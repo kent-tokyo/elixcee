@@ -22,3 +22,8 @@ zip = "7"
 [dev-dependencies]
 calamine  = "0.24"
 proptest  = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "vm_bench"
+harness = false
