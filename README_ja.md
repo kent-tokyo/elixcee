@@ -124,7 +124,7 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 
 ## 対応状況
 
-詳細は **[FUNCTIONS_ja.md](FUNCTIONS_ja.md)** を参照してください（全関数・VBA 構文対応表、Excel バージョン列付き）。
+詳細は **[FUNCTIONS.md](FUNCTIONS.md)** を参照してください（全関数・VBA 構文対応表、Excel バージョン列付き）。
 
 **主な対応状況:**
 - **Classic (Excel 2003-)**: SUM、VLOOKUP、IF、PMT、DGET ほか 100+ の基本関数
@@ -136,7 +136,7 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 
 ## 未対応関数
 
-詳細リストは **[FUNCTIONS_ja.md — 未対応関数](FUNCTIONS_ja.md#未対応関数)** を参照してください。
+詳細リストは **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)** を参照してください。
 
 主な未対応カテゴリ:
 - **財務系**: FV、PV、RATE、NPER、NPV、IRR、XNPV、XIRR ほか
