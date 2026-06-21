@@ -1,5 +1,7 @@
 # elixcee
 
+[English](README.md) | **日本語** | [中文](README_zh.md)
+
 Microsoft Excel をインストールすることなく、Linux / macOS / Windows 上で Excel マクロ（VBA）のデータ処理ロジックを高速にエミュレートして実行するライブラリです。
 
 コアエンジンは **Rust**、Python バインディングは **pyo3 + maturin** で提供します。

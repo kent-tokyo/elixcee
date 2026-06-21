@@ -1,5 +1,7 @@
 # elixcee
 
+**English** | [日本語](README_ja.md) | [中文](README_zh.md)
+
 A library to emulate and execute Excel macro (VBA) data processing logic at high speed on Linux, macOS, and Windows — without installing Microsoft Excel.
 
 The core engine is written in **Rust**; Python bindings are provided via **pyo3 + maturin**.
