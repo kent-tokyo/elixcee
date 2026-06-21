@@ -102,7 +102,18 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 
 | Function | Description | Excel |
 |---|---|---|
-| `PMT` | Periodic payment for a loan (`rate, nper, pv, [fv], [type]`) | Classic |
+| `PMT`  | Periodic payment for a loan (`rate, nper, pv, [fv], [type]`) | Classic |
+| `FV`   | Future value of an investment | Classic |
+| `PV`   | Present value of an investment | Classic |
+| `NPER` | Number of periods for an annuity | Classic |
+| `RATE` | Interest rate per period (Newton-Raphson) | Classic |
+| `IPMT` | Interest portion of a periodic payment | Classic |
+| `PPMT` | Principal portion of a periodic payment | Classic |
+| `NPV`  | Net present value (regular cash flows) | Classic |
+| `IRR`  | Internal rate of return (regular cash flows) | Classic |
+| `MIRR` | Modified internal rate of return | Classic |
+| `XNPV` | Net present value (irregular cash flows, date-weighted) | Classic |
+| `XIRR` | Internal rate of return (irregular cash flows) | Classic |
 
 ### Statistical
 
@@ -290,22 +301,6 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | `IMAGE(source, ...)` | Fetches images from URLs — not applicable in a headless VBA emulator |
 | `GROUPBY(row_fields, values, function, ...)` | Complex pivot-style aggregation; requires a multi-dimensional grouping engine |
 | `TRIMRANGE(range)` | Trims empty rows/cols from the edges of a range; low usage frequency |
-
-### Financial
-
-| Function | Description | Excel |
-|---|---|---|
-| `FV` | Future value of an investment | Classic |
-| `PV` | Present value of an investment | Classic |
-| `RATE` | Interest rate per period | Classic |
-| `NPER` | Number of periods for an annuity | Classic |
-| `IPMT` | Interest portion of a periodic payment | Classic |
-| `PPMT` | Principal portion of a periodic payment | Classic |
-| `NPV` | Net present value (regular cash flows) | Classic |
-| `IRR` | Internal rate of return (regular cash flows) | Classic |
-| `MIRR` | Modified internal rate of return | Classic |
-| `XNPV` | Net present value (irregular cash flows) | Classic |
-| `XIRR` | Internal rate of return (irregular cash flows) | Classic |
 
 ### Math & Combinatorics
 

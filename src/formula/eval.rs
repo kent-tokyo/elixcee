@@ -390,6 +390,17 @@ fn eval_func(
         // ── Math / Financial ─────────────────────────────────────────────────
         "COMBIN"    => func_combin(args, cells),
         "PMT"       => func_pmt(args, cells),
+        "FV"        => func_fv(args, cells),
+        "PV"        => func_pv(args, cells),
+        "NPER"      => func_nper(args, cells),
+        "RATE"      => func_rate(args, cells),
+        "IPMT"      => func_ipmt(args, cells),
+        "PPMT"      => func_ppmt(args, cells),
+        "NPV"       => func_npv(args, cells),
+        "IRR"       => func_irr(args, cells),
+        "MIRR"      => func_mirr(args, cells),
+        "XNPV"      => func_xnpv(args, cells),
+        "XIRR"      => func_xirr(args, cells),
         // ── Database ─────────────────────────────────────────────────────────
         "DGET"      => func_dget(args, cells),
         "DSUM"      => func_dsum(args, cells),
@@ -2629,6 +2640,240 @@ fn func_pmt(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
     Ok(Variant::Float(result))
 }
 
+// ── Financial functions (FV / PV / NPER / RATE / IPMT / PPMT / NPV / IRR / MIRR / XNPV / XIRR) ──
+
+/// Future value: FV(rate, nper, pmt, [pv=0], [type=0])
+fn annuity_fv(rate: f64, nper: f64, pmt: f64, pv: f64, typ: f64) -> f64 {
+    if rate == 0.0 {
+        -(pv + pmt * nper)
+    } else {
+        let factor = (1.0 + rate).powf(nper);
+        -(pv * factor + pmt * (1.0 + rate * typ) * (factor - 1.0) / rate)
+    }
+}
+
+/// PMT helper (same logic as func_pmt, usable internally)
+fn compute_pmt(rate: f64, nper: f64, pv: f64, fv: f64, typ: f64) -> f64 {
+    if nper == 0.0 { return f64::NAN; }
+    if rate == 0.0 {
+        -(pv + fv) / nper
+    } else {
+        let factor = (1.0 + rate).powf(nper);
+        -(rate * (pv * factor + fv)) / ((factor - 1.0) * (1.0 + rate * typ))
+    }
+}
+
+fn func_fv(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() < 3 || args.len() > 5 { return Err("FV requires 3 to 5 arguments".into()); }
+    let rate = to_float(&evaluate(&args[0], cells)?)?;
+    let nper = to_float(&evaluate(&args[1], cells)?)?;
+    let pmt  = to_float(&evaluate(&args[2], cells)?)?;
+    let pv   = if args.len() >= 4 { to_float(&evaluate(&args[3], cells)?)? } else { 0.0 };
+    let typ  = if args.len() >= 5 { to_float(&evaluate(&args[4], cells)?)? } else { 0.0 };
+    Ok(Variant::Float(annuity_fv(rate, nper, pmt, pv, typ)))
+}
+
+fn func_pv(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() < 3 || args.len() > 5 { return Err("PV requires 3 to 5 arguments".into()); }
+    let rate = to_float(&evaluate(&args[0], cells)?)?;
+    let nper = to_float(&evaluate(&args[1], cells)?)?;
+    let pmt  = to_float(&evaluate(&args[2], cells)?)?;
+    let fv   = if args.len() >= 4 { to_float(&evaluate(&args[3], cells)?)? } else { 0.0 };
+    let typ  = if args.len() >= 5 { to_float(&evaluate(&args[4], cells)?)? } else { 0.0 };
+    let result = if rate == 0.0 {
+        -(fv + pmt * nper)
+    } else {
+        let factor = (1.0 + rate).powf(nper);
+        -(fv / factor + pmt * (1.0 + rate * typ) * (1.0 - 1.0 / factor) / rate)
+    };
+    Ok(Variant::Float(result))
+}
+
+fn func_nper(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() < 3 || args.len() > 5 { return Err("NPER requires 3 to 5 arguments".into()); }
+    let rate = to_float(&evaluate(&args[0], cells)?)?;
+    let pmt  = to_float(&evaluate(&args[1], cells)?)?;
+    let pv   = to_float(&evaluate(&args[2], cells)?)?;
+    let fv   = if args.len() >= 4 { to_float(&evaluate(&args[3], cells)?)? } else { 0.0 };
+    let typ  = if args.len() >= 5 { to_float(&evaluate(&args[4], cells)?)? } else { 0.0 };
+    let result = if rate == 0.0 {
+        if pmt == 0.0 { return Ok(Variant::Error(ExcelError::DivZero)); }
+        -(pv + fv) / pmt
+    } else {
+        let z = pmt * (1.0 + rate * typ) / rate;
+        let numer = z - fv;
+        let denom = z + pv;
+        if denom == 0.0 || numer / denom <= 0.0 { return Ok(Variant::Error(ExcelError::Num)); }
+        (numer / denom).ln() / (1.0 + rate).ln()
+    };
+    Ok(Variant::Float(result))
+}
+
+fn func_rate(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() < 3 || args.len() > 6 { return Err("RATE requires 3 to 6 arguments".into()); }
+    let nper  = to_float(&evaluate(&args[0], cells)?)?;
+    let pmt   = to_float(&evaluate(&args[1], cells)?)?;
+    let pv    = to_float(&evaluate(&args[2], cells)?)?;
+    let fv    = if args.len() >= 4 { to_float(&evaluate(&args[3], cells)?)? } else { 0.0 };
+    let typ   = if args.len() >= 5 { to_float(&evaluate(&args[4], cells)?)? } else { 0.0 };
+    let guess = if args.len() >= 6 { to_float(&evaluate(&args[5], cells)?)? } else { 0.1 };
+    // Newton-Raphson
+    let mut r = guess;
+    for _ in 0..100 {
+        let a = (1.0 + r).powf(nper);
+        let da = nper * (1.0 + r).powf(nper - 1.0);
+        let f = pv * a + pmt * (1.0 + r * typ) * (a - 1.0) / r + fv;
+        let df = pv * da
+            + pmt * (typ * (a - 1.0) / r + (1.0 + r * typ) * (da * r - (a - 1.0)) / (r * r));
+        let delta = f / df;
+        r -= delta;
+        if delta.abs() < 1e-10 { return Ok(Variant::Float(r)); }
+    }
+    Ok(Variant::Error(ExcelError::Num)) // did not converge
+}
+
+fn func_ipmt(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() < 4 || args.len() > 6 { return Err("IPMT requires 4 to 6 arguments".into()); }
+    let rate = to_float(&evaluate(&args[0], cells)?)?;
+    let per  = to_float(&evaluate(&args[1], cells)?)? as i64;
+    let nper = to_float(&evaluate(&args[2], cells)?)?;
+    let pv   = to_float(&evaluate(&args[3], cells)?)?;
+    let fv   = if args.len() >= 5 { to_float(&evaluate(&args[4], cells)?)? } else { 0.0 };
+    let typ  = if args.len() >= 6 { to_float(&evaluate(&args[5], cells)?)? } else { 0.0 };
+    if per < 1 || per as f64 > nper { return Ok(Variant::Error(ExcelError::Num)); }
+    let pmt_val = compute_pmt(rate, nper, pv, fv, typ);
+    // Remaining balance after (per-1) periods = annuity_fv(rate, per-1, pmt, pv, typ)
+    let balance = annuity_fv(rate, (per - 1) as f64, pmt_val, pv, typ);
+    let mut ipmt = balance * rate;
+    if typ == 1.0 {
+        if per == 1 { return Ok(Variant::Float(0.0)); }
+        ipmt /= 1.0 + rate;
+    }
+    Ok(Variant::Float(ipmt))
+}
+
+fn func_ppmt(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() < 4 || args.len() > 6 { return Err("PPMT requires 4 to 6 arguments".into()); }
+    let rate = to_float(&evaluate(&args[0], cells)?)?;
+    let per  = to_float(&evaluate(&args[1], cells)?)? as i64;
+    let nper = to_float(&evaluate(&args[2], cells)?)?;
+    let pv   = to_float(&evaluate(&args[3], cells)?)?;
+    let fv   = if args.len() >= 5 { to_float(&evaluate(&args[4], cells)?)? } else { 0.0 };
+    let typ  = if args.len() >= 6 { to_float(&evaluate(&args[5], cells)?)? } else { 0.0 };
+    if per < 1 || per as f64 > nper { return Ok(Variant::Error(ExcelError::Num)); }
+    let pmt_val = compute_pmt(rate, nper, pv, fv, typ);
+    let balance = annuity_fv(rate, (per - 1) as f64, pmt_val, pv, typ);
+    let mut ipmt = balance * rate;
+    if typ == 1.0 {
+        if per == 1 { return Ok(Variant::Float(pmt_val)); }
+        ipmt /= 1.0 + rate;
+    }
+    Ok(Variant::Float(pmt_val - ipmt))
+}
+
+fn func_npv(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() < 2 { return Err("NPV requires at least 2 arguments".into()); }
+    let rate = to_float(&evaluate(&args[0], cells)?)?;
+    let values = collect_all(&args[1..], cells)?;
+    let nums: Vec<f64> = values.iter()
+        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .collect();
+    let result = nums.iter().enumerate()
+        .map(|(i, &v)| v / (1.0 + rate).powf((i + 1) as f64))
+        .sum::<f64>();
+    Ok(Variant::Float(result))
+}
+
+fn func_irr(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() < 1 || args.len() > 2 { return Err("IRR requires 1 to 2 arguments".into()); }
+    let values = collect_values(&args[0], cells)?;
+    let nums: Vec<f64> = values.iter()
+        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .collect();
+    if nums.is_empty() { return Ok(Variant::Error(ExcelError::Num)); }
+    let guess = if args.len() >= 2 { to_float(&evaluate(&args[1], cells)?)? } else { 0.1 };
+    // Newton-Raphson: find r where NPV = sum(v[i]/(1+r)^(i+1)) = 0
+    let mut r = guess;
+    for _ in 0..100 {
+        // IRR: find r where sum(v[i]/(1+r)^i) = 0, i=0,1,...
+        let f: f64  = nums.iter().enumerate().map(|(i, &v)| v / (1.0 + r).powf(i as f64)).sum();
+        let df: f64 = nums.iter().enumerate().map(|(i, &v)| -(i as f64) * v / (1.0 + r).powf((i + 1) as f64)).sum();
+        if df == 0.0 { break; }
+        let delta = f / df;
+        r -= delta;
+        if delta.abs() < 1e-10 { return Ok(Variant::Float(r)); }
+    }
+    Ok(Variant::Error(ExcelError::Num))
+}
+
+fn func_mirr(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 3 { return Err("MIRR requires 3 arguments".into()); }
+    let values = collect_values(&args[0], cells)?;
+    let nums: Vec<f64> = values.iter()
+        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .collect();
+    let n = nums.len();
+    if n < 2 { return Ok(Variant::Error(ExcelError::Num)); }
+    let finance_rate  = to_float(&evaluate(&args[1], cells)?)?;
+    let reinvest_rate = to_float(&evaluate(&args[2], cells)?)?;
+    // PV of negative cash flows at finance_rate
+    let pv_neg: f64 = nums.iter().enumerate()
+        .map(|(i, &v)| if v < 0.0 { v / (1.0 + finance_rate).powf(i as f64) } else { 0.0 })
+        .sum();
+    // FV of positive cash flows at reinvest_rate
+    let fv_pos: f64 = nums.iter().enumerate()
+        .map(|(i, &v)| if v > 0.0 { v * (1.0 + reinvest_rate).powf((n - 1 - i) as f64) } else { 0.0 })
+        .sum();
+    if pv_neg == 0.0 || fv_pos == 0.0 { return Ok(Variant::Error(ExcelError::DivZero)); }
+    let result = (fv_pos / (-pv_neg)).powf(1.0 / (n - 1) as f64) - 1.0;
+    Ok(Variant::Float(result))
+}
+
+fn func_xnpv(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 3 { return Err("XNPV requires 3 arguments".into()); }
+    let rate   = to_float(&evaluate(&args[0], cells)?)?;
+    let values = collect_values(&args[1], cells)?;
+    let dates  = collect_values(&args[2], cells)?;
+    if values.len() != dates.len() || values.is_empty() { return Ok(Variant::Error(ExcelError::Value)); }
+    let to_serial = |v: &Variant| -> Option<f64> {
+        match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None }
+    };
+    let d0 = match to_serial(&dates[0]) { Some(d) => d, None => return Ok(Variant::Error(ExcelError::Value)) };
+    let mut result = 0.0;
+    for (v, d) in values.iter().zip(dates.iter()) {
+        let val = match to_serial(v) { Some(x) => x, None => return Ok(Variant::Error(ExcelError::Value)) };
+        let date = match to_serial(d) { Some(x) => x, None => return Ok(Variant::Error(ExcelError::Value)) };
+        let exp = (date - d0) / 365.0;
+        result += val / (1.0 + rate).powf(exp);
+    }
+    Ok(Variant::Float(result))
+}
+
+fn func_xirr(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 { return Err("XIRR requires 2 to 3 arguments".into()); }
+    let values = collect_values(&args[0], cells)?;
+    let dates  = collect_values(&args[1], cells)?;
+    if values.len() != dates.len() || values.is_empty() { return Ok(Variant::Error(ExcelError::Value)); }
+    let guess = if args.len() >= 3 { to_float(&evaluate(&args[2], cells)?)? } else { 0.1 };
+    let to_serial = |v: &Variant| -> Option<f64> {
+        match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None }
+    };
+    let d0 = match to_serial(&dates[0]) { Some(d) => d, None => return Ok(Variant::Error(ExcelError::Value)) };
+    let nums: Vec<f64> = values.iter().filter_map(|v| to_serial(v)).collect();
+    let days: Vec<f64> = dates.iter().filter_map(|v| to_serial(v)).map(|d| (d - d0) / 365.0).collect();
+    if nums.len() != values.len() || days.len() != dates.len() { return Ok(Variant::Error(ExcelError::Value)); }
+    let mut r = guess;
+    for _ in 0..100 {
+        let f: f64  = nums.iter().zip(days.iter()).map(|(&v, &t)| v / (1.0 + r).powf(t)).sum();
+        let df: f64 = nums.iter().zip(days.iter()).map(|(&v, &t)| -t * v / (1.0 + r).powf(t + 1.0)).sum();
+        if df == 0.0 { break; }
+        let delta = f / df;
+        r -= delta;
+        if delta.abs() < 1e-10 { return Ok(Variant::Float(r)); }
+    }
+    Ok(Variant::Error(ExcelError::Num))
+}
+
 // ── TEXTSPLIT ─────────────────────────────────────────────────────────────────
 
 fn func_textsplit(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
@@ -4347,6 +4592,120 @@ mod tests {
         assert_eq!(calc("=DCOUNT(A1:B5,\"Score\",D1:D2)", &c), Variant::Integer(0));
         assert_eq!(calc("=DMAX(A1:B5,\"Score\",D1:D2)", &c), Variant::Integer(0));
         assert_eq!(calc("=DMIN(A1:B5,\"Score\",D1:D2)", &c), Variant::Integer(0));
+    }
+
+    #[test]
+    fn test_financial_functions() {
+        let c = HashMap::new();
+
+        // FV: invest 1000 at 5%/yr for 3 years, no recurring payment → 1157.625
+        match calc("=FV(0.05,3,0,-1000)", &c) {
+            Variant::Float(f) => assert!((f - 1157.625).abs() < 0.01),
+            other => panic!("FV unexpected: {:?}", other),
+        }
+
+        // PV: what is the PV of FV=1157.625 in 3 years at 5%?
+        match calc("=PV(0.05,3,0,1157.625)", &c) {
+            Variant::Float(f) => assert!((f + 1000.0).abs() < 0.01),
+            other => panic!("PV unexpected: {:?}", other),
+        }
+
+        // PMT round-trip: 5% for 3 years, pv=1000
+        let pmt_val = match calc("=PMT(0.05,3,-1000)", &c) {
+            Variant::Float(f) => f,
+            other => panic!("PMT unexpected: {:?}", other),
+        };
+        assert!((pmt_val - 367.2088).abs() < 0.01);
+
+        // NPER: how many periods to pay off pv=1000 at 5% with pmt=-367.21?
+        match calc("=NPER(0.05,-367.2088,1000)", &c) {
+            Variant::Float(f) => assert!((f - 3.0).abs() < 0.01),
+            other => panic!("NPER unexpected: {:?}", other),
+        }
+
+        // RATE: 3 periods, pmt=-367.21, pv=1000 → should converge to ~5%
+        match calc("=RATE(3,-367.2088,1000)", &c) {
+            Variant::Float(f) => assert!((f - 0.05).abs() < 1e-5),
+            other => panic!("RATE unexpected: {:?}", other),
+        }
+
+        // IPMT: interest portion of period 1 payment on 1000 at 5% for 3 periods
+        // period 1 interest = 1000 * 0.05 = 50
+        match calc("=IPMT(0.05,1,3,1000)", &c) {
+            Variant::Float(f) => assert!((f + 50.0).abs() < 0.01),
+            other => panic!("IPMT unexpected: {:?}", other),
+        }
+
+        // PPMT: principal portion = PMT - IPMT = 367.21 - 50 = 317.21
+        match calc("=PPMT(0.05,1,3,1000)", &c) {
+            Variant::Float(f) => assert!((f + 317.21).abs() < 0.01),
+            other => panic!("PPMT unexpected: {:?}", other),
+        }
+
+        // NPV: cash flows [50, 60, 70] at 10%
+        // Excel NPV discounts each arg: 50/1.1 + 60/1.21 + 70/1.331 ≈ 147.63
+        let c_npv = cells_from(&[
+            ((1,1), Variant::Float(50.0)),
+            ((2,1), Variant::Float(60.0)),
+            ((3,1), Variant::Float(70.0)),
+        ]);
+        match calc("=NPV(0.1,A1:A3)", &c_npv) {
+            Variant::Float(f) => assert!((f - 147.63).abs() < 0.01),
+            other => panic!("NPV unexpected: {:?}", other),
+        }
+
+        // IRR: cash flows [-100, 40, 60, 50] → find r where -100 + 40/(1+r) + 60/(1+r)^2 + 50/(1+r)^3 = 0
+        // Verify: NPV at found rate ≈ 0
+        let c_irr = cells_from(&[
+            ((1,1), Variant::Float(-100.0)),
+            ((2,1), Variant::Float(40.0)),
+            ((3,1), Variant::Float(60.0)),
+            ((4,1), Variant::Float(50.0)),
+        ]);
+        let irr_rate = match calc("=IRR(A1:A4)", &c_irr) {
+            Variant::Float(f) => f,
+            other => panic!("IRR unexpected: {:?}", other),
+        };
+        // Verify NPV ≈ 0 at that rate
+        let npv_check = -100.0 + 40.0/(1.0+irr_rate) + 60.0/(1.0+irr_rate).powi(2) + 50.0/(1.0+irr_rate).powi(3);
+        assert!(npv_check.abs() < 0.001, "IRR: NPV at found rate should be ~0, got {}", npv_check);
+
+        // MIRR: [-120, 50, 60, 70] at finance_rate=10%, reinvest_rate=12%
+        // pv_neg = -120; fv_pos = 50*1.12^2 + 60*1.12 + 70 = 199.92
+        // MIRR = (199.92/120)^(1/3) - 1 ≈ 18.58%
+        let c_mirr = cells_from(&[
+            ((1,1), Variant::Float(-120.0)),
+            ((2,1), Variant::Float(50.0)),
+            ((3,1), Variant::Float(60.0)),
+            ((4,1), Variant::Float(70.0)),
+        ]);
+        match calc("=MIRR(A1:A4,0.1,0.12)", &c_mirr) {
+            Variant::Float(f) => assert!((f - 0.1858).abs() < 0.001),
+            other => panic!("MIRR unexpected: {:?}", other),
+        }
+
+        // XNPV: values=[-100, 50, 60] at dates=[0, 180, 365] (serial days from base)
+        // Using small day numbers to simplify: date0=1, date1=181, date2=366
+        let c_xnpv = cells_from(&[
+            ((1,1), Variant::Float(-100.0)), ((1,2), Variant::Integer(1)),
+            ((2,1), Variant::Float(50.0)),   ((2,2), Variant::Integer(181)),
+            ((3,1), Variant::Float(60.0)),   ((3,2), Variant::Integer(366)),
+        ]);
+        match calc("=XNPV(0.1,A1:A3,B1:B3)", &c_xnpv) {
+            Variant::Float(f) => {
+                let expected = -100.0
+                    + 50.0 / 1.1f64.powf(180.0/365.0)
+                    + 60.0 / 1.1f64.powf(365.0/365.0);
+                assert!((f - expected).abs() < 0.01, "XNPV: got {}, expected {}", f, expected);
+            }
+            other => panic!("XNPV unexpected: {:?}", other),
+        }
+
+        // XIRR: same cash flows, find rate where XNPV=0
+        match calc("=XIRR(A1:A3,B1:B3)", &c_xnpv) {
+            Variant::Float(f) => assert!(f > 0.0 && f < 2.0, "XIRR out of range: {}", f),
+            other => panic!("XIRR unexpected: {:?}", other),
+        }
     }
 
     #[test]

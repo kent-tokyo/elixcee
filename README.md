@@ -127,7 +127,7 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 See **[FUNCTIONS.md](FUNCTIONS.md)** for the complete function and VBA syntax reference, including Excel version for each function.
 
 **Highlights:**
-- **Classic (Excel 2003-)**: SUM, VLOOKUP, IF, PMT, DGET, DSUM, DAVERAGE, DCOUNT, DCOUNTA, DMAX, DMIN, and 100+ core functions
+- **Classic (Excel 2003-)**: SUM, VLOOKUP, IF, PMT, FV, PV, NPER, RATE, IPMT, PPMT, NPV, IRR, MIRR, XNPV, XIRR, DGET, DSUM, DAVERAGE, DCOUNT, DCOUNTA, DMAX, DMIN, and 100+ core functions
 - **2007–2019**: IFERROR, COUNTIFS/SUMIFS, XOR, IFS, SWITCH, TEXTJOIN, MAXIFS/MINIFS
 - **365/2021**: XLOOKUP, XMATCH, FILTER, SORT, UNIQUE, SEQUENCE, LET, LAMBDA, MAP, REDUCE
 - **2024/365**: TEXTSPLIT, TEXTBEFORE, TEXTAFTER, VSTACK, HSTACK, TAKE, DROP, CHOOSECOLS, CHOOSEROWS
@@ -177,7 +177,6 @@ Named ranges are stored on `vm.named_ranges` (a `dict[str, str]` mapping lowerca
 See **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)** for the full list.
 
 Key gaps by category:
-- **Financial**: FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, and more
 - **Math**: FACT, PERMUT, GCD, LCM, SIGN, and more
 - **Statistical**: NORM.DIST, CORREL, COVARIANCE.S, and more
 - **Out of scope**: IMAGE (URL image fetch), GROUPBY (pivot aggregation), TRIMRANGE

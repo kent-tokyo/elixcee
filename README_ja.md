@@ -127,7 +127,7 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 詳細は **[FUNCTIONS.md](FUNCTIONS.md)** を参照してください（全関数・VBA 構文対応表、Excel バージョン列付き）。
 
 **主な対応状況:**
-- **Classic (Excel 2003-)**: SUM、VLOOKUP、IF、PMT、DGET、DSUM、DAVERAGE、DCOUNT、DCOUNTA、DMAX、DMIN ほか 100+ の基本関数
+- **Classic (Excel 2003-)**: SUM、VLOOKUP、IF、PMT、FV、PV、NPER、RATE、IPMT、PPMT、NPV、IRR、MIRR、XNPV、XIRR、DGET、DSUM、DAVERAGE、DCOUNT、DCOUNTA、DMAX、DMIN ほか 100+ の基本関数
 - **2007〜2019**: IFERROR、COUNTIFS/SUMIFS、XOR、IFS、SWITCH、TEXTJOIN、MAXIFS/MINIFS
 - **365/2021**: XLOOKUP、XMATCH、FILTER、SORT、UNIQUE、SEQUENCE、LET、LAMBDA、MAP、REDUCE
 - **2024/365**: TEXTSPLIT、TEXTBEFORE、TEXTAFTER、VSTACK、HSTACK、TAKE、DROP、CHOOSECOLS、CHOOSEROWS
@@ -139,7 +139,6 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 詳細リストは **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)** を参照してください。
 
 主な未対応カテゴリ:
-- **財務系**: FV、PV、RATE、NPER、NPV、IRR、XNPV、XIRR ほか
 - **数学**: FACT、PERMUT、GCD、LCM、SIGN ほか
 - **統計**: NORM.DIST、CORREL、COVARIANCE.S ほか
 - **対象外**: IMAGE（URL参照）、GROUPBY（ピボット集計）、TRIMRANGE（使用頻度低）
