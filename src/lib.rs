@@ -633,7 +633,7 @@ fn save_ods_impl(vm: &Vm, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn build_ods_manifest(vm: &Vm) -> String {
+fn build_ods_manifest(_vm: &Vm) -> String {
     let mut m = String::from(concat!(
         r#"<?xml version="1.0" encoding="UTF-8"?>"#, "\n",
         r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">"#, "\n",

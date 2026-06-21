@@ -437,11 +437,6 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
     let mut in_sheet = false;
     let mut row: u32 = 0;
     let mut col: u32 = 0;
-    let mut cell_type = String::new();
-    let mut cell_val_attr = String::new();
-    let mut cell_bool_attr = String::new();
-    let mut col_repeat: u32 = 1;
-    let mut row_repeat: u32 = 1;
     let mut in_text_p = false;
     let mut cell_text = String::new();
     let mut pending_cell: Option<OdsCellState> = None;
@@ -461,51 +456,29 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                         col = 0;
                     }
                     "table-row" if in_sheet => {
-                        row_repeat = attr_get(attrs, "number-rows-repeated")
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(1);
-                        // Cap row_repeat to avoid OOM on trailing empty rows
-                        if row_repeat > 1024 { row_repeat = 1; }
                         row += 1;
                         col = 0;
                         pending_cell = None;
                     }
                     "table-cell" | "covered-table-cell" if in_sheet => {
-                        // Flush previous pending cell before starting a new one
                         if let Some(state) = pending_cell.take() {
                             emit_ods_cell(&mut sheets, state);
                         }
-                        col_repeat = attr_get(attrs, "number-columns-repeated")
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(1);
-                        // Cap to avoid OOM on trailing empty columns
-                        if col_repeat > 1024 { col_repeat = 1; }
                         col += 1;
-                        cell_type = attr_get(attrs, "value-type").unwrap_or("").to_string();
-                        cell_val_attr = attr_get(attrs, "value").unwrap_or("").to_string();
-                        cell_bool_attr = attr_get(attrs, "boolean-value").unwrap_or("").to_string();
+                        let cell_type = attr_get(attrs, "value-type").unwrap_or("").to_string();
+                        let val_attr  = attr_get(attrs, "value").unwrap_or("").to_string();
+                        let bool_attr = attr_get(attrs, "boolean-value").unwrap_or("").to_string();
                         cell_text.clear();
                         in_text_p = false;
 
+                        let make_state = || OdsCellState {
+                            row, col, cell_type, val_attr, bool_attr, text: String::new(),
+                        };
                         if matches!(ev, Ev::SelfClose(_, _)) {
-                            // Self-closing: no text content, emit immediately
-                            let state = OdsCellState {
-                                row, col, col_repeat,
-                                cell_type: cell_type.clone(),
-                                val_attr: cell_val_attr.clone(),
-                                bool_attr: cell_bool_attr.clone(),
-                                text: String::new(),
-                            };
-                            emit_ods_cell(&mut sheets, state);
+                            emit_ods_cell(&mut sheets, make_state());
                             pending_cell = None;
                         } else {
-                            pending_cell = Some(OdsCellState {
-                                row, col, col_repeat,
-                                cell_type: cell_type.clone(),
-                                val_attr: cell_val_attr.clone(),
-                                bool_attr: cell_bool_attr.clone(),
-                                text: String::new(),
-                            });
+                            pending_cell = Some(make_state());
                         }
                     }
                     "p" if in_sheet => { in_text_p = true; }
@@ -540,7 +513,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
 }
 
 struct OdsCellState {
-    row: u32, col: u32, col_repeat: u32,
+    row: u32, col: u32,
     cell_type: String, val_attr: String, bool_attr: String, text: String,
 }
 

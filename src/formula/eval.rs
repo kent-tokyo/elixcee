@@ -175,6 +175,11 @@ fn as_integer_if_whole(f: f64) -> Variant {
     }
 }
 
+/// Extract a numeric value from a Variant, ignoring non-numeric types.
+fn as_f64(v: &Variant) -> Option<f64> {
+    match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None }
+}
+
 /// Expand a single formula argument into a flat list of Variant values.
 /// Range → all cells row-major. Scalar → single value.
 fn collect_values(
@@ -432,7 +437,7 @@ fn func_sum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
 
 fn func_average(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     let nums: Vec<f64> = collect_all(args, cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     if nums.is_empty() { return Err("AVERAGE: no numeric values".into()); }
     Ok(Variant::Float(nums.iter().sum::<f64>() / nums.len() as f64))
@@ -440,14 +445,14 @@ fn func_average(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) 
 
 fn func_min(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     let min = collect_all(args, cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .reduce(f64::min);
     min.map(as_integer_if_whole).ok_or_else(|| "MIN: no numeric values".into())
 }
 
 fn func_max(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     let max = collect_all(args, cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .reduce(f64::max);
     max.map(as_integer_if_whole).ok_or_else(|| "MAX: no numeric values".into())
 }
@@ -927,7 +932,7 @@ fn func_countifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>)
 fn func_median(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.is_empty() { return Err("MEDIAN requires at least 1 argument".into()); }
     let mut nums: Vec<f64> = collect_all(args, cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     if nums.is_empty() { return Err("MEDIAN: no numeric values".into()); }
     nums.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -953,7 +958,7 @@ fn func_mode_mult(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>
 fn func_product(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.is_empty() { return Err("PRODUCT requires at least 1 argument".into()); }
     let product: f64 = collect_all(args, cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .fold(1.0, |acc, x| acc * x);
     Ok(as_integer_if_whole(product))
 }
@@ -962,7 +967,7 @@ fn func_rank(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> 
     if args.len() < 2 || args.len() > 3 { return Err("RANK requires 2 or 3 arguments".into()); }
     let num = to_float(&evaluate(&args[0], cells)?)?;
     let vals: Vec<f64> = collect_values(&args[1], cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     let asc = if args.len() == 3 { to_float(&evaluate(&args[2], cells)?)? != 0.0 } else { false };
     let rank = if asc {
@@ -1245,7 +1250,7 @@ fn func_int(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
 fn func_large(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.len() != 2 { return Err("LARGE requires 2 arguments".into()); }
     let mut nums: Vec<f64> = collect_values(&args[0], cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     let k = to_float(&evaluate(&args[1], cells)?)? as usize;
     if k == 0 || k > nums.len() { return Err("LARGE: k out of range".into()); }
@@ -1256,7 +1261,7 @@ fn func_large(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) ->
 fn func_small(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.len() != 2 { return Err("SMALL requires 2 arguments".into()); }
     let mut nums: Vec<f64> = collect_values(&args[0], cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     let k = to_float(&evaluate(&args[1], cells)?)? as usize;
     if k == 0 || k > nums.len() { return Err("SMALL: k out of range".into()); }
@@ -1280,7 +1285,7 @@ fn func_maxifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
     }
     let max = max_vals.iter().enumerate()
         .filter(|(j, _)| mask[*j])
-        .filter_map(|(_, v)| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(|(_, v)| as_f64(v))
         .reduce(f64::max);
     max.map(as_integer_if_whole).ok_or_else(|| "MAXIFS: no matching values".into())
 }
@@ -1301,7 +1306,7 @@ fn func_minifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
     }
     let min = min_vals.iter().enumerate()
         .filter(|(j, _)| mask[*j])
-        .filter_map(|(_, v)| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(|(_, v)| as_f64(v))
         .reduce(f64::min);
     min.map(as_integer_if_whole).ok_or_else(|| "MINIFS: no matching values".into())
 }
@@ -1317,7 +1322,7 @@ fn func_mod(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
 fn func_percentile(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.len() != 2 { return Err("PERCENTILE requires 2 arguments".into()); }
     let mut nums: Vec<f64> = collect_values(&args[0], cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     let k = to_float(&evaluate(&args[1], cells)?)?;
     if !(0.0..=1.0).contains(&k) { return Err("PERCENTILE: k must be 0 to 1".into()); }
@@ -1333,7 +1338,7 @@ fn func_percentile(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent
 fn func_percentrank(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.len() < 2 || args.len() > 3 { return Err("PERCENTRANK requires 2 or 3 arguments".into()); }
     let nums: Vec<f64> = collect_values(&args[0], cells)?.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     let x = to_float(&evaluate(&args[1], cells)?)?;
     let sig = if args.len() == 3 { to_float(&evaluate(&args[2], cells)?)? as usize } else { 3 };
@@ -2776,7 +2781,7 @@ fn func_npv(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
     let rate = to_float(&evaluate(&args[0], cells)?)?;
     let values = collect_all(&args[1..], cells)?;
     let nums: Vec<f64> = values.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     let result = nums.iter().enumerate()
         .map(|(i, &v)| v / (1.0 + rate).powf((i + 1) as f64))
@@ -2788,7 +2793,7 @@ fn func_irr(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
     if args.len() < 1 || args.len() > 2 { return Err("IRR requires 1 to 2 arguments".into()); }
     let values = collect_values(&args[0], cells)?;
     let nums: Vec<f64> = values.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     if nums.is_empty() { return Ok(Variant::Error(ExcelError::Num)); }
     let guess = if args.len() >= 2 { to_float(&evaluate(&args[1], cells)?)? } else { 0.1 };
@@ -2810,7 +2815,7 @@ fn func_mirr(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> 
     if args.len() != 3 { return Err("MIRR requires 3 arguments".into()); }
     let values = collect_values(&args[0], cells)?;
     let nums: Vec<f64> = values.iter()
-        .filter_map(|v| match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None })
+        .filter_map(as_f64)
         .collect();
     let n = nums.len();
     if n < 2 { return Ok(Variant::Error(ExcelError::Num)); }
@@ -2835,14 +2840,11 @@ fn func_xnpv(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> 
     let values = collect_values(&args[1], cells)?;
     let dates  = collect_values(&args[2], cells)?;
     if values.len() != dates.len() || values.is_empty() { return Ok(Variant::Error(ExcelError::Value)); }
-    let to_serial = |v: &Variant| -> Option<f64> {
-        match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None }
-    };
-    let d0 = match to_serial(&dates[0]) { Some(d) => d, None => return Ok(Variant::Error(ExcelError::Value)) };
+    let d0 = match as_f64(&dates[0]) { Some(d) => d, None => return Ok(Variant::Error(ExcelError::Value)) };
     let mut result = 0.0;
     for (v, d) in values.iter().zip(dates.iter()) {
-        let val = match to_serial(v) { Some(x) => x, None => return Ok(Variant::Error(ExcelError::Value)) };
-        let date = match to_serial(d) { Some(x) => x, None => return Ok(Variant::Error(ExcelError::Value)) };
+        let val = match as_f64(v) { Some(x) => x, None => return Ok(Variant::Error(ExcelError::Value)) };
+        let date = match as_f64(d) { Some(x) => x, None => return Ok(Variant::Error(ExcelError::Value)) };
         let exp = (date - d0) / 365.0;
         result += val / (1.0 + rate).powf(exp);
     }
@@ -2855,12 +2857,9 @@ fn func_xirr(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> 
     let dates  = collect_values(&args[1], cells)?;
     if values.len() != dates.len() || values.is_empty() { return Ok(Variant::Error(ExcelError::Value)); }
     let guess = if args.len() >= 3 { to_float(&evaluate(&args[2], cells)?)? } else { 0.1 };
-    let to_serial = |v: &Variant| -> Option<f64> {
-        match v { Variant::Integer(n) => Some(*n as f64), Variant::Float(f) => Some(*f), _ => None }
-    };
-    let d0 = match to_serial(&dates[0]) { Some(d) => d, None => return Ok(Variant::Error(ExcelError::Value)) };
-    let nums: Vec<f64> = values.iter().filter_map(|v| to_serial(v)).collect();
-    let days: Vec<f64> = dates.iter().filter_map(|v| to_serial(v)).map(|d| (d - d0) / 365.0).collect();
+    let d0 = match as_f64(&dates[0]) { Some(d) => d, None => return Ok(Variant::Error(ExcelError::Value)) };
+    let nums: Vec<f64> = values.iter().filter_map(as_f64).collect();
+    let days: Vec<f64> = dates.iter().filter_map(as_f64).map(|d| (d - d0) / 365.0).collect();
     if nums.len() != values.len() || days.len() != dates.len() { return Ok(Variant::Error(ExcelError::Value)); }
     let mut r = guess;
     for _ in 0..100 {
@@ -3182,127 +3181,61 @@ fn func_dget(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> 
 
 // ── DSUM / DAVERAGE / DCOUNT / DCOUNTA / DMAX / DMIN ─────────────────────────
 
-fn func_dsum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() != 3 { return Err("DSUM requires 3 arguments".into()); }
-    let (db_c1, db_r1, db_c2, db_r2) = require_range(&args[0], "DSUM")?;
+struct DbCtx { db_r1: u32, db_r2: u32, db_c1: u32, db_c2: u32, field_col: u32, cr_r1: u32, cr_r2: u32, cr_c1: u32, cr_c2: u32 }
+
+fn db_resolve_args(args: &[FormulaExpr], cells: &HashMap<(u32,u32), CellContent>, fname: &str)
+    -> Result<Option<DbCtx>, String>
+{
+    if args.len() != 3 { return Err(format!("{fname} requires 3 arguments")); }
+    let (db_c1, db_r1, db_c2, db_r2) = require_range(&args[0], fname)?;
     let field_val = evaluate(&args[1], cells)?;
     let field_col = resolve_db_field(&field_val, cells, db_c1, db_c2, db_r1)?;
-    if field_col > db_c2 { return Ok(Variant::Error(ExcelError::Ref)); }
-    let (cr_c1, cr_r1, cr_c2, cr_r2) = require_range(&args[2], "DSUM")?;
-    let mut sum = 0f64;
-    for row in (db_r1 + 1)..=db_r2 {
-        if db_row_matches_criteria(cells, row, db_c1, db_c2, db_r1, cr_c1, cr_c2, cr_r1, cr_r2) {
-            match cell_val(cells, row, field_col) {
-                Variant::Integer(n) => sum += n as f64,
-                Variant::Float(f) => sum += f,
-                _ => {}
-            }
-        }
-    }
+    if field_col > db_c2 { return Ok(None); }
+    let (cr_c1, cr_r1, cr_c2, cr_r2) = require_range(&args[2], fname)?;
+    Ok(Some(DbCtx { db_r1, db_r2, db_c1, db_c2, field_col, cr_r1, cr_r2, cr_c1, cr_c2 }))
+}
+
+fn db_matched_vals(ctx: &DbCtx, cells: &HashMap<(u32,u32), CellContent>) -> Vec<Variant> {
+    (ctx.db_r1 + 1..=ctx.db_r2)
+        .filter(|&row| db_row_matches_criteria(cells, row, ctx.db_c1, ctx.db_c2, ctx.db_r1, ctx.cr_c1, ctx.cr_c2, ctx.cr_r1, ctx.cr_r2))
+        .map(|row| cell_val(cells, row, ctx.field_col))
+        .collect()
+}
+
+fn func_dsum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    let Some(ctx) = db_resolve_args(args, cells, "DSUM")? else { return Ok(Variant::Error(ExcelError::Ref)); };
+    let sum: f64 = db_matched_vals(&ctx, cells).iter().filter_map(as_f64).sum();
     Ok(as_integer_if_whole(sum))
 }
 
 fn func_daverage(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() != 3 { return Err("DAVERAGE requires 3 arguments".into()); }
-    let (db_c1, db_r1, db_c2, db_r2) = require_range(&args[0], "DAVERAGE")?;
-    let field_val = evaluate(&args[1], cells)?;
-    let field_col = resolve_db_field(&field_val, cells, db_c1, db_c2, db_r1)?;
-    if field_col > db_c2 { return Ok(Variant::Error(ExcelError::Ref)); }
-    let (cr_c1, cr_r1, cr_c2, cr_r2) = require_range(&args[2], "DAVERAGE")?;
-    let mut sum = 0f64;
-    let mut count = 0u32;
-    for row in (db_r1 + 1)..=db_r2 {
-        if db_row_matches_criteria(cells, row, db_c1, db_c2, db_r1, cr_c1, cr_c2, cr_r1, cr_r2) {
-            match cell_val(cells, row, field_col) {
-                Variant::Integer(n) => { sum += n as f64; count += 1; }
-                Variant::Float(f) => { sum += f; count += 1; }
-                _ => {}
-            }
-        }
-    }
-    if count == 0 { return Ok(Variant::Error(ExcelError::DivZero)); }
-    Ok(Variant::Float(sum / count as f64))
+    let Some(ctx) = db_resolve_args(args, cells, "DAVERAGE")? else { return Ok(Variant::Error(ExcelError::Ref)); };
+    let nums: Vec<f64> = db_matched_vals(&ctx, cells).iter().filter_map(as_f64).collect();
+    if nums.is_empty() { return Ok(Variant::Error(ExcelError::DivZero)); }
+    Ok(Variant::Float(nums.iter().sum::<f64>() / nums.len() as f64))
 }
 
 fn func_dcount(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() != 3 { return Err("DCOUNT requires 3 arguments".into()); }
-    let (db_c1, db_r1, db_c2, db_r2) = require_range(&args[0], "DCOUNT")?;
-    let field_val = evaluate(&args[1], cells)?;
-    let field_col = resolve_db_field(&field_val, cells, db_c1, db_c2, db_r1)?;
-    if field_col > db_c2 { return Ok(Variant::Error(ExcelError::Ref)); }
-    let (cr_c1, cr_r1, cr_c2, cr_r2) = require_range(&args[2], "DCOUNT")?;
-    let mut count = 0i64;
-    for row in (db_r1 + 1)..=db_r2 {
-        if db_row_matches_criteria(cells, row, db_c1, db_c2, db_r1, cr_c1, cr_c2, cr_r1, cr_r2) {
-            if matches!(cell_val(cells, row, field_col), Variant::Integer(_) | Variant::Float(_)) {
-                count += 1;
-            }
-        }
-    }
-    Ok(Variant::Integer(count))
+    let Some(ctx) = db_resolve_args(args, cells, "DCOUNT")? else { return Ok(Variant::Error(ExcelError::Ref)); };
+    let count = db_matched_vals(&ctx, cells).iter().filter(|v| as_f64(v).is_some()).count();
+    Ok(Variant::Integer(count as i64))
 }
 
 fn func_dcounta(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() != 3 { return Err("DCOUNTA requires 3 arguments".into()); }
-    let (db_c1, db_r1, db_c2, db_r2) = require_range(&args[0], "DCOUNTA")?;
-    let field_val = evaluate(&args[1], cells)?;
-    let field_col = resolve_db_field(&field_val, cells, db_c1, db_c2, db_r1)?;
-    if field_col > db_c2 { return Ok(Variant::Error(ExcelError::Ref)); }
-    let (cr_c1, cr_r1, cr_c2, cr_r2) = require_range(&args[2], "DCOUNTA")?;
-    let mut count = 0i64;
-    for row in (db_r1 + 1)..=db_r2 {
-        if db_row_matches_criteria(cells, row, db_c1, db_c2, db_r1, cr_c1, cr_c2, cr_r1, cr_r2) {
-            if !matches!(cell_val(cells, row, field_col), Variant::Empty) {
-                count += 1;
-            }
-        }
-    }
-    Ok(Variant::Integer(count))
+    let Some(ctx) = db_resolve_args(args, cells, "DCOUNTA")? else { return Ok(Variant::Error(ExcelError::Ref)); };
+    let count = db_matched_vals(&ctx, cells).iter().filter(|v| !matches!(v, Variant::Empty)).count();
+    Ok(Variant::Integer(count as i64))
 }
 
 fn func_dmax(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() != 3 { return Err("DMAX requires 3 arguments".into()); }
-    let (db_c1, db_r1, db_c2, db_r2) = require_range(&args[0], "DMAX")?;
-    let field_val = evaluate(&args[1], cells)?;
-    let field_col = resolve_db_field(&field_val, cells, db_c1, db_c2, db_r1)?;
-    if field_col > db_c2 { return Ok(Variant::Error(ExcelError::Ref)); }
-    let (cr_c1, cr_r1, cr_c2, cr_r2) = require_range(&args[2], "DMAX")?;
-    let mut max: Option<f64> = None;
-    for row in (db_r1 + 1)..=db_r2 {
-        if db_row_matches_criteria(cells, row, db_c1, db_c2, db_r1, cr_c1, cr_c2, cr_r1, cr_r2) {
-            let v = match cell_val(cells, row, field_col) {
-                Variant::Integer(n) => Some(n as f64),
-                Variant::Float(f) => Some(f),
-                _ => None,
-            };
-            if let Some(f) = v {
-                max = Some(max.map_or(f, |m: f64| m.max(f)));
-            }
-        }
-    }
+    let Some(ctx) = db_resolve_args(args, cells, "DMAX")? else { return Ok(Variant::Error(ExcelError::Ref)); };
+    let max = db_matched_vals(&ctx, cells).iter().filter_map(as_f64).reduce(f64::max);
     Ok(as_integer_if_whole(max.unwrap_or(0.0)))
 }
 
 fn func_dmin(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() != 3 { return Err("DMIN requires 3 arguments".into()); }
-    let (db_c1, db_r1, db_c2, db_r2) = require_range(&args[0], "DMIN")?;
-    let field_val = evaluate(&args[1], cells)?;
-    let field_col = resolve_db_field(&field_val, cells, db_c1, db_c2, db_r1)?;
-    if field_col > db_c2 { return Ok(Variant::Error(ExcelError::Ref)); }
-    let (cr_c1, cr_r1, cr_c2, cr_r2) = require_range(&args[2], "DMIN")?;
-    let mut min: Option<f64> = None;
-    for row in (db_r1 + 1)..=db_r2 {
-        if db_row_matches_criteria(cells, row, db_c1, db_c2, db_r1, cr_c1, cr_c2, cr_r1, cr_r2) {
-            let v = match cell_val(cells, row, field_col) {
-                Variant::Integer(n) => Some(n as f64),
-                Variant::Float(f) => Some(f),
-                _ => None,
-            };
-            if let Some(f) = v {
-                min = Some(min.map_or(f, |m: f64| m.min(f)));
-            }
-        }
-    }
+    let Some(ctx) = db_resolve_args(args, cells, "DMIN")? else { return Ok(Variant::Error(ExcelError::Ref)); };
+    let min = db_matched_vals(&ctx, cells).iter().filter_map(as_f64).reduce(f64::min);
     Ok(as_integer_if_whole(min.unwrap_or(0.0)))
 }
 
