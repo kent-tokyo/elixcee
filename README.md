@@ -127,7 +127,7 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 See **[FUNCTIONS.md](FUNCTIONS.md)** for the complete function and VBA syntax reference, including Excel version for each function.
 
 **Highlights:**
-- **Classic (Excel 2003-)**: SUM, VLOOKUP, IF, PMT, DGET, and 100+ core functions
+- **Classic (Excel 2003-)**: SUM, VLOOKUP, IF, PMT, DGET, DSUM, DAVERAGE, DCOUNT, DCOUNTA, DMAX, DMIN, and 100+ core functions
 - **2007–2019**: IFERROR, COUNTIFS/SUMIFS, XOR, IFS, SWITCH, TEXTJOIN, MAXIFS/MINIFS
 - **365/2021**: XLOOKUP, XMATCH, FILTER, SORT, UNIQUE, SEQUENCE, LET, LAMBDA, MAP, REDUCE
 - **2024/365**: TEXTSPLIT, TEXTBEFORE, TEXTAFTER, VSTACK, HSTACK, TAKE, DROP, CHOOSECOLS, CHOOSEROWS
