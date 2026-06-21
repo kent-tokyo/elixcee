@@ -181,32 +181,47 @@ impl FormulaParser {
             }
         }
 
-        // Cell reference: alpha letters followed by digits (e.g., A1, AA10)
-        if matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-            let col = col_letters_to_num(&name);
-            let mut row_s = String::new();
-            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                row_s.push(self.advance().unwrap());
+        // Collect trailing digits: could be cell-ref row (A1) or part of function name (LOG10, ATAN2)
+        let mut trailing_digits = String::new();
+        while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+            trailing_digits.push(self.advance().unwrap());
+        }
+
+        if !trailing_digits.is_empty() {
+            // Look ahead past whitespace: if '(' follows, the digits belong to the function name
+            let mut tmp = self.pos;
+            while tmp < self.chars.len() && matches!(self.chars[tmp], ' ' | '\t') {
+                tmp += 1;
             }
-            let row: u32 = row_s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-            self.skip_ws();
-            // Range: A1:B10
-            if self.peek() == Some(':') {
-                self.advance();
+            // A dot-qualified name (e.g. "A.A0") is always a function, never a cell ref.
+            let is_dotted = name.contains('.');
+            if is_dotted || self.chars.get(tmp) == Some(&'(') {
+                // Function name includes trailing digits (e.g. LOG10, ATAN2, MODE.MULT)
+                name.push_str(&trailing_digits);
+                // Fall through to function-call handling below
+            } else {
+                // Cell reference: name = column letters, trailing_digits = row number
+                let col = col_letters_to_num(&name);
+                let row: u32 = trailing_digits.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
                 self.skip_ws();
-                let mut name2 = String::new();
-                while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
-                    name2.push(self.advance().unwrap().to_ascii_uppercase());
+                // Range: A1:B10
+                if self.peek() == Some(':') {
+                    self.advance();
+                    self.skip_ws();
+                    let mut name2 = String::new();
+                    while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
+                        name2.push(self.advance().unwrap().to_ascii_uppercase());
+                    }
+                    let col2 = col_letters_to_num(&name2);
+                    let mut row2_s = String::new();
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+                        row2_s.push(self.advance().unwrap());
+                    }
+                    let row2: u32 = row2_s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+                    return Ok(FormulaExpr::Range { c1: col, r1: row, c2: col2, r2: row2 });
                 }
-                let col2 = col_letters_to_num(&name2);
-                let mut row2_s = String::new();
-                while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                    row2_s.push(self.advance().unwrap());
-                }
-                let row2: u32 = row2_s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-                return Ok(FormulaExpr::Range { c1: col, r1: row, c2: col2, r2: row2 });
+                return Ok(FormulaExpr::CellRef { col, row });
             }
-            return Ok(FormulaExpr::CellRef { col, row });
         }
 
         // Function call: IDENT(...)
@@ -237,12 +252,16 @@ impl FormulaParser {
             _ => {}
         }
 
-        Err(format!("Unknown identifier: '{}'", name))
+        // Bare identifier not matching any known pattern → name reference for LET/LAMBDA
+        Ok(FormulaExpr::FuncCall { name, args: vec![] })
     }
 }
 
 fn col_letters_to_num(s: &str) -> u32 {
-    s.chars().fold(0u32, |acc, c| acc * 26 + (c as u32 - 'A' as u32 + 1))
+    s.chars().fold(0u32, |acc, c| {
+        let digit = (c as u32).saturating_sub('A' as u32).saturating_add(1);
+        acc.saturating_mul(26).saturating_add(digit)
+    })
 }
 
 /// Parse an Excel formula string (with or without a leading `=`).
@@ -369,5 +388,19 @@ mod tests {
     fn test_dot_function_name() {
         let expr = parse("=MODE.MULT(1,2,2)").unwrap();
         assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "MODE.MULT"));
+    }
+
+    #[test]
+    fn test_function_name_with_digits() {
+        // LOG10 and ATAN2 have digits in their names; must not be mistaken for cell references
+        let expr = parse("=LOG10(100)").unwrap();
+        assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "LOG10"));
+
+        let expr = parse("=ATAN2(1,1)").unwrap();
+        assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "ATAN2"));
+
+        // Cell references with the same letter+digit pattern must still work
+        assert_eq!(parse("=A1").unwrap(), FormulaExpr::CellRef { col: 1, row: 1 });
+        assert_eq!(parse("=B10").unwrap(), FormulaExpr::CellRef { col: 2, row: 10 });
     }
 }

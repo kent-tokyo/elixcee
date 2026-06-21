@@ -4,6 +4,37 @@ A library to emulate and execute Excel macro (VBA) data processing logic at high
 
 The core engine is written in **Rust**; Python bindings are provided via **pyo3 + maturin**.
 
+## Name
+
+**elixcee** = **Excel** + **elixir** + **C**
+
+An *elixir* that cures your Excel dependency — running at C-level speed via Rust.
+
+---
+
+## Comparison with similar tools
+
+| Feature | **elixcee** | xlwings | LibreOffice UNO | openpyxl | xlcalculator |
+|---------|:-----------:|:-------:|:---------------:|:--------:|:------------:|
+| Runs VBA macros | Yes | Yes | Yes (subset) | No | No |
+| Requires Excel | No | Yes | No | No | No |
+| Requires LibreOffice | No | No | Yes | No | No |
+| Evaluates formulas | Yes | Yes | Yes | No | Yes |
+| macOS/Linux/Windows | Yes | partial | Yes | Yes | Yes |
+| Simple Python API | Yes | Yes | No | Yes | Yes |
+| Read .xlsx | Yes | Yes | Yes | Yes | Yes |
+| Read .ods | Yes | Yes | Yes | No | No |
+| Write .xlsx | Yes | Yes | Yes | Yes | No |
+| Write .ods | Yes | Yes | Yes | No | No |
+| Execution speed | Rust (native) | COM/IPC (slow) | IPC (slow) | — | Python |
+
+**Notes:**
+- **xlwings** requires Excel for Mac on macOS (via AppleScript) and Excel on Windows (via COM). Linux support requires a running Excel instance or a cloud bridge.
+- **LibreOffice UNO** has a slow startup (≥ 1 s process launch) and a complex API. It runs VBA via LibreOffice's own interpreter, which may not match Excel's behavior exactly.
+- **openpyxl** reads cached formula values from .xlsx files but does not re-evaluate formulas at runtime.
+- **xlcalculator** re-evaluates Excel formulas in Python but has no VBA support.
+- elixcee's VBA interpreter covers the subset of VBA used in typical data-processing macros (loops, conditionals, cell read/write, string/math functions, multi-sheet access). Excel-UI operations (charting, formatting, dialogs) are no-ops.
+
 ---
 
 ## Installation
@@ -65,135 +96,53 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 
 ---
 
+## Python API
+
+| Method | Description |
+|---|---|
+| `Vm(on_msgbox="skip")` | Create a new VM. `on_msgbox="error"` raises `RuntimeError` on `MsgBox`. |
+| `vm.run(vba_code, macro_name)` | Parse and execute the named Sub. |
+| `vm.set_cell(row, col, value)` | Write a value into a cell (1-based). |
+| `vm.get_cell(row, col)` | Read a cell value. Returns `None` for empty cells. |
+| `vm.cells()` | All non-empty cells as `{(row, col): value}`. |
+| `vm.variables()` | All VBA variables as `{name: value}`. |
+| `vm.set_cell_formula(row, col, formula)` | Store a formula (e.g. `"=SUM(A1:A3)"`) and evaluate it. |
+| `vm.set_cell_formula_batch(formulas)` | Set multiple formulas at once: `{(row, col): formula_str}`. |
+| `vm.recalculate()` | Re-evaluate all formula cells (useful after manual cell writes). |
+| `vm.set_sheet(name)` | Switch the active sheet (creates it if absent). |
+| `vm.active_sheet()` | Name of the currently active sheet. |
+| `vm.sheet_names()` | List of all sheet names. |
+| `vm.get_sheet(name)` | Cells of a named sheet as `{(row, col): value}`. |
+| `vm.save_workbook(path)` | Save all sheets to `.xlsx` or `.ods`. |
+| `vm.cells_df()` | Return the active sheet as a **pandas DataFrame** (requires pandas). |
+| `elixcee.run_macro(vba, name)` | One-shot: run a macro and return `{(row, col): value}`. |
+| `elixcee.load_workbook(path)` | Load an `.xlsx` or `.ods` file into a `Vm`. |
+
+---
+
 ## Coverage
 
-### VBA Syntax
+See **[FUNCTIONS.md](FUNCTIONS.md)** for the complete function and VBA syntax reference, including Excel version for each function.
 
-| Syntax | Example | Status |
-|---|---|---|
-| Sub / End Sub | `Sub MySub() ... End Sub` | Done |
-| Variable assignment | `a = 10` | Done |
-| Cell write | `Cells(1, 1).Value = a` | Done |
-| Cell read | `x = Cells(1, 1).Value` | Done |
-| Comment | `' comment` | Done |
-| Application.Calculation | `Application.Calculation = xlCalculationAutomatic` | Done |
-| Arithmetic expressions | `Cells(1, 1).Value = a + 1` | Done |
-| For loop | `For i = 1 To N ... Next i` | Done |
-| For loop (step) | `For i = 10 To 1 Step -2` | Done |
-| If / Else | `If x > 0 Then ... Else ... End If` | Done |
-| Do While loop | `Do While x > 0 ... Loop` | TBD |
-| Select Case | `Select Case x ... End Select` | TBD |
+**Highlights:**
+- **Classic (Excel 2003-)**: SUM, VLOOKUP, IF, PMT, DGET, and 100+ core functions
+- **2007–2019**: IFERROR, COUNTIFS/SUMIFS, XOR, IFS, SWITCH, TEXTJOIN, MAXIFS/MINIFS
+- **365/2021**: XLOOKUP, XMATCH, FILTER, SORT, UNIQUE, SEQUENCE, LET, LAMBDA, MAP, REDUCE
+- **2024/365**: TEXTSPLIT, TEXTBEFORE, TEXTAFTER, VSTACK, HSTACK, TAKE, DROP, CHOOSECOLS, CHOOSEROWS
+- **VBA**: For/If/While/With/On Error/Function/`Type...End Type`/Named Ranges/Array of UDT
 
-### Excel Worksheet Functions (cell formulas)
+### Named Ranges
 
-#### Arithmetic & Statistical
+Register a named range in VBA with `Range("A1:B5").Name = "MyData"`, then use the name anywhere a range address is accepted:
 
-| Function | Description |
-|---|---|
-| `SUM` | Sum of a range |
-| `AVERAGE` | Average of a range |
-| `AVERAGEIF` | Conditional average |
-| `AVERAGEIFS` | Multi-criteria average |
-| `MIN` / `MAX` | Minimum / Maximum value |
-| `MINIFS` / `MAXIFS` | Conditional min / max |
-| `COUNT` / `COUNTA` | Count of numeric / non-empty cells |
-| `COUNTIF` / `COUNTIFS` | Conditional count |
-| `SUMIF` / `SUMIFS` | Conditional sum |
-| `SUMPRODUCT` | Sum of element-wise products |
-| `PRODUCT` | Product of all values |
-| `MEDIAN` | Median value |
-| `MODE.MULT` | Most frequent value |
-| `LARGE` / `SMALL` | Kth largest / smallest |
-| `RANK` | Rank of a number |
-| `PERCENTILE` / `PERCENTILE.INC` | Percentile (inclusive) |
-| `PERCENTRANK` / `PERCENTRANK.INC` | Percent rank |
-| `ROUND` / `ROUNDUP` / `ROUNDDOWN` | Rounding functions |
-| `INT` | Floor (toward negative infinity) |
-| `TRUNC` | Truncate toward zero |
-| `MOD` | Modulo |
-| `RAND` | Random float 0–1 |
-| `RANDBETWEEN` | Random integer in range |
-| `SUBTOTAL` | Aggregate with selectable function (1–6, 9, 101–106, 109) |
-| `AGGREGATE` | Extended subtotal (1–6, 9, 12–16) |
+```vba
+Range("MyData").Value = 0          ' write to all cells in the range
+For Each cell In Range("MyData")   ' iterate over cells
+    total = total + cell
+Next cell
+```
 
-#### Logical
-
-| Function | Description |
-|---|---|
-| `IF` | Conditional value |
-| `IFS` | Multi-condition branch |
-| `SWITCH` | Switch/case |
-| `AND` / `OR` / `NOT` | Logical operators |
-| `XOR` | Exclusive OR |
-| `IFERROR` | Fallback on error |
-
-#### Text
-
-| Function | Description |
-|---|---|
-| `LEFT` / `RIGHT` / `MID` | Extract characters |
-| `LEFTB` / `RIGHTB` / `MIDB` | Extract by DBCS bytes |
-| `LEN` / `LENB` | Character / byte count |
-| `UPPER` / `LOWER` / `PROPER` | Case conversion |
-| `TRIM` | Remove extra spaces |
-| `FIND` | Case-sensitive position search |
-| `SEARCH` | Case-insensitive wildcard search |
-| `SUBSTITUTE` | Replace by value |
-| `REPLACE` | Replace by position |
-| `CONCATENATE` / `CONCAT` | Concatenate strings |
-| `TEXTJOIN` | Join with delimiter |
-| `TEXT` | Format number as string |
-| `VALUE` | Parse string to number |
-| `EXACT` | Case-sensitive equality |
-| `CHAR` / `UNICHAR` | Character from code |
-| `CODE` / `UNICODE` | Code point of first character |
-| `ASC` | Full-width → half-width (DBCS) |
-| `JIS` | Half-width → full-width (DBCS) |
-
-#### Date & Time
-
-| Function | Description |
-|---|---|
-| `DATE` | Create date serial (Excel epoch) |
-| `TODAY` / `NOW` | Today's date / current datetime |
-| `YEAR` / `MONTH` / `DAY` | Extract date parts |
-| `WEEKDAY` | Day of week (1–3 return types) |
-| `DAYS` | Days between two dates |
-| `EDATE` | Date N months from start |
-| `EOMONTH` | Last day of month N months from start |
-| `DATEDIF` | Difference in Y / M / D / MD / YM / YD |
-| `DATEVALUE` | Parse "YYYY/MM/DD" or "YYYY-MM-DD" |
-| `TIME` | Create time serial |
-| `TIMEVALUE` | Parse "HH:MM:SS" |
-| `HOUR` / `MINUTE` / `SECOND` | Extract time parts |
-| `NETWORKDAYS` | Workdays between dates (Sat+Sun weekend) |
-| `NETWORKDAYS.INTL` | Workdays with custom weekend |
-| `WORKDAY.INTL` | Date N workdays away with custom weekend |
-
-#### Lookup & Reference
-
-| Function | Description |
-|---|---|
-| `VLOOKUP` / `HLOOKUP` | Vertical / horizontal lookup |
-| `XLOOKUP` | Flexible lookup (exact, next-larger, next-smaller) |
-| `LOOKUP` | Sorted vector lookup |
-| `INDEX` | Value at row/column offset |
-| `MATCH` | Position of a value |
-| `XMATCH` | Extended MATCH with mode/search options |
-| `CHOOSE` | Choose from list by index |
-| `ROW` / `COLUMN` | Row / column number of reference |
-
-#### Information
-
-| Function | Description |
-|---|---|
-| `ISBLANK` | Is the value empty? |
-| `ISERROR` / `ISERR` | Is the value an error? |
-| `ISNA` | Is the value #N/A? (always FALSE — no N/A type) |
-| `ISNUMBER` | Is the value numeric? |
-| `ISTEXT` | Is the value a string? |
-| `ISLOGICAL` | Is the value a boolean? |
-| `ISNONTEXT` | Is the value not a string? |
+Named ranges are stored on `vm.named_ranges` (a `dict[str, str]` mapping lowercase name → address).
 
 ### Criteria Syntax (COUNTIF / SUMIF / SUMIFS / etc.)
 
@@ -221,6 +170,18 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 
 ---
 
+## Not Yet Supported
+
+See **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)** for the full list.
+
+Key gaps by category:
+- **Financial**: FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, and more
+- **Math**: FACT, PERMUT, GCD, LCM, SIGN, and more
+- **Statistical**: NORM.DIST, CORREL, COVARIANCE.S, and more
+- **Out of scope**: IMAGE (URL image fetch), GROUPBY (pivot aggregation), TRIMRANGE
+
+---
+
 ## Status Legend
 
 | Mark | Meaning |
@@ -241,3 +202,11 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 | Phase 4 | Control flow (For loop, If/Else, arithmetic expressions) | Done |
 | Phase 5 | Python interface (Vm class, run_macro, load_workbook, MsgBox) | Done |
 | Phase 6 | Formula function expansion (100+ Excel functions, 118 tests) | Done |
+| Phase 7 | Advanced VBA constructs (ElseIf, Exit, For Each, On Error, Function, arrays, While-Wend) | Done |
+| Phase 8 | Range API (ClearContents, Offset, Sheets.Cells, WorksheetFunction, multi-sheet) | Done |
+| Phase 9 | Multi-sheet support (Sheets HashMap, With Sheets, Python API, load_workbook all sheets) | Done |
+| Phase 10 | Worksheet function expansion (math, trig, stats, array/spill, lambda functions) | Done |
+| Phase 11 | User-defined types (`Type...End Type`), named ranges, `RANDARRAY`, pandas integration (`cells_df`), type stubs (`.pyi`) | Done |
+| Phase D1 | Remove rust_xlsxwriter, hand-written XLSX via zip (dependencies: 5→4) | Done |
+| Phase D2 | Remove pest/pest_derive, hand-written recursive descent VBA parser (dependencies: 4→3) | Done |
+| Phase D3 | Remove calamine from runtime, hand-written XLSX/ODS reader (dependencies: 3→2) | Done |

@@ -1,0 +1,15 @@
+.env
+AGENTS.md
+tasks/
+memo.txt
+
+# Added by cargo
+/target
+fuzz/target/
+
+# Python
+.venv/
+*.so
+*.pyd
+*.dylib
+dist/
