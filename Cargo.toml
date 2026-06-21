@@ -1,0 +1,22 @@
+[package]
+name = "elixcee"
+version = "0.1.0"
+edition = "2024"
+authors = ["kent-tokyo <kent-tokyo@users.noreply.github.com>"]
+repository = "https://github.com/kent-tokyo/elixcee"
+homepage = "https://github.com/kent-tokyo/elixcee"
+description = "Emulate and execute Excel VBA macros at high speed — without Microsoft Excel"
+license = "MIT"
+keywords = ["excel", "vba", "macro", "spreadsheet", "python"]
+categories = ["simulation", "text-processing"]
+readme = "README.md"
+
+[lib]
+name = "elixcee"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.29.0" }
+pest = "2.8"
+pest_derive = "2.8"
+calamine = "0.24"

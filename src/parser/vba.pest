@@ -1,0 +1,225 @@
+WHITESPACE = _{ " " | "\t" }
+NEWLINE    = _{ "\r\n" | "\n" | "\r" }
+COMMENT    = _{ "'" ~ (!NEWLINE ~ ANY)* }
+EOL        = _{ COMMENT? ~ NEWLINE }
+
+program = { SOI ~ EOL* ~ (sub_def ~ EOL*)* ~ EOI }
+
+sub_def = {
+    sub_kw ~ ident ~ "(" ~ ")" ~ EOL ~
+    stmt* ~
+    end_sub_kw ~ EOL*
+}
+
+sub_kw     = @{ ^"sub" ~ !ASCII_ALPHANUMERIC }
+end_sub_kw = @{ ^"end" ~ WHITESPACE+ ~ ^"sub" ~ !ASCII_ALPHANUMERIC }
+
+stmt = _{
+    WHITESPACE* ~ do_loop_stmt
+    | WHITESPACE* ~ select_case_stmt
+    | WHITESPACE* ~ with_stmt
+    | WHITESPACE* ~ for_stmt
+    | WHITESPACE* ~ if_stmt
+    | WHITESPACE* ~ (range_copy_stmt | dim_stmt | app_calc | app_prop | msgbox_stmt | range_write_stmt | cell_write | assignment) ~ EOL
+    | EOL
+}
+
+// ── Do While / Do Until ──────────────────────────────────────────────────────
+
+do_loop_stmt = {
+    do_kw ~ do_condition? ~ EOL ~
+    stmt* ~
+    loop_kw ~ do_condition? ~ EOL*
+}
+
+do_condition = { (while_kw | until_kw) ~ expr }
+
+do_kw    = @{ ^"do"    ~ !ASCII_ALPHANUMERIC }
+loop_kw  = @{ ^"loop"  ~ !ASCII_ALPHANUMERIC }
+while_kw = @{ ^"while" ~ !ASCII_ALPHANUMERIC }
+until_kw = @{ ^"until" ~ !ASCII_ALPHANUMERIC }
+
+// ── Select Case ───────────────────────────────────────────────────────────────
+
+select_case_stmt = {
+    select_kw ~ case_kw ~ expr ~ EOL ~
+    case_clause* ~
+    case_else_clause? ~
+    end_select_kw ~ EOL*
+}
+
+case_clause = {
+    case_kw ~ !else_kw ~ case_match_list ~ EOL ~
+    stmt*
+}
+
+case_match_list = { case_match ~ ("," ~ case_match)* }
+
+case_match = {
+    (is_kw ~ cmp_op ~ expr)
+    | (expr ~ to_kw ~ expr)
+    | expr
+}
+
+case_else_clause = {
+    case_kw ~ else_kw ~ EOL ~
+    stmt*
+}
+
+select_kw     = @{ ^"select" ~ !ASCII_ALPHANUMERIC }
+case_kw       = @{ ^"case"   ~ !ASCII_ALPHANUMERIC }
+is_kw         = @{ ^"is"     ~ !ASCII_ALPHANUMERIC }
+end_select_kw = @{ ^"end"    ~ WHITESPACE+ ~ ^"select" ~ !ASCII_ALPHANUMERIC }
+
+// ── Dim ──────────────────────────────────────────────────────────────────────
+
+dim_stmt = { dim_kw ~ dim_rest }
+dim_rest = { (!EOL ~ ANY)* }  // capture to EOL; content is ignored (no-op)
+
+dim_kw = @{ ^"dim" ~ !ASCII_ALPHANUMERIC }
+
+// ── With ... End With ────────────────────────────────────────────────────────
+
+with_stmt = {
+    with_kw ~ with_target ~ EOL ~
+    with_inner* ~
+    end_with_kw ~ EOL*
+}
+
+with_target = { (!EOL ~ ANY)+ }   // the object expression; ignored in VM
+
+with_inner = _{
+    WHITESPACE* ~ with_cell_write ~ EOL
+    | WHITESPACE* ~ with_range_write ~ EOL
+    | WHITESPACE* ~ with_dot_stmt ~ EOL
+    | stmt
+}
+
+with_range_write = {
+    "." ~ ^"range" ~ "(" ~ string_lit ~ ")" ~ "." ~ range_write_prop ~ "=" ~ expr
+}
+
+with_cell_write = {
+    "." ~ ^"cells" ~ "(" ~ expr ~ "," ~ expr ~ ")" ~ "." ~ ^"value" ~ "=" ~ expr
+}
+
+with_dot_stmt = { "." ~ (!EOL ~ ANY)* }  // .Property = … ; ignored
+
+with_kw     = @{ ^"with"  ~ !ASCII_ALPHANUMERIC }
+end_with_kw = @{ ^"end"   ~ WHITESPACE+ ~ ^"with" ~ !ASCII_ALPHANUMERIC }
+
+// ── Multi-line control flow (existing) ───────────────────────────────────────
+
+for_stmt = {
+    for_kw ~ ident ~ "=" ~ expr ~ to_kw ~ expr ~ (step_kw ~ expr)? ~ EOL ~
+    stmt* ~
+    next_kw ~ ident? ~ EOL*
+}
+
+if_stmt = {
+    if_kw ~ expr ~ then_kw ~ EOL ~
+    stmt* ~
+    else_clause? ~
+    end_if_kw ~ EOL*
+}
+
+else_clause = {
+    else_kw ~ EOL ~
+    stmt*
+}
+
+// ── Control-flow keywords ────────────────────────────────────────────────────
+
+for_kw     = @{ ^"for"    ~ !ASCII_ALPHANUMERIC }
+to_kw      = @{ ^"to"     ~ !ASCII_ALPHANUMERIC }
+step_kw    = @{ ^"step"   ~ !ASCII_ALPHANUMERIC }
+next_kw    = @{ ^"next"   ~ !ASCII_ALPHANUMERIC }
+if_kw      = @{ ^"if"     ~ !ASCII_ALPHANUMERIC }
+then_kw    = @{ ^"then"   ~ !ASCII_ALPHANUMERIC }
+else_kw    = @{ ^"else"   ~ !ASCII_ALPHANUMERIC }
+end_if_kw  = @{ ^"end"    ~ WHITESPACE+ ~ ^"if"   ~ !ASCII_ALPHANUMERIC }
+not_kw     = @{ ^"not"    ~ !ASCII_ALPHANUMERIC }
+
+// ── MsgBox ───────────────────────────────────────────────────────────────────
+
+msgbox_kw   = @{ ^"msgbox" ~ !ASCII_ALPHANUMERIC }
+msgbox_stmt =  { msgbox_kw ~ expr ~ ("," ~ expr)* }
+
+// ── Application.Calculation ───────────────────────────────────────────────────
+
+app_calc      = { ^"application" ~ "." ~ ^"calculation" ~ "=" ~ calc_mode_val }
+calc_mode_val = { ^"xlcalculationautomatic" | ^"xlcalculationmanual" }
+
+// Generic Application property (ScreenUpdating, EnableEvents, etc.) — no-op in VM
+app_prop = { ^"application" ~ "." ~ ident ~ "=" ~ expr }
+
+// ── Range write / copy ────────────────────────────────────────────────────────
+
+range_write_stmt = {
+    ^"range" ~ "(" ~ string_lit ~ ")" ~ "." ~ range_write_prop ~ "=" ~ expr
+}
+range_write_prop = { ^"formula" | ^"value" }
+
+range_copy_stmt = {
+    ^"range" ~ "(" ~ string_lit ~ ")" ~ "." ~ ^"copy" ~
+    ^"destination" ~ ":=" ~ ^"range" ~ "(" ~ string_lit ~ ")"
+}
+
+// ── Cell write / assignment ───────────────────────────────────────────────────
+
+cell_write = {
+    ^"cells" ~ "(" ~ expr ~ "," ~ expr ~ ")" ~ "." ~ ^"value" ~ "=" ~ expr
+}
+
+assignment = { ident ~ "=" ~ expr }
+
+// ── Expressions with operator precedence ────────────────────────────────────
+// Precedence: comparison < additive < multiplicative < unary < primary
+
+expr         = _{ comparison }
+comparison   =  { additive ~ (cmp_op ~ additive)* }
+cmp_op       = @{ ">=" | "<=" | "<>" | ">" | "<" | "=" }
+additive     =  { term ~ (add_op ~ term)* }
+add_op       = @{ "+" | "-" | "&" }
+term         =  { factor ~ (mul_op ~ factor)* }
+mul_op       = @{ "*" | "/" }
+factor       = _{ unary_minus | unary_not | primary_expr }
+unary_minus  =  { "-" ~ primary_expr }
+unary_not    =  { not_kw ~ primary_expr }
+
+// Order matters: specific patterns before general ones
+// rows/cols count, cells_end_expr, cell_read, range_read before func_call/var_ref
+primary_expr = _{
+    "(" ~ comparison ~ ")"
+    | float | integer | string_lit | bool_lit
+    | rows_count_expr | cols_count_expr
+    | cells_end_expr
+    | cell_read
+    | range_read
+    | func_call
+    | var_ref
+}
+cell_read    =  { ^"cells" ~ "(" ~ expr ~ "," ~ expr ~ ")" ~ "." ~ ^"value" }
+
+// Rows.Count and Columns.Count constants
+rows_count_expr = { ^"rows"    ~ "." ~ ^"count" }
+cols_count_expr = { ^"columns" ~ "." ~ ^"count" }
+
+// Cells(r,c).End(dir).Row / .Column
+cells_end_expr = {
+    ^"cells" ~ "(" ~ expr ~ "," ~ expr ~ ")" ~ "." ~ ^"end" ~
+    "(" ~ xl_dir_kw ~ ")" ~ "." ~ end_prop_kw
+}
+xl_dir_kw   = { ^"xlup" | ^"xldown" | ^"xltoleft" | ^"xltoright" }
+end_prop_kw = { ^"row" | ^"column" }
+
+// Range("A1").Value in expressions
+range_read = { ^"range" ~ "(" ~ string_lit ~ ")" ~ "." ~ ^"value" }
+func_call    =  { ident ~ "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+
+bool_lit   = @{ (^"true" | ^"false") ~ !ASCII_ALPHANUMERIC }
+var_ref    =  { ident }
+ident      = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+integer    = @{ ASCII_DIGIT+ }
+float      = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+string_lit = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
