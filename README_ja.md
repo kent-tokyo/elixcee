@@ -139,8 +139,8 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 詳細リストは **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)** を参照してください。
 
 主な未対応カテゴリ:
-- **数学**: FACT、PERMUT、GCD、LCM、SIGN ほか
-- **統計**: NORM.DIST、CORREL、COVARIANCE.S ほか
+- **統計**: NORM.S.DIST、T.INV、F.DIST、CHISQ.DIST ほか
+- **テキスト**: REPT、NUMBERVALUE、PHONETIC
 - **対象外**: IMAGE（URL参照）、GROUPBY（ピボット集計）、TRIMRANGE（使用頻度低）
 
 ---

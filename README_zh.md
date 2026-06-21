@@ -177,8 +177,8 @@ Next cell
 详见 **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)**。
 
 主要缺口：
-- **数学函数**：FACT、PERMUT、GCD、LCM、SIGN 等
-- **统计函数**：NORM.DIST、CORREL、COVARIANCE.S 等
+- **统计函数**：NORM.S.DIST、T.INV、F.DIST、CHISQ.DIST 等
+- **文本函数**：REPT、NUMBERVALUE、PHONETIC
 - **超出范围**：IMAGE（URL 图片获取）、GROUPBY（透视聚合）、TRIMRANGE
 
 ---

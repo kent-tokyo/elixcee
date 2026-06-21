@@ -346,6 +346,12 @@ fn eval_func(
         "STDEVP" | "STDEV.P" => func_stdev_p(args, cells),
         "VAR" | "VAR.S"  => func_var_s(args, cells),
         "VARP" | "VAR.P" => func_var_p(args, cells),
+        "CORREL"                        => func_correl(args, cells),
+        "COVARIANCE.S" | "COVAR"        => func_covariance_s(args, cells),
+        "COVARIANCE.P"                  => func_covariance_p(args, cells),
+        "NORM.DIST" | "NORMDIST"        => func_norm_dist(args, cells),
+        "NORM.INV"  | "NORMINV"         => func_norm_inv(args, cells),
+        "T.DIST"                        => func_t_dist(args, cells),
         // ── Rounding ─────────────────────────────────────────────────────────
         "FLOOR" | "FLOOR.MATH"     => func_floor(args, cells),
         "CEILING" | "CEILING.MATH" => func_ceiling(args, cells),
@@ -394,6 +400,12 @@ fn eval_func(
         "CHOOSEROWS" => func_chooserows(args, cells),
         // ── Math / Financial ─────────────────────────────────────────────────
         "COMBIN"    => func_combin(args, cells),
+        "FACT"      => func_fact(args, cells),
+        "PERMUT"    => func_permut(args, cells),
+        "GCD"       => func_gcd(args, cells),
+        "LCM"       => func_lcm(args, cells),
+        "QUOTIENT"  => func_quotient(args, cells),
+        "SIGN"      => func_sign(args, cells),
         "PMT"       => func_pmt(args, cells),
         "FV"        => func_fv(args, cells),
         "PV"        => func_pv(args, cells),
@@ -2066,6 +2078,170 @@ fn func_var_p(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) ->
     Ok(Variant::Float(nums.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / nums.len() as f64))
 }
 
+// ── Statistical: CORREL / COVARIANCE / NORM.DIST / NORM.INV / T.DIST ─────────
+
+/// Collect paired numeric values from two equal-length range arguments.
+fn collect_paired(args: &[FormulaExpr], cells: &HashMap<(u32,u32), CellContent>, fname: &str)
+    -> Result<(Vec<f64>, Vec<f64>), String>
+{
+    if args.len() != 2 { return Err(format!("{fname} requires 2 arguments")); }
+    let a: Vec<f64> = collect_values(&args[0], cells)?.into_iter().filter_map(|v| as_f64(&v)).collect();
+    let b: Vec<f64> = collect_values(&args[1], cells)?.into_iter().filter_map(|v| as_f64(&v)).collect();
+    if a.len() != b.len() || a.is_empty() { return Err(format!("{fname}: arrays must have equal length")); }
+    Ok((a, b))
+}
+
+fn func_correl(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    let (a, b) = collect_paired(args, cells, "CORREL")?;
+    let n = a.len() as f64;
+    let ma = a.iter().sum::<f64>() / n;
+    let mb = b.iter().sum::<f64>() / n;
+    let cov: f64 = a.iter().zip(b.iter()).map(|(x, y)| (x - ma) * (y - mb)).sum();
+    let sa: f64 = a.iter().map(|x| (x - ma).powi(2)).sum::<f64>().sqrt();
+    let sb: f64 = b.iter().map(|y| (y - mb).powi(2)).sum::<f64>().sqrt();
+    if sa == 0.0 || sb == 0.0 { return Ok(Variant::Error(ExcelError::DivZero)); }
+    Ok(Variant::Float(cov / (sa * sb)))
+}
+
+fn func_covariance_s(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    let (a, b) = collect_paired(args, cells, "COVARIANCE.S")?;
+    if a.len() < 2 { return Ok(Variant::Error(ExcelError::DivZero)); }
+    let n = a.len() as f64;
+    let ma = a.iter().sum::<f64>() / n;
+    let mb = b.iter().sum::<f64>() / n;
+    let cov: f64 = a.iter().zip(b.iter()).map(|(x, y)| (x - ma) * (y - mb)).sum::<f64>() / (n - 1.0);
+    Ok(Variant::Float(cov))
+}
+
+fn func_covariance_p(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    let (a, b) = collect_paired(args, cells, "COVARIANCE.P")?;
+    let n = a.len() as f64;
+    let ma = a.iter().sum::<f64>() / n;
+    let mb = b.iter().sum::<f64>() / n;
+    let cov: f64 = a.iter().zip(b.iter()).map(|(x, y)| (x - ma) * (y - mb)).sum::<f64>() / n;
+    Ok(Variant::Float(cov))
+}
+
+/// Error function (Horner's method, Abramowitz & Stegun 7.1.26, max error 1.5e-7)
+fn stat_erf(x: f64) -> f64 {
+    let t = 1.0 / (1.0 + 0.3275911 * x.abs());
+    let p = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+    let r = 1.0 - p * (-x * x).exp();
+    if x >= 0.0 { r } else { -r }
+}
+
+/// Normal CDF: Φ(x) = 0.5*(1 + erf(x/√2))
+fn norm_cdf(x: f64, mean: f64, std: f64) -> f64 {
+    0.5 * (1.0 + stat_erf((x - mean) / (std * std::f64::consts::SQRT_2)))
+}
+
+/// Normal PDF
+fn norm_pdf(x: f64, mean: f64, std: f64) -> f64 {
+    let z = (x - mean) / std;
+    (-0.5 * z * z).exp() / (std * (2.0 * std::f64::consts::PI).sqrt())
+}
+
+/// Rational approximation for inverse normal CDF (Abramowitz & Stegun 26.2.23)
+/// then refined with one Newton step for accuracy ~1e-9
+fn norm_ppf(p: f64) -> f64 {
+    if p <= 0.0 || p >= 1.0 { return f64::NAN; }
+    let (sign, q) = if p < 0.5 { (-1.0, p) } else { (1.0, 1.0 - p) };
+    let t = (-2.0 * q.ln()).sqrt();
+    let c = [2.515517_f64, 0.802853, 0.010328];
+    let d = [1.432788_f64, 0.189269, 0.001308];
+    let mut z = sign * (t - (c[0] + t*(c[1] + t*c[2])) / (1.0 + t*(d[0] + t*(d[1] + t*d[2]))));
+    // Newton-Raphson refinement
+    for _ in 0..3 {
+        let err = norm_cdf(z, 0.0, 1.0) - p;
+        z -= err / norm_pdf(z, 0.0, 1.0);
+    }
+    z
+}
+
+fn func_norm_dist(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 4 { return Err("NORM.DIST requires 4 arguments".into()); }
+    let x    = to_float(&evaluate(&args[0], cells)?)?;
+    let mean = to_float(&evaluate(&args[1], cells)?)?;
+    let std  = to_float(&evaluate(&args[2], cells)?)?;
+    let cum  = is_truthy(&evaluate(&args[3], cells)?);
+    if std <= 0.0 { return Ok(Variant::Error(ExcelError::Num)); }
+    Ok(Variant::Float(if cum { norm_cdf(x, mean, std) } else { norm_pdf(x, mean, std) }))
+}
+
+fn func_norm_inv(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 3 { return Err("NORM.INV requires 3 arguments".into()); }
+    let p    = to_float(&evaluate(&args[0], cells)?)?;
+    let mean = to_float(&evaluate(&args[1], cells)?)?;
+    let std  = to_float(&evaluate(&args[2], cells)?)?;
+    if std <= 0.0 || p <= 0.0 || p >= 1.0 { return Ok(Variant::Error(ExcelError::Num)); }
+    Ok(Variant::Float(mean + std * norm_ppf(p)))
+}
+
+/// Natural log of gamma function.
+/// Uses the reflection formula for x < 0.5, recurrence to shift x ≥ 7,
+/// then the Stirling series for large x.
+fn lgamma(x: f64) -> f64 {
+    use std::f64::consts::PI;
+    if x < 0.5 {
+        PI.ln() - (PI * x).sin().ln() - lgamma(1.0 - x)
+    } else {
+        let mut y = x;
+        let mut adj = 0.0;
+        while y < 7.0 { adj -= y.ln(); y += 1.0; }
+        adj + (y - 0.5) * y.ln() - y + 0.5 * (2.0 * PI).ln()
+            + 1.0/(12.0*y) - 1.0/(360.0*y.powi(3)) + 1.0/(1260.0*y.powi(5))
+    }
+}
+
+/// Regularized incomplete beta function I_x(a, b) via Lentz continued fraction
+fn reg_inc_beta(x: f64, a: f64, b: f64) -> f64 {
+    if x <= 0.0 { return 0.0; }
+    if x >= 1.0 { return 1.0; }
+    if x > (a + 1.0) / (a + b + 2.0) { return 1.0 - reg_inc_beta(1.0 - x, b, a); }
+    let bt = (a * x.ln() + b * (1.0 - x).ln() + lgamma(a + b) - lgamma(a) - lgamma(b)).exp();
+    const EPS: f64 = 3e-10;
+    const FPMIN: f64 = 1e-300;
+    let (qab, qap, qam) = (a + b, a + 1.0, a - 1.0);
+    let (mut c, mut d) = (1.0, 1.0 - qab * x / qap);
+    if d.abs() < FPMIN { d = FPMIN; }
+    d = 1.0 / d;
+    let mut h = d;
+    for m in 1usize..=100 {
+        let mf = m as f64;
+        let m2 = 2.0 * mf;
+        let aa = mf * (b - mf) * x / ((qam + m2) * (a + m2));
+        d = 1.0 + aa * d; if d.abs() < FPMIN { d = FPMIN; }
+        c = 1.0 + aa / c; if c.abs() < FPMIN { c = FPMIN; }
+        d = 1.0 / d; h *= d * c;
+        let aa = -(a + mf) * (qab + mf) * x / ((a + m2) * (qap + m2));
+        d = 1.0 + aa * d; if d.abs() < FPMIN { d = FPMIN; }
+        c = 1.0 + aa / c; if c.abs() < FPMIN { c = FPMIN; }
+        d = 1.0 / d;
+        let delta = d * c; h *= delta;
+        if (delta - 1.0).abs() < EPS { break; }
+    }
+    bt * h / a
+}
+
+fn func_t_dist(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 3 { return Err("T.DIST requires 3 arguments".into()); }
+    let t  = to_float(&evaluate(&args[0], cells)?)?;
+    let v  = to_float(&evaluate(&args[1], cells)?)?;
+    let cum = is_truthy(&evaluate(&args[2], cells)?);
+    if v < 1.0 { return Ok(Variant::Error(ExcelError::Num)); }
+    if cum {
+        let x = v / (v + t * t);
+        let p = 0.5 * reg_inc_beta(x, v / 2.0, 0.5);
+        Ok(Variant::Float(if t >= 0.0 { 1.0 - p } else { p }))
+    } else {
+        // PDF: Γ((v+1)/2) / (√(vπ) Γ(v/2)) * (1 + t²/v)^(-(v+1)/2)
+        let pdf = ((lgamma((v + 1.0) / 2.0) - lgamma(v / 2.0)).exp())
+            / (v * std::f64::consts::PI).sqrt()
+            * (1.0 + t * t / v).powf(-(v + 1.0) / 2.0);
+        Ok(Variant::Float(pdf))
+    }
+}
+
 // ── Rounding ──────────────────────────────────────────────────────────────────
 
 fn func_floor(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
@@ -3092,6 +3268,74 @@ fn func_combin(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
         result = result * (n - i) as f64 / (i + 1) as f64;
     }
     Ok(as_integer_if_whole(result.round()))
+}
+
+// ── Math & Combinatorics ──────────────────────────────────────────────────────
+
+fn func_fact(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 1 { return Err("FACT requires 1 argument".into()); }
+    let n = to_float(&evaluate(&args[0], cells)?)? as i64;
+    if n < 0 { return Ok(Variant::Error(ExcelError::Num)); }
+    if n > 170 { return Ok(Variant::Error(ExcelError::Num)); }
+    let mut result = 1f64;
+    for i in 2..=n { result *= i as f64; }
+    Ok(as_integer_if_whole(result))
+}
+
+fn func_permut(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 2 { return Err("PERMUT requires 2 arguments".into()); }
+    let n = to_float(&evaluate(&args[0], cells)?)? as i64;
+    let k = to_float(&evaluate(&args[1], cells)?)? as i64;
+    if n < 0 || k < 0 || k > n { return Ok(Variant::Error(ExcelError::Num)); }
+    let mut result = 1f64;
+    for i in (n - k + 1)..=n { result *= i as f64; }
+    Ok(as_integer_if_whole(result))
+}
+
+fn gcd_two(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 { let t = b; b = a % b; a = t; }
+    a
+}
+
+fn func_gcd(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.is_empty() { return Err("GCD requires at least 1 argument".into()); }
+    let vals = collect_all(args, cells)?;
+    let mut result = 0u64;
+    for v in &vals {
+        let n = to_float(v)? as i64;
+        if n < 0 { return Ok(Variant::Error(ExcelError::Num)); }
+        result = gcd_two(result, n as u64);
+    }
+    Ok(Variant::Integer(result as i64))
+}
+
+fn func_lcm(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.is_empty() { return Err("LCM requires at least 1 argument".into()); }
+    let vals = collect_all(args, cells)?;
+    let mut result = 1u64;
+    for v in &vals {
+        let n = to_float(v)? as i64;
+        if n < 0 { return Ok(Variant::Error(ExcelError::Num)); }
+        let n = n as u64;
+        let g = gcd_two(result, n);
+        if g == 0 { result = 0; break; }
+        result = result / g * n;
+    }
+    Ok(Variant::Integer(result as i64))
+}
+
+fn func_quotient(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 2 { return Err("QUOTIENT requires 2 arguments".into()); }
+    let num = to_float(&evaluate(&args[0], cells)?)?;
+    let den = to_float(&evaluate(&args[1], cells)?)?;
+    if den == 0.0 { return Ok(Variant::Error(ExcelError::DivZero)); }
+    Ok(Variant::Integer((num / den).trunc() as i64))
+}
+
+fn func_sign(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 1 { return Err("SIGN requires 1 argument".into()); }
+    let n = to_float(&evaluate(&args[0], cells)?)?;
+    Ok(Variant::Integer(if n > 0.0 { 1 } else if n < 0.0 { -1 } else { 0 }))
 }
 
 // ── DGET ─────────────────────────────────────────────────────────────────────
@@ -4638,6 +4882,87 @@ mod tests {
         match calc("=XIRR(A1:A3,B1:B3)", &c_xnpv) {
             Variant::Float(f) => assert!(f > 0.0 && f < 2.0, "XIRR out of range: {}", f),
             other => panic!("XIRR unexpected: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_math_combinatorics() {
+        let c = HashMap::new();
+        // FACT
+        assert_eq!(calc("=FACT(0)", &c), Variant::Integer(1));
+        assert_eq!(calc("=FACT(5)", &c), Variant::Integer(120));
+        assert_eq!(calc("=FACT(10)", &c), Variant::Integer(3628800));
+        assert_eq!(calc("=FACT(-1)", &c), Variant::Error(ExcelError::Num));
+        // PERMUT
+        assert_eq!(calc("=PERMUT(5,2)", &c), Variant::Integer(20));
+        assert_eq!(calc("=PERMUT(5,0)", &c), Variant::Integer(1));
+        // GCD
+        assert_eq!(calc("=GCD(12,8)", &c), Variant::Integer(4));
+        assert_eq!(calc("=GCD(0,5)", &c), Variant::Integer(5));
+        // LCM
+        assert_eq!(calc("=LCM(4,6)", &c), Variant::Integer(12));
+        assert_eq!(calc("=LCM(3,0)", &c), Variant::Integer(0));
+        // QUOTIENT
+        assert_eq!(calc("=QUOTIENT(10,3)", &c), Variant::Integer(3));
+        assert_eq!(calc("=QUOTIENT(-10,3)", &c), Variant::Integer(-3));
+        assert_eq!(calc("=QUOTIENT(10,0)", &c), Variant::Error(ExcelError::DivZero));
+        // SIGN
+        assert_eq!(calc("=SIGN(5)", &c), Variant::Integer(1));
+        assert_eq!(calc("=SIGN(-3)", &c), Variant::Integer(-1));
+        assert_eq!(calc("=SIGN(0)", &c), Variant::Integer(0));
+    }
+
+    #[test]
+    fn test_statistical_extended() {
+        // CORREL
+        let c = cells_from(&[
+            ((1,1), Variant::Float(1.0)), ((1,2), Variant::Float(2.0)),
+            ((2,1), Variant::Float(2.0)), ((2,2), Variant::Float(4.0)),
+            ((3,1), Variant::Float(3.0)), ((3,2), Variant::Float(6.0)),
+        ]);
+        match calc("=CORREL(A1:A3,B1:B3)", &c) {
+            Variant::Float(f) => assert!((f - 1.0).abs() < 1e-9),
+            other => panic!("CORREL: {:?}", other),
+        }
+        // COVARIANCE.P
+        let c2 = cells_from(&[
+            ((1,1), Variant::Float(2.0)), ((1,2), Variant::Float(4.0)),
+            ((2,1), Variant::Float(4.0)), ((2,2), Variant::Float(6.0)),
+        ]);
+        // cov_p = ((2-3)*(4-5) + (4-3)*(6-5)) / 2 = 1.0
+        match calc("=COVARIANCE.P(A1:A2,B1:B2)", &c2) {
+            Variant::Float(f) => assert!((f - 1.0).abs() < 1e-9),
+            other => panic!("COVARIANCE.P: {:?}", other),
+        }
+        // NORM.DIST (cumulative)
+        let cn = HashMap::new();
+        match calc("=NORM.DIST(0,0,1,TRUE)", &cn) {
+            Variant::Float(f) => assert!((f - 0.5).abs() < 1e-6),
+            other => panic!("NORM.DIST CDF: {:?}", other),
+        }
+        match calc("=NORM.DIST(1.96,0,1,TRUE)", &cn) {
+            Variant::Float(f) => assert!((f - 0.975).abs() < 0.001),
+            other => panic!("NORM.DIST 1.96: {:?}", other),
+        }
+        // NORM.DIST (PDF)
+        match calc("=NORM.DIST(0,0,1,FALSE)", &cn) {
+            Variant::Float(f) => assert!((f - 0.39894).abs() < 1e-4),
+            other => panic!("NORM.DIST PDF: {:?}", other),
+        }
+        // NORM.INV
+        match calc("=NORM.INV(0.975,0,1)", &cn) {
+            Variant::Float(f) => assert!((f - 1.96).abs() < 0.001),
+            other => panic!("NORM.INV: {:?}", other),
+        }
+        // T.DIST (cumulative) — t=0 should give 0.5
+        match calc("=T.DIST(0,10,TRUE)", &cn) {
+            Variant::Float(f) => assert!((f - 0.5).abs() < 1e-6),
+            other => panic!("T.DIST(0): {:?}", other),
+        }
+        // T.DIST: t(10) 97.5th percentile ≈ 2.228
+        match calc("=T.DIST(2.228,10,TRUE)", &cn) {
+            Variant::Float(f) => assert!((f - 0.975).abs() < 0.001),
+            other => panic!("T.DIST df=10: {:?}", other),
         }
     }
 

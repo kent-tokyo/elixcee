@@ -177,8 +177,8 @@ Named ranges are stored on `vm.named_ranges` (a `dict[str, str]` mapping lowerca
 See **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)** for the full list.
 
 Key gaps by category:
-- **Math**: FACT, PERMUT, GCD, LCM, SIGN, and more
-- **Statistical**: NORM.DIST, CORREL, COVARIANCE.S, and more
+- **Statistical**: NORM.S.DIST, T.INV, F.DIST, CHISQ.DIST, and more
+- **Text**: REPT, NUMBERVALUE, PHONETIC
 - **Out of scope**: IMAGE (URL image fetch), GROUPBY (pivot aggregation), TRIMRANGE
 
 ---

@@ -102,7 +102,13 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 
 | Function | Description | Excel |
 |---|---|---|
-| `PMT`  | Periodic payment for a loan (`rate, nper, pv, [fv], [type]`) | Classic |
+| `PMT`     | Periodic payment for a loan (`rate, nper, pv, [fv], [type]`) | Classic |
+| `FACT`    | Factorial n! | Classic |
+| `PERMUT`  | Permutations P(n, k) | Classic |
+| `GCD`     | Greatest common divisor (varargs) | Classic |
+| `LCM`     | Least common multiple (varargs) | Classic |
+| `QUOTIENT` | Integer division (truncated quotient) | Classic |
+| `SIGN`    | Sign of a number (−1, 0, or 1) | Classic |
 | `FV`   | Future value of an investment | Classic |
 | `PV`   | Present value of an investment | Classic |
 | `NPER` | Number of periods for an annuity | Classic |
@@ -123,6 +129,12 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | `STDEVP` / `STDEV.P` | Population standard deviation | Classic / 2010 |
 | `VAR` / `VAR.S` | Sample variance | Classic / 2010 |
 | `VARP` / `VAR.P` | Population variance | Classic / 2010 |
+| `CORREL` | Pearson correlation coefficient | Classic |
+| `COVARIANCE.S` / `COVAR` | Sample covariance | Classic / 2010 |
+| `COVARIANCE.P` | Population covariance | 2010 |
+| `NORM.DIST` / `NORMDIST` | Normal distribution CDF or PDF | 2010 / Classic |
+| `NORM.INV` / `NORMINV` | Inverse normal distribution | 2010 / Classic |
+| `T.DIST` | Student's t-distribution CDF or PDF | 2010 |
 
 ### Math & Trigonometry
 
@@ -301,27 +313,6 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | `IMAGE(source, ...)` | Fetches images from URLs — not applicable in a headless VBA emulator |
 | `GROUPBY(row_fields, values, function, ...)` | Complex pivot-style aggregation; requires a multi-dimensional grouping engine |
 | `TRIMRANGE(range)` | Trims empty rows/cols from the edges of a range; low usage frequency |
-
-### Math & Combinatorics
-
-| Function | Description | Excel |
-|---|---|---|
-| `FACT` | Factorial n! | Classic |
-| `PERMUT` | Number of permutations P(n, k) | Classic |
-| `GCD` | Greatest common divisor | Classic |
-| `LCM` | Least common multiple | Classic |
-| `QUOTIENT` | Integer division (truncated quotient) | Classic |
-| `SIGN` | Sign of a number (−1, 0, or 1) | Classic |
-
-### Statistical
-
-| Function | Description | Excel |
-|---|---|---|
-| `NORM.DIST` | Normal distribution (cumulative or PDF) | 2010 |
-| `NORM.INV` | Inverse of normal distribution | 2010 |
-| `T.DIST` | Student's t-distribution | 2010 |
-| `CORREL` | Pearson correlation coefficient | Classic |
-| `COVARIANCE.S` / `COVARIANCE.P` | Sample / population covariance | 2010 |
 
 ### Text
 
