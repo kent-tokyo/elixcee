@@ -54,6 +54,64 @@ maturin develop
 
 ---
 
+## CLI（Windows / Linux / macOS）
+
+Python 不要のスタンドアロンバイナリを [Releases](https://github.com/kent-tokyo/elixcee/releases) ページで配布しています。
+
+| ダウンロード | 対象プラットフォーム |
+|---|---|
+| [elixcee-x86_64-windows.exe](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-windows.exe) | Windows x64 |
+| [elixcee-x86_64-linux](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-linux) | Linux x64 |
+| [elixcee-aarch64-macos](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-aarch64-macos) | macOS Apple Silicon |
+
+### 使い方
+
+```
+elixcee <vba_file> <MacroName> [OPTIONS]
+
+引数:
+  <vba_file>    VBA ソースファイルのパス（.vbs / .bas / .txt）
+  <MacroName>   実行する Sub の名前
+
+オプション:
+  --file <path>    スプレッドシートからセルデータを読み込む（.xlsx / .xlsm / .ods）
+  --sheet <name>   アクティブシート名（デフォルト: --file の先頭シート）
+  --output <path>  結果セルをスプレッドシートに保存（.xlsx / .ods）
+```
+
+### 実行例
+
+VBA ファイルを実行して結果を標準出力に表示:
+
+```bat
+elixcee macro.vbs ProcessData
+```
+
+Excel ファイルからデータを読み込み、マクロを実行し、結果を保存:
+
+```bat
+elixcee macro.vbs ProcessData --file input.xlsx --output result.xlsx
+```
+
+出力形式 — 非空セルを1行ずつ、アドレスと値をタブ区切りで表示:
+
+```
+A1    Hello
+B1    42
+A2    3.14
+```
+
+`MsgBox` の内容は標準出力に表示されます。
+
+### ソースからビルド
+
+```bash
+cargo build --release --bin elixcee
+# 生成物: target/release/elixcee（Windows では elixcee.exe）
+```
+
+---
+
 ## クイックスタート
 
 ```python
