@@ -231,3 +231,5 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 | Phase D1 | rust_xlsxwriter 削除、手書き XLSX（zip）出力（依存: 5→4） | 完了 |
 | Phase D2 | pest/pest_derive 削除、手書き再帰下降 VBA パーサー（依存: 4→3） | 完了 |
 | Phase D3 | calamine をランタイム依存から除去、手書き XLSX/ODS リーダー（依存: 3→2） | 完了 |
+| Perf R4 | SUM/AVERAGE/MIN/MAX fast path（`Vec<Variant>` 省略）、RangeWrite dirty フラグ集約 | 完了 |
+| CLI | スタンドアロン `elixcee` バイナリ、pyo3 オプション化、GitHub Actions リリースワークフロー | 完了 |

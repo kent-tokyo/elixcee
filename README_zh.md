@@ -54,6 +54,64 @@ maturin develop
 
 ---
 
+## CLI（Windows / Linux / macOS）
+
+无需 Python 的独立可执行文件，可从 [Releases](https://github.com/kent-tokyo/elixcee/releases) 页面下载。
+
+| 下载 | 适用平台 |
+|---|---|
+| [elixcee-x86_64-windows.exe](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-windows.exe) | Windows x64 |
+| [elixcee-x86_64-linux](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-linux) | Linux x64 |
+| [elixcee-aarch64-macos](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-aarch64-macos) | macOS Apple Silicon |
+
+### 用法
+
+```
+elixcee <vba_file> <MacroName> [OPTIONS]
+
+参数：
+  <vba_file>    VBA 源文件路径（.vbs / .bas / .txt）
+  <MacroName>   要执行的 Sub 名称
+
+选项：
+  --file <path>    从电子表格加载单元格数据（.xlsx / .xlsm / .ods）
+  --sheet <name>   活动工作表名称（默认：--file 的第一个工作表）
+  --output <path>  将结果单元格保存到电子表格（.xlsx / .ods）
+```
+
+### 示例
+
+执行 VBA 文件并将结果打印到标准输出：
+
+```bat
+elixcee macro.vbs ProcessData
+```
+
+从 Excel 文件加载数据，执行宏，并保存结果：
+
+```bat
+elixcee macro.vbs ProcessData --file input.xlsx --output result.xlsx
+```
+
+输出格式 — 每行一个非空单元格，地址与值用制表符分隔：
+
+```
+A1    Hello
+B1    42
+A2    3.14
+```
+
+`MsgBox` 的内容将输出到标准输出。
+
+### 从源码构建
+
+```bash
+cargo build --release --bin elixcee
+# 生成文件：target/release/elixcee（Windows 为 elixcee.exe）
+```
+
+---
+
 ## 快速开始
 
 ```python
@@ -211,3 +269,5 @@ Next cell
 | Phase D1 | 移除 rust_xlsxwriter，手写 XLSX（zip）输出（依赖：5→4） | 完成 |
 | Phase D2 | 移除 pest/pest_derive，手写递归下降 VBA 解析器（依赖：4→3） | 完成 |
 | Phase D3 | 从运行时依赖中移除 calamine，手写 XLSX/ODS 读取器（依赖：3→2） | 完成 |
+| Perf R4 | SUM/AVERAGE/MIN/MAX 快速路径（跳过 `Vec<Variant>`），RangeWrite dirty 标志批量更新 | 完成 |
+| CLI | 独立 `elixcee` 可执行文件；pyo3 可选化；GitHub Actions 发布工作流 | 完成 |

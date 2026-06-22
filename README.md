@@ -269,3 +269,5 @@ Key gaps by category:
 | Phase D1 | Remove rust_xlsxwriter, hand-written XLSX via zip (dependencies: 5→4) | Done |
 | Phase D2 | Remove pest/pest_derive, hand-written recursive descent VBA parser (dependencies: 4→3) | Done |
 | Phase D3 | Remove calamine from runtime, hand-written XLSX/ODS reader (dependencies: 3→2) | Done |
+| Perf R4 | SUM/AVERAGE/MIN/MAX fast path (skip `Vec<Variant>`), RangeWrite dirty-flag batching | Done |
+| CLI | Standalone `elixcee` binary; pyo3 made optional; GitHub Actions release workflow | Done |
