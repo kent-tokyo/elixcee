@@ -313,6 +313,8 @@ fn eval_func(
         "UNICODE"     => func_code(args, cells),
         "UPPER"       => func_upper(args, cells),
         "VALUE"       => func_value(args, cells),
+        "REPT"        => func_rept(args, cells),
+        "NUMBERVALUE" => func_numbervalue(args, cells),
         // -- Date/Time --
         "YEAR"        => func_year(args, cells),
         "MONTH"       => func_month(args, cells),
@@ -1726,6 +1728,28 @@ fn func_value(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) ->
     cleaned.parse::<f64>()
         .map(as_integer_if_whole)
         .map_err(|_| format!("VALUE: cannot convert '{}' to number", s))
+}
+
+fn func_rept(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 2 { return Err("REPT requires 2 arguments".into()); }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    let n    = to_float(&evaluate(&args[1], cells)?)? as i64;
+    if n < 0 { return Ok(Variant::Error(ExcelError::Value)); }
+    Ok(Variant::Str(text.repeat(n as usize)))
+}
+
+fn func_numbervalue(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 3 { return Err("NUMBERVALUE requires 1 to 3 arguments".into()); }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    let dec  = if args.len() >= 2 { to_str(&evaluate(&args[1], cells)?) } else { ".".into() };
+    let grp  = if args.len() >= 3 { to_str(&evaluate(&args[2], cells)?) } else { ",".into() };
+    if dec.is_empty() || dec == grp { return Ok(Variant::Error(ExcelError::Value)); }
+    if text.trim().is_empty() { return Ok(Variant::Integer(0)); }
+    let normalized = text.replace(grp.as_str(), "").replace(dec.as_str(), ".");
+    match normalized.parse::<f64>() {
+        Ok(n)  => Ok(as_integer_if_whole(n)),
+        Err(_) => Ok(Variant::Error(ExcelError::Value)),
+    }
 }
 
 fn func_char(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
@@ -5186,6 +5210,34 @@ mod tests {
             Variant::Float(f) => assert!(f > 0.0 && f < 2.0, "XIRR out of range: {}", f),
             other => panic!("XIRR unexpected: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_rept_numbervalue() {
+        let c = HashMap::new();
+        // REPT
+        assert_eq!(calc("=REPT(\"ab\",3)", &c), Variant::Str("ababab".into()));
+        assert_eq!(calc("=REPT(\"x\",0)", &c),  Variant::Str("".into()));
+        assert_eq!(calc("=REPT(\"x\",-1)", &c), Variant::Error(ExcelError::Value));
+        assert_eq!(calc("=REPT(\"hi\",1.9)", &c), Variant::Str("hi".into())); // truncate
+
+        // NUMBERVALUE — default separators
+        assert_eq!(calc("=NUMBERVALUE(\"1234.56\")", &c), Variant::Float(1234.56));
+        match calc("=NUMBERVALUE(\"1,234.56\")", &c) {
+            Variant::Float(f) => assert!((f - 1234.56).abs() < 1e-9),
+            other => panic!("NUMBERVALUE unexpected: {:?}", other),
+        }
+        assert_eq!(calc("=NUMBERVALUE(\"\")", &c), Variant::Integer(0));
+        assert_eq!(calc("=NUMBERVALUE(\"abc\")", &c), Variant::Error(ExcelError::Value));
+        // European locale: decimal=",", group="."
+        match calc("=NUMBERVALUE(\"1.234,56\",\",\",\".\")", &c) {
+            Variant::Float(f) => assert!((f - 1234.56).abs() < 1e-9),
+            other => panic!("NUMBERVALUE EU unexpected: {:?}", other),
+        }
+        // Whole number
+        assert_eq!(calc("=NUMBERVALUE(\"42\")", &c), Variant::Integer(42));
+        // Invalid: same separator
+        assert_eq!(calc("=NUMBERVALUE(\"1.2\",\".\",\".\")", &c), Variant::Error(ExcelError::Value));
     }
 
     #[test]

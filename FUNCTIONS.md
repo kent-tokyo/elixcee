@@ -194,6 +194,8 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | `TEXTBEFORE` | Extract text before the Nth occurrence of a delimiter | 2024/365 |
 | `TEXTAFTER` | Extract text after the Nth occurrence of a delimiter | 2024/365 |
 | `VALUETOTEXT` | Convert any value to its text representation | 2024/365 |
+| `REPT` | Repeat a text string N times | Classic |
+| `NUMBERVALUE` | Parse number with locale-specific decimal/group separators | 2013 |
 
 ### Date & Time
 
@@ -324,8 +326,6 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 
 | Function | Description | Excel |
 |---|---|---|
-| `REPT` | Repeat a text string N times | Classic |
-| `NUMBERVALUE` | Parse number with locale-specific separator | 2013 |
 | `PHONETIC` | Extract phonetic (furigana) characters | Classic |
 | `BAHTTEXT` | Format number as Thai Baht text | Classic |
 
