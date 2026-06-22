@@ -191,6 +191,25 @@ fn bench_recalculate(c: &mut Criterion) {
     });
 }
 
+fn bench_formula_countif_wildcard(c: &mut Criterion) {
+    // COUNTIF(A1:A1000,"*son") — suffix wildcard, no DP needed with fast path
+    let mut cells: HashMap<(u32, u32), CellContent> = HashMap::new();
+    let names = ["Jackson", "Mason", "Wilson", "Johnson", "Anderson",
+                 "Thompson", "Martin", "Cooper", "Evans", "Murphy"];
+    for row in 1u32..=1000 {
+        let name = names[(row as usize - 1) % names.len()];
+        cells.insert((row, 1), CellContent { formula: None, value: Variant::Str(name.to_uppercase()) });
+    }
+    let expr_suffix  = fparse("=COUNTIF(A1:A1000,\"*SON\")").unwrap();
+    let expr_contains = fparse("=COUNTIF(A1:A1000,\"*SON*\")").unwrap();
+    c.bench_function("formula_countif_wildcard_suffix", |b| {
+        b.iter(|| evaluate(black_box(&expr_suffix), black_box(&cells)).unwrap())
+    });
+    c.bench_function("formula_countif_wildcard_contains", |b| {
+        b.iter(|| evaluate(black_box(&expr_contains), black_box(&cells)).unwrap())
+    });
+}
+
 criterion_group!(
     benches,
     bench_vba_parse_only,
@@ -204,5 +223,6 @@ criterion_group!(
     bench_formula_dsum,
     bench_formula_filter,
     bench_recalculate,
+    bench_formula_countif_wildcard,
 );
 criterion_main!(benches);
