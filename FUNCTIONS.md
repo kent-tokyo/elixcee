@@ -240,11 +240,17 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 |---|---|---|
 | `ISBLANK` | Is the value empty? | Classic |
 | `ISERROR` / `ISERR` | Is the value an error? | Classic |
-| `ISNA` | Is the value #N/A? (always FALSE — no N/A type) | Classic |
+| `ISNA` | Is the value #N/A? | Classic |
 | `ISNUMBER` | Is the value numeric? | Classic |
 | `ISTEXT` | Is the value a string? | Classic |
 | `ISLOGICAL` | Is the value a boolean? | Classic |
 | `ISNONTEXT` | Is the value not a string? | Classic |
+| `N` | Convert a value to a number | Classic |
+| `NA` | Generate an #N/A error value | Classic |
+| `TYPE` | Return numeric type code (1=num, 2=text, 4=bool, 16=error, 64=array) | Classic |
+| `ERROR.TYPE` | Return numeric code of an error (#NULL!=1 … #N/A=7) | Classic |
+| `FORMULATEXT` | Return formula of a cell as text | 2013 |
+| `CELL` | Return cell metadata (address, row, col, type, contents, width, …) | Classic |
 
 ### Array / Spill Functions
 
@@ -329,17 +335,6 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 |---|---|---|
 | `WEEKNUM` | Week number in a year | Classic |
 | `ISOWEEKNUM` | ISO 8601 week number | 2013 |
-
-### Lookup & Information
-
-| Function | Description | Excel |
-|---|---|---|
-| `FORMULATEXT` | Return formula of a cell as text | 2013 |
-| `CELL` | Return metadata about a cell (format, address, etc.) | Classic |
-| `N` | Convert a value to a number | Classic |
-| `NA` | Generate an #N/A error value | Classic |
-| `TYPE` | Return numeric type code of a value | Classic |
-| `ERROR.TYPE` | Return numeric code of an error value | Classic |
 
 ### Dynamic Array
 

@@ -347,6 +347,12 @@ fn eval_func(
         "ISTEXT"      => func_istext(args, cells),
         "ISLOGICAL"   => func_islogical(args, cells),
         "ISNONTEXT"   => func_isnontext(args, cells),
+        "N"           => func_n(args, cells),
+        "NA"          => func_na(args, cells),
+        "TYPE"        => func_type_fn(args, cells),
+        "ERROR.TYPE"  => func_error_type(args, cells),
+        "FORMULATEXT" => func_formulatext(args, cells),
+        "CELL"        => func_cell(args, cells),
         "VLOOKUP"     => func_vlookup(args, cells),
         "HLOOKUP"     => func_hlookup(args, cells),
         "INDEX"       => func_index(args, cells),
@@ -2131,6 +2137,109 @@ fn func_islogical(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>
 fn func_isnontext(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.len() != 1 { return Err("ISNONTEXT requires 1 argument".into()); }
     Ok(Variant::Boolean(!matches!(evaluate(&args[0], cells).unwrap_or(Variant::Empty), Variant::Str(_))))
+}
+
+// ── N / NA / TYPE / ERROR.TYPE / FORMULATEXT / CELL ──────────────────────────
+
+fn func_na(args: &[FormulaExpr], _cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if !args.is_empty() { return Err("NA takes no arguments".into()); }
+    Ok(Variant::Error(ExcelError::NA))
+}
+
+fn func_n(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 1 { return Err("N requires 1 argument".into()); }
+    Ok(match evaluate(&args[0], cells)? {
+        Variant::Integer(n)   => Variant::Integer(n),
+        Variant::Float(f)     => Variant::Float(f),
+        Variant::Date(s)      => Variant::Integer(s),
+        Variant::Boolean(b)   => Variant::Integer(if b { 1 } else { 0 }),
+        Variant::Error(e)     => Variant::Error(e),
+        _                     => Variant::Integer(0),
+    })
+}
+
+fn func_type_fn(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 1 { return Err("TYPE requires 1 argument".into()); }
+    let code = match evaluate(&args[0], cells)? {
+        Variant::Integer(_) | Variant::Float(_) | Variant::Date(_) | Variant::Empty => 1,
+        Variant::Str(_)     => 2,
+        Variant::Boolean(_) => 4,
+        Variant::Error(_)   => 16,
+        Variant::Array(_)   => 64,
+        Variant::Record(_)  => 64,
+    };
+    Ok(Variant::Integer(code))
+}
+
+fn func_error_type(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 1 { return Err("ERROR.TYPE requires 1 argument".into()); }
+    // Evaluation errors map to #VALUE! (code 3); non-errors return #N/A
+    let v = evaluate(&args[0], cells).unwrap_or(Variant::Error(ExcelError::Value));
+    let code: i64 = match v {
+        Variant::Error(ExcelError::Null)    => 1,
+        Variant::Error(ExcelError::DivZero) => 2,
+        Variant::Error(ExcelError::Value)   => 3,
+        Variant::Error(ExcelError::Ref)     => 4,
+        Variant::Error(ExcelError::Name)    => 5,
+        Variant::Error(ExcelError::Num)     => 6,
+        Variant::Error(ExcelError::NA)      => 7,
+        _ => return Ok(Variant::Error(ExcelError::NA)),
+    };
+    Ok(Variant::Integer(code))
+}
+
+fn func_formulatext(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 1 { return Err("FORMULATEXT requires 1 argument".into()); }
+    let (row, col) = match &args[0] {
+        FormulaExpr::CellRef { row, col } => (*row, *col),
+        FormulaExpr::Range { r1, c1, .. } => (*r1, *c1),
+        _ => return Ok(Variant::Error(ExcelError::Value)),
+    };
+    match cells.get(&(row, col)).and_then(|c| c.formula.as_ref()) {
+        Some(f) => Ok(Variant::Str(f.clone())),
+        None    => Ok(Variant::Error(ExcelError::NA)),
+    }
+}
+
+fn col_to_letter(mut col: u32) -> String {
+    let mut s = String::new();
+    while col > 0 {
+        col -= 1;
+        s.insert(0, (b'A' + (col % 26) as u8) as char);
+        col /= 26;
+    }
+    s
+}
+
+fn func_cell(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 { return Err("CELL requires 1 or 2 arguments".into()); }
+    let info = to_str(&evaluate(&args[0], cells)?).to_lowercase();
+    let (row, col) = if args.len() == 2 {
+        match &args[1] {
+            FormulaExpr::CellRef { row, col } => (*row, *col),
+            FormulaExpr::Range { r1, c1, .. } => (*r1, *c1),
+            _ => (1u32, 1u32),
+        }
+    } else { (1u32, 1u32) };
+
+    Ok(match info.as_str() {
+        "address"  => Variant::Str(format!("${}${}", col_to_letter(col), row)),
+        "col"      => Variant::Integer(col as i64),
+        "row"      => Variant::Integer(row as i64),
+        "contents" => cell_val(cells, row, col),
+        "type"     => {
+            let v = cell_val(cells, row, col);
+            Variant::Str(match v {
+                Variant::Empty       => "b".into(),
+                Variant::Str(_)      => "l".into(),
+                _                    => "v".into(),
+            })
+        }
+        "filename" | "prefix" | "format" => Variant::Str(String::new()),
+        "protect" | "parentheses" | "color" => Variant::Integer(0),
+        "width"    => Variant::Integer(8),
+        _          => Variant::Integer(0),
+    })
 }
 
 // ── Statistics ────────────────────────────────────────────────────────────────
@@ -5032,6 +5141,59 @@ mod tests {
             Variant::Float(f) => assert!(f > 0.0 && f < 2.0, "XIRR out of range: {}", f),
             other => panic!("XIRR unexpected: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_lookup_info_functions() {
+        let c = HashMap::new();
+
+        // NA
+        assert_eq!(calc("=NA()", &c), Variant::Error(ExcelError::NA));
+
+        // N
+        assert_eq!(calc("=N(42)", &c), Variant::Integer(42));
+        assert_eq!(calc("=N(TRUE)", &c), Variant::Integer(1));
+        assert_eq!(calc("=N(FALSE)", &c), Variant::Integer(0));
+        assert_eq!(calc("=N(\"abc\")", &c), Variant::Integer(0));
+
+        // TYPE
+        assert_eq!(calc("=TYPE(1)", &c), Variant::Integer(1));
+        assert_eq!(calc("=TYPE(1.5)", &c), Variant::Integer(1));
+        assert_eq!(calc("=TYPE(\"text\")", &c), Variant::Integer(2));
+        assert_eq!(calc("=TYPE(TRUE)", &c), Variant::Integer(4));
+
+        // ERROR.TYPE
+        assert_eq!(calc("=ERROR.TYPE(1/0)", &c), Variant::Integer(2));  // #DIV/0! = 2
+        assert_eq!(calc("=ERROR.TYPE(NA())", &c), Variant::Integer(7)); // #N/A = 7
+        assert_eq!(calc("=ERROR.TYPE(42)", &c), Variant::Error(ExcelError::NA)); // not an error
+
+        // FORMULATEXT
+        let mut cf = cells_from(&[
+            ((1,1), Variant::Integer(10)),
+        ]);
+        cf.insert((2,1), CellContent { formula: Some("=A1*2".into()), value: Variant::Integer(20) });
+        assert_eq!(calc("=FORMULATEXT(A1)", &cf), Variant::Error(ExcelError::NA)); // no formula
+        assert_eq!(calc("=FORMULATEXT(A2)", &cf), Variant::Str("=A1*2".into()));
+
+        // CELL
+        let cv = cells_from(&[
+            ((3,2), Variant::Str("hello".into())),
+            ((4,2), Variant::Integer(99)),
+        ]);
+        assert_eq!(calc("=CELL(\"row\",B3)", &cv), Variant::Integer(3));
+        assert_eq!(calc("=CELL(\"col\",B3)", &cv), Variant::Integer(2));
+        assert_eq!(calc("=CELL(\"address\",B3)", &cv), Variant::Str("$B$3".into()));
+        assert_eq!(calc("=CELL(\"type\",B3)", &cv), Variant::Str("l".into())); // Str = label
+        assert_eq!(calc("=CELL(\"type\",B4)", &cv), Variant::Str("v".into())); // number = value
+        assert_eq!(calc("=CELL(\"contents\",B4)", &cv), Variant::Integer(99));
+        assert_eq!(calc("=CELL(\"filename\",B3)", &cv), Variant::Str("".into()));
+        assert_eq!(calc("=CELL(\"width\",B3)", &cv), Variant::Integer(8));
+
+        // col_to_letter helper: col 1=A, 26=Z, 27=AA
+        assert_eq!(col_to_letter(1), "A");
+        assert_eq!(col_to_letter(26), "Z");
+        assert_eq!(col_to_letter(27), "AA");
+        assert_eq!(col_to_letter(28), "AB");
     }
 
     #[test]
