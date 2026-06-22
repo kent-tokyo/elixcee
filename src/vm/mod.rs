@@ -1060,11 +1060,17 @@ impl Vm {
         // Sort by dependency order so that A2=A1+1 evaluates after A1
         let order = topo_sort_formulas(&formula_cells)?;
 
+        // Update cell values directly, bypassing cells_mut() to avoid N dirty-flag sets.
+        let active = self.active_sheet.clone();
         for idx in order {
             let (row, col, ref expr) = formula_cells[idx];
             let value = formula::evaluate(expr, self.cells())?;
-            if let Some(cell) = self.cells_mut().get_mut(&(row, col)) { cell.value = value; }
+            if let Some(cell) = self.sheets.get_mut(&active).and_then(|m| m.get_mut(&(row, col))) {
+                cell.value = value;
+            }
         }
+        // Mark index dirty once (formula values changed, End queries may be stale)
+        if !formula_cells.is_empty() { self.cell_index_dirty = true; }
         Ok(())
     }
 

@@ -153,7 +153,7 @@ fn variant_eq(a: &Variant, b: &Variant) -> bool {
         (Variant::Date(x),    Variant::Date(y))    => x == y,
         (Variant::Date(x),    Variant::Integer(y)) => x == y,
         (Variant::Integer(x), Variant::Date(y))    => x == y,
-        (Variant::Str(x),     Variant::Str(y))     => x.to_uppercase() == y.to_uppercase(),
+        (Variant::Str(x),     Variant::Str(y))     => x.eq_ignore_ascii_case(y),
         (Variant::Boolean(x), Variant::Boolean(y)) => x == y,
         (Variant::Empty,      Variant::Empty)       => true,
         (Variant::Error(_),   _) | (_, Variant::Error(_)) => false,
@@ -724,11 +724,14 @@ fn func_vlookup(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) 
         }
         Ok(Variant::Error(ExcelError::NA))
     } else {
-        let mut best = None;
-        for row in r1..=r2 {
-            match variant_cmp(&cell_val(cells, row, c1), &key) {
-                Ok(Ordering::Less) | Ok(Ordering::Equal) => best = Some(row),
-                _ => break,
+        // Binary search for largest row where cell <= key (data assumed sorted ascending)
+        let (mut lo, mut hi) = (r1 as i64, r2 as i64);
+        let mut best: Option<u32> = None;
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            match variant_cmp(&cell_val(cells, mid as u32, c1), &key) {
+                Ok(Ordering::Less) | Ok(Ordering::Equal) => { best = Some(mid as u32); lo = mid + 1; }
+                _ => { hi = mid - 1; }
             }
         }
         Ok(best.map(|row| cell_val(cells, row, ret_col)).unwrap_or(Variant::Error(ExcelError::NA)))
@@ -751,16 +754,17 @@ fn func_hlookup(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) 
         }
         Ok(Variant::Error(ExcelError::NA))
     } else {
-        let mut best = None;
-        for col in c1..=c2 {
-            match variant_cmp(&cell_val(cells, r1, col), &key) {
-                Ok(Ordering::Less) | Ok(Ordering::Equal) => best = Some(col),
-                _ => break,
+        // Binary search for largest col where cell <= key (data assumed sorted ascending)
+        let (mut lo, mut hi) = (c1 as i64, c2 as i64);
+        let mut best: Option<u32> = None;
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            match variant_cmp(&cell_val(cells, r1, mid as u32), &key) {
+                Ok(Ordering::Less) | Ok(Ordering::Equal) => { best = Some(mid as u32); lo = mid + 1; }
+                _ => { hi = mid - 1; }
             }
         }
-        best.map(|col| cell_val(cells, ret_row, col))
-            .map(Ok)
-            .unwrap_or(Ok(Variant::Error(ExcelError::NA)))
+        Ok(best.map(|col| cell_val(cells, ret_row, col)).unwrap_or(Variant::Error(ExcelError::NA)))
     }
 }
 
@@ -2739,12 +2743,22 @@ fn func_filter(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
 
 fn func_unique(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.is_empty() { return Err("UNIQUE requires 1 argument".into()); }
-    let vals = collect_values(&args[0], cells)?;
-    let mut result: Vec<Variant> = vec![];
-    for v in vals {
-        if !result.contains(&v) { result.push(v); }
-    }
-    Ok(wrap_array(result))
+    // Collect non-empty values with their original positions
+    let mut indexed: Vec<(Variant, usize)> = collect_values(&args[0], cells)?
+        .into_iter()
+        .enumerate()
+        .filter(|(_, v)| !matches!(v, Variant::Empty))
+        .map(|(i, v)| (v, i))
+        .collect();
+    // Sort by (value, original_index) so equal values have lowest index first
+    indexed.sort_by(|(a, ai), (b, bi)| {
+        variant_cmp(a, b).unwrap_or(Ordering::Equal).then(ai.cmp(bi))
+    });
+    // Dedup by value — keeps first occurrence (lowest original index) of each group
+    indexed.dedup_by(|(a, _), (b, _)| variant_eq(a, b));
+    // Restore original insertion order
+    indexed.sort_by_key(|(_, i)| *i);
+    Ok(wrap_array(indexed.into_iter().map(|(v, _)| v).collect()))
 }
 
 // ── SORT ──────────────────────────────────────────────────────────────────────
