@@ -3,15 +3,23 @@ pub mod parser;
 pub mod reader;
 pub mod vm;
 
+use vm::{Variant, Vm};
+#[cfg(any(feature = "python", test))]
+use vm::CellContent;
+
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::PyDict;
-use vm::{serial_to_display, CellContent, ExcelError, Variant, Vm};
+#[cfg(feature = "python")]
+use vm::{serial_to_display, ExcelError};
 
 // ── ExcelError Python class ───────────────────────────────────────────────────
 
 /// Represents an Excel cell error value (#N/A, #VALUE!, #DIV/0!, etc.).
 /// Returned by ``get_cell`` and ``cells()`` for error cells, and accepted by
 /// ``set_cell`` to store an error value.
+#[cfg(feature = "python")]
 #[pyclass(name = "ExcelError")]
 #[derive(Clone, Debug)]
 pub struct PyExcelError {
@@ -20,6 +28,7 @@ pub struct PyExcelError {
     pub code: String,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl PyExcelError {
     #[new]
@@ -32,6 +41,7 @@ impl PyExcelError {
 
 // ── Variant ↔ Python conversion ───────────────────────────────────────────────
 
+#[cfg(feature = "python")]
 fn variant_to_py(py: Python<'_>, v: &Variant) -> Py<PyAny> {
     match v {
         Variant::Integer(n) => (*n).into_pyobject(py).unwrap().into_any().unbind(),
@@ -66,6 +76,7 @@ fn variant_to_py(py: Python<'_>, v: &Variant) -> Py<PyAny> {
     }
 }
 
+#[cfg(feature = "python")]
 fn py_to_variant(obj: &Bound<'_, PyAny>) -> PyResult<Variant> {
     if obj.is_none() { return Ok(Variant::Empty); }
     // bool must come before int (Python bool is a subclass of int)
@@ -92,11 +103,13 @@ fn py_to_variant(obj: &Bound<'_, PyAny>) -> PyResult<Variant> {
 
 /// VBA execution engine. Create one, pre-populate cells with ``set_cell``,
 /// run a macro with ``run``, then read results via ``get_cell`` / ``cells``.
+#[cfg(feature = "python")]
 #[pyclass(name = "Vm")]
 pub struct PyVm {
     inner: Vm,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl PyVm {
     #[new]
@@ -280,6 +293,7 @@ impl PyVm {
 ///     Name of the Sub to execute.
 /// on_msgbox : str
 ///     ``"skip"`` (default) or ``"error"``.
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (vba_code, macro_name, on_msgbox = "skip"))]
 fn run_macro(
@@ -306,6 +320,7 @@ fn run_macro(
 ///     Sheet name to read. Defaults to the first sheet.
 /// on_msgbox : str, optional
 ///     ``"skip"`` (default) or ``"error"``.
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (path, sheet = None, on_msgbox = "skip"))]
 fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<PyVm> {
@@ -348,12 +363,18 @@ fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<P
     Ok(PyVm { inner: vm })
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn hello() -> &'static str {
     "Hello from elixcee (Rust)!"
 }
 
 // ── save_workbook implementation ─────────────────────────────────────────────
+
+/// Save all sheets in `vm` to a file. Supports `.xlsx` and `.ods`.
+pub fn save_workbook(vm: &Vm, path: &str) -> Result<(), String> {
+    save_workbook_impl(vm, path)
+}
 
 fn save_workbook_impl(vm: &Vm, path: &str) -> Result<(), String> {
     if path.to_lowercase().ends_with(".ods") {
@@ -730,6 +751,7 @@ fn xml_escape(s: &str) -> String {
 
 // ── Module ────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "python")]
 #[pymodule]
 mod elixcee {
     #[pymodule_export]

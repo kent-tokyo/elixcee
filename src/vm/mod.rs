@@ -98,6 +98,7 @@ pub struct Vm {
     pub variables: HashMap<String, Variant>,
     pub calc_mode: CalculationMode,
     pub error_on_msgbox: bool,
+    pub print_msgbox: bool,
     pub exit_flag: Option<ExitKind>,
     pub on_error_resume_next: bool,
     /// Label to jump to when an error occurs (On Error GoTo <label>).
@@ -128,6 +129,7 @@ impl Vm {
             variables: HashMap::new(),
             calc_mode: CalculationMode::Automatic,
             error_on_msgbox: false,
+            print_msgbox: false,
             exit_flag: None,
             on_error_resume_next: false,
             on_error_goto_label: None,
@@ -440,20 +442,32 @@ impl Vm {
                 let v = self.eval_expr(value)?;
                 let ((r1,c1),(r2,c2)) = self.resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeWrite: invalid address '{}'", addr))?;
-                for r in r1..=r2 {
-                    for c in c1..=c2 {
-                        if *is_formula {
-                            self.set_cell_formula(r, c, &vba_to_str(&v))?;
-                        } else {
-                            self.cells_mut().insert((r, c), CellContent { formula: None, value: v.clone() });
+                if *is_formula {
+                    let s = vba_to_str(&v);
+                    for r in r1..=r2 {
+                        for c in c1..=c2 { self.set_cell_formula(r, c, &s)?; }
+                    }
+                } else {
+                    // Batch writes: access sheet directly to avoid N dirty-flag sets
+                    let sheet = self.active_sheet.clone();
+                    if let Some(cells) = self.sheets.get_mut(&sheet) {
+                        for r in r1..=r2 {
+                            for c in c1..=c2 {
+                                cells.insert((r, c), CellContent { formula: None, value: v.clone() });
+                            }
                         }
                     }
+                    self.cell_index_dirty = true;
                 }
             }
             Stmt::RangeClear { addr, .. } => {
                 let ((r1,c1),(r2,c2)) = self.resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeClear: invalid address '{}'", addr))?;
-                for r in r1..=r2 { for c in c1..=c2 { self.cells_mut().remove(&(r, c)); } }
+                let sheet = self.active_sheet.clone();
+                if let Some(cells) = self.sheets.get_mut(&sheet) {
+                    for r in r1..=r2 { for c in c1..=c2 { cells.remove(&(r, c)); } }
+                }
+                self.cell_index_dirty = true;
             }
             Stmt::RangeOffsetWrite { addr, row_off, col_off, value } => {
                 let v = self.eval_expr(value)?;
@@ -585,6 +599,7 @@ impl Vm {
             Stmt::MsgBox { message } => {
                 let msg = self.eval_expr(message)?;
                 if self.error_on_msgbox { return Err(format!("MsgBox: {}", msg)); }
+                if self.print_msgbox { println!("{}", msg); }
             }
             Stmt::DimRecord { var, type_name } => {
                 if let Some(fields) = self.type_defs.get(type_name).cloned() {

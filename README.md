@@ -54,6 +54,64 @@ maturin develop
 
 ---
 
+## CLI (Windows / Linux / macOS)
+
+Pre-built binaries are available on the [Releases](https://github.com/kent-tokyo/elixcee/releases) page — no Python required.
+
+| Download | Platform |
+|---|---|
+| [elixcee-x86_64-windows.exe](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-windows.exe) | Windows x64 |
+| [elixcee-x86_64-linux](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-linux) | Linux x64 |
+| [elixcee-aarch64-macos](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-aarch64-macos) | macOS Apple Silicon |
+
+### Usage
+
+```
+elixcee <vba_file> <MacroName> [OPTIONS]
+
+Arguments:
+  <vba_file>    Path to VBA source file (.vbs / .bas / .txt)
+  <MacroName>   Name of the Sub to execute
+
+Options:
+  --file <path>    Load cell data from spreadsheet (.xlsx / .xlsm / .ods)
+  --sheet <name>   Active sheet name (default: first sheet in --file)
+  --output <path>  Save result cells to spreadsheet (.xlsx / .ods)
+```
+
+### Examples
+
+Run a VBA file and print results to stdout:
+
+```bat
+elixcee macro.vbs ProcessData
+```
+
+Load data from an Excel file, run a macro, and save the output:
+
+```bat
+elixcee macro.vbs ProcessData --file input.xlsx --output result.xlsx
+```
+
+Output format — one line per non-empty cell, tab-separated address and value:
+
+```
+A1    Hello
+B1    42
+A2    3.14
+```
+
+`MsgBox` calls are printed to stdout.
+
+### Build from source
+
+```bash
+cargo build --release --bin elixcee
+# binary: target/release/elixcee  (or elixcee.exe on Windows)
+```
+
+---
+
 ## Quick Start
 
 ```python

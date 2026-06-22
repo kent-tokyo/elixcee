@@ -460,7 +460,43 @@ fn eval_func(
 
 // ── Arithmetic ────────────────────────────────────────────────────────────────
 
+/// Collect numeric values from a single Range argument without allocating Vec<Variant>.
+/// Falls back to collect_all for non-Range args or multiple args.
+macro_rules! range_nums_fast {
+    ($args:expr, $cells:expr) => {{
+        if $args.len() == 1 {
+            if let FormulaExpr::Range { c1, r1, c2, r2 } = &$args[0] {
+                let mut nums: Vec<f64> = vec![];
+                for row in *r1..=*r2 {
+                    for col in *c1..=*c2 {
+                        if let Some(f) = cell_ref($cells, row, col).and_then(as_f64) {
+                            nums.push(f);
+                        }
+                    }
+                }
+                nums
+            } else {
+                collect_all($args, $cells)?.iter().filter_map(as_f64).collect::<Vec<_>>()
+            }
+        } else {
+            collect_all($args, $cells)?.iter().filter_map(as_f64).collect::<Vec<_>>()
+        }
+    }};
+}
+
 fn func_sum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    // Fast path: single Range — iterate cell refs without cloning into Vec<Variant>
+    if args.len() == 1 {
+        if let FormulaExpr::Range { c1, r1, c2, r2 } = &args[0] {
+            let mut sum = 0f64;
+            for row in *r1..=*r2 {
+                for col in *c1..=*c2 {
+                    if let Some(f) = cell_ref(cells, row, col).and_then(as_f64) { sum += f; }
+                }
+            }
+            return Ok(as_integer_if_whole(sum));
+        }
+    }
     let sum: f64 = collect_all(args, cells)?.iter()
         .filter_map(|v| if matches!(v, Variant::Str(_)) { None } else { to_float(v).ok() })
         .sum();
@@ -468,24 +504,18 @@ fn func_sum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
 }
 
 fn func_average(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    let nums: Vec<f64> = collect_all(args, cells)?.iter()
-        .filter_map(as_f64)
-        .collect();
+    let nums = range_nums_fast!(args, cells);
     if nums.is_empty() { return Err("AVERAGE: no numeric values".into()); }
     Ok(Variant::Float(nums.iter().sum::<f64>() / nums.len() as f64))
 }
 
 fn func_min(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    let min = collect_all(args, cells)?.iter()
-        .filter_map(as_f64)
-        .reduce(f64::min);
+    let min = range_nums_fast!(args, cells).into_iter().reduce(f64::min);
     min.map(as_integer_if_whole).ok_or_else(|| "MIN: no numeric values".into())
 }
 
 fn func_max(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    let max = collect_all(args, cells)?.iter()
-        .filter_map(as_f64)
-        .reduce(f64::max);
+    let max = range_nums_fast!(args, cells).into_iter().reduce(f64::max);
     max.map(as_integer_if_whole).ok_or_else(|| "MAX: no numeric values".into())
 }
 
