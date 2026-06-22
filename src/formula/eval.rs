@@ -215,6 +215,11 @@ fn cell_val(cells: &HashMap<(u32, u32), CellContent>, row: u32, col: u32) -> Var
     cells.get(&(row, col)).map(|c| c.value.clone()).unwrap_or(Variant::Empty)
 }
 
+/// Borrow a cell value without cloning. Returns `None` for missing/empty cells.
+fn cell_ref<'a>(cells: &'a HashMap<(u32, u32), CellContent>, row: u32, col: u32) -> Option<&'a Variant> {
+    cells.get(&(row, col)).map(|c| &c.value)
+}
+
 // ── Function dispatch ─────────────────────────────────────────────────────────
 
 fn eval_func(
@@ -878,22 +883,87 @@ fn wildcard_match_prefix(text: &[char], pattern: &[char]) -> bool {
     dp[0][m] // handles empty text with pattern that reduces to empty via '*'
 }
 
+// ── ParsedCriteria — criteria parsed once, matched N times ───────────────────
+
+#[derive(Clone, Copy)]
+enum CompOp { Gt, Ge, Lt, Le, Ne }
+
+enum ParsedCriteria {
+    Direct(Variant),        // non-string Variant: exact match
+    EqNum(Variant),         // "5" or "5.0": numeric equality
+    EqStr(String),          // "abc": case-insensitive string
+    Wildcard(String),       // "a*b": wildcard (pre-uppercased)
+    CompNum(CompOp, f64),   // ">5", "<>3": numeric comparison (NaN = never matches)
+}
+
+fn parse_criteria(crit: &Variant) -> ParsedCriteria {
+    let s = match crit {
+        Variant::Str(s) => s,
+        other => return ParsedCriteria::Direct(other.clone()),
+    };
+    let (op, rest) =
+        if let Some(r) = s.strip_prefix(">=") { (Some(CompOp::Ge), r) }
+        else if let Some(r) = s.strip_prefix("<=") { (Some(CompOp::Le), r) }
+        else if let Some(r) = s.strip_prefix("<>") { (Some(CompOp::Ne), r) }
+        else if let Some(r) = s.strip_prefix('>') { (Some(CompOp::Gt), r) }
+        else if let Some(r) = s.strip_prefix('<') { (Some(CompOp::Lt), r) }
+        else { (None, s.as_str()) };
+    match op {
+        Some(op) => {
+            // Non-numeric comparison (e.g. "<>abc") → NaN never matches, matching legacy behaviour
+            ParsedCriteria::CompNum(op, rest.parse::<f64>().unwrap_or(f64::NAN))
+        }
+        None => {
+            if rest.contains('*') || rest.contains('?') {
+                ParsedCriteria::Wildcard(rest.to_uppercase())
+            } else if let Ok(n) = rest.parse::<f64>() {
+                ParsedCriteria::EqNum(as_integer_if_whole(n))
+            } else {
+                ParsedCriteria::EqStr(rest.to_string())
+            }
+        }
+    }
+}
+
+fn matches_parsed(val: &Variant, crit: &ParsedCriteria) -> bool {
+    match crit {
+        ParsedCriteria::Direct(v) => variant_eq(val, v),
+        ParsedCriteria::EqNum(v) => variant_eq(val, v),
+        ParsedCriteria::EqStr(s) => match val {
+            Variant::Str(vs) => vs.eq_ignore_ascii_case(s),
+            Variant::Empty   => s.is_empty(),
+            _                => to_str(val).eq_ignore_ascii_case(s),
+        },
+        ParsedCriteria::Wildcard(p) => wildcard_match(&to_str(val).to_uppercase(), p),
+        ParsedCriteria::CompNum(op, n) => match to_float(val) {
+            Ok(v) => match op {
+                CompOp::Gt => v > *n,
+                CompOp::Ge => v >= *n,
+                CompOp::Lt => v < *n,
+                CompOp::Le => v <= *n,
+                CompOp::Ne => (v - n).abs() > f64::EPSILON,
+            },
+            Err(_) => false,
+        },
+    }
+}
+
 // ── Statistical ───────────────────────────────────────────────────────────────
 
 fn func_countif(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.len() != 2 { return Err("COUNTIF requires 2 arguments".into()); }
     let vals = collect_values(&args[0], cells)?;
-    let crit = evaluate(&args[1], cells)?;
-    Ok(Variant::Integer(vals.iter().filter(|v| matches_criteria(v, &crit)).count() as i64))
+    let pcrit = parse_criteria(&evaluate(&args[1], cells)?);
+    Ok(Variant::Integer(vals.iter().filter(|v| matches_parsed(v, &pcrit)).count() as i64))
 }
 
 fn func_sumif(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.len() < 2 || args.len() > 3 { return Err("SUMIF requires 2 or 3 arguments".into()); }
     let range_vals = collect_values(&args[0], cells)?;
-    let crit = evaluate(&args[1], cells)?;
+    let pcrit = parse_criteria(&evaluate(&args[1], cells)?);
     let sum_vals = if args.len() == 3 { collect_values(&args[2], cells)? } else { range_vals.clone() };
     let total: f64 = range_vals.iter().zip(sum_vals.iter())
-        .filter(|(rv, _)| matches_criteria(rv, &crit))
+        .filter(|(rv, _)| matches_parsed(rv, &pcrit))
         .filter_map(|(_, sv)| to_float(sv).ok())
         .sum();
     Ok(as_integer_if_whole(total))
@@ -907,9 +977,9 @@ fn func_sumifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
     let mut i = 1;
     while i + 1 < args.len() {
         let range_vals = collect_values(&args[i], cells)?;
-        let crit = evaluate(&args[i + 1], cells)?;
+        let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
-            if j < n && !matches_criteria(rv, &crit) { mask[j] = false; }
+            if j < n && !matches_parsed(rv, &pcrit) { mask[j] = false; }
         }
         i += 2;
     }
@@ -925,16 +995,16 @@ fn func_countifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>)
     let first_vals = collect_values(&args[0], cells)?;
     let n = first_vals.len();
     let mut mask = vec![true; n];
-    let crit0 = evaluate(&args[1], cells)?;
+    let pcrit0 = parse_criteria(&evaluate(&args[1], cells)?);
     for (j, rv) in first_vals.iter().enumerate() {
-        if !matches_criteria(rv, &crit0) { mask[j] = false; }
+        if !matches_parsed(rv, &pcrit0) { mask[j] = false; }
     }
     let mut i = 2;
     while i + 1 < args.len() {
         let range_vals = collect_values(&args[i], cells)?;
-        let crit = evaluate(&args[i + 1], cells)?;
+        let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
-            if j < n && !matches_criteria(rv, &crit) { mask[j] = false; }
+            if j < n && !matches_parsed(rv, &pcrit) { mask[j] = false; }
         }
         i += 2;
     }
@@ -1221,10 +1291,10 @@ fn func_subtotal(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>)
 fn func_averageif(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.len() < 2 || args.len() > 3 { return Err("AVERAGEIF requires 2 or 3 arguments".into()); }
     let range_vals = collect_values(&args[0], cells)?;
-    let crit = evaluate(&args[1], cells)?;
+    let pcrit = parse_criteria(&evaluate(&args[1], cells)?);
     let avg_vals = if args.len() == 3 { collect_values(&args[2], cells)? } else { range_vals.clone() };
     let nums: Vec<f64> = range_vals.iter().zip(avg_vals.iter())
-        .filter(|(rv, _)| matches_criteria(rv, &crit))
+        .filter(|(rv, _)| matches_parsed(rv, &pcrit))
         .filter_map(|(_, av)| to_float(av).ok())
         .collect();
     if nums.is_empty() { return Err("AVERAGEIF: no matching values".into()); }
@@ -1239,9 +1309,9 @@ fn func_averageifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent
     let mut i = 1;
     while i + 1 < args.len() {
         let range_vals = collect_values(&args[i], cells)?;
-        let crit = evaluate(&args[i + 1], cells)?;
+        let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
-            if j < n && !matches_criteria(rv, &crit) { mask[j] = false; }
+            if j < n && !matches_parsed(rv, &pcrit) { mask[j] = false; }
         }
         i += 2;
     }
@@ -1289,9 +1359,9 @@ fn func_maxifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
     let mut i = 1;
     while i + 1 < args.len() {
         let range_vals = collect_values(&args[i], cells)?;
-        let crit = evaluate(&args[i + 1], cells)?;
+        let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
-            if j < n && !matches_criteria(rv, &crit) { mask[j] = false; }
+            if j < n && !matches_parsed(rv, &pcrit) { mask[j] = false; }
         }
         i += 2;
     }
@@ -1310,9 +1380,9 @@ fn func_minifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
     let mut i = 1;
     while i + 1 < args.len() {
         let range_vals = collect_values(&args[i], cells)?;
-        let crit = evaluate(&args[i + 1], cells)?;
+        let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
-            if j < n && !matches_criteria(rv, &crit) { mask[j] = false; }
+            if j < n && !matches_parsed(rv, &pcrit) { mask[j] = false; }
         }
         i += 2;
     }
@@ -3425,7 +3495,13 @@ fn func_dget(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> 
 
 // ── DSUM / DAVERAGE / DCOUNT / DCOUNTA / DMAX / DMIN ─────────────────────────
 
-struct DbCtx { db_r1: u32, db_r2: u32, db_c1: u32, db_c2: u32, field_col: u32, cr_r1: u32, cr_r2: u32, cr_c1: u32, cr_c2: u32 }
+/// Pre-compiled criteria for one database function call.
+/// `criteria[i]` = one OR-branch; each entry is `(db_col, ParsedCriteria)` (AND within branch).
+/// Built once in `db_resolve_args`; matched per data row without header scanning.
+struct DbCtx {
+    db_r1: u32, db_r2: u32, field_col: u32,
+    criteria: Vec<Vec<(u32, ParsedCriteria)>>,
+}
 
 fn db_resolve_args(args: &[FormulaExpr], cells: &HashMap<(u32,u32), CellContent>, fname: &str)
     -> Result<Option<DbCtx>, String>
@@ -3436,12 +3512,40 @@ fn db_resolve_args(args: &[FormulaExpr], cells: &HashMap<(u32,u32), CellContent>
     let field_col = resolve_db_field(&field_val, cells, db_c1, db_c2, db_r1)?;
     if field_col > db_c2 { return Ok(None); }
     let (cr_c1, cr_r1, cr_c2, cr_r2) = require_range(&args[2], fname)?;
-    Ok(Some(DbCtx { db_r1, db_r2, db_c1, db_c2, field_col, cr_r1, cr_r2, cr_c1, cr_c2 }))
+
+    // Build header name → db column map once
+    let header_map: std::collections::HashMap<String, u32> = (db_c1..=db_c2)
+        .map(|c| (to_str(&cell_val(cells, db_r1, c)).to_lowercase(), c))
+        .collect();
+
+    // Pre-build criteria: outer = OR rows, inner = (db_col, ParsedCriteria)
+    let criteria: Vec<Vec<(u32, ParsedCriteria)>> = (cr_r1 + 1..=cr_r2).map(|cr_row| {
+        let mut branch: Vec<(u32, ParsedCriteria)> = Vec::new();
+        let mut valid = true;
+        for cr_col in cr_c1..=cr_c2 {
+            let crit_val = cell_val(cells, cr_row, cr_col);
+            if matches!(crit_val, Variant::Empty) { continue; }
+            let header_name = to_str(&cell_val(cells, cr_r1, cr_col)).to_lowercase();
+            if header_name.is_empty() { continue; }
+            match header_map.get(&header_name) {
+                Some(&db_col) => branch.push((db_col, parse_criteria(&crit_val))),
+                None => { valid = false; break; }
+            }
+        }
+        if !valid { vec![(0, ParsedCriteria::CompNum(CompOp::Gt, f64::NAN))] } else { branch }
+    }).collect();
+
+    Ok(Some(DbCtx { db_r1, db_r2, field_col, criteria }))
 }
 
 fn db_matched_vals(ctx: &DbCtx, cells: &HashMap<(u32,u32), CellContent>) -> Vec<Variant> {
+    const EMPTY: Variant = Variant::Empty;
     (ctx.db_r1 + 1..=ctx.db_r2)
-        .filter(|&row| db_row_matches_criteria(cells, row, ctx.db_c1, ctx.db_c2, ctx.db_r1, ctx.cr_c1, ctx.cr_c2, ctx.cr_r1, ctx.cr_r2))
+        .filter(|&row| ctx.criteria.iter().any(|or_branch|
+            or_branch.iter().all(|(db_col, pcrit)|
+                matches_parsed(cell_ref(cells, row, *db_col).unwrap_or(&EMPTY), pcrit)
+            )
+        ))
         .map(|row| cell_val(cells, row, ctx.field_col))
         .collect()
 }
