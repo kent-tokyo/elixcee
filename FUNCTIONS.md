@@ -217,6 +217,8 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | `NETWORKDAYS.INTL` | Workdays with custom weekend | 2010 |
 | `WORKDAY.INTL` | Date N workdays away with custom weekend | 2010 |
 | `DAYS` | Days between two dates | 2013 |
+| `WEEKNUM` | Week number in a year (types 1/2/11-17/21) | Classic |
+| `ISOWEEKNUM` | ISO 8601 week number | 2013 |
 
 ### Lookup & Reference
 
@@ -329,12 +331,6 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | `PHONETIC` | Extract phonetic (furigana) characters | Classic |
 | `BAHTTEXT` | Format number as Thai Baht text | Classic |
 
-### Date & Time
-
-| Function | Description | Excel |
-|---|---|---|
-| `WEEKNUM` | Week number in a year | Classic |
-| `ISOWEEKNUM` | ISO 8601 week number | 2013 |
 
 ### Dynamic Array
 

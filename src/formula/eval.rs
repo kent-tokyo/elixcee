@@ -320,6 +320,8 @@ fn eval_func(
         "MONTH"       => func_month(args, cells),
         "DAY"         => func_day(args, cells),
         "WEEKDAY"     => func_weekday(args, cells),
+        "WEEKNUM"     => func_weeknum(args, cells),
+        "ISOWEEKNUM"  => func_isoweeknum(args, cells),
         "DAYS"        => func_days(args, cells),
         "EDATE"       => func_edate(args, cells),
         "DATEDIF"     => func_datedif(args, cells),
@@ -1865,6 +1867,52 @@ fn func_weekday(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) 
         _ => return Err(format!("WEEKDAY: unsupported return_type {}", return_type)),
     };
     Ok(Variant::Integer(result as i64))
+}
+
+/// ISO 8601 week number (internal helper, used by ISOWEEKNUM and WEEKNUM type 21).
+fn iso_weeknum_impl(serial: i64) -> i64 {
+    let (y, _, _) = serial_to_ymd(serial);
+    let iso_dow = ((serial_weekday(serial) + 6) % 7 + 1) as i64; // 1=Mon..7=Sun
+    let jan1 = date_to_serial(y, 1, 1);
+    let doy  = serial - jan1 + 1;
+    let week = (doy - iso_dow + 10) / 7;
+    if week < 1 {
+        iso_weeknum_impl(date_to_serial(y - 1, 12, 31))
+    } else if week > 52 {
+        let dec31 = date_to_serial(y, 12, 31);
+        let iso_dow_dec31 = ((serial_weekday(dec31) + 6) % 7 + 1) as i64;
+        if iso_dow_dec31 >= 4 { week } else { 1 }
+    } else {
+        week
+    }
+}
+
+fn func_isoweeknum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.len() != 1 { return Err("ISOWEEKNUM requires 1 argument".into()); }
+    let serial = to_float(&evaluate(&args[0], cells)?)? as i64;
+    Ok(Variant::Integer(iso_weeknum_impl(serial)))
+}
+
+fn func_weeknum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 { return Err("WEEKNUM requires 1 or 2 arguments".into()); }
+    let serial = to_float(&evaluate(&args[0], cells)?)? as i64;
+    let return_type = if args.len() == 2 { to_float(&evaluate(&args[1], cells)?)? as u32 } else { 1 };
+    if return_type == 21 { return Ok(Variant::Integer(iso_weeknum_impl(serial))); }
+    let (y, _, _) = serial_to_ymd(serial);
+    let jan1 = date_to_serial(y, 1, 1);
+    let doy  = serial - jan1 + 1;
+    let dow_jan1 = serial_weekday(jan1); // 0=Sun..6=Sat
+    let offset: u32 = match return_type {
+        1 | 17 => dow_jan1,               // Sun-start
+        2 | 11 => (dow_jan1 + 6) % 7,    // Mon-start
+        12     => (dow_jan1 + 5) % 7,    // Tue-start
+        13     => (dow_jan1 + 4) % 7,    // Wed-start
+        14     => (dow_jan1 + 3) % 7,    // Thu-start
+        15     => (dow_jan1 + 2) % 7,    // Fri-start
+        16     => (dow_jan1 + 1) % 7,    // Sat-start
+        _      => return Ok(Variant::Error(ExcelError::Num)),
+    };
+    Ok(Variant::Integer(((doy - 1 + offset as i64) / 7 + 1)))
 }
 
 fn func_days(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
@@ -5210,6 +5258,30 @@ mod tests {
             Variant::Float(f) => assert!(f > 0.0 && f < 2.0, "XIRR out of range: {}", f),
             other => panic!("XIRR unexpected: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_weeknum_isoweeknum() {
+        let c = HashMap::new();
+        // ISOWEEKNUM
+        // Jan 4, 2016 (Mon) = ISO week 1 of 2016
+        assert_eq!(calc("=ISOWEEKNUM(DATE(2016,1,4))", &c), Variant::Integer(1));
+        // Jan 1, 2016 (Fri) = ISO week 53 of 2015
+        assert_eq!(calc("=ISOWEEKNUM(DATE(2016,1,1))", &c), Variant::Integer(53));
+        // Dec 31, 2018 (Mon) = ISO week 1 of 2019
+        assert_eq!(calc("=ISOWEEKNUM(DATE(2018,12,31))", &c), Variant::Integer(1));
+        // Dec 28, 2015 (Mon) = ISO week 53 of 2015
+        assert_eq!(calc("=ISOWEEKNUM(DATE(2015,12,28))", &c), Variant::Integer(53));
+        // WEEKNUM type 1 (Sun-start); Jan 1, 2023 = Sunday
+        assert_eq!(calc("=WEEKNUM(DATE(2023,1,1))", &c), Variant::Integer(1));
+        assert_eq!(calc("=WEEKNUM(DATE(2023,1,7))", &c), Variant::Integer(1)); // Sat still w1
+        assert_eq!(calc("=WEEKNUM(DATE(2023,1,8))", &c), Variant::Integer(2)); // next Sunday
+        // WEEKNUM type 2 (Mon-start)
+        assert_eq!(calc("=WEEKNUM(DATE(2023,1,1),2)", &c), Variant::Integer(1)); // Sun in w1
+        assert_eq!(calc("=WEEKNUM(DATE(2023,1,2),2)", &c), Variant::Integer(2)); // Mon starts w2
+        // WEEKNUM type 21 = ISOWEEKNUM
+        assert_eq!(calc("=WEEKNUM(DATE(2016,1,1),21)", &c), Variant::Integer(53));
+        assert_eq!(calc("=WEEKNUM(DATE(2016,1,4),21)", &c), Variant::Integer(1));
     }
 
     #[test]
