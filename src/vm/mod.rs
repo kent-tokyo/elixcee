@@ -1,7 +1,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::formula;
-use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, Program, Stmt, SubDef, VbaBinOp, XlDir, XlEndProp};
+use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, XlDir, XlEndProp};
+use crate::parser::{self, EntrypointResolution};
 
 /// Excel worksheet error values (#DIV/0!, #N/A, etc.)
 #[derive(Debug, Clone, PartialEq)]
@@ -99,6 +100,19 @@ pub struct Vm {
     pub calc_mode: CalculationMode,
     pub error_on_msgbox: bool,
     pub print_msgbox: bool,
+    /// Every MsgBox message shown during the current `run_sub` call, in
+    /// order — populated regardless of `print_msgbox`, so callers (e.g. the
+    /// `--json` CLI path) can surface them without relying on stdout
+    /// printing. Cleared at the start of each `run_sub`; use
+    /// `take_messages()` to read (and drain) it. Private so external callers
+    /// can't mutate it directly.
+    msgbox_log: Vec<String>,
+    /// Span of the statement currently executing (set on every `exec_stmt`
+    /// call, at every nesting level) — so a caller can locate where a
+    /// runtime error happened via `current_span()` after `run_sub` fails.
+    /// `None` until the first statement actually starts executing (e.g. a
+    /// "Sub not found" failure happens before this is ever set).
+    current_span: Option<SourceSpan>,
     pub exit_flag: Option<ExitKind>,
     pub on_error_resume_next: bool,
     /// Label to jump to when an error occurs (On Error GoTo <label>).
@@ -130,6 +144,8 @@ impl Vm {
             calc_mode: CalculationMode::Automatic,
             error_on_msgbox: false,
             print_msgbox: false,
+            msgbox_log: Vec::new(),
+            current_span: None,
             exit_flag: None,
             on_error_resume_next: false,
             on_error_goto_label: None,
@@ -204,7 +220,24 @@ impl Vm {
         self.sheets.get_mut(&name.to_lowercase())
     }
 
+    /// Drain and return every MsgBox message recorded since the last call
+    /// (or since `run_sub` started, since `run_sub` clears the log first).
+    pub fn take_messages(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.msgbox_log)
+    }
+
+    /// Span of the statement that was executing the last time `exec_stmt`
+    /// ran — i.e. where a runtime error happened, if `run_sub` just
+    /// returned one. `None` if no statement has executed yet.
+    pub fn current_span(&self) -> Option<SourceSpan> {
+        self.current_span
+    }
+
     pub fn run_sub(&mut self, program: &Program, sub_name: &str) -> Result<(), String> {
+        // Each run starts with a clean message log — otherwise a Vm reused
+        // across multiple run_sub calls (e.g. from the Python bindings)
+        // would leak the previous run's MsgBox text into this run's result.
+        self.msgbox_log.clear();
         // Cache user-defined functions, subs, and type definitions.
         self.user_funcs = program.funcs.iter().map(|f| (f.name.clone(), f.clone())).collect();
         self.user_subs  = program.subs.iter().map(|s| (s.name.clone(), s.clone())).collect();
@@ -215,6 +248,54 @@ impl Vm {
         let sub = self.user_subs.get(&name)
             .ok_or_else(|| format!("Sub '{}' not found", sub_name))?
             .clone();
+        self.call_sub_def(&sub, &[])
+    }
+
+    /// Multi-module entrypoint (Milestone B2): `modules` is a list of
+    /// (module_name, Program) pairs. Rejects the run at load time if any
+    /// bare Sub or Function name collides across modules — the flat merge
+    /// used for in-body calls can't express VBA's own-module-first/Private
+    /// scoping, so a colliding name is refused rather than resolved
+    /// silently (see `parser::find_cross_module_sub_collisions`). Otherwise
+    /// behaves like `run_sub`, generalized to N modules; `entrypoint` may be
+    /// a bare name or a `Module.Sub`-qualified one.
+    pub fn run_sub_multi(
+        &mut self,
+        modules: &[(String, Program)],
+        entrypoint: &str,
+    ) -> Result<(), String> {
+        let sub_collisions = parser::find_cross_module_sub_collisions(modules);
+        if let Some((name, mods)) = sub_collisions.first() {
+            return Err(format!(
+                "duplicate Sub '{}' across modules '{}' — cross-module name collisions aren't supported yet; own-module-first/Private scoping isn't modeled — rename one of them",
+                name,
+                mods.join("', '")
+            ));
+        }
+        let func_collisions = parser::find_cross_module_func_collisions(modules);
+        if let Some((name, mods)) = func_collisions.first() {
+            return Err(format!(
+                "duplicate Function '{}' across modules '{}' — cross-module name collisions aren't supported yet; own-module-first/Private scoping isn't modeled — rename one of them",
+                name,
+                mods.join("', '")
+            ));
+        }
+
+        self.msgbox_log.clear();
+        self.user_funcs.clear();
+        self.user_subs.clear();
+        for (_, program) in modules {
+            for f in &program.funcs { self.user_funcs.insert(f.name.clone(), f.clone()); }
+            for s in &program.subs { self.user_subs.insert(s.name.clone(), s.clone()); }
+            for td in &program.type_defs { self.type_defs.insert(td.name.clone(), td.fields.clone()); }
+        }
+
+        let sub = match parser::resolve_entrypoint(modules, entrypoint) {
+            EntrypointResolution::Found(sub) => sub.clone(),
+            EntrypointResolution::NotFound => {
+                return Err(format!("Sub '{}' not found", entrypoint));
+            }
+        };
         self.call_sub_def(&sub, &[])
     }
 
@@ -252,14 +333,14 @@ impl Vm {
 
     /// Execute a body slice with label-jump support (for GoTo and On Error GoTo).
     /// The existing per-statement `exec_stmt` error catch (resume_next) is preserved.
-    fn exec_body<F>(&mut self, stmts: &[Stmt], is_exit: F) -> Result<(), String>
+    fn exec_body<F>(&mut self, stmts: &[SpannedStmt], is_exit: F) -> Result<(), String>
     where F: Fn(&ExitKind) -> bool
     {
         let mut i = 0;
         while i < stmts.len() {
             // Handle pending unconditional GoTo
             if let Some(label) = self.pending_goto.take() {
-                match stmts.iter().position(|s| matches!(s, Stmt::Label(l) if l == &label)) {
+                match stmts.iter().position(|s| matches!(&s.stmt, Stmt::Label(l) if l == &label)) {
                     Some(pos) => { i = pos; continue; }
                     None      => return Err(format!("GoTo: label '{}' not found", label)),
                 }
@@ -276,7 +357,7 @@ impl Vm {
                 Err(e) => {
                     // On Error GoTo: jump to handler label
                     if let Some(label) = self.on_error_goto_label.take() {
-                        match stmts.iter().position(|s| matches!(s, Stmt::Label(l) if l == &label)) {
+                        match stmts.iter().position(|s| matches!(&s.stmt, Stmt::Label(l) if l == &label)) {
                             Some(pos) => { i = pos; continue; }
                             None      => return Err(format!("On Error GoTo: label '{}' not found", label)),
                         }
@@ -289,9 +370,10 @@ impl Vm {
         Ok(())
     }
 
-    fn exec_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
+    fn exec_stmt(&mut self, spanned: &SpannedStmt) -> Result<(), String> {
         if self.exit_flag.is_some() { return Ok(()); }
-        let result = self.exec_stmt_inner(stmt);
+        self.current_span = Some(spanned.span);
+        let result = self.exec_stmt_inner(&spanned.stmt);
         match result {
             Ok(()) => Ok(()),
             Err(_) if self.on_error_resume_next => Ok(()),
@@ -568,6 +650,7 @@ impl Vm {
                 if key != self.active_sheet { self.sheets.remove(&key); }
             }
             Stmt::Dim => {}
+            Stmt::Unsupported { .. } => {}
             Stmt::DimArray { name, sizes } => {
                 let upper = to_f64(&self.eval_expr(&sizes[0])?)? as usize;
                 self.variables.insert(name.clone(), Variant::Array(vec![Variant::Empty; upper + 1]));
@@ -598,6 +681,10 @@ impl Vm {
             }
             Stmt::MsgBox { message } => {
                 let msg = self.eval_expr(message)?;
+                // Record before checking error_on_msgbox: `messages` should
+                // reflect every MsgBox the macro attempted to show, even
+                // ones that are then treated as a blocking error.
+                self.msgbox_log.push(msg.to_string());
                 if self.error_on_msgbox { return Err(format!("MsgBox: {}", msg)); }
                 if self.print_msgbox { println!("{}", msg); }
             }
@@ -1426,6 +1513,22 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
             Ok(arr.get(idx).cloned().unwrap_or(Variant::Error(ExcelError::Ref)))
         }
         _ => Err(format!("WorksheetFunction.{} is not implemented", func)),
+    }
+}
+
+/// `true` iff `name` is a recognized built-in VBA function or
+/// `WorksheetFunction.*` method (via the `wsf_` prefix). Used by the
+/// `check` subcommand to consult the *real* dispatch table instead of a
+/// hand-maintained mirror that would drift as functions are added — a
+/// throwaway `Vm` + zero-arg probe call is cheap and has no second source
+/// of truth to go stale.
+pub fn is_known_builtin_function(name: &str) -> bool {
+    let mut vm = Vm::new();
+    match vm.eval_vba_func(name, &[]) {
+        Ok(_) => true,
+        Err(msg) => {
+            !msg.starts_with("Unknown VBA function: '") && !msg.ends_with("is not implemented")
+        }
     }
 }
 
@@ -2766,5 +2869,165 @@ mod tests {
             "Sub MySub()\n    s = 0\n    For i = 1 To 5\n        If i > 3 Then\n            s = s + i\n        End If\n    Next i\nEnd Sub\n",
         );
         assert_eq!(vm.variables["s"], Variant::Integer(9));
+    }
+
+    // ── msgbox_log lifecycle ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_msgbox_log_does_not_leak_across_runs() {
+        let prog1 = parser::parse("Sub First()\n    MsgBox \"from first\"\nEnd Sub\n").unwrap();
+        let prog2 = parser::parse("Sub Second()\n    MsgBox \"from second\"\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+
+        vm.run_sub(&prog1, "First").unwrap();
+        assert_eq!(vm.take_messages(), vec!["from first".to_string()]);
+
+        // Reusing the same Vm for a second run must not carry over the first
+        // run's messages, even if take_messages() wasn't called in between.
+        vm.run_sub(&prog2, "Second").unwrap();
+        assert_eq!(vm.take_messages(), vec!["from second".to_string()]);
+    }
+
+    #[test]
+    fn test_msgbox_log_survives_a_later_runtime_error() {
+        let prog = parser::parse(
+            "Sub MySub()\n    MsgBox \"seen before failure\"\n    x = totla + 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let result = vm.run_sub(&prog, "MySub");
+        assert!(result.is_err(), "expected the undefined-variable error to propagate");
+        assert_eq!(vm.take_messages(), vec!["seen before failure".to_string()]);
+    }
+
+    #[test]
+    fn test_msgbox_blocked_is_recorded_before_failing() {
+        let prog = parser::parse("Sub MySub()\n    MsgBox \"blocked\"\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        vm.error_on_msgbox = true;
+        let result = vm.run_sub(&prog, "MySub");
+        assert!(result.is_err(), "MsgBox must still fail when error_on_msgbox is set");
+        // Spec: messages reflects every MsgBox the macro attempted to show,
+        // even ones that are then treated as a blocking error.
+        assert_eq!(vm.take_messages(), vec!["blocked".to_string()]);
+    }
+
+    #[test]
+    fn test_take_messages_drains_the_log() {
+        let prog = parser::parse("Sub MySub()\n    MsgBox \"once\"\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "MySub").unwrap();
+        assert_eq!(vm.take_messages(), vec!["once".to_string()]);
+        // A second drain with no new MsgBox calls must come back empty.
+        assert!(vm.take_messages().is_empty());
+    }
+
+    // ── Stmt::Unsupported executes as a true no-op ──────────────────────────
+
+    #[test]
+    fn test_unsupported_stmt_is_a_true_noop() {
+        // Range("A1").NumberFormat isn't a recognized Range property, so it
+        // parses to Stmt::Unsupported — confirm it doesn't error and later
+        // statements still run normally, exactly like Stmt::Dim.
+        let vm = run(
+            "Sub MySub()\n    Range(\"A1\").NumberFormat = \"0.00\"\n    x = 3\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["x"], Variant::Integer(3));
+    }
+
+    // ── is_known_builtin_function ───────────────────────────────────────────
+
+    #[test]
+    fn known_builtin_vba_functions_are_recognized() {
+        assert!(is_known_builtin_function("len"));
+        assert!(is_known_builtin_function("iif"));
+        assert!(is_known_builtin_function("range"));
+    }
+
+    #[test]
+    fn known_worksheet_functions_are_recognized_via_wsf_prefix() {
+        assert!(is_known_builtin_function("wsf_sum"));
+        assert!(is_known_builtin_function("wsf_countif"));
+    }
+
+    #[test]
+    fn unknown_names_are_not_recognized() {
+        assert!(!is_known_builtin_function("totallyfake"));
+        assert!(!is_known_builtin_function("wsf_totallyfake"));
+    }
+
+    // ── run_sub_multi (Milestone B2) ────────────────────────────────────────
+
+    fn module(name: &str, src: &str) -> (String, Program) {
+        (name.to_string(), parser::parse(src).unwrap())
+    }
+
+    #[test]
+    fn run_sub_multi_single_module_behaves_like_run_sub() {
+        let modules = vec![module("module1", "Sub Main()\n    x = 42\nEnd Sub\n")];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["x"], Variant::Integer(42));
+    }
+
+    #[test]
+    fn run_sub_multi_resolves_unique_bare_name_across_modules() {
+        let modules = vec![
+            module("module1", "Sub Helper()\n    y = 1\nEnd Sub\n"),
+            module("module2", "Sub Main()\n    Call Helper()\n    x = 42\nEnd Sub\n"),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["x"], Variant::Integer(42));
+        assert_eq!(vm.variables["y"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn run_sub_multi_resolves_qualified_entrypoint() {
+        // Qualification works even without a collision forcing it — useful
+        // for explicit scripting even when the bare name would resolve
+        // fine on its own. (Disambiguating a *genuine* same-name collision
+        // via qualification is not supported: the flat cross-module merge
+        // used for in-body calls can't safely coexist with it, so any
+        // collision is rejected at load regardless of qualification — see
+        // `run_sub_multi_rejects_a_genuine_sub_collision_before_executing_anything`.)
+        let modules = vec![
+            module("module1", "Sub Other()\n    x = 1\nEnd Sub\n"),
+            module("module2", "Sub Main()\n    x = 2\nEnd Sub\n"),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Module2.Main").unwrap();
+        assert_eq!(vm.variables["x"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn run_sub_multi_rejects_a_genuine_sub_collision_before_executing_anything() {
+        let modules = vec![
+            module("module1", "Sub Main()\n    x = 1\nEnd Sub\n"),
+            module("module2", "Sub Main()\n    x = 2\nEnd Sub\n"),
+        ];
+        let mut vm = Vm::new();
+        let err = vm.run_sub_multi(&modules, "Main").unwrap_err();
+        assert!(err.contains("duplicate Sub 'main'"), "{:?}", err);
+        assert!(!vm.variables.contains_key("x"), "no execution should have happened");
+    }
+
+    #[test]
+    fn run_sub_multi_rejects_a_genuine_func_collision() {
+        let modules = vec![
+            module("module1", "Function Foo()\n    Foo = 1\nEnd Function\nSub Main()\n    x = 1\nEnd Sub\n"),
+            module("module2", "Function Foo()\n    Foo = 2\nEnd Function\n"),
+        ];
+        let mut vm = Vm::new();
+        let err = vm.run_sub_multi(&modules, "Module1.Main").unwrap_err();
+        assert!(err.contains("duplicate Function 'foo'"), "{:?}", err);
+    }
+
+    #[test]
+    fn run_sub_multi_entrypoint_not_found() {
+        let modules = vec![module("module1", "Sub Main()\n    x = 1\nEnd Sub\n")];
+        let mut vm = Vm::new();
+        let err = vm.run_sub_multi(&modules, "Bogus").unwrap_err();
+        assert!(err.contains("not found"), "{:?}", err);
     }
 }

@@ -1,0 +1,12 @@
+name = "check_clean_file_no_diagnostics"
+command = "check"
+files = ["""
+Sub Main()
+    Cells(1,1).Value = 42
+End Sub
+"""]
+args = ["--entry", "Main"]
+expect_exit_code = 0
+expect_json = """
+{"schema_version":1,"ok":true,"diagnostics":[]}
+"""

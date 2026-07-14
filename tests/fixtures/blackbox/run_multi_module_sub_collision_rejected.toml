@@ -1,0 +1,16 @@
+name = "run_multi_module_sub_collision_rejected"
+command = "run"
+files = ["""
+Attribute VB_Name = "Mod1"
+Sub Main()
+End Sub
+""", """
+Attribute VB_Name = "Mod2"
+Sub Main()
+End Sub
+"""]
+args = ["Main"]
+expect_exit_code = 1
+expect_json = """
+{"schema_version":1,"ok":false,"error":{"code":"E1099","kind":"runtime_error","message":"duplicate Sub 'main' across modules 'mod1', 'mod2' — cross-module name collisions aren't supported yet; own-module-first/Private scoping isn't modeled — rename one of them","location":null},"messages":[]}
+"""

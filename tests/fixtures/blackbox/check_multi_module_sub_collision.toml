@@ -1,0 +1,16 @@
+name = "check_multi_module_sub_collision"
+command = "check"
+files = ["""
+Attribute VB_Name = "Mod1"
+Sub Main()
+End Sub
+""", """
+Attribute VB_Name = "Mod2"
+Sub Main()
+End Sub
+"""]
+args = []
+expect_exit_code = 1
+expect_json = """
+{"schema_version":1,"ok":false,"diagnostics":[{"severity":"error","code":"E1005","kind":"duplicate_sub_or_function","message":"duplicate Sub 'main' across modules 'mod1', 'mod2'","location":null}]}
+"""

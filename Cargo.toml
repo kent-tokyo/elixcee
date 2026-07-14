@@ -23,9 +23,16 @@ pyo3 = { version = "0.29.0", optional = true }
 zip = "7"
 
 [dev-dependencies]
-calamine  = "0.24"
-proptest  = "1"
-criterion = { version = "0.5", features = ["html_reports"] }
+calamine   = "0.24"
+proptest   = "1"
+criterion  = { version = "0.5", features = ["html_reports"] }
+# Dev-only: lets integration tests parse --json CLI output with a real JSON
+# parser instead of substring matching. Does not affect the release binary's
+# runtime dependencies (hand-rolled JSON writer stays in src/diagnostics.rs).
+serde_json = "1"
+# Dev-only: lets tests/blackbox.rs parse declarative *.toml fixture files.
+# Does not affect the release binary's runtime dependencies.
+toml = "0.8"
 
 [[bench]]
 name = "vm_bench"

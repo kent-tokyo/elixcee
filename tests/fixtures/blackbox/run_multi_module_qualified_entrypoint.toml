@@ -1,0 +1,18 @@
+name = "run_multi_module_qualified_entrypoint"
+command = "run"
+files = ["""
+Attribute VB_Name = "Helpers"
+Sub Greet()
+    Cells(1,1).Value = "hi"
+End Sub
+""", """
+Attribute VB_Name = "MainMod"
+Sub Main()
+    Call Greet()
+End Sub
+"""]
+args = ["MainMod.Main"]
+expect_exit_code = 0
+expect_json = """
+{"schema_version":1,"ok":true,"entrypoint":"MainMod.Main","cells":[{"sheet":"sheet1","address":"A1","value":"hi"}],"messages":[]}
+"""

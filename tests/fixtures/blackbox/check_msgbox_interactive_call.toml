@@ -1,0 +1,12 @@
+name = "check_msgbox_interactive_call"
+command = "check"
+files = ["""
+Sub Main()
+    MsgBox "hi"
+End Sub
+"""]
+args = ["--entry", "Main"]
+expect_exit_code = 0
+expect_json = """
+{"schema_version":1,"ok":true,"diagnostics":[{"severity":"info","code":"I1001","kind":"interactive_call","message":"MsgBox displays a dialog and blocks headless execution","location":{"file":"<FILE>","line":2,"column":5}}]}
+"""

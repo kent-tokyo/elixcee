@@ -1,6 +1,9 @@
+pub mod check;
+pub mod diagnostics;
 pub mod formula;
 pub mod parser;
 pub mod reader;
+pub mod snapshot;
 pub mod vm;
 
 use vm::{Variant, Vm};

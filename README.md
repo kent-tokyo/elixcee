@@ -67,16 +67,19 @@ Pre-built binaries are available on the [Releases](https://github.com/kent-tokyo
 ### Usage
 
 ```
-elixcee <vba_file> <MacroName> [OPTIONS]
+elixcee <vba_file>... <MacroName> [OPTIONS]
 
 Arguments:
-  <vba_file>    Path to VBA source file (.vbs / .bas / .txt)
-  <MacroName>   Name of the Sub to execute
+  <vba_file>...  One or more VBA source files (.vbs / .bas / .txt). With
+                 more than one, use Module.Sub to disambiguate same-named
+                 Subs/Functions across modules.
+  <MacroName>    Name of the Sub to execute (last argument)
 
 Options:
   --file <path>    Load cell data from spreadsheet (.xlsx / .xlsm / .ods)
   --sheet <name>   Active sheet name (default: first sheet in --file)
   --output <path>  Save result cells to spreadsheet (.xlsx / .ods)
+  --json           Emit a single JSON object (result or error) instead of plain text
 ```
 
 ### Examples
@@ -102,6 +105,65 @@ A2    3.14
 ```
 
 `MsgBox` calls are printed to stdout.
+
+### Multiple files (multi-module projects)
+
+Pass more than one source file to run a project spanning several modules.
+Sub/Function names are shared project-wide — use `Module.Sub` to pick a
+specific one if the bare name exists in more than one module (module names
+come from `Attribute VB_Name` if present, else the filename):
+
+```bat
+elixcee Helpers.bas Main.bas Main.ProcessData
+```
+
+There's no project manifest yet (see [docs/agent-contract.md](docs/agent-contract.md)
+for exactly what is/isn't supported, including how cross-module name
+collisions are handled).
+
+### JSON output (for scripts / AI agents)
+
+Add `--json` for a single machine-readable JSON object instead of plain text:
+
+```bat
+elixcee macro.vbs ProcessData --json
+```
+
+```json
+{"schema_version":1,"ok":true,"entrypoint":"ProcessData","duration_ms":0.42,"cells":[{"sheet":"sheet1","address":"A1","value":42}],"messages":[]}
+```
+
+Full contract — error codes, exit codes, `messages` semantics: [docs/agent-contract.md](docs/agent-contract.md).
+
+### Static analysis without running the macro
+
+`elixcee check` inspects one or more `.bas` files without executing them: parse errors, whether the entrypoint macro exists, undefined Sub/Function calls anywhere in the body, and interactive `MsgBox` calls. Every positional argument is a file; the entrypoint (if any) is always `--entry`, never positional — so `elixcee check *.bas` checks every module in a project without asserting any particular entrypoint.
+
+```bat
+elixcee check macro.vbs --entry ProcessData --json
+```
+
+```json
+{"schema_version":1,"ok":true,"diagnostics":[]}
+```
+
+### Workbook snapshot
+
+`elixcee snapshot` reads a `.xlsx`/`.xlsm`/`.ods` file directly — no VBA
+execution — and prints every sheet's non-empty cells as Markdown by default,
+or JSON with `--json`:
+
+```bat
+elixcee snapshot Book1.xlsx --json
+```
+
+```json
+{"schema_version":1,"ok":true,"file":"Book1.xlsx","sheets":[{"name":"Sheet1","sheet_id":"1","stable_id":"sheet1","cells":[{"address":"A1","value":42}]}]}
+```
+
+`stable_id` is derived from the file's own `sheetId` when available (else a
+positional fallback) — it is **not** VBA's `CodeName` property. See
+[docs/agent-contract.md](docs/agent-contract.md) for the full rationale.
 
 ### Build from source
 

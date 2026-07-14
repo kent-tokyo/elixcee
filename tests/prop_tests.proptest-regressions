@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc f0bed530951bbdd11148f760b851e748d12c2e8c06e5f6375ba711d65823c9df # shrinks to s = "A.a0a"
 cc 3bf2a9769df1214c41c5e864cb5c21e526c147d782ce73b12b59df3173a08c49 # shrinks to var = "on", val = 0
+cc b907dd20499039489cb43438f2e12cafd995223376c35a47323d9673a54d9e74 # shrinks to var = "do", val = 0

@@ -1,0 +1,12 @@
+name = "run_success_basic_cell_write"
+command = "run"
+files = ["""
+Sub Main()
+    Cells(1, 1).Value = 42
+End Sub
+"""]
+args = ["Main"]
+expect_exit_code = 0
+expect_json = """
+{"schema_version":1,"ok":true,"entrypoint":"Main","cells":[{"sheet":"sheet1","address":"A1","value":42}],"messages":[]}
+"""

@@ -20,14 +20,17 @@ enum Tok {
     Eof,
 }
 
-fn tokenize(input: &str) -> Vec<Tok> {
+fn tokenize(input: &str) -> (Vec<Tok>, Vec<(u32, u32)>) {
     let chars: Vec<char> = input.chars().collect();
     let mut pos = 0;
     let mut toks: Vec<Tok> = Vec::new();
+    // Parallel (start, end) char-offset span per token in `toks`.
+    let mut spans: Vec<(u32, u32)> = Vec::new();
 
     macro_rules! ch { () => { chars[pos] }; }
 
     while pos < chars.len() {
+        let tok_start = pos;
         match chars[pos] {
             ' ' | '\t' => { pos += 1; }
             '\'' => {
@@ -115,9 +118,16 @@ fn tokenize(input: &str) -> Vec<Tok> {
             }
             _ => { pos += 1; }
         }
+        // The match arm above pushed 0 or 1 tokens (0 for whitespace/comments/
+        // line continuations) — record the same (tok_start, pos) span for
+        // however many it actually pushed, without touching any arm above.
+        while spans.len() < toks.len() {
+            spans.push((tok_start as u32, pos as u32));
+        }
     }
     toks.push(Tok::Eof);
-    toks
+    spans.push((pos as u32, pos as u32));
+    (toks, spans)
 }
 
 // Only push Newline if last token isn't already one (collapse runs)
@@ -131,18 +141,28 @@ fn push_nl(toks: &mut Vec<Tok>) {
 
 struct Parser {
     tokens: Vec<Tok>,
+    /// Parallel to `tokens`: (start, end) char-offset span of each token.
+    spans: Vec<(u32, u32)>,
     pos: usize,
     /// Variable name currently targeted by `With p` (None outside a With block).
     with_target: Option<String>,
 }
 
 impl Parser {
-    fn new(tokens: Vec<Tok>) -> Self {
-        Parser { tokens, pos: 0, with_target: None }
+    fn new(tokens: Vec<Tok>, spans: Vec<(u32, u32)>) -> Self {
+        Parser { tokens, spans, pos: 0, with_target: None }
     }
 
     fn peek(&self) -> &Tok {
         self.tokens.get(self.pos).unwrap_or(&Tok::Eof)
+    }
+
+    /// Span of the token at the current position (clamped to the last
+    /// recorded span — the EOF sentinel — if past the end).
+    fn peek_span(&self) -> SourceSpan {
+        let &(start, end) = self.spans.get(self.pos)
+            .unwrap_or_else(|| self.spans.last().expect("tokenize always emits at least an EOF span"));
+        SourceSpan { start, end }
     }
 
     fn peek_at(&self, offset: usize) -> &Tok {
@@ -236,12 +256,16 @@ impl Parser {
 
     // Parse a body of statements until `at_end` returns true or EOF.
     // Caller is responsible for consuming the terminator.
-    fn parse_stmts<F: Fn(&Self) -> bool>(&mut self, at_end: F) -> Result<Vec<Stmt>, String> {
+    fn parse_stmts<F: Fn(&Self) -> bool>(&mut self, at_end: F) -> Result<Vec<SpannedStmt>, String> {
         let mut stmts = vec![];
         loop {
             self.skip_nl();
             if *self.peek() == Tok::Eof || at_end(self) { break; }
-            if let Some(s) = self.parse_stmt()? { stmts.push(s); }
+            let start = self.peek_span().start;
+            if let Some(s) = self.parse_stmt()? {
+                let end = self.peek_span().start;
+                stmts.push(SpannedStmt { stmt: s, span: SourceSpan { start, end } });
+            }
         }
         Ok(stmts)
     }
@@ -253,9 +277,26 @@ impl Parser {
         let mut subs      = vec![];
         let mut funcs     = vec![];
         let mut type_defs = vec![];
+        let mut module_diagnostics: Vec<(String, SourceSpan)> = vec![];
+        let mut module_name: Option<String> = None;
         while *self.peek() != Tok::Eof {
-            // Module-level Option / Attribute declarations → no-op
-            if self.is_ident("option") || self.is_ident("attribute") {
+            // Module-level Option declarations → no-op
+            if self.is_ident("option") {
+                self.skip_to_eol();
+                continue;
+            }
+            // `Attribute VB_Name = "..."` names the module, as real VBA
+            // does — captured for multi-module CLI use. Every other
+            // Attribute line is still a no-op, same as before.
+            if self.is_ident("attribute") {
+                if self.is_ident_at(1, "vb_name") && *self.peek_at(2) == Tok::Eq {
+                    self.advance(); // attribute
+                    self.advance(); // vb_name
+                    self.advance(); // =
+                    if let Ok(name) = self.consume_str() {
+                        module_name = Some(name);
+                    }
+                }
                 self.skip_to_eol();
                 continue;
             }
@@ -263,9 +304,25 @@ impl Parser {
             if self.is_ident("public") || self.is_ident("private")
                 || self.is_ident("friend") || self.is_ident("static")
             {
+                let start = self.peek_span().start;
                 self.advance();
                 if !self.is_ident("sub") && !self.is_ident("function") && !self.is_ident("type") {
-                    self.skip_to_eol(); // module-level declaration (Dim, Const, etc.) → skip
+                    // Module-level `Const` never gets its value evaluated
+                    // anywhere (unlike inside a Sub) — a real gap, worth
+                    // flagging. A plain `Public x As Long`/`Static y` etc.
+                    // is a harmless no-op (no separate module scope exists;
+                    // `Vm::variables` is one flat namespace) — same as
+                    // plain `Dim` inside a Sub, left unflagged.
+                    if self.is_ident("const") {
+                        self.skip_to_eol();
+                        let end = self.peek_span().start;
+                        module_diagnostics.push((
+                            "Module-level 'Const' is not evaluated (module-level constants aren't supported outside a Sub/Function) and was skipped".to_string(),
+                            SourceSpan { start, end },
+                        ));
+                    } else {
+                        self.skip_to_eol(); // module-level declaration (Dim, etc.) → skip
+                    }
                     continue;
                 }
             }
@@ -277,11 +334,41 @@ impl Parser {
                 type_defs.push(self.parse_type_def()?);
             } else if *self.peek() == Tok::Newline {
                 self.advance();
+            } else if self.is_ident("const") {
+                // Bare module-level `Const` (no modifier) — same gap as above.
+                let start = self.peek_span().start;
+                self.skip_to_eol();
+                let end = self.peek_span().start;
+                module_diagnostics.push((
+                    "Module-level 'Const' is not evaluated (module-level constants aren't supported outside a Sub/Function) and was skipped".to_string(),
+                    SourceSpan { start, end },
+                ));
+            } else if self.is_ident("dim") {
+                // Bare module-level `Dim` (no modifier) — harmless, same as Group A above.
+                self.skip_to_eol();
             } else {
-                self.skip_to_eol(); // unknown module-level line → skip
+                // Unknown module-level line → genuinely unrecognized construct.
+                let start = self.peek_span().start;
+                let reason = if let Tok::Ident(name) = self.peek().clone() {
+                    format!(
+                        "Module-level statement starting with '{}' is not recognized and was skipped",
+                        name
+                    )
+                } else {
+                    "Module-level statement is not recognized and was skipped".to_string()
+                };
+                self.skip_to_eol();
+                let end = self.peek_span().start;
+                module_diagnostics.push((reason, SourceSpan { start, end }));
             }
         }
-        Ok(Program { subs, funcs, type_defs })
+        Ok(Program {
+            subs,
+            funcs,
+            type_defs,
+            module_diagnostics,
+            module_name,
+        })
     }
 
     /// Parse a `Type Name ... End Type` block.
@@ -362,6 +449,19 @@ impl Parser {
             _ => return Err(format!("unexpected token starting statement: {:?}", self.peek())),
         };
 
+        // A bare `name = ...` is always a plain assignment, even when `name`
+        // collides with one of the statement keywords below (e.g. `do = 0`,
+        // `select = 1`) — no VBA statement keyword's grammar puts `=`
+        // immediately after itself (Dim/Const/For/etc. all require a name or
+        // expression there instead), so this check is safe and general
+        // rather than needing a per-keyword lookahead guard (the `"on" if
+        // ...`-style fix below only disambiguates `On Error` specifically).
+        if *self.peek_at(1) == Tok::Eq {
+            let s = self.parse_ident_stmt()?;
+            self.eat_eol()?;
+            return Ok(Some(s));
+        }
+
         match first.as_str() {
             "do"      => Ok(Some(self.parse_do_loop()?)),
             "select"  => Ok(Some(self.parse_select_case()?)),
@@ -371,7 +471,7 @@ impl Parser {
             "if"      => Ok(Some(self.parse_if()?)),
             "while"   => Ok(Some(self.parse_while_wend()?)),
             "exit"    => { let s = self.parse_exit()?; self.eat_eol()?; Ok(Some(s)) }
-            "on"      => { let s = self.parse_on_error()?; self.eat_eol()?; Ok(Some(s)) }
+            "on" if self.is_ident_at(1, "error") => { let s = self.parse_on_error()?; self.eat_eol()?; Ok(Some(s)) }
             "goto"    => {
                 self.advance();
                 let label = self.consume_ident()?;
@@ -406,7 +506,12 @@ impl Parser {
                 }
             }
             // Debug.Print / Debug.Assert → no-op
-            "debug" => { self.skip_to_eol(); Ok(Some(Stmt::Dim)) }
+            "debug" => {
+                self.skip_to_eol();
+                Ok(Some(Stmt::Unsupported {
+                    reason: "Debug.Print/Debug.Assert has no effect (no-op)".to_string(),
+                }))
+            }
             _ => { let s = self.parse_ident_stmt()?; self.eat_eol()?; Ok(Some(s)) }
         }
     }
@@ -481,7 +586,8 @@ impl Parser {
         Ok(Stmt::If { condition, then_body, else_body })
     }
 
-    fn parse_elseif_chain(&mut self) -> Result<Vec<Stmt>, String> {
+    fn parse_elseif_chain(&mut self) -> Result<Vec<SpannedStmt>, String> {
+        let start = self.peek_span().start;
         self.consume_elseif();
         let condition = self.parse_expr()?;
         self.expect_ident("then")?;
@@ -498,7 +604,9 @@ impl Parser {
         } else {
             vec![]
         };
-        Ok(vec![Stmt::If { condition, then_body, else_body }])
+        let end = self.peek_span().start;
+        let stmt = Stmt::If { condition, then_body, else_body };
+        Ok(vec![SpannedStmt { stmt, span: SourceSpan { start, end } }])
     }
 
     fn parse_do_loop(&mut self) -> Result<Stmt, String> {
@@ -653,18 +761,21 @@ impl Parser {
         Ok(Stmt::With { body })
     }
 
-    fn parse_with_body(&mut self) -> Result<Vec<Stmt>, String> {
+    fn parse_with_body(&mut self) -> Result<Vec<SpannedStmt>, String> {
         let mut stmts = vec![];
         loop {
             self.skip_nl();
             if self.is_end_kw("with") || *self.peek() == Tok::Eof { break; }
-            if *self.peek() == Tok::Dot {
+            let start = self.peek_span().start;
+            let stmt = if *self.peek() == Tok::Dot {
                 // with_cell_write, with_range_write, or with_dot_stmt
-                if let Some(s) = self.parse_with_dot_stmt()? {
-                    stmts.push(s);
-                }
-            } else if let Some(s) = self.parse_stmt()? {
-                stmts.push(s);
+                self.parse_with_dot_stmt()?
+            } else {
+                self.parse_stmt()?
+            };
+            if let Some(stmt) = stmt {
+                let end = self.peek_span().start;
+                stmts.push(SpannedStmt { stmt, span: SourceSpan { start, end } });
             }
         }
         Ok(stmts)
@@ -695,9 +806,15 @@ impl Parser {
                                 Ok(Some(Stmt::RecordSetNested { var, fields, value }))
                             };
                         }
-                        // No '=' → skip (method call / property read no-op)
+                        // No '=' → read without assignment has no effect
                         self.skip_to_eol();
-                        return Ok(None);
+                        return Ok(Some(Stmt::Unsupported {
+                            reason: format!(
+                                "'{}.{}' read without assignment has no effect",
+                                var,
+                                fields.join(".")
+                            ),
+                        }));
                     }
                 }
                 match s.as_str() {
@@ -731,15 +848,20 @@ impl Parser {
                         Ok(Some(Stmt::CellWrite { row, col, value }))
                     }
                     _ => {
-                        // with_dot_stmt: skip to EOL
+                        // with_dot_stmt: unrecognized property/method
                         self.skip_to_eol();
-                        Ok(None)
+                        Ok(Some(Stmt::Unsupported {
+                            reason: format!("With-block '.{}' is not implemented", s),
+                        }))
                     }
                 }
             }
             _ => {
                 self.skip_to_eol();
-                Ok(None)
+                Ok(Some(Stmt::Unsupported {
+                    reason: "With-block dotted statement is not recognized and was skipped"
+                        .to_string(),
+                }))
             }
         }
     }
@@ -961,7 +1083,19 @@ impl Parser {
                         addr,
                         contents_only: method == "clearcontents",
                     }),
-                    _ => { self.skip_to_eol(); Ok(Stmt::Dim) }
+                    _ => {
+                        // Leave the trailing newline for the caller's own
+                        // `eat_eol()` (the "range" dispatch arm) — unlike
+                        // `skip_to_eol()`, which would consume it too and
+                        // cause a spurious "expected newline" error when
+                        // this is the last statement before End Sub.
+                        while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                            self.advance();
+                        }
+                        Ok(Stmt::Unsupported {
+                            reason: format!("EntireRow/EntireColumn.{} is not implemented", method),
+                        })
+                    }
                 }
             }
             "clearcontents" | "clear" => Ok(Stmt::RangeClear {
@@ -976,7 +1110,9 @@ impl Parser {
             _ => {
                 // range_noop_stmt
                 while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
-                Ok(Stmt::Dim)
+                Ok(Stmt::Unsupported {
+                    reason: format!("Range property/method '{}' is not implemented", prop),
+                })
             }
         }
     }
@@ -1044,8 +1180,15 @@ impl Parser {
                 while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
                 return Ok(Stmt::SheetsAdd);
             }
-            self.skip_to_eol();
-            return Ok(Stmt::Dim);
+            // Leave the trailing newline for the caller's own `eat_eol()`
+            // (the "worksheets"/"sheets" dispatch arm) — see the identical
+            // note on the EntireRow/EntireColumn fallback above.
+            while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                self.advance();
+            }
+            return Ok(Stmt::Unsupported {
+                reason: format!("Sheets.{} is not implemented", method),
+            });
         }
         self.expect_tok(Tok::LParen)?;
         let sheet_raw = self.consume_str()?.to_lowercase();
@@ -1069,7 +1212,9 @@ impl Parser {
             }
             _ => {
                 while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
-                Ok(Stmt::Dim)
+                Ok(Stmt::Unsupported {
+                    reason: format!("Sheets(...).{} is not implemented", method),
+                })
             }
         }
     }
@@ -1108,8 +1253,18 @@ impl Parser {
                     let value = self.parse_expr()?;
                     Ok(Stmt::ArrayRecordSet { name, indices: args, field, value })
                 } else {
-                    self.skip_to_eol();
-                    Ok(Stmt::Dim)
+                    // Leave the trailing newline for the caller's own
+                    // `eat_eol()` (the ident-statement dispatch fallback) —
+                    // see the identical note on the EntireRow fallback above.
+                    while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                        self.advance();
+                    }
+                    Ok(Stmt::Unsupported {
+                        reason: format!(
+                            "'{}(...).{}' read without assignment has no effect",
+                            name, field
+                        ),
+                    })
                 }
             } else {
                 Ok(Stmt::CallSub { name, args })
@@ -1137,14 +1292,29 @@ impl Parser {
                     Ok(Stmt::RecordSetNested { var: name, fields, value })
                 }
             } else {
-                // p.Method / property access without assignment — skip to EOL (noop)
-                self.skip_to_eol();
-                Ok(Stmt::Dim)
+                // p.Method / property access without assignment — skip to
+                // EOL (noop). Leave the trailing newline for the caller's
+                // own `eat_eol()` — see the identical note above.
+                while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                    self.advance();
+                }
+                Ok(Stmt::Unsupported {
+                    reason: format!(
+                        "'{}.{}' read without assignment has no effect",
+                        name,
+                        fields.join(".")
+                    ),
+                })
             }
         } else {
             // Bare ident — noop
             while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
-            Ok(Stmt::Dim)
+            Ok(Stmt::Unsupported {
+                reason: format!(
+                    "'{}' as a bare statement (no Call keyword or parentheses) is not supported and was skipped",
+                    name
+                ),
+            })
         }
     }
 
@@ -1453,9 +1623,112 @@ fn parse_cell_addr(addr: &str) -> Option<(u32, u32)> {
 // ── Public entry point ────────────────────────────────────────────────────────
 
 pub fn parse(input: &str) -> Result<Program, String> {
-    let tokens = tokenize(input);
-    let mut parser = Parser::new(tokens);
-    parser.parse_program()
+    parse_with_span(input).map_err(|e| e.message)
+}
+
+/// A parse failure paired with the span of the token where it was detected.
+pub struct ParseErrorWithSpan {
+    pub message: String,
+    pub span: SourceSpan,
+}
+
+/// Like `parse`, but on failure also reports where in the source the parser
+/// gave up. Existing callers should keep using `parse` — this is additive,
+/// for the `--json` CLI contract's location reporting.
+pub fn parse_with_span(input: &str) -> Result<Program, ParseErrorWithSpan> {
+    let (tokens, spans) = tokenize(input);
+    let mut parser = Parser::new(tokens, spans);
+    parser.parse_program().map_err(|message| {
+        let span = parser.peek_span();
+        ParseErrorWithSpan { message, span }
+    })
+}
+
+// ── Multi-module resolution (Milestone B2) ────────────────────────────────────
+//
+// Pure functions over parsed `Program`s — no VM dependency. `modules` is a
+// list of (module_name, Program) pairs; module names are expected to
+// already be lowercased by the caller (mirroring the tokenizer's universal
+// identifier-lowercasing convention used everywhere else).
+
+/// Result of resolving a CLI entrypoint name against a set of modules.
+pub enum EntrypointResolution<'a> {
+    Found(&'a SubDef),
+    NotFound,
+}
+
+/// Resolve a bare (`MySub`) or qualified (`Module1.MySub`) entrypoint name
+/// against `modules`. Callers are expected to have already rejected
+/// cross-module bare-name collisions (see `find_cross_module_sub_collisions`)
+/// before calling this — a collision-free namespace means this only ever
+/// has two outcomes, no "ambiguous" case.
+pub fn resolve_entrypoint<'a>(
+    modules: &'a [(String, Program)],
+    entrypoint: &str,
+) -> EntrypointResolution<'a> {
+    let entrypoint = entrypoint.to_lowercase();
+    if let Some((module_part, sub_part)) = entrypoint.rsplit_once('.') {
+        for (name, prog) in modules {
+            if name == module_part {
+                return match prog.subs.iter().find(|s| s.name == sub_part) {
+                    Some(sub) => EntrypointResolution::Found(sub),
+                    None => EntrypointResolution::NotFound,
+                };
+            }
+        }
+        EntrypointResolution::NotFound
+    } else {
+        for (_, prog) in modules {
+            if let Some(sub) = prog.subs.iter().find(|s| s.name == entrypoint) {
+                return EntrypointResolution::Found(sub);
+            }
+        }
+        EntrypointResolution::NotFound
+    }
+}
+
+/// Bare Sub names that appear in 2+ modules, mapped to the list of module
+/// names that declare them — the flat cross-module namespace can't
+/// disambiguate these (own-module-first/Private VBA scoping isn't modeled),
+/// so callers should reject the run rather than pick one silently.
+pub fn find_cross_module_sub_collisions(
+    modules: &[(String, Program)],
+) -> Vec<(String, Vec<String>)> {
+    let mut by_name: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (module_name, prog) in modules {
+        for sub in &prog.subs {
+            by_name
+                .entry(sub.name.clone())
+                .or_default()
+                .push(module_name.clone());
+        }
+    }
+    by_name
+        .into_iter()
+        .filter(|(_, mods)| mods.len() > 1)
+        .collect()
+}
+
+/// Same as `find_cross_module_sub_collisions`, for bare Function names
+/// (a separate namespace from Subs, same as within a single module today).
+pub fn find_cross_module_func_collisions(
+    modules: &[(String, Program)],
+) -> Vec<(String, Vec<String>)> {
+    let mut by_name: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (module_name, prog) in modules {
+        for func in &prog.funcs {
+            by_name
+                .entry(func.name.clone())
+                .or_default()
+                .push(module_name.clone());
+        }
+    }
+    by_name
+        .into_iter()
+        .filter(|(_, mods)| mods.len() > 1)
+        .collect()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1466,6 +1739,7 @@ mod tests {
 
     fn parse_body(code: &str) -> Vec<Stmt> {
         parse(code).unwrap().subs.into_iter().next().unwrap().body
+            .into_iter().map(|s| s.stmt).collect()
     }
 
     #[test] fn test_empty_sub() {
@@ -1586,6 +1860,51 @@ mod tests {
         };
         assert_eq!(body_len, 1);
     }
+
+    #[test] fn test_with_udt_field_read_without_assignment_is_unsupported() {
+        let body = parse_body("Sub MySub()\n    With p\n        .Field\n    End With\nEnd Sub\n");
+        let inner = match &body[0] {
+            Stmt::WithRecord { body, .. } => body,
+            other => panic!("expected WithRecord, got {:?}", other),
+        };
+        assert_eq!(
+            inner[0].stmt,
+            Stmt::Unsupported {
+                reason: "'p.field' read without assignment has no effect".to_string()
+            }
+        );
+    }
+
+    #[test] fn test_with_unrecognized_dot_method_is_unsupported() {
+        let body = parse_body(
+            "Sub MySub()\n    With Sheets(\"Sheet1\")\n        .Foo\n    End With\nEnd Sub\n",
+        );
+        let inner = match &body[0] {
+            Stmt::WithSheet { body, .. } => body,
+            other => panic!("expected WithSheet, got {:?}", other),
+        };
+        assert_eq!(
+            inner[0].stmt,
+            Stmt::Unsupported {
+                reason: "With-block '.foo' is not implemented".to_string()
+            }
+        );
+    }
+
+    #[test] fn test_with_non_identifier_dotted_statement_is_unsupported() {
+        // `.42` tokenizes as Dot, Int(42) — a non-identifier after the dot.
+        let body = parse_body("Sub MySub()\n    With p\n        .42\n    End With\nEnd Sub\n");
+        let inner = match &body[0] {
+            Stmt::WithRecord { body, .. } => body,
+            other => panic!("expected WithRecord, got {:?}", other),
+        };
+        assert_eq!(
+            inner[0].stmt,
+            Stmt::Unsupported {
+                reason: "With-block dotted statement is not recognized and was skipped".to_string()
+            }
+        );
+    }
     #[test] fn test_func_call_in_expr() {
         let body = parse_body("Sub MySub()\n    a = Len(\"hello\")\nEnd Sub\n");
         assert!(matches!(&body[0], Stmt::Assignment { value: Expr::FuncCall { name, .. }, .. } if name == "len"));
@@ -1607,12 +1926,12 @@ mod tests {
         let body = parse_body("Sub MySub()\n    If x > 10 Then\n        a = 1\n    ElseIf x > 5 Then\n        a = 2\n    Else\n        a = 3\n    End If\nEnd Sub\n");
         assert!(matches!(&body[0], Stmt::If { .. }));
         if let Stmt::If { else_body, .. } = &body[0] {
-            assert!(matches!(else_body[0], Stmt::If { .. }));
+            assert!(matches!(else_body[0].stmt, Stmt::If { .. }));
         }
     }
     #[test] fn test_exit_for() {
         let body = parse_body("Sub MySub()\n    For i = 1 To 10\n        Exit For\n    Next i\nEnd Sub\n");
-        if let Stmt::For { body, .. } = &body[0] { assert_eq!(body[0], Stmt::ExitFor); }
+        if let Stmt::For { body, .. } = &body[0] { assert_eq!(body[0].stmt, Stmt::ExitFor); }
     }
     #[test] fn test_on_error_resume_next() {
         let body = parse_body("Sub MySub()\n    On Error Resume Next\n    a = 1\nEnd Sub\n");
@@ -1676,8 +1995,71 @@ mod tests {
         assert_eq!(prog.subs[0].name, "mysub");
     }
 
+    #[test] fn test_module_level_const_with_modifier_is_flagged() {
+        // `Public Const` never gets its value evaluated anywhere — a real
+        // gap, unlike a plain declaration, so it's recorded for `check`.
+        let prog = parse("Public Const MAX_RETRIES = 5\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+        assert_eq!(prog.module_diagnostics.len(), 1);
+        assert_eq!(
+            prog.module_diagnostics[0].0,
+            "Module-level 'Const' is not evaluated (module-level constants aren't supported outside a Sub/Function) and was skipped"
+        );
+    }
+
+    #[test] fn test_module_level_bare_const_is_flagged() {
+        let prog = parse("Const MAX_RETRIES = 5\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+        assert_eq!(prog.module_diagnostics.len(), 1);
+        assert_eq!(
+            prog.module_diagnostics[0].0,
+            "Module-level 'Const' is not evaluated (module-level constants aren't supported outside a Sub/Function) and was skipped"
+        );
+    }
+
+    #[test] fn test_module_level_unrecognized_line_is_flagged() {
+        let prog =
+            parse("Declare Function Foo Lib \"x.dll\" ()\nSub MySub()\n    a = 1\nEnd Sub\n")
+                .unwrap();
+        assert_eq!(prog.module_diagnostics.len(), 1);
+        assert_eq!(
+            prog.module_diagnostics[0].0,
+            "Module-level statement starting with 'declare' is not recognized and was skipped"
+        );
+    }
+
+    #[test] fn test_module_level_plain_public_declaration_is_not_flagged() {
+        // Group A parity with the Sub-level case: no separate module scope
+        // exists (`Vm::variables` is one flat namespace), so a plain
+        // declaration with no value is a harmless no-op, not a gap.
+        let prog = parse("Public x As Long\nSub MySub()\n    x = 1\nEnd Sub\n").unwrap();
+        assert!(prog.module_diagnostics.is_empty());
+    }
+
+    #[test] fn test_module_level_bare_dim_is_not_flagged() {
+        let prog = parse("Dim counter As Long\nSub MySub()\n    counter = 1\nEnd Sub\n").unwrap();
+        assert!(prog.module_diagnostics.is_empty());
+    }
+
     #[test] fn test_attribute_ignored() {
         let prog = parse("Attribute VB_Name = \"Module1\"\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+        assert_eq!(prog.subs.len(), 1);
+    }
+
+    #[test] fn test_vb_name_attribute_is_captured_as_module_name() {
+        let prog = parse("Attribute VB_Name = \"Module1\"\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+        assert_eq!(prog.module_name, Some("Module1".to_string()));
+    }
+
+    #[test] fn test_module_name_is_none_without_vb_name_attribute() {
+        let prog = parse("Sub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+        assert_eq!(prog.module_name, None);
+    }
+
+    #[test] fn test_other_attribute_lines_still_ignored_alongside_vb_name() {
+        let prog = parse(
+            "Attribute VB_Name = \"Module1\"\nAttribute VB_GlobalNameSpace = False\nSub MySub()\n    a = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        assert_eq!(prog.module_name, Some("Module1".to_string()));
         assert_eq!(prog.subs.len(), 1);
     }
 
@@ -1686,13 +2068,93 @@ mod tests {
     #[test] fn test_debug_print_noop() {
         let body = parse_body("Sub MySub()\n    Debug.Print \"hello\"\n    a = 1\nEnd Sub\n");
         // Debug.Print is a no-op; only the assignment remains
-        assert_eq!(body.len(), 2); // Stmt::Dim (noop) + Assignment
+        assert_eq!(body.len(), 2); // Stmt::Unsupported (noop) + Assignment
         assert_eq!(body[1], Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) });
     }
 
     #[test] fn test_debug_assert_noop() {
         let body = parse_body("Sub MySub()\n    Debug.Assert x > 0\n    a = 1\nEnd Sub\n");
         assert_eq!(body[1], Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) });
+    }
+
+    // ── Stmt::Unsupported: unrecognized constructs preserve *why*, distinct
+    // from Stmt::Dim's intentional no-op (see test_static_dim_inside_sub and
+    // test_dim_is_noop below, which are untouched by this) ──────────────────
+
+    #[test] fn test_debug_print_reason_is_specific() {
+        let body = parse_body("Sub MySub()\n    Debug.Print \"hello\"\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::Unsupported {
+                reason: "Debug.Print/Debug.Assert has no effect (no-op)".into()
+            }
+        );
+    }
+
+    #[test] fn test_entirerow_unknown_method_reason() {
+        let body = parse_body("Sub MySub()\n    Range(\"A1\").EntireRow.Foo\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::Unsupported {
+                reason: "EntireRow/EntireColumn.foo is not implemented".into()
+            }
+        );
+    }
+
+    #[test] fn test_range_unknown_property_reason() {
+        let body = parse_body("Sub MySub()\n    Range(\"A1\").Hidden = True\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::Unsupported {
+                reason: "Range property/method 'hidden' is not implemented".into()
+            }
+        );
+    }
+
+    #[test] fn test_sheets_unknown_method_reason() {
+        let body = parse_body("Sub MySub()\n    Sheets.Foo\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::Unsupported { reason: "Sheets.foo is not implemented".into() }
+        );
+    }
+
+    #[test] fn test_sheets_indexed_unknown_method_reason() {
+        let body = parse_body("Sub MySub()\n    Sheets(\"Sheet1\").Foo\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::Unsupported { reason: "Sheets(...).foo is not implemented".into() }
+        );
+    }
+
+    #[test] fn test_array_field_read_without_assignment_reason() {
+        let body = parse_body("Sub MySub()\n    arr(0).Name\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::Unsupported {
+                reason: "'arr(...).name' read without assignment has no effect".into()
+            }
+        );
+    }
+
+    #[test] fn test_record_field_read_without_assignment_reason() {
+        let body = parse_body("Sub MySub()\n    p.Refresh\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::Unsupported {
+                reason: "'p.refresh' read without assignment has no effect".into()
+            }
+        );
+    }
+
+    #[test] fn test_bare_ident_statement_reason() {
+        let body = parse_body("Sub MySub()\n    Foo\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::Unsupported {
+                reason: "'foo' as a bare statement (no Call keyword or parentheses) is not supported and was skipped".into()
+            }
+        );
     }
 
     #[test] fn test_static_dim_inside_sub() {
@@ -1751,5 +2213,119 @@ mod tests {
     #[test] fn test_resume_next_stmt() {
         let body = parse_body("Sub MySub()\n    Resume Next\nEnd Sub\n");
         assert_eq!(body[0], Stmt::Resume { next: true });
+    }
+
+    // ── Multi-module resolution (Milestone B2) ─────────────────────────────
+
+    fn module(name: &str, src: &str) -> (String, Program) {
+        (name.to_string(), parse(src).unwrap())
+    }
+
+    #[test] fn resolve_entrypoint_bare_name_found() {
+        let modules = vec![module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n")];
+        assert!(matches!(
+            resolve_entrypoint(&modules, "Foo"),
+            EntrypointResolution::Found(sub) if sub.name == "foo"
+        ));
+    }
+
+    #[test] fn resolve_entrypoint_bare_name_not_found() {
+        let modules = vec![module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n")];
+        assert!(matches!(
+            resolve_entrypoint(&modules, "Bar"),
+            EntrypointResolution::NotFound
+        ));
+    }
+
+    #[test] fn resolve_entrypoint_bare_name_across_modules() {
+        let modules = vec![
+            module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
+            module("module2", "Sub Bar()\n    a = 1\nEnd Sub\n"),
+        ];
+        assert!(matches!(
+            resolve_entrypoint(&modules, "Bar"),
+            EntrypointResolution::Found(sub) if sub.name == "bar"
+        ));
+    }
+
+    #[test] fn resolve_entrypoint_qualified_found() {
+        let modules = vec![
+            module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
+            module("module2", "Sub Foo()\n    a = 2\nEnd Sub\n"),
+        ];
+        assert!(matches!(
+            resolve_entrypoint(&modules, "Module2.Foo"),
+            EntrypointResolution::Found(sub) if sub.name == "foo"
+        ));
+    }
+
+    #[test] fn resolve_entrypoint_qualified_unknown_module() {
+        let modules = vec![module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n")];
+        assert!(matches!(
+            resolve_entrypoint(&modules, "NoSuchModule.Foo"),
+            EntrypointResolution::NotFound
+        ));
+    }
+
+    #[test] fn resolve_entrypoint_qualified_unknown_sub_in_known_module() {
+        let modules = vec![module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n")];
+        assert!(matches!(
+            resolve_entrypoint(&modules, "Module1.Bar"),
+            EntrypointResolution::NotFound
+        ));
+    }
+
+    #[test] fn no_sub_collisions_across_disjoint_modules() {
+        let modules = vec![
+            module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
+            module("module2", "Sub Bar()\n    a = 1\nEnd Sub\n"),
+        ];
+        assert!(find_cross_module_sub_collisions(&modules).is_empty());
+    }
+
+    #[test] fn one_sub_collision_across_two_modules() {
+        let modules = vec![
+            module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
+            module("module2", "Sub Foo()\n    a = 2\nEnd Sub\n"),
+        ];
+        let collisions = find_cross_module_sub_collisions(&modules);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].0, "foo");
+        let mut mods = collisions[0].1.clone();
+        mods.sort();
+        assert_eq!(mods, vec!["module1".to_string(), "module2".to_string()]);
+    }
+
+    #[test] fn sub_collision_spanning_three_modules() {
+        let modules = vec![
+            module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
+            module("module2", "Sub Foo()\n    a = 2\nEnd Sub\n"),
+            module("module3", "Sub Foo()\n    a = 3\nEnd Sub\n"),
+        ];
+        let collisions = find_cross_module_sub_collisions(&modules);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].1.len(), 3);
+    }
+
+    #[test] fn func_collisions_are_a_separate_namespace_from_subs() {
+        // A Sub and a Function sharing a name across modules is not a
+        // collision — Subs and Funcs are separate namespaces, as within a
+        // single module today.
+        let modules = vec![
+            module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
+            module("module2", "Function Foo()\n    Foo = 1\nEnd Function\n"),
+        ];
+        assert!(find_cross_module_sub_collisions(&modules).is_empty());
+        assert!(find_cross_module_func_collisions(&modules).is_empty());
+    }
+
+    #[test] fn one_func_collision_across_two_modules() {
+        let modules = vec![
+            module("module1", "Function Foo()\n    Foo = 1\nEnd Function\n"),
+            module("module2", "Function Foo()\n    Foo = 2\nEnd Function\n"),
+        ];
+        let collisions = find_cross_module_func_collisions(&modules);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].0, "foo");
     }
 }

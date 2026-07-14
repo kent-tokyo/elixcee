@@ -1,0 +1,12 @@
+name = "check_undefined_call"
+command = "check"
+files = ["""
+Sub Main()
+    Call Ghost()
+End Sub
+"""]
+args = ["--entry", "Main"]
+expect_exit_code = 1
+expect_json = """
+{"schema_version":1,"ok":false,"diagnostics":[{"severity":"error","code":"E1002","kind":"undefined_sub_or_function","message":"Sub/Function 'ghost' not found","location":{"file":"<FILE>","line":2,"column":5}}]}
+"""

@@ -11,6 +11,11 @@ use zip::ZipArchive;
 pub struct WorkbookSheet {
     pub name: String,
     pub cells: HashMap<(u32, u32), SheetCell>,
+    /// The XLSX `<sheet sheetId="...">` attribute, when read from a real
+    /// `.xlsx`/`.xlsm` file — `None` for `.ods` (no equivalent attribute) or
+    /// if the attribute was missing. Not VBA's `CodeName` (that lives in
+    /// `vbaProject.bin`, an OLE binary format this reader doesn't parse).
+    pub sheet_id: Option<String>,
 }
 
 pub enum SheetCell {
@@ -214,7 +219,7 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     };
 
     let mut sheets = vec![];
-    for (name, rid) in sheet_refs {
+    for (name, rid, sheet_id) in sheet_refs {
         let Some(target) = rels.get(&rid) else { continue };
         let zip_path = if target.starts_with('/') {
             target[1..].to_string()
@@ -225,13 +230,13 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
             Ok(s) => s, Err(_) => continue,
         };
         let cells = xlsx_sheet_cells(&sheet_xml, &shared);
-        sheets.push(WorkbookSheet { name, cells });
+        sheets.push(WorkbookSheet { name, cells, sheet_id });
     }
     Ok(sheets)
 }
 
-/// Returns `[(sheet_name, rId)]` in document order.
-fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String)> {
+/// Returns `[(sheet_name, rId, sheetId)]` in document order.
+fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>)> {
     let mut iter = XmlIter::new(xml);
     let mut result = vec![];
     while let Some(ev) = iter.next_ev() {
@@ -242,7 +247,8 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String)> {
                     attr_get(attrs, "name"),
                     attr_get(attrs, "id"),
                 ) {
-                    result.push((name.to_string(), rid.to_string()));
+                    let sheet_id = attr_get(attrs, "sheetId").map(|s| s.to_string());
+                    result.push((name.to_string(), rid.to_string(), sheet_id));
                 }
             }
         }
@@ -450,7 +456,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                         let name = attr_get(attrs, "name")
                             .unwrap_or("sheet1")
                             .to_lowercase();
-                        sheets.push(WorkbookSheet { name, cells: HashMap::new() });
+                        sheets.push(WorkbookSheet { name, cells: HashMap::new(), sheet_id: None });
                         in_sheet = true;
                         row = 0;
                         col = 0;
@@ -540,5 +546,60 @@ fn ods_make_cell(s: &OdsCellState) -> Option<SheetCell> {
             Some(SheetCell::Bool(s.bool_attr == "true"))
         }
         _ => None, // empty / formula result not available / etc.
+    }
+}
+
+#[cfg(test)]
+mod sheet_id_tests {
+    use super::*;
+
+    #[test]
+    fn xlsx_workbook_sheets_captures_non_contiguous_sheet_ids() {
+        // sheetIds "1" and "5" (not "1"/"2") prove sheet_id is read from the
+        // attribute itself, not inferred from document position.
+        let xml = r#"<?xml version="1.0"?>
+<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets>
+<sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+<sheet name="Sheet2" sheetId="5" r:id="rId2"/>
+</sheets>
+</workbook>"#;
+        let result = xlsx_workbook_sheets(xml);
+        assert_eq!(
+            result,
+            vec![
+                (
+                    "Sheet1".to_string(),
+                    "rId1".to_string(),
+                    Some("1".to_string())
+                ),
+                (
+                    "Sheet2".to_string(),
+                    "rId2".to_string(),
+                    Some("5".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn xlsx_workbook_sheets_handles_a_missing_sheet_id() {
+        let xml = r#"<sheets><sheet name="Sheet1" r:id="rId1"/></sheets>"#;
+        let result = xlsx_workbook_sheets(xml);
+        assert_eq!(
+            result,
+            vec![("Sheet1".to_string(), "rId1".to_string(), None)]
+        );
+    }
+
+    #[test]
+    fn ods_sheets_always_have_no_sheet_id() {
+        let xml = r#"<office:body><office:spreadsheet>
+<table:table table:name="Sheet1"></table:table>
+<table:table table:name="Sheet2"></table:table>
+</office:spreadsheet></office:body>"#;
+        let sheets = ods_parse(xml);
+        assert_eq!(sheets.len(), 2);
+        assert!(sheets.iter().all(|s| s.sheet_id.is_none()));
     }
 }

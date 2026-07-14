@@ -1,0 +1,12 @@
+name = "run_failure_parse_error"
+command = "run"
+files = ["""
+Sub Main()
+    x =
+End Sub
+"""]
+args = ["Main"]
+expect_exit_code = 1
+expect_json = """
+{"schema_version":1,"ok":false,"error":{"code":"E2001","kind":"parse_error","message":"unexpected token in expression: Newline","location":{"file":"<FILE>","line":2,"column":8}},"messages":[]}
+"""

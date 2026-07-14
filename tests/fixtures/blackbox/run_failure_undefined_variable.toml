@@ -1,0 +1,12 @@
+name = "run_failure_undefined_variable"
+command = "run"
+files = ["""
+Sub Main()
+    x = totla + 1
+End Sub
+"""]
+args = ["Main"]
+expect_exit_code = 1
+expect_json = """
+{"schema_version":1,"ok":false,"error":{"code":"E1001","kind":"undefined_variable","message":"Undefined variable: 'totla'","location":{"file":"<FILE>","line":2,"column":5}},"messages":[]}
+"""

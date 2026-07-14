@@ -67,16 +67,19 @@ Python 不要のスタンドアロンバイナリを [Releases](https://github.c
 ### 使い方
 
 ```
-elixcee <vba_file> <MacroName> [OPTIONS]
+elixcee <vba_file>... <MacroName> [OPTIONS]
 
 引数:
-  <vba_file>    VBA ソースファイルのパス（.vbs / .bas / .txt）
-  <MacroName>   実行する Sub の名前
+  <vba_file>...  VBA ソースファイルのパス（.vbs / .bas / .txt）を1つ以上。
+                 複数ファイルの場合、モジュールをまたいで同名の Sub/Function
+                 があれば Module.Sub で区別する。
+  <MacroName>    実行する Sub の名前（最後の引数）
 
 オプション:
   --file <path>    スプレッドシートからセルデータを読み込む（.xlsx / .xlsm / .ods）
   --sheet <name>   アクティブシート名（デフォルト: --file の先頭シート）
   --output <path>  結果セルをスプレッドシートに保存（.xlsx / .ods）
+  --json           プレーンテキストの代わりに単一の JSON オブジェクト（結果またはエラー）を出力
 ```
 
 ### 実行例
@@ -102,6 +105,56 @@ A2    3.14
 ```
 
 `MsgBox` の内容は標準出力に表示されます。
+
+### 複数ファイル（マルチモジュールプロジェクト）
+
+複数の VBA ファイルを渡すと、複数モジュールにまたがるプロジェクトを実行できます。Sub/Function 名はプロジェクト全体で共有されるため、同じ名前が複数モジュールに存在する場合は `Module.Sub` で特定のものを指定します（モジュール名は `Attribute VB_Name` があればその値、なければファイル名から決まります）:
+
+```bat
+elixcee Helpers.bas Main.bas Main.ProcessData
+```
+
+プロジェクトマニフェストはまだありません（対応範囲の詳細、モジュール間で名前が衝突した場合の扱いなどは [docs/agent-contract.md](docs/agent-contract.md) を参照）。
+
+### JSON 出力（スクリプト・AI エージェント向け）
+
+`--json` を付けると、プレーンテキストの代わりに単一の機械可読な JSON オブジェクトを出力します:
+
+```bat
+elixcee macro.vbs ProcessData --json
+```
+
+```json
+{"schema_version":1,"ok":true,"entrypoint":"ProcessData","duration_ms":0.42,"cells":[{"sheet":"sheet1","address":"A1","value":42}],"messages":[]}
+```
+
+契約の全容（エラーコード・終了コード・`messages` の仕様）: [docs/agent-contract.md](docs/agent-contract.md)
+
+### マクロを実行せずに静的解析する
+
+`elixcee check` は1つ以上の `.bas` ファイルを**実行せずに**検査します: parse エラー、指定した macro の存在確認、本文中の未定義 Sub/Function 呼び出し、`MsgBox` などの対話操作の検出。位置引数はすべてファイルとして扱われ、エントリポイント（指定する場合）は常に `--entry` で渡します（位置引数では渡しません）— そのため `elixcee check *.bas` は特定のエントリポイントを前提とせずプロジェクト内の全モジュールを検査できます。
+
+```bat
+elixcee check macro.vbs --entry ProcessData --json
+```
+
+```json
+{"schema_version":1,"ok":true,"diagnostics":[]}
+```
+
+### ワークブックのスナップショット
+
+`elixcee snapshot` は `.xlsx`/`.xlsm`/`.ods` ファイルを VBA を実行せずに直接読み込み、全シートの非空セルを Markdown（デフォルト）または `--json` で JSON として出力します。
+
+```bat
+elixcee snapshot Book1.xlsx --json
+```
+
+```json
+{"schema_version":1,"ok":true,"file":"Book1.xlsx","sheets":[{"name":"Sheet1","sheet_id":"1","stable_id":"sheet1","cells":[{"address":"A1","value":42}]}]}
+```
+
+`stable_id` はファイル自身が持つ `sheetId`（無ければ位置ベースのフォールバック）から導出したものであり、VBA の `CodeName` プロパティ**ではありません**。詳細な設計理由は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
 
 ### ソースからビルド
 
