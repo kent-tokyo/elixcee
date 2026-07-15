@@ -490,7 +490,7 @@ shrinking later, per the roadmap. Only two strategies and one range-scoped
 assertion rule exist in this phase; more of each are plausible later
 additions, not redesigns.
 
-## `diagnose` subcommand (Excel operation diagnostics, Milestones B6a/B6b)
+## `diagnose` subcommand (Excel operation diagnostics, Milestones B6a/B6b/B6c)
 
 ```
 elixcee diagnose <vba_file>... --file <workbook> --entrypoint <MacroName> [--json]
@@ -593,6 +593,41 @@ that (same mechanism as B6a) so the first failure is always reported.
   reference adjustment (`.Copy` only ever copied baked values before this
   milestone too); real OS-level/cross-application clipboard.
 
+### Sheet protection (Milestone B6c)
+
+`Sheets(name).Protect`/`.Unprotect` (also reachable via
+`Worksheets(name)...`/`Workbooks(...).Worksheets(...)...`) toggle a
+per-sheet protected flag. Trailing kwargs (`Password:=`, `DrawingObjects:=`,
+`Contents:=`, etc.) are accepted and discarded — elixcee has no security
+model and doesn't enforce a real password, only the "is this sheet
+protected" question a diagnostic tool needs. **`UserInterfaceOnly:=True`
+is modeled**: real Excel blocks manual UI edits but *not* macro writes in
+that mode, so `.Protect UserInterfaceOnly:=True` leaves the sheet
+macro-writable in elixcee (there's no UI to block). Bare `.Protect` (or
+`UserInterfaceOnly:=False`) blocks macro writes too. While protected, **any**
+cell-content mutation on that sheet is a hard error, **unconditionally, in
+every mode** (`run`/`check`/`diagnose`) — writes (`Cells`/`Range.Value`/
+`.Formula`), `Range.ClearContents`/`.Clear`/`.Delete`/`.Insert`/`.Sort`,
+`.Copy`/`.Paste`/`.PasteSpecial` into it, and deleting the sheet itself —
+matching real Excel, which raises a hard runtime error for all of these
+regardless of `On Error` state (same "unconditional hard error" reasoning
+as B6b's shape-mismatch/empty-clipboard checks: nothing pre-existing
+relied on writes to a "protected" sheet succeeding, since the concept
+didn't exist before). **Reads are never blocked** — protection only gates
+edits, matching real Excel. `On Error Resume Next`/`GoTo` still swallow
+the error in normal `run` mode; `diagnose` still bypasses that via the
+existing B6a mechanism. Protecting or unprotecting a nonexistent sheet is
+itself a `WORKSHEET_NOT_FOUND` failure, unconditionally (a brand-new
+construct, same precedent as `WorkbookQualifiedSheet`'s mismatch check).
+
+- **`SHEET_PROTECTED`**: evidence carries only `sheet` (the protected
+  sheet's name) — the simplest evidence shape of any root cause so far.
+  Suggestion: `"unprotect the sheet first: Worksheets(\"<sheet>\")
+  .Unprotect"`.
+- No bare `ActiveSheet.Protect` — elixcee has no `ActiveSheet` concept
+  anywhere; `Sheets(name)`/`Worksheets(name)` qualification is required,
+  same as every other sheet-level statement in this codebase.
+
 ### Output
 
 Success: `{"schema_version":1,"ok":true,"messages":[...]}`
@@ -628,7 +663,17 @@ model ("3 possible reasons, ranked") can reuse this exact shape without a
 breaking schema change. `ARRAY_INDEX_OUT_OF_BOUNDS` entries carry
 `name`/`index`/`lower`/`upper` instead of the name-lookup evidence fields;
 `PASTE_SHAPE_MISMATCH`/`PASTE_WITHOUT_COPY` entries (Milestone B6b) carry
-the fields described above, e.g.:
+the fields described above; `SHEET_PROTECTED` entries (Milestone B6c)
+carry just `sheet`, e.g.:
+
+```json
+{
+  "code": "SHEET_PROTECTED",
+  "certainty": "definite",
+  "sheet": "sheet1",
+  "suggestions": ["unprotect the sheet first: Worksheets(\"sheet1\").Unprotect"]
+}
+```
 
 ```json
 {
@@ -655,10 +700,19 @@ single-module-only rule as run-mode's own `--json` contract (a
 
 B6a covers resolution failures (missing worksheet/workbook, array out of
 bounds); B6b covers Copy/Paste shape mismatch and clipboard state (see its
-own non-goals list above). Explicitly out of scope, planned for later:
+own non-goals list above); B6c covers sheet protection (see its own
+non-goals note above). Explicitly out of scope, planned for later:
 
-- Merged cells, multi-area (`Areas`) ranges, hidden/filtered rows, sheet
-  protection, Excel Tables (B6c).
+- Merged cells, multi-area (`Areas`) ranges, hidden/filtered rows — the
+  user's original roadmap bundled these with sheet protection under
+  "B6c," but they were split into a future continuation once grounding
+  showed each needs new reader-format parsing (XLSX/ODS) and/or a
+  range-model change (a single rectangle → a list of areas) that
+  protection alone doesn't need.
+- Excel Tables (`ListObjects`) — never part of the user's original
+  roadmap; added as a placeholder non-goal during B6a's own docs and kept
+  deferred (a full new VBA object model, comparable in scope to `Range`/
+  `Sheets` itself, not "add diagnosis to an existing path").
 - Integration with `test-workbook`'s case generator for counterexample
   search (B6d) — `diagnose` runs a macro exactly once today.
 - A real VBA `Collection` object — it doesn't exist in elixcee at all, so

@@ -65,6 +65,7 @@ impl RootCause {
             ResolutionFailureKind::ArrayIndexOutOfBounds { .. } => "ARRAY_INDEX_OUT_OF_BOUNDS",
             ResolutionFailureKind::PasteShapeMismatch { .. } => "PASTE_SHAPE_MISMATCH",
             ResolutionFailureKind::PasteWithoutCopy { .. } => "PASTE_WITHOUT_COPY",
+            ResolutionFailureKind::SheetProtected { .. } => "SHEET_PROTECTED",
         };
         RootCause {
             code,
@@ -130,6 +131,10 @@ impl RootCause {
                  Application.CutCopyMode was cleared first"
                     .to_string(),
             ],
+            ResolutionFailureKind::SheetProtected { sheet } => vec![format!(
+                "unprotect the sheet first: Worksheets(\"{}\").Unprotect",
+                sheet
+            )],
         }
     }
 }
@@ -281,6 +286,9 @@ fn root_cause_json(rc: &RootCause, copy_location: Option<&SourceLocation>) -> St
         ResolutionFailureKind::PasteWithoutCopy { dest_addr } => {
             format!("\"dest_addr\":{}", json_string(dest_addr))
         }
+        ResolutionFailureKind::SheetProtected { sheet } => {
+            format!("\"sheet\":{}", json_string(sheet))
+        }
     };
     format!(
         "{{\"code\":\"{}\",\"certainty\":\"{}\",{},\"suggestions\":{}}}",
@@ -403,6 +411,9 @@ pub fn to_plain_text(
                     "Paste to {} attempted with an empty clipboard",
                     dest_addr
                 ));
+            }
+            ResolutionFailureKind::SheetProtected { sheet } => {
+                out.push_str(&format!("sheet '{}' is protected", sheet));
             }
         }
         for s in rc.suggestions() {
@@ -601,5 +612,24 @@ mod tests {
         let json = to_json(&diag, None, None);
         assert!(json.contains("PASTE_WITHOUT_COPY"));
         assert!(json.contains("\"dest_addr\":\"A1\""));
+    }
+
+    #[test]
+    fn sheet_protected_reports_a_root_cause_with_an_unprotect_suggestion() {
+        let out_path = std::env::temp_dir().join("elixcee_diagnose_sheet_protected.xlsx");
+        build_workbook(out_path.to_str().unwrap());
+        let programs = programs_from(
+            "Sub Main()\n    Worksheets(\"Sheet1\").Protect\n    Cells(1,1).Value = 1\nEnd Sub\n",
+        );
+        let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
+        assert!(!diag.ok);
+        let rc = diag
+            .root_cause
+            .as_ref()
+            .expect("should classify a root cause");
+        assert_eq!(rc.code, "SHEET_PROTECTED");
+        let json = to_json(&diag, None, None);
+        assert!(json.contains("SHEET_PROTECTED"));
+        assert!(json.contains("unprotect the sheet first"));
     }
 }

@@ -186,7 +186,7 @@ elixcee test-workbook fixture.toml --json
 
 ### Excel操作の診断
 
-`elixcee diagnose` はマクロを一度だけ実行し、存在しないシート・存在しないワークブック・配列の範囲外アクセス・Copy/Paste の形状不一致など、Excelがその操作を拒否する具体的な理由を根拠付きで説明します（単なるエラー文字列ではありません）：
+`elixcee diagnose` はマクロを一度だけ実行し、存在しないシート・存在しないワークブック・配列の範囲外アクセス・Copy/Paste の形状不一致・保護されたシートへの書き込みなど、Excelがその操作を拒否する具体的な理由を根拠付きで説明します（単なるエラー文字列ではありません）：
 
 ```bat
 elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
@@ -225,6 +225,16 @@ elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
     "resize the destination to E1:G10",
     "or specify only the top-left cell E1"
   ]
+}
+```
+
+`.Protect` されたシートへ書き込むと、どのシートかと修正方法を報告します:
+
+```json
+{
+  "code": "SHEET_PROTECTED",
+  "sheet": "sheet1",
+  "suggestions": ["unprotect the sheet first: Worksheets(\"sheet1\").Unprotect"]
 }
 ```
 

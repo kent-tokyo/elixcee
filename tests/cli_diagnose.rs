@@ -290,3 +290,22 @@ fn paste_without_a_prior_copy_reports_a_root_cause() {
     assert_eq!(v["root_causes"][0]["code"], "PASTE_WITHOUT_COPY");
     assert_eq!(v["root_causes"][0]["dest_addr"], "A1");
 }
+
+#[test]
+fn writing_to_a_protected_sheet_reports_sheet_protected() {
+    let (_, workbook, macro_bas) = build_dir(
+        "sheet_protected",
+        &[],
+        "Sub Run()\n    Worksheets(\"Sheet1\").Protect\n    Cells(1,1).Value = 1\nEnd Sub\n",
+    );
+    let (ok, v) = run_json(&macro_bas, &workbook, "Run");
+    assert!(!ok, "{:?}", v);
+    assert_eq!(v["root_causes"][0]["code"], "SHEET_PROTECTED");
+    assert_eq!(v["root_causes"][0]["sheet"], "sheet1");
+    assert!(
+        v["root_causes"][0]["suggestions"][0]
+            .as_str()
+            .unwrap()
+            .contains("Unprotect")
+    );
+}

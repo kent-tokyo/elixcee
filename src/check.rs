@@ -183,6 +183,7 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::RangeCopy { .. } => {}
             Stmt::RangePaste { .. } => {}
             Stmt::SheetRangePaste { .. } => {}
+            Stmt::SheetProtection { .. } => {}
             Stmt::RangeClear { .. } => {}
             Stmt::RangeOffsetWrite { .. } => {}
             Stmt::RangeDelete { .. } => {}
@@ -420,6 +421,12 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             }
         }
         Stmt::SheetRangePaste { sheet, .. } => out.push(sheet),
+        Stmt::SheetProtection { sheet, ui_only, .. } => {
+            out.push(sheet);
+            if let Some(e) = ui_only {
+                out.push(e);
+            }
+        }
         Stmt::RangeClear { .. } => {}
         Stmt::RangeOffsetWrite {
             row_off,

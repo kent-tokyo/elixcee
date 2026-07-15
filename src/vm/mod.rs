@@ -89,6 +89,12 @@ pub enum ResolutionFailureKind {
     PasteWithoutCopy {
         dest_addr: String,
     },
+    /// A cell-mutating statement targeted a sheet that's been `.Protect`ed
+    /// (Milestone B6c) — real Excel blocks any write/clear/insert/sort/
+    /// paste/delete on a protected sheet, unconditionally.
+    SheetProtected {
+        sheet: String,
+    },
 }
 
 /// The VM's clipboard state, populated by `.Copy` and consumed by
@@ -233,6 +239,10 @@ pub struct Vm {
     /// `.Paste`/`.PasteSpecial` (Milestone B6b). `None` initially, and
     /// whenever `Application.CutCopyMode` is set to `False`.
     clipboard: Option<ClipboardState>,
+    /// Lowercase sheet keys currently `.Protect`ed (Milestone B6c) — same
+    /// key space as `sheets`/`active_sheet`/`ensure_sheet`. Empty by
+    /// default; blocks any cell-mutating statement on that sheet.
+    protected_sheets: HashSet<String>,
 }
 
 impl Vm {
@@ -265,6 +275,7 @@ impl Vm {
             last_resolution_failure: None,
             loaded_workbook_name: None,
             clipboard: None,
+            protected_sheets: HashSet::new(),
         }
     }
 
@@ -478,6 +489,42 @@ impl Vm {
         Ok(())
     }
 
+    /// Unconditional sheet-must-exist check (every mode, not gated behind
+    /// `strict_resolution`) — used by `.Protect`/`.Unprotect` (Milestone
+    /// B6c), which is a brand-new construct with no pre-existing lenient
+    /// behavior to preserve, same reasoning as `WorkbookQualifiedSheet`'s
+    /// mismatch check in `resolve_sheet_expr`.
+    fn require_sheet_exists(&mut self, requested: &str, key: &str) -> Result<(), String> {
+        if !self.sheets.contains_key(key) {
+            let available = self.sheet_names();
+            let evidence = ResolutionEvidence {
+                expression: format!("Worksheets(\"{}\")", requested),
+                requested: requested.to_string(),
+                suggested: closest_match(requested, &available),
+                available,
+            };
+            self.last_resolution_failure = Some(ResolutionFailureKind::WorksheetNotFound(evidence));
+            return Err(format!("Sheet '{}' not found", requested));
+        }
+        Ok(())
+    }
+
+    /// If `key` names a `.Protect`ed sheet, records `SheetProtected`
+    /// evidence and returns the matching error — unconditional in every
+    /// mode (Milestone B6c), since real Excel blocks any cell-content
+    /// mutation on a protected sheet regardless of error-handling state,
+    /// and nothing pre-existing relied on writes to a "protected" sheet
+    /// succeeding (the concept didn't exist before this milestone).
+    fn check_sheet_not_protected(&mut self, key: &str, display: &str) -> Result<(), String> {
+        if self.protected_sheets.contains(key) {
+            self.last_resolution_failure = Some(ResolutionFailureKind::SheetProtected {
+                sheet: display.to_string(),
+            });
+            return Err(format!("Cannot edit: sheet '{}' is protected", display));
+        }
+        Ok(())
+    }
+
     /// Pastes the current clipboard into `dest_addr` — shared by
     /// `Stmt::RangePaste`, `Stmt::SheetRangePaste`, and `Stmt::RangeCopy`'s
     /// immediate `Destination:=` form (Milestone B6b). A missing clipboard
@@ -494,6 +541,8 @@ impl Vm {
     /// behavior — a destination range that's an exact multiple of a
     /// multi-cell source, i.e. tiling, is a rarer sibling left unmodeled).
     fn do_paste(&mut self, dest_addr: &str, transpose: bool) -> Result<(), String> {
+        let active = self.active_sheet.clone();
+        self.check_sheet_not_protected(&active, &active)?;
         let clip = match &self.clipboard {
             Some(c) => c.clone(),
             None => {
@@ -817,6 +866,8 @@ impl Vm {
                 self.variables.insert(var.clone(), v);
             }
             Stmt::CellWrite { row, col, value } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 let v = self.eval_expr(value)?;
@@ -959,6 +1010,8 @@ impl Vm {
                 self.named_ranges.insert(name.to_lowercase(), addr.clone());
             }
             Stmt::RangeWrite { addr, is_formula, value } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
                 let v = self.eval_expr(value)?;
                 let ((r1,c1),(r2,c2)) = self.resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeWrite: invalid address '{}'", addr))?;
@@ -981,6 +1034,8 @@ impl Vm {
                 }
             }
             Stmt::RangeClear { addr, .. } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
                 let ((r1,c1),(r2,c2)) = self.resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeClear: invalid address '{}'", addr))?;
                 let sheet = self.active_sheet.clone();
@@ -990,6 +1045,8 @@ impl Vm {
                 self.cell_index_dirty = true;
             }
             Stmt::RangeOffsetWrite { addr, row_off, col_off, value } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
                 let v = self.eval_expr(value)?;
                 let (base_r, base_c) = parse_cell_addr(addr)
                     .ok_or_else(|| format!("RangeOffsetWrite: invalid address '{}'", addr))?;
@@ -1000,6 +1057,8 @@ impl Vm {
                 self.cells_mut().insert((row, col), CellContent { formula: None, value: v });
             }
             Stmt::RangeDelete { addr } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
                 let ((r1,_),(r2,_)) = self.resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeDelete: invalid address '{}'", addr))?;
                 let rows_del = r2 - r1 + 1;
@@ -1014,6 +1073,8 @@ impl Vm {
                 }
             }
             Stmt::RangeInsert { addr } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
                 let ((r1,_),(r2,_)) = self.resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeInsert: invalid address '{}'", addr))?;
                 let rows_ins = r2 - r1 + 1;
@@ -1027,6 +1088,8 @@ impl Vm {
                 }
             }
             Stmt::RangeSort { addr, key_col, descending } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
                 let ((r1,c1),(r2,c2)) = self.resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeSort: invalid address '{}'", addr))?;
                 // key_col is 1-based absolute column; convert to 0-based offset within range
@@ -1090,6 +1153,7 @@ impl Vm {
             Stmt::SheetCellWrite { sheet, row, col, value } => {
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
                 self.check_strict_sheet_exists(&display, &key)?;
+                self.check_sheet_not_protected(&key, &display)?;
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 let v = self.eval_expr(value)?;
@@ -1099,6 +1163,7 @@ impl Vm {
             Stmt::SheetRangeWrite { sheet, addr, is_formula, value } => {
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
                 self.check_strict_sheet_exists(&display, &key)?;
+                self.check_sheet_not_protected(&key, &display)?;
                 let ((r1, c1), (r2, c2)) = parse_range_addr(addr)
                     .ok_or_else(|| format!("SheetRangeWrite: invalid address '{}'", addr))?;
                 let v = self.eval_expr(value)?;
@@ -1148,8 +1213,31 @@ impl Vm {
                 self.ensure_sheet(&new_name);
             }
             Stmt::SheetsDelete { sheet } => {
-                let (key, _) = self.resolve_sheet_expr(sheet)?;
+                let (key, display) = self.resolve_sheet_expr(sheet)?;
+                self.check_sheet_not_protected(&key, &display)?;
                 if key != self.active_sheet { self.sheets.remove(&key); }
+            }
+            Stmt::SheetProtection {
+                sheet,
+                protect,
+                ui_only,
+            } => {
+                let (key, display) = self.resolve_sheet_expr(sheet)?;
+                self.require_sheet_exists(&display, &key)?;
+                if *protect {
+                    // UserInterfaceOnly:=True means real Excel blocks manual
+                    // UI edits but not macro writes — since elixcee has no
+                    // UI to block, that leaves the sheet macro-writable.
+                    let ui_only = match ui_only {
+                        Some(e) => is_truthy(&self.eval_expr(e)?),
+                        None => false,
+                    };
+                    if !ui_only {
+                        self.protected_sheets.insert(key);
+                    }
+                } else {
+                    self.protected_sheets.remove(&key);
+                }
             }
             Stmt::Dim => {}
             Stmt::Unsupported { .. } => {}
@@ -4115,5 +4203,123 @@ mod tests {
              Worksheets(\"Sheet1\").Paste Destination:=Range(\"C1\")\nEnd Sub\n",
         );
         assert_eq!(vm.get_cell(1, 3), Variant::Integer(7));
+    }
+
+    // ── Milestone B6c: sheet protection diagnosis ───────────────────────────
+
+    #[test]
+    fn protecting_a_sheet_blocks_a_later_cell_write() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Worksheets(\"Sheet1\").Protect\n    Cells(1,1).Value = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("protected"), "{:?}", err);
+        assert_eq!(
+            vm.take_resolution_failure(),
+            Some(ResolutionFailureKind::SheetProtected {
+                sheet: "sheet1".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn unprotecting_a_sheet_restores_write_access() {
+        let vm = run("Sub MySub()\n    Worksheets(\"Sheet1\").Protect\n    \
+             Worksheets(\"Sheet1\").Unprotect\n    Cells(1,1).Value = 42\nEnd Sub\n");
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(42));
+    }
+
+    #[test]
+    fn protection_does_not_block_reads() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 5\n    Worksheets(\"Sheet1\").Protect\n    \
+             x = Cells(1,1).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["x"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn protecting_a_nonexistent_sheet_is_a_hard_error_unconditionally() {
+        // Unconditional (not gated behind strict_resolution) — brand-new
+        // construct, same precedent as `WorkbookQualifiedSheet`.
+        let prog = parser::parse("Sub MySub()\n    Worksheets(\"NoSuchSheet\").Protect\nEnd Sub\n")
+            .unwrap();
+        let mut vm = Vm::new();
+        assert!(!vm.strict_resolution);
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("not found"), "{:?}", err);
+        assert!(matches!(
+            vm.take_resolution_failure(),
+            Some(ResolutionFailureKind::WorksheetNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn protect_accepts_and_discards_a_password_kwarg() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Worksheets(\"Sheet1\").Protect Password:=\"secret\"\n    \
+             Cells(1,1).Value = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("protected"), "{:?}", err);
+    }
+
+    #[test]
+    fn protect_user_interface_only_true_does_not_block_macro_writes() {
+        // Real Excel's UserInterfaceOnly:=True blocks manual UI edits but
+        // not macro writes — this is the standard idiom for a sheet a
+        // macro must keep writing to while the user can't touch it by hand.
+        let vm = run(
+            "Sub MySub()\n    Worksheets(\"Sheet1\").Protect UserInterfaceOnly:=True\n    \
+             Cells(1,1).Value = 42\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(42));
+    }
+
+    #[test]
+    fn protect_user_interface_only_false_still_blocks_macro_writes() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Worksheets(\"Sheet1\").Protect UserInterfaceOnly:=False\n    \
+             Cells(1,1).Value = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("protected"), "{:?}", err);
+    }
+
+    #[test]
+    fn range_write_range_clear_and_copy_paste_are_all_blocked_by_protection() {
+        let cases = [
+            "Range(\"A1\").Value = 1",
+            "Range(\"A1\").ClearContents",
+            "Range(\"A1\").Copy Destination:=Range(\"B1\")",
+        ];
+        for stmt in cases {
+            let src = format!(
+                "Sub MySub()\n    Worksheets(\"Sheet1\").Protect\n    {}\nEnd Sub\n",
+                stmt
+            );
+            let prog = parser::parse(&src).unwrap();
+            let mut vm = Vm::new();
+            let err = vm.run_sub(&prog, "mysub").unwrap_err();
+            assert!(err.contains("protected"), "stmt {:?}: {:?}", stmt, err);
+        }
+    }
+
+    #[test]
+    fn sheets_delete_is_blocked_on_a_protected_sheet() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Worksheets(\"Extra\").Cells(1,1).Value = 1\n    \
+             Worksheets(\"Extra\").Protect\n    Sheets(\"Extra\").Delete\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("protected"), "{:?}", err);
     }
 }

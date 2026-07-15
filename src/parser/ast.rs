@@ -99,6 +99,17 @@ pub enum Stmt {
     /// `Worksheets(sheet).Paste Destination:=Range(dest_addr)` (Milestone
     /// B6b). No `Transpose:=` here, matching real VBA's `Worksheet.Paste`.
     SheetRangePaste { sheet: Expr, dest_addr: String },
+    /// `Sheets(sheet).Protect` (`protect: true`) / `.Unprotect`
+    /// (`protect: false`) (Milestone B6c) — one variant with a bool flag,
+    /// same convention as `Stmt::OnError { resume_next: bool }`.
+    /// `ui_only` is `.Protect UserInterfaceOnly:=<expr>` — when truthy,
+    /// real Excel blocks manual UI edits but *not* macro writes, so the VM
+    /// must not add the sheet to `protected_sheets` in that case.
+    SheetProtection {
+        sheet: Expr,
+        protect: bool,
+        ui_only: Option<Expr>,
+    },
     RangeClear { addr: String, contents_only: bool },
     RangeOffsetWrite { addr: String, row_off: Expr, col_off: Expr, value: Expr },
     RangeDelete { addr: String },

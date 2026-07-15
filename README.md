@@ -203,8 +203,8 @@ schema, strategies, and assertion rules: [docs/agent-contract.md](docs/agent-con
 
 `elixcee diagnose` runs a macro once and explains *why* Excel would reject
 it — a missing worksheet, a missing workbook, an out-of-bounds array
-index, or a Copy/Paste shape mismatch — with evidence, instead of a bare
-error string:
+index, a Copy/Paste shape mismatch, or a write to a protected sheet — with
+evidence, instead of a bare error string:
 
 ```bat
 elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
@@ -244,6 +244,16 @@ both the shape mismatch and where each statement is:
     "resize the destination to E1:G10",
     "or specify only the top-left cell E1"
   ]
+}
+```
+
+Writing to a `.Protect`ed sheet reports which sheet and how to fix it:
+
+```json
+{
+  "code": "SHEET_PROTECTED",
+  "sheet": "sheet1",
+  "suggestions": ["unprotect the sheet first: Worksheets(\"sheet1\").Unprotect"]
 }
 ```
 

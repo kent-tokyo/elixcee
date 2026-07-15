@@ -1296,6 +1296,40 @@ impl Parser {
                 self.expect_tok(Tok::RParen)?;
                 Ok(Stmt::SheetRangePaste { sheet, dest_addr })
             }
+            "protect" | "unprotect" => {
+                // Optional kwargs; only UserInterfaceOnly:= is modeled
+                // (Milestone B6c) — others (Password:=, DrawingObjects:=,
+                // Contents:=, etc.) are evaluated and discarded, same
+                // convention as `Stmt::SetAppProp`/`.PasteSpecial`.
+                let mut ui_only = None;
+                while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof {
+                    if !matches!(self.peek(), Tok::Ident(_)) {
+                        self.advance();
+                        continue;
+                    }
+                    let kw_name = self.consume_ident()?;
+                    if *self.peek() != Tok::ColonEq {
+                        continue;
+                    }
+                    self.advance(); // :=
+                    match kw_name.as_str() {
+                        "userinterfaceonly" => {
+                            ui_only = Some(self.parse_expr()?);
+                        }
+                        _ => {
+                            self.parse_expr()?;
+                        }
+                    }
+                    if *self.peek() == Tok::Comma {
+                        self.advance();
+                    }
+                }
+                Ok(Stmt::SheetProtection {
+                    sheet,
+                    protect: method == "protect",
+                    ui_only,
+                })
+            }
             _ => {
                 while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
                     self.advance();
