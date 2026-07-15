@@ -5,7 +5,35 @@ build-backend = "maturin"
 [project]
 name = "elixcee"
 version = "0.1.1"
+description = "Emulate and execute Excel VBA macros at high speed — without Microsoft Excel"
+readme = "README.md"
 requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = [
+    "excel",
+    "vba",
+    "excel-vba",
+    "macro",
+    "xlsx",
+    "spreadsheet",
+    "static-analysis",
+    "testing",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.urls]
+Homepage = "https://github.com/kent-tokyo/elixcee"
+Documentation = "https://github.com/kent-tokyo/elixcee/tree/master/docs"
+Repository = "https://github.com/kent-tokyo/elixcee"
+Issues = "https://github.com/kent-tokyo/elixcee/issues"
+Changelog = "https://github.com/kent-tokyo/elixcee/blob/master/CHANGELOG.md"
 
 [tool.maturin]
 features = ["python"]

@@ -35,7 +35,7 @@ Excel 依存という「呪い」を解く*エリクサー*（万能薬）— Ru
 - **LibreOffice UNO** は起動に 1 秒以上かかる場合があり、API も複雑です。VBA は LibreOffice 独自のインタプリタで実行されるため、Excel の動作と完全には一致しない場合があります。
 - **openpyxl** は .xlsx ファイルからキャッシュ済みの数式値を読み込みますが、実行時に数式を再評価する機能はありません。
 - **xlcalculator** は Excel の数式を Python で再評価できますが、VBA はサポートしていません。
-- elixcee の VBA インタプリタは、一般的なデータ処理マクロで使われる VBA のサブセット（ループ、条件分岐、セルの読み書き、文字列・数学関数、複数シートへのアクセス）をカバーしています。Excel の UI 操作（グラフ作成、書式設定、ダイアログ）は no-op です。
+- elixcee の VBA インタプリタは、一般的なデータ処理マクロで使われる VBA のサブセット（ループ、条件分岐、セルの読み書き、文字列・数学関数、複数シートへのアクセス）をカバーしています。グラフ作成や書式設定など、Excel の UI 操作の大半は未対応または no-op です。`MsgBox` だけは特別扱いで、モードに応じて標準出力への表示・JSON 出力への収集・エラーとしての送出のいずれかになります。
 
 ---
 
@@ -328,6 +328,42 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 - **2024/365**: TEXTSPLIT、TEXTBEFORE、TEXTAFTER、VSTACK、HSTACK、TAKE、DROP、CHOOSECOLS、CHOOSEROWS
 - **VBA**: For/If/While/With/On Error/Function/`Type...End Type`/名前付き範囲/UDT配列
 
+### 名前付き範囲
+
+VBA で `Range("A1:B5").Name = "MyData"` として名前付き範囲を登録すると、範囲アドレスを受け取るあらゆる箇所でその名前を使えます:
+
+```vba
+Range("MyData").Value = 0          ' 範囲内の全セルに書き込む
+For Each cell In Range("MyData")   ' セルを走査する
+    total = total + cell
+Next cell
+```
+
+名前付き範囲は `vm.named_ranges`（`dict[str, str]`、小文字化した名前 → アドレス）に保存されます。
+
+### 条件構文（COUNTIF / SUMIF / SUMIFS など）
+
+| 条件 | 例 | 意味 |
+|---|---|---|
+| 数値 | `10` | 完全一致する数値 |
+| 文字列 | `"apple"` | 大文字小文字を区別しない文字列一致 |
+| 比較 | `">5"`、`"<=10"`、`"<>"` | 数値比較 |
+| ワイルドカード | `"a*"`、`"?bc"` | `*` = 任意の文字列、`?` = 任意の1文字 |
+
+### Application オブジェクト
+
+| プロパティ/メソッド | 説明 | 挙動 |
+|---|---|---|
+| `Application.Calculation = xlCalculationManual` | 自動再計算を無効化 | **有効** |
+| `Application.Calculation = xlCalculationAutomatic` | 自動再計算を有効化し、全数式セルを再評価 | **有効** |
+| `Application.ScreenUpdating = False/True` | 画面更新を抑制 | **No-op**（画面が存在しない） |
+| `Application.EnableEvents = False/True` | イベント発火を無効化/有効化 | **No-op**（イベントが存在しない） |
+| `Application.DisplayAlerts = False/True` | ダイアログ表示を抑制 | **No-op**（ダイアログが存在しない） |
+| `Application.StatusBar = "..."` / `False` | ステータスバーの文字列を設定/クリア | **No-op**（UI が存在しない） |
+| `Application.Cursor = xlWait` / `xlDefault` | カーソル形状を変更 | **No-op**（UI が存在しない） |
+| `Application.CutCopyMode = False` | クリップボードモードを解除 | **有効**（内部で保持しているクリップボード状態をクリア） |
+
+> **No-op** のプロパティはパースと受理はされますが、効果はありません。これにより、マクロ冒頭の `Application.ScreenUpdating = False` のような VBA のパフォーマンス最適化の書き方を、変更せずそのまま実行できます。
 
 ## 未対応関数
 

@@ -13,9 +13,9 @@ elixcee <vba_file>... <MacroName> [--file <path>] [--sheet <name>] [--output <pa
 ```
 
 `<MacroName>` is always the last argument; everything before it is a VBA
-source file. A single file (today's only shape until Milestone B2) parses
-exactly as before. With more than one file, see "Multi-module projects"
-below for how `MacroName` and cross-module calls resolve.
+source file. A single-file invocation behaves exactly as before. With more
+than one source file, see "Multi-module projects" below for how
+`MacroName` and cross-module calls resolve.
 
 Without `--json`, output is unchanged from elixcee's original plain-text
 behavior (kept exactly, byte-for-byte, for scripts that already depend on
@@ -497,9 +497,13 @@ elixcee diagnose <vba_file>... <MacroName> --file <workbook> [--json]
 ```
 
 Runs one macro once and classifies *why* it failed — a missing worksheet,
-a missing workbook, or an out-of-bounds array index — with concrete
-evidence (the requested key, what was actually available, a "did you mean"
-suggestion), instead of only a bare runtime-error string. This is a
+a missing workbook, an out-of-bounds array index, a Copy/Paste shape
+mismatch or missing clipboard, or a write to a protected sheet — with
+concrete evidence (the requested key and what was actually available, a
+"did you mean" suggestion, the mismatched shapes, or the protected sheet's
+name), instead of only a bare runtime-error string.
+
+Missing-sheet/workbook/array-bounds classification (Milestone B6a) has a
 different posture from `run`/`check`/`test-workbook`: it turns on
 `Vm::strict_resolution`, which makes elixcee's usual auto-vivify/silent-
 `Empty` convenience for `Sheets("X")`/`Worksheets("X")` references into a
@@ -507,6 +511,12 @@ hard, classified failure — because a diagnostic tool whose whole purpose is
 "what would Excel actually reject here" needs to *not* paper over the exact
 class of mistake it exists to catch. Every other subcommand leaves
 `strict_resolution` off (the default) and is completely unaffected.
+Copy/Paste shape-mismatch and sheet-protection classification (Milestones
+B6b/B6c, below) work differently: those checks are unconditional hard
+errors in every mode that executes the macro (`run`/`diagnose`/
+`test-workbook`) — `diagnose` doesn't need a toggle for them, it just
+surfaces the same failure with structured evidence instead of a bare
+error string.
 
 ### Strict-resolution mode
 
@@ -553,7 +563,8 @@ semantics). `.Paste`/`.PasteSpecial` (new syntax: `Range(addr).Paste`,
 `Range(addr).PasteSpecial [Transpose:=<expr>]`,
 `Worksheets(sheet).Paste Destination:=Range(addr)`) consume it. Unlike
 B6a's sheet resolution, these checks are **unconditional hard errors in
-every mode** (`run`/`check`/`diagnose` alike) — not gated behind
+every mode that executes the macro** (`run`/`diagnose`/`test-workbook`
+alike) — not gated behind
 `strict_resolution` — because nothing in elixcee ever relied on the old
 silently-wrong behavior (see below), and real Excel itself raises a hard
 runtime error (1004) for both cases regardless of any error-handling
@@ -606,7 +617,8 @@ that mode, so `.Protect UserInterfaceOnly:=True` leaves the sheet
 macro-writable in elixcee (there's no UI to block). Bare `.Protect` (or
 `UserInterfaceOnly:=False`) blocks macro writes too. While protected, **any**
 cell-content mutation on that sheet is a hard error, **unconditionally, in
-every mode** (`run`/`check`/`diagnose`) — writes (`Cells`/`Range.Value`/
+every mode that executes the macro** (`run`/`diagnose`/`test-workbook`) —
+writes (`Cells`/`Range.Value`/
 `.Formula`), `Range.ClearContents`/`.Clear`/`.Delete`/`.Insert`/`.Sort`,
 `.Copy`/`.Paste`/`.PasteSpecial` into it, and deleting the sheet itself —
 matching real Excel, which raises a hard runtime error for all of these

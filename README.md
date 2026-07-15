@@ -35,7 +35,7 @@ An *elixir* that cures your Excel dependency — running at C-level speed via Ru
 - **LibreOffice UNO** has a slow startup (≥ 1 s process launch) and a complex API. It runs VBA via LibreOffice's own interpreter, which may not match Excel's behavior exactly.
 - **openpyxl** reads cached formula values from .xlsx files but does not re-evaluate formulas at runtime.
 - **xlcalculator** re-evaluates Excel formulas in Python but has no VBA support.
-- elixcee's VBA interpreter covers the subset of VBA used in typical data-processing macros (loops, conditionals, cell read/write, string/math functions, multi-sheet access). Excel-UI operations (charting, formatting, dialogs) are no-ops.
+- elixcee's VBA interpreter covers the subset of VBA used in typical data-processing macros (loops, conditionals, cell read/write, string/math functions, multi-sheet access). Most Excel UI operations such as charting and formatting are unsupported or no-ops. `MsgBox` is handled specially: depending on the mode, it's printed to stdout, collected in JSON output, or raised as an error.
 
 ---
 
@@ -380,7 +380,7 @@ Named ranges are stored on `vm.named_ranges` (a `dict[str, str]` mapping lowerca
 | `Application.DisplayAlerts = False/True` | Suppress dialog boxes | **No-op** (no dialogs) |
 | `Application.StatusBar = "..."` / `False` | Set/clear status bar text | **No-op** (no UI) |
 | `Application.Cursor = xlWait` / `xlDefault` | Change cursor shape | **No-op** (no UI) |
-| `Application.CutCopyMode = False` | Cancel clipboard mode | **No-op** (no clipboard) |
+| `Application.CutCopyMode = False` | Cancel clipboard mode | **Active** (clears the modeled clipboard) |
 
 > **No-op** properties are parsed and accepted without error, but have no effect. This allows VBA macro performance patterns (e.g., `Application.ScreenUpdating = False` at the start of a macro) to run unchanged.
 

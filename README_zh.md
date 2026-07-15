@@ -35,7 +35,7 @@
 - **LibreOffice UNO** 启动耗时超过 1 秒，且 API 复杂。VBA 通过 LibreOffice 自有解释器运行，行为可能与 Excel 不完全一致。
 - **openpyxl** 从 .xlsx 文件中读取缓存的公式值，但不支持运行时重新求值。
 - **xlcalculator** 可在 Python 中重新求值 Excel 公式，但不支持 VBA。
-- elixcee 的 VBA 解释器覆盖了典型数据处理宏所用的 VBA 子集（循环、条件分支、单元格读写、字符串/数学函数、多工作表访问）。Excel UI 操作（图表、格式设置、对话框）均为 no-op。
+- elixcee 的 VBA 解释器覆盖了典型数据处理宏所用的 VBA 子集（循环、条件分支、单元格读写、字符串/数学函数、多工作表访问）。图表、格式设置等大多数 Excel UI 操作不受支持或为 no-op。`MsgBox` 是特例：根据运行模式，它会被输出到标准输出、收集进 JSON 输出，或作为错误抛出。
 
 ---
 
@@ -360,7 +360,7 @@ Next cell
 | `Application.DisplayAlerts = False/True` | 抑制对话框 | **No-op**（无对话框） |
 | `Application.StatusBar = "..."` / `False` | 设置/清除状态栏文本 | **No-op**（无界面） |
 | `Application.Cursor = xlWait` / `xlDefault` | 更改光标形状 | **No-op**（无界面） |
-| `Application.CutCopyMode = False` | 取消剪贴板模式 | **No-op**（无剪贴板） |
+| `Application.CutCopyMode = False` | 取消剪贴板模式 | **有效**（清除已建模的剪贴板状态） |
 
 > **No-op** 属性会被解析并接受，但不产生任何效果。这使得 VBA 宏中的性能优化写法（如 `Application.ScreenUpdating = False`）能够不经修改直接运行。
 
