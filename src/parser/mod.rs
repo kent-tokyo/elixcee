@@ -1011,14 +1011,57 @@ impl Parser {
                 Ok(Stmt::RangeWrite { addr, is_formula, value })
             }
             "copy" => {
-                // destination := Range("dst")
-                self.expect_ident("destination")?;
-                self.expect_tok(Tok::ColonEq)?;
-                self.expect_ident("range")?;
-                self.expect_tok(Tok::LParen)?;
-                let dst = self.consume_str()?;
-                self.expect_tok(Tok::RParen)?;
+                // Optional: Destination:=Range("dst") — a bare `.Copy` (no
+                // Destination) only populates the clipboard (Milestone B6b).
+                let dst = if self.is_ident("destination") {
+                    self.advance();
+                    self.expect_tok(Tok::ColonEq)?;
+                    self.expect_ident("range")?;
+                    self.expect_tok(Tok::LParen)?;
+                    let d = self.consume_str()?;
+                    self.expect_tok(Tok::RParen)?;
+                    Some(d)
+                } else {
+                    None
+                };
                 Ok(Stmt::RangeCopy { src: addr, dst })
+            }
+            "paste" => Ok(Stmt::RangePaste {
+                dest_addr: addr,
+                transpose: None,
+            }),
+            "pastespecial" => {
+                // Optional kwargs; only Transpose:= is modeled (Milestone
+                // B6b) — others (Paste:=, Operation:=, SkipBlanks:=, ...)
+                // are evaluated and discarded, same convention as
+                // `Stmt::SetAppProp` for unmodeled Application properties.
+                let mut transpose = None;
+                while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof {
+                    if !matches!(self.peek(), Tok::Ident(_)) {
+                        self.advance();
+                        continue;
+                    }
+                    let kw_name = self.consume_ident()?;
+                    if *self.peek() != Tok::ColonEq {
+                        continue;
+                    }
+                    self.advance(); // :=
+                    match kw_name.as_str() {
+                        "transpose" => {
+                            transpose = Some(self.parse_expr()?);
+                        }
+                        _ => {
+                            self.parse_expr()?;
+                        }
+                    }
+                    if *self.peek() == Tok::Comma {
+                        self.advance();
+                    }
+                }
+                Ok(Stmt::RangePaste {
+                    dest_addr: addr,
+                    transpose,
+                })
             }
             "sort" => {
                 // Optional kwargs: Key1:=Range("A1"), Order1:=xlAscending/xlDescending, etc.
@@ -1240,6 +1283,18 @@ impl Parser {
                     is_formula,
                     value,
                 })
+            }
+            "paste" => {
+                // Worksheets(sheet).Paste Destination:=Range(addr) — real
+                // VBA's Worksheet.Paste has no Transpose:= parameter
+                // (Milestone B6b).
+                self.expect_ident("destination")?;
+                self.expect_tok(Tok::ColonEq)?;
+                self.expect_ident("range")?;
+                self.expect_tok(Tok::LParen)?;
+                let dest_addr = self.consume_str()?;
+                self.expect_tok(Tok::RParen)?;
+                Ok(Stmt::SheetRangePaste { sheet, dest_addr })
             }
             _ => {
                 while !matches!(self.peek(), Tok::Newline | Tok::Eof) {

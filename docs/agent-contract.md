@@ -490,7 +490,7 @@ shrinking later, per the roadmap. Only two strategies and one range-scoped
 assertion rule exist in this phase; more of each are plausible later
 additions, not redesigns.
 
-## `diagnose` subcommand (Excel operation diagnostics, Milestone B6a)
+## `diagnose` subcommand (Excel operation diagnostics, Milestones B6a/B6b)
 
 ```
 elixcee diagnose <vba_file>... --file <workbook> --entrypoint <MacroName> [--json]
@@ -544,6 +544,55 @@ class of mistake it exists to catch. Every other subcommand leaves
   without it, none of the sheet-resolution scenarios above could even be
   written as a runnable macro.
 
+### Copy/Paste shape mismatch and clipboard state (Milestone B6b)
+
+`.Copy` now populates a clipboard (`ClipboardState`: the source address,
+its row/column shape, and its cell values snapshotted at copy time — not
+re-read at paste time, matching real Excel's copy-then-mutate-then-paste
+semantics). `.Paste`/`.PasteSpecial` (new syntax: `Range(addr).Paste`,
+`Range(addr).PasteSpecial [Transpose:=<expr>]`,
+`Worksheets(sheet).Paste Destination:=Range(addr)`) consume it. Unlike
+B6a's sheet resolution, these checks are **unconditional hard errors in
+every mode** (`run`/`check`/`diagnose` alike) — not gated behind
+`strict_resolution` — because nothing in elixcee ever relied on the old
+silently-wrong behavior (see below), and real Excel itself raises a hard
+runtime error (1004) for both cases regardless of any error-handling
+state. `On Error Resume Next`/`GoTo` still swallow these in normal `run`
+mode exactly as they do for any other error; `diagnose` still bypasses
+that (same mechanism as B6a) so the first failure is always reported.
+
+- **`PASTE_SHAPE_MISMATCH`**: the destination — when given as an explicit
+  range (`"E1:F10"`), not a single anchor cell — doesn't match the
+  clipboard's shape (after accounting for `Transpose:=True`, which swaps
+  rows/cols). Evidence carries `source_addr`/`source_rows`/`source_cols`,
+  `dest_addr`/`dest_rows`/`dest_cols`, `transpose`, and a `copy_location`
+  (the *Copy* statement's own location — `location` at the top level
+  already points at the failing *Paste* statement, so this is the only
+  root cause with two locations). Suggestions are mechanically derived:
+  "resize the destination to `<top-left>:<computed bottom-right>`" and
+  "or specify only the top-left cell `<anchor>`". Two cases are never
+  shape-checked, matching real Excel: a single anchor destination cell
+  (auto-expands to the clipboard's shape), and a single-*cell* clipboard
+  pasted into an explicit destination range of any size (Excel's
+  well-known "fill many cells with one copied value" behavior — a
+  destination that's an exact multiple of a *multi-cell* clipboard, i.e.
+  tiling, is a rarer sibling not modeled here).
+- **`PASTE_WITHOUT_COPY`**: a `.Paste`/`.PasteSpecial` ran with nothing on
+  the clipboard — either no prior `.Copy` at all, or
+  `Application.CutCopyMode = False` cleared it since. Evidence carries
+  only `dest_addr` (there is no copy to point at).
+- Fixes a latent, previously-untested bug in `Range.Copy Destination:=`:
+  the old execution parsed the destination via a single-cell-only parser
+  and silently fell back to the source's own top-left cell for any real
+  range address (a no-op) — nothing ever exercised this path with a
+  multi-cell `Destination:=`. It now resolves the destination as a real
+  range and shape-checks it, the same as bare `.Paste`.
+- Non-goals for B6b: `.Cut` (only `.Copy` is modeled — `CutCopyMode` is
+  only ever cleared, never set by a cut); `PasteSpecial`'s `Operation:=`/
+  `SkipBlanks:=`/paste-type parameters; copying formulas with relative-
+  reference adjustment (`.Copy` only ever copied baked values before this
+  milestone too); real OS-level/cross-application clipboard.
+
 ### Output
 
 Success: `{"schema_version":1,"ok":true,"messages":[...]}`
@@ -577,7 +626,25 @@ message, location}`:
 failure) rather than a bare object, so a later milestone's ranked-candidate
 model ("3 possible reasons, ranked") can reuse this exact shape without a
 breaking schema change. `ARRAY_INDEX_OUT_OF_BOUNDS` entries carry
-`name`/`index`/`lower`/`upper` instead of the name-lookup evidence fields.
+`name`/`index`/`lower`/`upper` instead of the name-lookup evidence fields;
+`PASTE_SHAPE_MISMATCH`/`PASTE_WITHOUT_COPY` entries (Milestone B6b) carry
+the fields described above, e.g.:
+
+```json
+{
+  "code": "PASTE_SHAPE_MISMATCH",
+  "certainty": "definite",
+  "source_addr": "A1:C10", "source_rows": 10, "source_cols": 3,
+  "dest_addr": "E1:F10", "dest_rows": 10, "dest_cols": 2,
+  "transpose": false,
+  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
+  "suggestions": [
+    "resize the destination to E1:G10",
+    "or specify only the top-left cell E1"
+  ]
+}
+```
+
 Exit code 0/`ok:true` on success, 1/`ok:false` on failure — same
 convention as every other subcommand. `location` follows the same
 single-module-only rule as run-mode's own `--json` contract (a
@@ -586,12 +653,10 @@ single-module-only rule as run-mode's own `--json` contract (a
 
 ### Explicit non-goals (deferred to later B6 phases)
 
-This milestone only covers resolution failures (B6a in the roadmap).
-Explicitly out of scope, planned for later:
+B6a covers resolution failures (missing worksheet/workbook, array out of
+bounds); B6b covers Copy/Paste shape mismatch and clipboard state (see its
+own non-goals list above). Explicitly out of scope, planned for later:
 
-- Copy/Paste shape validation, `Clipboard`/`CutCopyMode` state modeling,
-  `Transpose` (B6b) — `Range.Copy`'s existing `Destination:=`-only,
-  single-top-left-cell behavior is untouched by this milestone.
 - Merged cells, multi-area (`Areas`) ranges, hidden/filtered rows, sheet
   protection, Excel Tables (B6c).
 - Integration with `test-workbook`'s case generator for counterexample

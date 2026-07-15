@@ -86,7 +86,19 @@ pub enum Stmt {
     SetCalcMode(CalcModeValue),
     SetAppProp { prop: String, value: Expr },
     RangeWrite { addr: String, is_formula: bool, value: Expr },
-    RangeCopy  { src: String, dst: String },
+    /// `dst` is `None` for a bare `Range(src).Copy` (populates the VM's
+    /// clipboard only); `Some(addr)` for `Range(src).Copy
+    /// Destination:=Range(addr)` (also writes `addr` immediately).
+    RangeCopy  { src: String, dst: Option<String> },
+    /// `Range(dest_addr).Paste` / `Range(dest_addr).PasteSpecial
+    /// [Transpose:=<expr>]` (Milestone B6b) — pastes the VM's clipboard
+    /// contents into `dest_addr`. Real VBA only exposes `Transpose:=` on
+    /// `.PasteSpecial`, not plain `.Paste`, so the parser only ever
+    /// produces `Some(_)` for a `.PasteSpecial` statement.
+    RangePaste { dest_addr: String, transpose: Option<Expr> },
+    /// `Worksheets(sheet).Paste Destination:=Range(dest_addr)` (Milestone
+    /// B6b). No `Transpose:=` here, matching real VBA's `Worksheet.Paste`.
+    SheetRangePaste { sheet: Expr, dest_addr: String },
     RangeClear { addr: String, contents_only: bool },
     RangeOffsetWrite { addr: String, row_off: Expr, col_off: Expr, value: Expr },
     RangeDelete { addr: String },

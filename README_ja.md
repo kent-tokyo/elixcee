@@ -186,7 +186,7 @@ elixcee test-workbook fixture.toml --json
 
 ### Excel操作の診断
 
-`elixcee diagnose` はマクロを一度だけ実行し、存在しないシート・存在しないワークブック・配列の範囲外アクセスなど、Excelがその操作を拒否する具体的な理由を根拠付きで説明します（単なるエラー文字列ではありません）：
+`elixcee diagnose` はマクロを一度だけ実行し、存在しないシート・存在しないワークブック・配列の範囲外アクセス・Copy/Paste の形状不一致など、Excelがその操作を拒否する具体的な理由を根拠付きで説明します（単なるエラー文字列ではありません）：
 
 ```bat
 elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
@@ -210,6 +210,21 @@ elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
     }
   ],
   "messages": []
+}
+```
+
+`Range("A1:C10").Copy` の後に `Range("E1:F10").PasteSpecial` を実行すると、形状の不一致と両方の文の位置を報告します:
+
+```json
+{
+  "code": "PASTE_SHAPE_MISMATCH",
+  "source_addr": "A1:C10", "source_rows": 10, "source_cols": 3,
+  "dest_addr": "E1:F10", "dest_rows": 10, "dest_cols": 2,
+  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
+  "suggestions": [
+    "resize the destination to E1:G10",
+    "or specify only the top-left cell E1"
+  ]
 }
 ```
 

@@ -235,3 +235,58 @@ fn run_mode_auto_vivify_is_unaffected_by_diagnose_strict_mode() {
     assert!(!diag_ok, "{:?}", diag_v);
     assert_eq!(diag_v["root_causes"][0]["code"], "WORKSHEET_NOT_FOUND");
 }
+
+#[test]
+fn paste_shape_mismatch_reports_both_shapes_and_a_resize_suggestion() {
+    // The user's own literal Milestone B6b example: A1:C10 (10x3) copied,
+    // E1:F10 (10x2) pasted into.
+    let (_, workbook, macro_bas) = build_dir(
+        "paste_shape_mismatch",
+        &[],
+        "Sub Run()\n    Range(\"A1:C10\").Copy\n    Range(\"E1:F10\").PasteSpecial\nEnd Sub\n",
+    );
+    let (ok, v) = run_json(&macro_bas, &workbook, "Run");
+    assert!(!ok, "{:?}", v);
+    assert_eq!(v["root_causes"][0]["code"], "PASTE_SHAPE_MISMATCH");
+    assert_eq!(v["root_causes"][0]["source_addr"], "A1:C10");
+    assert_eq!(v["root_causes"][0]["source_rows"], 10);
+    assert_eq!(v["root_causes"][0]["source_cols"], 3);
+    assert_eq!(v["root_causes"][0]["dest_addr"], "E1:F10");
+    assert_eq!(v["root_causes"][0]["dest_rows"], 10);
+    assert_eq!(v["root_causes"][0]["dest_cols"], 2);
+    assert_eq!(
+        v["root_causes"][0]["suggestions"][0],
+        "resize the destination to E1:G10"
+    );
+    assert!(
+        v["location"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("main.bas"),
+        "location must point at the failing Paste statement"
+    );
+    assert!(
+        v["root_causes"][0]["copy_location"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("main.bas"),
+        "copy_location must point at the earlier Copy statement"
+    );
+    assert_ne!(
+        v["location"]["line"], v["root_causes"][0]["copy_location"]["line"],
+        "Copy and Paste are on different lines"
+    );
+}
+
+#[test]
+fn paste_without_a_prior_copy_reports_a_root_cause() {
+    let (_, workbook, macro_bas) = build_dir(
+        "paste_without_copy",
+        &[],
+        "Sub Run()\n    Range(\"A1\").PasteSpecial\nEnd Sub\n",
+    );
+    let (ok, v) = run_json(&macro_bas, &workbook, "Run");
+    assert!(!ok, "{:?}", v);
+    assert_eq!(v["root_causes"][0]["code"], "PASTE_WITHOUT_COPY");
+    assert_eq!(v["root_causes"][0]["dest_addr"], "A1");
+}

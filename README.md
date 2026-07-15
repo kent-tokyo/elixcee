@@ -202,8 +202,9 @@ schema, strategies, and assertion rules: [docs/agent-contract.md](docs/agent-con
 ### Excel operation diagnostics
 
 `elixcee diagnose` runs a macro once and explains *why* Excel would reject
-it — a missing worksheet, a missing workbook, or an out-of-bounds array
-index — with evidence, instead of a bare error string:
+it — a missing worksheet, a missing workbook, an out-of-bounds array
+index, or a Copy/Paste shape mismatch — with evidence, instead of a bare
+error string:
 
 ```bat
 elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
@@ -227,6 +228,22 @@ elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
     }
   ],
   "messages": []
+}
+```
+
+`Range("A1:C10").Copy` followed by `Range("E1:F10").PasteSpecial` reports
+both the shape mismatch and where each statement is:
+
+```json
+{
+  "code": "PASTE_SHAPE_MISMATCH",
+  "source_addr": "A1:C10", "source_rows": 10, "source_cols": 3,
+  "dest_addr": "E1:F10", "dest_rows": 10, "dest_cols": 2,
+  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
+  "suggestions": [
+    "resize the destination to E1:G10",
+    "or specify only the top-left cell E1"
+  ]
 }
 ```
 

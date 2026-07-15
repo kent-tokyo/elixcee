@@ -503,11 +503,23 @@ fn run_diagnose_command(args: &[String]) -> ! {
             } else {
                 None
             };
+            let copy_location = if modules.len() == 1 {
+                diag.copy_span
+                    .map(|span| diagnostics::locate(&modules[0].source, &modules[0].path, span))
+            } else {
+                None
+            };
             let ok = diag.ok;
             if json {
-                println!("{}", diagnose::to_json(&diag, location.as_ref()));
+                println!(
+                    "{}",
+                    diagnose::to_json(&diag, location.as_ref(), copy_location.as_ref())
+                );
             } else {
-                println!("{}", diagnose::to_plain_text(&diag, location.as_ref()));
+                println!(
+                    "{}",
+                    diagnose::to_plain_text(&diag, location.as_ref(), copy_location.as_ref())
+                );
             }
             process::exit(if ok { 0 } else { 1 });
         }

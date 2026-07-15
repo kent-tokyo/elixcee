@@ -65,6 +65,44 @@ pub enum ResolutionFailureKind {
         lower: i64,
         upper: i64,
     },
+    /// A `.Paste`/`.PasteSpecial` destination's shape doesn't match what
+    /// was copied (Milestone B6b) — `dest_row1`/`dest_col1` are the
+    /// destination's 1-based anchor cell, used to render a "resize to..."
+    /// suggestion. `copy_span` is the *Copy* statement's span (the Paste
+    /// statement's own span is already `Vm::current_span()` by the time
+    /// this fires), so a diagnosis can point at both statements.
+    PasteShapeMismatch {
+        source_addr: String,
+        source_rows: u32,
+        source_cols: u32,
+        dest_addr: String,
+        dest_rows: u32,
+        dest_cols: u32,
+        dest_row1: u32,
+        dest_col1: u32,
+        transpose: bool,
+        copy_span: Option<SourceSpan>,
+    },
+    /// A `.Paste`/`.PasteSpecial` was attempted with nothing copied — either
+    /// no prior `.Copy` ran, or `Application.CutCopyMode` was cleared since
+    /// (Milestone B6b).
+    PasteWithoutCopy {
+        dest_addr: String,
+    },
+}
+
+/// The VM's clipboard state, populated by `.Copy` and consumed by
+/// `.Paste`/`.PasteSpecial` (Milestone B6b). Values are snapshotted at copy
+/// time (`cells`), not re-read from the source range at paste time — this
+/// matches real Excel's copy-then-mutate-then-paste semantics now that Copy
+/// and Paste can be separate statements.
+#[derive(Debug, Clone)]
+struct ClipboardState {
+    source_addr: String,
+    rows: u32,
+    cols: u32,
+    cells: Vec<Vec<Variant>>, // [row][col], 0-based offsets from the source's top-left
+    span: SourceSpan,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -191,6 +229,10 @@ pub struct Vm {
     /// reference that doesn't match it (Milestone B6a), not to model real
     /// multi-workbook switching.
     loaded_workbook_name: Option<String>,
+    /// The clipboard populated by `.Copy` and consumed by
+    /// `.Paste`/`.PasteSpecial` (Milestone B6b). `None` initially, and
+    /// whenever `Application.CutCopyMode` is set to `False`.
+    clipboard: Option<ClipboardState>,
 }
 
 impl Vm {
@@ -222,6 +264,7 @@ impl Vm {
             strict_resolution: false,
             last_resolution_failure: None,
             loaded_workbook_name: None,
+            clipboard: None,
         }
     }
 
@@ -431,6 +474,89 @@ impl Vm {
             };
             self.last_resolution_failure = Some(ResolutionFailureKind::WorksheetNotFound(evidence));
             return Err(format!("Sheet '{}' not found", requested));
+        }
+        Ok(())
+    }
+
+    /// Pastes the current clipboard into `dest_addr` — shared by
+    /// `Stmt::RangePaste`, `Stmt::SheetRangePaste`, and `Stmt::RangeCopy`'s
+    /// immediate `Destination:=` form (Milestone B6b). A missing clipboard
+    /// (no prior `.Copy`, or `Application.CutCopyMode` cleared since) and a
+    /// destination range whose shape doesn't match the clipboard's (after
+    /// accounting for `transpose`) are both unconditional hard errors, in
+    /// every mode — real Excel raises Error 1004 for these regardless of
+    /// any error-handling state, so this is a fidelity improvement, not a
+    /// gated diagnostic-only behavior (see the B6b plan's "Key decision").
+    /// Two cases are never shape-checked, matching real Excel: a single
+    /// destination *cell* (no `:`) auto-expands from the anchor, and a
+    /// single-*cell source* fills an explicit destination range of any size
+    /// (real Excel's well-known "paste one value into many cells" fill
+    /// behavior — a destination range that's an exact multiple of a
+    /// multi-cell source, i.e. tiling, is a rarer sibling left unmodeled).
+    fn do_paste(&mut self, dest_addr: &str, transpose: bool) -> Result<(), String> {
+        let clip = match &self.clipboard {
+            Some(c) => c.clone(),
+            None => {
+                self.last_resolution_failure = Some(ResolutionFailureKind::PasteWithoutCopy {
+                    dest_addr: dest_addr.to_string(),
+                });
+                return Err("Paste error: Clipboard is empty".to_string());
+            }
+        };
+        let single_cell_source = clip.rows == 1 && clip.cols == 1;
+        let (expected_rows, expected_cols) = if transpose {
+            (clip.cols, clip.rows)
+        } else {
+            (clip.rows, clip.cols)
+        };
+        let (anchor_row, anchor_col, fill_rows, fill_cols) = if dest_addr.contains(':') {
+            let ((r1, c1), (r2, c2)) = self
+                .resolve_range_addr(dest_addr)
+                .ok_or_else(|| format!("Paste error: invalid destination range '{}'", dest_addr))?;
+            let dest_rows = r2 - r1 + 1;
+            let dest_cols = c2 - c1 + 1;
+            if !single_cell_source && (dest_rows != expected_rows || dest_cols != expected_cols) {
+                self.last_resolution_failure = Some(ResolutionFailureKind::PasteShapeMismatch {
+                    source_addr: clip.source_addr.clone(),
+                    source_rows: clip.rows,
+                    source_cols: clip.cols,
+                    dest_addr: dest_addr.to_string(),
+                    dest_rows,
+                    dest_cols,
+                    dest_row1: r1,
+                    dest_col1: c1,
+                    transpose,
+                    copy_span: Some(clip.span),
+                });
+                return Err(format!(
+                    "Paste error: shape mismatch (source {}x{}, destination {}x{})",
+                    expected_rows, expected_cols, dest_rows, dest_cols
+                ));
+            }
+            (r1, c1, dest_rows, dest_cols)
+        } else {
+            let (r, c) = parse_cell_addr(dest_addr).ok_or_else(|| {
+                format!("Paste error: invalid destination address '{}'", dest_addr)
+            })?;
+            (r, c, expected_rows, expected_cols)
+        };
+        for r in 0..fill_rows {
+            for c in 0..fill_cols {
+                let v = if single_cell_source {
+                    clip.cells[0][0].clone()
+                } else if transpose {
+                    clip.cells[c as usize][r as usize].clone()
+                } else {
+                    clip.cells[r as usize][c as usize].clone()
+                };
+                self.cells_mut().insert(
+                    (anchor_row + r, anchor_col + c),
+                    CellContent {
+                        formula: None,
+                        value: v,
+                    },
+                );
+            }
         }
         Ok(())
     }
@@ -820,8 +946,14 @@ impl Vm {
                     return Err(format!("Sub/Function '{}' not found", name));
                 }
             }
-            Stmt::SetAppProp { prop: _, value } => {
-                let _ = self.eval_expr(value);
+            Stmt::SetAppProp { prop, value } => {
+                let v = self.eval_expr(value);
+                if prop == "cutcopymode"
+                    && let Ok(v) = &v
+                    && !is_truthy(v)
+                {
+                    self.clipboard = None;
+                }
             }
             Stmt::RangeName { addr, name } => {
                 self.named_ranges.insert(name.to_lowercase(), addr.clone());
@@ -915,16 +1047,45 @@ impl Vm {
                 }
             }
             Stmt::RangeCopy { src, dst } => {
-                let ((r1,c1),(r2,c2)) = self.resolve_range_addr(src)
+                let ((r1, c1), (r2, c2)) = self.resolve_range_addr(src)
                     .ok_or_else(|| format!("RangeCopy: invalid source range '{}'", src))?;
-                let (dr, dc) = parse_cell_addr(dst).unwrap_or((r1, c1));
-                let vals: Vec<(u32, u32, Variant)> = (r1..=r2)
-                    .flat_map(|r| (c1..=c2).map(move |c| (r, c)))
-                    .map(|(r, c)| (r, c, self.get_cell(r, c)))
+                let cells: Vec<Vec<Variant>> = (r1..=r2)
+                    .map(|r| (c1..=c2).map(|c| self.get_cell(r, c)).collect())
                     .collect();
-                for (r, c, v) in vals {
-                    self.cells_mut().insert((dr + r - r1, dc + c - c1), CellContent { formula: None, value: v });
+                self.clipboard = Some(ClipboardState {
+                    source_addr: src.clone(),
+                    rows: r2 - r1 + 1,
+                    cols: c2 - c1 + 1,
+                    cells,
+                    span: self.current_span.unwrap_or(SourceSpan { start: 0, end: 0 }),
+                });
+                if let Some(dst_addr) = dst {
+                    self.do_paste(dst_addr, false)?;
                 }
+            }
+            Stmt::RangePaste {
+                dest_addr,
+                transpose,
+            } => {
+                let t = match transpose {
+                    Some(e) => is_truthy(&self.eval_expr(e)?),
+                    None => false,
+                };
+                self.do_paste(dest_addr, t)?;
+            }
+            Stmt::SheetRangePaste { sheet, dest_addr } => {
+                let (key, display) = self.resolve_sheet_expr(sheet)?;
+                self.check_strict_sheet_exists(&display, &key)?;
+                let prev = self.active_sheet.clone();
+                if !self.strict_resolution {
+                    self.ensure_sheet(&key);
+                }
+                self.active_sheet = key;
+                self.cell_index_dirty = true;
+                let result = self.do_paste(dest_addr, false);
+                self.active_sheet = prev;
+                self.cell_index_dirty = true;
+                result?;
             }
             Stmt::SheetCellWrite { sheet, row, col, value } => {
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
@@ -3821,5 +3982,138 @@ mod tests {
         .unwrap();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert!(err.starts_with("TIMEOUT:"), "{:?}", err);
+    }
+
+    // ── Milestone B6b: Copy/Paste shape diagnosis + Clipboard state ─────────
+
+    #[test]
+    fn bare_copy_then_paste_special_round_trips_matching_shapes() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(1,2).Value = 20\n    \
+             Cells(2,1).Value = 30\n    Cells(2,2).Value = 40\n    \
+             Range(\"A1:B2\").Copy\n    Range(\"E1:F2\").PasteSpecial\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(10));
+        assert_eq!(vm.get_cell(1, 6), Variant::Integer(20));
+        assert_eq!(vm.get_cell(2, 5), Variant::Integer(30));
+        assert_eq!(vm.get_cell(2, 6), Variant::Integer(40));
+    }
+
+    #[test]
+    fn transpose_true_swaps_rows_and_columns_on_paste() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(1,2).Value = 20\n    \
+             Range(\"A1:B1\").Copy\n    Range(\"E1:E2\").PasteSpecial Transpose:=True\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(10));
+        assert_eq!(vm.get_cell(2, 5), Variant::Integer(20));
+    }
+
+    #[test]
+    fn paste_shape_mismatch_is_a_hard_error_with_evidence() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:C10\").Copy\n    Range(\"E1:F10\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("shape mismatch"), "{:?}", err);
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::PasteShapeMismatch {
+                source_addr,
+                source_rows,
+                source_cols,
+                dest_addr,
+                dest_rows,
+                dest_cols,
+                dest_row1,
+                dest_col1,
+                transpose,
+                copy_span,
+            }) => {
+                assert_eq!(source_addr, "A1:C10");
+                assert_eq!((source_rows, source_cols), (10, 3));
+                assert_eq!(dest_addr, "E1:F10");
+                assert_eq!((dest_rows, dest_cols), (10, 2));
+                assert_eq!((dest_row1, dest_col1), (1, 5));
+                assert!(!transpose);
+                assert!(copy_span.is_some());
+            }
+            other => panic!("expected PasteShapeMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn paste_without_a_prior_copy_is_a_hard_error() {
+        let prog = parser::parse("Sub MySub()\n    Range(\"A1\").PasteSpecial\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("Clipboard is empty"), "{:?}", err);
+        assert_eq!(
+            vm.take_resolution_failure(),
+            Some(ResolutionFailureKind::PasteWithoutCopy {
+                dest_addr: "A1".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn cutcopymode_false_clears_the_clipboard_so_a_later_paste_fails() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Range(\"A1\").Copy\n    \
+             Application.CutCopyMode = False\n    Range(\"B1\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("Clipboard is empty"), "{:?}", err);
+    }
+
+    #[test]
+    fn copy_destination_to_a_matching_shape_range_writes_there_correctly() {
+        // Closes a latent bug: the old `RangeCopy` execution parsed `dst`
+        // via `parse_cell_addr` (single-cell only) and silently fell back
+        // to the source's own top-left cell for any real range address —
+        // never noticed because no prior test exercised a range Destination.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    \
+             Cells(3,1).Value = 3\n    Range(\"A1:A3\").Copy Destination:=Range(\"B1:B3\")\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(2));
+        assert_eq!(vm.get_cell(3, 2), Variant::Integer(3));
+    }
+
+    #[test]
+    fn copy_destination_shape_mismatch_is_also_a_hard_error() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:C10\").Copy Destination:=Range(\"E1:F10\")\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("shape mismatch"), "{:?}", err);
+    }
+
+    #[test]
+    fn single_cell_source_fills_a_larger_destination_range_without_a_shape_error() {
+        // Real Excel's well-known "paste one value into many cells" fill
+        // behavior — not a shape mismatch, even though 1x1 != 10x1.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 42\n    Range(\"A1\").Copy\n    \
+             Range(\"B1:B10\").PasteSpecial\nEnd Sub\n",
+        );
+        for row in 1..=10 {
+            assert_eq!(vm.get_cell(row, 2), Variant::Integer(42), "row {}", row);
+        }
+    }
+
+    #[test]
+    fn worksheet_paste_destination_writes_into_the_named_sheet() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 7\n    Range(\"A1\").Copy\n    \
+             Worksheets(\"Sheet1\").Paste Destination:=Range(\"C1\")\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(7));
     }
 }

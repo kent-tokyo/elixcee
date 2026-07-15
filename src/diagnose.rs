@@ -41,6 +41,11 @@ pub struct Diagnosis {
     /// convention in `main.rs`) does that conversion via
     /// `diagnostics::locate`.
     pub span: Option<SourceSpan>,
+    /// The span of the `.Copy` statement that populated the clipboard, when
+    /// `root_cause` is a `PASTE_SHAPE_MISMATCH` (Milestone B6b) — `span`
+    /// above already points at the failing *Paste* statement, so this lets
+    /// a diagnosis report both locations. `None` for every other kind.
+    pub copy_span: Option<SourceSpan>,
     pub root_cause: Option<RootCause>,
     pub messages: Vec<String>,
 }
@@ -58,6 +63,8 @@ impl RootCause {
             ResolutionFailureKind::WorksheetNotFound(_) => "WORKSHEET_NOT_FOUND",
             ResolutionFailureKind::WorkbookNotFound(_) => "WORKBOOK_NOT_FOUND",
             ResolutionFailureKind::ArrayIndexOutOfBounds { .. } => "ARRAY_INDEX_OUT_OF_BOUNDS",
+            ResolutionFailureKind::PasteShapeMismatch { .. } => "PASTE_SHAPE_MISMATCH",
+            ResolutionFailureKind::PasteWithoutCopy { .. } => "PASTE_WITHOUT_COPY",
         };
         RootCause {
             code,
@@ -94,8 +101,52 @@ impl RootCause {
                     name, index, lower, upper
                 )]
             }
+            ResolutionFailureKind::PasteShapeMismatch {
+                source_rows,
+                source_cols,
+                dest_row1,
+                dest_col1,
+                transpose,
+                ..
+            } => {
+                let (rows, cols) = if *transpose {
+                    (*source_cols, *source_rows)
+                } else {
+                    (*source_rows, *source_cols)
+                };
+                let anchor = format!("{}{}", col_to_letters(*dest_col1), dest_row1);
+                let bottom_right = format!(
+                    "{}{}",
+                    col_to_letters(dest_col1 + cols - 1),
+                    dest_row1 + rows - 1
+                );
+                vec![
+                    format!("resize the destination to {}:{}", anchor, bottom_right),
+                    format!("or specify only the top-left cell {}", anchor),
+                ]
+            }
+            ResolutionFailureKind::PasteWithoutCopy { .. } => vec![
+                "add a Range(...).Copy before this Paste, or check whether \
+                 Application.CutCopyMode was cleared first"
+                    .to_string(),
+            ],
         }
     }
+}
+
+/// Renders a 1-based column number as its Excel letter form (`1` -> `"A"`).
+/// A small private copy of the same tiny helper already independently
+/// duplicated per-module in `snapshot.rs`/`main.rs`/`testworkbook.rs`, not a
+/// shared `utils` module — matches existing project convention.
+fn col_to_letters(mut col: u32) -> String {
+    let mut bytes = Vec::new();
+    while col > 0 {
+        col -= 1;
+        bytes.push(b'A' + (col % 26) as u8);
+        col /= 26;
+    }
+    bytes.reverse();
+    String::from_utf8(bytes).unwrap()
 }
 
 /// Runs `entrypoint` once against the workbook at `workbook_path`, in
@@ -124,16 +175,22 @@ pub fn run_diagnosis(
             ok: true,
             message: None,
             span: None,
+            copy_span: None,
             root_cause: None,
             messages: vm.take_messages(),
         }),
         Err(message) => {
             let root_cause = vm.take_resolution_failure().map(RootCause::from_kind);
             let span = vm.current_span();
+            let copy_span = root_cause.as_ref().and_then(|rc| match &rc.kind {
+                ResolutionFailureKind::PasteShapeMismatch { copy_span, .. } => *copy_span,
+                _ => None,
+            });
             Ok(Diagnosis {
                 ok: false,
                 message: Some(message),
                 span,
+                copy_span,
                 root_cause,
                 messages: vm.take_messages(),
             })
@@ -175,7 +232,7 @@ fn evidence_json(e: &ResolutionEvidence) -> String {
     )
 }
 
-fn root_cause_json(rc: &RootCause) -> String {
+fn root_cause_json(rc: &RootCause, copy_location: Option<&SourceLocation>) -> String {
     let suggestions = format!(
         "[{}]",
         rc.suggestions()
@@ -199,6 +256,31 @@ fn root_cause_json(rc: &RootCause) -> String {
             lower,
             upper,
         ),
+        ResolutionFailureKind::PasteShapeMismatch {
+            source_addr,
+            source_rows,
+            source_cols,
+            dest_addr,
+            dest_rows,
+            dest_cols,
+            transpose,
+            ..
+        } => format!(
+            "\"source_addr\":{},\"source_rows\":{},\"source_cols\":{},\
+             \"dest_addr\":{},\"dest_rows\":{},\"dest_cols\":{},\"transpose\":{},\
+             \"copy_location\":{}",
+            json_string(source_addr),
+            source_rows,
+            source_cols,
+            json_string(dest_addr),
+            dest_rows,
+            dest_cols,
+            transpose,
+            location_json(copy_location),
+        ),
+        ResolutionFailureKind::PasteWithoutCopy { dest_addr } => {
+            format!("\"dest_addr\":{}", json_string(dest_addr))
+        }
     };
     format!(
         "{{\"code\":\"{}\",\"certainty\":\"{}\",{},\"suggestions\":{}}}",
@@ -208,9 +290,16 @@ fn root_cause_json(rc: &RootCause) -> String {
 
 /// `{"schema_version":1,"ok":true,"messages":[...]}` on success, or
 /// `{"schema_version":1,"ok":false,"message":...,"location":...,"root_causes":[...],"messages":[...]}`
-/// on failure. `location` is resolved by the caller (see `Diagnosis::span`'s
-/// doc comment) — `None` when the caller couldn't or didn't resolve one.
-pub fn to_json(diag: &Diagnosis, location: Option<&SourceLocation>) -> String {
+/// on failure. `location`/`copy_location` are resolved by the caller (see
+/// `Diagnosis::span`/`copy_span`'s doc comments) — `None` when the caller
+/// couldn't or didn't resolve one. `copy_location` only ever appears nested
+/// inside a `PASTE_SHAPE_MISMATCH` root cause; it's accepted here regardless
+/// of `diag.root_cause`'s kind so callers don't need to inspect it first.
+pub fn to_json(
+    diag: &Diagnosis,
+    location: Option<&SourceLocation>,
+    copy_location: Option<&SourceLocation>,
+) -> String {
     let messages_json = format!(
         "[{}]",
         diag.messages
@@ -226,7 +315,7 @@ pub fn to_json(diag: &Diagnosis, location: Option<&SourceLocation>) -> String {
         );
     }
     let root_causes = match &diag.root_cause {
-        Some(rc) => format!("[{}]", root_cause_json(rc)),
+        Some(rc) => format!("[{}]", root_cause_json(rc, copy_location)),
         None => "[]".to_string(),
     };
     format!(
@@ -241,7 +330,11 @@ pub fn to_json(diag: &Diagnosis, location: Option<&SourceLocation>) -> String {
 /// Plain-text summary for non-`--json` invocations — mirrors the level of
 /// detail `test-workbook`'s `to_plain_text` gives, not a full replica of
 /// the JSON shape.
-pub fn to_plain_text(diag: &Diagnosis, location: Option<&SourceLocation>) -> String {
+pub fn to_plain_text(
+    diag: &Diagnosis,
+    location: Option<&SourceLocation>,
+    copy_location: Option<&SourceLocation>,
+) -> String {
     if diag.ok {
         return "OK: no resolution failure detected".to_string();
     }
@@ -278,6 +371,39 @@ pub fn to_plain_text(diag: &Diagnosis, location: Option<&SourceLocation>) -> Str
                     name, index, lower, upper
                 ));
             }
+            ResolutionFailureKind::PasteShapeMismatch {
+                source_addr,
+                source_rows,
+                source_cols,
+                dest_addr,
+                dest_rows,
+                dest_cols,
+                transpose,
+                ..
+            } => {
+                out.push_str(&format!(
+                    "copy source {} ({}x{}) does not match paste destination {} ({}x{}){}",
+                    source_addr,
+                    source_rows,
+                    source_cols,
+                    dest_addr,
+                    dest_rows,
+                    dest_cols,
+                    if *transpose { ", Transpose:=True" } else { "" },
+                ));
+                if let Some(loc) = copy_location {
+                    out.push_str(&format!(
+                        "\n  copied at {}:{}:{}",
+                        loc.file, loc.line, loc.column
+                    ));
+                }
+            }
+            ResolutionFailureKind::PasteWithoutCopy { dest_addr } => {
+                out.push_str(&format!(
+                    "Paste to {} attempted with an empty clipboard",
+                    dest_addr
+                ));
+            }
         }
         for s in rc.suggestions() {
             out.push_str(&format!("\n  suggestion: {}", s));
@@ -308,7 +434,7 @@ mod tests {
         let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
         assert!(diag.ok);
         assert!(diag.root_cause.is_none());
-        assert!(to_json(&diag, None).contains("\"ok\":true"));
+        assert!(to_json(&diag, None, None).contains("\"ok\":true"));
     }
 
     #[test]
@@ -336,7 +462,7 @@ mod tests {
             }
             other => panic!("expected WorksheetNotFound, got {:?}", other),
         }
-        let json = to_json(&diag, None);
+        let json = to_json(&diag, None, None);
         assert!(json.contains("WORKSHEET_NOT_FOUND"));
         assert!(json.contains("売上2026"));
     }
@@ -355,7 +481,7 @@ mod tests {
                 .unwrap_or("")
                 .contains("Undefined variable")
         );
-        assert!(to_json(&diag, None).contains("\"root_causes\":[]"));
+        assert!(to_json(&diag, None, None).contains("\"root_causes\":[]"));
     }
 
     #[test]
@@ -425,5 +551,55 @@ mod tests {
         let programs = programs_from("Sub Main()\nEnd Sub\n");
         let err = run_diagnosis(&programs, "/nonexistent/path.xlsx", "Main").unwrap_err();
         assert!(err.starts_with("cannot read"), "{:?}", err);
+    }
+
+    #[test]
+    fn paste_shape_mismatch_reports_both_locations_and_a_resize_suggestion() {
+        // The user's own literal example: A1:C10 (10x3) copied, E1:F10
+        // (10x2) pasted into — column counts differ.
+        let out_path = std::env::temp_dir().join("elixcee_diagnose_paste_shape_mismatch.xlsx");
+        build_workbook(out_path.to_str().unwrap());
+        let programs = programs_from(
+            "Sub Main()\n    Range(\"A1:C10\").Copy\n    Range(\"E1:F10\").PasteSpecial\nEnd Sub\n",
+        );
+        let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
+        assert!(!diag.ok);
+        let rc = diag
+            .root_cause
+            .as_ref()
+            .expect("should classify a root cause");
+        assert_eq!(rc.code, "PASTE_SHAPE_MISMATCH");
+        assert!(diag.span.is_some(), "must locate the failing Paste");
+        assert!(diag.copy_span.is_some(), "must also locate the Copy");
+        assert_eq!(
+            rc.suggestions(),
+            vec![
+                "resize the destination to E1:G10".to_string(),
+                "or specify only the top-left cell E1".to_string(),
+            ]
+        );
+        let json = to_json(&diag, None, None);
+        assert!(json.contains("PASTE_SHAPE_MISMATCH"));
+        assert!(json.contains("\"source_addr\":\"A1:C10\""));
+        assert!(json.contains("\"dest_addr\":\"E1:F10\""));
+        assert!(json.contains("resize the destination to E1:G10"));
+    }
+
+    #[test]
+    fn paste_without_copy_reports_a_root_cause_with_a_fix_suggestion() {
+        let out_path = std::env::temp_dir().join("elixcee_diagnose_paste_without_copy.xlsx");
+        build_workbook(out_path.to_str().unwrap());
+        let programs = programs_from("Sub Main()\n    Range(\"A1\").PasteSpecial\nEnd Sub\n");
+        let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
+        assert!(!diag.ok);
+        let rc = diag
+            .root_cause
+            .as_ref()
+            .expect("should classify a root cause");
+        assert_eq!(rc.code, "PASTE_WITHOUT_COPY");
+        assert!(diag.copy_span.is_none());
+        let json = to_json(&diag, None, None);
+        assert!(json.contains("PASTE_WITHOUT_COPY"));
+        assert!(json.contains("\"dest_addr\":\"A1\""));
     }
 }
