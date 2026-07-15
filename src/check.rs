@@ -188,6 +188,7 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::RangeSort { .. } => {}
             Stmt::RangeName { .. } => {}
             Stmt::SheetCellWrite { .. } => {}
+            Stmt::SheetRangeWrite { .. } => {}
             Stmt::WithSheet { body, .. } => collect_declared_names(body, names),
             Stmt::SheetsAdd => {}
             Stmt::SheetsDelete { .. } => {}
@@ -437,6 +438,10 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             out.push(col);
             out.push(value);
         }
+        Stmt::SheetRangeWrite { sheet, value, .. } => {
+            out.push(sheet);
+            out.push(value);
+        }
         Stmt::WithSheet { .. } => {}
         Stmt::SheetsAdd => {}
         Stmt::SheetsDelete { sheet } => out.push(sheet),
@@ -676,6 +681,40 @@ fn walk_expr(
             );
             walk_expr(
                 col,
+                prog,
+                local_names,
+                other_module_names,
+                stmt_span,
+                source,
+                file,
+                diags,
+            );
+        }
+        Expr::SheetRangeRead { sheet, .. } => {
+            walk_expr(
+                sheet,
+                prog,
+                local_names,
+                other_module_names,
+                stmt_span,
+                source,
+                file,
+                diags,
+            );
+        }
+        Expr::WorkbookQualifiedSheet { workbook, sheet } => {
+            walk_expr(
+                workbook,
+                prog,
+                local_names,
+                other_module_names,
+                stmt_span,
+                source,
+                file,
+                diags,
+            );
+            walk_expr(
+                sheet,
                 prog,
                 local_names,
                 other_module_names,

@@ -184,6 +184,37 @@ elixcee test-workbook fixture.toml --json
 
 失敗したケースは seed と case index を報告するため、`elixcee test-workbook fixture.toml --seed 42 --case 17` で正確に再現できます。スキーマ・strategy・assertion ルールの詳細は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
 
+### Excel操作の診断
+
+`elixcee diagnose` はマクロを一度だけ実行し、存在しないシート・存在しないワークブック・配列の範囲外アクセスなど、Excelがその操作を拒否する具体的な理由を根拠付きで説明します（単なるエラー文字列ではありません）：
+
+```bat
+elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
+```
+
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "message": "Sheet 'Sales2025' not found",
+  "location": {"file": "Main.bas", "line": 2, "column": 5},
+  "root_causes": [
+    {
+      "code": "WORKSHEET_NOT_FOUND",
+      "certainty": "definite",
+      "expression": "Worksheets(\"Sales2025\")",
+      "requested": "Sales2025",
+      "available": ["input", "sales2026", "summary"],
+      "suggested": "sales2026",
+      "suggestions": ["did you mean 'sales2026'?"]
+    }
+  ],
+  "messages": []
+}
+```
+
+分類ルールと JSON スキーマの詳細は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
+
 ### ソースからビルド
 
 ```bash

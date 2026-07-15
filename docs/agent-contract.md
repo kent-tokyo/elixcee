@@ -107,7 +107,9 @@ error locations are statement-level, not sub-expression-level** — `line`/
 exact sub-expression within it (e.g. for `x = totla + 1` failing on the
 undefined `totla`, `location` points at the `x` that starts the statement,
 not at `totla`). Parse error locations point at the specific token the
-parser choked on. There's no "did you mean" suggestion field.
+parser choked on. There's no "did you mean" suggestion field in *this*
+contract — the `diagnose` subcommand below has its own, richer contract
+that does.
 
 ### Error codes
 
@@ -115,7 +117,7 @@ parser choked on. There's no "did you mean" suggestion field.
 |---|---|---|---|
 | `E1001` | `undefined_variable` | runtime | Macro referenced a variable that was never assigned |
 | `E1002` | `undefined_sub_or_function` | runtime | Entrypoint macro name doesn't exist, or the macro called an unknown Sub/Function |
-| `E1003` | `sheet_not_found` | runtime | Reserved for a `Sheets("X")` reference failing *during* macro execution (not currently reachable — today `Sheets("X")` auto-creates missing sheets) |
+| `E1003` | `sheet_not_found` | runtime | Reserved for a `Sheets("X")` reference failing *during* macro execution — still not reachable via `run`/`check`'s plain `--json` contract, since `Sheets("X")` auto-creates on write / reads `Empty` on miss unless `Vm::strict_resolution` is on, which only the `diagnose` subcommand sets (see below — it uses its own richer contract, not this error code) |
 | `E1004` | `msgbox_blocked` | runtime | A `MsgBox` fired while the VM was configured to treat MsgBox as an error (Python API only; not reachable from the CLI today) |
 | `E1099` | `runtime_error` | runtime | Any other runtime failure not covered above |
 | `E2001` | `parse_error` | parse | The VBA source failed to parse |
@@ -487,3 +489,116 @@ deterministic generation → save failing case → single-case replay first,
 shrinking later, per the roadmap. Only two strategies and one range-scoped
 assertion rule exist in this phase; more of each are plausible later
 additions, not redesigns.
+
+## `diagnose` subcommand (Excel operation diagnostics, Milestone B6a)
+
+```
+elixcee diagnose <vba_file>... --file <workbook> --entrypoint <MacroName> [--json]
+```
+
+Runs one macro once and classifies *why* it failed — a missing worksheet,
+a missing workbook, or an out-of-bounds array index — with concrete
+evidence (the requested key, what was actually available, a "did you mean"
+suggestion), instead of only a bare runtime-error string. This is a
+different posture from `run`/`check`/`test-workbook`: it turns on
+`Vm::strict_resolution`, which makes elixcee's usual auto-vivify/silent-
+`Empty` convenience for `Sheets("X")`/`Worksheets("X")` references into a
+hard, classified failure — because a diagnostic tool whose whole purpose is
+"what would Excel actually reject here" needs to *not* paper over the exact
+class of mistake it exists to catch. Every other subcommand leaves
+`strict_resolution` off (the default) and is completely unaffected.
+
+### Strict-resolution mode
+
+- **Missing worksheet** (`Sheets("X")`/`Worksheets("X")`, by name or by a
+  new 1-based numeric index — `Worksheets(2)`): normally a write
+  auto-creates the sheet and a read silently returns `Empty`; in strict
+  mode, either is a `WORKSHEET_NOT_FOUND` failure with the requested name,
+  every existing sheet name, and (if within a small bounded Levenshtein
+  distance) a suggested closest match. elixcee has no real workbook
+  tab-order tracking, so a numeric index resolves against sheet names
+  sorted alphabetically, not Excel's actual left-to-right tab order — an
+  honest fidelity gap, not a bug.
+- **Missing workbook** (`Workbooks("X").Worksheets(...)`, a new construct
+  in this milestone): elixcee only ever has one workbook loaded at a time
+  (via `--file`), so this doesn't model real multi-workbook switching — it
+  only compares the requested name/index against the one loaded workbook,
+  raising `WORKBOOK_NOT_FOUND` on any mismatch. This check fires
+  unconditionally (not gated behind strict mode), since `Workbooks(...)`
+  is brand new — there's no pre-existing lenient behavior for it to
+  preserve.
+- **Array out of bounds** (`arr(i)` past its declared size): already a
+  hard error in every mode before this milestone; now also carries
+  structured `ARRAY_INDEX_OUT_OF_BOUNDS` evidence (`lower`/`upper` are
+  elixcee's true 0-based bounds — `Dim arr(1 To N)`'s non-zero lower bound
+  isn't tracked anywhere, so this reports elixcee's actual model, not a
+  fabricated VBA-style `1 To N`).
+- **`On Error Resume Next`/`On Error GoTo` are not honored** while
+  `strict_resolution` is on — the first resolution failure always
+  propagates and gets reported, rather than being silently swallowed or
+  redirected by the macro's own error handling (which in real VBA usage is
+  exactly the code most likely to be masking the bug this subcommand
+  exists to surface).
+- New syntax added alongside this: `Sheets(name).Range(addr)` (read and
+  write — previously only `.Cells(r,c)` was supported off a sheet name);
+  without it, none of the sheet-resolution scenarios above could even be
+  written as a runnable macro.
+
+### Output
+
+Success: `{"schema_version":1,"ok":true,"messages":[...]}`
+
+Failure — its own JSON contract (like `test-workbook`'s), not the flat
+`ElixceeError` shape above, since ranked evidence doesn't fit `{code, kind,
+message, location}`:
+
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "message": "Sheet '売上2025' not found",
+  "location": {"file": "Main.bas", "line": 2, "column": 5},
+  "root_causes": [
+    {
+      "code": "WORKSHEET_NOT_FOUND",
+      "certainty": "definite",
+      "expression": "Worksheets(\"売上2025\")",
+      "requested": "売上2025",
+      "available": ["input", "売上2026", "sheet1", "集計"],
+      "suggested": "売上2026",
+      "suggestions": ["did you mean '売上2026'?"]
+    }
+  ],
+  "messages": []
+}
+```
+
+`root_causes` is an array (currently at most one entry — the first
+failure) rather than a bare object, so a later milestone's ranked-candidate
+model ("3 possible reasons, ranked") can reuse this exact shape without a
+breaking schema change. `ARRAY_INDEX_OUT_OF_BOUNDS` entries carry
+`name`/`index`/`lower`/`upper` instead of the name-lookup evidence fields.
+Exit code 0/`ok:true` on success, 1/`ok:false` on failure — same
+convention as every other subcommand. `location` follows the same
+single-module-only rule as run-mode's own `--json` contract (a
+`SourceSpan` carries no module id, so a multi-module run reports
+`location: null` rather than risk pointing at the wrong module's source).
+
+### Explicit non-goals (deferred to later B6 phases)
+
+This milestone only covers resolution failures (B6a in the roadmap).
+Explicitly out of scope, planned for later:
+
+- Copy/Paste shape validation, `Clipboard`/`CutCopyMode` state modeling,
+  `Transpose` (B6b) — `Range.Copy`'s existing `Destination:=`-only,
+  single-top-left-cell behavior is untouched by this milestone.
+- Merged cells, multi-area (`Areas`) ranges, hidden/filtered rows, sheet
+  protection, Excel Tables (B6c).
+- Integration with `test-workbook`'s case generator for counterexample
+  search (B6d) — `diagnose` runs a macro exactly once today.
+- A real VBA `Collection` object — it doesn't exist in elixcee at all, so
+  there is nothing to classify a failure for; adding one is a first-class
+  feature, not "add diagnosis to an existing path."
+- Real multi-workbook execution — only a name/index mismatch check against
+  the single loaded workbook ships in this milestone.
+- `Dim arr(1 To N)` non-zero-lower-bound tracking.

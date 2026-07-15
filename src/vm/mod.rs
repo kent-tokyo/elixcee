@@ -37,6 +37,36 @@ impl std::fmt::Display for ExcelError {
     }
 }
 
+/// Evidence for a resolution failure (Milestone B6a's `diagnose`
+/// subcommand) — the requested key, what was actually available, and (for
+/// name lookups) the closest match by edit distance, if any.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolutionEvidence {
+    pub expression: String,
+    pub requested: String,
+    pub available: Vec<String>,
+    pub suggested: Option<String>,
+}
+
+/// Why a VBA "Subscript out of range" (Error 9)-shaped operation failed,
+/// classified with evidence instead of only a formatted message string.
+/// Set on `Vm::last_resolution_failure` immediately before the matching
+/// `Err(String)` is returned — a side channel, same pattern as
+/// `current_span`/`take_messages()` — so `diagnose` (or any caller) can
+/// read structured detail after `run_sub`/`run_sub_multi` fails, while
+/// every other caller that only wants the plain string is unaffected.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolutionFailureKind {
+    WorksheetNotFound(ResolutionEvidence),
+    WorkbookNotFound(ResolutionEvidence),
+    ArrayIndexOutOfBounds {
+        name: String,
+        index: i64,
+        lower: i64,
+        upper: i64,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Variant {
     Integer(i64),
@@ -140,6 +170,27 @@ pub struct Vm {
     /// deadline is only actually checked (a real `Instant::now()` call)
     /// every 256th iteration, not every one.
     loop_iters: u64,
+    /// Milestone B6a's `diagnose` opt-in mode. `false` (the default) is
+    /// today's existing behavior for every caller (`run`, `check`,
+    /// `snapshot`, `test-workbook`, Python bindings): a missing
+    /// `Sheets("X")`/`Worksheets("X")` name auto-creates the sheet on write
+    /// and silently reads as `Empty`. `true` (set only by `diagnose`) is
+    /// the more Excel-faithful behavior a diagnostic tool needs: a missing
+    /// name is a resolution failure (see `ResolutionFailureKind`), and `On
+    /// Error Resume Next`/`GoTo` no longer swallow/redirect the first error
+    /// — it propagates so `diagnose` can report it.
+    pub strict_resolution: bool,
+    /// Set immediately before returning an `Err` for a resolution failure
+    /// (missing worksheet/workbook, array out of bounds) — a side channel
+    /// read by `diagnose` after `run_sub`/`run_sub_multi` fails, same
+    /// pattern as `current_span`. Cleared at the start of each `run_sub`.
+    last_resolution_failure: Option<ResolutionFailureKind>,
+    /// The file name (not full path) of the workbook loaded via
+    /// `load_workbook_file`, if any — elixcee only ever has one workbook
+    /// loaded at a time, so this is only enough to detect a `Workbooks("x")`
+    /// reference that doesn't match it (Milestone B6a), not to model real
+    /// multi-workbook switching.
+    loaded_workbook_name: Option<String>,
 }
 
 impl Vm {
@@ -168,7 +219,19 @@ impl Vm {
             cell_index_dirty: true,
             deadline: None,
             loop_iters: 0,
+            strict_resolution: false,
+            last_resolution_failure: None,
+            loaded_workbook_name: None,
         }
+    }
+
+    /// Drains the resolution-failure evidence set by the most recent failed
+    /// `run_sub`/`run_sub_multi` call, if the failure was a classified
+    /// resolution failure (missing worksheet/workbook, array out of
+    /// bounds) rather than some other runtime error. `None` either if the
+    /// run succeeded or if it failed for an unrelated reason.
+    pub fn take_resolution_failure(&mut self) -> Option<ResolutionFailureKind> {
+        self.last_resolution_failure.take()
     }
 
     /// Checked once per outer-loop iteration by `For`/`ForEach`/`DoLoop` —
@@ -243,6 +306,135 @@ impl Vm {
         self.sheets.get(&name.to_lowercase())
     }
 
+    /// `true` iff `requested` identifies the one workbook `load_workbook_file`
+    /// loaded (by name, case-insensitively, or by the numeric index `1` —
+    /// elixcee never has more than one workbook open, so any other index is
+    /// always a mismatch). No workbook loaded yet is never a match.
+    fn workbook_matches(&self, requested: &Variant) -> bool {
+        match requested {
+            Variant::Integer(1) => self.loaded_workbook_name.is_some(),
+            Variant::Integer(_) => false,
+            other => {
+                let name = vba_to_str(other).to_lowercase();
+                self.loaded_workbook_name
+                    .as_deref()
+                    .is_some_and(|n| n.to_lowercase() == name)
+            }
+        }
+    }
+
+    /// Resolves a sheet-identifying `Expr` — a string name, a 1-based
+    /// numeric index, or a `Workbooks(...).Worksheets(...)` qualifier — to
+    /// `(key, display)`: the lowercase key used to index `self.sheets`, and
+    /// the human-readable form to show in evidence/error messages (the
+    /// as-written name, or the numeric index as a string). Both the
+    /// numeric-index and `Workbooks(...)` forms are new in Milestone B6a, so
+    /// unlike plain-name lookups there is no pre-B6a lenient behavior to
+    /// preserve for them: a workbook mismatch or an out-of-range index is
+    /// always a hard error (evidence recorded via `last_resolution_failure`),
+    /// in every mode, not just `strict_resolution`.
+    ///
+    /// The returned key is **not** guaranteed to exist in `self.sheets` for
+    /// a plain-name lookup — each of the four sheet-access call sites
+    /// (`SheetCellRead`/`SheetRangeRead`/`SheetCellWrite`/`SheetRangeWrite`)
+    /// checks that separately via `check_strict_sheet_exists`, since each
+    /// has its own pre-B6a fallback (auto-vivify on write, silent `Empty`
+    /// on read) that only applies when `strict_resolution` is off.
+    fn resolve_sheet_expr(&mut self, sheet_expr: &Expr) -> Result<(String, String), String> {
+        let plain = match sheet_expr {
+            Expr::WorkbookQualifiedSheet { workbook, sheet } => {
+                let wb_val = self.eval_expr(workbook)?;
+                if !self.workbook_matches(&wb_val) {
+                    let requested = vba_to_str(&wb_val);
+                    let available = match &self.loaded_workbook_name {
+                        Some(n) => vec![n.clone()],
+                        None => vec![],
+                    };
+                    let evidence = ResolutionEvidence {
+                        expression: format!("Workbooks({})", requested),
+                        requested: requested.clone(),
+                        suggested: closest_match(&requested, &available),
+                        available,
+                    };
+                    self.last_resolution_failure =
+                        Some(ResolutionFailureKind::WorkbookNotFound(evidence));
+                    return Err(format!("Workbook '{}' not found", requested));
+                }
+                sheet.as_ref()
+            }
+            other => other,
+        };
+
+        let val = self.eval_expr(plain)?;
+        match val {
+            Variant::Integer(n) => {
+                let names = self.sheet_names();
+                let idx = n - 1;
+                if idx >= 0 && (idx as usize) < names.len() {
+                    let key = names[idx as usize].clone();
+                    Ok((key, n.to_string()))
+                } else {
+                    let evidence = ResolutionEvidence {
+                        expression: format!("Worksheets({})", n),
+                        requested: n.to_string(),
+                        available: names,
+                        suggested: None,
+                    };
+                    self.last_resolution_failure =
+                        Some(ResolutionFailureKind::WorksheetNotFound(evidence));
+                    Err(format!("Sheet index {} not found", n))
+                }
+            }
+            other => {
+                let display = vba_to_str(&other);
+                let key = display.to_lowercase();
+                Ok((key, display))
+            }
+        }
+    }
+
+    /// Records `ArrayIndexOutOfBounds` evidence and returns the same
+    /// message string every array-access site has always returned — a pure
+    /// addition (the error was already unconditionally hard, in every
+    /// mode, before Milestone B6a), so existing callers/tests see byte-
+    /// identical output. `lower` is always 0 and `upper` is `len - 1`
+    /// (elixcee's arrays are always 0-based — see the module-level note on
+    /// `Dim arr(1 To N)` not being tracked): this is elixcee's true bound,
+    /// not a fabricated VBA-style `1 To N`.
+    fn array_oob_error(&mut self, name: &str, idx: usize, len: usize) -> String {
+        self.last_resolution_failure = Some(ResolutionFailureKind::ArrayIndexOutOfBounds {
+            name: name.to_string(),
+            index: idx as i64,
+            lower: 0,
+            upper: len as i64 - 1,
+        });
+        format!(
+            "Array '{}': index {} out of bounds (len={})",
+            name, idx, len
+        )
+    }
+
+    /// If `strict_resolution` is on and `key` doesn't name an existing
+    /// sheet, records `WorksheetNotFound` evidence (with a "did you mean"
+    /// suggestion, if any) and returns the matching error. Callers only
+    /// invoke this when they're about to do something that pre-B6a leniency
+    /// (auto-vivify on write / silent `Empty` on read) would otherwise paper
+    /// over — see `resolve_sheet_expr`'s doc comment.
+    fn check_strict_sheet_exists(&mut self, requested: &str, key: &str) -> Result<(), String> {
+        if self.strict_resolution && !self.sheets.contains_key(key) {
+            let available = self.sheet_names();
+            let evidence = ResolutionEvidence {
+                expression: format!("Worksheets(\"{}\")", requested),
+                requested: requested.to_string(),
+                suggested: closest_match(requested, &available),
+                available,
+            };
+            self.last_resolution_failure = Some(ResolutionFailureKind::WorksheetNotFound(evidence));
+            return Err(format!("Sheet '{}' not found", requested));
+        }
+        Ok(())
+    }
+
     /// Loads a `.xlsx`/`.xlsm`/`.ods` file's sheets and cells into this `Vm`
     /// and sets the active sheet to the first one loaded. Returns the
     /// loaded sheet names (lowercase, in file order) on success. Extracted
@@ -256,6 +448,9 @@ impl Vm {
     /// for an empty workbook, or `"cannot read '<path>': <reader error>"`
     /// for anything else.
     pub fn load_workbook_file(&mut self, path: &str) -> Result<Vec<String>, String> {
+        self.loaded_workbook_name = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string());
         let sheets =
             reader::read_workbook(path).map_err(|e| format!("cannot read '{}': {}", path, e))?;
         if sheets.is_empty() {
@@ -329,6 +524,7 @@ impl Vm {
         // across multiple run_sub calls (e.g. from the Python bindings)
         // would leak the previous run's MsgBox text into this run's result.
         self.msgbox_log.clear();
+        self.last_resolution_failure = None;
         // Cache user-defined functions, subs, and type definitions.
         self.user_funcs = program.funcs.iter().map(|f| (f.name.clone(), f.clone())).collect();
         self.user_subs  = program.subs.iter().map(|s| (s.name.clone(), s.clone())).collect();
@@ -373,6 +569,7 @@ impl Vm {
         }
 
         self.msgbox_log.clear();
+        self.last_resolution_failure = None;
         self.user_funcs.clear();
         self.user_subs.clear();
         for (_, program) in modules {
@@ -446,11 +643,24 @@ impl Vm {
             match result {
                 Ok(()) => {}
                 Err(e) => {
-                    // On Error GoTo: jump to handler label
-                    if let Some(label) = self.on_error_goto_label.take() {
-                        match stmts.iter().position(|s| matches!(&s.stmt, Stmt::Label(l) if l == &label)) {
-                            Some(pos) => { i = pos; continue; }
-                            None      => return Err(format!("On Error GoTo: label '{}' not found", label)),
+                    // On Error GoTo: jump to handler label — skipped in
+                    // strict-resolution mode (`diagnose`) so the first
+                    // failure always propagates instead of being redirected
+                    // to a handler that would mask it.
+                    if !self.strict_resolution
+                        && let Some(label) = self.on_error_goto_label.take()
+                    {
+                        match stmts
+                            .iter()
+                            .position(|s| matches!(&s.stmt, Stmt::Label(l) if l == &label))
+                        {
+                            Some(pos) => {
+                                i = pos;
+                                continue;
+                            }
+                            None => {
+                                return Err(format!("On Error GoTo: label '{}' not found", label));
+                            }
                         }
                     }
                     return Err(e);
@@ -467,7 +677,9 @@ impl Vm {
         let result = self.exec_stmt_inner(&spanned.stmt);
         match result {
             Ok(()) => Ok(()),
-            Err(_) if self.on_error_resume_next => Ok(()),
+            // `On Error Resume Next` is not honored in strict-resolution
+            // mode (`diagnose`) — see the field doc on `strict_resolution`.
+            Err(_) if self.on_error_resume_next && !self.strict_resolution => Ok(()),
             Err(e) => Err(e),
         }
     }
@@ -715,16 +927,52 @@ impl Vm {
                 }
             }
             Stmt::SheetCellWrite { sheet, row, col, value } => {
-                let sheet_name = vba_to_str(&self.eval_expr(sheet)?);
+                let (key, display) = self.resolve_sheet_expr(sheet)?;
+                self.check_strict_sheet_exists(&display, &key)?;
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 let v = self.eval_expr(value)?;
-                self.ensure_sheet(&sheet_name);
-                self.sheet_cells_mut(&sheet_name).unwrap().insert((r, c), CellContent { formula: None, value: v });
+                if !self.strict_resolution { self.ensure_sheet(&key); }
+                self.sheet_cells_mut(&key).unwrap().insert((r, c), CellContent { formula: None, value: v });
+            }
+            Stmt::SheetRangeWrite { sheet, addr, is_formula, value } => {
+                let (key, display) = self.resolve_sheet_expr(sheet)?;
+                self.check_strict_sheet_exists(&display, &key)?;
+                let ((r1, c1), (r2, c2)) = parse_range_addr(addr)
+                    .ok_or_else(|| format!("SheetRangeWrite: invalid address '{}'", addr))?;
+                let v = self.eval_expr(value)?;
+                if !self.strict_resolution {
+                    self.ensure_sheet(&key);
+                }
+                if *is_formula {
+                    let s = vba_to_str(&v);
+                    let prev = self.active_sheet.clone();
+                    self.active_sheet = key.clone();
+                    for r in r1..=r2 {
+                        for c in c1..=c2 {
+                            self.set_cell_formula(r, c, &s)?;
+                        }
+                    }
+                    self.active_sheet = prev;
+                } else if let Some(cells) = self.sheet_cells_mut(&key) {
+                    for r in r1..=r2 {
+                        for c in c1..=c2 {
+                            cells.insert(
+                                (r, c),
+                                CellContent {
+                                    formula: None,
+                                    value: v.clone(),
+                                },
+                            );
+                        }
+                    }
+                    self.cell_index_dirty = true;
+                }
             }
             Stmt::WithSheet { sheet_name, body } => {
+                self.check_strict_sheet_exists(sheet_name, &sheet_name.to_lowercase())?;
                 let prev = self.active_sheet.clone();
-                self.ensure_sheet(sheet_name);
+                if !self.strict_resolution { self.ensure_sheet(sheet_name); }
                 self.active_sheet = sheet_name.to_lowercase();
                 self.cell_index_dirty = true;
                 for s in body.clone() {
@@ -739,8 +987,7 @@ impl Vm {
                 self.ensure_sheet(&new_name);
             }
             Stmt::SheetsDelete { sheet } => {
-                let name = vba_to_str(&self.eval_expr(sheet)?);
-                let key = name.to_lowercase();
+                let (key, _) = self.resolve_sheet_expr(sheet)?;
                 if key != self.active_sheet { self.sheets.remove(&key); }
             }
             Stmt::Dim => {}
@@ -762,12 +1009,16 @@ impl Vm {
             Stmt::ArrayWrite { name, indices, value } => {
                 let v = self.eval_expr(value)?;
                 let idx = to_f64(&self.eval_expr(&indices[0])?)? as usize;
-                match self.variables.get_mut(name) {
-                    Some(Variant::Array(arr)) => {
-                        if idx < arr.len() { arr[idx] = v; }
-                        else { return Err(format!("Array '{}': index {} out of bounds (len={})", name, idx, arr.len())); }
-                    }
+                let oob_len = match self.variables.get(name) {
+                    Some(Variant::Array(arr)) if idx >= arr.len() => Some(arr.len()),
+                    Some(Variant::Array(_)) => None,
                     _ => return Err(format!("'{}' is not an array", name)),
+                };
+                if let Some(len) = oob_len {
+                    return Err(self.array_oob_error(name, idx, len));
+                }
+                if let Some(Variant::Array(arr)) = self.variables.get_mut(name) {
+                    arr[idx] = v;
                 }
             }
             Stmt::With { body } => {
@@ -807,22 +1058,25 @@ impl Vm {
             Stmt::ArrayRecordSet { name, indices, field, value } => {
                 let v = self.eval_expr(value)?;
                 let idx = to_f64(&self.eval_expr(&indices[0])?)? as usize;
-                match self.variables.get_mut(name) {
-                    Some(Variant::Array(arr)) => {
-                        if idx < arr.len() {
-                            match &mut arr[idx] {
-                                Variant::Record(m) => { m.insert(field.clone(), v); }
-                                slot => {
-                                    let mut m = HashMap::new();
-                                    m.insert(field.clone(), v);
-                                    *slot = Variant::Record(m);
-                                }
-                            }
-                        } else {
-                            return Err(format!("Array '{}': index {} out of bounds (len={})", name, idx, arr.len()));
+                let oob_len = match self.variables.get(name) {
+                    Some(Variant::Array(arr)) if idx >= arr.len() => Some(arr.len()),
+                    Some(Variant::Array(_)) => None,
+                    _ => return Err(format!("'{}' is not an array", name)),
+                };
+                if let Some(len) = oob_len {
+                    return Err(self.array_oob_error(name, idx, len));
+                }
+                if let Some(Variant::Array(arr)) = self.variables.get_mut(name) {
+                    match &mut arr[idx] {
+                        Variant::Record(m) => {
+                            m.insert(field.clone(), v);
+                        }
+                        slot => {
+                            let mut m = HashMap::new();
+                            m.insert(field.clone(), v);
+                            *slot = Variant::Record(m);
                         }
                     }
-                    _ => return Err(format!("'{}' is not an array", name)),
                 }
             }
             Stmt::WithRecord { body, .. } => {
@@ -916,9 +1170,13 @@ impl Vm {
                 // Array subscript access: arr(i)
                 if matches!(self.variables.get(name.as_str()), Some(Variant::Array(_))) {
                     let idx = to_f64(&self.eval_expr(args.first().ok_or_else(|| format!("Array '{}' requires index", name))?)?)? as usize;
-                    return match self.variables.get(name.as_str()) {
-                        Some(Variant::Array(arr)) => arr.get(idx).cloned().ok_or_else(|| format!("Array '{}': index {} out of bounds (len={})", name, idx, arr.len())),
-                        _ => Err(format!("'{}' is not an array", name)),
+                    let (found, len) = match self.variables.get(name.as_str()) {
+                        Some(Variant::Array(arr)) => (arr.get(idx).cloned(), arr.len()),
+                        _ => return Err(format!("'{}' is not an array", name)),
+                    };
+                    return match found {
+                        Some(v) => Ok(v),
+                        None => Err(self.array_oob_error(name, idx, len)),
                     };
                 }
                 self.eval_vba_func(name, args)
@@ -944,13 +1202,47 @@ impl Vm {
                 Ok(self.get_cell((base_r as i64 + ro) as u32, (base_c as i64 + co) as u32))
             }
             Expr::SheetCellRead { sheet, row, col } => {
-                let sheet_name = vba_to_str(&self.eval_expr(sheet)?);
+                let (key, display) = self.resolve_sheet_expr(sheet)?;
+                self.check_strict_sheet_exists(&display, &key)?;
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
-                Ok(self.sheets.get(&sheet_name.to_lowercase())
+                Ok(self
+                    .sheets
+                    .get(&key)
                     .and_then(|s| s.get(&(r, c)))
                     .map(|cell| cell.value.clone())
                     .unwrap_or(Variant::Empty))
+            }
+            Expr::SheetRangeRead { sheet, addr } => {
+                let (key, display) = self.resolve_sheet_expr(sheet)?;
+                self.check_strict_sheet_exists(&display, &key)?;
+                let ((r1, c1), (r2, c2)) = parse_range_addr(addr)
+                    .ok_or_else(|| format!("SheetRangeRead: invalid address '{}'", addr))?;
+                let cells = self.sheets.get(&key);
+                let get = |r: u32, c: u32| {
+                    cells
+                        .and_then(|s| s.get(&(r, c)))
+                        .map(|cell| cell.value.clone())
+                        .unwrap_or(Variant::Empty)
+                };
+                if r1 == r2 && c1 == c2 {
+                    Ok(get(r1, c1))
+                } else {
+                    let arr = (r1..=r2)
+                        .flat_map(|r| (c1..=c2).map(move |c| (r, c)))
+                        .map(|(r, c)| get(r, c))
+                        .collect();
+                    Ok(Variant::Array(arr))
+                }
+            }
+            Expr::WorkbookQualifiedSheet { .. } => {
+                // Only meaningful as the `sheet` field wrapped inside another
+                // sheet-access node (see `resolve_sheet_expr`) — never
+                // evaluated as a standalone expression by the parser.
+                Err(
+                    "Workbooks(...).Worksheets(...) is only valid as part of a Cells/Range access"
+                        .to_string(),
+                )
             }
             Expr::CellsFind { what, find_row } => {
                 let target = self.eval_expr(what)?;
@@ -998,15 +1290,14 @@ impl Vm {
             }
             Expr::ArrayRecordGet { name, indices, field } => {
                 let idx = to_f64(&self.eval_expr(&indices[0])?)? as usize;
-                match self.variables.get(name) {
-                    Some(Variant::Array(arr)) => {
-                        match arr.get(idx) {
-                            Some(Variant::Record(m)) => Ok(m.get(field).cloned().unwrap_or(Variant::Empty)),
-                            Some(other) => Ok(other.clone()),
-                            None => Err(format!("Array '{}': index {} out of bounds (len={})", name, idx, arr.len())),
-                        }
-                    }
-                    _ => Err(format!("'{}' is not an array", name)),
+                let (found, len) = match self.variables.get(name) {
+                    Some(Variant::Array(arr)) => (arr.get(idx).cloned(), arr.len()),
+                    _ => return Err(format!("'{}' is not an array", name)),
+                };
+                match found {
+                    Some(Variant::Record(m)) => Ok(m.get(field).cloned().unwrap_or(Variant::Empty)),
+                    Some(other) => Ok(other),
+                    None => Err(self.array_oob_error(name, idx, len)),
                 }
             }
         }
@@ -1373,6 +1664,44 @@ pub fn parse_sheet_range_addr(s: &str, active_sheet: &str) -> Option<SheetRange>
     };
     let range = parse_range_addr(range_part)?;
     Some((sheet, range.0, range.1))
+}
+
+// ── B6a: resolution-failure evidence helpers ────────────────────────────────
+
+/// Levenshtein edit distance, hand-rolled to avoid a new dependency for a
+/// single "did you mean" suggestion (same zero-new-runtime-dependency
+/// rationale as B5a's hand-rolled TOML parser). Operates on `char`s (not
+/// bytes) so CJK names are compared correctly.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// The closest name to `requested` among `candidates` by edit distance —
+/// only returned if the distance is small relative to the requested name's
+/// length, so an unrelated name is never suggested (e.g. a 1-character typo
+/// in a 4-character name is worth suggesting; a completely different name
+/// of similar length is not).
+fn closest_match(requested: &str, candidates: &[String]) -> Option<String> {
+    let requested_lower = requested.to_lowercase();
+    let bound = (requested_lower.chars().count() / 2).max(2);
+    candidates
+        .iter()
+        .map(|c| (c, levenshtein(&requested_lower, &c.to_lowercase())))
+        .filter(|(_, d)| *d <= bound)
+        .min_by_key(|(_, d)| *d)
+        .map(|(c, _)| c.clone())
 }
 
 // ── UDT helpers ──────────────────────────────────────────────────────────────
@@ -2664,6 +2993,238 @@ mod tests {
     #[test] fn test_sheets_delete() {
         let vm = run("Sub MySub()\n    Sheets(\"Sheet2\").Cells(1,1).Value = 5\n    Sheets(\"Sheet2\").Delete\n    n = 1\nEnd Sub\n");
         assert!(!vm.sheet_names().contains(&"sheet2".to_string()));
+    }
+
+    // ── Milestone B6a: strict_resolution + resolution-failure evidence ──────
+
+    #[test]
+    fn sheet_range_write_and_read_round_trip() {
+        // New Milestone B6a construct: Sheets(name).Range(addr) — previously
+        // only .Cells(r,c) was supported off a sheet name.
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Sheet2\").Range(\"B2\").Value = 123\n    x = Sheets(\"Sheet2\").Range(\"B2\").Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["x"], Variant::Integer(123));
+    }
+
+    #[test]
+    fn strict_mode_write_to_a_missing_sheet_is_a_resolution_failure_not_auto_vivify() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Worksheets(\"NoSuchSheet\").Cells(1,1).Value = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.strict_resolution = true;
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Sheet 'NoSuchSheet' not found");
+        assert!(
+            !vm.sheet_names().contains(&"nosuchsheet".to_string()),
+            "strict mode must not auto-vivify"
+        );
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::WorksheetNotFound(e)) => {
+                assert_eq!(e.requested, "NoSuchSheet");
+                assert!(e.available.contains(&"sheet1".to_string()));
+            }
+            other => panic!("expected WorksheetNotFound, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn non_strict_mode_write_to_a_missing_sheet_still_auto_vivifies() {
+        // Confirms strict_resolution is opt-in only — every existing caller
+        // (default: false) keeps today's convenience behavior unchanged.
+        let prog = parser::parse(
+            "Sub MySub()\n    Worksheets(\"NewSheet\").Cells(1,1).Value = 42\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(
+            vm.get_sheet_cells("newsheet")
+                .and_then(|s| s.get(&(1, 1)))
+                .map(|c| c.value.clone()),
+            Some(Variant::Integer(42))
+        );
+    }
+
+    #[test]
+    fn strict_mode_read_from_a_missing_sheet_is_a_resolution_failure_not_empty() {
+        let prog = parser::parse(
+            "Sub MySub()\n    x = Worksheets(\"NoSuchSheet\").Cells(1,1).Value\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.strict_resolution = true;
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Sheet 'NoSuchSheet' not found");
+    }
+
+    #[test]
+    fn non_strict_mode_read_from_a_missing_sheet_is_still_silently_empty() {
+        let prog = parser::parse(
+            "Sub MySub()\n    x = Worksheets(\"NoSuchSheet\").Cells(1,1).Value\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.variables["x"], Variant::Empty);
+    }
+
+    #[test]
+    fn strict_mode_with_sheets_on_a_missing_sheet_is_a_resolution_failure() {
+        // `With Sheets("...")` parses its sheet name to a plain lowercased
+        // String (unlike the Expr-based Sheets(...)/Worksheets(...) forms
+        // above) — left untouched by B6a, so the evidence shows the
+        // already-lowercased name here, not the as-written case.
+        let prog = parser::parse("Sub MySub()\n    With Sheets(\"NoSuchSheet\")\n        .Cells(1,1).Value = 1\n    End With\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        vm.strict_resolution = true;
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Sheet 'nosuchsheet' not found");
+    }
+
+    #[test]
+    fn numeric_sheet_index_selects_by_alphabetical_position_in_both_modes() {
+        // elixcee has no real tab-order tracking, so a numeric index resolves
+        // against `sheet_names()`'s alphabetical order — documented as an
+        // honest fidelity gap, not real Excel tab order.
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Alpha\").Cells(1,1).Value = 1\n    Sheets(\"Beta\").Cells(1,1).Value = 2\n    Worksheets(2).Cells(2,2).Value = 99\nEnd Sub\n",
+        );
+        // sheet_names() alphabetical: alpha, beta, sheet1 -> index 2 = "beta"
+        assert_eq!(
+            vm.get_sheet_cells("beta")
+                .and_then(|s| s.get(&(2, 2)))
+                .map(|c| c.value.clone()),
+            Some(Variant::Integer(99))
+        );
+    }
+
+    #[test]
+    fn numeric_sheet_index_out_of_range_is_a_hard_error_even_without_strict_mode() {
+        // Numeric indexing is new in B6a — there's no pre-B6a lenient
+        // behavior to preserve for it, so it's always a hard error.
+        let prog = parser::parse("Sub MySub()\n    x = Worksheets(99).Cells(1,1).Value\nEnd Sub\n")
+            .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Sheet index 99 not found");
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::WorksheetNotFound(e)) => assert_eq!(e.requested, "99"),
+            other => panic!("expected WorksheetNotFound, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn workbooks_qualified_sheet_access_matches_the_loaded_workbook_by_name() {
+        let out_path = std::env::temp_dir().join("elixcee_vm_workbooks_match_test.xlsx");
+        crate::save_workbook(&Vm::new(), out_path.to_str().unwrap()).unwrap();
+        let file_name = std::path::Path::new(&out_path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let src = format!(
+            "Sub MySub()\n    Workbooks(\"{}\").Worksheets(\"Sheet1\").Cells(1,1).Value = 7\nEnd Sub\n",
+            file_name
+        );
+        let prog = parser::parse(&src).unwrap();
+        let mut vm = Vm::new();
+        vm.load_workbook_file(out_path.to_str().unwrap()).unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .and_then(|s| s.get(&(1, 1)))
+                .map(|c| c.value.clone()),
+            Some(Variant::Integer(7))
+        );
+    }
+
+    #[test]
+    fn workbooks_qualified_sheet_access_reports_a_mismatch_unconditionally() {
+        // A workbook mismatch is always a hard error — not gated behind
+        // strict_resolution, since Workbooks(...) is a brand-new B6a
+        // construct with no pre-B6a lenient behavior to preserve.
+        let out_path = std::env::temp_dir().join("elixcee_vm_workbooks_mismatch_test.xlsx");
+        crate::save_workbook(&Vm::new(), out_path.to_str().unwrap()).unwrap();
+
+        let prog = parser::parse(
+            "Sub MySub()\n    Workbooks(\"other.xlsx\").Worksheets(1).Cells(1,1).Value = 1\nEnd Sub\n",
+        ).unwrap();
+        let mut vm = Vm::new();
+        vm.load_workbook_file(out_path.to_str().unwrap()).unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Workbook 'other.xlsx' not found");
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::WorkbookNotFound(e)) => {
+                assert_eq!(e.requested, "other.xlsx");
+                assert!(!e.available.is_empty());
+            }
+            other => panic!("expected WorkbookNotFound, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn array_out_of_bounds_evidence_reports_zero_based_bounds() {
+        let prog = parser::parse("Sub MySub()\n    Dim arr(3)\n    arr(9) = 1\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Array 'arr': index 9 out of bounds (len=4)");
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::ArrayIndexOutOfBounds {
+                name,
+                index,
+                lower,
+                upper,
+            }) => {
+                assert_eq!(name, "arr");
+                assert_eq!(index, 9);
+                assert_eq!(lower, 0);
+                assert_eq!(upper, 3);
+            }
+            other => panic!("expected ArrayIndexOutOfBounds, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn last_resolution_failure_does_not_leak_across_separate_run_sub_calls() {
+        let bad = parser::parse("Sub Bad()\n    Dim arr(1)\n    arr(9) = 1\nEnd Sub\n").unwrap();
+        let good = parser::parse("Sub Good()\n    x = 1\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        assert!(vm.run_sub(&bad, "bad").is_err());
+        assert!(vm.take_resolution_failure().is_some());
+        vm.run_sub(&good, "good").unwrap();
+        assert!(
+            vm.take_resolution_failure().is_none(),
+            "stale evidence from a prior failed run must not leak into a later successful run"
+        );
+    }
+
+    #[test]
+    fn levenshtein_distance_matches_hand_counted_edits() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("abc", "abc"), 0);
+        assert_eq!(levenshtein("abc", "abd"), 1);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("売上2025", "売上2026"), 1);
+    }
+
+    #[test]
+    fn closest_match_suggests_only_within_a_bounded_distance() {
+        let candidates = vec![
+            "Sales2026".to_string(),
+            "Summary".to_string(),
+            "Input".to_string(),
+        ];
+        assert_eq!(
+            closest_match("Sales2025", &candidates),
+            Some("Sales2026".to_string())
+        );
+        // Nothing here is meaningfully close to "ZzzUnrelated" — no suggestion.
+        assert_eq!(closest_match("ZzzUnrelated", &candidates), None);
     }
 
     #[test] fn test_sheet_names() {

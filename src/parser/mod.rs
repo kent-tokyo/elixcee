@@ -494,6 +494,7 @@ impl Parser {
             "application" => { let s = self.parse_application_stmt()?; self.eat_eol()?; Ok(Some(s)) }
             "worksheetfunction" => { let s = self.parse_wsf_call_stmt(None)?; self.eat_eol()?; Ok(Some(s)) }
             "worksheets" | "sheets" => { let s = self.parse_sheets_stmt()?; self.eat_eol()?; Ok(Some(s)) }
+            "workbooks" => { let s = self.parse_workbook_qualified_stmt()?; self.eat_eol()?; Ok(Some(s)) }
             // Access/scope modifiers before Dim/Const inside a sub
             "public" | "private" | "static" | "friend" => {
                 self.advance(); // consume modifier
@@ -1169,31 +1170,34 @@ impl Parser {
         })
     }
 
-    fn parse_sheets_stmt(&mut self) -> Result<Stmt, String> {
-        // worksheets or sheets
-        self.consume_ident()?; // consume "worksheets" or "sheets"
-        if *self.peek() == Tok::Dot {
-            // sheets.add ...
-            self.advance(); // dot
-            let method = self.consume_ident()?;
-            if method == "add" {
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
-                return Ok(Stmt::SheetsAdd);
-            }
-            // Leave the trailing newline for the caller's own `eat_eol()`
-            // (the "worksheets"/"sheets" dispatch arm) — see the identical
-            // note on the EntireRow/EntireColumn fallback above.
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+    /// A sheet key inside `Sheets(...)`/`Worksheets(...)`: either a string
+    /// literal name (the common case) or a 1-based numeric index
+    /// (Milestone B6a — lets `diagnose` classify an out-of-range index).
+    /// elixcee doesn't track real workbook tab order, so a numeric index
+    /// resolves against `Vm::sheet_names()`'s alphabetical order at
+    /// runtime, not Excel's left-to-right tab order — an honest fidelity
+    /// gap, documented in `docs/agent-contract.md`.
+    ///
+    /// Unlike the pre-B6a `.Cells(...)` path, a string name is kept in its
+    /// as-written case here (not lowercased at parse time) — resolution
+    /// (`Vm::resolve_sheet_expr`) lowercases only when it needs a
+    /// `self.sheets` lookup key, so `diagnose`'s evidence can still show
+    /// the name the macro actually wrote.
+    fn parse_sheet_key(&mut self) -> Result<Expr, String> {
+        match self.peek().clone() {
+            Tok::Str(_) => Ok(Expr::Str(self.consume_str()?)),
+            Tok::Int(n) => {
                 self.advance();
+                Ok(Expr::Integer(n))
             }
-            return Ok(Stmt::Unsupported {
-                reason: format!("Sheets.{} is not implemented", method),
-            });
+            other => Err(format!("expected a sheet name or index, got {:?}", other)),
         }
-        self.expect_tok(Tok::LParen)?;
-        let sheet_raw = self.consume_str()?.to_lowercase();
-        let sheet = Expr::Str(sheet_raw);
-        self.expect_tok(Tok::RParen)?;
+    }
+
+    /// Parses the `.Cells(r,c).Value = ...` / `.Range(addr).Value|Formula =
+    /// ...` / `.Delete` suffix shared by `Sheets(...)` and
+    /// `Workbooks(...).Worksheets(...)` statement forms.
+    fn parse_sheet_property_write(&mut self, sheet: Expr) -> Result<Stmt, String> {
         self.expect_tok(Tok::Dot)?;
         let method = self.consume_ident()?;
         match method.as_str() {
@@ -1208,15 +1212,105 @@ impl Parser {
                 self.expect_ident("value")?;
                 self.expect_tok(Tok::Eq)?;
                 let value = self.parse_expr()?;
-                Ok(Stmt::SheetCellWrite { sheet, row, col, value })
+                Ok(Stmt::SheetCellWrite {
+                    sheet,
+                    row,
+                    col,
+                    value,
+                })
+            }
+            "range" => {
+                self.expect_tok(Tok::LParen)?;
+                let addr = self.consume_str()?;
+                self.expect_tok(Tok::RParen)?;
+                self.expect_tok(Tok::Dot)?;
+                let prop = self.consume_ident()?;
+                let is_formula = match prop.as_str() {
+                    "value" => false,
+                    "formula" => true,
+                    other => {
+                        return Err(format!("unexpected property after Range(...): {}", other));
+                    }
+                };
+                self.expect_tok(Tok::Eq)?;
+                let value = self.parse_expr()?;
+                Ok(Stmt::SheetRangeWrite {
+                    sheet,
+                    addr,
+                    is_formula,
+                    value,
+                })
             }
             _ => {
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                    self.advance();
+                }
                 Ok(Stmt::Unsupported {
                     reason: format!("Sheets(...).{} is not implemented", method),
                 })
             }
         }
+    }
+
+    fn parse_sheets_stmt(&mut self) -> Result<Stmt, String> {
+        // worksheets or sheets
+        self.consume_ident()?; // consume "worksheets" or "sheets"
+        if *self.peek() == Tok::Dot {
+            // sheets.add ...
+            self.advance(); // dot
+            let method = self.consume_ident()?;
+            if method == "add" {
+                while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                    self.advance();
+                }
+                return Ok(Stmt::SheetsAdd);
+            }
+            // Leave the trailing newline for the caller's own `eat_eol()`
+            // (the "worksheets"/"sheets" dispatch arm) — see the identical
+            // note on the EntireRow/EntireColumn fallback above.
+            while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                self.advance();
+            }
+            return Ok(Stmt::Unsupported {
+                reason: format!("Sheets.{} is not implemented", method),
+            });
+        }
+        self.expect_tok(Tok::LParen)?;
+        let sheet = self.parse_sheet_key()?;
+        self.expect_tok(Tok::RParen)?;
+        self.parse_sheet_property_write(sheet)
+    }
+
+    /// `Workbooks(workbook).Worksheets(sheet).Cells(...)`/`.Range(...)` —
+    /// Milestone B6a. elixcee never has more than one workbook loaded, so
+    /// this exists only so a mismatched workbook name/index can be
+    /// diagnosed (`ResolutionFailureKind::WorkbookNotFound`), not to model
+    /// real multi-workbook switching.
+    fn parse_workbook_qualified_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect_ident("workbooks")?;
+        self.expect_tok(Tok::LParen)?;
+        let workbook = self.parse_sheet_key()?;
+        self.expect_tok(Tok::RParen)?;
+        self.expect_tok(Tok::Dot)?;
+        if !(self.is_ident("worksheets") || self.is_ident("sheets")) {
+            while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                self.advance();
+            }
+            return Ok(Stmt::Unsupported {
+                reason:
+                    "Workbooks(...) is only supported followed by .Worksheets(...)/.Sheets(...)"
+                        .to_string(),
+            });
+        }
+        self.advance();
+        self.expect_tok(Tok::LParen)?;
+        let sheet = self.parse_sheet_key()?;
+        self.expect_tok(Tok::RParen)?;
+        let qualified = Expr::WorkbookQualifiedSheet {
+            workbook: Box::new(workbook),
+            sheet: Box::new(sheet),
+        };
+        self.parse_sheet_property_write(qualified)
     }
 
     // ident-starting: assignment, array_write, call_stmt (without Call keyword)
@@ -1418,6 +1512,7 @@ impl Parser {
                     "cells" => self.parse_cells_expr(),
                     "range" => self.parse_range_expr(),
                     "worksheets" | "sheets" => self.parse_sheet_cell_read(),
+                    "workbooks" => self.parse_workbook_qualified_read(),
                     "application" => self.parse_application_wsf_expr(),
                     "worksheetfunction" => self.parse_wsf_expr(),
                     _ => self.parse_ident_expr(),
@@ -1537,22 +1632,77 @@ impl Parser {
         }
     }
 
+    /// Parses the `.Cells(r,c).Value` / `.Range(addr).Value` suffix shared
+    /// by `Sheets(...)`/`Worksheets(...)` and `Workbooks(...).Worksheets(...)`
+    /// read expressions.
+    fn parse_sheet_property_read(&mut self, sheet: Expr) -> Result<Expr, String> {
+        self.expect_tok(Tok::Dot)?;
+        let prop = self.consume_ident()?;
+        match prop.as_str() {
+            "cells" => {
+                self.expect_tok(Tok::LParen)?;
+                let row = self.parse_expr()?;
+                self.expect_tok(Tok::Comma)?;
+                let col = self.parse_expr()?;
+                self.expect_tok(Tok::RParen)?;
+                self.expect_tok(Tok::Dot)?;
+                self.expect_ident("value")?;
+                Ok(Expr::SheetCellRead {
+                    sheet: Box::new(sheet),
+                    row: Box::new(row),
+                    col: Box::new(col),
+                })
+            }
+            "range" => {
+                self.expect_tok(Tok::LParen)?;
+                let addr = self.consume_str()?.to_uppercase();
+                self.expect_tok(Tok::RParen)?;
+                self.expect_tok(Tok::Dot)?;
+                self.expect_ident("value")?;
+                Ok(Expr::SheetRangeRead {
+                    sheet: Box::new(sheet),
+                    addr,
+                })
+            }
+            other => Err(format!(
+                "unexpected property after sheet reference: {}",
+                other
+            )),
+        }
+    }
+
     fn parse_sheet_cell_read(&mut self) -> Result<Expr, String> {
         self.consume_ident()?; // "worksheets" or "sheets"
         self.expect_tok(Tok::LParen)?;
-        let sheet_name = self.consume_str()?.to_lowercase();
-        let sheet = Expr::Str(sheet_name);
+        let sheet = self.parse_sheet_key()?;
         self.expect_tok(Tok::RParen)?;
-        self.expect_tok(Tok::Dot)?;
-        self.expect_ident("cells")?;
+        self.parse_sheet_property_read(sheet)
+    }
+
+    /// `Workbooks(workbook).Worksheets(sheet).Cells(...)`/`.Range(...)` read
+    /// form — see `parse_workbook_qualified_stmt` for the write-side twin
+    /// and the same "no real multi-workbook model" caveat.
+    fn parse_workbook_qualified_read(&mut self) -> Result<Expr, String> {
+        self.expect_ident("workbooks")?;
         self.expect_tok(Tok::LParen)?;
-        let row = self.parse_expr()?;
-        self.expect_tok(Tok::Comma)?;
-        let col = self.parse_expr()?;
+        let workbook = self.parse_sheet_key()?;
         self.expect_tok(Tok::RParen)?;
         self.expect_tok(Tok::Dot)?;
-        self.expect_ident("value")?;
-        Ok(Expr::SheetCellRead { sheet: Box::new(sheet), row: Box::new(row), col: Box::new(col) })
+        if !(self.is_ident("worksheets") || self.is_ident("sheets")) {
+            return Err(format!(
+                "expected Worksheets(...)/Sheets(...) after Workbooks(...), got {:?}",
+                self.peek()
+            ));
+        }
+        self.advance();
+        self.expect_tok(Tok::LParen)?;
+        let sheet = self.parse_sheet_key()?;
+        self.expect_tok(Tok::RParen)?;
+        let qualified = Expr::WorkbookQualifiedSheet {
+            workbook: Box::new(workbook),
+            sheet: Box::new(sheet),
+        };
+        self.parse_sheet_property_read(qualified)
     }
 
     fn parse_application_wsf_expr(&mut self) -> Result<Expr, String> {

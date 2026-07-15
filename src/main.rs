@@ -1,7 +1,7 @@
 use std::{env, fs, process};
 
 use elixcee::{
-    check,
+    check, diagnose,
     diagnostics::{self, ElixceeError},
     parser, reader,
     save_workbook, snapshot, testworkbook,
@@ -37,7 +37,11 @@ fn usage() -> ! {
          \x20   Property-based test runner: reruns a macro against a starting\n\
          \x20   workbook many times with generated boundary-value inputs, checking\n\
          \x20   each run for panics/runtime errors/timeouts/Excel error values.\n\
-         \x20   --seed overrides the fixture's seed; --case replays a single case."
+         \x20   --seed overrides the fixture's seed; --case replays a single case.\n\
+           elixcee diagnose <vba_file>... --file <path> --entrypoint <MacroName> [--json]\n\
+         \x20   Runs the macro once in strict-resolution mode and classifies the\n\
+         \x20   first resolution failure (missing worksheet/workbook, array out of\n\
+         \x20   bounds) with evidence, instead of only a bare runtime-error string."
     );
     process::exit(1);
 }
@@ -436,6 +440,94 @@ fn run_test_workbook_command(args: &[String]) -> ! {
     }
 }
 
+/// `elixcee diagnose <vba_file>... --file <workbook> --entrypoint <MacroName> [--json]`
+/// — Milestone B6a's resolution-failure diagnosis. See `elixcee::diagnose`
+/// for the strict-resolution execution model and JSON `root_causes` shape.
+fn run_diagnose_command(args: &[String]) -> ! {
+    let mut vba_paths: Vec<String> = Vec::new();
+    let mut workbook_path: Option<String> = None;
+    let mut entrypoint: Option<String> = None;
+    let mut json = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--file" => {
+                i += 1;
+                workbook_path = Some(
+                    args.get(i)
+                        .cloned()
+                        .unwrap_or_else(|| die("--file requires a path")),
+                );
+            }
+            "--entrypoint" => {
+                i += 1;
+                entrypoint = Some(
+                    args.get(i)
+                        .cloned()
+                        .unwrap_or_else(|| die("--entrypoint requires a MacroName")),
+                );
+            }
+            "--json" => json = true,
+            a if a.starts_with('-') => die(&format!("unknown option: {}", a)),
+            _ => vba_paths.push(args[i].clone()),
+        }
+        i += 1;
+    }
+    if vba_paths.is_empty() {
+        usage();
+    }
+    let Some(workbook_path) = workbook_path else {
+        usage()
+    };
+    let Some(entrypoint) = entrypoint else {
+        usage()
+    };
+
+    let modules = load_modules(&vba_paths, json);
+    let programs: Vec<(String, parser::Program)> = modules
+        .iter()
+        .map(|m| (m.name.clone(), m.program.clone()))
+        .collect();
+
+    match diagnose::run_diagnosis(&programs, &workbook_path, &entrypoint) {
+        Ok(diag) => {
+            // Same single-module-only location convention as run-mode
+            // (see the comment at its own `current_span` use) — a
+            // `SourceSpan` carries no module id, so a multi-module run
+            // reports `location: None` rather than risk pointing at the
+            // wrong module's source.
+            let location = if modules.len() == 1 {
+                diag.span
+                    .map(|span| diagnostics::locate(&modules[0].source, &modules[0].path, span))
+            } else {
+                None
+            };
+            let ok = diag.ok;
+            if json {
+                println!("{}", diagnose::to_json(&diag, location.as_ref()));
+            } else {
+                println!("{}", diagnose::to_plain_text(&diag, location.as_ref()));
+            }
+            process::exit(if ok { 0 } else { 1 });
+        }
+        Err(e) if e == "workbook has no sheets" => {
+            if json {
+                fail_json(ElixceeError::sheet_setup_error(e), &[])
+            } else {
+                die(&e)
+            }
+        }
+        Err(e) => {
+            if json {
+                fail_json(ElixceeError::io_error(e), &[])
+            } else {
+                die(&e)
+            }
+        }
+    }
+}
+
 fn die(msg: &str) -> ! {
     eprintln!("error: {}", msg);
     process::exit(1);
@@ -513,6 +605,9 @@ fn main() {
     }
     if args.get(1).map(String::as_str) == Some("test-workbook") {
         run_test_workbook_command(&args[2..]);
+    }
+    if args.get(1).map(String::as_str) == Some("diagnose") {
+        run_diagnose_command(&args[2..]);
     }
 
     let mut positionals: Vec<String> = Vec::new();

@@ -199,6 +199,39 @@ A failing case reports its seed and case index so it can be reproduced
 exactly: `elixcee test-workbook fixture.toml --seed 42 --case 17`. Full
 schema, strategies, and assertion rules: [docs/agent-contract.md](docs/agent-contract.md).
 
+### Excel operation diagnostics
+
+`elixcee diagnose` runs a macro once and explains *why* Excel would reject
+it — a missing worksheet, a missing workbook, or an out-of-bounds array
+index — with evidence, instead of a bare error string:
+
+```bat
+elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
+```
+
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "message": "Sheet 'Sales2025' not found",
+  "location": {"file": "Main.bas", "line": 2, "column": 5},
+  "root_causes": [
+    {
+      "code": "WORKSHEET_NOT_FOUND",
+      "certainty": "definite",
+      "expression": "Worksheets(\"Sales2025\")",
+      "requested": "Sales2025",
+      "available": ["input", "sales2026", "summary"],
+      "suggested": "sales2026",
+      "suggestions": ["did you mean 'sales2026'?"]
+    }
+  ],
+  "messages": []
+}
+```
+
+Full classification rules and JSON schema: [docs/agent-contract.md](docs/agent-contract.md).
+
 ### Build from source
 
 ```bash

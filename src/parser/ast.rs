@@ -41,6 +41,19 @@ pub enum Expr {
     RangeOffsetRead { addr: String, row_off: Box<Expr>, col_off: Box<Expr> },
     CellsFind { what: Box<Expr>, find_row: bool },
     SheetCellRead { sheet: Box<Expr>, row: Box<Expr>, col: Box<Expr> },
+    SheetRangeRead { sheet: Box<Expr>, addr: String },
+    /// `Workbooks(workbook).Worksheets(sheet)` / `Workbooks(workbook).Sheets(sheet)`
+    /// — wraps a plain sheet key (name or 1-based index) with a workbook
+    /// identity to check first. elixcee only ever loads one workbook at a
+    /// time (see `Vm::loaded_workbook_name`), so this does not model real
+    /// multi-workbook switching — it only lets a mismatched workbook name
+    /// be diagnosed (Milestone B6a). Valid wherever a plain sheet `Expr` is
+    /// (`SheetCellRead`/`SheetRangeRead`/`SheetCellWrite`/`SheetRangeWrite`/
+    /// `SheetsDelete`'s `sheet` field).
+    WorkbookQualifiedSheet {
+        workbook: Box<Expr>,
+        sheet: Box<Expr>,
+    },
     RowsCount,
     ColsCount,
     CellsEndProp { row: Box<Expr>, col: Box<Expr>, dir: XlDir, prop: XlEndProp },
@@ -81,6 +94,7 @@ pub enum Stmt {
     RangeSort { addr: String, key_col: u32, descending: bool },
     RangeName { addr: String, name: String },  // Range("A1:B3").Name = "MyRange"
     SheetCellWrite { sheet: Expr, row: Expr, col: Expr, value: Expr },
+    SheetRangeWrite { sheet: Expr, addr: String, is_formula: bool, value: Expr },
     WithSheet { sheet_name: String, body: Vec<SpannedStmt> },
     SheetsAdd,
     SheetsDelete { sheet: Expr },
