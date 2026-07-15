@@ -207,7 +207,7 @@ index, a Copy/Paste shape mismatch, or a write to a protected sheet — with
 evidence, instead of a bare error string:
 
 ```bat
-elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
+elixcee diagnose Main.bas --file report.xlsx --json Main.Run
 ```
 
 ```json
@@ -427,3 +427,15 @@ Key gaps by category:
 | Phase D3 | Remove calamine from runtime, hand-written XLSX/ODS reader (dependencies: 3→2) | Done |
 | Perf R4 | SUM/AVERAGE/MIN/MAX fast path (skip `Vec<Variant>`), RangeWrite dirty-flag batching | Done |
 | CLI | Standalone `elixcee` binary; pyo3 made optional; GitHub Actions release workflow | Done |
+| Milestone A | JSON agent contract (`--json`), error classification, MsgBox message log | Done |
+| Milestone A.1 | JSON contract hardening (`serde_json`-verified tests, message-log lifecycle, error code docs) | Done |
+| Milestone A.5 | Source location tracking — line/column in parse and runtime errors | Done |
+| Milestone B1 | `check` subcommand — parse diagnostics, entrypoint check, `MsgBox`/interactive-call detection | Done |
+| Milestone B1.1 | `check`: undefined Sub/Function call detection, unsupported-construct (no-op) detection | Done |
+| Milestone B2 | Multi-module projects — multiple `.bas` files, `Module.Sub` qualified entrypoints, cross-module collision detection | Done |
+| Milestone B3 | Deterministic black-box tests (`tests/blackbox.rs`, declarative `.toml` fixtures) | Done |
+| Milestone B4 | `snapshot` subcommand — read a workbook's cells without executing VBA | Done |
+| Milestone B5a | `test-workbook` subcommand — property-based testing with generated boundary-value inputs | Done |
+| Milestone B6a | `diagnose` subcommand — missing sheet/workbook, array-out-of-bounds root causes | Done |
+| Milestone B6b | `diagnose`: Copy/Paste shape mismatch + clipboard state | Done |
+| Milestone B6c | `diagnose`: sheet protection (`Protect`/`Unprotect`) | Done |

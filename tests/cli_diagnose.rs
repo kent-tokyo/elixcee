@@ -52,13 +52,7 @@ fn run_json(
     let output = Command::new(env!("CARGO_BIN_EXE_elixcee"))
         .arg("diagnose")
         .arg(macro_bas.to_str().unwrap())
-        .args([
-            "--file",
-            workbook.to_str().unwrap(),
-            "--entrypoint",
-            entrypoint,
-            "--json",
-        ])
+        .args(["--file", workbook.to_str().unwrap(), "--json", entrypoint])
         .output()
         .expect("run elixcee binary");
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
@@ -178,7 +172,7 @@ fn non_json_mode_prints_a_plain_text_summary() {
     let output = Command::new(env!("CARGO_BIN_EXE_elixcee"))
         .arg("diagnose")
         .arg(macro_bas.to_str().unwrap())
-        .args(["--file", workbook.to_str().unwrap(), "--entrypoint", "Run"])
+        .args(["--file", workbook.to_str().unwrap(), "Run"])
         .output()
         .expect("run elixcee binary");
     assert!(!output.status.success());

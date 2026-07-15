@@ -493,7 +493,7 @@ additions, not redesigns.
 ## `diagnose` subcommand (Excel operation diagnostics, Milestones B6a/B6b/B6c)
 
 ```
-elixcee diagnose <vba_file>... --file <workbook> --entrypoint <MacroName> [--json]
+elixcee diagnose <vba_file>... <MacroName> --file <workbook> [--json]
 ```
 
 Runs one macro once and classifies *why* it failed — a missing worksheet,

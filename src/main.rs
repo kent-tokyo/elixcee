@@ -38,7 +38,7 @@ fn usage() -> ! {
          \x20   workbook many times with generated boundary-value inputs, checking\n\
          \x20   each run for panics/runtime errors/timeouts/Excel error values.\n\
          \x20   --seed overrides the fixture's seed; --case replays a single case.\n\
-           elixcee diagnose <vba_file>... --file <path> --entrypoint <MacroName> [--json]\n\
+           elixcee diagnose <vba_file>... <MacroName> --file <path> [--json]\n\
          \x20   Runs the macro once in strict-resolution mode and classifies the\n\
          \x20   first resolution failure (missing worksheet/workbook, array out of\n\
          \x20   bounds) with evidence, instead of only a bare runtime-error string."
@@ -440,13 +440,15 @@ fn run_test_workbook_command(args: &[String]) -> ! {
     }
 }
 
-/// `elixcee diagnose <vba_file>... --file <workbook> --entrypoint <MacroName> [--json]`
+/// `elixcee diagnose <vba_file>... <MacroName> --file <workbook> [--json]`
 /// — Milestone B6a's resolution-failure diagnosis. See `elixcee::diagnose`
 /// for the strict-resolution execution model and JSON `root_causes` shape.
+/// Entrypoint is mandatory (unlike `check`), so — same reasoning as run
+/// mode — the last positional argument is the macro name, everything
+/// before it a source file; no `--entrypoint` flag.
 fn run_diagnose_command(args: &[String]) -> ! {
     let mut vba_paths: Vec<String> = Vec::new();
     let mut workbook_path: Option<String> = None;
-    let mut entrypoint: Option<String> = None;
     let mut json = false;
 
     let mut i = 0;
@@ -460,14 +462,6 @@ fn run_diagnose_command(args: &[String]) -> ! {
                         .unwrap_or_else(|| die("--file requires a path")),
                 );
             }
-            "--entrypoint" => {
-                i += 1;
-                entrypoint = Some(
-                    args.get(i)
-                        .cloned()
-                        .unwrap_or_else(|| die("--entrypoint requires a MacroName")),
-                );
-            }
             "--json" => json = true,
             a if a.starts_with('-') => die(&format!("unknown option: {}", a)),
             _ => vba_paths.push(args[i].clone()),
@@ -477,10 +471,11 @@ fn run_diagnose_command(args: &[String]) -> ! {
     if vba_paths.is_empty() {
         usage();
     }
+    let entrypoint = vba_paths.pop().unwrap();
+    if vba_paths.is_empty() {
+        usage();
+    }
     let Some(workbook_path) = workbook_path else {
-        usage()
-    };
-    let Some(entrypoint) = entrypoint else {
         usage()
     };
 

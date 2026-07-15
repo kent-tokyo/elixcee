@@ -189,7 +189,7 @@ elixcee test-workbook fixture.toml --json
 `elixcee diagnose` はマクロを一度だけ実行し、存在しないシート・存在しないワークブック・配列の範囲外アクセス・Copy/Paste の形状不一致・保護されたシートへの書き込みなど、Excelがその操作を拒否する具体的な理由を根拠付きで説明します（単なるエラー文字列ではありません）：
 
 ```bat
-elixcee diagnose Main.bas --file report.xlsx --entrypoint Main.Run --json
+elixcee diagnose Main.bas --file report.xlsx --json Main.Run
 ```
 
 ```json
@@ -370,3 +370,15 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 | Phase D3 | calamine をランタイム依存から除去、手書き XLSX/ODS リーダー（依存: 3→2） | 完了 |
 | Perf R4 | SUM/AVERAGE/MIN/MAX fast path（`Vec<Variant>` 省略）、RangeWrite dirty フラグ集約 | 完了 |
 | CLI | スタンドアロン `elixcee` バイナリ、pyo3 オプション化、GitHub Actions リリースワークフロー | 完了 |
+| Milestone A | JSON Agent Contract（`--json`）、エラー分類、MsgBox メッセージログ | 完了 |
+| Milestone A.1 | JSON contract hardening（`serde_json` による構造検証テスト、メッセージログのライフサイクル、エラーコード表のドキュメント化） | 完了 |
+| Milestone A.5 | ソースロケーション追跡 — parse/runtime エラーへの line/column 付与 | 完了 |
+| Milestone B1 | `check` サブコマンド — parse 診断、エントリポイント存在確認、`MsgBox` 等の対話操作検出 | 完了 |
+| Milestone B1.1 | `check`: 未定義 Sub/Function 呼び出し検出、未対応構文（no-op）検出 | 完了 |
+| Milestone B2 | マルチモジュールプロジェクト — 複数 `.bas` ファイル、`Module.Sub` 修飾エントリポイント、モジュール間名前衝突検出 | 完了 |
+| Milestone B3 | 決定的なブラックボックステスト（`tests/blackbox.rs`、宣言的な `.toml` フィクスチャ） | 完了 |
+| Milestone B4 | `snapshot` サブコマンド — VBA を実行せずにワークブックのセルを読む | 完了 |
+| Milestone B5a | `test-workbook` サブコマンド — 生成された境界値入力によるプロパティベーステスト | 完了 |
+| Milestone B6a | `diagnose` サブコマンド — 存在しないシート/ワークブック、配列範囲外の根本原因診断 | 完了 |
+| Milestone B6b | `diagnose`: Copy/Paste 形状不一致 + クリップボード状態 | 完了 |
+| Milestone B6c | `diagnose`: シート保護（`Protect`/`Unprotect`） | 完了 |
