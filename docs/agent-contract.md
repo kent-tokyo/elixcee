@@ -367,3 +367,123 @@ reports the single active sheet, unchanged).
   stable_id / cell count) followed by one address/value table per sheet —
   display-only, not meant to round-trip (table-unsafe characters in cell
   values are escaped for readability, not reversibly).
+
+## `test-workbook` subcommand (property-based testing, Milestone B5a)
+
+```
+elixcee test-workbook <fixture.toml> [--json] [--seed <N>] [--case <N>]
+```
+
+Reruns a macro against a starting `.xlsx`/`.ods` workbook many times with
+generated boundary-value inputs, checking each run for panics, runtime
+errors, timeouts, and Excel error values in a result range. Every case is
+fully independent: a fresh `Vm`, a fresh read of the workbook file, no
+carried-over cells/variables/MsgBox log/deadline state.
+
+### Fixture format
+
+```toml
+name = "order calculation"
+workbook = "fixtures/orders.xlsx"   # resolved relative to the .toml file's own directory
+vba_files = ["Main.bas"]            # one or more .bas files (same multi-module rules as run-mode)
+macro = "Main.Process"              # bare or Module.Sub-qualified
+cases = 100
+seed = 42
+timeout_secs = 10                   # optional, default 10
+
+[[inputs]]
+range = "Input!B2:B10"
+strategy = "boundary_numeric"       # or "boundary_string"
+
+[[assertions]]
+range = "Result!A1:F100"
+rule = "no_excel_errors"
+```
+
+Parsed by a hand-rolled, deliberately minimal TOML-subset parser (not the
+`toml` crate — that's a `[dev-dependencies]`-only crate added for
+`tests/blackbox.rs`, and pulling it into the release binary would reverse
+this project's zero-new-runtime-dependency principle, the same one that
+led Milestone B2 to reject a TOML project manifest). Only flat
+`key = value` lines and `[[inputs]]`/`[[assertions]]` array-of-tables are
+supported; anything outside that subset (inline tables, multi-line
+strings, dotted keys, trailing junk after a value) is a hard parse error,
+not a silent skip.
+
+### Strategies (v1: two)
+
+- `boundary_numeric`: `Empty, 0, 1, -1, 999999999, -999999999` — chosen
+  over `i64::MAX`/`MIN` since these sit just past VBA's classic
+  `Integer`/`Long` overflow boundaries, where realistic spreadsheet-macro
+  bugs actually show up.
+- `boundary_string`: `"", "test", "a"×1000`.
+
+Each cell in an input range gets an independent draw from its strategy's
+pool per case (not one value repeated across the whole range). Sampling is
+with replacement — `cases` independent trials, matching how `proptest`
+(already a dev-dependency in this repo) works, not exhaustive enumeration
+of the (small) pool.
+
+### Assertion rules
+
+`no_panic`, `no_runtime_error`, and `no_timeout` are **always active** for
+every case — not TOML-declared, since a panic or hang is never something a
+property test should let you opt out of. `[[assertions]]` is specifically
+for range-scoped rules; `no_excel_errors` (scans the range for any
+`#DIV/0!`/`#VALUE!`/`#REF!`/etc. cell value) is the only one in v1. A
+missing sheet in an assertion's range is a hard error (fixture/config
+problem), not a silent "no errors found".
+
+### Output
+
+Success: `{"schema_version":1,"ok":true,"seed":42,"cases_run":100}`
+
+Failure (fail-fast — stops at the first failing case, matching both
+`proptest`'s own convention and this CLI's "exactly one JSON object per
+invocation" contract):
+
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "seed": 42,
+  "case_index": 17,
+  "inputs": [{"address": "Input!B2", "value": -1}],
+  "failure": {"rule": "no_excel_errors", "address": "Result!C8", "actual": "#DIV/0!"}
+}
+```
+
+`failure.address`/`failure.actual` are only present for `no_excel_errors`;
+`no_panic`/`no_runtime_error`/`no_timeout` use `failure.message` instead.
+Exit code 0/`ok:true` if every run case passed, 1/`ok:false` on the first
+failure — same coarse-exit-code convention as every other subcommand.
+
+### Replay
+
+`--case <N>` (0-based, matching `case_index`) reruns exactly one case
+instead of the full `cases` loop; `--seed <N>` overrides the fixture's own
+`seed`. The per-case seed is derived deterministically from
+`(base_seed, case_index)`, and input draws are made in a pinned order
+(`[[inputs]]` declaration order, cells row-major within each range), so
+`elixcee test-workbook fixture.toml --seed 42 --case 17` always reproduces
+the exact same drawn inputs as case 17 of a full run with `seed = 42`.
+
+### Known limitation
+
+`RANDARRAY`/`Rnd`'s PRNG (`src/formula/eval.rs`) is a **thread-local**, not
+a `Vm` field, so a fresh `Vm` per case does not reset it — draws continue
+across cases on the same thread. `--seed`/`--case` replay is only
+guaranteed to reproduce identical *input generation* (which boundary value
+gets written where), not VBA-visible randomness for a macro that calls
+`RANDARRAY`/`Rnd`. Neither `boundary_numeric` nor `boundary_string` (the
+only strategies in this phase) invoke any VBA-side randomness, so this
+doesn't bite v1 — but it's a real constraint for any future strategy that
+does.
+
+### Explicit non-goals (deferred to a later B5 phase)
+
+Shrinking (minimizing a failing input) is not implemented — the order is
+deterministic generation → save failing case → single-case replay first,
+shrinking later, per the roadmap. Only two strategies and one range-scoped
+assertion rule exist in this phase; more of each are plausible later
+additions, not redesigns.

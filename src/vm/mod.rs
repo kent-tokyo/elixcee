@@ -3,6 +3,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use crate::formula;
 use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, XlDir, XlEndProp};
 use crate::parser::{self, EntrypointResolution};
+use crate::reader::{self, SheetCell, WorkbookSheet};
 
 /// Excel worksheet error values (#DIV/0!, #N/A, etc.)
 #[derive(Debug, Clone, PartialEq)]
@@ -131,6 +132,14 @@ pub struct Vm {
     row_cols: HashMap<u32, BTreeSet<u32>>,
     /// Set to true whenever cells change; triggers index rebuild on next End query.
     cell_index_dirty: bool,
+    /// Wall-clock deadline for loop execution (Milestone B5a's `test-workbook`
+    /// timeout guard). `None` (the default) means no limit — every existing
+    /// caller (run-mode, `check`, `snapshot`, Python bindings) is unaffected.
+    pub deadline: Option<std::time::Instant>,
+    /// Counts outer-loop iterations across `For`/`ForEach`/`DoLoop` so the
+    /// deadline is only actually checked (a real `Instant::now()` call)
+    /// every 256th iteration, not every one.
+    loop_iters: u64,
 }
 
 impl Vm {
@@ -157,7 +166,26 @@ impl Vm {
             col_rows: HashMap::new(),
             row_cols: HashMap::new(),
             cell_index_dirty: true,
+            deadline: None,
+            loop_iters: 0,
         }
+    }
+
+    /// Checked once per outer-loop iteration by `For`/`ForEach`/`DoLoop` —
+    /// not a per-statement check, so it doesn't touch the interpreter's hot
+    /// path outside loop constructs. Only actually calls `Instant::now()`
+    /// every 256th iteration (cheap counter increment otherwise), so a
+    /// single slow iteration can overshoot the deadline by at most ~256
+    /// iterations' worth of time, not indefinitely.
+    fn check_deadline(&mut self) -> Result<(), String> {
+        self.loop_iters = self.loop_iters.wrapping_add(1);
+        if self.loop_iters.is_multiple_of(256)
+            && let Some(deadline) = self.deadline
+            && std::time::Instant::now() >= deadline
+        {
+            return Err("TIMEOUT: loop execution exceeded the configured deadline".to_string());
+        }
+        Ok(())
     }
 
     /// Resolve a range address, expanding named ranges if needed.
@@ -213,6 +241,69 @@ impl Vm {
 
     pub fn get_sheet_cells(&self, name: &str) -> Option<&HashMap<(u32, u32), CellContent>> {
         self.sheets.get(&name.to_lowercase())
+    }
+
+    /// Loads a `.xlsx`/`.xlsm`/`.ods` file's sheets and cells into this `Vm`
+    /// and sets the active sheet to the first one loaded. Returns the
+    /// loaded sheet names (lowercase, in file order) on success. Extracted
+    /// from `main.rs`'s run-mode `--file` handling (Milestone B5a) so the
+    /// new `test-workbook` subcommand can reuse it instead of duplicating
+    /// the loop.
+    ///
+    /// Two failure messages are preserved exactly so CLI callers can keep
+    /// classifying them the way `--file` already does (`E3001`/`io_error`
+    /// vs `E3002`/`sheet_setup_error`): a literal `"workbook has no sheets"`
+    /// for an empty workbook, or `"cannot read '<path>': <reader error>"`
+    /// for anything else.
+    pub fn load_workbook_file(&mut self, path: &str) -> Result<Vec<String>, String> {
+        let sheets =
+            reader::read_workbook(path).map_err(|e| format!("cannot read '{}': {}", path, e))?;
+        if sheets.is_empty() {
+            return Err("workbook has no sheets".to_string());
+        }
+        Ok(self.populate_from_sheets(sheets))
+    }
+
+    /// Populates this `Vm` from already-read sheet data and sets the active
+    /// sheet to the first one. Split out from `load_workbook_file` so the
+    /// mixed-case-sheet-name fix (see below) is unit-testable without going
+    /// through a real file, since `save_workbook`-built fixtures always
+    /// lowercase sheet names and would never exercise it.
+    fn populate_from_sheets(&mut self, sheets: Vec<WorkbookSheet>) -> Vec<String> {
+        let mut names = Vec::with_capacity(sheets.len());
+        for sheet_data in &sheets {
+            self.ensure_sheet(&sheet_data.name);
+            let prev = self.active_sheet.clone();
+            // Lowercased, matching `active_sheet`'s documented invariant —
+            // `ensure_sheet` already lowercases the stored key, so leaving
+            // this un-lowercased (as the pre-extraction code did) meant
+            // `cells_mut()` couldn't find the sheet for any file with a
+            // non-lowercase sheet name (found and fixed during extraction:
+            // confirmed via a hand-crafted .xlsx with a sheet named "Input"
+            // that panicked with "active sheet must exist" before this fix).
+            self.active_sheet = sheet_data.name.to_lowercase();
+            for (&(row, col), cell) in &sheet_data.cells {
+                let value = match cell {
+                    SheetCell::Integer(n) => Variant::Integer(*n),
+                    SheetCell::Float(f) => Variant::Float(*f),
+                    SheetCell::Str(s) => Variant::Str(s.clone()),
+                    SheetCell::Bool(b) => Variant::Boolean(*b),
+                };
+                self.cells_mut().insert(
+                    (row, col),
+                    CellContent {
+                        formula: None,
+                        value,
+                    },
+                );
+            }
+            self.active_sheet = prev;
+            names.push(sheet_data.name.to_lowercase());
+        }
+        let first = names[0].clone();
+        self.set_active_sheet(&first)
+            .expect("just-inserted sheet must exist");
+        names
     }
 
     fn sheet_cells_mut(&mut self, name: &str) -> Option<&mut HashMap<(u32, u32), CellContent>> {
@@ -406,6 +497,7 @@ impl Vm {
                 let step_f = match step { Some(s) => to_f64(&self.eval_expr(s)?)?, None => 1.0 };
                 if step_f == 0.0 { return Err("For loop: step cannot be zero".into()); }
                 'for_loop: while (step_f > 0.0 && i <= to_f) || (step_f < 0.0 && i >= to_f) {
+                    self.check_deadline()?;
                     self.variables.insert(var.clone(), as_int_if_whole(i));
                     for s in body {
                         self.exec_stmt(s)?;
@@ -420,6 +512,7 @@ impl Vm {
                     .ok_or_else(|| format!("ForEach: invalid range '{}'", range_addr))?;
                 'fe_outer: for r in r1..=r2 {
                     for c in c1..=c2 {
+                        self.check_deadline()?;
                         let v = self.get_cell(r, c);
                         self.variables.insert(var.clone(), v);
                         for s in body {
@@ -445,6 +538,7 @@ impl Vm {
                     }
                 };
                 'do_loop: while check(self, pre_cond)? {
+                    self.check_deadline()?;
                     for s in body.clone() {
                         self.exec_stmt(&s)?;
                         if matches!(self.exit_flag, Some(ExitKind::Do)) { self.exit_flag = None; break 'do_loop; }
@@ -1262,6 +1356,23 @@ pub fn parse_range_addr(addr: &str) -> Option<((u32, u32), (u32, u32))> {
         let c = parse_cell_addr(addr)?;
         Some((c, c))
     }
+}
+
+/// `(sheet_name_lowercase, (r1,c1), (r2,c2))`.
+pub type SheetRange = (String, (u32, u32), (u32, u32));
+
+/// Parses `"Sheet!A1:B10"` (or bare `"A1:B10"`, defaulting to `active_sheet`)
+/// into a `SheetRange` — for CLI/fixture-facing range strings outside VBA
+/// syntax (e.g. Milestone B5a's `test-workbook` TOML), not used anywhere
+/// inside VBA statement execution itself.
+pub fn parse_sheet_range_addr(s: &str, active_sheet: &str) -> Option<SheetRange> {
+    let s = s.trim();
+    let (sheet, range_part) = match s.find('!') {
+        Some(i) => (s[..i].trim().to_lowercase(), &s[i + 1..]),
+        None => (active_sheet.to_lowercase(), s),
+    };
+    let range = parse_range_addr(range_part)?;
+    Some((sheet, range.0, range.1))
 }
 
 // ── UDT helpers ──────────────────────────────────────────────────────────────
@@ -3029,5 +3140,125 @@ mod tests {
         let mut vm = Vm::new();
         let err = vm.run_sub_multi(&modules, "Bogus").unwrap_err();
         assert!(err.contains("not found"), "{:?}", err);
+    }
+
+    // ── Milestone B5a: parse_sheet_range_addr / load_workbook_file / deadline ──
+
+    #[test]
+    fn parse_sheet_range_addr_with_sheet_prefix() {
+        let (sheet, from, to) = parse_sheet_range_addr("Input!B2:B10", "sheet1").unwrap();
+        assert_eq!(sheet, "input");
+        assert_eq!(from, (2, 2));
+        assert_eq!(to, (10, 2));
+    }
+
+    #[test]
+    fn parse_sheet_range_addr_without_sheet_prefix_uses_active_sheet() {
+        let (sheet, from, to) = parse_sheet_range_addr("A1:B3", "sheet1").unwrap();
+        assert_eq!(sheet, "sheet1");
+        assert_eq!(from, (1, 1));
+        assert_eq!(to, (3, 2));
+    }
+
+    #[test]
+    fn parse_sheet_range_addr_rejects_invalid_range() {
+        assert!(parse_sheet_range_addr("Input!not_a_range", "sheet1").is_none());
+    }
+
+    #[test]
+    fn load_workbook_file_populates_cells_and_sets_active_sheet() {
+        // Build a real .xlsx in-process via the existing writer (same
+        // technique as lib.rs's diff_reader_tests) rather than shelling out
+        // to the CLI binary — CARGO_BIN_EXE_* isn't available inside a
+        // `cargo test --lib` unit test.
+        let out_path = std::env::temp_dir().join("elixcee_vm_load_workbook_test.xlsx");
+        let mut source_vm = Vm::new();
+        source_vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        crate::save_workbook(&source_vm, out_path.to_str().unwrap()).unwrap();
+
+        let mut vm = Vm::new();
+        let names = vm.load_workbook_file(out_path.to_str().unwrap()).unwrap();
+        assert_eq!(names, vec!["sheet1".to_string()]);
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(42));
+    }
+
+    #[test]
+    fn populate_from_sheets_lowercases_a_mixed_case_sheet_name() {
+        // Regression test for the bug found while extracting
+        // `load_workbook_file` out of main.rs: real Excel files commonly
+        // default to a sheet named "Sheet1" (capital S), and `save_workbook`
+        // always lowercases names on write — so a fixture built via
+        // `save_workbook` (as in the test above) can never exercise a
+        // mixed-case name and would pass identically with or without the
+        // lowercasing fix. Constructing a `WorkbookSheet` directly, as a
+        // real XLSX reader would produce, closes that hole.
+        let mut cells = std::collections::HashMap::new();
+        cells.insert((1, 1), SheetCell::Integer(42));
+        let sheets = vec![WorkbookSheet {
+            name: "Input".to_string(),
+            cells,
+            sheet_id: None,
+        }];
+
+        let mut vm = Vm::new();
+        let names = vm.populate_from_sheets(sheets);
+
+        assert_eq!(names, vec!["input".to_string()]);
+        assert_eq!(vm.active_sheet, "input");
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(42));
+    }
+
+    #[test]
+    fn load_workbook_file_reports_a_clear_error_for_a_missing_file() {
+        let mut vm = Vm::new();
+        let err = vm
+            .load_workbook_file("/nonexistent/path/does_not_exist.xlsx")
+            .unwrap_err();
+        assert!(err.starts_with("cannot read"), "{:?}", err);
+    }
+
+    #[test]
+    fn deadline_none_means_unlimited_loop_execution() {
+        // A loop well past the 256-iteration check gate must still run to
+        // completion with no deadline set — the default, zero-overhead path.
+        let mut vm = Vm::new();
+        assert!(vm.deadline.is_none());
+        let prog = parser::parse(
+            "Sub MySub()\n    n = 0\n    For i = 1 To 2000\n        n = n + 1\n    Next i\nEnd Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.variables["n"], Variant::Integer(2000));
+    }
+
+    #[test]
+    fn deadline_exceeded_stops_a_tight_for_loop_with_a_timeout_error() {
+        let mut vm = Vm::new();
+        vm.deadline = Some(std::time::Instant::now()); // already past
+        let prog = parser::parse(
+            "Sub MySub()\n    For i = 1 To 100000000\n        n = i\n    Next i\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("TIMEOUT:"), "{:?}", err);
+    }
+
+    #[test]
+    fn deadline_exceeded_stops_a_tight_do_loop_with_a_timeout_error() {
+        let mut vm = Vm::new();
+        vm.deadline = Some(std::time::Instant::now());
+        let prog = parser::parse(
+            "Sub MySub()\n    i = 0\n    Do While i < 100000000\n        i = i + 1\n    Loop\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("TIMEOUT:"), "{:?}", err);
     }
 }

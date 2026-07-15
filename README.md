@@ -165,6 +165,40 @@ elixcee snapshot Book1.xlsx --json
 positional fallback) — it is **not** VBA's `CodeName` property. See
 [docs/agent-contract.md](docs/agent-contract.md) for the full rationale.
 
+### Property-based workbook testing
+
+`elixcee test-workbook` reruns a macro against a starting workbook many
+times with generated boundary-value inputs (blank, `0`, `1`, `-1`, near
+overflow, empty/short/long strings), checking every run for panics,
+runtime errors, timeouts, and Excel error values — each case starts from a
+completely fresh workbook state:
+
+```toml
+# fixture.toml
+name = "order calculation"
+workbook = "orders.xlsx"
+vba_files = ["Main.bas"]
+macro = "Main.Process"
+cases = 100
+seed = 42
+
+[[inputs]]
+range = "Input!B2:B10"
+strategy = "boundary_numeric"
+
+[[assertions]]
+range = "Result!A1:F100"
+rule = "no_excel_errors"
+```
+
+```bat
+elixcee test-workbook fixture.toml --json
+```
+
+A failing case reports its seed and case index so it can be reproduced
+exactly: `elixcee test-workbook fixture.toml --seed 42 --case 17`. Full
+schema, strategies, and assertion rules: [docs/agent-contract.md](docs/agent-contract.md).
+
 ### Build from source
 
 ```bash

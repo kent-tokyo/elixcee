@@ -4,6 +4,7 @@ pub mod formula;
 pub mod parser;
 pub mod reader;
 pub mod snapshot;
+pub mod testworkbook;
 pub mod vm;
 
 use vm::{Variant, Vm};

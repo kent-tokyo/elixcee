@@ -3,10 +3,9 @@ use std::{env, fs, process};
 use elixcee::{
     check,
     diagnostics::{self, ElixceeError},
-    parser,
-    reader::{self, SheetCell},
-    save_workbook, snapshot,
-    vm::{serial_to_display, CellContent, Variant, Vm},
+    parser, reader,
+    save_workbook, snapshot, testworkbook,
+    vm::{serial_to_display, Variant, Vm},
 };
 
 fn usage() -> ! {
@@ -33,7 +32,12 @@ fn usage() -> ! {
          \x20   are files; the entrypoint (if any) is always given via --entry.\n\
            elixcee snapshot <file> [--json]\n\
          \x20   Reads a .xlsx/.ods file directly (no VBA execution) and prints every\n\
-         \x20   sheet's non-empty cells — Markdown by default, JSON with --json."
+         \x20   sheet's non-empty cells — Markdown by default, JSON with --json.\n\
+           elixcee test-workbook <fixture.toml> [--json] [--seed <N>] [--case <N>]\n\
+         \x20   Property-based test runner: reruns a macro against a starting\n\
+         \x20   workbook many times with generated boundary-value inputs, checking\n\
+         \x20   each run for panics/runtime errors/timeouts/Excel error values.\n\
+         \x20   --seed overrides the fixture's seed; --case replays a single case."
     );
     process::exit(1);
 }
@@ -302,6 +306,136 @@ fn run_snapshot_command(args: &[String]) -> ! {
     }
 }
 
+/// Resolves a fixture-relative path: absolute paths are used as-is;
+/// relative paths are resolved against the fixture `.toml`'s own directory
+/// (not the process's CWD), so a fixture is portable regardless of where
+/// `elixcee test-workbook` is invoked from.
+fn resolve_relative(base_dir: &std::path::Path, path: &str) -> String {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        path.to_string()
+    } else {
+        base_dir.join(p).to_string_lossy().into_owned()
+    }
+}
+
+/// `elixcee test-workbook <fixture.toml> [--json] [--seed <N>] [--case <N>]`
+/// — Milestone B5a's property-based workbook test runner. See
+/// `elixcee::testworkbook` for the fixture schema and execution model.
+fn run_test_workbook_command(args: &[String]) -> ! {
+    let mut path: Option<String> = None;
+    let mut json = false;
+    let mut seed_override: Option<u64> = None;
+    let mut case_override: Option<u64> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json = true,
+            "--seed" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .unwrap_or_else(|| die("--seed requires a number"));
+                seed_override = Some(
+                    v.parse()
+                        .unwrap_or_else(|_| die("--seed must be a non-negative integer")),
+                );
+            }
+            "--case" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .unwrap_or_else(|| die("--case requires a number"));
+                case_override = Some(
+                    v.parse()
+                        .unwrap_or_else(|_| die("--case must be a non-negative integer")),
+                );
+            }
+            a if a.starts_with('-') => die(&format!("unknown option: {}", a)),
+            _ if path.is_none() => path = Some(args[i].clone()),
+            _ => die("test-workbook takes exactly one fixture file"),
+        }
+        i += 1;
+    }
+    let Some(fixture_path) = path else { usage() };
+
+    let text = match fs::read_to_string(&fixture_path) {
+        Ok(t) => t,
+        Err(e) => {
+            let msg = format!("cannot read '{}': {}", fixture_path, e);
+            if json {
+                fail_json(ElixceeError::io_error(msg), &[])
+            } else {
+                die(&msg)
+            }
+        }
+    };
+    let fixture = match testworkbook::parse_fixture(&text) {
+        Ok(f) => f,
+        Err(e) => {
+            let msg = format!("invalid fixture '{}': {}", fixture_path, e);
+            if json {
+                fail_json(ElixceeError::io_error(msg), &[])
+            } else {
+                die(&msg)
+            }
+        }
+    };
+
+    let base_dir = std::path::Path::new(&fixture_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let workbook_path = resolve_relative(base_dir, &fixture.workbook);
+    let vba_paths: Vec<String> = fixture
+        .vba_files
+        .iter()
+        .map(|f| resolve_relative(base_dir, f))
+        .collect();
+    if vba_paths.is_empty() {
+        let msg = format!(
+            "fixture '{}': vba_files must list at least one .bas file",
+            fixture_path
+        );
+        if json {
+            fail_json(ElixceeError::io_error(msg), &[])
+        } else {
+            die(&msg)
+        }
+    }
+
+    let modules = load_modules(&vba_paths, json);
+    let programs: Vec<(String, parser::Program)> = modules
+        .iter()
+        .map(|m| (m.name.clone(), m.program.clone()))
+        .collect();
+
+    match testworkbook::run_fixture(
+        &fixture,
+        &programs,
+        &workbook_path,
+        seed_override,
+        case_override,
+    ) {
+        Ok(result) => {
+            let ok = matches!(result, testworkbook::FixtureResult::Passed { .. });
+            if json {
+                println!("{}", testworkbook::to_json(&result));
+            } else {
+                println!("{}", testworkbook::to_plain_text(&result));
+            }
+            process::exit(if ok { 0 } else { 1 });
+        }
+        Err(e) => {
+            if json {
+                fail_json(ElixceeError::io_error(e), &[])
+            } else {
+                die(&e)
+            }
+        }
+    }
+}
+
 fn die(msg: &str) -> ! {
     eprintln!("error: {}", msg);
     process::exit(1);
@@ -377,6 +511,9 @@ fn main() {
     if args.get(1).map(String::as_str) == Some("snapshot") {
         run_snapshot_command(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("test-workbook") {
+        run_test_workbook_command(&args[2..]);
+    }
 
     let mut positionals: Vec<String> = Vec::new();
     let mut xlsx_file:  Option<String> = None;
@@ -414,42 +551,26 @@ fn main() {
 
     // Load spreadsheet data if provided
     if let Some(ref path) = xlsx_file {
-        let sheets = match reader::read_workbook(path) {
-            Ok(s) => s,
+        // load_workbook_file already sets the active sheet to the first one
+        // loaded; only override it if --sheet was explicitly given.
+        match vm.load_workbook_file(path) {
+            Ok(_) => {}
+            Err(e) if e == "workbook has no sheets" => {
+                if json { fail_json(ElixceeError::sheet_setup_error(e), &[]) } else { die(&e) }
+            }
             Err(e) => {
-                let msg = format!("cannot read '{}': {}", path, e);
-                if json { fail_json(ElixceeError::io_error(msg), &[]) } else { die(&msg) }
+                if json { fail_json(ElixceeError::io_error(e), &[]) } else { die(&e) }
             }
-        };
-        if sheets.is_empty() {
-            if json { fail_json(ElixceeError::sheet_setup_error("workbook has no sheets".into()), &[]) }
-            else { die("workbook has no sheets") }
         }
-
-        for sheet_data in &sheets {
-            vm.ensure_sheet(&sheet_data.name);
-            let prev = vm.active_sheet.clone();
-            vm.active_sheet = sheet_data.name.clone();
-            for (&(row, col), cell) in &sheet_data.cells {
-                let value = match cell {
-                    SheetCell::Integer(n) => Variant::Integer(*n),
-                    SheetCell::Float(f)   => Variant::Float(*f),
-                    SheetCell::Str(s)     => Variant::Str(s.clone()),
-                    SheetCell::Bool(b)    => Variant::Boolean(*b),
-                };
-                vm.cells_mut().insert((row, col), CellContent { formula: None, value });
-            }
-            vm.active_sheet = prev;
-        }
-
-        let active = sheet_name.as_deref().unwrap_or(&sheets[0].name).to_string();
-        if let Err(e) = vm.set_active_sheet(&active) {
+        if let Some(ref name) = sheet_name
+            && let Err(e) = vm.set_active_sheet(name)
+        {
             if json { fail_json(ElixceeError::sheet_setup_error(e), &[]) } else { die(&e) }
         }
-    } else if let Some(ref name) = sheet_name {
-        if let Err(e) = vm.set_active_sheet(name) {
-            if json { fail_json(ElixceeError::sheet_setup_error(e), &[]) } else { die(&e) }
-        }
+    } else if let Some(ref name) = sheet_name
+        && let Err(e) = vm.set_active_sheet(name)
+    {
+        if json { fail_json(ElixceeError::sheet_setup_error(e), &[]) } else { die(&e) }
     }
 
     let start = std::time::Instant::now();

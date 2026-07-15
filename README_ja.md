@@ -156,6 +156,34 @@ elixcee snapshot Book1.xlsx --json
 
 `stable_id` はファイル自身が持つ `sheetId`（無ければ位置ベースのフォールバック）から導出したものであり、VBA の `CodeName` プロパティ**ではありません**。詳細な設計理由は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
 
+### プロパティベースのワークブックテスト
+
+`elixcee test-workbook` は、生成された境界値入力（空欄・`0`・`1`・`-1`・オーバーフロー付近の数値・空/短/長い文字列）を使ってマクロを何度も実行し、panic・ランタイムエラー・タイムアウト・Excel エラー値の混入を検査します。各ケースは必ずまっさらなワークブック状態から開始します。
+
+```toml
+# fixture.toml
+name = "order calculation"
+workbook = "orders.xlsx"
+vba_files = ["Main.bas"]
+macro = "Main.Process"
+cases = 100
+seed = 42
+
+[[inputs]]
+range = "Input!B2:B10"
+strategy = "boundary_numeric"
+
+[[assertions]]
+range = "Result!A1:F100"
+rule = "no_excel_errors"
+```
+
+```bat
+elixcee test-workbook fixture.toml --json
+```
+
+失敗したケースは seed と case index を報告するため、`elixcee test-workbook fixture.toml --seed 42 --case 17` で正確に再現できます。スキーマ・strategy・assertion ルールの詳細は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
+
 ### ソースからビルド
 
 ```bash
