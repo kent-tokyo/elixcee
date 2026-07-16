@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README_ja.md) | **中文**
 
-无需安装 Microsoft Excel，即可在 Linux、macOS 和 Windows 上高速模拟并执行 Excel 宏（VBA）数据处理逻辑的库。
+无需安装 Microsoft Excel，即可运行、测试并诊断 Excel VBA 宏。elixcee 是一个 Rust 驱动的无头 VBA 运行时，支持 Linux、macOS 和 Windows，具备静态分析、基于属性的工作簿测试，以及针对常见 Excel 操作失败的根因诊断能力。
 
 核心引擎使用 **Rust** 编写，通过 **pyo3 + maturin** 提供 Python 绑定。
 

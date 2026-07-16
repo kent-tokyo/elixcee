@@ -2,7 +2,7 @@
 
 [English](README.md) | **日本語** | [中文](README_zh.md)
 
-Microsoft Excel をインストールすることなく、Linux / macOS / Windows 上で Excel マクロ（VBA）のデータ処理ロジックを高速にエミュレートして実行するライブラリです。
+Microsoft Excelをインストールせずに、Excel VBAマクロを実行・テスト・原因診断できるRust製ヘッドレスランタイムです。存在しないシート、配列範囲外、コピー／貼り付け範囲の不一致、保護シートへの書き込みなど、Excelが操作を拒否する理由を具体的な範囲と根拠付きで報告します。
 
 コアエンジンは **Rust**、Python バインディングは **pyo3 + maturin** で提供します。
 
