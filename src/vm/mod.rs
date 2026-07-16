@@ -95,6 +95,39 @@ pub enum ResolutionFailureKind {
     SheetProtected {
         sheet: String,
     },
+    /// A `.Paste`/`.PasteSpecial` anchor cell is a covered (non-top-left)
+    /// cell of an existing merged range on the destination sheet
+    /// (Milestone B6c2) — real Excel refuses to paste directly into one.
+    /// `merged_range` is the raw rect (not pre-formatted), matching
+    /// `PasteShapeMismatch`'s `dest_row1`/`dest_col1` convention of leaving
+    /// address formatting to `diagnose.rs`'s own `col_to_letters`.
+    PasteIntoNonAnchorMergedCell {
+        dest_addr: String,
+        dest_sheet: String,
+        merged_range: MergeRect,
+        copy_span: Option<SourceSpan>,
+    },
+    /// A `.Paste`/`.PasteSpecial` destination range only partially
+    /// overlaps one or more merged ranges on the destination sheet
+    /// (Milestone B6c2) — pasting would split an existing merge.
+    PastePartialMergedRange {
+        dest_addr: String,
+        dest_sheet: String,
+        conflicts: Vec<MergeRect>,
+        copy_span: Option<SourceSpan>,
+    },
+    /// The copied range and the paste destination have matching row/column
+    /// counts (Milestone B6b's shape check passed) but differ in which
+    /// relative cells are merged (Milestone B6c2) — e.g. the destination
+    /// has a merged row where the source has none.
+    PasteMergeLayoutMismatch {
+        source_addr: String,
+        source_sheet: String,
+        dest_addr: String,
+        dest_sheet: String,
+        conflicts: Vec<MergeRect>,
+        copy_span: Option<SourceSpan>,
+    },
 }
 
 /// The VM's clipboard state, populated by `.Copy` and consumed by
@@ -105,6 +138,10 @@ pub enum ResolutionFailureKind {
 #[derive(Debug, Clone)]
 struct ClipboardState {
     source_addr: String,
+    /// The sheet `.Copy` ran against (Milestone B6c2) — `.Copy` always
+    /// targets `self.active_sheet`, but nothing captured that name before
+    /// this was needed to look up the source sheet's merged ranges.
+    src_sheet: String,
     rows: u32,
     cols: u32,
     cells: Vec<Vec<Variant>>, // [row][col], 0-based offsets from the source's top-left
@@ -165,6 +202,12 @@ pub enum CalculationMode {
 /// Signals emitted by Exit For / Exit Do / Exit Sub / Exit Function.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExitKind { For, Do, Sub, Function }
+
+/// A 1-based inclusive `((row1,col1),(row2,col2))` rect (Milestone B6c2) —
+/// a private per-module alias, not a shared type, matching this codebase's
+/// existing per-module `col_to_letters` duplication convention rather than
+/// a cross-module `utils` dependency.
+type MergeRect = ((u32, u32), (u32, u32));
 
 pub struct Vm {
     /// Per-sheet cell storage. Key is sheet name (lowercase for lookup).
@@ -243,6 +286,13 @@ pub struct Vm {
     /// key space as `sheets`/`active_sheet`/`ensure_sheet`. Empty by
     /// default; blocks any cell-mutating statement on that sheet.
     protected_sheets: HashSet<String>,
+    /// Merged cell ranges per sheet (Milestone B6c2), keyed the same way as
+    /// `protected_sheets` — lowercase sheet name → its merged ranges as
+    /// `((row1,col1),(row2,col2))`, 1-based inclusive. Populated by
+    /// `populate_from_sheets` from the reader's `WorkbookSheet::
+    /// merged_ranges`; empty for any sheet built purely in-VBA (`Sheets.Add`
+    /// has no merge concept).
+    merged_ranges: HashMap<String, Vec<MergeRect>>,
 }
 
 impl Vm {
@@ -276,6 +326,7 @@ impl Vm {
             loaded_workbook_name: None,
             clipboard: None,
             protected_sheets: HashSet::new(),
+            merged_ranges: HashMap::new(),
         }
     }
 
@@ -525,6 +576,125 @@ impl Vm {
         Ok(())
     }
 
+    /// Checks the 3 merged-cell-conflict cases for a Paste (Milestone
+    /// B6c2), called once from `do_paste` after the destination
+    /// anchor/fill dimensions are known — common to both its range- and
+    /// single-cell-destination branches. Unconditional in every mode that
+    /// executes the macro, same precedent as the shape-mismatch/
+    /// protection checks above it.
+    #[allow(clippy::too_many_arguments)]
+    fn check_merge_conflicts(
+        &mut self,
+        dest_sheet: &str,
+        dest_addr: &str,
+        anchor_row: u32,
+        anchor_col: u32,
+        fill_rows: u32,
+        fill_cols: u32,
+        clip: &ClipboardState,
+        transpose: bool,
+    ) -> Result<(), String> {
+        let dest_rect = (
+            (anchor_row, anchor_col),
+            (anchor_row + fill_rows - 1, anchor_col + fill_cols - 1),
+        );
+        let dest_merges: Vec<MergeRect> =
+            self.merged_ranges.get(dest_sheet).cloned().unwrap_or_default();
+
+        // 1. Anchor cell is a covered (non-top-left) cell of an existing
+        // merge — applies regardless of destination shape.
+        let anchor_point = ((anchor_row, anchor_col), (anchor_row, anchor_col));
+        for &m in &dest_merges {
+            if rect_contains(m, anchor_point) && m.0 != (anchor_row, anchor_col) {
+                self.last_resolution_failure =
+                    Some(ResolutionFailureKind::PasteIntoNonAnchorMergedCell {
+                        dest_addr: dest_addr.to_string(),
+                        dest_sheet: dest_sheet.to_string(),
+                        merged_range: m,
+                        copy_span: Some(clip.span),
+                    });
+                return Err(
+                    "Paste error: destination cell is inside a merged range but isn't its top-left cell"
+                        .to_string(),
+                );
+            }
+        }
+
+        // 2. Destination range partially overlaps one or more merges — a
+        // single-cell destination can't "partially" overlap anything (case
+        // 1 above already covers landing inside one), so this only applies
+        // to a genuinely multi-cell destination.
+        if fill_rows > 1 || fill_cols > 1 {
+            let conflicts: Vec<_> = dest_merges
+                .iter()
+                .copied()
+                .filter(|&m| rects_overlap(dest_rect, m) && !rect_contains(dest_rect, m))
+                .collect();
+            if !conflicts.is_empty() {
+                self.last_resolution_failure =
+                    Some(ResolutionFailureKind::PastePartialMergedRange {
+                        dest_addr: dest_addr.to_string(),
+                        dest_sheet: dest_sheet.to_string(),
+                        conflicts,
+                        copy_span: Some(clip.span),
+                    });
+                return Err(
+                    "Paste error: destination partially overlaps a merged range".to_string()
+                );
+            }
+        }
+
+        // 3. Source and destination merge layouts differ — only meaningful
+        // when the source itself has a real shape to compare against.
+        let single_cell_source = clip.rows == 1 && clip.cols == 1;
+        if !single_cell_source
+            && let Some(src_rect @ ((sr1, sc1), _)) = self.resolve_range_addr(&clip.source_addr)
+        {
+            let src_merges: Vec<MergeRect> =
+                self.merged_ranges.get(&clip.src_sheet).cloned().unwrap_or_default();
+
+            let mut src_rel: Vec<MergeRect> = src_merges
+                .iter()
+                .filter(|&&m| rect_contains(src_rect, m))
+                .map(|&((r1, c1), (r2, c2))| ((r1 - sr1, c1 - sc1), (r2 - sr1, c2 - sc1)))
+                .collect();
+            src_rel.sort();
+
+            let mut dest_rel: Vec<MergeRect> = dest_merges
+                .iter()
+                .filter(|&&m| rect_contains(dest_rect, m))
+                .map(|&((r1, c1), (r2, c2))| {
+                    let (rr1, rc1) = (r1 - anchor_row, c1 - anchor_col);
+                    let (rr2, rc2) = (r2 - anchor_row, c2 - anchor_col);
+                    if transpose { ((rc1, rr1), (rc2, rr2)) } else { ((rr1, rc1), (rr2, rc2)) }
+                })
+                .collect();
+            dest_rel.sort();
+
+            if src_rel != dest_rel {
+                let conflicts: Vec<MergeRect> = dest_merges
+                    .iter()
+                    .copied()
+                    .filter(|&m| rect_contains(dest_rect, m))
+                    .collect();
+                self.last_resolution_failure =
+                    Some(ResolutionFailureKind::PasteMergeLayoutMismatch {
+                        source_addr: clip.source_addr.clone(),
+                        source_sheet: clip.src_sheet.clone(),
+                        dest_addr: dest_addr.to_string(),
+                        dest_sheet: dest_sheet.to_string(),
+                        conflicts,
+                        copy_span: Some(clip.span),
+                    });
+                return Err(
+                    "Paste error: source and destination merge layouts differ".to_string()
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Pastes the current clipboard into `dest_addr` — shared by
     /// `Stmt::RangePaste`, `Stmt::SheetRangePaste`, and `Stmt::RangeCopy`'s
     /// immediate `Destination:=` form (Milestone B6b). A missing clipboard
@@ -540,6 +710,9 @@ impl Vm {
     /// (real Excel's well-known "paste one value into many cells" fill
     /// behavior — a destination range that's an exact multiple of a
     /// multi-cell source, i.e. tiling, is a rarer sibling left unmodeled).
+    /// Once the anchor/fill dimensions are settled, `check_merge_conflicts`
+    /// (Milestone B6c2) applies the same unconditional-hard-error treatment
+    /// to merged-cell conflicts — same reasoning, same precedent.
     fn do_paste(&mut self, dest_addr: &str, transpose: bool) -> Result<(), String> {
         let active = self.active_sheet.clone();
         self.check_sheet_not_protected(&active, &active)?;
@@ -589,6 +762,9 @@ impl Vm {
             })?;
             (r, c, expected_rows, expected_cols)
         };
+        self.check_merge_conflicts(
+            &active, dest_addr, anchor_row, anchor_col, fill_rows, fill_cols, &clip, transpose,
+        )?;
         for r in 0..fill_rows {
             for c in 0..fill_cols {
                 let v = if single_cell_source {
@@ -668,7 +844,11 @@ impl Vm {
                 );
             }
             self.active_sheet = prev;
-            names.push(sheet_data.name.to_lowercase());
+            let key = sheet_data.name.to_lowercase();
+            if !sheet_data.merged_ranges.is_empty() {
+                self.merged_ranges.insert(key.clone(), sheet_data.merged_ranges.clone());
+            }
+            names.push(key);
         }
         let first = names[0].clone();
         self.set_active_sheet(&first)
@@ -1117,6 +1297,7 @@ impl Vm {
                     .collect();
                 self.clipboard = Some(ClipboardState {
                     source_addr: src.clone(),
+                    src_sheet: self.active_sheet.clone(),
                     rows: r2 - r1 + 1,
                     cols: c2 - c1 + 1,
                     cells,
@@ -1896,6 +2077,21 @@ pub fn parse_range_addr(addr: &str) -> Option<((u32, u32), (u32, u32))> {
         let c = parse_cell_addr(addr)?;
         Some((c, c))
     }
+}
+
+/// Does rect `a` overlap rect `b` at all? (Milestone B6c2) — no existing
+/// helper for this anywhere in the codebase before now.
+fn rects_overlap(a: MergeRect, b: MergeRect) -> bool {
+    let ((ar1, ac1), (ar2, ac2)) = a;
+    let ((br1, bc1), (br2, bc2)) = b;
+    ar1 <= br2 && br1 <= ar2 && ac1 <= bc2 && bc1 <= ac2
+}
+
+/// Does rect `outer` fully contain rect `inner`? (Milestone B6c2)
+fn rect_contains(outer: MergeRect, inner: MergeRect) -> bool {
+    let ((or1, oc1), (or2, oc2)) = outer;
+    let ((ir1, ic1), (ir2, ic2)) = inner;
+    or1 <= ir1 && ir2 <= or2 && oc1 <= ic1 && ic2 <= oc2
 }
 
 /// `(sheet_name_lowercase, (r1,c1), (r2,c2))`.
@@ -4015,6 +4211,7 @@ mod tests {
             name: "Input".to_string(),
             cells,
             sheet_id: None,
+            merged_ranges: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -4321,5 +4518,186 @@ mod tests {
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert!(err.contains("protected"), "{:?}", err);
+    }
+
+    // ── Milestone B6c2: merged-cell-aware Paste diagnosis ───────────────────
+
+    /// There's no VBA construct to create a merge (out of scope — see the
+    /// plan's non-goals), so tests inject `merged_ranges` directly, the same
+    /// way a real `.xlsx`/`.ods` reader would via `populate_from_sheets`.
+    fn vm_with_merge(sheet: &str, rect: MergeRect) -> Vm {
+        let mut vm = Vm::new();
+        vm.merged_ranges.insert(sheet.to_string(), vec![rect]);
+        vm
+    }
+
+    #[test]
+    fn paste_into_non_anchor_merged_cell_is_a_hard_error() {
+        // Sheet1 has a merge B1:D1 (cols 2-4, row 1); pasting into C1 (a
+        // covered cell of that merge, not its top-left B1) must fail.
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4)));
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1\").Copy\n    Range(\"C1\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("top-left"), "{:?}", err);
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::PasteIntoNonAnchorMergedCell {
+                dest_addr,
+                dest_sheet,
+                merged_range,
+                ..
+            }) => {
+                assert_eq!(dest_addr, "C1");
+                assert_eq!(dest_sheet, "sheet1");
+                assert_eq!(merged_range, ((1, 2), (1, 4)));
+            }
+            other => panic!("expected PasteIntoNonAnchorMergedCell, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn paste_into_a_merges_own_anchor_cell_succeeds() {
+        // Pasting into B1 itself (the merge's top-left) is the normal way
+        // to write to a merged cell in real Excel — must not error.
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4)));
+        let prog = parser::parse(
+            "Sub MySub()\n    Cells(1,1).Value = 42\n    Range(\"A1\").Copy\n    \
+             Range(\"B1\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(42));
+    }
+
+    #[test]
+    fn paste_partial_merged_range_is_a_hard_error() {
+        // Merge B1:D1 spans cols 2-4; a paste destination of only B1:C1
+        // (cols 2-3) crosses part of it without covering it fully.
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4)));
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:B1\").Copy\n    Range(\"B1:C1\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("partially overlaps"), "{:?}", err);
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::PastePartialMergedRange {
+                dest_addr,
+                dest_sheet,
+                conflicts,
+                ..
+            }) => {
+                assert_eq!(dest_addr, "B1:C1");
+                assert_eq!(dest_sheet, "sheet1");
+                assert_eq!(conflicts, vec![((1, 2), (1, 4))]);
+            }
+            other => panic!("expected PastePartialMergedRange, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn paste_merge_layout_mismatch_reports_the_correct_root_cause() {
+        // The user's own motivating example: same shape (10x3), but the
+        // destination has a merged first row (E1:G1) the source doesn't.
+        let mut vm = vm_with_merge("sheet1", ((1, 5), (1, 7)));
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:C10\").Copy\n    Range(\"E1:G10\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("layouts differ"), "{:?}", err);
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::PasteMergeLayoutMismatch {
+                source_addr,
+                source_sheet,
+                dest_addr,
+                dest_sheet,
+                conflicts,
+                ..
+            }) => {
+                assert_eq!(source_addr, "A1:C10");
+                assert_eq!(source_sheet, "sheet1");
+                assert_eq!(dest_addr, "E1:G10");
+                assert_eq!(dest_sheet, "sheet1");
+                assert_eq!(conflicts, vec![((1, 5), (1, 7))]);
+            }
+            other => panic!("expected PasteMergeLayoutMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn matching_merge_layouts_on_both_sides_paste_cleanly() {
+        // Source A1:C10 has a merged first row (A1:C1); destination E1:G10
+        // has a merged first row at the same relative position (E1:G1) —
+        // identical layouts must not be flagged as a mismatch.
+        let mut vm = Vm::new();
+        vm.merged_ranges.insert("sheet1".to_string(), vec![((1, 1), (1, 3)), ((1, 5), (1, 7))]);
+        let prog = parser::parse(
+            "Sub MySub()\n    Cells(2,1).Value = 42\n    Range(\"A1:C10\").Copy\n    \
+             Range(\"E1:G10\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.get_cell(2, 5), Variant::Integer(42));
+    }
+
+    #[test]
+    fn matching_merge_layouts_paste_cleanly_with_transpose() {
+        // Source A1:C2 (2 rows x 3 cols) has a merge in its top row spanning
+        // its last 2 cols (B1:C1, relative (0,1)-(0,2)). Transpose:=True
+        // swaps rows/cols, so the matching destination shape is 3 rows x 2
+        // cols (E1:F3); the merge that lines up after transposing is a
+        // 2-row x 1-col merge in the *second column-worth-of-source's-rows*
+        // position — E2:E3 (rows 2-3, col E only), not E1:E2. This position
+        // (not just matching dimensions) only lines up if `do_paste`
+        // actually applies the `(rr,rc) -> (rc,rr)` swap to the destination
+        // merge's relative coordinates before comparing — a naive
+        // non-transposed comparison would flag this as a mismatch instead.
+        let mut vm = Vm::new();
+        vm.merged_ranges.insert(
+            "sheet1".to_string(),
+            vec![((1, 2), (1, 3)), ((2, 5), (3, 5))],
+        );
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:C2\").Copy\n    \
+             Range(\"E1:F3\").PasteSpecial Transpose:=True\nEnd Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+    }
+
+    #[test]
+    fn populate_from_sheets_threads_merged_ranges_into_the_vm() {
+        // Every other B6c2 test injects `vm.merged_ranges` directly
+        // (`vm_with_merge`), bypassing `populate_from_sheets` entirely — so
+        // the actual reader -> VM wiring added to `populate_from_sheets`
+        // (the `if !sheet_data.merged_ranges.is_empty() { .. }` block) was
+        // never exercised by any test. Mixed-case "Input" also confirms the
+        // merge map is keyed lowercase, same as `active_sheet`/`sheets`.
+        let mut cells = std::collections::HashMap::new();
+        cells.insert((1, 1), SheetCell::Integer(1));
+        let sheets = vec![WorkbookSheet {
+            name: "Input".to_string(),
+            cells,
+            sheet_id: None,
+            merged_ranges: vec![((1, 2), (1, 4))],
+        }];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1\").Copy\n    Range(\"C1\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("top-left"), "{:?}", err);
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::PasteIntoNonAnchorMergedCell { dest_sheet, .. }) => {
+                assert_eq!(dest_sheet, "input");
+            }
+            other => panic!("expected PasteIntoNonAnchorMergedCell, got {:?}", other),
+        }
     }
 }

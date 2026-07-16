@@ -15,12 +15,15 @@
 //! object, and every other subcommand's contract stays untouched.
 //!
 //! Explicit non-goals (see `docs/agent-contract.md` for the full list):
-//! Copy/Paste shape validation, Clipboard/merged-cell/multi-area modeling,
-//! a real `Collection` object, real multi-workbook execution, and
-//! `Dim arr(1 To N)` non-zero-lower-bound tracking are all out of scope for
-//! this milestone. `root_causes` carries at most one entry today (the first
-//! failure) but is an array, not a bare object, because a later milestone's
-//! ranked-candidate model reuses this exact shape.
+//! multi-area (`Areas`) ranges, hidden/filtered rows, Excel Tables, a real
+//! `Collection` object, real multi-workbook execution, and
+//! `Dim arr(1 To N)` non-zero-lower-bound tracking are all out of scope.
+//! (Copy/Paste shape/clipboard validation shipped in Milestone B6b, and
+//! merged-cell-aware Paste conflicts in Milestone B6c2 — both superseding
+//! this comment's original B6a-era non-goals list.) `root_causes` carries
+//! at most one entry today (the first failure) but is an array, not a bare
+//! object, because a later milestone's ranked-candidate model reuses this
+//! exact shape.
 
 use crate::diagnostics::{SourceLocation, json_string};
 use crate::parser::{Program, ast::SourceSpan};
@@ -42,9 +45,12 @@ pub struct Diagnosis {
     /// `diagnostics::locate`.
     pub span: Option<SourceSpan>,
     /// The span of the `.Copy` statement that populated the clipboard, when
-    /// `root_cause` is a `PASTE_SHAPE_MISMATCH` (Milestone B6b) — `span`
-    /// above already points at the failing *Paste* statement, so this lets
-    /// a diagnosis report both locations. `None` for every other kind.
+    /// `root_cause` is any Paste-related kind — `PASTE_SHAPE_MISMATCH`
+    /// (Milestone B6b) or `PASTE_INTO_NON_ANCHOR_MERGED_CELL`/
+    /// `PASTE_PARTIAL_MERGED_RANGE`/`PASTE_MERGE_LAYOUT_MISMATCH`
+    /// (Milestone B6c2) — `span` above already points at the failing
+    /// *Paste* statement, so this lets a diagnosis report both locations.
+    /// `None` for every other kind.
     pub copy_span: Option<SourceSpan>,
     pub root_cause: Option<RootCause>,
     pub messages: Vec<String>,
@@ -66,6 +72,11 @@ impl RootCause {
             ResolutionFailureKind::PasteShapeMismatch { .. } => "PASTE_SHAPE_MISMATCH",
             ResolutionFailureKind::PasteWithoutCopy { .. } => "PASTE_WITHOUT_COPY",
             ResolutionFailureKind::SheetProtected { .. } => "SHEET_PROTECTED",
+            ResolutionFailureKind::PasteIntoNonAnchorMergedCell { .. } => {
+                "PASTE_INTO_NON_ANCHOR_MERGED_CELL"
+            }
+            ResolutionFailureKind::PastePartialMergedRange { .. } => "PASTE_PARTIAL_MERGED_RANGE",
+            ResolutionFailureKind::PasteMergeLayoutMismatch { .. } => "PASTE_MERGE_LAYOUT_MISMATCH",
         };
         RootCause {
             code,
@@ -135,6 +146,28 @@ impl RootCause {
                 "unprotect the sheet first: Worksheets(\"{}\").Unprotect",
                 sheet
             )],
+            ResolutionFailureKind::PasteIntoNonAnchorMergedCell { merged_range, .. } => {
+                let addr = rect_addr(*merged_range);
+                let anchor = rect_addr((merged_range.0, merged_range.0));
+                vec![
+                    format!("unmerge {} before pasting", addr),
+                    format!("or paste into its top-left cell {} instead", anchor),
+                ]
+            }
+            ResolutionFailureKind::PastePartialMergedRange { conflicts, .. } => {
+                let addrs = conflicts.iter().map(|r| rect_addr(*r)).collect::<Vec<_>>().join(", ");
+                vec![format!(
+                    "unmerge {} before pasting, or resize the destination to fully contain it",
+                    addrs
+                )]
+            }
+            ResolutionFailureKind::PasteMergeLayoutMismatch { conflicts, .. } => {
+                let addrs = conflicts.iter().map(|r| rect_addr(*r)).collect::<Vec<_>>().join(", ");
+                vec![
+                    format!("unmerge {} before pasting", addrs),
+                    "or make the source and destination merge layouts identical".to_string(),
+                ]
+            }
         }
     }
 }
@@ -152,6 +185,23 @@ fn col_to_letters(mut col: u32) -> String {
     }
     bytes.reverse();
     String::from_utf8(bytes).unwrap()
+}
+
+/// A 1-based inclusive `((row1,col1),(row2,col2))` rect (Milestone B6c2) —
+/// a private per-module alias, not a shared type, matching this codebase's
+/// existing per-module `col_to_letters` duplication convention rather than
+/// a cross-module `utils` dependency.
+type MergeRect = ((u32, u32), (u32, u32));
+
+/// Renders a rect as an address string, e.g. `((1,5),(1,7))` -> `"E1:G1"` —
+/// a single-cell rect renders without the `:` (`"E1"`, not `"E1:E1"`).
+fn rect_addr(r: MergeRect) -> String {
+    let ((r1, c1), (r2, c2)) = r;
+    if (r1, c1) == (r2, c2) {
+        format!("{}{}", col_to_letters(c1), r1)
+    } else {
+        format!("{}{}:{}{}", col_to_letters(c1), r1, col_to_letters(c2), r2)
+    }
 }
 
 /// Runs `entrypoint` once against the workbook at `workbook_path`, in
@@ -188,7 +238,10 @@ pub fn run_diagnosis(
             let root_cause = vm.take_resolution_failure().map(RootCause::from_kind);
             let span = vm.current_span();
             let copy_span = root_cause.as_ref().and_then(|rc| match &rc.kind {
-                ResolutionFailureKind::PasteShapeMismatch { copy_span, .. } => *copy_span,
+                ResolutionFailureKind::PasteShapeMismatch { copy_span, .. }
+                | ResolutionFailureKind::PasteIntoNonAnchorMergedCell { copy_span, .. }
+                | ResolutionFailureKind::PastePartialMergedRange { copy_span, .. }
+                | ResolutionFailureKind::PasteMergeLayoutMismatch { copy_span, .. } => *copy_span,
                 _ => None,
             });
             Ok(Diagnosis {
@@ -234,6 +287,20 @@ fn evidence_json(e: &ResolutionEvidence) -> String {
         json_string(&e.requested),
         available,
         suggested,
+    )
+}
+
+/// Renders a list of merge-conflict rects as a JSON array of address
+/// strings (Milestone B6c2), same `format!("[{}]", ...join(","))` idiom as
+/// `evidence_json`'s `available` field.
+fn conflicts_json(conflicts: &[MergeRect]) -> String {
+    format!(
+        "[{}]",
+        conflicts
+            .iter()
+            .map(|r| json_string(&rect_addr(*r)))
+            .collect::<Vec<_>>()
+            .join(",")
     )
 }
 
@@ -289,6 +356,47 @@ fn root_cause_json(rc: &RootCause, copy_location: Option<&SourceLocation>) -> St
         ResolutionFailureKind::SheetProtected { sheet } => {
             format!("\"sheet\":{}", json_string(sheet))
         }
+        ResolutionFailureKind::PasteIntoNonAnchorMergedCell {
+            dest_addr,
+            dest_sheet,
+            merged_range,
+            ..
+        } => format!(
+            "\"dest_addr\":{},\"dest_sheet\":{},\"merged_range\":{},\"copy_location\":{}",
+            json_string(dest_addr),
+            json_string(dest_sheet),
+            json_string(&rect_addr(*merged_range)),
+            location_json(copy_location),
+        ),
+        ResolutionFailureKind::PastePartialMergedRange {
+            dest_addr,
+            dest_sheet,
+            conflicts,
+            ..
+        } => format!(
+            "\"dest_addr\":{},\"dest_sheet\":{},\"conflicts\":{},\"copy_location\":{}",
+            json_string(dest_addr),
+            json_string(dest_sheet),
+            conflicts_json(conflicts),
+            location_json(copy_location),
+        ),
+        ResolutionFailureKind::PasteMergeLayoutMismatch {
+            source_addr,
+            source_sheet,
+            dest_addr,
+            dest_sheet,
+            conflicts,
+            ..
+        } => format!(
+            "\"source_addr\":{},\"source_sheet\":{},\"dest_addr\":{},\"dest_sheet\":{},\
+             \"conflicts\":{},\"copy_location\":{}",
+            json_string(source_addr),
+            json_string(source_sheet),
+            json_string(dest_addr),
+            json_string(dest_sheet),
+            conflicts_json(conflicts),
+            location_json(copy_location),
+        ),
     };
     format!(
         "{{\"code\":\"{}\",\"certainty\":\"{}\",{},\"suggestions\":{}}}",
@@ -301,8 +409,9 @@ fn root_cause_json(rc: &RootCause, copy_location: Option<&SourceLocation>) -> St
 /// on failure. `location`/`copy_location` are resolved by the caller (see
 /// `Diagnosis::span`/`copy_span`'s doc comments) — `None` when the caller
 /// couldn't or didn't resolve one. `copy_location` only ever appears nested
-/// inside a `PASTE_SHAPE_MISMATCH` root cause; it's accepted here regardless
-/// of `diag.root_cause`'s kind so callers don't need to inspect it first.
+/// inside a Paste-related root cause (see `Diagnosis::copy_span`'s doc
+/// comment for the full list); it's accepted here regardless of
+/// `diag.root_cause`'s kind so callers don't need to inspect it first.
 pub fn to_json(
     diag: &Diagnosis,
     location: Option<&SourceLocation>,
@@ -414,6 +523,52 @@ pub fn to_plain_text(
             }
             ResolutionFailureKind::SheetProtected { sheet } => {
                 out.push_str(&format!("sheet '{}' is protected", sheet));
+            }
+            ResolutionFailureKind::PasteIntoNonAnchorMergedCell {
+                dest_addr,
+                dest_sheet,
+                merged_range,
+                ..
+            } => {
+                out.push_str(&format!(
+                    "paste destination {} (sheet '{}') is inside merged range {} but isn't its top-left cell",
+                    dest_addr, dest_sheet, rect_addr(*merged_range),
+                ));
+                if let Some(loc) = copy_location {
+                    out.push_str(&format!("\n  copied at {}:{}:{}", loc.file, loc.line, loc.column));
+                }
+            }
+            ResolutionFailureKind::PastePartialMergedRange {
+                dest_addr,
+                dest_sheet,
+                conflicts,
+                ..
+            } => {
+                let addrs: Vec<String> = conflicts.iter().map(|r| rect_addr(*r)).collect();
+                out.push_str(&format!(
+                    "paste destination {} (sheet '{}') partially overlaps merged range(s): {}",
+                    dest_addr, dest_sheet, addrs.join(", "),
+                ));
+                if let Some(loc) = copy_location {
+                    out.push_str(&format!("\n  copied at {}:{}:{}", loc.file, loc.line, loc.column));
+                }
+            }
+            ResolutionFailureKind::PasteMergeLayoutMismatch {
+                source_addr,
+                source_sheet,
+                dest_addr,
+                dest_sheet,
+                conflicts,
+                ..
+            } => {
+                let addrs: Vec<String> = conflicts.iter().map(|r| rect_addr(*r)).collect();
+                out.push_str(&format!(
+                    "copy source {} (sheet '{}') and paste destination {} (sheet '{}') have different merged-cell layouts: {}",
+                    source_addr, source_sheet, dest_addr, dest_sheet, addrs.join(", "),
+                ));
+                if let Some(loc) = copy_location {
+                    out.push_str(&format!("\n  copied at {}:{}:{}", loc.file, loc.line, loc.column));
+                }
             }
         }
         for s in rc.suggestions() {
@@ -631,5 +786,84 @@ mod tests {
         let json = to_json(&diag, None, None);
         assert!(json.contains("SHEET_PROTECTED"));
         assert!(json.contains("unprotect the sheet first"));
+    }
+
+    // ── Milestone B6c2: merged-cell-aware Paste diagnostics ─────────────────
+    //
+    // Unlike every kind above, these can't be reproduced through
+    // `run_diagnosis`'s full file-loading pipeline: there's no VBA
+    // construct to create a merge, and `save_workbook` doesn't write
+    // `<mergeCells>` (out of scope — reading merges was this milestone's
+    // job, not writing them). So these test `RootCause`/`root_cause_json`
+    // directly against a hand-built `ResolutionFailureKind`, the same
+    // pattern the VM-level tests use to bypass the lack of a `.Merge`
+    // VBA statement.
+
+    #[test]
+    fn paste_into_non_anchor_merged_cell_reports_the_correct_root_cause() {
+        let rc = RootCause::from_kind(ResolutionFailureKind::PasteIntoNonAnchorMergedCell {
+            dest_addr: "C1".to_string(),
+            dest_sheet: "sheet1".to_string(),
+            merged_range: ((1, 2), (1, 4)),
+            copy_span: None,
+        });
+        assert_eq!(rc.code, "PASTE_INTO_NON_ANCHOR_MERGED_CELL");
+        assert_eq!(
+            rc.suggestions(),
+            vec![
+                "unmerge B1:D1 before pasting".to_string(),
+                "or paste into its top-left cell B1 instead".to_string(),
+            ]
+        );
+        let json = root_cause_json(&rc, None);
+        assert!(json.contains("PASTE_INTO_NON_ANCHOR_MERGED_CELL"));
+        assert!(json.contains("\"dest_addr\":\"C1\""));
+        assert!(json.contains("\"merged_range\":\"B1:D1\""));
+    }
+
+    #[test]
+    fn paste_partial_merged_range_reports_the_correct_root_cause() {
+        let rc = RootCause::from_kind(ResolutionFailureKind::PastePartialMergedRange {
+            dest_addr: "B1:C1".to_string(),
+            dest_sheet: "sheet1".to_string(),
+            conflicts: vec![((1, 2), (1, 4))],
+            copy_span: None,
+        });
+        assert_eq!(rc.code, "PASTE_PARTIAL_MERGED_RANGE");
+        assert_eq!(
+            rc.suggestions(),
+            vec![
+                "unmerge B1:D1 before pasting, or resize the destination to fully contain it"
+                    .to_string()
+            ]
+        );
+        let json = root_cause_json(&rc, None);
+        assert!(json.contains("PASTE_PARTIAL_MERGED_RANGE"));
+        assert!(json.contains("\"conflicts\":[\"B1:D1\"]"));
+    }
+
+    #[test]
+    fn paste_merge_layout_mismatch_reports_the_correct_root_cause_directly() {
+        let rc = RootCause::from_kind(ResolutionFailureKind::PasteMergeLayoutMismatch {
+            source_addr: "A1:C10".to_string(),
+            source_sheet: "sheet1".to_string(),
+            dest_addr: "E1:G10".to_string(),
+            dest_sheet: "sheet1".to_string(),
+            conflicts: vec![((1, 5), (1, 7))],
+            copy_span: None,
+        });
+        assert_eq!(rc.code, "PASTE_MERGE_LAYOUT_MISMATCH");
+        assert_eq!(
+            rc.suggestions(),
+            vec![
+                "unmerge E1:G1 before pasting".to_string(),
+                "or make the source and destination merge layouts identical".to_string(),
+            ]
+        );
+        let json = root_cause_json(&rc, None);
+        assert!(json.contains("PASTE_MERGE_LAYOUT_MISMATCH"));
+        assert!(json.contains("\"source_addr\":\"A1:C10\""));
+        assert!(json.contains("\"dest_addr\":\"E1:G10\""));
+        assert!(json.contains("\"conflicts\":[\"E1:G1\"]"));
     }
 }

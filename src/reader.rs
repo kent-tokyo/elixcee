@@ -8,6 +8,12 @@ use zip::ZipArchive;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
+/// A 1-based inclusive `((row1,col1),(row2,col2))` rect (Milestone B6c2) —
+/// a private per-module alias, not a shared type, matching this codebase's
+/// existing per-module `col_to_letters` duplication convention rather than
+/// a cross-module `utils` dependency.
+type MergeRect = ((u32, u32), (u32, u32));
+
 pub struct WorkbookSheet {
     pub name: String,
     pub cells: HashMap<(u32, u32), SheetCell>,
@@ -16,6 +22,11 @@ pub struct WorkbookSheet {
     /// if the attribute was missing. Not VBA's `CodeName` (that lives in
     /// `vbaProject.bin`, an OLE binary format this reader doesn't parse).
     pub sheet_id: Option<String>,
+    /// Merged cell ranges, 1-based inclusive (Milestone B6c2) — from XLSX's
+    /// `<mergeCells><mergeCell ref="..."/>` or ODS's
+    /// `table:number-columns-spanned`/`table:number-rows-spanned` on the
+    /// anchor cell. Empty if the sheet has no merges.
+    pub merged_ranges: Vec<MergeRect>,
 }
 
 pub enum SheetCell {
@@ -229,8 +240,8 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
         let sheet_xml = match zip_read_text(&mut archive, &zip_path) {
             Ok(s) => s, Err(_) => continue,
         };
-        let cells = xlsx_sheet_cells(&sheet_xml, &shared);
-        sheets.push(WorkbookSheet { name, cells, sheet_id });
+        let (cells, merged_ranges) = xlsx_sheet_cells(&sheet_xml, &shared);
+        sheets.push(WorkbookSheet { name, cells, sheet_id, merged_ranges });
     }
     Ok(sheets)
 }
@@ -315,10 +326,16 @@ fn xlsx_shared_strings(xml: &str) -> Vec<String> {
     strings
 }
 
-/// Parses a single worksheet XML into a 1-based (row, col) → SheetCell map.
-fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> HashMap<(u32, u32), SheetCell> {
+/// Parses a single worksheet XML into a 1-based (row, col) → SheetCell map,
+/// plus any `<mergeCells><mergeCell ref="..."/></mergeCells>` ranges
+/// (Milestone B6c2).
+fn xlsx_sheet_cells(
+    xml: &str,
+    shared: &[String],
+) -> (HashMap<(u32, u32), SheetCell>, Vec<MergeRect>) {
     let mut iter = XmlIter::new(xml);
     let mut cells: HashMap<(u32, u32), SheetCell> = HashMap::new();
+    let mut merged_ranges: Vec<MergeRect> = Vec::new();
     let mut cur_row: u32 = 0;
     let mut cur_col: u32 = 0;
     let mut cur_type = String::new();
@@ -352,6 +369,11 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> HashMap<(u32, u32), SheetCe
                         // inside <is> for inline strings
                         in_is_t = true;
                         is_text.clear();
+                    }
+                    "mergeCell" => {
+                        if let Some(rect) = attr_get(attrs, "ref").and_then(parse_merge_ref) {
+                            merged_ranges.push(rect);
+                        }
                     }
                     _ => {}
                 }
@@ -389,7 +411,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> HashMap<(u32, u32), SheetCe
             }
         }
     }
-    cells
+    (cells, merged_ranges)
 }
 
 fn xlsx_parse_cell(v: &str, t: &str, shared: &[String]) -> Option<SheetCell> {
@@ -428,6 +450,15 @@ fn parse_cell_ref(r: &str) -> Option<(u32, u32)> {
     Some((row, col))
 }
 
+/// Parses an XLSX `<mergeCell ref="A1:C1"/>` address into a 1-based
+/// inclusive `(top-left, bottom-right)` pair (Milestone B6c2). Mirrors
+/// `vm::parse_range_addr`'s logic locally rather than importing it, since
+/// only `vm` depends on `reader` today, not the reverse.
+fn parse_merge_ref(s: &str) -> Option<MergeRect> {
+    let i = s.find(':')?;
+    Some((parse_cell_ref(&s[..i])?, parse_cell_ref(&s[i + 1..])?))
+}
+
 // ── ODS reader ────────────────────────────────────────────────────────────────
 
 fn read_ods(path: &str) -> Result<Vec<WorkbookSheet>, String> {
@@ -456,7 +487,12 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                         let name = attr_get(attrs, "name")
                             .unwrap_or("sheet1")
                             .to_lowercase();
-                        sheets.push(WorkbookSheet { name, cells: HashMap::new(), sheet_id: None });
+                        sheets.push(WorkbookSheet {
+                            name,
+                            cells: HashMap::new(),
+                            sheet_id: None,
+                            merged_ranges: Vec::new(),
+                        });
                         in_sheet = true;
                         row = 0;
                         col = 0;
@@ -476,6 +512,26 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                         let bool_attr = attr_get(attrs, "boolean-value").unwrap_or("").to_string();
                         cell_text.clear();
                         in_text_p = false;
+
+                        // Merge span attrs only ever appear on the anchor
+                        // `table-cell`, never `covered-table-cell`
+                        // (Milestone B6c2).
+                        if local == "table-cell" {
+                            let cols_spanned: u32 = attr_get(attrs, "number-columns-spanned")
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(1);
+                            let rows_spanned: u32 = attr_get(attrs, "number-rows-spanned")
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(1);
+                            if (cols_spanned > 1 || rows_spanned > 1)
+                                && let Some(sheet) = sheets.last_mut()
+                            {
+                                sheet.merged_ranges.push((
+                                    (row, col),
+                                    (row + rows_spanned - 1, col + cols_spanned - 1),
+                                ));
+                            }
+                        }
 
                         let make_state = || OdsCellState {
                             row, col, cell_type, val_attr, bool_attr, text: String::new(),
@@ -601,5 +657,73 @@ mod sheet_id_tests {
         let sheets = ods_parse(xml);
         assert_eq!(sheets.len(), 2);
         assert!(sheets.iter().all(|s| s.sheet_id.is_none()));
+    }
+}
+
+// ── Milestone B6c2: merged-range parsing ────────────────────────────────
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    #[test]
+    fn parse_merge_ref_reads_top_left_and_bottom_right() {
+        assert_eq!(parse_merge_ref("A1:C1"), Some(((1, 1), (1, 3))));
+        assert_eq!(parse_merge_ref("B3:B4"), Some(((3, 2), (4, 2))));
+    }
+
+    #[test]
+    fn parse_merge_ref_rejects_a_single_cell_with_no_colon() {
+        assert_eq!(parse_merge_ref("A1"), None);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_reads_merge_cells() {
+        let xml = r#"<worksheet>
+<sheetData>
+<row r="1"><c r="A1"><v>1</v></c></row>
+</sheetData>
+<mergeCells count="2">
+<mergeCell ref="A1:C1"/>
+<mergeCell ref="B3:B4"/>
+</mergeCells>
+</worksheet>"#;
+        let (cells, merged_ranges) = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(cells.len(), 1);
+        assert_eq!(merged_ranges, vec![((1, 1), (1, 3)), ((3, 2), (4, 2))]);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_with_no_merge_cells_element_has_empty_merged_ranges() {
+        let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
+        let (_, merged_ranges) = xlsx_sheet_cells(xml, &[]);
+        assert!(merged_ranges.is_empty());
+    }
+
+    #[test]
+    fn ods_parse_reads_column_and_row_span_into_a_merged_range() {
+        let xml = r#"<office:spreadsheet>
+<table:table table:name="Sheet1">
+<table:table-row>
+<table:table-cell table:number-columns-spanned="3" office:value-type="float" office:value="1"/>
+<table:covered-table-cell/>
+<table:covered-table-cell/>
+</table:table-row>
+</table:table>
+</office:spreadsheet>"#;
+        let sheets = ods_parse(xml);
+        assert_eq!(sheets[0].merged_ranges, vec![((1, 1), (1, 3))]);
+    }
+
+    #[test]
+    fn ods_parse_ordinary_cells_have_no_merged_ranges() {
+        let xml = r#"<office:spreadsheet>
+<table:table table:name="Sheet1">
+<table:table-row>
+<table:table-cell office:value-type="float" office:value="1"/>
+</table:table-row>
+</table:table>
+</office:spreadsheet>"#;
+        let sheets = ods_parse(xml);
+        assert!(sheets[0].merged_ranges.is_empty());
     }
 }

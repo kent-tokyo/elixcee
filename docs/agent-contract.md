@@ -490,7 +490,7 @@ shrinking later, per the roadmap. Only two strategies and one range-scoped
 assertion rule exist in this phase; more of each are plausible later
 additions, not redesigns.
 
-## `diagnose` subcommand (Excel operation diagnostics, Milestones B6a/B6b/B6c)
+## `diagnose` subcommand (Excel operation diagnostics, Milestones B6a/B6b/B6c/B6c2)
 
 ```
 elixcee diagnose <vba_file>... <MacroName> --file <workbook> [--json]
@@ -498,10 +498,11 @@ elixcee diagnose <vba_file>... <MacroName> --file <workbook> [--json]
 
 Runs one macro once and classifies *why* it failed — a missing worksheet,
 a missing workbook, an out-of-bounds array index, a Copy/Paste shape
-mismatch or missing clipboard, or a write to a protected sheet — with
-concrete evidence (the requested key and what was actually available, a
-"did you mean" suggestion, the mismatched shapes, or the protected sheet's
-name), instead of only a bare runtime-error string.
+mismatch or missing clipboard, a write to a protected sheet, or a
+Copy/Paste that conflicts with a merged-cell layout — with concrete
+evidence (the requested key and what was actually available, a "did you
+mean" suggestion, the mismatched shapes, the protected sheet's name, or the
+conflicting merged range), instead of only a bare runtime-error string.
 
 Missing-sheet/workbook/array-bounds classification (Milestone B6a) has a
 different posture from `run`/`check`/`test-workbook`: it turns on
@@ -511,12 +512,12 @@ hard, classified failure — because a diagnostic tool whose whole purpose is
 "what would Excel actually reject here" needs to *not* paper over the exact
 class of mistake it exists to catch. Every other subcommand leaves
 `strict_resolution` off (the default) and is completely unaffected.
-Copy/Paste shape-mismatch and sheet-protection classification (Milestones
-B6b/B6c, below) work differently: those checks are unconditional hard
-errors in every mode that executes the macro (`run`/`diagnose`/
-`test-workbook`) — `diagnose` doesn't need a toggle for them, it just
-surfaces the same failure with structured evidence instead of a bare
-error string.
+Copy/Paste shape-mismatch, sheet-protection, and merged-cell-conflict
+classification (Milestones B6b/B6c/B6c2, below) work differently: those
+checks are unconditional hard errors in every mode that executes the macro
+(`run`/`diagnose`/`test-workbook`) — `diagnose` doesn't need a toggle for
+them, it just surfaces the same failure with structured evidence instead of
+a bare error string.
 
 ### Strict-resolution mode
 
@@ -640,6 +641,46 @@ construct, same precedent as `WorkbookQualifiedSheet`'s mismatch check).
   anywhere; `Sheets(name)`/`Worksheets(name)` qualification is required,
   same as every other sheet-level statement in this codebase.
 
+### Merged-cell-aware Paste diagnostics (Milestone B6c2)
+
+`WorkbookSheet` now carries `merged_ranges` (parsed from XLSX
+`<mergeCell ref="...">` and ODS `table:number-columns-spanned`/
+`table:number-rows-spanned`), threaded into the VM as
+`merged_ranges: HashMap<sheet, Vec<rect>>` alongside `sheets`/
+`active_sheet`/`protected_sheets`. `do_paste` checks the destination
+against this state right after computing the fill dimensions — same
+"unconditional hard error in every mode that executes the macro"
+(`run`/`diagnose`/`test-workbook`) posture as B6b/B6c, for the same
+reason: real Excel rejects these pastes outright regardless of `On Error`
+state, and nothing pre-existing relied on lenient behavior since the
+concept didn't exist before. Checks run in this order, first match wins:
+
+1. **`PASTE_INTO_NON_ANCHOR_MERGED_CELL`**: the destination anchor cell
+   falls inside an existing merge but isn't that merge's own top-left cell
+   — applies regardless of destination shape, including a single-cell
+   destination. Evidence: `dest_addr`, `dest_sheet`, `merged_range`.
+   Pasting into a merge's own top-left cell is the normal way to write to
+   a merged cell in real Excel and is never flagged.
+2. **`PASTE_PARTIAL_MERGED_RANGE`**: the destination — only when genuinely
+   multi-cell — partially overlaps one or more merges without fully
+   containing them. Evidence: `dest_addr`, `dest_sheet`, `conflicts` (every
+   overlapping merge's range).
+3. **`PASTE_MERGE_LAYOUT_MISMATCH`**: only checked when the source isn't a
+   single cell and the shape already matched (B6b); the source-side and
+   destination-side merges, normalized to relative position within their
+   own rect (transposed first if `Transpose:=True`), don't line up.
+   Evidence: `source_addr`, `source_sheet`, `dest_addr`, `dest_sheet`,
+   `conflicts` (the mismatching destination-side merges), and
+   `copy_location` (same two-location convention as `PASTE_SHAPE_MISMATCH`).
+
+Non-goals for B6c2: AutoFilter/`SpecialCells(xlCellTypeVisible)`
+visible-cells-only copy, multi-area (`Areas`) ranges, Excel Tables, hidden
+rows/columns, external OS-level clipboard, formula relative-reference
+translation on copy, and merge-awareness on any statement other than
+Paste (`RangeSort`/`RangeInsert`/`RangeDelete`/plain `RangeWrite` are
+untouched — a merge only blocks a *paste into* it, not other mutations,
+in this milestone).
+
 ### Output
 
 Success: `{"schema_version":1,"ok":true,"messages":[...]}`
@@ -676,7 +717,11 @@ breaking schema change. `ARRAY_INDEX_OUT_OF_BOUNDS` entries carry
 `name`/`index`/`lower`/`upper` instead of the name-lookup evidence fields;
 `PASTE_SHAPE_MISMATCH`/`PASTE_WITHOUT_COPY` entries (Milestone B6b) carry
 the fields described above; `SHEET_PROTECTED` entries (Milestone B6c)
-carry just `sheet`, e.g.:
+carry just `sheet`; `PASTE_INTO_NON_ANCHOR_MERGED_CELL`/
+`PASTE_PARTIAL_MERGED_RANGE`/`PASTE_MERGE_LAYOUT_MISMATCH` entries
+(Milestone B6c2) carry `dest_addr`/`dest_sheet` plus either
+`merged_range` or a `conflicts` array (and, for the layout-mismatch case,
+`source_addr`/`source_sheet`/`copy_location`), e.g.:
 
 ```json
 {
@@ -702,6 +747,21 @@ carry just `sheet`, e.g.:
 }
 ```
 
+```json
+{
+  "code": "PASTE_MERGE_LAYOUT_MISMATCH",
+  "certainty": "definite",
+  "source_addr": "A1:C10", "source_sheet": "sheet1",
+  "dest_addr": "E1:G10", "dest_sheet": "sheet1",
+  "conflicts": ["E1:G1"],
+  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
+  "suggestions": [
+    "unmerge E1:G1 before pasting",
+    "or make the source and destination merge layouts identical"
+  ]
+}
+```
+
 Exit code 0/`ok:true` on success, 1/`ok:false` on failure — same
 convention as every other subcommand. `location` follows the same
 single-module-only rule as run-mode's own `--json` contract (a
@@ -713,14 +773,16 @@ single-module-only rule as run-mode's own `--json` contract (a
 B6a covers resolution failures (missing worksheet/workbook, array out of
 bounds); B6b covers Copy/Paste shape mismatch and clipboard state (see its
 own non-goals list above); B6c covers sheet protection (see its own
-non-goals note above). Explicitly out of scope, planned for later:
+non-goals note above); B6c2 covers merged-cell conflicts on Paste (see its
+own non-goals note above). Explicitly out of scope, planned for later:
 
-- Merged cells, multi-area (`Areas`) ranges, hidden/filtered rows — the
-  user's original roadmap bundled these with sheet protection under
-  "B6c," but they were split into a future continuation once grounding
-  showed each needs new reader-format parsing (XLSX/ODS) and/or a
-  range-model change (a single rectangle → a list of areas) that
-  protection alone doesn't need.
+- Multi-area (`Areas`) ranges, hidden/filtered rows, AutoFilter
+  visible-cells-only copy — the user's original roadmap bundled these
+  with merged cells under "B6c," but merged-cell Paste conflicts shipped
+  first as B6c2 once grounding showed each of the others needs its own
+  new reader-format parsing (XLSX/ODS) and/or range-model change (a
+  single rectangle → a list of areas) that merged-cell handling alone
+  didn't need.
 - Excel Tables (`ListObjects`) — never part of the user's original
   roadmap; added as a placeholder non-goal during B6a's own docs and kept
   deferred (a full new VBA object model, comparable in scope to `Range`/

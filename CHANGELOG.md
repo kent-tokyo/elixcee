@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Merged-cell-aware Paste diagnostics** (Milestone B6c2): `diagnose` now classifies Copy/Paste operations that conflict with a merged-cell layout —
+  - `PASTE_INTO_NON_ANCHOR_MERGED_CELL`: the destination cell falls inside an existing merge but isn't that merge's own top-left cell (pasting into the top-left cell itself, the normal way to write to a merged cell, is unaffected)
+  - `PASTE_PARTIAL_MERGED_RANGE`: a multi-cell destination partially overlaps one or more merges without fully containing them
+  - `PASTE_MERGE_LAYOUT_MISMATCH`: the source's and destination's merged-cell layouts, compared by relative position (accounting for `Transpose:=True`), don't match
+  - `WorkbookSheet.merged_ranges` parsed from XLSX `<mergeCell ref="...">` and ODS `table:number-columns-spanned`/`table:number-rows-spanned`, threaded into a new `Vm.merged_ranges` map
+  - Unconditional hard errors in every mode that executes the macro (`run`/`diagnose`/`test-workbook`), matching real Excel's Error 1004 regardless of `On Error` state — same posture as B6b/B6c
+  - Scope stays Paste-only; multi-area (`Areas`) ranges, hidden/filtered rows, and AutoFilter visible-cells-only copy remain deferred
+
 ## [0.1.1]
 
 ### Added

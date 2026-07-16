@@ -203,8 +203,9 @@ schema, strategies, and assertion rules: [docs/agent-contract.md](docs/agent-con
 
 `elixcee diagnose` runs a macro once and explains *why* Excel would reject
 it — a missing worksheet, a missing workbook, an out-of-bounds array
-index, a Copy/Paste shape mismatch, or a write to a protected sheet — with
-evidence, instead of a bare error string:
+index, a Copy/Paste shape mismatch, a write to a protected sheet, or a
+Copy/Paste that conflicts with a merged-cell layout — with evidence,
+instead of a bare error string:
 
 ```bat
 elixcee diagnose Main.bas --file report.xlsx --json Main.Run
@@ -254,6 +255,23 @@ Writing to a `.Protect`ed sheet reports which sheet and how to fix it:
   "code": "SHEET_PROTECTED",
   "sheet": "sheet1",
   "suggestions": ["unprotect the sheet first: Worksheets(\"sheet1\").Unprotect"]
+}
+```
+
+Pasting `A1:C10` into `E1:G10` when the destination's first row is merged
+(`E1:G1`) but the source's isn't reports the layout conflict and both
+locations:
+
+```json
+{
+  "code": "PASTE_MERGE_LAYOUT_MISMATCH",
+  "source_addr": "A1:C10", "dest_addr": "E1:G10",
+  "conflicts": ["E1:G1"],
+  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
+  "suggestions": [
+    "unmerge E1:G1 before pasting",
+    "or make the source and destination merge layouts identical"
+  ]
 }
 ```
 

@@ -186,7 +186,7 @@ elixcee test-workbook fixture.toml --json
 
 ### Excel操作の診断
 
-`elixcee diagnose` はマクロを一度だけ実行し、存在しないシート・存在しないワークブック・配列の範囲外アクセス・Copy/Paste の形状不一致・保護されたシートへの書き込みなど、Excelがその操作を拒否する具体的な理由を根拠付きで説明します（単なるエラー文字列ではありません）：
+`elixcee diagnose` はマクロを一度だけ実行し、存在しないシート・存在しないワークブック・配列の範囲外アクセス・Copy/Paste の形状不一致・保護されたシートへの書き込み・結合セルのレイアウトと衝突する Copy/Paste など、Excelがその操作を拒否する具体的な理由を根拠付きで説明します（単なるエラー文字列ではありません）：
 
 ```bat
 elixcee diagnose Main.bas --file report.xlsx --json Main.Run
@@ -235,6 +235,21 @@ elixcee diagnose Main.bas --file report.xlsx --json Main.Run
   "code": "SHEET_PROTECTED",
   "sheet": "sheet1",
   "suggestions": ["unprotect the sheet first: Worksheets(\"sheet1\").Unprotect"]
+}
+```
+
+`A1:C10` を `E1:G10` へ貼り付ける際、貼り付け先の1行目だけが結合されている（`E1:G1`）が貼り付け元は結合されていない場合、レイアウトの衝突と両方の文の位置を報告します:
+
+```json
+{
+  "code": "PASTE_MERGE_LAYOUT_MISMATCH",
+  "source_addr": "A1:C10", "dest_addr": "E1:G10",
+  "conflicts": ["E1:G1"],
+  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
+  "suggestions": [
+    "unmerge E1:G1 before pasting",
+    "or make the source and destination merge layouts identical"
+  ]
 }
 ```
 

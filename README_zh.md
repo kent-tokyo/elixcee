@@ -185,7 +185,7 @@ elixcee test-workbook fixture.toml --json
 
 ### Excel 操作诊断
 
-`elixcee diagnose` 执行一次宏，并给出证据说明 Excel *为什么* 会拒绝该操作——缺失的工作表、缺失的工作簿、数组越界、Copy/Paste 形状不匹配，或写入受保护的工作表——而不是只给出一句裸的错误字符串：
+`elixcee diagnose` 执行一次宏，并给出证据说明 Excel *为什么* 会拒绝该操作——缺失的工作表、缺失的工作簿、数组越界、Copy/Paste 形状不匹配、写入受保护的工作表，或 Copy/Paste 与合并单元格布局冲突——而不是只给出一句裸的错误字符串：
 
 ```bat
 elixcee diagnose Main.bas --file report.xlsx --json Main.Run
@@ -234,6 +234,21 @@ elixcee diagnose Main.bas --file report.xlsx --json Main.Run
   "code": "SHEET_PROTECTED",
   "sheet": "sheet1",
   "suggestions": ["unprotect the sheet first: Worksheets(\"sheet1\").Unprotect"]
+}
+```
+
+将 `A1:C10` 粘贴到 `E1:G10`，若目标区域的第一行已合并（`E1:G1`）而源区域没有合并，会报告布局冲突以及两条语句各自的位置：
+
+```json
+{
+  "code": "PASTE_MERGE_LAYOUT_MISMATCH",
+  "source_addr": "A1:C10", "dest_addr": "E1:G10",
+  "conflicts": ["E1:G1"],
+  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
+  "suggestions": [
+    "unmerge E1:G1 before pasting",
+    "or make the source and destination merge layouts identical"
+  ]
 }
 ```
 
