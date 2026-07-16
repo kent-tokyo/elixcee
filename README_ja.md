@@ -255,6 +255,37 @@ elixcee diagnose Main.bas --file report.xlsx --json Main.Run
 
 分類ルールと JSON スキーマの詳細は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
 
+### 生成された入力群にわたる診断
+
+`elixcee diagnose-workbook` は上記2つの機能を組み合わせたものです。`test-workbook` が生成するケース群に対してマクロを繰り返し実行し、失敗した場合は単なるエラー文字列ではなく分類結果を報告します。配列範囲外エラーのように、一部の入力値でしか再現しない入力依存の失敗にこそ真価を発揮します——形状不一致・結合セルの衝突・シート保護といった構造的な問題は、そもそも入力値に依存しないため `diagnose` を1回実行するだけで十分見つかります:
+
+```bat
+elixcee diagnose-workbook fixture.toml --json
+```
+
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "seed": 42,
+  "case_index": 3,
+  "inputs": [{"address": "sheet1!B2", "value": 999999999}],
+  "failure": {
+    "rule": "no_runtime_error",
+    "message": "Array 'arr': index 999999999 out of bounds (len=6)"
+  },
+  "root_causes": [
+    {
+      "code": "ARRAY_INDEX_OUT_OF_BOUNDS",
+      "name": "arr", "index": 999999999, "lower": 0, "upper": 5,
+      "suggestions": ["check that 'arr' is large enough for index 999999999 (valid range is 0 To 5)"]
+    }
+  ]
+}
+```
+
+フィクスチャ形式と `--seed`/`--case` による再現は `test-workbook` と同一、加えて今回の実行だけフィクスチャのケース数を上書きする `--cases N` を追加しました。完全なスキーマは [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
+
 ### ソースからビルド
 
 ```bash

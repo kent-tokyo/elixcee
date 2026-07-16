@@ -1,7 +1,7 @@
 use std::{env, fs, process};
 
 use elixcee::{
-    check, diagnose,
+    check, diagnose, diagnoseworkbook,
     diagnostics::{self, ElixceeError},
     parser, reader,
     save_workbook, snapshot, testworkbook,
@@ -41,7 +41,13 @@ fn usage() -> ! {
            elixcee diagnose <vba_file>... <MacroName> --file <path> [--json]\n\
          \x20   Runs the macro once in strict-resolution mode and classifies the\n\
          \x20   first resolution failure (missing worksheet/workbook, array out of\n\
-         \x20   bounds) with evidence, instead of only a bare runtime-error string."
+         \x20   bounds) with evidence, instead of only a bare runtime-error string.\n\
+           elixcee diagnose-workbook <fixture.toml> [--json] [--seed <N>] [--case <N>] [--cases <N>]\n\
+         \x20   Combines test-workbook's generated-case search with diagnose's\n\
+         \x20   root-cause classification: reruns the macro under strict-resolution\n\
+         \x20   mode across generated cases, reporting the first failing case with\n\
+         \x20   root-cause evidence when classifiable. Same fixture/flags as\n\
+         \x20   test-workbook, plus --cases to override the fixture's case count."
     );
     process::exit(1);
 }
@@ -420,6 +426,8 @@ fn run_test_workbook_command(args: &[String]) -> ! {
         &workbook_path,
         seed_override,
         case_override,
+        None,
+        false,
     ) {
         Ok(result) => {
             let ok = matches!(result, testworkbook::FixtureResult::Passed { .. });
@@ -427,6 +435,140 @@ fn run_test_workbook_command(args: &[String]) -> ! {
                 println!("{}", testworkbook::to_json(&result));
             } else {
                 println!("{}", testworkbook::to_plain_text(&result));
+            }
+            process::exit(if ok { 0 } else { 1 });
+        }
+        Err(e) => {
+            if json {
+                fail_json(ElixceeError::io_error(e), &[])
+            } else {
+                die(&e)
+            }
+        }
+    }
+}
+
+/// `elixcee diagnose-workbook <fixture.toml> [--json] [--seed N] [--case N]
+/// [--cases N]` — Milestone B6d: reuses `test-workbook`'s (B5a) generated
+/// case search, run with `Vm::strict_resolution` on, and enriches whichever
+/// failures are classifiable with `diagnose`'s (B6a–B6c2) root-cause
+/// machinery. Same fixture format and flags as `test-workbook`, plus a new
+/// `--cases N` override (scoped to this subcommand only — the fixture's own
+/// `cases` field is still what `test-workbook` itself honors).
+fn run_diagnose_workbook_command(args: &[String]) -> ! {
+    let mut path: Option<String> = None;
+    let mut json = false;
+    let mut seed_override: Option<u64> = None;
+    let mut case_override: Option<u64> = None;
+    let mut cases_override: Option<u64> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json = true,
+            "--seed" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .unwrap_or_else(|| die("--seed requires a number"));
+                seed_override = Some(
+                    v.parse()
+                        .unwrap_or_else(|_| die("--seed must be a non-negative integer")),
+                );
+            }
+            "--case" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .unwrap_or_else(|| die("--case requires a number"));
+                case_override = Some(
+                    v.parse()
+                        .unwrap_or_else(|_| die("--case must be a non-negative integer")),
+                );
+            }
+            "--cases" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .unwrap_or_else(|| die("--cases requires a number"));
+                cases_override = Some(
+                    v.parse()
+                        .unwrap_or_else(|_| die("--cases must be a non-negative integer")),
+                );
+            }
+            a if a.starts_with('-') => die(&format!("unknown option: {}", a)),
+            _ if path.is_none() => path = Some(args[i].clone()),
+            _ => die("diagnose-workbook takes exactly one fixture file"),
+        }
+        i += 1;
+    }
+    let Some(fixture_path) = path else { usage() };
+
+    let text = match fs::read_to_string(&fixture_path) {
+        Ok(t) => t,
+        Err(e) => {
+            let msg = format!("cannot read '{}': {}", fixture_path, e);
+            if json {
+                fail_json(ElixceeError::io_error(msg), &[])
+            } else {
+                die(&msg)
+            }
+        }
+    };
+    let fixture = match testworkbook::parse_fixture(&text) {
+        Ok(f) => f,
+        Err(e) => {
+            let msg = format!("invalid fixture '{}': {}", fixture_path, e);
+            if json {
+                fail_json(ElixceeError::io_error(msg), &[])
+            } else {
+                die(&msg)
+            }
+        }
+    };
+
+    let base_dir = std::path::Path::new(&fixture_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let workbook_path = resolve_relative(base_dir, &fixture.workbook);
+    let vba_paths: Vec<String> = fixture
+        .vba_files
+        .iter()
+        .map(|f| resolve_relative(base_dir, f))
+        .collect();
+    if vba_paths.is_empty() {
+        let msg = format!(
+            "fixture '{}': vba_files must list at least one .bas file",
+            fixture_path
+        );
+        if json {
+            fail_json(ElixceeError::io_error(msg), &[])
+        } else {
+            die(&msg)
+        }
+    }
+
+    let modules = load_modules(&vba_paths, json);
+    let programs: Vec<(String, parser::Program)> = modules
+        .iter()
+        .map(|m| (m.name.clone(), m.program.clone()))
+        .collect();
+
+    match testworkbook::run_fixture(
+        &fixture,
+        &programs,
+        &workbook_path,
+        seed_override,
+        case_override,
+        cases_override,
+        true,
+    ) {
+        Ok(result) => {
+            let ok = matches!(result, testworkbook::FixtureResult::Passed { .. });
+            if json {
+                println!("{}", diagnoseworkbook::to_json(&result));
+            } else {
+                println!("{}", diagnoseworkbook::to_plain_text(&result));
             }
             process::exit(if ok { 0 } else { 1 });
         }
@@ -615,6 +757,9 @@ fn main() {
     }
     if args.get(1).map(String::as_str) == Some("diagnose") {
         run_diagnose_command(&args[2..]);
+    }
+    if args.get(1).map(String::as_str) == Some("diagnose-workbook") {
+        run_diagnose_workbook_command(&args[2..]);
     }
 
     let mut positionals: Vec<String> = Vec::new();

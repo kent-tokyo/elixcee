@@ -787,11 +787,93 @@ own non-goals note above). Explicitly out of scope, planned for later:
   roadmap; added as a placeholder non-goal during B6a's own docs and kept
   deferred (a full new VBA object model, comparable in scope to `Range`/
   `Sheets` itself, not "add diagnosis to an existing path").
-- Integration with `test-workbook`'s case generator for counterexample
-  search (B6d) — `diagnose` runs a macro exactly once today.
 - A real VBA `Collection` object — it doesn't exist in elixcee at all, so
   there is nothing to classify a failure for; adding one is a first-class
   feature, not "add diagnosis to an existing path."
 - Real multi-workbook execution — only a name/index mismatch check against
   the single loaded workbook ships in this milestone.
 - `Dim arr(1 To N)` non-zero-lower-bound tracking.
+
+`diagnose` itself still runs a macro exactly once against one fixed
+workbook state — integration with `test-workbook`'s generated-case search
+now ships as its own subcommand, `diagnose-workbook` (Milestone B6d, below),
+rather than changing `diagnose`'s own execution model.
+
+## `diagnose-workbook` subcommand (generated-case root-cause diagnosis, Milestone B6d)
+
+```
+elixcee diagnose-workbook <fixture.toml> [--json] [--seed <N>] [--case <N>] [--cases <N>]
+```
+
+Reuses `test-workbook`'s (B5a) case generator — the identical TOML fixture
+format, `boundary_numeric`/`boundary_string` strategies, deterministic
+seed/case-index derivation, and fail-fast-on-first-failure model — but runs
+each case with `Vm::strict_resolution` turned on (matching `diagnose`'s own
+posture) and enriches whichever failures are classifiable with the same
+root-cause machinery `diagnose` uses (B6a–B6c2's `ResolutionFailureKind` →
+`RootCause` pipeline), instead of only reporting a bare rule/message.
+
+**Honest scope**: most root causes are *structural* — the 3 merge kinds,
+`PASTE_SHAPE_MISMATCH`, `PASTE_WITHOUT_COPY`, and `SHEET_PROTECTED` all
+depend on the macro's own text and the workbook's fixed layout, not on which
+boundary value a case draws, so they fire identically on case 0 (or never)
+no matter how many cases run — a single plain `diagnose` invocation already
+finds these in one shot. This command earns its keep specifically for
+**input-dependent** kinds, chiefly `ARRAY_INDEX_OUT_OF_BOUNDS` (a drawn
+value can flip an array index in or out of bounds across cases) and, in
+principle, `WORKSHEET_NOT_FOUND`/`WORKBOOK_NOT_FOUND` if a drawn value were
+used to build a sheet/workbook name. Every other runtime error (the
+majority — type mismatches, division by zero, etc.) has no classification
+at all, matching `diagnose`'s own permanent limitation.
+
+- **`--cases <N>`**: overrides the fixture's declared `cases` count for this
+  invocation only — scoped to `diagnose-workbook`; `test-workbook` itself
+  still only honors the fixture's own `cases` field (no equivalent flag
+  there). `--seed`/`--case` behave identically to `test-workbook`.
+- Output is `test-workbook`'s existing JSON shape
+  (`schema_version`/`ok`/`seed`/`case_index`/`inputs`/`failure` on failure,
+  `schema_version`/`ok`/`seed`/`cases_run` on success) plus one sibling
+  field on failure: `root_causes` — `[]` when unclassified, a one-item array
+  in `diagnose`'s own field shape (same `code`/evidence-field spellings,
+  e.g. `source_addr`/`dest_addr`/`conflicts` for the merge kinds) when
+  classified. No `copy_location` resolution — there's no per-case source
+  text/location tracking in the generated-case search, so paste-related
+  kinds always report `"copy_location":null` here (unlike plain `diagnose`,
+  which resolves it from the single source file it's given).
+- Non-JSON mode appends a `root cause: <CODE>` line when classified — full
+  evidence and suggestions are `--json`-only, matching every other
+  subcommand's "plain text is a simplified view" convention.
+
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "seed": 42,
+  "case_index": 3,
+  "inputs": [{"address": "sheet1!B2", "value": 999999999}],
+  "failure": {
+    "rule": "no_runtime_error",
+    "message": "Array 'arr': index 999999999 out of bounds (len=6)"
+  },
+  "root_causes": [
+    {
+      "code": "ARRAY_INDEX_OUT_OF_BOUNDS",
+      "certainty": "definite",
+      "name": "arr",
+      "index": 999999999,
+      "lower": 0,
+      "upper": 5,
+      "suggestions": ["check that 'arr' is large enough for index 999999999 (valid range is 0 To 5)"]
+    }
+  ]
+}
+```
+
+### Explicit non-goals (this milestone)
+
+Shrinking (minimizing a failing case's inputs to a smaller reproducer) is
+the deliberate next step *after* this milestone, not part of it — cases are
+reported as-drawn. Also deferred: multi-area `Areas` ranges,
+filtered/hidden-visible-cell diagnosis (both already deferred from
+B6c/B6c2), backporting `--cases` to `test-workbook` itself, and any new
+`[[assertions]]` rules beyond the existing `no_excel_errors`.

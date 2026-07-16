@@ -31,7 +31,7 @@
 
 use crate::diagnostics::{json_string, variant_to_json};
 use crate::parser::ast::Program;
-use crate::vm::{CellContent, Variant, Vm, parse_sheet_range_addr};
+use crate::vm::{CellContent, ResolutionFailureKind, Variant, Vm, parse_sheet_range_addr};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -413,6 +413,19 @@ pub enum FixtureResult {
         case_index: u64,
         inputs_used: Vec<InputUsed>,
         failure: FailureDetail,
+        /// The VM's classified resolution failure, if any, captured via
+        /// `Vm::take_resolution_failure()` right after the macro call fails
+        /// (Milestone B6d) — `None` for a panic/timeout, and also `None` for
+        /// a runtime error that isn't one of `diagnose`'s classified kinds
+        /// (most aren't: only structural ones like `SheetProtected` or
+        /// genuinely input-dependent ones like `ArrayIndexOutOfBounds` set
+        /// this side channel). `test-workbook`'s own `to_json`/`to_plain_text`
+        /// ignore this field entirely — it exists for `diagnose-workbook` to
+        /// enrich the same failure with root-cause evidence. `Box`ed:
+        /// `ResolutionFailureKind`'s largest variants (several `String`s/
+        /// `Vec`s) made this field big enough that clippy's
+        /// `large_enum_variant` flagged the size gap against `Passed`.
+        resolution_kind: Option<Box<ResolutionFailureKind>>,
     },
 }
 
@@ -424,12 +437,22 @@ pub enum FixtureResult {
 /// independent of every other case. Stops at the first failing case
 /// (fail-fast, matching `proptest`'s own convention and keeping this
 /// subcommand's "exactly one JSON object per invocation" contract).
+///
+/// `strict` sets `Vm::strict_resolution` before the macro call (Milestone
+/// B6d) — `test-workbook` itself always passes `false` (unchanged lenient
+/// behavior); `diagnose-workbook` passes `true` to also catch
+/// `WorksheetNotFound`/`WorkbookNotFound`-style failures across generated
+/// cases, matching `diagnose`'s own strict posture. Set only after inputs
+/// are written: `ensure_sheet`'s auto-vivify is what strict mode disables,
+/// and by then every input sheet already exists.
 pub fn run_fixture(
     fixture: &Fixture,
     programs: &[(String, Program)],
     workbook_path: &str,
     seed_override: Option<u64>,
     case_override: Option<u64>,
+    cases_override: Option<u64>,
+    strict: bool,
 ) -> Result<FixtureResult, String> {
     let base_seed = seed_override.unwrap_or(fixture.seed);
     let input_pools: Vec<Vec<Variant>> = fixture
@@ -438,9 +461,12 @@ pub fn run_fixture(
         .map(|i| resolve_strategy(&i.strategy))
         .collect::<Result<_, _>>()?;
 
+    // `cases_override` (`--cases`, Milestone B6d) overrides the fixture's
+    // declared case *count*; `case_override` (`--case`) replays one specific
+    // index and takes precedence, same as `--seed` overriding `fixture.seed`.
     let case_indices: Vec<u64> = match case_override {
         Some(n) => vec![n],
-        None => (0..fixture.cases).collect(),
+        None => (0..cases_override.unwrap_or(fixture.cases)).collect(),
     };
     let cases_run = case_indices.len() as u64;
 
@@ -480,6 +506,7 @@ pub fn run_fixture(
         }
 
         vm.deadline = Some(Instant::now() + Duration::from_secs(fixture.timeout_secs));
+        vm.strict_resolution = strict;
 
         let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if programs.len() == 1 {
@@ -501,6 +528,7 @@ pub fn run_fixture(
                         actual: None,
                         message: Some("macro execution panicked".to_string()),
                     },
+                    resolution_kind: None,
                 });
             }
             Ok(Err(e)) => {
@@ -509,6 +537,7 @@ pub fn run_fixture(
                 } else {
                     "no_runtime_error"
                 };
+                let resolution_kind = vm.take_resolution_failure().map(Box::new);
                 return Ok(FixtureResult::Failed {
                     seed: base_seed,
                     case_index,
@@ -519,6 +548,7 @@ pub fn run_fixture(
                         actual: None,
                         message: Some(e),
                     },
+                    resolution_kind,
                 });
             }
             Ok(Ok(())) => {}
@@ -560,6 +590,7 @@ pub fn run_fixture(
                                         actual: Some(e.as_str().to_string()),
                                         message: None,
                                     },
+                                    resolution_kind: None,
                                 });
                             }
                         }
@@ -591,6 +622,7 @@ pub fn to_json(result: &FixtureResult) -> String {
             case_index,
             inputs_used,
             failure,
+            ..
         } => {
             let inputs_json: Vec<String> = inputs_used
                 .iter()
@@ -640,6 +672,7 @@ pub fn to_plain_text(result: &FixtureResult) -> String {
             case_index,
             inputs_used,
             failure,
+            ..
         } => {
             let mut line = format!(
                 "FAIL: case {} (seed {}) - {}",
@@ -830,13 +863,15 @@ rule = "no_excel_errors"
             }],
         };
 
-        let result = run_fixture(&fixture, &programs, &fixture.workbook, None, None).unwrap();
+        let result =
+            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, false).unwrap();
         let (seed, case_index, inputs_used) = match &result {
             FixtureResult::Failed {
                 seed,
                 case_index,
                 inputs_used,
                 failure,
+                ..
             } => {
                 assert_eq!(failure.rule, "no_excel_errors");
                 assert_eq!(failure.address.as_deref(), Some("sheet1!A1"));
@@ -856,6 +891,8 @@ rule = "no_excel_errors"
             &fixture.workbook,
             Some(seed),
             Some(case_index),
+            None,
+            false,
         )
         .unwrap();
         match replay {
@@ -901,12 +938,129 @@ rule = "no_excel_errors"
             }],
         };
 
-        let result = run_fixture(&fixture, &programs, &fixture.workbook, None, None).unwrap();
+        let result =
+            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, false).unwrap();
         match result {
             FixtureResult::Passed { cases_run, .. } => assert_eq!(cases_run, 20),
             FixtureResult::Failed { .. } => {
                 panic!("a macro that never divides should never fail no_excel_errors")
             }
+        }
+    }
+
+    // ── Milestone B6d: resolution_kind capture + strict flag ────────────────
+
+    #[test]
+    fn run_fixture_captures_a_structural_resolution_failure_even_when_not_strict() {
+        // SheetProtected is an unconditional hard error in every mode
+        // (Milestone B6c) — not gated behind `strict_resolution` — so this
+        // must be classified even at `test-workbook`'s own default (false).
+        let path = std::env::temp_dir().join("elixcee_testworkbook_protected.xlsx");
+        build_workbook_fixture(path.to_str().unwrap());
+        let program = parser::parse(
+            "Sub Main()\n    Sheets(\"sheet1\").Protect\n    Cells(1, 1).Value = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let programs = vec![("main".to_string(), program)];
+
+        let fixture = Fixture {
+            name: "protected".to_string(),
+            workbook: path.to_str().unwrap().to_string(),
+            vba_files: vec![],
+            macro_name: "Main".to_string(),
+            cases: 1,
+            seed: 1,
+            timeout_secs: 5,
+            inputs: vec![],
+            assertions: vec![],
+        };
+
+        let result =
+            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, false).unwrap();
+        match result {
+            FixtureResult::Failed {
+                resolution_kind: Some(kind),
+                ..
+            } => match *kind {
+                ResolutionFailureKind::SheetProtected { sheet } => assert_eq!(sheet, "sheet1"),
+                other => panic!("expected SheetProtected, got {:?}", other),
+            },
+            _ => panic!("expected a classified SheetProtected failure"),
+        }
+    }
+
+    #[test]
+    fn run_fixture_with_strict_true_classifies_a_missing_worksheet_reference() {
+        // Same macro, same workbook, only `strict` differs: non-strict
+        // silently reads Empty from a nonexistent sheet (no failure);
+        // strict classifies it as WorksheetNotFound — proving the `strict`
+        // parameter actually changes behavior, not just a passthrough flag.
+        let path = std::env::temp_dir().join("elixcee_testworkbook_strict.xlsx");
+        build_workbook_fixture(path.to_str().unwrap());
+        let program = parser::parse(
+            "Sub Main()\n    Dim x As Variant\n    x = Sheets(\"DoesNotExist\").Range(\"A1\").Value\nEnd Sub\n",
+        )
+        .unwrap();
+        let programs = vec![("main".to_string(), program)];
+
+        let fixture = Fixture {
+            name: "strict-check".to_string(),
+            workbook: path.to_str().unwrap().to_string(),
+            vba_files: vec![],
+            macro_name: "Main".to_string(),
+            cases: 1,
+            seed: 1,
+            timeout_secs: 5,
+            inputs: vec![],
+            assertions: vec![],
+        };
+
+        let lenient =
+            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, false).unwrap();
+        assert!(matches!(lenient, FixtureResult::Passed { .. }));
+
+        let strict =
+            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, true).unwrap();
+        match strict {
+            FixtureResult::Failed {
+                resolution_kind: Some(kind),
+                ..
+            } if matches!(*kind, ResolutionFailureKind::WorksheetNotFound(_)) => {}
+            _ => panic!("expected WorksheetNotFound to be classified under strict mode"),
+        }
+    }
+
+    #[test]
+    fn run_fixture_with_cases_override_runs_fewer_cases_than_the_fixture_declares() {
+        let path = std::env::temp_dir().join("elixcee_testworkbook_cases_override.xlsx");
+        build_workbook_fixture(path.to_str().unwrap());
+        let program = parser::parse("Sub Main()\n    Cells(1, 1).Value = 1\nEnd Sub\n").unwrap();
+        let programs = vec![("main".to_string(), program)];
+
+        let fixture = Fixture {
+            name: "cases-override".to_string(),
+            workbook: path.to_str().unwrap().to_string(),
+            vba_files: vec![],
+            macro_name: "Main".to_string(),
+            cases: 20,
+            seed: 1,
+            timeout_secs: 5,
+            inputs: vec![InputSpec {
+                range: "Sheet1!B2".to_string(),
+                strategy: "boundary_numeric".to_string(),
+            }],
+            assertions: vec![AssertionSpec {
+                range: "Sheet1!A1".to_string(),
+                rule: "no_excel_errors".to_string(),
+            }],
+        };
+
+        let result =
+            run_fixture(&fixture, &programs, &fixture.workbook, None, None, Some(5), false)
+                .unwrap();
+        match result {
+            FixtureResult::Passed { cases_run, .. } => assert_eq!(cases_run, 5),
+            FixtureResult::Failed { .. } => panic!("unexpected failure"),
         }
     }
 
@@ -936,6 +1090,7 @@ rule = "no_excel_errors"
                 actual: Some("#DIV/0!".to_string()),
                 message: None,
             },
+            resolution_kind: None,
         };
         let json = to_json(&result);
         assert!(json.contains("\"ok\":false"));

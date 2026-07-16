@@ -64,7 +64,13 @@ pub struct RootCause {
 }
 
 impl RootCause {
-    fn from_kind(kind: ResolutionFailureKind) -> Self {
+    /// `pub(crate)` (not fully private) so `diagnose-workbook` (Milestone
+    /// B6d) can classify a `ResolutionFailureKind` captured from a
+    /// generated test-workbook case and read `.code`/`.kind` directly for
+    /// plain-text rendering — the JSON-rendering internals
+    /// (`.suggestions()`, `root_cause_json`) stay private; `root_causes_json`
+    /// below is the one JSON-shaped entry point.
+    pub(crate) fn from_kind(kind: ResolutionFailureKind) -> Self {
         let code = match &kind {
             ResolutionFailureKind::WorksheetNotFound(_) => "WORKSHEET_NOT_FOUND",
             ResolutionFailureKind::WorkbookNotFound(_) => "WORKBOOK_NOT_FOUND",
@@ -402,6 +408,21 @@ fn root_cause_json(rc: &RootCause, copy_location: Option<&SourceLocation>) -> St
         "{{\"code\":\"{}\",\"certainty\":\"{}\",{},\"suggestions\":{}}}",
         rc.code, rc.certainty, fields, suggestions,
     )
+}
+
+/// Renders the same `"root_causes":[...]` fragment `to_json` produces —
+/// `"[]"` for `None`, a one-item array for `Some` — reusing the exact same
+/// field spellings (Milestone B6d) so `diagnose-workbook` never reports the
+/// same `code` with different evidence field names than plain `diagnose`
+/// does. No `copy_location` is available here (there's no per-case source
+/// text/location resolution in the generated-case search), so paste-related
+/// kinds render `"copy_location":null`, same as `to_json` does whenever the
+/// caller doesn't resolve one.
+pub(crate) fn root_causes_json(kind: Option<&ResolutionFailureKind>) -> String {
+    match kind {
+        Some(k) => format!("[{}]", root_cause_json(&RootCause::from_kind(k.clone()), None)),
+        None => "[]".to_string(),
+    }
 }
 
 /// `{"schema_version":1,"ok":true,"messages":[...]}` on success, or
@@ -865,5 +886,38 @@ mod tests {
         assert!(json.contains("\"source_addr\":\"A1:C10\""));
         assert!(json.contains("\"dest_addr\":\"E1:G10\""));
         assert!(json.contains("\"conflicts\":[\"E1:G1\"]"));
+    }
+
+    // ── Milestone B6d: root_causes_json (the diagnose-workbook entry point) ─
+
+    #[test]
+    fn root_causes_json_renders_an_empty_array_for_none() {
+        assert_eq!(root_causes_json(None), "[]");
+    }
+
+    #[test]
+    fn root_causes_json_matches_diagnosis_to_json_exactly_for_the_same_kind() {
+        let kind = ResolutionFailureKind::SheetProtected {
+            sheet: "sheet1".to_string(),
+        };
+        let diag = Diagnosis {
+            ok: false,
+            message: Some("Cannot write: sheet is protected".to_string()),
+            span: None,
+            copy_span: None,
+            root_cause: Some(RootCause::from_kind(kind.clone())),
+            messages: vec![],
+        };
+        let full_json = to_json(&diag, None, None);
+        let root_causes_fragment = format!(
+            "\"root_causes\":{}",
+            root_causes_json(Some(&kind))
+        );
+        assert!(
+            full_json.contains(&root_causes_fragment),
+            "expected {} to contain {}",
+            full_json,
+            root_causes_fragment
+        );
     }
 }

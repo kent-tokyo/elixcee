@@ -254,6 +254,37 @@ elixcee diagnose Main.bas --file report.xlsx --json Main.Run
 
 完整分类规则与 JSON schema 见 [docs/agent-contract.md](docs/agent-contract.md)。
 
+### 对生成的输入进行诊断
+
+`elixcee diagnose-workbook` 结合了以上两个功能：对 `test-workbook` 生成的一系列用例反复运行宏，并对失败结果给出分类，而不只是一句裸的错误字符串。它对输入依赖型的失败(例如只有部分取值才会触发的数组越界)最有价值——形状不匹配、合并单元格冲突、工作表保护等结构性问题本身不依赖输入，运行一次 `diagnose` 就足以发现：
+
+```bat
+elixcee diagnose-workbook fixture.toml --json
+```
+
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "seed": 42,
+  "case_index": 3,
+  "inputs": [{"address": "sheet1!B2", "value": 999999999}],
+  "failure": {
+    "rule": "no_runtime_error",
+    "message": "Array 'arr': index 999999999 out of bounds (len=6)"
+  },
+  "root_causes": [
+    {
+      "code": "ARRAY_INDEX_OUT_OF_BOUNDS",
+      "name": "arr", "index": 999999999, "lower": 0, "upper": 5,
+      "suggestions": ["check that 'arr' is large enough for index 999999999 (valid range is 0 To 5)"]
+    }
+  ]
+}
+```
+
+Fixture 格式与 `--seed`/`--case` 复现方式与 `test-workbook` 完全相同，另外新增 `--cases N` 可在本次运行中覆盖 fixture 自身声明的用例数。完整 schema 见 [docs/agent-contract.md](docs/agent-contract.md)。
+
 ### 从源码构建
 
 ```bash

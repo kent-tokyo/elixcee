@@ -1,5 +1,6 @@
 pub mod check;
 pub mod diagnose;
+pub mod diagnoseworkbook;
 pub mod diagnostics;
 pub mod formula;
 pub mod parser;

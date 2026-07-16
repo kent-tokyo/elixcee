@@ -277,6 +277,45 @@ locations:
 
 Full classification rules and JSON schema: [docs/agent-contract.md](docs/agent-contract.md).
 
+### Diagnosing across generated inputs
+
+`elixcee diagnose-workbook` combines the two features above: it reruns a
+macro across `test-workbook`'s generated cases and classifies whichever
+failures it finds, instead of only reporting a bare error string. It's most
+useful for input-dependent failures like array-bounds errors, where only
+some drawn values trigger the bug — a single `diagnose` call already finds
+structural issues (shape mismatches, merged-cell conflicts, sheet
+protection) in one shot, since those don't depend on the input at all:
+
+```bat
+elixcee diagnose-workbook fixture.toml --json
+```
+
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "seed": 42,
+  "case_index": 3,
+  "inputs": [{"address": "sheet1!B2", "value": 999999999}],
+  "failure": {
+    "rule": "no_runtime_error",
+    "message": "Array 'arr': index 999999999 out of bounds (len=6)"
+  },
+  "root_causes": [
+    {
+      "code": "ARRAY_INDEX_OUT_OF_BOUNDS",
+      "name": "arr", "index": 999999999, "lower": 0, "upper": 5,
+      "suggestions": ["check that 'arr' is large enough for index 999999999 (valid range is 0 To 5)"]
+    }
+  ]
+}
+```
+
+Same fixture format and `--seed`/`--case` replay as `test-workbook`, plus
+`--cases N` to override the fixture's own case count for one run. Full
+schema: [docs/agent-contract.md](docs/agent-contract.md).
+
 ### Build from source
 
 ```bash
