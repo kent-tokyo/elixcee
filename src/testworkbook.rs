@@ -31,7 +31,10 @@
 
 use crate::diagnostics::{json_string, variant_to_json};
 use crate::parser::ast::Program;
-use crate::vm::{CellContent, ResolutionFailureKind, Variant, Vm, parse_sheet_range_addr};
+use crate::vm::{
+    CellContent, HiddenCellsObservation, ResolutionFailureKind, Variant, Vm,
+    parse_sheet_range_addr,
+};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -407,6 +410,10 @@ pub enum FixtureResult {
     Passed {
         seed: u64,
         cases_run: u64,
+        /// See `Failed.hidden_cells`'s doc comment (Milestone B7b) — the
+        /// same observation, computed the same way, just also threaded
+        /// through the success variant since it isn't failure-gated.
+        hidden_cells: Option<Box<HiddenCellsObservation>>,
     },
     Failed {
         seed: u64,
@@ -426,6 +433,14 @@ pub enum FixtureResult {
         /// `Vec`s) made this field big enough that clippy's
         /// `large_enum_variant` flagged the size gap against `Passed`.
         resolution_kind: Option<Box<ResolutionFailureKind>>,
+        /// The `RANGE_CONTAINS_HIDDEN_CELLS` observation, if any, captured
+        /// via `Vm::hidden_cells_observation()` right after the macro call
+        /// (Milestone B7b) — unconditionally, regardless of `Ok`/`Err`,
+        /// since it isn't a failure. `test-workbook`'s own `to_json`/
+        /// `to_plain_text` ignore this field too; `diagnose-workbook`
+        /// enriches with it. `Box`ed for the same `large_enum_variant`
+        /// reason as `resolution_kind`.
+        hidden_cells: Option<Box<HiddenCellsObservation>>,
     },
 }
 
@@ -469,6 +484,11 @@ pub fn run_fixture(
         None => (0..cases_override.unwrap_or(fixture.cases)).collect(),
     };
     let cases_run = case_indices.len() as u64;
+    // Milestone B7b: carries the last case's observation forward for the
+    // final `Passed` result if every case passes. Structurally identical
+    // across cases (workbook layout + macro text, not drawn values), so
+    // which case's copy actually "wins" doesn't matter in practice.
+    let mut last_hidden_cells: Option<Box<HiddenCellsObservation>> = None;
 
     for case_index in case_indices {
         let seed = case_seed(base_seed, case_index);
@@ -516,6 +536,8 @@ pub fn run_fixture(
             }
         }));
 
+        let hidden_cells = vm.hidden_cells_observation().map(Box::new);
+
         match run_result {
             Err(_panic) => {
                 return Ok(FixtureResult::Failed {
@@ -529,6 +551,7 @@ pub fn run_fixture(
                         message: Some("macro execution panicked".to_string()),
                     },
                     resolution_kind: None,
+                    hidden_cells,
                 });
             }
             Ok(Err(e)) => {
@@ -549,6 +572,7 @@ pub fn run_fixture(
                         message: Some(e),
                     },
                     resolution_kind,
+                    hidden_cells,
                 });
             }
             Ok(Ok(())) => {}
@@ -591,6 +615,7 @@ pub fn run_fixture(
                                         message: None,
                                     },
                                     resolution_kind: None,
+                                    hidden_cells: hidden_cells.clone(),
                                 });
                             }
                         }
@@ -599,11 +624,14 @@ pub fn run_fixture(
                 other => return Err(format!("unknown assertion rule '{}'", other)),
             }
         }
+
+        last_hidden_cells = hidden_cells;
     }
 
     Ok(FixtureResult::Passed {
         seed: base_seed,
         cases_run,
+        hidden_cells: last_hidden_cells,
     })
 }
 
@@ -611,7 +639,7 @@ pub fn run_fixture(
 
 pub fn to_json(result: &FixtureResult) -> String {
     match result {
-        FixtureResult::Passed { seed, cases_run } => {
+        FixtureResult::Passed { seed, cases_run, .. } => {
             format!(
                 "{{\"schema_version\":1,\"ok\":true,\"seed\":{},\"cases_run\":{}}}",
                 seed, cases_run
@@ -664,7 +692,7 @@ fn display_variant(v: &Variant) -> String {
 
 pub fn to_plain_text(result: &FixtureResult) -> String {
     match result {
-        FixtureResult::Passed { seed, cases_run } => {
+        FixtureResult::Passed { seed, cases_run, .. } => {
             format!("ok: {} case(s) passed (seed {})", cases_run, seed)
         }
         FixtureResult::Failed {
@@ -1069,6 +1097,7 @@ rule = "no_excel_errors"
         let json = to_json(&FixtureResult::Passed {
             seed: 42,
             cases_run: 100,
+            hidden_cells: None,
         });
         assert!(json.contains("\"ok\":true"));
         assert!(json.contains("\"seed\":42"));
@@ -1091,6 +1120,7 @@ rule = "no_excel_errors"
                 message: None,
             },
             resolution_kind: None,
+            hidden_cells: None,
         };
         let json = to_json(&result);
         assert!(json.contains("\"ok\":false"));

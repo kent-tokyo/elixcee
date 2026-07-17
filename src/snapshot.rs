@@ -182,6 +182,8 @@ mod tests {
             cells: cells.into_iter().collect::<HashMap<_, _>>(),
             sheet_id: sheet_id.map(|s| s.to_string()),
             merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
         }
     }
 

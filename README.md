@@ -346,6 +346,33 @@ multi-area paste actually completes in v1 — even one where the source and
 destination areas match exactly. Full scope and the other 3 classified
 codes: [docs/agent-contract.md](docs/agent-contract.md).
 
+### Hidden row/column evidence
+
+`diagnose`/`diagnose-workbook` now report when a `.Copy`'d range overlaps
+hidden rows/columns (read from real XLSX `hidden="1"` metadata) — not an
+error, just a new `observations` field, present alongside (or instead of)
+`root_causes`:
+
+```json
+{
+  "code": "RANGE_CONTAINS_HIDDEN_CELLS",
+  "certainty": "observed",
+  "range": {"sheet": "sheet1", "address": "A1:C100", "rows": 100, "columns": 3},
+  "visibility": {
+    "hidden_rows": ["11:14", "30:39"],
+    "hidden_columns": ["B:B"],
+    "total_cells": 300,
+    "visible_cells": 172
+  },
+  "message": "The range contains hidden rows or columns. Excel operations using visible cells only may produce a multi-area range."
+}
+```
+
+This is the foundation `SpecialCells(xlCellTypeVisible)` will build on
+later — Copy/Paste itself is unaffected (hidden cells still copy/paste
+exactly as before). XLSX only; ODS is deferred. Full scope:
+[docs/agent-contract.md](docs/agent-contract.md).
+
 ### Build from source
 
 ```bash

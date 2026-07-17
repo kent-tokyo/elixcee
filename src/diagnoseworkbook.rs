@@ -18,7 +18,7 @@
 //! `diagnose`'s own permanent limitation: `root_causes` is `[]`, only the
 //! bare message is reported, same as `test-workbook` already does today.
 
-use crate::diagnose::root_causes_json;
+use crate::diagnose::{observations_json, root_causes_json};
 use crate::diagnostics::{json_string, variant_to_json};
 use crate::testworkbook::FixtureResult;
 
@@ -29,16 +29,27 @@ use crate::testworkbook::FixtureResult;
 /// array when it is. Success shape is `test-workbook`'s, unchanged.
 pub fn to_json(result: &FixtureResult) -> String {
     match result {
-        FixtureResult::Passed { seed, cases_run } => format!(
-            "{{\"schema_version\":1,\"ok\":true,\"seed\":{},\"cases_run\":{}}}",
-            seed, cases_run
-        ),
+        FixtureResult::Passed { seed, cases_run, hidden_cells } => {
+            // Milestone B7b: a sibling field, present only when `Some` —
+            // same "never an always-present empty array" contract as
+            // plain `diagnose`'s own `observations` field.
+            let observations_field = if hidden_cells.is_some() {
+                format!(",\"observations\":{}", observations_json(hidden_cells.as_deref()))
+            } else {
+                String::new()
+            };
+            format!(
+                "{{\"schema_version\":1,\"ok\":true,\"seed\":{},\"cases_run\":{}{}}}",
+                seed, cases_run, observations_field
+            )
+        }
         FixtureResult::Failed {
             seed,
             case_index,
             inputs_used,
             failure,
             resolution_kind,
+            hidden_cells,
         } => {
             let inputs_json: Vec<String> = inputs_used
                 .iter()
@@ -60,13 +71,19 @@ pub fn to_json(result: &FixtureResult) -> String {
             if let Some(m) = &failure.message {
                 fields.push(format!("\"message\":{}", json_string(m)));
             }
+            let observations_field = if hidden_cells.is_some() {
+                format!(",\"observations\":{}", observations_json(hidden_cells.as_deref()))
+            } else {
+                String::new()
+            };
             format!(
-                "{{\"schema_version\":1,\"ok\":false,\"seed\":{},\"case_index\":{},\"inputs\":[{}],\"failure\":{{{}}},\"root_causes\":{}}}",
+                "{{\"schema_version\":1,\"ok\":false,\"seed\":{},\"case_index\":{},\"inputs\":[{}],\"failure\":{{{}}},\"root_causes\":{}{}}}",
                 seed,
                 case_index,
                 inputs_json.join(","),
                 fields.join(","),
                 root_causes_json(resolution_kind.as_deref()),
+                observations_field,
             )
         }
     }
@@ -78,14 +95,22 @@ pub fn to_json(result: &FixtureResult) -> String {
 /// "plain text is a simplified view" convention (`snapshot`, `diagnose`).
 pub fn to_plain_text(result: &FixtureResult) -> String {
     match result {
-        FixtureResult::Passed { seed, cases_run } => {
-            format!("ok: {} case(s) passed (seed {})", cases_run, seed)
+        FixtureResult::Passed { seed, cases_run, hidden_cells } => {
+            let mut line = format!("ok: {} case(s) passed (seed {})", cases_run, seed);
+            if let Some(obs) = hidden_cells {
+                line.push_str(&format!(
+                    "\n  observation: RANGE_CONTAINS_HIDDEN_CELLS ({} of {} cells visible in {})",
+                    obs.visible_cells, obs.total_cells, obs.address
+                ));
+            }
+            line
         }
         FixtureResult::Failed {
             seed,
             case_index,
             failure,
             resolution_kind,
+            hidden_cells,
             ..
         } => {
             let mut line = format!(
@@ -105,6 +130,12 @@ pub fn to_plain_text(result: &FixtureResult) -> String {
                 let rc = crate::diagnose::RootCause::from_kind((**kind).clone());
                 line.push_str(&format!("\n  root cause: {}", rc.code));
             }
+            if let Some(obs) = hidden_cells {
+                line.push_str(&format!(
+                    "\n  observation: RANGE_CONTAINS_HIDDEN_CELLS ({} of {} cells visible in {})",
+                    obs.visible_cells, obs.total_cells, obs.address
+                ));
+            }
             line
         }
     }
@@ -121,6 +152,7 @@ mod tests {
         let json = to_json(&FixtureResult::Passed {
             seed: 42,
             cases_run: 100,
+            hidden_cells: None,
         });
         assert!(json.contains("\"ok\":true"));
         assert!(json.contains("\"seed\":42"));
@@ -143,6 +175,7 @@ mod tests {
                 message: Some("Division by zero".to_string()),
             },
             resolution_kind: None,
+            hidden_cells: None,
         };
         let json = to_json(&result);
         assert!(json.contains("\"root_causes\":[]"));
@@ -170,6 +203,7 @@ mod tests {
                 lower: 0,
                 upper: 9,
             })),
+            hidden_cells: None,
         };
         let json = to_json(&result);
         assert!(json.contains("\"code\":\"ARRAY_INDEX_OUT_OF_BOUNDS\""));
@@ -195,6 +229,7 @@ mod tests {
                 lower: 0,
                 upper: 9,
             })),
+            hidden_cells: None,
         };
         let text = to_plain_text(&result);
         assert!(text.contains("root cause: ARRAY_INDEX_OUT_OF_BOUNDS"));
@@ -213,8 +248,96 @@ mod tests {
                 message: Some("Division by zero".to_string()),
             },
             resolution_kind: None,
+            hidden_cells: None,
         };
         let text = to_plain_text(&result);
         assert!(!text.contains("root cause"));
+    }
+
+    // ── Milestone B7b: hidden row/column evidence ────────────────────────────
+    //
+    // No end-to-end `run_fixture` test here: the observation is computed
+    // purely from `Vm.clipboard`/`Vm.sheet_visibility`, and `sheet_visibility`
+    // can only be populated from a real workbook file's hidden-row/column
+    // metadata (the XLSX writer can't emit it — see the B7b plan's
+    // grounding). So, same test-debt precedent as B6c2's merged cells:
+    // `FixtureResult` is constructed directly here to test the rendering
+    // layer, and the "case 0 and a later case report the same observation"
+    // claim (Milestone B6d's honest-scope framing) holds by construction —
+    // `Vm::hidden_cells_observation` never reads a case's drawn cell
+    // values, only the copied range's geometry and the sheet's hidden-row/
+    // column metadata, neither of which varies across cases.
+    use crate::vm::{HiddenCellsObservation, Interval};
+
+    fn sample_observation() -> HiddenCellsObservation {
+        HiddenCellsObservation {
+            sheet: "sheet1".to_string(),
+            address: "A1:C10".to_string(),
+            rows: 10,
+            columns: 3,
+            hidden_rows: vec![Interval { start: 3, end: 5 }],
+            hidden_columns: vec![],
+            total_cells: 30,
+            visible_cells: 21,
+        }
+    }
+
+    #[test]
+    fn to_json_passing_fixture_includes_observations_when_present() {
+        let json = to_json(&FixtureResult::Passed {
+            seed: 42,
+            cases_run: 20,
+            hidden_cells: Some(Box::new(sample_observation())),
+        });
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("\"observations\":[{\"code\":\"RANGE_CONTAINS_HIDDEN_CELLS\""));
+        assert!(json.contains("\"visible_cells\":21"));
+    }
+
+    #[test]
+    fn to_json_passing_fixture_omits_observations_when_absent() {
+        let json = to_json(&FixtureResult::Passed {
+            seed: 42,
+            cases_run: 20,
+            hidden_cells: None,
+        });
+        assert!(!json.contains("observations"));
+    }
+
+    #[test]
+    fn to_json_failing_fixture_includes_observations_alongside_root_causes() {
+        let result = FixtureResult::Failed {
+            seed: 42,
+            case_index: 3,
+            inputs_used: vec![],
+            failure: FailureDetail {
+                rule: "no_runtime_error".to_string(),
+                address: None,
+                actual: None,
+                message: Some("array 'arr' index 999999999 out of bounds".to_string()),
+            },
+            resolution_kind: Some(Box::new(ResolutionFailureKind::ArrayIndexOutOfBounds {
+                name: "arr".to_string(),
+                index: 999_999_999,
+                lower: 0,
+                upper: 9,
+            })),
+            hidden_cells: Some(Box::new(sample_observation())),
+        };
+        let json = to_json(&result);
+        assert!(json.contains("\"code\":\"ARRAY_INDEX_OUT_OF_BOUNDS\""));
+        assert!(json.contains("\"observations\":[{\"code\":\"RANGE_CONTAINS_HIDDEN_CELLS\""));
+    }
+
+    #[test]
+    fn to_plain_text_passing_fixture_appends_the_observation_note() {
+        let text = to_plain_text(&FixtureResult::Passed {
+            seed: 42,
+            cases_run: 20,
+            hidden_cells: Some(Box::new(sample_observation())),
+        });
+        assert!(text.starts_with("ok: 20 case(s) passed"));
+        assert!(text.contains("RANGE_CONTAINS_HIDDEN_CELLS"));
+        assert!(text.contains("21 of 30"));
     }
 }

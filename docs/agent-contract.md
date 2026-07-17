@@ -967,3 +967,109 @@ explicitly sequenced ahead of shrinking because most structural failures
 (multi-area, filtered rows) come from workbook layout, not drawn cell
 values, so there was nothing for shrinking to minimize until this
 structural model existed.
+
+## Hidden row/column evidence (Milestone B7b)
+
+Before `SpecialCells(xlCellTypeVisible)` (B7c) can turn a filtered range
+into a multi-area `RangeRef` (B7a), elixcee needs to know which rows/
+columns are hidden in the first place. B7b adds that foundation: reading
+hidden-row/column metadata from a real workbook, holding it as interval
+data, and computing its intersection with the range a `.Copy` last
+touched — surfaced through `diagnose`/`diagnose-workbook` as a new,
+**non-failure** observation. Copy/Paste behavior itself is unchanged:
+hidden cells are still copied/pasted exactly as before. This milestone
+only adds observability, not filtering.
+
+**Model**: `vm::Interval { start, end }` (1-based inclusive, one type for
+both rows and columns), `vm::SheetVisibility { hidden_rows, hidden_columns:
+Vec<Interval> }`, threaded into `Vm.sheet_visibility: HashMap<sheet,
+SheetVisibility>` — same lowercase-keyed, populated-by-`populate_from_sheets`
+pattern as `merged_ranges` (Milestone B6c2).
+
+**XLSX only** — `<row hidden="1">` and `<col min=".." max=".." hidden="1">`
+are parsed; **ODS is explicitly deferred**. ODS's `<table:table-row>`
+parsing today only counts rows, and critically doesn't expand
+`table:number-rows-repeated` (common for blocks of blank/identical rows) —
+without that expansion, a hidden-row flag can't be mapped to correct
+absolute row numbers, so attempting it would silently produce wrong
+results, worse than not supporting it at all.
+
+**`Vm::hidden_cells_observation(&self) -> Option<HiddenCellsObservation>`**
+computes the evidence on demand from `Vm.clipboard` (populated by the last
+`.Copy`) intersected with `Vm.sheet_visibility` — not a new stored side
+channel. Read-only and idempotent (unlike `take_resolution_failure`, it
+doesn't drain anything), so it can be called any number of times after a
+run regardless of success/failure. `None` when:
+- nothing has been copied, or `Application.CutCopyMode = False` cleared it
+  since (the clipboard's own "last surviving Copy" semantics — same
+  limitation `PASTE_WITHOUT_COPY` already has on the failure side);
+- the copy spanned more than one area (Milestone B7a's multi-area Copy) —
+  combining "multi-area source" with "also touches hidden cells" is a
+  compound case this milestone doesn't model;
+- the copied sheet has no registered hidden rows/columns; or
+- none of those hidden rows/columns actually overlap the copied range.
+
+**`visible_cells = (rows − hidden_row_count) × (cols − hidden_col_count)`**
+— the product form correctly avoids double-counting a cell hidden by both
+a hidden row and a hidden column (inclusion-exclusion), assuming a sheet's
+hidden row/column intervals don't overlap each other (true for any real
+XLSX).
+
+### Output: the `observations` field
+
+A new **sibling** JSON field, not folded into `root_causes` — `root_causes`
+means "why it failed"; `RANGE_CONTAINS_HIDDEN_CELLS` isn't a failure at
+all, so it gets its own array, with its own `"certainty":"observed"` tier
+(distinct from every `root_causes` entry's `"definite"`). **Present only
+when non-empty, on both success and failure** — never an always-present
+`"observations":[]`, since that would break every existing `--json` fixture
+in `tests/blackbox.rs` that predates this field (all of them, since none
+can involve hidden cells pre-B7b).
+
+```json
+{
+  "schema_version": 1,
+  "ok": true,
+  "messages": [],
+  "observations": [
+    {
+      "code": "RANGE_CONTAINS_HIDDEN_CELLS",
+      "certainty": "observed",
+      "range": {"sheet": "sheet1", "address": "A1:C100", "rows": 100, "columns": 3},
+      "visibility": {
+        "hidden_rows": ["11:14", "30:39"],
+        "hidden_columns": ["B:B"],
+        "total_cells": 300,
+        "visible_cells": 172
+      },
+      "message": "The range contains hidden rows or columns. Excel operations using visible cells only may produce a multi-area range."
+    }
+  ]
+}
+```
+
+Row/column intervals render as `"start:end"` address strings always
+(`"11:14"`, `"B:B"`) — even for a single row/column (`"5:5"`, not `"5"`) —
+deliberately not `rect_addr`'s single-cell-omits-the-colon convention used
+elsewhere, matching this feature's own worked example.
+
+`diagnose-workbook` gets the identical field via `FixtureResult::Passed`/
+`::Failed` both gaining `hidden_cells: Option<Box<HiddenCellsObservation>>`
+(mirroring Milestone B6d's `resolution_kind` precedent, but threaded
+through *both* variants since this isn't failure-gated) — `test-workbook`'s
+own `to_json`/`to_plain_text` ignore the field entirely, byte-identical to
+before. **Honestly no additional value over a single plain `diagnose` call
+here**, same as most of B6d's structural root causes: hidden-row/column
+metadata depends only on the workbook file and the macro's `.Copy`
+statement, never on drawn cell values, so it fires identically on case 0
+(or never) no matter how many generated cases run.
+
+### Explicit non-goals (this milestone)
+
+AutoFilter condition evaluation, `SpecialCells(xlCellTypeVisible)`
+execution, generating `RangeRef.areas` from filter/hidden results (B7c),
+a strict manual-vs-filter-hidden distinction, outline/group expand state,
+any Excel-faithful Copy/Paste behavior change for hidden cells (still
+copies/pastes them exactly as before — this milestone only adds
+observability), ODS hidden-row/column support, and multi-area-source
+hidden-cell observations.

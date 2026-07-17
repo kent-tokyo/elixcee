@@ -323,6 +323,51 @@ impl RangeRef {
     }
 }
 
+/// A 1-based inclusive `[start, end]` row or column interval (Milestone
+/// B7b). Deliberately one type for both rows and columns (structurally
+/// identical), not two.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Interval {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl Interval {
+    /// Clips this interval to `[lo, hi]`, returning `None` if they don't
+    /// overlap at all (Milestone B7b).
+    fn clip(&self, lo: u32, hi: u32) -> Option<Interval> {
+        let start = self.start.max(lo);
+        let end = self.end.min(hi);
+        if start <= end { Some(Interval { start, end }) } else { None }
+    }
+}
+
+/// Which rows/columns are hidden on one sheet (Milestone B7b), read from
+/// XLSX's `<row hidden="1">`/`<col min=".." max=".." hidden="1">` (ODS is
+/// deferred — see `docs/agent-contract.md`). Threaded into
+/// `Vm.sheet_visibility` the same way `merged_ranges` already is.
+#[derive(Debug, Clone, Default)]
+pub struct SheetVisibility {
+    pub hidden_rows: Vec<Interval>,
+    pub hidden_columns: Vec<Interval>,
+}
+
+/// Evidence for the `RANGE_CONTAINS_HIDDEN_CELLS` observation (Milestone
+/// B7b) — computed on demand by `Vm::hidden_cells_observation`, not stored
+/// as a side channel. `hidden_rows`/`hidden_columns` are already clipped to
+/// this range (not the sheet's full hidden-row/column list).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HiddenCellsObservation {
+    pub sheet: String,
+    pub address: String,
+    pub rows: u32,
+    pub columns: u32,
+    pub hidden_rows: Vec<Interval>,
+    pub hidden_columns: Vec<Interval>,
+    pub total_cells: u64,
+    pub visible_cells: u64,
+}
+
 pub struct Vm {
     /// Per-sheet cell storage. Key is sheet name (lowercase for lookup).
     sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
@@ -407,6 +452,12 @@ pub struct Vm {
     /// merged_ranges`; empty for any sheet built purely in-VBA (`Sheets.Add`
     /// has no merge concept).
     merged_ranges: HashMap<String, Vec<MergeRect>>,
+    /// Hidden row/column metadata per sheet (Milestone B7b), keyed the same
+    /// way as `merged_ranges`/`protected_sheets`. Populated by
+    /// `populate_from_sheets` from the reader's `WorkbookSheet::
+    /// hidden_rows`/`hidden_columns` (XLSX only — ODS is deferred); empty
+    /// for any sheet built purely in-VBA.
+    sheet_visibility: HashMap<String, SheetVisibility>,
 }
 
 impl Vm {
@@ -441,6 +492,7 @@ impl Vm {
             clipboard: None,
             protected_sheets: HashSet::new(),
             merged_ranges: HashMap::new(),
+            sheet_visibility: HashMap::new(),
         }
     }
 
@@ -1002,6 +1054,67 @@ impl Vm {
             .to_string()
     }
 
+    /// Computes the `RANGE_CONTAINS_HIDDEN_CELLS` observation (Milestone
+    /// B7b) for the range last `.Copy`'d, intersected with the copied
+    /// sheet's hidden row/column metadata. Read-only and idempotent — not
+    /// a "drain" like `take_resolution_failure` — callable any time after
+    /// a run regardless of success/failure. `None` when: nothing has been
+    /// copied (or `Application.CutCopyMode = False` cleared it since — the
+    /// same "last surviving Copy" limitation `PASTE_WITHOUT_COPY` already
+    /// has on the failure side); the copy spanned more than one area
+    /// (multi-area sources are deferred, see the B7b plan's design
+    /// decisions); the copied sheet has no registered hidden rows/columns;
+    /// or none of those hidden rows/columns actually overlap the copied
+    /// range.
+    pub fn hidden_cells_observation(&self) -> Option<HiddenCellsObservation> {
+        let clip = self.clipboard.as_ref()?;
+        if clip.areas.len() != 1 {
+            return None;
+        }
+        let rect = clip.areas[0];
+        let visibility = self.sheet_visibility.get(&clip.src_sheet)?;
+
+        let hidden_rows: Vec<Interval> = visibility
+            .hidden_rows
+            .iter()
+            .filter_map(|iv| iv.clip(rect.start_row, rect.end_row))
+            .collect();
+        let hidden_columns: Vec<Interval> = visibility
+            .hidden_columns
+            .iter()
+            .filter_map(|iv| iv.clip(rect.start_col, rect.end_col))
+            .collect();
+        if hidden_rows.is_empty() && hidden_columns.is_empty() {
+            return None;
+        }
+
+        // Assumes hidden row/column intervals for a sheet don't overlap
+        // each other (true for any real XLSX: rows are scanned in
+        // increasing order, columns come from non-overlapping <col>
+        // spans) — `saturating_sub` is just arithmetic hygiene against a
+        // malformed input, not validation of a case this milestone models.
+        let hidden_row_count: u64 =
+            hidden_rows.iter().map(|iv| (iv.end - iv.start + 1) as u64).sum();
+        let hidden_col_count: u64 =
+            hidden_columns.iter().map(|iv| (iv.end - iv.start + 1) as u64).sum();
+        let rows = rect.rows() as u64;
+        let cols = rect.cols() as u64;
+        let total_cells = rows * cols;
+        let visible_cells = rows.saturating_sub(hidden_row_count)
+            * cols.saturating_sub(hidden_col_count);
+
+        Some(HiddenCellsObservation {
+            sheet: clip.src_sheet.clone(),
+            address: clip.source_addr.clone(),
+            rows: rect.rows(),
+            columns: rect.cols(),
+            hidden_rows,
+            hidden_columns,
+            total_cells,
+            visible_cells,
+        })
+    }
+
     /// Loads a `.xlsx`/`.xlsm`/`.ods` file's sheets and cells into this `Vm`
     /// and sets the active sheet to the first one loaded. Returns the
     /// loaded sheet names (lowercase, in file order) on success. Extracted
@@ -1063,6 +1176,23 @@ impl Vm {
             let key = sheet_data.name.to_lowercase();
             if !sheet_data.merged_ranges.is_empty() {
                 self.merged_ranges.insert(key.clone(), sheet_data.merged_ranges.clone());
+            }
+            if !sheet_data.hidden_rows.is_empty() || !sheet_data.hidden_columns.is_empty() {
+                self.sheet_visibility.insert(
+                    key.clone(),
+                    SheetVisibility {
+                        hidden_rows: sheet_data
+                            .hidden_rows
+                            .iter()
+                            .map(|&(start, end)| Interval { start, end })
+                            .collect(),
+                        hidden_columns: sheet_data
+                            .hidden_columns
+                            .iter()
+                            .map(|&(start, end)| Interval { start, end })
+                            .collect(),
+                    },
+                );
             }
             names.push(key);
         }
@@ -4450,6 +4580,8 @@ mod tests {
             cells,
             sheet_id: None,
             merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -5069,6 +5201,8 @@ mod tests {
             cells,
             sheet_id: None,
             merged_ranges: vec![((1, 2), (1, 4))],
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -5085,5 +5219,89 @@ mod tests {
             }
             other => panic!("expected PasteIntoNonAnchorMergedCell, got {:?}", other),
         }
+    }
+
+    // ── Milestone B7b: hidden row/column metadata foundation ────────────────
+
+    #[test]
+    fn populate_from_sheets_threads_hidden_rows_and_columns_into_the_vm() {
+        // Mixed-case "Input" confirms `sheet_visibility` is keyed lowercase,
+        // same as `merged_ranges`/`active_sheet`/`sheets`.
+        let mut cells = std::collections::HashMap::new();
+        cells.insert((1, 1), SheetCell::Integer(1));
+        let sheets = vec![WorkbookSheet {
+            name: "Input".to_string(),
+            cells,
+            sheet_id: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: vec![(3, 5)],
+            hidden_columns: vec![(2, 2)],
+        }];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+
+        let prog = parser::parse("Sub MySub()\n    Range(\"A1:C10\").Copy\nEnd Sub\n").unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+
+        let obs = vm
+            .hidden_cells_observation()
+            .expect("should observe hidden rows/columns overlapping the copy");
+        assert_eq!(obs.sheet, "input");
+        assert_eq!(obs.address, "A1:C10");
+        assert_eq!(obs.rows, 10);
+        assert_eq!(obs.columns, 3);
+        assert_eq!(obs.hidden_rows, vec![Interval { start: 3, end: 5 }]);
+        assert_eq!(obs.hidden_columns, vec![Interval { start: 2, end: 2 }]);
+        assert_eq!(obs.total_cells, 30);
+        // (10 rows - 3 hidden) * (3 cols - 1 hidden) = 7 * 2 = 14.
+        assert_eq!(obs.visible_cells, 14);
+    }
+
+    #[test]
+    fn hidden_cells_observation_is_none_for_a_multi_area_copy() {
+        let mut cells = std::collections::HashMap::new();
+        cells.insert((1, 1), SheetCell::Integer(1));
+        let sheets = vec![WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells,
+            sheet_id: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: vec![(3, 5)],
+            hidden_columns: Vec::new(),
+        }];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:A10,C1:C10\").Copy\nEnd Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.hidden_cells_observation(), None);
+    }
+
+    #[test]
+    fn hidden_cells_observation_is_none_when_no_hidden_interval_overlaps_the_range() {
+        let mut cells = std::collections::HashMap::new();
+        cells.insert((1, 1), SheetCell::Integer(1));
+        let sheets = vec![WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells,
+            sheet_id: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: vec![(50, 60)],
+            hidden_columns: Vec::new(),
+        }];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+
+        let prog = parser::parse("Sub MySub()\n    Range(\"A1:C10\").Copy\nEnd Sub\n").unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.hidden_cells_observation(), None);
+    }
+
+    #[test]
+    fn hidden_cells_observation_is_none_when_nothing_was_copied() {
+        assert_eq!(Vm::new().hidden_cells_observation(), None);
     }
 }

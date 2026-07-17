@@ -27,6 +27,14 @@ pub struct WorkbookSheet {
     /// `table:number-columns-spanned`/`table:number-rows-spanned` on the
     /// anchor cell. Empty if the sheet has no merges.
     pub merged_ranges: Vec<MergeRect>,
+    /// Hidden row intervals, 1-based inclusive `(start, end)` (Milestone
+    /// B7b) — from XLSX's `<row hidden="1">`. Always empty for `.ods`
+    /// (deferred — see `docs/agent-contract.md`).
+    pub hidden_rows: Vec<(u32, u32)>,
+    /// Hidden column intervals, 1-based inclusive `(start, end)`
+    /// (Milestone B7b) — from XLSX's `<col min=".." max=".." hidden="1">`.
+    /// Always empty for `.ods` (deferred).
+    pub hidden_columns: Vec<(u32, u32)>,
 }
 
 pub enum SheetCell {
@@ -240,8 +248,15 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
         let sheet_xml = match zip_read_text(&mut archive, &zip_path) {
             Ok(s) => s, Err(_) => continue,
         };
-        let (cells, merged_ranges) = xlsx_sheet_cells(&sheet_xml, &shared);
-        sheets.push(WorkbookSheet { name, cells, sheet_id, merged_ranges });
+        let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared);
+        sheets.push(WorkbookSheet {
+            name,
+            cells: sheet_data.cells,
+            sheet_id,
+            merged_ranges: sheet_data.merged_ranges,
+            hidden_rows: sheet_data.hidden_rows,
+            hidden_columns: sheet_data.hidden_columns,
+        });
     }
     Ok(sheets)
 }
@@ -328,14 +343,29 @@ fn xlsx_shared_strings(xml: &str) -> Vec<String> {
 
 /// Parses a single worksheet XML into a 1-based (row, col) → SheetCell map,
 /// plus any `<mergeCells><mergeCell ref="..."/></mergeCells>` ranges
-/// (Milestone B6c2).
-fn xlsx_sheet_cells(
-    xml: &str,
-    shared: &[String],
-) -> (HashMap<(u32, u32), SheetCell>, Vec<MergeRect>) {
+/// (Milestone B6c2) and hidden row/column metadata (Milestone B7b).
+/// A small return struct, not a growing bare tuple — B6c2 hit a
+/// `clippy::type_complexity` error the first time this function's return
+/// type grew, so this sidesteps a repeat of that churn.
+struct XlsxSheetData {
+    cells: HashMap<(u32, u32), SheetCell>,
+    merged_ranges: Vec<MergeRect>,
+    /// Hidden row intervals, 1-based inclusive `(start, end)` — coalesced
+    /// from consecutive `<row r=".." hidden="1">` tags (Milestone B7b).
+    hidden_rows: Vec<(u32, u32)>,
+    /// Hidden column intervals, 1-based inclusive `(start, end)` — read
+    /// directly from `<col min=".." max=".." hidden="1">` (Milestone
+    /// B7b), already interval-shaped in the XML, no coalescing needed.
+    hidden_columns: Vec<(u32, u32)>,
+}
+
+fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
     let mut iter = XmlIter::new(xml);
     let mut cells: HashMap<(u32, u32), SheetCell> = HashMap::new();
     let mut merged_ranges: Vec<MergeRect> = Vec::new();
+    let mut hidden_rows: Vec<(u32, u32)> = Vec::new();
+    let mut hidden_columns: Vec<(u32, u32)> = Vec::new();
+    let mut pending_hidden_row_run: Option<(u32, u32)> = None;
     let mut cur_row: u32 = 0;
     let mut cur_col: u32 = 0;
     let mut cur_type = String::new();
@@ -351,6 +381,29 @@ fn xlsx_sheet_cells(
                     "row" => {
                         if let Some(r) = attr_get(attrs, "r") {
                             cur_row = r.parse().unwrap_or(0);
+                        }
+                        let hidden = attr_get(attrs, "hidden") == Some("1");
+                        if hidden {
+                            pending_hidden_row_run = Some(match pending_hidden_row_run {
+                                Some((start, end)) if end + 1 == cur_row => (start, cur_row),
+                                _ => {
+                                    if let Some(run) = pending_hidden_row_run {
+                                        hidden_rows.push(run);
+                                    }
+                                    (cur_row, cur_row)
+                                }
+                            });
+                        } else if let Some(run) = pending_hidden_row_run.take() {
+                            hidden_rows.push(run);
+                        }
+                    }
+                    "col" => {
+                        if attr_get(attrs, "hidden") == Some("1") {
+                            let min = attr_get(attrs, "min").and_then(|s| s.parse().ok());
+                            let max = attr_get(attrs, "max").and_then(|s| s.parse().ok());
+                            if let (Some(min), Some(max)) = (min, max) {
+                                hidden_columns.push((min, max));
+                            }
                         }
                     }
                     "c" => {
@@ -411,7 +464,10 @@ fn xlsx_sheet_cells(
             }
         }
     }
-    (cells, merged_ranges)
+    if let Some(run) = pending_hidden_row_run.take() {
+        hidden_rows.push(run);
+    }
+    XlsxSheetData { cells, merged_ranges, hidden_rows, hidden_columns }
 }
 
 fn xlsx_parse_cell(v: &str, t: &str, shared: &[String]) -> Option<SheetCell> {
@@ -492,6 +548,8 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             cells: HashMap::new(),
                             sheet_id: None,
                             merged_ranges: Vec::new(),
+                            hidden_rows: Vec::new(),
+                            hidden_columns: Vec::new(),
                         });
                         in_sheet = true;
                         row = 0;
@@ -687,16 +745,66 @@ mod merge_tests {
 <mergeCell ref="B3:B4"/>
 </mergeCells>
 </worksheet>"#;
-        let (cells, merged_ranges) = xlsx_sheet_cells(xml, &[]);
-        assert_eq!(cells.len(), 1);
-        assert_eq!(merged_ranges, vec![((1, 1), (1, 3)), ((3, 2), (4, 2))]);
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.cells.len(), 1);
+        assert_eq!(data.merged_ranges, vec![((1, 1), (1, 3)), ((3, 2), (4, 2))]);
     }
 
     #[test]
     fn xlsx_sheet_cells_with_no_merge_cells_element_has_empty_merged_ranges() {
         let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
-        let (_, merged_ranges) = xlsx_sheet_cells(xml, &[]);
-        assert!(merged_ranges.is_empty());
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert!(data.merged_ranges.is_empty());
+        assert!(data.hidden_rows.is_empty());
+        assert!(data.hidden_columns.is_empty());
+    }
+
+    // ── Milestone B7b: hidden row/column parsing ────────────────────────────
+
+    #[test]
+    fn xlsx_sheet_cells_coalesces_consecutive_hidden_rows_into_intervals() {
+        let xml = r#"<worksheet>
+<cols>
+<col min="2" max="2" hidden="1"/>
+</cols>
+<sheetData>
+<row r="1"><c r="A1"><v>1</v></c></row>
+<row r="11" hidden="1"/>
+<row r="12" hidden="1"/>
+<row r="13" hidden="1"/>
+<row r="14" hidden="1"/>
+<row r="20"><c r="A20"><v>2</v></c></row>
+<row r="30" hidden="1"/>
+<row r="31" hidden="1"/>
+</sheetData>
+</worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.hidden_rows, vec![(11, 14), (30, 31)]);
+        assert_eq!(data.hidden_columns, vec![(2, 2)]);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_starts_a_new_interval_across_a_row_number_gap() {
+        // Row 6 is entirely absent from <sheetData> (no <row r="6"> element
+        // at all) — row 5 and row 7 being hidden must NOT coalesce into a
+        // single (5,7) interval just because no explicit non-hidden row
+        // separates them.
+        let xml = r#"<worksheet><sheetData>
+<row r="5" hidden="1"/>
+<row r="7" hidden="1"/>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.hidden_rows, vec![(5, 5), (7, 7)]);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_reads_a_multi_column_hidden_col_span_without_coalescing() {
+        let xml = r#"<worksheet><cols>
+<col min="2" max="4" hidden="1"/>
+<col min="6" max="6"/>
+</cols><sheetData></sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.hidden_columns, vec![(2, 4)]);
     }
 
     #[test]

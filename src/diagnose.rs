@@ -28,7 +28,9 @@
 
 use crate::diagnostics::{SourceLocation, json_string};
 use crate::parser::{Program, ast::SourceSpan};
-use crate::vm::{Rect, ResolutionEvidence, ResolutionFailureKind, Vm};
+use crate::vm::{
+    HiddenCellsObservation, Interval, Rect, ResolutionEvidence, ResolutionFailureKind, Vm,
+};
 
 /// The outcome of running one macro under strict-resolution diagnosis.
 #[derive(Debug)]
@@ -54,6 +56,13 @@ pub struct Diagnosis {
     /// `None` for every other kind.
     pub copy_span: Option<SourceSpan>,
     pub root_cause: Option<RootCause>,
+    /// The `RANGE_CONTAINS_HIDDEN_CELLS` observation (Milestone B7b), if
+    /// the last `.Copy`'d range overlapped hidden rows/columns — populated
+    /// regardless of `ok`, since this isn't a failure at all (see
+    /// `Vm::hidden_cells_observation`'s doc comment for exactly when it's
+    /// `None`). Rendered as a separate `observations` JSON field, not
+    /// folded into `root_causes` (which means "why it failed").
+    pub hidden_cells: Option<HiddenCellsObservation>,
     pub messages: Vec<String>,
 }
 
@@ -267,6 +276,65 @@ fn areas_json(areas: &[Rect]) -> String {
     )
 }
 
+/// Renders a hidden-row interval as `"11:14"` (Milestone B7b) — always
+/// `"{start}:{end}"`, even for a single row, matching the completion
+/// condition's own `"B:B"`-style column rendering rather than
+/// `rect_addr`'s single-cell-omits-the-colon convention.
+fn row_interval_addr(iv: &Interval) -> String {
+    format!("{}:{}", iv.start, iv.end)
+}
+
+/// Renders a hidden-column interval as `"B:B"` (Milestone B7b).
+fn col_interval_addr(iv: &Interval) -> String {
+    format!("{}:{}", col_to_letters(iv.start), col_to_letters(iv.end))
+}
+
+fn row_intervals_json(intervals: &[Interval]) -> String {
+    format!(
+        "[{}]",
+        intervals.iter().map(|iv| json_string(&row_interval_addr(iv))).collect::<Vec<_>>().join(",")
+    )
+}
+
+fn col_intervals_json(intervals: &[Interval]) -> String {
+    format!(
+        "[{}]",
+        intervals.iter().map(|iv| json_string(&col_interval_addr(iv))).collect::<Vec<_>>().join(",")
+    )
+}
+
+/// Renders the `"observations":[...]` fragment (Milestone B7b) — `"[]"`
+/// for `None`, a one-item array for `Some`. Callers (`to_json`,
+/// `diagnose-workbook`) omit the whole `observations` field rather than
+/// emit `"observations":[]"` when this is `None` — see `Diagnosis::
+/// hidden_cells`'s doc comment for why (this is a non-failure observation,
+/// not a `root_causes`-shaped "why it failed" entry, and an
+/// always-present empty array would break every existing `--json`
+/// fixture in `tests/blackbox.rs`).
+pub(crate) fn observations_json(obs: Option<&HiddenCellsObservation>) -> String {
+    match obs {
+        Some(o) => format!(
+            "[{{\"code\":\"RANGE_CONTAINS_HIDDEN_CELLS\",\"certainty\":\"observed\",\
+             \"range\":{{\"sheet\":{},\"address\":{},\"rows\":{},\"columns\":{}}},\
+             \"visibility\":{{\"hidden_rows\":{},\"hidden_columns\":{},\
+             \"total_cells\":{},\"visible_cells\":{}}},\"message\":{}}}]",
+            json_string(&o.sheet),
+            json_string(&o.address),
+            o.rows,
+            o.columns,
+            row_intervals_json(&o.hidden_rows),
+            col_intervals_json(&o.hidden_columns),
+            o.total_cells,
+            o.visible_cells,
+            json_string(
+                "The range contains hidden rows or columns. Excel operations using \
+                 visible cells only may produce a multi-area range."
+            ),
+        ),
+        None => "[]".to_string(),
+    }
+}
+
 /// Runs `entrypoint` once against the workbook at `workbook_path`, in
 /// strict-resolution mode. `Err` is only for setup failures before the
 /// macro could start (the workbook file couldn't be read, or has no
@@ -295,6 +363,7 @@ pub fn run_diagnosis(
             span: None,
             copy_span: None,
             root_cause: None,
+            hidden_cells: vm.hidden_cells_observation(),
             messages: vm.take_messages(),
         }),
         Err(message) => {
@@ -307,12 +376,14 @@ pub fn run_diagnosis(
                 | ResolutionFailureKind::PasteMergeLayoutMismatch { copy_span, .. } => *copy_span,
                 _ => None,
             });
+            let hidden_cells = vm.hidden_cells_observation();
             Ok(Diagnosis {
                 ok: false,
                 message: Some(message),
                 span,
                 copy_span,
                 root_cause,
+                hidden_cells,
                 messages: vm.take_messages(),
             })
         }
@@ -522,10 +593,17 @@ pub fn to_json(
             .collect::<Vec<_>>()
             .join(",")
     );
+    // Milestone B7b: a sibling field, present only when `Some` — never
+    // `"observations":[]"`, since that would break every existing
+    // `--json` fixture in `tests/blackbox.rs` that predates this field.
+    let observations_field = match &diag.hidden_cells {
+        Some(obs) => format!(",\"observations\":{}", observations_json(Some(obs))),
+        None => String::new(),
+    };
     if diag.ok {
         return format!(
-            "{{\"schema_version\":1,\"ok\":true,\"messages\":{}}}",
-            messages_json
+            "{{\"schema_version\":1,\"ok\":true,\"messages\":{}{}}}",
+            messages_json, observations_field
         );
     }
     let root_causes = match &diag.root_cause {
@@ -533,11 +611,12 @@ pub fn to_json(
         None => "[]".to_string(),
     };
     format!(
-        "{{\"schema_version\":1,\"ok\":false,\"message\":{},\"location\":{},\"root_causes\":{},\"messages\":{}}}",
+        "{{\"schema_version\":1,\"ok\":false,\"message\":{},\"location\":{},\"root_causes\":{},\"messages\":{}{}}}",
         json_string(diag.message.as_deref().unwrap_or("")),
         location_json(location),
         root_causes,
         messages_json,
+        observations_field,
     )
 }
 
@@ -550,7 +629,11 @@ pub fn to_plain_text(
     copy_location: Option<&SourceLocation>,
 ) -> String {
     if diag.ok {
-        return "OK: no resolution failure detected".to_string();
+        let mut out = "OK: no resolution failure detected".to_string();
+        if let Some(obs) = &diag.hidden_cells {
+            out.push_str(&hidden_cells_plain_text_note(obs));
+        }
+        return out;
     }
     let mut out = format!(
         "FAILED: {}",
@@ -701,7 +784,34 @@ pub fn to_plain_text(
             out.push_str(&format!("\n  suggestion: {}", s));
         }
     }
+    if let Some(obs) = &diag.hidden_cells {
+        out.push_str(&hidden_cells_plain_text_note(obs));
+    }
     out
+}
+
+/// Plain-text rendering of the `RANGE_CONTAINS_HIDDEN_CELLS` observation
+/// (Milestone B7b), shared by both `to_plain_text`'s success and failure
+/// branches.
+fn hidden_cells_plain_text_note(obs: &HiddenCellsObservation) -> String {
+    format!(
+        "\n\nRANGE_CONTAINS_HIDDEN_CELLS: {} ({}) has {} of {} cells visible \
+         (hidden rows: {}; hidden columns: {})",
+        obs.address,
+        obs.sheet,
+        obs.visible_cells,
+        obs.total_cells,
+        if obs.hidden_rows.is_empty() {
+            "none".to_string()
+        } else {
+            obs.hidden_rows.iter().map(row_interval_addr).collect::<Vec<_>>().join(", ")
+        },
+        if obs.hidden_columns.is_empty() {
+            "none".to_string()
+        } else {
+            obs.hidden_columns.iter().map(col_interval_addr).collect::<Vec<_>>().join(", ")
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1101,6 +1211,7 @@ mod tests {
             span: None,
             copy_span: None,
             root_cause: Some(RootCause::from_kind(kind.clone())),
+            hidden_cells: None,
             messages: vec![],
         };
         let full_json = to_json(&diag, None, None);
@@ -1114,5 +1225,121 @@ mod tests {
             full_json,
             root_causes_fragment
         );
+    }
+
+    // ── Milestone B7b: hidden row/column evidence ────────────────────────────
+
+    fn sample_observation() -> HiddenCellsObservation {
+        // The B7b plan's own worked example — note its `visible_cells`
+        // (172, hand-verified: (100-14)*(3-1)) intentionally differs from
+        // the request's own inconsistent `162`; see the plan's decision 5.
+        HiddenCellsObservation {
+            sheet: "sheet1".to_string(),
+            address: "A1:C100".to_string(),
+            rows: 100,
+            columns: 3,
+            hidden_rows: vec![
+                Interval { start: 11, end: 14 },
+                Interval { start: 30, end: 39 },
+            ],
+            hidden_columns: vec![Interval { start: 2, end: 2 }],
+            total_cells: 300,
+            visible_cells: 172,
+        }
+    }
+
+    #[test]
+    fn observations_json_renders_an_empty_array_for_none() {
+        assert_eq!(observations_json(None), "[]");
+    }
+
+    #[test]
+    fn observations_json_renders_the_completion_condition_shape() {
+        let json = observations_json(Some(&sample_observation()));
+        assert!(json.contains("\"code\":\"RANGE_CONTAINS_HIDDEN_CELLS\""));
+        assert!(json.contains("\"certainty\":\"observed\""));
+        assert!(json.contains(
+            "\"range\":{\"sheet\":\"sheet1\",\"address\":\"A1:C100\",\"rows\":100,\"columns\":3}"
+        ));
+        assert!(json.contains("\"hidden_rows\":[\"11:14\",\"30:39\"]"));
+        assert!(json.contains("\"hidden_columns\":[\"B:B\"]"));
+        assert!(json.contains("\"total_cells\":300"));
+        assert!(json.contains("\"visible_cells\":172"));
+    }
+
+    fn diagnosis_with_hidden_cells(ok: bool, hidden_cells: Option<HiddenCellsObservation>) -> Diagnosis {
+        Diagnosis {
+            ok,
+            message: if ok { None } else { Some("Sheet 'x' not found".to_string()) },
+            span: None,
+            copy_span: None,
+            root_cause: if ok {
+                None
+            } else {
+                Some(RootCause::from_kind(ResolutionFailureKind::WorksheetNotFound(
+                    ResolutionEvidence {
+                        expression: "Worksheets(\"x\")".to_string(),
+                        requested: "x".to_string(),
+                        available: vec![],
+                        suggested: None,
+                    },
+                )))
+            },
+            hidden_cells,
+            messages: vec![],
+        }
+    }
+
+    #[test]
+    fn to_json_omits_the_observations_field_when_there_is_nothing_to_observe() {
+        assert!(!to_json(&diagnosis_with_hidden_cells(true, None), None, None)
+            .contains("observations"));
+        assert!(!to_json(&diagnosis_with_hidden_cells(false, None), None, None)
+            .contains("observations"));
+    }
+
+    #[test]
+    fn to_json_includes_observations_on_a_successful_run() {
+        let json = to_json(
+            &diagnosis_with_hidden_cells(true, Some(sample_observation())),
+            None,
+            None,
+        );
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("\"observations\":[{\"code\":\"RANGE_CONTAINS_HIDDEN_CELLS\""));
+    }
+
+    #[test]
+    fn to_json_includes_observations_alongside_root_causes_on_a_failing_run() {
+        let json = to_json(
+            &diagnosis_with_hidden_cells(false, Some(sample_observation())),
+            None,
+            None,
+        );
+        assert!(json.contains("\"root_causes\":[{\"code\":\"WORKSHEET_NOT_FOUND\""));
+        assert!(json.contains("\"observations\":[{\"code\":\"RANGE_CONTAINS_HIDDEN_CELLS\""));
+    }
+
+    #[test]
+    fn to_plain_text_appends_the_hidden_cells_note_on_success() {
+        let text = to_plain_text(
+            &diagnosis_with_hidden_cells(true, Some(sample_observation())),
+            None,
+            None,
+        );
+        assert!(text.starts_with("OK: no resolution failure detected"));
+        assert!(text.contains("RANGE_CONTAINS_HIDDEN_CELLS"));
+        assert!(text.contains("172"));
+    }
+
+    #[test]
+    fn to_plain_text_appends_the_hidden_cells_note_on_failure() {
+        let text = to_plain_text(
+            &diagnosis_with_hidden_cells(false, Some(sample_observation())),
+            None,
+            None,
+        );
+        assert!(text.contains("WORKSHEET_NOT_FOUND"));
+        assert!(text.contains("RANGE_CONTAINS_HIDDEN_CELLS"));
     }
 }

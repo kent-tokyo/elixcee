@@ -310,6 +310,27 @@ elixcee diagnose-workbook fixture.toml --json
 
 これは基盤となるマイルストーンです。`Union()`、`Areas` プロパティ、`Dim rng As Range` によるオブジェクト変数はまだ未対応で、複数領域の貼り付けはv1では——コピー元と貼り付け先の領域が完全に一致する場合でも——実際には完了しません。全体像とその他3つの分類コードは [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
 
+### 非表示行・列の証拠情報
+
+`diagnose`/`diagnose-workbook` は、`.Copy` したRangeが非表示の行・列（実際のXLSXの `hidden="1"` メタデータから読み取り）と重なっている場合に報告するようになりました——これはエラーではなく、`root_causes` とは別の新しい `observations` フィールドとして（併記、または単独で）出力されます:
+
+```json
+{
+  "code": "RANGE_CONTAINS_HIDDEN_CELLS",
+  "certainty": "observed",
+  "range": {"sheet": "sheet1", "address": "A1:C100", "rows": 100, "columns": 3},
+  "visibility": {
+    "hidden_rows": ["11:14", "30:39"],
+    "hidden_columns": ["B:B"],
+    "total_cells": 300,
+    "visible_cells": 172
+  },
+  "message": "The range contains hidden rows or columns. Excel operations using visible cells only may produce a multi-area range."
+}
+```
+
+これは将来の `SpecialCells(xlCellTypeVisible)` が土台にする基盤機能です——Copy/Paste自体の挙動は変わりません（非表示セルもこれまで通りコピー・貼り付けされます）。対応はXLSXのみで、ODSは後続課題です。全体像は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
+
 ### ソースからビルド
 
 ```bash

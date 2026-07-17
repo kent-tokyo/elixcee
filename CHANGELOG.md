@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Hidden row/column evidence** (Milestone B7b): `diagnose`/`diagnose-workbook` now report when a `.Copy`'d range overlaps hidden rows/columns —
+  - New `vm::Interval`/`vm::SheetVisibility` types, threaded from XLSX's `<row hidden="1">`/`<col min=".." max=".." hidden="1">` into `Vm.sheet_visibility` the same way `merged_ranges` already is; ODS is explicitly deferred (its reader doesn't expand `table:number-rows-repeated`, so a hidden-row flag can't map to a correct absolute row number yet)
+  - New `Vm::hidden_cells_observation()` computes the evidence on demand from the existing `Vm.clipboard` + `sheet_visibility` — no new stored side channel
+  - A new sibling JSON field `observations` (not folded into `root_causes`, which means "why it failed" — this isn't a failure), present only when non-empty, on both success and failure: `{"code":"RANGE_CONTAINS_HIDDEN_CELLS","certainty":"observed","range":{...},"visibility":{...},"message":"..."}`
+  - `diagnose-workbook` gets the same field via `FixtureResult::Passed`/`::Failed`, though honestly no additional value over a single `diagnose` call — hidden-row/column metadata is structural (workbook layout + macro text), not input-dependent
+  - Copy/Paste behavior itself is unchanged — hidden cells still copy/paste exactly as before; this is observability only, laying groundwork for `SpecialCells(xlCellTypeVisible)` (B7c)
 - **Multi-area Range foundation** (Milestone B7a): `Range("A1:A3,C1:C3")`-style disjoint ranges now have an underlying model —
   - New `vm::Rect`/`vm::RangeRef` types (`{ sheet, areas: Vec<Rect> }`); the existing single-rect `parse_range_addr`/`SheetRange` and their ~11 call sites are untouched — only Copy/Paste resolve through the new `parse_multi_area_addr`
   - `.Copy` now accepts a comma-separated multi-area source; `.Paste`/`.PasteSpecial` is diagnose-only for any multi-area shape and never completes (writes cells) in v1, even a fully-matching one — 4 new classified failures instead: `MULTI_AREA_TO_SINGLE_AREA_PASTE`, `MULTI_AREA_COUNT_MISMATCH`, `MULTI_AREA_SHAPE_MISMATCH`, and the catch-all `MULTI_AREA_PASTE_UNSUPPORTED`

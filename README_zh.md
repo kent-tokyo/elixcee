@@ -309,6 +309,27 @@ Fixture 格式与 `--seed`/`--case` 复现方式与 `test-workbook` 完全相同
 
 这是一个基础性的里程碑：`Union()`、`Areas` 属性、`Dim rng As Range` 对象变量目前都还不支持，v1 中任何多区域粘贴都不会真正完成——即使源区域与目标区域的数量和形状完全匹配也是如此。完整范围和另外 3 个分类代码见 [docs/agent-contract.md](docs/agent-contract.md)。
 
+### 隐藏行/列证据
+
+当 `.Copy` 的区域与隐藏的行/列（从真实 XLSX 的 `hidden="1"` 元数据读取）重叠时，`diagnose`/`diagnose-workbook` 现在会报告——这不是错误，而是与 `root_causes` 并列（或单独出现）的新 `observations` 字段：
+
+```json
+{
+  "code": "RANGE_CONTAINS_HIDDEN_CELLS",
+  "certainty": "observed",
+  "range": {"sheet": "sheet1", "address": "A1:C100", "rows": 100, "columns": 3},
+  "visibility": {
+    "hidden_rows": ["11:14", "30:39"],
+    "hidden_columns": ["B:B"],
+    "total_cells": 300,
+    "visible_cells": 172
+  },
+  "message": "The range contains hidden rows or columns. Excel operations using visible cells only may produce a multi-area range."
+}
+```
+
+这是未来 `SpecialCells(xlCellTypeVisible)` 的基础——Copy/Paste 本身的行为不受影响（隐藏单元格仍会像以前一样被复制/粘贴）。目前仅支持 XLSX，ODS 留待后续。完整范围见 [docs/agent-contract.md](docs/agent-contract.md)。
+
 ### 从源码构建
 
 ```bash
