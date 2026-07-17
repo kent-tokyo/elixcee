@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Multi-area Range foundation** (Milestone B7a): `Range("A1:A3,C1:C3")`-style disjoint ranges now have an underlying model —
+  - New `vm::Rect`/`vm::RangeRef` types (`{ sheet, areas: Vec<Rect> }`); the existing single-rect `parse_range_addr`/`SheetRange` and their ~11 call sites are untouched — only Copy/Paste resolve through the new `parse_multi_area_addr`
+  - `.Copy` now accepts a comma-separated multi-area source; `.Paste`/`.PasteSpecial` is diagnose-only for any multi-area shape and never completes (writes cells) in v1, even a fully-matching one — 4 new classified failures instead: `MULTI_AREA_TO_SINGLE_AREA_PASTE`, `MULTI_AREA_COUNT_MISMATCH`, `MULTI_AREA_SHAPE_MISMATCH`, and the catch-all `MULTI_AREA_PASTE_UNSUPPORTED`
+  - Each area's evidence is `{"address", "rows", "columns"}`, matching the completion-condition JSON's own shape
+  - `Union()`, the `Areas`/`Areas.Count`/`Areas(n)` property, and `Dim rng As Range`/`Set rng = ...` object variables remain unsupported — `Variant` gained no Range variant
+  - Foundation for B7b (hidden/filtered rows) and B7c (`SpecialCells(xlCellTypeVisible)`), sequenced ahead of shrinking (B5b) since most structural failures need this range model first
 - **`diagnose-workbook` subcommand** (Milestone B6d): combines `test-workbook`'s (B5a) generated-case search with `diagnose`'s (B6a–B6c2) root-cause classification —
   - Reuses `test-workbook`'s exact fixture format, strategies, and deterministic `--seed`/`--case` replay; runs each case with `Vm::strict_resolution` on and enriches classifiable failures with the same `ResolutionFailureKind` → `RootCause` pipeline `diagnose` uses, via a new `pub(crate) diagnose::root_causes_json` entry point
   - New `--cases N` flag overrides the fixture's declared case count for one invocation (scoped to this subcommand; `test-workbook` itself is unchanged)

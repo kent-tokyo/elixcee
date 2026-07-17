@@ -286,6 +286,30 @@ elixcee diagnose-workbook fixture.toml --json
 
 フィクスチャ形式と `--seed`/`--case` による再現は `test-workbook` と同一、加えて今回の実行だけフィクスチャのケース数を上書きする `--cases N` を追加しました。完全なスキーマは [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
 
+### 複数領域Range
+
+`Range("A1:A10,C1:C10")` のような非連続な複数領域Rangeを `.Copy` が認識するようになりました。ただし貼り付けは診断専用です——`diagnose`/`diagnose-workbook` が、黙って何もしない代わりに理由を分類して報告します:
+
+```json
+{
+  "code": "MULTI_AREA_TO_SINGLE_AREA_PASTE",
+  "source_areas": [
+    {"address": "A1:A10", "rows": 10, "columns": 1},
+    {"address": "C1:C10", "rows": 10, "columns": 1}
+  ],
+  "destination_areas": [
+    {"address": "E1:F10", "rows": 10, "columns": 2}
+  ],
+  "suggestions": [
+    "paste each source area separately",
+    "copy a contiguous rectangular range",
+    "use destination areas with matching count and shapes"
+  ]
+}
+```
+
+これは基盤となるマイルストーンです。`Union()`、`Areas` プロパティ、`Dim rng As Range` によるオブジェクト変数はまだ未対応で、複数領域の貼り付けはv1では——コピー元と貼り付け先の領域が完全に一致する場合でも——実際には完了しません。全体像とその他3つの分類コードは [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
+
 ### ソースからビルド
 
 ```bash

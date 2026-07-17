@@ -285,6 +285,30 @@ elixcee diagnose-workbook fixture.toml --json
 
 Fixture 格式与 `--seed`/`--case` 复现方式与 `test-workbook` 完全相同，另外新增 `--cases N` 可在本次运行中覆盖 fixture 自身声明的用例数。完整 schema 见 [docs/agent-contract.md](docs/agent-contract.md)。
 
+### 多区域 Range
+
+`.Copy` 现在能识别 `Range("A1:A10,C1:C10")` 这样不连续的多区域 Range，但粘贴仅限于诊断——`diagnose`/`diagnose-workbook` 会分类报告原因，而不是悄悄什么都不做：
+
+```json
+{
+  "code": "MULTI_AREA_TO_SINGLE_AREA_PASTE",
+  "source_areas": [
+    {"address": "A1:A10", "rows": 10, "columns": 1},
+    {"address": "C1:C10", "rows": 10, "columns": 1}
+  ],
+  "destination_areas": [
+    {"address": "E1:F10", "rows": 10, "columns": 2}
+  ],
+  "suggestions": [
+    "paste each source area separately",
+    "copy a contiguous rectangular range",
+    "use destination areas with matching count and shapes"
+  ]
+}
+```
+
+这是一个基础性的里程碑：`Union()`、`Areas` 属性、`Dim rng As Range` 对象变量目前都还不支持，v1 中任何多区域粘贴都不会真正完成——即使源区域与目标区域的数量和形状完全匹配也是如此。完整范围和另外 3 个分类代码见 [docs/agent-contract.md](docs/agent-contract.md)。
+
 ### 从源码构建
 
 ```bash

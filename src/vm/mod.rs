@@ -128,6 +128,48 @@ pub enum ResolutionFailureKind {
         conflicts: Vec<MergeRect>,
         copy_span: Option<SourceSpan>,
     },
+    /// A multi-area source (`Range("A1:A3,C1:C3")`, `Areas.Count > 1`) was
+    /// pasted into a single-area destination (Milestone B7a) — real Excel
+    /// can't determine a unique area-to-area correspondence. This is the
+    /// foundation milestone's completion-condition scenario. Raw `Rect`s,
+    /// not pre-formatted addresses — same precedent as
+    /// `PasteIntoNonAnchorMergedCell`'s `MergeRect`; `diagnose.rs` formats
+    /// them (via its existing private `rect_addr`) at JSON-serialization
+    /// time.
+    MultiAreaToSingleAreaPaste {
+        source_areas: Vec<Rect>,
+        /// Always exactly 1 element — kept as a `Vec` for field-shape
+        /// symmetry with the other 3 multi-area kinds below.
+        destination_areas: Vec<Rect>,
+    },
+    /// Both source and destination are multi-area, but their `Areas.Count`
+    /// differ (Milestone B7a).
+    MultiAreaCountMismatch {
+        source_areas: Vec<Rect>,
+        destination_areas: Vec<Rect>,
+    },
+    /// Both source and destination are multi-area with matching
+    /// `Areas.Count`, but at least one area pair (by position) differs in
+    /// rows/columns (Milestone B7a). Reports the first mismatching pair;
+    /// `area_index` is 1-based, matching VBA's own `Areas(1)`-style
+    /// indexing.
+    MultiAreaShapeMismatch {
+        area_index: usize,
+        source_area: Rect,
+        destination_area: Rect,
+    },
+    /// A multi-area paste shape Milestone B7a doesn't diagnose as
+    /// structurally *wrong*: a single-area source into a multi-area
+    /// destination, or a multi-area-to-multi-area paste that fully matches
+    /// in count and per-area shape. Real Excel would complete either of
+    /// these; elixcee's v1 multi-area foundation is diagnose-only and
+    /// never actually executes a multi-area paste (see `do_paste`'s doc
+    /// comment), so this reports the limitation plainly rather than
+    /// silently doing nothing or misreporting a mismatch that isn't there.
+    MultiAreaPasteUnsupported {
+        source_areas: Vec<Rect>,
+        destination_areas: Vec<Rect>,
+    },
 }
 
 /// The VM's clipboard state, populated by `.Copy` and consumed by
@@ -146,6 +188,14 @@ struct ClipboardState {
     cols: u32,
     cells: Vec<Vec<Variant>>, // [row][col], 0-based offsets from the source's top-left
     span: SourceSpan,
+    /// Full area geometry of what was copied (Milestone B7a) — `rows`/
+    /// `cols` above are only the *first* area's dimensions, kept so the
+    /// existing `areas.len() == 1` fast path (every pre-B7a macro) is
+    /// byte-identical to before. `cells` is only ever populated when
+    /// `areas.len() == 1`: a multi-area paste is diagnose-only in v1 (see
+    /// `do_paste`) and never reads per-area cell values, so none are
+    /// snapshotted for `areas.len() > 1`.
+    areas: Vec<Rect>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -208,6 +258,70 @@ pub enum ExitKind { For, Do, Sub, Function }
 /// existing per-module `col_to_letters` duplication convention rather than
 /// a cross-module `utils` dependency.
 type MergeRect = ((u32, u32), (u32, u32));
+
+/// A 1-based inclusive rectangular area (Milestone B7a) — the multi-area
+/// foundation's basic building block. Same bounds convention as
+/// `MergeRect`/`SheetRange`, but a named struct (not a bare tuple) since
+/// `RangeRef` needs a `Vec` of these.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub start_row: u32,
+    pub start_col: u32,
+    pub end_row: u32,
+    pub end_col: u32,
+}
+
+impl Rect {
+    pub fn rows(&self) -> u32 {
+        self.end_row - self.start_row + 1
+    }
+
+    pub fn cols(&self) -> u32 {
+        self.end_col - self.start_col + 1
+    }
+}
+
+/// A possibly-disjoint Excel range on one sheet — one or more rectangular
+/// areas (Milestone B7a's foundation for `Areas.Count`-shaped ranges like
+/// `"A1:A3,C1:C3"`, and eventually a filtered `SpecialCells
+/// (xlCellTypeVisible)` result in B7c). Every existing single-rect call
+/// site (`SheetRange`, `parse_range_addr`, every VBA statement except
+/// Copy/Paste) is unchanged and keeps using the bare-tuple representation
+/// — only Copy/Paste resolve through `Rect`/`RangeRef`, and only their
+/// `areas.len() == 1` fast path is exercised by pre-B7a macros.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeRef {
+    pub sheet: String,
+    pub areas: Vec<Rect>,
+}
+
+impl RangeRef {
+    pub fn single(sheet: String, rect: Rect) -> Self {
+        RangeRef {
+            sheet,
+            areas: vec![rect],
+        }
+    }
+
+    pub fn is_single_area(&self) -> bool {
+        self.areas.len() == 1
+    }
+
+    pub fn single_rect(&self) -> Option<&Rect> {
+        if self.is_single_area() {
+            self.areas.first()
+        } else {
+            None
+        }
+    }
+
+    pub fn cell_count(&self) -> usize {
+        self.areas
+            .iter()
+            .map(|r| r.rows() as usize * r.cols() as usize)
+            .sum()
+    }
+}
 
 pub struct Vm {
     /// Per-sheet cell storage. Key is sheet name (lowercase for lookup).
@@ -362,6 +476,17 @@ impl Vm {
         if let Some(r) = parse_range_addr(addr) { return Some(r); }
         self.named_ranges.get(&addr.to_lowercase())
             .and_then(|real| parse_range_addr(real))
+    }
+
+    /// Multi-area sibling of `resolve_range_addr` (Milestone B7a) — used
+    /// only by Copy-source and Paste-destination resolution, not any of the
+    /// other ~11 `parse_range_addr`/`resolve_range_addr` call sites (sort,
+    /// sheet-range write, formula evaluation), which have no need for
+    /// comma-separated addresses.
+    fn resolve_multi_area_addr(&self, addr: &str) -> Option<Vec<Rect>> {
+        if let Some(r) = parse_multi_area_addr(addr) { return Some(r); }
+        self.named_ranges.get(&addr.to_lowercase())
+            .and_then(|real| parse_multi_area_addr(real))
     }
 
     pub fn cells(&self) -> &HashMap<(u32, u32), CellContent> {
@@ -725,6 +850,19 @@ impl Vm {
                 return Err("Paste error: Clipboard is empty".to_string());
             }
         };
+
+        // Milestone B7a: multi-area foundation — diagnose-only, never
+        // completes (see `multi_area_paste_failure`'s doc comment). Only
+        // taken when source or destination unambiguously parses to more
+        // than one area; an unparseable destination or a single-area-only
+        // paste falls through untouched to the existing logic below.
+        let dest_areas_probe = self.resolve_multi_area_addr(dest_addr);
+        let is_multi_area = clip.areas.len() > 1
+            || dest_areas_probe.as_ref().is_some_and(|d| d.len() > 1);
+        if is_multi_area {
+            return Err(self.multi_area_paste_failure(&clip, dest_addr, dest_areas_probe));
+        }
+
         let single_cell_source = clip.rows == 1 && clip.cols == 1;
         let (expected_rows, expected_cols) = if transpose {
             (clip.cols, clip.rows)
@@ -784,6 +922,84 @@ impl Vm {
             }
         }
         Ok(())
+    }
+
+    /// Classifies a multi-area Copy/Paste (Milestone B7a) and returns the
+    /// matching error message — never returns success, since v1's
+    /// multi-area foundation only models the range/geometry and its
+    /// failure modes, not actual multi-area cell copying (see the module's
+    /// B7a design notes). Called only once `do_paste` has already
+    /// established that source or destination has more than one area.
+    ///
+    /// `dest_areas` is `None` when the destination address itself didn't
+    /// resolve (malformed, or a named-range miss) — that's a plain invalid-
+    /// address error, same message pre-B7a callers already saw, not a
+    /// multi-area classification.
+    fn multi_area_paste_failure(
+        &mut self,
+        clip: &ClipboardState,
+        dest_addr: &str,
+        dest_areas: Option<Vec<Rect>>,
+    ) -> String {
+        let source_areas = clip.areas.clone();
+        let dest_areas = match dest_areas {
+            Some(d) => d,
+            None => {
+                return format!("Paste error: invalid destination range '{}'", dest_addr);
+            }
+        };
+
+        if source_areas.len() > 1 && dest_areas.len() == 1 {
+            let count = source_areas.len();
+            self.last_resolution_failure = Some(ResolutionFailureKind::MultiAreaToSingleAreaPaste {
+                source_areas,
+                destination_areas: dest_areas,
+            });
+            return format!(
+                "Paste error: source has {} disjoint areas but the destination is a single area",
+                count
+            );
+        }
+
+        if source_areas.len() > 1 && dest_areas.len() > 1 {
+            if source_areas.len() != dest_areas.len() {
+                let (src_count, dst_count) = (source_areas.len(), dest_areas.len());
+                self.last_resolution_failure = Some(ResolutionFailureKind::MultiAreaCountMismatch {
+                    source_areas,
+                    destination_areas: dest_areas,
+                });
+                return format!(
+                    "Paste error: source has {} areas but destination has {} areas",
+                    src_count, dst_count
+                );
+            }
+            for (i, (s, d)) in source_areas.iter().zip(dest_areas.iter()).enumerate() {
+                if s.rows() != d.rows() || s.cols() != d.cols() {
+                    let (area_index, source_area, destination_area) = (i + 1, *s, *d);
+                    let (sr, sc, dr, dc) = (s.rows(), s.cols(), d.rows(), d.cols());
+                    self.last_resolution_failure = Some(ResolutionFailureKind::MultiAreaShapeMismatch {
+                        area_index,
+                        source_area,
+                        destination_area,
+                    });
+                    return format!(
+                        "Paste error: area {} shape mismatch (source {}x{}, destination {}x{})",
+                        area_index, sr, sc, dr, dc
+                    );
+                }
+            }
+        }
+
+        // Nothing structurally wrong (a single-area source into a
+        // multi-area destination, or a fully-matching multi-area-to-
+        // multi-area paste) — still unsupported in v1; see
+        // `MultiAreaPasteUnsupported`'s doc comment.
+        self.last_resolution_failure = Some(ResolutionFailureKind::MultiAreaPasteUnsupported {
+            source_areas,
+            destination_areas: dest_areas,
+        });
+        "Paste error: multi-area paste is not yet supported by elixcee (diagnosed, not executed)"
+            .to_string()
     }
 
     /// Loads a `.xlsx`/`.xlsm`/`.ods` file's sheets and cells into this `Vm`
@@ -1290,18 +1506,26 @@ impl Vm {
                 }
             }
             Stmt::RangeCopy { src, dst } => {
-                let ((r1, c1), (r2, c2)) = self.resolve_range_addr(src)
+                let areas = self.resolve_multi_area_addr(src)
                     .ok_or_else(|| format!("RangeCopy: invalid source range '{}'", src))?;
-                let cells: Vec<Vec<Variant>> = (r1..=r2)
-                    .map(|r| (c1..=c2).map(|c| self.get_cell(r, c)).collect())
-                    .collect();
+                // `resolve_multi_area_addr` never returns `Some(vec![])` — every
+                // comma-separated piece (at least 1) must itself parse.
+                let first = areas[0];
+                let cells: Vec<Vec<Variant>> = if areas.len() == 1 {
+                    (first.start_row..=first.end_row)
+                        .map(|r| (first.start_col..=first.end_col).map(|c| self.get_cell(r, c)).collect())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 self.clipboard = Some(ClipboardState {
                     source_addr: src.clone(),
                     src_sheet: self.active_sheet.clone(),
-                    rows: r2 - r1 + 1,
-                    cols: c2 - c1 + 1,
+                    rows: first.rows(),
+                    cols: first.cols(),
                     cells,
                     span: self.current_span.unwrap_or(SourceSpan { start: 0, end: 0 }),
+                    areas,
                 });
                 if let Some(dst_addr) = dst {
                     self.do_paste(dst_addr, false)?;
@@ -2077,6 +2301,20 @@ pub fn parse_range_addr(addr: &str) -> Option<((u32, u32), (u32, u32))> {
         let c = parse_cell_addr(addr)?;
         Some((c, c))
     }
+}
+
+/// Splits `addr` on top-level commas and parses each piece with
+/// `parse_range_addr` (Milestone B7a) — `"A1:A3,C1:C3"` becomes 2 `Rect`s;
+/// a plain `"A1:C10"` (no comma) still returns a 1-element `Vec` so callers
+/// can treat single- and multi-area addresses uniformly. `parse_range_addr`
+/// itself is untouched — every other caller keeps its current signature.
+pub fn parse_multi_area_addr(addr: &str) -> Option<Vec<Rect>> {
+    addr.split(',')
+        .map(|piece| {
+            let ((start_row, start_col), (end_row, end_col)) = parse_range_addr(piece)?;
+            Some(Rect { start_row, start_col, end_row, end_col })
+        })
+        .collect()
 }
 
 /// Does rect `a` overlap rect `b` at all? (Milestone B6c2) — no existing
@@ -4340,6 +4578,154 @@ mod tests {
                 dest_addr: "A1".to_string()
             })
         );
+    }
+
+    // ── Milestone B7a: multi-area Range foundation ───────────────────────────
+
+    #[test]
+    fn rect_and_range_ref_helpers_report_dimensions_and_area_count() {
+        let a = Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 3 };
+        assert_eq!((a.rows(), a.cols()), (10, 3));
+
+        let single = RangeRef::single("sheet1".to_string(), a);
+        assert!(single.is_single_area());
+        assert_eq!(single.single_rect(), Some(&a));
+        assert_eq!(single.cell_count(), 30);
+
+        let b = Rect { start_row: 1, start_col: 5, end_row: 4, end_col: 5 };
+        let multi = RangeRef { sheet: "sheet1".to_string(), areas: vec![a, b] };
+        assert!(!multi.is_single_area());
+        assert_eq!(multi.single_rect(), None);
+        assert_eq!(multi.cell_count(), 30 + 4);
+    }
+
+    #[test]
+    fn parse_multi_area_addr_returns_one_rect_for_a_plain_range() {
+        assert_eq!(
+            parse_multi_area_addr("A1:C10"),
+            Some(vec![Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 3 }])
+        );
+    }
+
+    #[test]
+    fn parse_multi_area_addr_splits_multiple_comma_separated_pieces() {
+        assert_eq!(
+            parse_multi_area_addr("A1:A10,C1:C10"),
+            Some(vec![
+                Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 1 },
+                Rect { start_row: 1, start_col: 3, end_row: 10, end_col: 3 },
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_multi_area_addr_rejects_a_malformed_piece() {
+        assert_eq!(parse_multi_area_addr("A1:A10,bogus"), None);
+    }
+
+    #[test]
+    fn range_copy_of_a_multi_area_source_populates_clipboard_areas_without_snapshotting_cells() {
+        let prog = parser::parse("Sub MySub()\n    Range(\"A1:A10,C1:C10\").Copy\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "mysub").unwrap();
+        let clip = vm.clipboard.as_ref().expect("Copy should have populated the clipboard");
+        assert_eq!(
+            clip.areas,
+            vec![
+                Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 1 },
+                Rect { start_row: 1, start_col: 3, end_row: 10, end_col: 3 },
+            ]
+        );
+        assert!(
+            clip.cells.is_empty(),
+            "multi-area Copy shouldn't snapshot per-area cell values in v1: {:?}",
+            clip.cells
+        );
+    }
+
+    #[test]
+    fn multi_area_source_pasted_into_single_area_destination_reports_the_completion_condition() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:A10,C1:C10\").Copy\n    Range(\"E1:F10\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("disjoint areas"), "{:?}", err);
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::MultiAreaToSingleAreaPaste { source_areas, destination_areas }) => {
+                assert_eq!(
+                    source_areas,
+                    vec![
+                        Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 1 },
+                        Rect { start_row: 1, start_col: 3, end_row: 10, end_col: 3 },
+                    ]
+                );
+                assert_eq!(
+                    destination_areas,
+                    vec![Rect { start_row: 1, start_col: 5, end_row: 10, end_col: 6 }]
+                );
+            }
+            other => panic!("expected MultiAreaToSingleAreaPaste, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn multi_area_source_and_destination_with_differing_area_counts_reports_count_mismatch() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:A10,C1:C10,E1:E10\").Copy\n    \
+             Range(\"G1:G10,I1:I10\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("3 areas"), "{:?}", err);
+        assert!(err.contains("2 areas"), "{:?}", err);
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::MultiAreaCountMismatch { source_areas, destination_areas }) => {
+                assert_eq!(source_areas.len(), 3);
+                assert_eq!(destination_areas.len(), 2);
+            }
+            other => panic!("expected MultiAreaCountMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn multi_area_source_and_destination_with_matching_counts_but_differing_shapes_reports_shape_mismatch() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:A10,C1:C10\").Copy\n    \
+             Range(\"G1:G10,I1:J10\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("area 2"), "{:?}", err);
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::MultiAreaShapeMismatch { area_index, source_area, destination_area }) => {
+                assert_eq!(area_index, 2);
+                assert_eq!(source_area, Rect { start_row: 1, start_col: 3, end_row: 10, end_col: 3 });
+                assert_eq!(destination_area, Rect { start_row: 1, start_col: 9, end_row: 10, end_col: 10 });
+            }
+            other => panic!("expected MultiAreaShapeMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn single_area_source_pasted_into_multi_area_destination_reports_paste_unsupported() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Range(\"A1:B10\").Copy\n    Range(\"E1:E10,G1:G10\").PasteSpecial\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("not yet supported"), "{:?}", err);
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::MultiAreaPasteUnsupported { source_areas, destination_areas }) => {
+                assert_eq!(source_areas.len(), 1);
+                assert_eq!(destination_areas.len(), 2);
+            }
+            other => panic!("expected MultiAreaPasteUnsupported, got {:?}", other),
+        }
     }
 
     #[test]

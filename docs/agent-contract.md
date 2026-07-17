@@ -674,12 +674,13 @@ concept didn't exist before. Checks run in this order, first match wins:
    `copy_location` (same two-location convention as `PASTE_SHAPE_MISMATCH`).
 
 Non-goals for B6c2: AutoFilter/`SpecialCells(xlCellTypeVisible)`
-visible-cells-only copy, multi-area (`Areas`) ranges, Excel Tables, hidden
-rows/columns, external OS-level clipboard, formula relative-reference
-translation on copy, and merge-awareness on any statement other than
-Paste (`RangeSort`/`RangeInsert`/`RangeDelete`/plain `RangeWrite` are
-untouched — a merge only blocks a *paste into* it, not other mutations,
-in this milestone).
+visible-cells-only copy, Excel Tables, hidden rows/columns, external
+OS-level clipboard, formula relative-reference translation on copy, and
+merge-awareness on any statement other than Paste (`RangeSort`/
+`RangeInsert`/`RangeDelete`/plain `RangeWrite` are untouched — a merge only
+blocks a *paste into* it, not other mutations, in this milestone).
+Multi-area (`Areas`) ranges — deferred here — now has its own foundation
+milestone, B7a (below).
 
 ### Output
 
@@ -776,13 +777,15 @@ own non-goals list above); B6c covers sheet protection (see its own
 non-goals note above); B6c2 covers merged-cell conflicts on Paste (see its
 own non-goals note above). Explicitly out of scope, planned for later:
 
-- Multi-area (`Areas`) ranges, hidden/filtered rows, AutoFilter
-  visible-cells-only copy — the user's original roadmap bundled these
-  with merged cells under "B6c," but merged-cell Paste conflicts shipped
-  first as B6c2 once grounding showed each of the others needs its own
-  new reader-format parsing (XLSX/ODS) and/or range-model change (a
-  single rectangle → a list of areas) that merged-cell handling alone
-  didn't need.
+- Hidden/filtered rows, AutoFilter visible-cells-only copy — the user's
+  original roadmap bundled these with merged cells under "B6c," but
+  merged-cell Paste conflicts shipped first as B6c2 once grounding showed
+  each of the others needs its own new reader-format parsing (XLSX/ODS)
+  and/or range-model change that merged-cell handling alone didn't need.
+  Multi-area (`Areas`) ranges — the range-model change itself — shipped
+  as its own foundation milestone, B7a (below); hidden/filtered rows and
+  `SpecialCells(xlCellTypeVisible)` remain deferred to B7b/B7c, which
+  build on B7a's `RangeRef`/`Rect` model.
 - Excel Tables (`ListObjects`) — never part of the user's original
   roadmap; added as a placeholder non-goal during B6a's own docs and kept
   deferred (a full new VBA object model, comparable in scope to `Range`/
@@ -873,7 +876,94 @@ at all, matching `diagnose`'s own permanent limitation.
 
 Shrinking (minimizing a failing case's inputs to a smaller reproducer) is
 the deliberate next step *after* this milestone, not part of it — cases are
-reported as-drawn. Also deferred: multi-area `Areas` ranges,
-filtered/hidden-visible-cell diagnosis (both already deferred from
-B6c/B6c2), backporting `--cases` to `test-workbook` itself, and any new
+reported as-drawn. Also deferred: filtered/hidden-visible-cell diagnosis
+(already deferred from B6c/B6c2; multi-area ranges themselves shipped as
+B7a, below), backporting `--cases` to `test-workbook` itself, and any new
 `[[assertions]]` rules beyond the existing `no_excel_errors`.
+
+## Multi-area ranges (Milestone B7a)
+
+A single-rectangle `Range` can't model real Excel constructs like
+`Range("A1:A3,C1:C3")` or a filtered `SpecialCells(xlCellTypeVisible)`
+result (multiple disjoint rectangles, one sheet). B7a adds the underlying
+model — `vm::Rect` (a 1-based inclusive rectangle) and `vm::RangeRef`
+(`{ sheet, areas: Vec<Rect> }`) — and wires it into Copy/Paste diagnosis
+only; every other statement (`RangeSort`, `RangeInsert`, plain cell
+read/write, formula evaluation, etc.) is untouched and still single-rect
+only. This is the foundation B7b (hidden/filtered rows) and B7c
+(`SpecialCells(xlCellTypeVisible)`) build on — those milestones are what
+actually *produce* a multi-area `RangeRef` from a real workbook; B7a only
+adds the model and its Copy/Paste diagnostics.
+
+**Supported syntax**: `Range("A1:A3,C1:C3")` — a single string-literal
+argument with a comma inside it, exactly like real VBA's own union syntax.
+No parser/grammar change was needed for this (the comma is inside the
+string, not a VBA-level argument separator); only the runtime address
+parser (`parse_multi_area_addr`, alongside the existing single-rect
+`parse_range_addr`) splits on top-level commas. **Not supported** (all
+deferred, per the same reasoning as B6a's `Dim arr(1 To N)` non-goal — no
+storable Range object exists to hang them on): `Union(...)`, the `Areas`/
+`Areas.Count`/`Areas(n)` VBA-visible property, and `Dim rng As Range` /
+`Set rng = ...` Range object variables in general (the `Variant` enum
+gained no `Range` variant).
+
+**Diagnose-only, by design**: v1 never actually completes (writes cells
+for) a multi-area paste — not even when source and destination areas fully
+correspond in count and shape. Multi-area `.Copy` succeeds (the clipboard
+records area geometry), but multi-area `.Paste`/`.PasteSpecial` always
+ends in one of 4 classified failures instead:
+
+- **`MULTI_AREA_TO_SINGLE_AREA_PASTE`**: source has more than one area,
+  destination has exactly one. Evidence: `source_areas`, `destination_areas`
+  (always 1 element).
+- **`MULTI_AREA_COUNT_MISMATCH`**: both sides have more than one area, but
+  `Areas.Count` differs. Evidence: `source_areas`, `destination_areas`.
+- **`MULTI_AREA_SHAPE_MISMATCH`**: both sides have more than one area with
+  matching counts, but at least one area pair (by position) differs in
+  rows/columns. Evidence: `area_index` (1-based, the first mismatching
+  pair), `source_area`, `destination_area`.
+- **`MULTI_AREA_PASTE_UNSUPPORTED`**: the catch-all for shapes the other 3
+  don't name — a single-area source into a multi-area destination, or a
+  multi-area-to-multi-area paste that fully matches in count and shape.
+  Real Excel would complete either of these; elixcee's v1 foundation
+  can't yet, so this reports the limitation plainly rather than silently
+  doing nothing or misreporting a mismatch that isn't there. Evidence:
+  `source_areas`, `destination_areas`.
+
+Every area's evidence is `{"address": "...", "rows": N, "columns": N}` —
+`columns` (not `cols`), and nested per area — a different convention from
+the existing flat `source_cols`/`dest_cols` fields `PASTE_SHAPE_MISMATCH`
+uses. No `copy_location`/`copy_span` on any of the 4 kinds (unlike the
+merge-conflict kinds) — geometry is the whole story here, there's no
+merged-cell layout to cross-reference.
+
+```json
+{
+  "code": "MULTI_AREA_TO_SINGLE_AREA_PASTE",
+  "certainty": "definite",
+  "source_areas": [
+    {"address": "A1:A10", "rows": 10, "columns": 1},
+    {"address": "C1:C10", "rows": 10, "columns": 1}
+  ],
+  "destination_areas": [
+    {"address": "E1:F10", "rows": 10, "columns": 2}
+  ],
+  "suggestions": [
+    "paste each source area separately",
+    "copy a contiguous rectangular range",
+    "use destination areas with matching count and shapes"
+  ]
+}
+```
+
+### Explicit non-goals (this milestone)
+
+`Union()`, `Areas`/`Areas.Count`/`Areas(n)`, and `Dim rng As Range`/
+`Set rng = ...` Range object variables (see "Supported syntax" above);
+actually completing (writing cells for) any multi-area paste, even a
+fully-matching one; hidden/filtered-row awareness (B7b);
+`SpecialCells(xlCellTypeVisible)` (B7c); and shrinking (B5b) — B7a is
+explicitly sequenced ahead of shrinking because most structural failures
+(multi-area, filtered rows) come from workbook layout, not drawn cell
+values, so there was nothing for shrinking to minimize until this
+structural model existed.

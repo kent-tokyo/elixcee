@@ -303,3 +303,98 @@ fn writing_to_a_protected_sheet_reports_sheet_protected() {
             .contains("Unprotect")
     );
 }
+
+// ── Milestone B7a: multi-area Range foundation ──────────────────────────────
+
+#[test]
+fn multi_area_to_single_area_paste_reports_the_completion_condition() {
+    // The B7a plan's own completion-condition scenario: a 2-area source
+    // pasted into a 1-area destination.
+    let (_, workbook, macro_bas) = build_dir(
+        "multi_area_to_single",
+        &[],
+        "Sub Run()\n    Range(\"A1:A10,C1:C10\").Copy\n    Range(\"E1:F10\").PasteSpecial\nEnd Sub\n",
+    );
+    let (ok, v) = run_json(&macro_bas, &workbook, "Run");
+    assert!(!ok, "{:?}", v);
+    assert_eq!(v["root_causes"][0]["code"], "MULTI_AREA_TO_SINGLE_AREA_PASTE");
+    assert_eq!(v["root_causes"][0]["certainty"], "definite");
+    assert_eq!(
+        v["root_causes"][0]["source_areas"],
+        serde_json::json!([
+            {"address": "A1:A10", "rows": 10, "columns": 1},
+            {"address": "C1:C10", "rows": 10, "columns": 1},
+        ])
+    );
+    assert_eq!(
+        v["root_causes"][0]["destination_areas"],
+        serde_json::json!([{"address": "E1:F10", "rows": 10, "columns": 2}])
+    );
+    assert_eq!(
+        v["root_causes"][0]["suggestions"],
+        serde_json::json!([
+            "paste each source area separately",
+            "copy a contiguous rectangular range",
+            "use destination areas with matching count and shapes",
+        ])
+    );
+}
+
+#[test]
+fn multi_area_count_mismatch_reports_a_root_cause() {
+    let (_, workbook, macro_bas) = build_dir(
+        "multi_area_count_mismatch",
+        &[],
+        "Sub Run()\n    Range(\"A1:A10,C1:C10,E1:E10\").Copy\n    \
+         Range(\"G1:G10,I1:I10\").PasteSpecial\nEnd Sub\n",
+    );
+    let (ok, v) = run_json(&macro_bas, &workbook, "Run");
+    assert!(!ok, "{:?}", v);
+    assert_eq!(v["root_causes"][0]["code"], "MULTI_AREA_COUNT_MISMATCH");
+    assert_eq!(v["root_causes"][0]["source_areas"].as_array().unwrap().len(), 3);
+    assert_eq!(v["root_causes"][0]["destination_areas"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn multi_area_to_single_area_paste_non_json_mode_prints_a_plain_text_summary() {
+    let (_, workbook, macro_bas) = build_dir(
+        "multi_area_plaintext",
+        &[],
+        "Sub Run()\n    Range(\"A1:A10,C1:C10\").Copy\n    Range(\"E1:F10\").PasteSpecial\nEnd Sub\n",
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_elixcee"))
+        .arg("diagnose")
+        .arg(macro_bas.to_str().unwrap())
+        .args(["--file", workbook.to_str().unwrap(), "Run"])
+        .output()
+        .expect("run elixcee binary");
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("MULTI_AREA_TO_SINGLE_AREA_PASTE"));
+    assert!(stdout.contains("A1:A10"));
+    assert!(stdout.contains("C1:C10"));
+    assert!(stdout.contains("E1:F10"));
+    assert!(stdout.contains("paste each source area separately"));
+}
+
+#[test]
+fn multi_area_shape_mismatch_reports_the_first_mismatching_area() {
+    let (_, workbook, macro_bas) = build_dir(
+        "multi_area_shape_mismatch",
+        &[],
+        "Sub Run()\n    Range(\"A1:A10,C1:C10\").Copy\n    \
+         Range(\"G1:G10,I1:J10\").PasteSpecial\nEnd Sub\n",
+    );
+    let (ok, v) = run_json(&macro_bas, &workbook, "Run");
+    assert!(!ok, "{:?}", v);
+    assert_eq!(v["root_causes"][0]["code"], "MULTI_AREA_SHAPE_MISMATCH");
+    assert_eq!(v["root_causes"][0]["area_index"], 2);
+    assert_eq!(
+        v["root_causes"][0]["source_area"],
+        serde_json::json!({"address": "C1:C10", "rows": 10, "columns": 1})
+    );
+    assert_eq!(
+        v["root_causes"][0]["destination_area"],
+        serde_json::json!({"address": "I1:J10", "rows": 10, "columns": 2})
+    );
+}

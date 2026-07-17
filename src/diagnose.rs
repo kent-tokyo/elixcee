@@ -15,11 +15,12 @@
 //! object, and every other subcommand's contract stays untouched.
 //!
 //! Explicit non-goals (see `docs/agent-contract.md` for the full list):
-//! multi-area (`Areas`) ranges, hidden/filtered rows, Excel Tables, a real
-//! `Collection` object, real multi-workbook execution, and
-//! `Dim arr(1 To N)` non-zero-lower-bound tracking are all out of scope.
-//! (Copy/Paste shape/clipboard validation shipped in Milestone B6b, and
-//! merged-cell-aware Paste conflicts in Milestone B6c2 — both superseding
+//! hidden/filtered rows, Excel Tables, a real `Collection` object, real
+//! multi-workbook execution, and `Dim arr(1 To N)` non-zero-lower-bound
+//! tracking are all out of scope. (Copy/Paste shape/clipboard validation
+//! shipped in Milestone B6b, merged-cell-aware Paste conflicts in Milestone
+//! B6c2, and a multi-area (`Areas`) Range foundation — diagnose-only, never
+//! completes a multi-area paste — in Milestone B7a; all three superseding
 //! this comment's original B6a-era non-goals list.) `root_causes` carries
 //! at most one entry today (the first failure) but is an array, not a bare
 //! object, because a later milestone's ranked-candidate model reuses this
@@ -27,7 +28,7 @@
 
 use crate::diagnostics::{SourceLocation, json_string};
 use crate::parser::{Program, ast::SourceSpan};
-use crate::vm::{ResolutionEvidence, ResolutionFailureKind, Vm};
+use crate::vm::{Rect, ResolutionEvidence, ResolutionFailureKind, Vm};
 
 /// The outcome of running one macro under strict-resolution diagnosis.
 #[derive(Debug)]
@@ -83,6 +84,14 @@ impl RootCause {
             }
             ResolutionFailureKind::PastePartialMergedRange { .. } => "PASTE_PARTIAL_MERGED_RANGE",
             ResolutionFailureKind::PasteMergeLayoutMismatch { .. } => "PASTE_MERGE_LAYOUT_MISMATCH",
+            ResolutionFailureKind::MultiAreaToSingleAreaPaste { .. } => {
+                "MULTI_AREA_TO_SINGLE_AREA_PASTE"
+            }
+            ResolutionFailureKind::MultiAreaCountMismatch { .. } => "MULTI_AREA_COUNT_MISMATCH",
+            ResolutionFailureKind::MultiAreaShapeMismatch { .. } => "MULTI_AREA_SHAPE_MISMATCH",
+            ResolutionFailureKind::MultiAreaPasteUnsupported { .. } => {
+                "MULTI_AREA_PASTE_UNSUPPORTED"
+            }
         };
         RootCause {
             code,
@@ -174,6 +183,25 @@ impl RootCause {
                     "or make the source and destination merge layouts identical".to_string(),
                 ]
             }
+            ResolutionFailureKind::MultiAreaToSingleAreaPaste { .. } => vec![
+                "paste each source area separately".to_string(),
+                "copy a contiguous rectangular range".to_string(),
+                "use destination areas with matching count and shapes".to_string(),
+            ],
+            ResolutionFailureKind::MultiAreaCountMismatch { .. } => vec![
+                "match the destination area count to the source area count".to_string(),
+                "paste each source area separately".to_string(),
+            ],
+            ResolutionFailureKind::MultiAreaShapeMismatch { area_index, .. } => vec![
+                format!(
+                    "resize destination area {} to match the source area's shape",
+                    area_index
+                ),
+                "paste each source area separately".to_string(),
+            ],
+            ResolutionFailureKind::MultiAreaPasteUnsupported { .. } => {
+                vec!["paste each source area separately".to_string()]
+            }
         }
     }
 }
@@ -208,6 +236,35 @@ fn rect_addr(r: MergeRect) -> String {
     } else {
         format!("{}{}:{}{}", col_to_letters(c1), r1, col_to_letters(c2), r2)
     }
+}
+
+/// Formats a `vm::Rect` (Milestone B7a) via the same `rect_addr` used for
+/// `MergeRect` — the two types share the same 1-based inclusive bounds,
+/// just a named struct vs. a bare tuple.
+fn area_addr(r: Rect) -> String {
+    rect_addr(((r.start_row, r.start_col), (r.end_row, r.end_col)))
+}
+
+/// One multi-area evidence object (Milestone B7a): `{"address":...,
+/// "rows":N,"columns":N}` — the completion-condition JSON's own per-area
+/// shape, deliberately not `evidence_json`'s flat-field convention (see the
+/// B7a plan's "Advisor-reviewed scope decisions" #2).
+fn area_json(r: Rect) -> String {
+    format!(
+        "{{\"address\":{},\"rows\":{},\"columns\":{}}}",
+        json_string(&area_addr(r)),
+        r.rows(),
+        r.cols(),
+    )
+}
+
+/// A JSON array of `area_json` objects, same `format!("[{}]", ...)` idiom
+/// as `conflicts_json`.
+fn areas_json(areas: &[Rect]) -> String {
+    format!(
+        "[{}]",
+        areas.iter().map(|r| area_json(*r)).collect::<Vec<_>>().join(",")
+    )
 }
 
 /// Runs `entrypoint` once against the workbook at `workbook_path`, in
@@ -403,6 +460,25 @@ fn root_cause_json(rc: &RootCause, copy_location: Option<&SourceLocation>) -> St
             conflicts_json(conflicts),
             location_json(copy_location),
         ),
+        ResolutionFailureKind::MultiAreaToSingleAreaPaste { source_areas, destination_areas }
+        | ResolutionFailureKind::MultiAreaCountMismatch { source_areas, destination_areas }
+        | ResolutionFailureKind::MultiAreaPasteUnsupported { source_areas, destination_areas } => {
+            format!(
+                "\"source_areas\":{},\"destination_areas\":{}",
+                areas_json(source_areas),
+                areas_json(destination_areas),
+            )
+        }
+        ResolutionFailureKind::MultiAreaShapeMismatch {
+            area_index,
+            source_area,
+            destination_area,
+        } => format!(
+            "\"area_index\":{},\"source_area\":{},\"destination_area\":{}",
+            area_index,
+            area_json(*source_area),
+            area_json(*destination_area),
+        ),
     };
     format!(
         "{{\"code\":\"{}\",\"certainty\":\"{}\",{},\"suggestions\":{}}}",
@@ -590,6 +666,35 @@ pub fn to_plain_text(
                 if let Some(loc) = copy_location {
                     out.push_str(&format!("\n  copied at {}:{}:{}", loc.file, loc.line, loc.column));
                 }
+            }
+            ResolutionFailureKind::MultiAreaToSingleAreaPaste { source_areas, destination_areas }
+            | ResolutionFailureKind::MultiAreaCountMismatch { source_areas, destination_areas }
+            | ResolutionFailureKind::MultiAreaPasteUnsupported { source_areas, destination_areas } => {
+                let src: Vec<String> = source_areas.iter().map(|r| area_addr(*r)).collect();
+                let dst: Vec<String> = destination_areas.iter().map(|r| area_addr(*r)).collect();
+                out.push_str(&format!(
+                    "copy source has {} area(s) ({}), paste destination has {} area(s) ({})",
+                    src.len(),
+                    src.join(", "),
+                    dst.len(),
+                    dst.join(", "),
+                ));
+            }
+            ResolutionFailureKind::MultiAreaShapeMismatch {
+                area_index,
+                source_area,
+                destination_area,
+            } => {
+                out.push_str(&format!(
+                    "area {} shape mismatch: source {} ({}x{}) vs destination {} ({}x{})",
+                    area_index,
+                    area_addr(*source_area),
+                    source_area.rows(),
+                    source_area.cols(),
+                    area_addr(*destination_area),
+                    destination_area.rows(),
+                    destination_area.cols(),
+                ));
             }
         }
         for s in rc.suggestions() {
@@ -788,6 +893,96 @@ mod tests {
         let json = to_json(&diag, None, None);
         assert!(json.contains("PASTE_WITHOUT_COPY"));
         assert!(json.contains("\"dest_addr\":\"A1\""));
+    }
+
+    // ── Milestone B7a: multi-area Range foundation ───────────────────────────
+
+    #[test]
+    fn multi_area_to_single_area_paste_reports_the_completion_condition_json() {
+        // The B7a plan's own completion-condition scenario.
+        let out_path = std::env::temp_dir().join("elixcee_diagnose_multi_area_to_single.xlsx");
+        build_workbook(out_path.to_str().unwrap());
+        let programs = programs_from(
+            "Sub Main()\n    Range(\"A1:A10,C1:C10\").Copy\n    Range(\"E1:F10\").PasteSpecial\nEnd Sub\n",
+        );
+        let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
+        assert!(!diag.ok);
+        let rc = diag.root_cause.as_ref().expect("should classify a root cause");
+        assert_eq!(rc.code, "MULTI_AREA_TO_SINGLE_AREA_PASTE");
+        assert_eq!(
+            rc.suggestions(),
+            vec![
+                "paste each source area separately".to_string(),
+                "copy a contiguous rectangular range".to_string(),
+                "use destination areas with matching count and shapes".to_string(),
+            ]
+        );
+        let json = to_json(&diag, None, None);
+        assert!(json.contains("\"code\":\"MULTI_AREA_TO_SINGLE_AREA_PASTE\""));
+        assert!(json.contains("\"certainty\":\"definite\""));
+        assert!(json.contains(
+            "\"source_areas\":[{\"address\":\"A1:A10\",\"rows\":10,\"columns\":1},\
+             {\"address\":\"C1:C10\",\"rows\":10,\"columns\":1}]"
+        ));
+        assert!(json.contains(
+            "\"destination_areas\":[{\"address\":\"E1:F10\",\"rows\":10,\"columns\":2}]"
+        ));
+        assert!(json.contains("paste each source area separately"));
+    }
+
+    #[test]
+    fn multi_area_count_mismatch_reports_a_root_cause() {
+        let out_path = std::env::temp_dir().join("elixcee_diagnose_multi_area_count_mismatch.xlsx");
+        build_workbook(out_path.to_str().unwrap());
+        let programs = programs_from(
+            "Sub Main()\n    Range(\"A1:A10,C1:C10,E1:E10\").Copy\n    \
+             Range(\"G1:G10,I1:I10\").PasteSpecial\nEnd Sub\n",
+        );
+        let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
+        assert!(!diag.ok);
+        let rc = diag.root_cause.as_ref().expect("should classify a root cause");
+        assert_eq!(rc.code, "MULTI_AREA_COUNT_MISMATCH");
+        let json = to_json(&diag, None, None);
+        assert!(json.contains("\"source_areas\":[{\"address\":\"A1:A10\""));
+        assert!(json.contains("\"destination_areas\":[{\"address\":\"G1:G10\""));
+        assert!(json.contains("match the destination area count to the source area count"));
+    }
+
+    #[test]
+    fn multi_area_shape_mismatch_reports_the_first_mismatching_area() {
+        let out_path = std::env::temp_dir().join("elixcee_diagnose_multi_area_shape_mismatch.xlsx");
+        build_workbook(out_path.to_str().unwrap());
+        let programs = programs_from(
+            "Sub Main()\n    Range(\"A1:A10,C1:C10\").Copy\n    \
+             Range(\"G1:G10,I1:J10\").PasteSpecial\nEnd Sub\n",
+        );
+        let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
+        assert!(!diag.ok);
+        let rc = diag.root_cause.as_ref().expect("should classify a root cause");
+        assert_eq!(rc.code, "MULTI_AREA_SHAPE_MISMATCH");
+        let json = to_json(&diag, None, None);
+        assert!(json.contains("\"area_index\":2"));
+        assert!(json.contains("\"source_area\":{\"address\":\"C1:C10\",\"rows\":10,\"columns\":1}"));
+        assert!(json.contains(
+            "\"destination_area\":{\"address\":\"I1:J10\",\"rows\":10,\"columns\":2}"
+        ));
+        assert!(json.contains("resize destination area 2 to match the source area's shape"));
+    }
+
+    #[test]
+    fn multi_area_paste_unsupported_reports_a_root_cause_for_a_single_to_multi_paste() {
+        let out_path = std::env::temp_dir().join("elixcee_diagnose_multi_area_unsupported.xlsx");
+        build_workbook(out_path.to_str().unwrap());
+        let programs = programs_from(
+            "Sub Main()\n    Range(\"A1:B10\").Copy\n    Range(\"E1:E10,G1:G10\").PasteSpecial\nEnd Sub\n",
+        );
+        let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
+        assert!(!diag.ok);
+        let rc = diag.root_cause.as_ref().expect("should classify a root cause");
+        assert_eq!(rc.code, "MULTI_AREA_PASTE_UNSUPPORTED");
+        let json = to_json(&diag, None, None);
+        assert!(json.contains("\"source_areas\":[{\"address\":\"A1:B10\",\"rows\":10,\"columns\":2}]"));
+        assert!(json.contains("\"destination_areas\":[{\"address\":\"E1:E10\""));
     }
 
     #[test]

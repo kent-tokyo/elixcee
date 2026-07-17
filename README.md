@@ -316,6 +316,36 @@ Same fixture format and `--seed`/`--case` replay as `test-workbook`, plus
 `--cases N` to override the fixture's own case count for one run. Full
 schema: [docs/agent-contract.md](docs/agent-contract.md).
 
+### Multi-area ranges
+
+`Range("A1:A10,C1:C10")` — a disjoint, multi-area range — is now
+recognized by `.Copy`, but pasting it is diagnose-only: `diagnose`/
+`diagnose-workbook` classify why, instead of silently doing nothing:
+
+```json
+{
+  "code": "MULTI_AREA_TO_SINGLE_AREA_PASTE",
+  "source_areas": [
+    {"address": "A1:A10", "rows": 10, "columns": 1},
+    {"address": "C1:C10", "rows": 10, "columns": 1}
+  ],
+  "destination_areas": [
+    {"address": "E1:F10", "rows": 10, "columns": 2}
+  ],
+  "suggestions": [
+    "paste each source area separately",
+    "copy a contiguous rectangular range",
+    "use destination areas with matching count and shapes"
+  ]
+}
+```
+
+This is a foundation milestone: `Union()`, the `Areas` property, and
+`Dim rng As Range` object variables aren't supported yet, and no
+multi-area paste actually completes in v1 — even one where the source and
+destination areas match exactly. Full scope and the other 3 classified
+codes: [docs/agent-contract.md](docs/agent-contract.md).
+
 ### Build from source
 
 ```bash
