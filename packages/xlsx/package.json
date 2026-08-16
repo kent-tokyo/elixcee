@@ -20,7 +20,9 @@
     "node": ">=18"
   },
   "files": [
-    "src"
+    "src",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit"
