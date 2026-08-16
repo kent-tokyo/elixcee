@@ -1,0 +1,17 @@
+{
+  "name": "elixcee-compat-harness",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Node-side oracle + differential-testing harness for the @elixcee/xlsx compatibility initiative. Not published.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "oracle:manifest": "node oracle/generate-manifest.mjs",
+    "differential:demo": "node differential/run-demo.mjs"
+  },
+  "devDependencies": {
+    "xlsx": "0.18.5"
+  }
+}

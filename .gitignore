@@ -13,3 +13,6 @@ fuzz/target/
 *.pyd
 *.dylib
 dist/
+
+# Node (compat/, packages/)
+node_modules/

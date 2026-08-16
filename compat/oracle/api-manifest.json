@@ -1,0 +1,1172 @@
+{
+  "generatedAt": "2026-08-16T10:05:04.720Z",
+  "generatorNodeVersion": "v24.5.0",
+  "generatorNpmVersion": "11.5.1",
+  "generatorScriptVersion": "0.2.0",
+  "package": {
+    "requestedVersion": "0.18.5",
+    "installedVersion": "0.18.5",
+    "main": "xlsx.js",
+    "module": "xlsx.mjs",
+    "types": "types/index.d.ts",
+    "bin": {
+      "xlsx": "./bin/xlsx.njs"
+    },
+    "browser": {
+      "buffer": false,
+      "crypto": false,
+      "stream": false,
+      "process": false,
+      "fs": false
+    },
+    "exports": null,
+    "sideEffects": false,
+    "dependencies": {
+      "adler-32": "~1.3.0",
+      "cfb": "~1.2.1",
+      "codepage": "~1.15.0",
+      "crc-32": "~1.2.1",
+      "ssf": "~0.11.2",
+      "wmf": "~1.0.1",
+      "word": "~0.3.0"
+    },
+    "distFiles": {
+      "xlsx.js": true,
+      "xlsx.mjs": true,
+      "dist/xlsx.full.min.js": true,
+      "bin/xlsx.njs": true
+    },
+    "lock": {
+      "resolved": "https://registry.npmjs.org/xlsx/-/xlsx-0.18.5.tgz",
+      "integrity": "sha512-dmg3LCjBPHZnQp5/F/+nnTa+miPJxUXB6vtk42YjBBKayDNagxGEeIdWApkYPOf3Z3pm3k62Knjzp7lMeTEtFQ=="
+    }
+  },
+  "entrypoints": {
+    "cjs": {
+      "resolvedVia": "require('xlsx')",
+      "topLevel": {
+        "enumerableKeys": [
+          "version",
+          "parse_xlscfb",
+          "parse_zip",
+          "read",
+          "readFile",
+          "readFileSync",
+          "write",
+          "writeFile",
+          "writeFileSync",
+          "writeFileAsync",
+          "utils",
+          "writeXLSX",
+          "writeFileXLSX",
+          "SSF",
+          "stream",
+          "CFB"
+        ],
+        "allOwnKeys": [
+          "version",
+          "parse_xlscfb",
+          "parse_zip",
+          "read",
+          "readFile",
+          "readFileSync",
+          "write",
+          "writeFile",
+          "writeFileSync",
+          "writeFileAsync",
+          "utils",
+          "writeXLSX",
+          "writeFileXLSX",
+          "SSF",
+          "stream",
+          "CFB"
+        ],
+        "symbolKeys": [],
+        "prototype": "Object.prototype",
+        "descriptors": {
+          "version": {
+            "kind": "string",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "value": "0.18.5"
+          },
+          "parse_xlscfb": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "parse_xlscfb",
+            "arity": 2
+          },
+          "parse_zip": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "parse_zip",
+            "arity": 2
+          },
+          "read": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "readSync",
+            "arity": 2
+          },
+          "readFile": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "readFileSync",
+            "arity": 2
+          },
+          "readFileSync": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "readFileSync",
+            "arity": 2
+          },
+          "write": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "writeSync",
+            "arity": 2
+          },
+          "writeFile": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "writeFileSync",
+            "arity": 3
+          },
+          "writeFileSync": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "writeFileSync",
+            "arity": 3
+          },
+          "writeFileAsync": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "writeFileAsync",
+            "arity": 4
+          },
+          "utils": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true
+          },
+          "writeXLSX": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "writeSyncXLSX",
+            "arity": 2
+          },
+          "writeFileXLSX": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "writeFileSyncXLSX",
+            "arity": 3
+          },
+          "SSF": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true
+          },
+          "stream": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true
+          },
+          "CFB": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true
+          }
+        }
+      },
+      "utils": {
+        "enumerableKeys": [
+          "encode_col",
+          "encode_row",
+          "encode_cell",
+          "encode_range",
+          "decode_col",
+          "decode_row",
+          "split_cell",
+          "decode_cell",
+          "decode_range",
+          "format_cell",
+          "sheet_add_aoa",
+          "sheet_add_json",
+          "sheet_add_dom",
+          "aoa_to_sheet",
+          "json_to_sheet",
+          "table_to_sheet",
+          "table_to_book",
+          "sheet_to_csv",
+          "sheet_to_txt",
+          "sheet_to_json",
+          "sheet_to_html",
+          "sheet_to_formulae",
+          "sheet_to_row_object_array",
+          "sheet_get_cell",
+          "book_new",
+          "book_append_sheet",
+          "book_set_sheet_visibility",
+          "cell_set_number_format",
+          "cell_set_hyperlink",
+          "cell_set_internal_link",
+          "cell_add_comment",
+          "sheet_set_array_formula",
+          "consts"
+        ],
+        "allOwnKeys": [
+          "encode_col",
+          "encode_row",
+          "encode_cell",
+          "encode_range",
+          "decode_col",
+          "decode_row",
+          "split_cell",
+          "decode_cell",
+          "decode_range",
+          "format_cell",
+          "sheet_add_aoa",
+          "sheet_add_json",
+          "sheet_add_dom",
+          "aoa_to_sheet",
+          "json_to_sheet",
+          "table_to_sheet",
+          "table_to_book",
+          "sheet_to_csv",
+          "sheet_to_txt",
+          "sheet_to_json",
+          "sheet_to_html",
+          "sheet_to_formulae",
+          "sheet_to_row_object_array",
+          "sheet_get_cell",
+          "book_new",
+          "book_append_sheet",
+          "book_set_sheet_visibility",
+          "cell_set_number_format",
+          "cell_set_hyperlink",
+          "cell_set_internal_link",
+          "cell_add_comment",
+          "sheet_set_array_formula",
+          "consts"
+        ],
+        "symbolKeys": [],
+        "prototype": "Object.prototype",
+        "descriptors": {
+          "encode_col": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "encode_col",
+            "arity": 1
+          },
+          "encode_row": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "encode_row",
+            "arity": 1
+          },
+          "encode_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "encode_cell",
+            "arity": 1
+          },
+          "encode_range": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "encode_range",
+            "arity": 2
+          },
+          "decode_col": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "decode_col",
+            "arity": 1
+          },
+          "decode_row": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "decode_row",
+            "arity": 1
+          },
+          "split_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "split_cell",
+            "arity": 1
+          },
+          "decode_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "decode_cell",
+            "arity": 1
+          },
+          "decode_range": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "decode_range",
+            "arity": 1
+          },
+          "format_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "format_cell",
+            "arity": 3
+          },
+          "sheet_add_aoa": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_add_aoa",
+            "arity": 3
+          },
+          "sheet_add_json": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_add_json",
+            "arity": 3
+          },
+          "sheet_add_dom": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_add_dom",
+            "arity": 3
+          },
+          "aoa_to_sheet": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "aoa_to_sheet",
+            "arity": 2
+          },
+          "json_to_sheet": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "json_to_sheet",
+            "arity": 2
+          },
+          "table_to_sheet": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "parse_dom_table",
+            "arity": 2
+          },
+          "table_to_book": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "table_to_book",
+            "arity": 2
+          },
+          "sheet_to_csv": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_csv",
+            "arity": 2
+          },
+          "sheet_to_txt": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_txt",
+            "arity": 2
+          },
+          "sheet_to_json": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_json",
+            "arity": 2
+          },
+          "sheet_to_html": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_html",
+            "arity": 2
+          },
+          "sheet_to_formulae": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_formulae",
+            "arity": 1
+          },
+          "sheet_to_row_object_array": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_json",
+            "arity": 2
+          },
+          "sheet_get_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "ws_get_cell_stub",
+            "arity": 3
+          },
+          "book_new": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "book_new",
+            "arity": 0
+          },
+          "book_append_sheet": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "book_append_sheet",
+            "arity": 4
+          },
+          "book_set_sheet_visibility": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "book_set_sheet_visibility",
+            "arity": 3
+          },
+          "cell_set_number_format": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "cell_set_number_format",
+            "arity": 2
+          },
+          "cell_set_hyperlink": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "cell_set_hyperlink",
+            "arity": 3
+          },
+          "cell_set_internal_link": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "cell_set_internal_link",
+            "arity": 3
+          },
+          "cell_add_comment": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "cell_add_comment",
+            "arity": 3
+          },
+          "sheet_set_array_formula": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_set_array_formula",
+            "arity": 4
+          },
+          "consts": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true
+          }
+        }
+      },
+      "stream": {
+        "enumerableKeys": [
+          "to_json",
+          "to_html",
+          "to_csv",
+          "set_readable"
+        ],
+        "allOwnKeys": [
+          "to_json",
+          "to_html",
+          "to_csv",
+          "set_readable"
+        ],
+        "symbolKeys": [],
+        "prototype": "Object.prototype",
+        "descriptors": {
+          "to_json": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "write_json_stream",
+            "arity": 2
+          },
+          "to_html": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "write_html_stream",
+            "arity": 2
+          },
+          "to_csv": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "write_csv_stream",
+            "arity": 2
+          },
+          "set_readable": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "set_readable",
+            "arity": 1
+          }
+        }
+      }
+    },
+    "esm": {
+      "resolvedVia": "xlsx/xlsx.mjs",
+      "topLevel": {
+        "enumerableKeys": [
+          "CFB",
+          "SSF",
+          "parse_xlscfb",
+          "parse_zip",
+          "read",
+          "readFile",
+          "readFileSync",
+          "set_cptable",
+          "set_fs",
+          "stream",
+          "utils",
+          "version",
+          "write",
+          "writeFile",
+          "writeFileAsync",
+          "writeFileSync",
+          "writeFileXLSX",
+          "writeXLSX"
+        ],
+        "allOwnKeys": [
+          "CFB",
+          "SSF",
+          "parse_xlscfb",
+          "parse_zip",
+          "read",
+          "readFile",
+          "readFileSync",
+          "set_cptable",
+          "set_fs",
+          "stream",
+          "utils",
+          "version",
+          "write",
+          "writeFile",
+          "writeFileAsync",
+          "writeFileSync",
+          "writeFileXLSX",
+          "writeXLSX"
+        ],
+        "symbolKeys": [
+          "Symbol(Symbol.toStringTag)"
+        ],
+        "prototype": "null",
+        "descriptors": {
+          "CFB": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false
+          },
+          "SSF": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false
+          },
+          "parse_xlscfb": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "parse_xlscfb",
+            "arity": 2
+          },
+          "parse_zip": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "parse_zip",
+            "arity": 2
+          },
+          "read": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "readSync",
+            "arity": 2
+          },
+          "readFile": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "readFileSync",
+            "arity": 2
+          },
+          "readFileSync": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "readFileSync",
+            "arity": 2
+          },
+          "set_cptable": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "set_cptable",
+            "arity": 1
+          },
+          "set_fs": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "set_fs",
+            "arity": 1
+          },
+          "stream": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false
+          },
+          "utils": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false
+          },
+          "version": {
+            "kind": "string",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "value": "0.18.5"
+          },
+          "write": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "writeSync",
+            "arity": 2
+          },
+          "writeFile": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "writeFileSync",
+            "arity": 3
+          },
+          "writeFileAsync": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "writeFileAsync",
+            "arity": 4
+          },
+          "writeFileSync": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "writeFileSync",
+            "arity": 3
+          },
+          "writeFileXLSX": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "writeFileSyncXLSX",
+            "arity": 3
+          },
+          "writeXLSX": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": false,
+            "name": "writeSyncXLSX",
+            "arity": 2
+          }
+        }
+      },
+      "utils": {
+        "enumerableKeys": [
+          "encode_col",
+          "encode_row",
+          "encode_cell",
+          "encode_range",
+          "decode_col",
+          "decode_row",
+          "split_cell",
+          "decode_cell",
+          "decode_range",
+          "format_cell",
+          "sheet_add_aoa",
+          "sheet_add_json",
+          "sheet_add_dom",
+          "aoa_to_sheet",
+          "json_to_sheet",
+          "table_to_sheet",
+          "table_to_book",
+          "sheet_to_csv",
+          "sheet_to_txt",
+          "sheet_to_json",
+          "sheet_to_html",
+          "sheet_to_formulae",
+          "sheet_to_row_object_array",
+          "sheet_get_cell",
+          "book_new",
+          "book_append_sheet",
+          "book_set_sheet_visibility",
+          "cell_set_number_format",
+          "cell_set_hyperlink",
+          "cell_set_internal_link",
+          "cell_add_comment",
+          "sheet_set_array_formula",
+          "consts"
+        ],
+        "allOwnKeys": [
+          "encode_col",
+          "encode_row",
+          "encode_cell",
+          "encode_range",
+          "decode_col",
+          "decode_row",
+          "split_cell",
+          "decode_cell",
+          "decode_range",
+          "format_cell",
+          "sheet_add_aoa",
+          "sheet_add_json",
+          "sheet_add_dom",
+          "aoa_to_sheet",
+          "json_to_sheet",
+          "table_to_sheet",
+          "table_to_book",
+          "sheet_to_csv",
+          "sheet_to_txt",
+          "sheet_to_json",
+          "sheet_to_html",
+          "sheet_to_formulae",
+          "sheet_to_row_object_array",
+          "sheet_get_cell",
+          "book_new",
+          "book_append_sheet",
+          "book_set_sheet_visibility",
+          "cell_set_number_format",
+          "cell_set_hyperlink",
+          "cell_set_internal_link",
+          "cell_add_comment",
+          "sheet_set_array_formula",
+          "consts"
+        ],
+        "symbolKeys": [],
+        "prototype": "Object.prototype",
+        "descriptors": {
+          "encode_col": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "encode_col",
+            "arity": 1
+          },
+          "encode_row": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "encode_row",
+            "arity": 1
+          },
+          "encode_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "encode_cell",
+            "arity": 1
+          },
+          "encode_range": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "encode_range",
+            "arity": 2
+          },
+          "decode_col": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "decode_col",
+            "arity": 1
+          },
+          "decode_row": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "decode_row",
+            "arity": 1
+          },
+          "split_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "split_cell",
+            "arity": 1
+          },
+          "decode_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "decode_cell",
+            "arity": 1
+          },
+          "decode_range": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "decode_range",
+            "arity": 1
+          },
+          "format_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "format_cell",
+            "arity": 3
+          },
+          "sheet_add_aoa": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_add_aoa",
+            "arity": 3
+          },
+          "sheet_add_json": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_add_json",
+            "arity": 3
+          },
+          "sheet_add_dom": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_add_dom",
+            "arity": 3
+          },
+          "aoa_to_sheet": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "aoa_to_sheet",
+            "arity": 2
+          },
+          "json_to_sheet": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "json_to_sheet",
+            "arity": 2
+          },
+          "table_to_sheet": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "parse_dom_table",
+            "arity": 2
+          },
+          "table_to_book": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "table_to_book",
+            "arity": 2
+          },
+          "sheet_to_csv": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_csv",
+            "arity": 2
+          },
+          "sheet_to_txt": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_txt",
+            "arity": 2
+          },
+          "sheet_to_json": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_json",
+            "arity": 2
+          },
+          "sheet_to_html": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_html",
+            "arity": 2
+          },
+          "sheet_to_formulae": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_formulae",
+            "arity": 1
+          },
+          "sheet_to_row_object_array": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_to_json",
+            "arity": 2
+          },
+          "sheet_get_cell": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "ws_get_cell_stub",
+            "arity": 3
+          },
+          "book_new": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "book_new",
+            "arity": 0
+          },
+          "book_append_sheet": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "book_append_sheet",
+            "arity": 4
+          },
+          "book_set_sheet_visibility": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "book_set_sheet_visibility",
+            "arity": 3
+          },
+          "cell_set_number_format": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "cell_set_number_format",
+            "arity": 2
+          },
+          "cell_set_hyperlink": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "cell_set_hyperlink",
+            "arity": 3
+          },
+          "cell_set_internal_link": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "cell_set_internal_link",
+            "arity": 3
+          },
+          "cell_add_comment": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "cell_add_comment",
+            "arity": 3
+          },
+          "sheet_set_array_formula": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "sheet_set_array_formula",
+            "arity": 4
+          },
+          "consts": {
+            "kind": "object",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true
+          }
+        }
+      },
+      "stream": {
+        "enumerableKeys": [
+          "to_json",
+          "to_html",
+          "to_csv",
+          "set_readable"
+        ],
+        "allOwnKeys": [
+          "to_json",
+          "to_html",
+          "to_csv",
+          "set_readable"
+        ],
+        "symbolKeys": [],
+        "prototype": "Object.prototype",
+        "descriptors": {
+          "to_json": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "write_json_stream",
+            "arity": 2
+          },
+          "to_html": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "write_html_stream",
+            "arity": 2
+          },
+          "to_csv": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "write_csv_stream",
+            "arity": 2
+          },
+          "set_readable": {
+            "kind": "function",
+            "enumerable": true,
+            "writable": true,
+            "configurable": true,
+            "name": "set_readable",
+            "arity": 1
+          }
+        }
+      }
+    }
+  }
+}
