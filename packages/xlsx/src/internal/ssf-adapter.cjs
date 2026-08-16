@@ -25,14 +25,47 @@ const ssf = require('ssf');
 // overwrites default_map[67]/[68] a second time with the wrong values (10/11 instead of
 // 9/10) and (b) never sets default_map[69..71] at all. Confirmed live against the
 // bundled engine that these are the ONLY 5 numFmtIds (of 0-100+ swept) where the two
-// diverge. This corrects the 5 affected ids to their bundled-engine-correct target
-// before delegating — a narrow, disclosed patch for one precisely-diagnosed upstream
-// defect, not a reimplementation of any part of the format engine itself.
+// diverge.
+//
+// The oracle's own numFmtId resolution is a 3-step chain (SSF_format's "number" case):
+//   1. o.table[fmt]  (if o.table was passed at all; otherwise table_fmt[fmt] — but
+//      table_fmt has no entry for 67-71, they're indirection-only ids)
+//   2. o.table[default_map[fmt]] || table_fmt[default_map[fmt]]
+//   3. SSF_default_str[fmt] || "General"
+// Step 1 doesn't touch default_map at all, so a caller's own `opts.table[67]` override
+// already works correctly even through the buggy ssf@0.11.2 — confirmed live. The bug is
+// isolated to step 2. A naive "remap fmt then delegate" fix (e.g. rewrite 67 to 9 and
+// call ssf.format(9, v, opts)) breaks BOTH directions: it skips step 1 entirely (losing
+// a literal opts.table[67] override), AND produces the wrong step-2 fallback (id 9 has
+// no indirection of its own, so ssf.format(9, v, opts) falls to "General" when opts.table
+// lacks a `9` key, instead of correctly reaching table_fmt[9] — confirmed live these
+// differ: the real oracle still renders via table_fmt[9] in that case). This resolves
+// steps 1-2 explicitly instead, delegating to ssf.format only with an already-resolved
+// format STRING, so ssf never has to consult its own broken default_map for these ids.
 const DEFAULT_MAP_CORRECTION = { 67: 9, 68: 10, 69: 12, 70: 13, 71: 14 };
 
+// table_fmt entries for the 5 corrected targets — the literal built-in strings step 2
+// falls back to when o.table has neither the original id nor the target id. Verified
+// against the bundled engine's own table_fmt (compat/node_modules/xlsx/xlsx.js).
+const TARGET_FORMAT = { 9: '0%', 10: '0.00%', 12: '# ?/?', 13: '# ??/??', 14: 'm/d/yy' };
+
+function hasOwn(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
 function format(fmt, v, opts) {
-  const correctedFmt = typeof fmt === 'number' && Object.prototype.hasOwnProperty.call(DEFAULT_MAP_CORRECTION, fmt) ? DEFAULT_MAP_CORRECTION[fmt] : fmt;
-  return ssf.format(correctedFmt, v, opts);
+  if (typeof fmt === 'number' && hasOwn(DEFAULT_MAP_CORRECTION, fmt) && !hasOwn(opts && opts.table, fmt)) {
+    const target = DEFAULT_MAP_CORRECTION[fmt];
+    const sfmt = hasOwn(opts && opts.table, target) ? opts.table[target] : TARGET_FORMAT[target];
+    // dateNF must NOT apply here: confirmed live that SSF_format(71, v, {dateNF}) does
+    // NOT substitute (only the LITERAL id 14 / string 'm/d/yy' path does, per the
+    // oracle's own source — the indirected step-2 path never reaches that check).
+    // Stripping it prevents ssf's string-branch dateNF check (`fmt === 'm/d/yy' &&
+    // o.dateNF`) from incorrectly firing once `sfmt` resolves to the literal 'm/d/yy'.
+    const fallbackOpts = opts && 'dateNF' in opts ? Object.assign({}, opts, { dateNF: undefined }) : opts;
+    return ssf.format(sfmt, v, fallbackOpts);
+  }
+  return ssf.format(fmt, v, opts);
 }
 
 module.exports = { format };

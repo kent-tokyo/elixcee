@@ -94,6 +94,26 @@ ssfCase('date1904 true', 14, 46027, { date1904: true });
 ssfCase('date1904 false explicit', 14, 46027, { date1904: false });
 ssfCase('custom table option', 200, 42, { table: { 200: '0.0"custom"' } });
 
+// ---- numFmtId 67-71 (the ssf@0.11.2 indirection-bug ids, see ssf-adapter.cjs): a
+// caller's opts.table must NOT be shadowed by the adapter's correction. Confirmed live
+// this is a real precedence chain (literal id override > indirected-target-id override
+// > the corrected built-in default > dateNF explicitly excluded from the indirected
+// path even for id 71 -> 14), not just "does it still work with no opts at all". ----
+for (const id of [67, 68, 69, 70, 71]) {
+  const target = { 67: 9, 68: 10, 69: 12, 70: 13, 71: 14 }[id];
+  ssfCase(`numFmtId ${id}, no opts (uses the corrected built-in default)`, id, id === 71 ? 46027 : 42);
+  ssfCase(`numFmtId ${id}, opts.table has an unrelated id only (still falls through to the built-in default)`, id, 42, { table: { 200: '"unrelated"' } });
+  ssfCase(`numFmtId ${id}, opts.table[${id}] literal override wins`, id, 42, { table: { [id]: '"LITERAL' + id + '"' } });
+  ssfCase(`numFmtId ${id}, opts.table[${target}] indirected-target override is used`, id, 42, { table: { [target]: '"TARGET' + target + '"' } });
+  ssfCase(`numFmtId ${id}, both literal and target overrides present -> literal wins`, id, 42, {
+    table: { [id]: '"LITERAL' + id + '"', [target]: '"TARGET' + target + '"' },
+  });
+}
+// dateNF must not apply through the id-71 -> 14 indirection (only literal id 14 /
+// string 'm/d/yy' substitutes it) — confirmed live this differs from the id=14 control.
+ssfCase('numFmtId 71 with dateNF (must NOT substitute, unlike literal id 14)', 71, 46027, { dateNF: 'yyyy-mm-dd' });
+ssfCase('numFmtId 14 with dateNF (control: DOES substitute)', 14, 46027, { dateNF: 'yyyy-mm-dd' });
+
 // ---- date-serial boundaries ----
 for (const v of [-1, 0, 60, 2958465, 2958466]) {
   ssfCase(`date boundary v=${v}`, 14, v);
