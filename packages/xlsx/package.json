@@ -2,7 +2,7 @@
   "name": "@elixcee/xlsx",
   "version": "0.0.0-development",
   "private": true,
-  "description": "Drop-in replacement for xlsx (SheetJS) — Phase 1B-3: address/workbook utilities, worksheet mutation (sheet_add_aoa/sheet_add_json), sheet_get_cell/sheet_to_json, full SSF-backed number formatting, formula/text export, and cell metadata, no file I/O yet. See ../../docs/xlsx-architecture.md.",
+  "description": "Drop-in replacement for xlsx (SheetJS) — Phase 1C: full utils surface (aliases/constants, HTML export, DOM table conversion) plus everything from earlier phases, no file I/O yet. See ../../docs/xlsx-architecture.md.",
   "license": "MIT",
   "type": "commonjs",
   "main": "./src/index.cjs",
@@ -25,7 +25,8 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:no-dom": "tsc --noEmit -p tsconfig.no-dom.json"
   },
   "devDependencies": {
     "typescript": "^5"

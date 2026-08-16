@@ -1003,6 +1003,268 @@ function sheetSetArrayFormula(ws, range, formula, dynamic) {
   return ws;
 }
 
+// ---- sheet_add_dom / table_to_sheet / table_to_book ----
+//
+// Independent port of the oracle's sheet_add_dom/parse_dom_table/table_to_book. These are
+// the "BROWSER ONLY!" functions (per the oracle's own .d.ts comment) — they consume a
+// DOM-like <table> element, not spreadsheet data. `packages/xlsx` imports no DOM library
+// at runtime (still zero runtime dependencies beyond ssf): this port calls only the DOM
+// methods the oracle itself calls (getElementsByTagName, .children, hasAttribute,
+// getAttribute, .innerHTML, .style, .ownerDocument.defaultView.getComputedStyle) on
+// whatever object it's handed, so any real DOM element (browser or a devDependency like
+// jsdom used only for testing) — or a hand-built duck-typed stub satisfying the same
+// shape — works identically. `opts.dense`'s DENSE-global override
+// (`if(DENSE != null) opts.dense = DENSE;` in the oracle) is omitted: `DENSE` is a
+// module-level variable the shipped xlsx.js declares once (`var DENSE = null;`) and never
+// reassigns anywhere in the bundle — confirmed by grepping the whole file — so that line
+// is dead code in the real npm package, not a behavior to reproduce.
+function isDomElementHidden(element) {
+  let display = '';
+  const getComputedStyleFn = getComputedStyleFunction(element);
+  if (getComputedStyleFn) display = getComputedStyleFn(element).getPropertyValue('display');
+  if (!display) display = element.style && element.style.display;
+  return display === 'none';
+}
+
+function getComputedStyleFunction(element) {
+  if (element.ownerDocument.defaultView && typeof element.ownerDocument.defaultView.getComputedStyle === 'function') {
+    return element.ownerDocument.defaultView.getComputedStyle;
+  }
+  if (typeof getComputedStyle === 'function') return getComputedStyle;
+  return null;
+}
+
+// Matches the oracle's own fuzzynum exactly: strips thousands separators/currency/percent
+// (tracking percent's implied /100 as a weight) and a trailing/wrapping "(...)" for
+// negative-in-parens accounting notation, retrying Number() after each strip.
+function fuzzyNum(s) {
+  let v = Number(s);
+  if (!isNaN(v)) return isFinite(v) ? v : NaN;
+  if (!/\d/.test(s)) return v;
+  let wt = 1;
+  let ss = s
+    .replace(/([\d]),([\d])/g, '$1$2')
+    .replace(/[$]/g, '')
+    .replace(/[%]/g, () => {
+      wt *= 100;
+      return '';
+    });
+  if (!isNaN((v = Number(ss)))) return v / wt;
+  ss = ss.replace(/[(](.*)[)]/, ($$, $1) => {
+    wt = -wt;
+    return $1;
+  });
+  if (!isNaN((v = Number(ss)))) return v / wt;
+  return v;
+}
+
+const FUZZY_DATE_LOWER_MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+
+// Matches the oracle's own fuzzydate exactly. Uses .getYear() (not .getFullYear()) for
+// its year-range sanity check, deliberately reproducing that exact legacy API choice —
+// .getYear() returns year-1900 (e.g. 117 for 2017), which is why the "0 < y < 8099" bound
+// below is meaningless as a literal year check but is what the oracle actually tests.
+function fuzzyDate(s) {
+  const o = new Date(s);
+  const n = new Date(NaN);
+  const y = o.getYear();
+  const m = o.getMonth();
+  const d = o.getDate();
+  if (isNaN(d)) return n;
+  let lower = s.toLowerCase();
+  if (lower.match(/jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/)) {
+    lower = lower.replace(/[^a-z]/g, '').replace(/([^a-z]|^)[ap]m?([^a-z]|$)/, '');
+    if (lower.length > 3 && FUZZY_DATE_LOWER_MONTHS.indexOf(lower) === -1) return n;
+  } else if (lower.match(/[a-z]/)) {
+    return n;
+  }
+  if (y < 0 || y > 8099) return n;
+  if ((m > 0 || d > 1) && y !== 101) return o;
+  if (s.match(/[^-0-9:,/\\]/)) return n;
+  return o;
+}
+
+// Matches the oracle's own parseDate for the ONLY call shape sheetAddDom ever uses
+// (single-argument, so fixdate is always undefined and the timezone-shift branches never
+// fire) — the oracle's own function also has non-good_pd fallback branches for engines
+// where `new Date('2017-02-19T19:06:09.000Z').getFullYear() !== 2017`; confirmed live
+// that condition is true in this package's target environments (any real Node.js), so
+// those branches are dead code here too, not a behavior being dropped.
+function fuzzyParseDate(str) {
+  return new Date(str);
+}
+
+function sheetAddDom(ws, table, opts) {
+  const o = opts || {};
+  let orR = 0;
+  let orC = 0;
+  if (o.origin != null) {
+    if (typeof o.origin === 'number') {
+      orR = o.origin;
+    } else {
+      const origin = typeof o.origin === 'string' ? decodeCell(o.origin) : o.origin;
+      orR = origin.r;
+      orC = origin.c;
+    }
+  }
+  const rows = table.getElementsByTagName('tr');
+  const sheetRows = Math.min(o.sheetRows || 10000000, rows.length);
+  const range = { s: { c: 0, r: 0 }, e: { c: orC, r: orR } };
+  if (ws['!ref']) {
+    const existingRange = safeDecodeRange(ws['!ref']);
+    range.s.r = Math.min(range.s.r, existingRange.s.r);
+    range.s.c = Math.min(range.s.c, existingRange.s.c);
+    range.e.r = Math.max(range.e.r, existingRange.e.r);
+    range.e.c = Math.max(range.e.c, existingRange.e.c);
+    if (orR === -1) range.e.r = orR = existingRange.e.r + 1;
+  }
+  const merges = [];
+  const rowinfo = ws['!rows'] || (ws['!rows'] = []);
+  let R = 0;
+  let C = 0;
+  let domR = 0;
+  if (!ws['!cols']) ws['!cols'] = [];
+  for (; domR < rows.length && R < sheetRows; ++domR) {
+    const row = rows[domR];
+    if (isDomElementHidden(row)) {
+      if (o.display) continue;
+      rowinfo[R] = { hidden: true };
+    }
+    const elts = row.children;
+    C = 0;
+    for (let domC = 0; domC < elts.length; ++domC) {
+      const elt = elts[domC];
+      if (o.display && isDomElementHidden(elt)) continue;
+      let v = elt.hasAttribute('data-v') ? elt.getAttribute('data-v') : elt.hasAttribute('v') ? elt.getAttribute('v') : htmlDecode(elt.innerHTML);
+      const z = elt.getAttribute('data-z') || elt.getAttribute('z');
+      for (let midx = 0; midx < merges.length; ++midx) {
+        const m = merges[midx];
+        if (m.s.c === C + orC && m.s.r < R + orR && R + orR <= m.e.r) {
+          C = m.e.c + 1 - orC;
+          midx = -1;
+        }
+      }
+      const CS = +elt.getAttribute('colspan') || 1;
+      const RS = +elt.getAttribute('rowspan') || 1;
+      if (RS > 1 || CS > 1) {
+        merges.push({ s: { r: R + orR, c: C + orC }, e: { r: R + orR + (RS || 1) - 1, c: C + orC + (CS || 1) - 1 } });
+      }
+      let cellObj = { t: 's', v };
+      const cellT = elt.getAttribute('data-t') || elt.getAttribute('t') || '';
+      if (v != null) {
+        if (v.length === 0) {
+          cellObj.t = cellT || 'z';
+        } else if (o.raw || v.trim().length === 0 || cellT === 's') {
+          // leave as string, matching the oracle's empty-block branch
+        } else if (v === 'TRUE') {
+          cellObj = { t: 'b', v: true };
+        } else if (v === 'FALSE') {
+          cellObj = { t: 'b', v: false };
+        } else if (!isNaN(fuzzyNum(v))) {
+          cellObj = { t: 'n', v: fuzzyNum(v) };
+        } else if (!isNaN(fuzzyDate(v).getDate())) {
+          cellObj = { t: 'd', v: fuzzyParseDate(v) };
+          if (!o.cellDates) cellObj = { t: 'n', v: datenum(cellObj.v) };
+          cellObj.z = o.dateNF || 'm/d/yy';
+        }
+      }
+      if (cellObj.z === undefined && z != null) cellObj.z = z;
+      let l = '';
+      const aElts = elt.getElementsByTagName('A');
+      if (aElts && aElts.length) {
+        for (let ai = 0; ai < aElts.length; ++ai) {
+          if (aElts[ai].hasAttribute('href')) {
+            l = aElts[ai].getAttribute('href');
+            if (l.charAt(0) !== '#') break;
+          }
+        }
+      }
+      if (l && l.charAt(0) !== '#') cellObj.l = { Target: l };
+      if (o.dense) {
+        if (!ws[R + orR]) ws[R + orR] = [];
+        ws[R + orR][C + orC] = cellObj;
+      } else {
+        ws[encodeCell({ c: C + orC, r: R + orR })] = cellObj;
+      }
+      if (range.e.c < C + orC) range.e.c = C + orC;
+      C += CS;
+    }
+    ++R;
+  }
+  if (merges.length) ws['!merges'] = (ws['!merges'] || []).concat(merges);
+  range.e.r = Math.max(range.e.r, R - 1 + orR);
+  ws['!ref'] = encodeRange(range);
+  // Matches the oracle's own comma-operator line exactly (including its own comment
+  // about the tradeoff): `!fullref` is set whenever R reached sheetRows at loop exit —
+  // which, since sheetRows = min(opts.sheetRows||10000000, rows.length), is the NORMAL
+  // exit case whenever no opts.display-hidden row was skipped (R and domR both end up
+  // equal to rows.length then) — NOT only when opts.sheetRows truncated the parse. A
+  // opts.display-skipped hidden row can make R fall short of domR, in which case
+  // !fullref is NOT set. This is a genuinely confusing but precise boundary condition,
+  // confirmed live rather than assumed from the name alone.
+  if (R >= sheetRows) {
+    range.e.r = rows.length - domR + R - 1 + orR;
+    ws['!fullref'] = encodeRange(range);
+  }
+  return ws;
+}
+
+// Matches the oracle's own htmldecode exactly — strips leading/trailing whitespace,
+// collapses interior whitespace runs, turns <br> into '\n', strips all other tags, then
+// decodes a small fixed entity set (nbsp/middot/quot/apos/gt/lt/amp).
+const HTML_DECODE_ENTITIES = [
+  [/&nbsp;/gi, ' '],
+  [/&middot;/gi, '·'],
+  [/&quot;/gi, '"'],
+  [/&apos;/gi, "'"],
+  [/&gt;/gi, '>'],
+  [/&lt;/gi, '<'],
+  [/&amp;/gi, '&'],
+];
+function htmlDecode(str) {
+  let o = str
+    .replace(/^[\t\n\r ]+/, '')
+    .replace(/[\t\n\r ]+$/, '')
+    .replace(/>\s+/g, '>')
+    .replace(/\s+</g, '<')
+    .replace(/[\t\n\r ]+/g, ' ')
+    .replace(/<\s*[bB][rR]\s*\/?>/g, '\n')
+    .replace(/<[^>]*>/g, '');
+  for (const [re, repl] of HTML_DECODE_ENTITIES) o = o.replace(re, repl);
+  return o;
+}
+
+function parseDomTable(table, opts) {
+  const o = opts || {};
+  const ws = o.dense ? [] : {};
+  return sheetAddDom(ws, table, opts);
+}
+
+// The oracle's own table_to_book delegates to a shared sheet_to_workbook(sheet, opts)
+// helper (`var n = opts.sheet || "Sheet1"; var sheets = {}; sheets[n] = sheet; return
+// {SheetNames:[n], Sheets:sheets};`) that is NOT book_new()/book_append_sheet() — it skips
+// all of book_append_sheet's own validation (name length/forbidden characters/uniqueness)
+// entirely, so this port deliberately does NOT route through bookAppendSheet either
+// (that would add oracle-incompatible throws for e.g. a >31-char opts.sheet name).
+// SECURITY: confirmed live the oracle's own `sheets[n] = sheet` is the exact same
+// prototype-corruption hazard book_append_sheet had in Phase 1A (opts.sheet:'"__proto__"'
+// reassigns the resulting WorkBook's own Sheets prototype instead of storing a
+// retrievable entry) — reachable here since opts.sheet is directly caller-controlled.
+// Fixed the same way, with Object.defineProperty, from this function's first
+// implementation rather than shipping the hazard and fixing it in a later commit (unlike
+// sheet_to_html's escaping fix): the fix is a single line with no wider ripple, so there
+// is no benefit to a separate "vulnerable" commit here.
+function sheetToWorkbookSafe(sheet, opts) {
+  const n = opts && opts.sheet ? opts.sheet : 'Sheet1';
+  const sheets = {};
+  Object.defineProperty(sheets, n, { value: sheet, writable: true, enumerable: true, configurable: true });
+  return { SheetNames: [n], Sheets: sheets };
+}
+
+function tableToBook(table, opts) {
+  return sheetToWorkbookSafe(parseDomTable(table, opts), opts);
+}
+
 // Every function above is declared with a camelCase internal name (encodeCol, ...) —
 // ordinary JS convention within this file — but a plain `{ encode_col: encodeCol }`
 // object-literal assignment does NOT rename an already-named function's own `.name`.
@@ -1018,7 +1280,7 @@ function sheetSetArrayFormula(ws, range, formula, dynamic) {
 // oracle's own `.name` property descriptor, verified live) — not a plain `fn.name = ...`
 // assignment, which silently no-ops since `.name` is non-writable by default.
 // Exceptions to "every export's .name equals its exact snake_case public key" — the
-// oracle itself breaks that pattern in two ways:
+// oracle itself breaks that pattern in three ways:
 // - `sheet_get_cell: ws_get_cell_stub` assigns the internal helper directly without a
 //   wrapper, so `XLSX.utils.sheet_get_cell.name` is genuinely "ws_get_cell_stub"
 //   (confirmed live), not "sheet_get_cell".
@@ -1026,9 +1288,17 @@ function sheetSetArrayFormula(ws, range, formula, dynamic) {
 //   `sheet_to_json` (confirmed live: `U.sheet_to_row_object_array === U.sheet_to_json`),
 //   which the oracle declared once as `function sheet_to_json(...)` — aliasing a key to
 //   an existing function never renames it, so both keys' `.name` reads "sheet_to_json".
-// Both reproduced as-is per this project's fidelity-over-tidiness rule
-// (compat/differential/metadata.test.mjs is what caught both).
-const NAME_OVERRIDES = { sheet_get_cell: 'ws_get_cell_stub', sheet_to_row_object_array: 'sheet_to_json' };
+// - `table_to_sheet: parse_dom_table` — same pattern as sheet_get_cell: the internal
+//   helper assigned directly, so `.name` reads "parse_dom_table" (confirmed live), not
+//   "table_to_sheet". `table_to_book` and `sheet_add_dom`, by contrast, ARE declared with
+//   their own exact public names in the oracle's source, so neither needs an override.
+// All three reproduced as-is per this project's fidelity-over-tidiness rule
+// (compat/differential/metadata.test.mjs is what caught all three).
+const NAME_OVERRIDES = {
+  sheet_get_cell: 'ws_get_cell_stub',
+  sheet_to_row_object_array: 'sheet_to_json',
+  table_to_sheet: 'parse_dom_table',
+};
 
 // nameAs is for FUNCTION exports only — `consts` is a plain data object (no `.name`
 // concept; the oracle's own `consts` has no `.name` property either), so the loop below
@@ -1077,8 +1347,11 @@ module.exports = {
   format_cell: formatCell,
   sheet_add_aoa: sheetAddAoa,
   sheet_add_json: sheetAddJson,
+  sheet_add_dom: sheetAddDom,
   aoa_to_sheet: aoaToSheet,
   json_to_sheet: jsonToSheet,
+  table_to_sheet: parseDomTable,
+  table_to_book: tableToBook,
   sheet_to_csv: sheetToCsv,
   sheet_to_txt: sheetToTxt,
   sheet_to_json: sheetToJson,

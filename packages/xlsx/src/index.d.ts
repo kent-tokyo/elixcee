@@ -161,6 +161,38 @@ export function sheet_add_aoa<T>(ws: WorkSheet, data: T[][], opts?: SheetAOAOpts
 export function json_to_sheet<T>(data: T[], opts?: SheetJSONOpts): WorkSheet;
 export function sheet_add_json<T>(ws: WorkSheet, data: T[], opts?: SheetJSONOpts): WorkSheet;
 
+// Mirrors the oracle's own Table2SheetOpts (types/index.d.ts) field-for-field.
+export interface Table2SheetOpts extends OriginOption {
+  WTF?: boolean;
+  bookVBA?: boolean;
+  cellDates?: boolean;
+  sheetStubs?: boolean;
+  cellStyles?: boolean;
+  password?: string;
+  dateNF?: string | number;
+  /** Name of Worksheet (for single-sheet formats) */
+  sheet?: string;
+  /** If true, plaintext parsing will not parse values */
+  raw?: boolean;
+  /** If >0, read the first sheetRows rows */
+  sheetRows?: number;
+  /** If true, hidden rows and cells will not be parsed */
+  display?: boolean;
+}
+
+// Mirrors the oracle's own signatures exactly: `data: any`, not `HTMLTableElement`. The
+// oracle's real .d.ts types this as `any` too (confirmed: `table_to_sheet(data: any,
+// opts?: Table2SheetOpts): WorkSheet` in types/index.d.ts) — narrowing to
+// HTMLTableElement would REJECT code the oracle's own types accept (a plain duck-typed
+// object, or any non-DOM-lib TypeScript project passing a real element typed as `any`),
+// which is exactly the kind of tightening Phase 1B-3's review prohibited. Passing a real
+// HTMLTableElement still works fine under `any` — it's simply not required, matching the
+// oracle. See packages/xlsx/test/smoke-dom.ts for a DOM-lib compile check that a real
+// HTMLTableElement is ALSO accepted, and package.json's `typecheck:dom` script.
+export function sheet_add_dom(ws: WorkSheet, data: any, opts?: Table2SheetOpts): WorkSheet;
+export function table_to_sheet(data: any, opts?: Table2SheetOpts): WorkSheet;
+export function table_to_book(data: any, opts?: Table2SheetOpts): WorkBook;
+
 // Not present in xlsx@0.18.5's own types/index.d.ts at all (confirmed: no `get_cell`
 // entry there) even though it's a real runtime export (`sheet_get_cell: ws_get_cell_stub`
 // in the oracle's own source) — this is pure addition, not a narrowing of any existing
