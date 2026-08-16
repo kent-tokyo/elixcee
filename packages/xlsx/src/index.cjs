@@ -185,7 +185,18 @@ function bookAppendSheet(wb, ws, name, roll) {
   }
 
   wb.SheetNames.push(name);
-  wb.Sheets[name] = ws;
+  // Object.defineProperty, not `wb.Sheets[name] = ws`: a sheet literally named
+  // "__proto__" is legitimate data a caller may pass (a crafted or accidental sheet
+  // name), and per docs/xlsx-security-model.md it must be retained as data, not
+  // rejected — but plain bracket assignment on an ordinary object invokes
+  // Object.prototype's inherited `__proto__` accessor instead of creating a normal own
+  // property, which (a) silently reassigns wb.Sheets's own prototype to `ws` and (b)
+  // makes the sheet unretrievable via `wb.Sheets[name]` or `Object.keys(wb.Sheets)`
+  // (confirmed against the real oracle, which has this exact defect). defineProperty
+  // always creates/overwrites a normal own data property regardless of the key's name,
+  // closing the hole with zero shape divergence from the oracle (wb.Sheets stays a
+  // plain object, `Object.getPrototypeOf(wb.Sheets) === Object.prototype` unchanged).
+  Object.defineProperty(wb.Sheets, name, { value: ws, writable: true, enumerable: true, configurable: true });
   return name;
 }
 

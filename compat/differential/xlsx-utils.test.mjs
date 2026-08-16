@@ -198,6 +198,47 @@ for (const name of ['Sheet/1', 'Sheet:1', 'Sheet?1', 'Sheet*1', "O'Brien", "'Quo
     step(() => u.book_append_sheet(wb, ws1, name), steps);
   });
 }
+// "constructor"/"prototype" are ordinary (non-accessor) inherited properties — unlike
+// "__proto__" these are NOT special-cased by the language, so plain bracket assignment
+// already works correctly on the real oracle too (confirmed empirically). Expected plain
+// MATCH, not a registered divergence.
+for (const name of ['constructor', 'prototype', 'toString', 'hasOwnProperty']) {
+  bookAppendScenario(`append property-name-shaped sheet name ${JSON.stringify(name)}`, (wb, u, steps) => {
+    step(() => u.book_append_sheet(wb, ws1, name), steps);
+  });
+}
+
+// Prototype-pollution-shaped input: a sheet literally named "__proto__". Found during
+// Phase 1A's own security review, not part of the originally-specified boundary matrix.
+// The real oracle's plain `wb.Sheets[name] = ws` invokes Object.prototype's inherited
+// `__proto__` accessor instead of creating a normal own property — the sheet ends up
+// UNRETRIEVABLE (wb.Sheets has zero own keys afterward) and wb.Sheets's own prototype is
+// silently reassigned to the worksheet object. This does not leak into the global
+// Object.prototype (confirmed: a fresh {} is unaffected), but it is exactly the
+// "spreadsheet-derived string used as an object key" hazard docs/xlsx-security-model.md
+// requires guarding — and per that same doc, the sheet must be retained as data, not
+// rejected. Elixcee uses Object.defineProperty (see bookAppendSheet), so the sheet stays
+// retrievable and nothing's prototype changes. Registered as
+// INTENTIONAL_SECURITY_DIVERGENCE, not compared for MATCH, since the oracle's own output
+// here is the defect.
+{
+  const oracleWb = U.book_new();
+  U.book_append_sheet(oracleWb, ws1, '__proto__');
+  const elixceeWb = elixcee.book_new();
+  elixcee.book_append_sheet(elixceeWb, ws1, '__proto__');
+  const verdict = classify({
+    api: 'utils.book_append_sheet',
+    oracleA: { ownSheetKeys: Object.keys(oracleWb.Sheets), sheetNames: oracleWb.SheetNames },
+    elixcee: { ownSheetKeys: Object.keys(elixceeWb.Sheets), sheetNames: elixceeWb.SheetNames },
+    securityDivergenceKey: 'book_append_sheet:proto_key_pollution',
+  });
+  record('utils.book_append_sheet', 'append "__proto__" name (prototype-pollution-shaped)', verdict);
+  // Assert the actual safety property directly too, not just trust the registry lookup:
+  assert.deepEqual(Object.keys(elixceeWb.Sheets), ['__proto__'], 'sheet must be retrievable');
+  assert.equal(elixceeWb.Sheets['__proto__'], ws1, 'sheet must be the worksheet, not a corrupted prototype');
+  assert.equal(Object.getPrototypeOf(elixceeWb.Sheets), Object.prototype, 'wb.Sheets\'s own prototype must be untouched');
+  assert.equal(({}).marker, undefined, 'global Object.prototype must remain unpolluted');
+}
 
 // ---- book_set_sheet_visibility (stateful — scenario-based) ----
 function visScenario(label, run) {

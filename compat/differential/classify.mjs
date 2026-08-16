@@ -67,11 +67,20 @@ export const UNSUPPORTED_ALLOWLIST = new Map([
   // 'utils.sheet_to_json' => 'Phase 0 demo placeholder — no elixcee implementation exists yet',
 ]);
 
-// Registered intentional SECURITY divergences (untrusted-file-parsing attack surfaces),
-// keyed by the elixcee-side error code that signals them — see
-// docs/xlsx-security-model.md's planned ELIXCEE_* codes. Empty until a real file-parsing
-// limit exists and throws a real code.
+// Registered intentional SECURITY divergences, keyed either by the elixcee-side error
+// code that signals them (see docs/xlsx-security-model.md's planned ELIXCEE_* codes), or
+// — for divergences that are a safer VALUE rather than a thrown error — by a descriptive
+// string key a test passes explicitly via `securityDivergenceKey`.
 export const SECURITY_DIVERGENCE_REGISTRY = new Map([
+  [
+    'book_append_sheet:proto_key_pollution',
+    'A sheet named "__proto__" must be retained as data (docs/xlsx-security-model.md), ' +
+      'never rejected, but the real oracle\'s `wb.Sheets[name] = ws` silently reassigns ' +
+      'wb.Sheets\'s own prototype instead of storing a retrievable entry (confirmed: ' +
+      'oracle\'s wb.Sheets ends up with zero own keys after this). Elixcee uses ' +
+      'Object.defineProperty instead, so the sheet stays retrievable and no prototype is ' +
+      'touched. See packages/xlsx/src/index.cjs\'s bookAppendSheet.',
+  ],
   // 'ELIXCEE_ZIP_ENTRY_LIMIT' => 'zip bomb protection, see docs/xlsx-security-model.md',
 ]);
 
@@ -99,6 +108,11 @@ export const SAFETY_DIVERGENCE_REGISTRY = new Map([
  * @param {string} [input.elixceeErrorCode] the ELIXCEE_* code elixcee's implementation
  *   threw, if any — checked against SECURITY_DIVERGENCE_REGISTRY and then
  *   SAFETY_DIVERGENCE_REGISTRY, in that order.
+ * @param {string} [input.securityDivergenceKey] a descriptive registry key for
+ *   divergences that are a safer RETURN VALUE rather than a thrown error (e.g. elixcee
+ *   silently avoiding a prototype-pollution-shaped output the oracle produces) — checked
+ *   against SECURITY_DIVERGENCE_REGISTRY only. Same anti-laundering rule: must be
+ *   pre-registered with a reason, or this is a no-op.
  * @param {boolean} [input.oracleAmbiguous] set when the oracle's own behavior for this
  *   input is known to be inconsistent/underspecified (human-flagged, not inferred here)
  * @param {string} [input.oracleAmbiguityReason] required when oracleAmbiguous is true —
@@ -111,6 +125,7 @@ export function classify({
   oracleB,
   elixcee,
   elixceeErrorCode,
+  securityDivergenceKey,
   oracleAmbiguous = false,
   oracleAmbiguityReason,
 } = {}) {
@@ -126,6 +141,9 @@ export function classify({
   }
   if (elixceeErrorCode && SAFETY_DIVERGENCE_REGISTRY.has(elixceeErrorCode)) {
     return 'INTENTIONAL_SAFETY_DIVERGENCE';
+  }
+  if (securityDivergenceKey && SECURITY_DIVERGENCE_REGISTRY.has(securityDivergenceKey)) {
+    return 'INTENTIONAL_SECURITY_DIVERGENCE';
   }
 
   if (oracleB !== undefined) {
@@ -183,10 +201,25 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     'UNCLASSIFIED'
   );
 
-  // UNSUPPORTED and INTENTIONAL_SECURITY_DIVERGENCE only fire for registered entries —
-  // exercised for real once a later phase populates these registries with actual entries.
+  // A registered security divergence keyed by a descriptive string (not a thrown error
+  // code) — for divergences that are a safer VALUE, not an exception.
+  assert.equal(
+    classify({
+      oracleA: { own_keys: [] },
+      elixcee: { own_keys: ['__proto__'] },
+      securityDivergenceKey: 'book_append_sheet:proto_key_pollution',
+    }),
+    'INTENTIONAL_SECURITY_DIVERGENCE'
+  );
+  assert.equal(
+    classify({ oracleA: {}, elixcee: { x: 1 }, securityDivergenceKey: 'not_registered' }),
+    'UNCLASSIFIED'
+  );
+
+  // UNSUPPORTED only fires for registered entries — exercised for real once a later
+  // phase populates it with actual entries.
   assert.equal(UNSUPPORTED_ALLOWLIST.size, 0, 'Phase 1A: allowlist should start empty');
-  assert.equal(SECURITY_DIVERGENCE_REGISTRY.size, 0, 'Phase 1A: security registry should start empty (no file-parsing code exists yet)');
+  assert.equal(SECURITY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one security divergence registered (book_append_sheet proto-key)');
   assert.equal(SAFETY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one safety divergence registered (ELIXCEE_NON_FINITE_INDEX)');
 
   console.log('classify.mjs self-check: all assertions passed');
