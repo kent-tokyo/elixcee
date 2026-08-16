@@ -22,6 +22,8 @@ export {
   format_cell,
   cell_set_number_format,
   sheet_to_formulae,
+  sheet_to_csv,
+  sheet_to_txt,
   cell_set_hyperlink,
   cell_set_internal_link,
   cell_add_comment,

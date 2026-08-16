@@ -1,9 +1,10 @@
 // Type shapes mirror xlsx@0.18.5's own types/index.d.ts (CellAddress, Range, Origin/AOA/
-// JSON option interfaces) so existing `xlsx`-typed consumer code keeps compiling
+// JSON/CSV option interfaces) so existing `xlsx`-typed consumer code keeps compiling
 // unchanged. Phase 1B-1 added worksheet mutation (sheet_add_aoa/sheet_add_json) and a
-// narrow number-format subset (format_cell/cell_set_number_format). Phase 1B-2A adds
-// formula extraction (sheet_to_formulae) and cell metadata (hyperlink/comment/array
-// formula) — see docs/xlsx-architecture.md's Phase 1B plan for what's next.
+// number-format subset (format_cell/cell_set_number_format, now full — Phase 1B-2B).
+// Phase 1B-2A added formula extraction (sheet_to_formulae) and cell metadata (hyperlink/
+// comment/array formula). Phase 1B-2B adds text export (sheet_to_csv/sheet_to_txt) — see
+// docs/xlsx-architecture.md's Phase 1B plan for what's next.
 
 export interface CellAddress {
   c: number;
@@ -40,7 +41,7 @@ export interface AOA2SheetOpts {
   sheetStubs?: boolean;
   cellDates?: boolean;
   nullError?: boolean;
-  /** Use specified date format (only 'm/d/yy', numFmtId 14's default, is implemented) */
+  /** Use specified date format */
   dateNF?: string | number;
 }
 
@@ -57,6 +58,29 @@ export interface JSON2SheetOpts {
 }
 
 export interface SheetJSONOpts extends JSON2SheetOpts, OriginOption {}
+
+export interface Sheet2CSVOpts {
+  /** Field Separator ("delimiter") */
+  FS?: string;
+  /** Record Separator ("row separator") */
+  RS?: string;
+  /** Remove trailing field separators in each record */
+  strip?: boolean;
+  /** Include blank lines in the CSV output */
+  blankrows?: boolean;
+  /** Skip hidden rows and columns in the CSV output */
+  skipHidden?: boolean;
+  /** Force quotes around fields */
+  forceQuotes?: boolean;
+  /** if true, return raw numbers; if false, return formatted numbers */
+  rawNumbers?: boolean;
+  dateNF?: string | number;
+}
+
+export interface Sheet2TXTOpts extends Sheet2CSVOpts {
+  /** If 'string', return a plain string instead of BOM + UTF-16LE encoding */
+  type?: 'string';
+}
 
 export function encode_col(col: number): string;
 export function decode_col(colstr: string): number;
@@ -91,6 +115,8 @@ export function format_cell(cell: CellObject, v?: unknown, opts?: { dateNF?: str
 export function cell_set_number_format(cell: CellObject, fmt: string | number): CellObject;
 
 export function sheet_to_formulae(worksheet: WorkSheet): string[];
+export function sheet_to_csv(worksheet: WorkSheet, options?: Sheet2CSVOpts): string;
+export function sheet_to_txt(worksheet: WorkSheet, options?: Sheet2TXTOpts): string;
 
 export function cell_set_hyperlink(cell: CellObject, target: string, tooltip?: string): CellObject;
 export function cell_set_internal_link(cell: CellObject, target: string, tooltip?: string): CellObject;

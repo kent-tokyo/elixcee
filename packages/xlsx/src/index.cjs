@@ -505,6 +505,127 @@ function sheetToFormulae(sheet) {
   return cmds;
 }
 
+// ---- sheet_to_csv / sheet_to_txt ----
+//
+// Independent port of the oracle's make_csv_row/sheet_to_csv/sheet_to_txt.
+//
+// make_csv_row: a cell's text comes from format_cell(val, null, o) UNLESS o.rawNumbers
+// and the cell is numeric (uses the raw value's plain string form then); quoting is
+// triggered by the field-separator char code, the record-separator char code, a literal
+// double-quote, or o.forceQuotes. A rendered value of exactly "ID" always gets quoted (a
+// SYLK-file-detection legacy in the real oracle, confirmed live, reproduced as-is). A
+// formula cell without a cached/array value (`.f` set, `.F` NOT set) renders as
+// "=<formula>", quoted only if it contains a literal comma (not FS) — confirmed live.
+// blankrows:false skips an all-empty row entirely (no cell had a `.v`), and the row
+// separator only precedes an actually-EMITTED row (a skipped row doesn't consume a
+// leading separator) — confirmed live via aoa_to_sheet([[1],[],[3]]).
+//
+// sheet_to_csv mutates its `opts` argument: sets o.dense (Array.isArray(sheet)) for the
+// duration of the call, then deletes it — confirmed live (an opts object with a
+// pre-existing `dense` key comes back WITHOUT that key afterward). o.strip builds
+// `new RegExp((FS=="|" ? "\\|" : FS)+"+$")` — only `|` is escaped; any other FS is used
+// RAW as a regex fragment, so e.g. FS:"." strips the entire row (matches "any char,
+// greedy") and FS:"(" throws a native SyntaxError (invalid regex) — both confirmed live,
+// reproduced as-is with no extra escaping added.
+const CSV_QUOTE_RE = /"/g;
+
+function makeCsvRow(sheet, r, R, cols, fs, rs, FS, o) {
+  let isempty = true;
+  const row = [];
+  const rr = encodeRow(R);
+  for (let C = r.s.c; C <= r.e.c; ++C) {
+    if (!cols[C]) continue;
+    const val = o.dense ? (sheet[R] || [])[C] : sheet[cols[C] + rr];
+    let txt;
+    if (val == null) txt = '';
+    else if (val.v != null) {
+      isempty = false;
+      txt = '' + (o.rawNumbers && val.t === 'n' ? val.v : formatCell(val, null, o));
+      for (let i = 0, cc = 0; i !== txt.length; ++i) {
+        cc = txt.charCodeAt(i);
+        if (cc === fs || cc === rs || cc === 34 || o.forceQuotes) {
+          txt = '"' + txt.replace(CSV_QUOTE_RE, '""') + '"';
+          break;
+        }
+      }
+      if (txt === 'ID') txt = '"ID"';
+    } else if (val.f != null && !val.F) {
+      isempty = false;
+      txt = '=' + val.f;
+      if (txt.indexOf(',') >= 0) txt = '"' + txt.replace(CSV_QUOTE_RE, '""') + '"';
+    } else txt = '';
+    row.push(txt);
+  }
+  if (o.blankrows === false && isempty) return null;
+  return row.join(FS);
+}
+
+function sheetToCsv(sheet, opts) {
+  const out = [];
+  const o = opts == null ? {} : opts;
+  if (sheet == null || sheet['!ref'] == null) return '';
+  const r = safeDecodeRange(sheet['!ref']);
+  checkRangeSize(r);
+  const FS = o.FS !== undefined ? o.FS : ',';
+  const fs = FS.charCodeAt(0);
+  const RS = o.RS !== undefined ? o.RS : '\n';
+  const rs = RS.charCodeAt(0);
+  const endregex = new RegExp((FS === '|' ? '\\|' : FS) + '+$');
+  const cols = [];
+  o.dense = Array.isArray(sheet);
+  const colinfo = (o.skipHidden && sheet['!cols']) || [];
+  const rowinfo = (o.skipHidden && sheet['!rows']) || [];
+  for (let C = r.s.c; C <= r.e.c; ++C) {
+    if (!(colinfo[C] || {}).hidden) cols[C] = encodeCol(C);
+  }
+  let w = 0;
+  for (let R = r.s.r; R <= r.e.r; ++R) {
+    if ((rowinfo[R] || {}).hidden) continue;
+    let row = makeCsvRow(sheet, r, R, cols, fs, rs, FS, o);
+    if (row == null) continue;
+    if (o.strip) row = row.replace(endregex, '');
+    if (row || o.blankrows !== false) out.push((w++ ? RS : '') + row);
+  }
+  delete o.dense;
+  return out.join('');
+}
+
+// UTF-16LE-encoding codepage 1200 needs no lookup table (unlike e.g. codepage 932) —
+// verified byte-exact against the real oracle's codepage encoder across ASCII/BMP/
+// astral/lone-surrogate cases, so this package implements it directly rather than
+// taking on the separate "codepage" npm package as another dependency just for this.
+function utf16leEncode(str) {
+  let out = '';
+  for (let i = 0; i < str.length; ++i) {
+    const cu = str.charCodeAt(i);
+    out += String.fromCharCode(cu & 0xff) + String.fromCharCode((cu >> 8) & 0xff);
+  }
+  return out;
+}
+
+// sheet_to_txt sets opts.FS='\t'/opts.RS='\n' on the CALLER'S opts object (mutates it in
+// place, confirmed live — an opts:{} object comes back as {FS:'\t',RS:'\n'} after the
+// call), then delegates to sheet_to_csv. Unless opts.type === 'string', the oracle
+// UTF-16LE-encodes the result with a leading BOM — but ONLY when its internal
+// "$cptable" codepage support happens to be loaded, which differs by how the real
+// oracle package itself is reached: confirmed live that both `require('xlsx')` and a
+// bare `import 'xlsx'` in Node ESM resolve to its CJS build (no `exports` map on the
+// real package, so ESM falls back to `main`), which auto-loads codepage support — so
+// BOM+UTF-16LE is what any normal Node consumer of the real "xlsx" package name
+// actually observes by default, regardless of require/import. Only a bundler-resolved
+// deep import of the oracle's separate xlsx.mjs file (not reachable through the
+// "xlsx" package name) sees the opposite default. This package has one canonical
+// sheet_to_txt implementation shared by its own CJS and ESM entrypoints, so it always
+// matches the require/bare-import default.
+function sheetToTxt(sheet, opts) {
+  const o = opts || {};
+  o.FS = '\t';
+  o.RS = '\n';
+  const s = sheetToCsv(sheet, o);
+  if (o.type === 'string') return s;
+  return String.fromCharCode(255) + String.fromCharCode(254) + utf16leEncode(s);
+}
+
 // ---- cell_set_hyperlink / cell_set_internal_link ----
 //
 // Independent port. A falsy target (including "", 0, false, NaN, null, undefined)
@@ -619,6 +740,8 @@ module.exports = {
   format_cell: formatCell,
   cell_set_number_format: cellSetNumberFormat,
   sheet_to_formulae: sheetToFormulae,
+  sheet_to_csv: sheetToCsv,
+  sheet_to_txt: sheetToTxt,
   cell_set_hyperlink: cellSetHyperlink,
   cell_set_internal_link: cellSetInternalLink,
   cell_add_comment: cellAddComment,
