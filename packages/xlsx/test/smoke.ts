@@ -50,7 +50,31 @@ const gotByAddr: XLSX.CellObject = XLSX.sheet_get_cell(ws4, { r: 0, c: 0 });
 const gotByRC: XLSX.CellObject = XLSX.sheet_get_cell(ws4, 0, 0);
 const gotByRow: XLSX.CellObject = XLSX.sheet_get_cell(ws4, 0);
 
+// sheet_to_json: interface Row { a: number; b: string } — a caller's own row-shape
+// generic, matching how real xlsx-typed consumer code parameterizes T.
+interface Row {
+  a: number;
+  b: string;
+}
+const rowsGeneric: Row[] = XLSX.sheet_to_json<Row>(ws4);
+const rowsDefault = XLSX.sheet_to_json(ws4);
+const rowsHeader1 = XLSX.sheet_to_json(ws4, { header: 1 });
+const rowsHeaderA = XLSX.sheet_to_json(ws4, { header: 'A' });
+const rowsHeaderArray = XLSX.sheet_to_json(ws4, { header: ['x', 'y'] });
+const rowsDefval = XLSX.sheet_to_json(ws4, { defval: null });
+const rowsRawTrue = XLSX.sheet_to_json(ws4, { raw: true });
+const rowsRawFalse = XLSX.sheet_to_json(ws4, { raw: false });
+const rowsRangeString = XLSX.sheet_to_json(ws4, { range: 'A1:B2' });
+const rowsRangeNumber = XLSX.sheet_to_json(ws4, { range: 1 });
+const rowsRangeObj = XLSX.sheet_to_json(ws4, { range: { s: { r: 0, c: 0 }, e: { r: 1, c: 1 } } });
+
+// Dense worksheet, same aoa_to_sheet({ dense: true }) shape used elsewhere above.
+const denseWs: XLSX.WorkSheet = XLSX.aoa_to_sheet([[1, 2], [3, 4]], { dense: true });
+const rowsDense = XLSX.sheet_to_json(denseWs);
+
 console.log(
   decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, ws5,
-  formatted, formatted2, formulae, csv, txt, gotByRef, gotByAddr, gotByRC, gotByRow
+  formatted, formatted2, formulae, csv, txt, gotByRef, gotByAddr, gotByRC, gotByRow,
+  rowsGeneric, rowsDefault, rowsHeader1, rowsHeaderA, rowsHeaderArray, rowsDefval, rowsRawTrue,
+  rowsRawFalse, rowsRangeString, rowsRangeNumber, rowsRangeObj, rowsDense
 );

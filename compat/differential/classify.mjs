@@ -107,7 +107,7 @@ export const SAFETY_DIVERGENCE_REGISTRY = new Map([
   ],
   [
     'ELIXCEE_RANGE_TOO_LARGE',
-    'sheet_to_formulae/sheet_to_csv/sheet_to_txt all iterate every (row,col) pair in a ' +
+    'sheet_to_formulae/sheet_to_csv/sheet_to_txt/sheet_to_json all iterate every (row,col) pair in a ' +
       "worksheet's !ref rectangle regardless of sparsity — confirmed live (timeout-" +
       "guarded subprocess) that a crafted full-grid !ref ('A1:XFD1048576', ~17.18 " +
       'billion cells) does not return within 25s on the real oracle\'s sheet_to_csv, and ' +

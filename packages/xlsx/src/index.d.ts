@@ -82,6 +82,25 @@ export interface Sheet2TXTOpts extends Sheet2CSVOpts {
   type?: 'string';
 }
 
+export interface Sheet2JSONOpts {
+  /** Output format: 1 -> 0-based index-number keys, "A" -> column-letter keys, an
+   * array -> explicit header names, omitted -> infer from row 0's formatted text */
+  header?: 'A' | 1 | string[];
+  /** Override worksheet range */
+  range?: any;
+  /** Include or omit blank lines in the output */
+  blankrows?: boolean;
+  /** Default value for null/undefined values */
+  defval?: any;
+  /** if true, return raw data; if false, return formatted text */
+  raw?: boolean;
+  /** if true, skip hidden rows and columns */
+  skipHidden?: boolean;
+  /** if true, return raw numbers; if false, return formatted numbers */
+  rawNumbers?: boolean;
+  dateNF?: string | number;
+}
+
 export function encode_col(col: number): string;
 export function decode_col(colstr: string): number;
 export function encode_row(row: number): string;
@@ -121,6 +140,14 @@ export function sheet_get_cell(ws: WorkSheet, row: number, col?: number): CellOb
 
 export function format_cell(cell: CellObject, v?: unknown, opts?: { dateNF?: string | number }): string;
 export function cell_set_number_format(cell: CellObject, fmt: string | number): CellObject;
+
+// Mirrors xlsx@0.18.5's own overload set verbatim (types/index.d.ts) — including the two
+// non-generic overloads below the generic one, even though normal TS overload resolution
+// makes them largely unreachable in practice, so any call site pattern the real oracle's
+// types accept is still accepted here.
+export function sheet_to_json<T>(worksheet: WorkSheet, opts?: Sheet2JSONOpts): T[];
+export function sheet_to_json(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[][];
+export function sheet_to_json(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[];
 
 export function sheet_to_formulae(worksheet: WorkSheet): string[];
 export function sheet_to_csv(worksheet: WorkSheet, options?: Sheet2CSVOpts): string;

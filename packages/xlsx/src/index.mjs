@@ -22,6 +22,7 @@ export {
   sheet_get_cell,
   format_cell,
   cell_set_number_format,
+  sheet_to_json,
   sheet_to_formulae,
   sheet_to_csv,
   sheet_to_txt,

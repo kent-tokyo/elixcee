@@ -468,6 +468,160 @@ function jsonToSheet(js, opts) {
   return sheetAddJson(null, js, opts);
 }
 
+// ---- sheet_to_json ----
+//
+// Independent port of the oracle's sheet_to_json/make_json_row. header mode dispatch:
+// 1 -> 0-based column-index numbers, "A" -> column letters, Array -> the array as-is
+// (offset becomes 0, i.e. row 0 of the range is treated as data, not a header row), else
+// -> infer from row 0's formatted text with de-dup via header_cnt (collisions get a
+// "_N" suffix). `raw` defaults to true only when the `raw` key is entirely ABSENT from
+// opts (`o.raw || !hasOwnProperty(o,'raw')` — confirmed live: `{raw:undefined}` behaves
+// like `raw:true`, since `hasOwnProperty` is still true, but `o.raw` is falsy... the `||`
+// covers that: falsy `o.raw` alone doesn't disable raw mode unless the key is present AND
+// explicitly falsy). Error cells (`t:'e'`) become `null` only when `v == 0`; otherwise
+// `undefined`, which then falls through to the defval/raw-null/skip logic same as any
+// other null-ish cell. checkRangeSize (see ./internal/range-guard.cjs) guards the same
+// !ref-rectangle walk-cost DoS already measured for sheet_to_formulae/sheet_to_csv
+// (docs/limits.md) — this function walks the identical rectangle shape, so no separate
+// measurement was needed for this threshold.
+//
+// header_cnt is a plain `{}`, matching the oracle exactly — deliberately NOT
+// Object.create(null): reading `header_cnt["__proto__"]` (a literal "__proto__" header
+// cell) or `header_cnt["constructor"]` returns a truthy inherited value (the real
+// Object.prototype / Object constructor respectively), which accidentally triggers the
+// SAME collision-suffix path as a real duplicate header, renaming the header text to
+// "__proto___NaN" / "constructor_NaN" (confirmed live against the oracle) — an oracle
+// quirk, not a hazard: the write `header_cnt[v] = counter` at the end assigns a NaN
+// counter through the __proto__ SETTER, which per spec is a no-op for non-object values,
+// so header_cnt's own prototype is never actually touched. Reproduced as-is per this
+// project's fidelity-over-tidiness rule (docs/compatibility-known-defects.md). By
+// contrast, "prototype" has no inherited own-object value on a plain `{}` (only
+// FUNCTIONS have `.prototype`), so it never collides and passes through unchanged — also
+// confirmed live and reproduced by using an ordinary `{}` rather than special-casing it.
+function sheetToJson(sheet, opts) {
+  if (sheet == null || sheet['!ref'] == null) return [];
+  let header = 0;
+  let offset = 1;
+  const hdr = [];
+  const o = opts || {};
+  const range = o.range != null ? o.range : sheet['!ref'];
+  if (o.header === 1) header = 1;
+  else if (o.header === 'A') header = 2;
+  else if (Array.isArray(o.header)) header = 3;
+  else if (o.header == null) header = 0;
+  let r;
+  switch (typeof range) {
+    case 'string':
+      r = safeDecodeRange(range);
+      break;
+    case 'number':
+      r = safeDecodeRange(sheet['!ref']);
+      r.s.r = range;
+      break;
+    default:
+      r = range;
+  }
+  checkRangeSize(r);
+  if (header > 0) offset = 0;
+  const rr = encodeRow(r.s.r);
+  const cols = [];
+  const out = [];
+  let outi = 0;
+  const dense = Array.isArray(sheet);
+  let R = r.s.r;
+  const header_cnt = {};
+  if (dense && !sheet[R]) sheet[R] = [];
+  const colinfo = (o.skipHidden && sheet['!cols']) || [];
+  const rowinfo = (o.skipHidden && sheet['!rows']) || [];
+  for (let C = r.s.c; C <= r.e.c; ++C) {
+    if ((colinfo[C] || {}).hidden) continue;
+    cols[C] = encodeCol(C);
+    let val = dense ? sheet[R][C] : sheet[cols[C] + rr];
+    switch (header) {
+      case 1:
+        hdr[C] = C - r.s.c;
+        break;
+      case 2:
+        hdr[C] = cols[C];
+        break;
+      case 3:
+        hdr[C] = o.header[C - r.s.c];
+        break;
+      default: {
+        if (val == null) val = { w: '__EMPTY', t: 's' };
+        const v = formatCell(val, null, o);
+        let vv = v;
+        let counter = header_cnt[v] || 0;
+        if (!counter) header_cnt[v] = 1;
+        else {
+          do {
+            vv = v + '_' + counter++;
+          } while (header_cnt[vv]);
+          header_cnt[v] = counter;
+          header_cnt[vv] = 1;
+        }
+        hdr[C] = vv;
+      }
+    }
+  }
+  for (R = r.s.r + offset; R <= r.e.r; ++R) {
+    if ((rowinfo[R] || {}).hidden) continue;
+    const row = makeJsonRow(sheet, r, R, cols, header, hdr, dense, o);
+    if (row.isempty === false || (header === 1 ? o.blankrows !== false : !!o.blankrows)) out[outi++] = row.row;
+  }
+  out.length = outi;
+  return out;
+}
+
+function makeJsonRow(sheet, r, R, cols, header, hdr, dense, o) {
+  const rr = encodeRow(R);
+  const defval = o.defval;
+  const raw = o.raw || !Object.prototype.hasOwnProperty.call(o, 'raw');
+  let isempty = true;
+  const row = header === 1 ? [] : {};
+  if (header !== 1) {
+    Object.defineProperty(row, '__rowNum__', { value: R, enumerable: false });
+  }
+  if (!dense || sheet[R]) {
+    for (let C = r.s.c; C <= r.e.c; ++C) {
+      const val = dense ? sheet[R][C] : sheet[cols[C] + rr];
+      if (val === undefined || val.t === undefined) {
+        if (defval === undefined) continue;
+        if (hdr[C] != null) row[hdr[C]] = defval;
+        continue;
+      }
+      let v = val.v;
+      switch (val.t) {
+        case 'z':
+          if (v == null) break;
+          continue;
+        case 'e':
+          v = v == 0 ? null : undefined;
+          break;
+        case 's':
+        case 'd':
+        case 'b':
+        case 'n':
+          break;
+        default:
+          throw new Error('unrecognized type ' + val.t);
+      }
+      if (hdr[C] != null) {
+        if (v == null) {
+          if (val.t === 'e' && v === null) row[hdr[C]] = null;
+          else if (defval !== undefined) row[hdr[C]] = defval;
+          else if (raw && v === null) row[hdr[C]] = null;
+          else continue;
+        } else {
+          row[hdr[C]] = raw && (val.t !== 'n' || (val.t === 'n' && o.rawNumbers !== false)) ? v : formatCell(val, v, o);
+        }
+        if (v != null) isempty = false;
+      }
+    }
+  }
+  return { row, isempty };
+}
+
 // ---- sheet_to_formulae ----
 //
 // Independent port of the oracle's sheet_to_formulae(sheet): walks !ref in row-major
@@ -764,6 +918,7 @@ module.exports = {
   sheet_get_cell: sheetGetCell,
   format_cell: formatCell,
   cell_set_number_format: cellSetNumberFormat,
+  sheet_to_json: sheetToJson,
   sheet_to_formulae: sheetToFormulae,
   sheet_to_csv: sheetToCsv,
   sheet_to_txt: sheetToTxt,

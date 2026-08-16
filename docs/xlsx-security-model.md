@@ -42,7 +42,7 @@ file I/O yet) with its own, much smaller limit set:
 
 | Limit | Value | Where | Registered as |
 |---|---|---|---|
-| `!ref` rectangle cell count (`sheet_to_formulae`/`sheet_to_csv`/`sheet_to_txt`) | 5,000,000 cells | `packages/xlsx/src/internal/range-guard.cjs` | `ELIXCEE_RANGE_TOO_LARGE`, `compat/differential/classify.mjs`'s `SAFETY_DIVERGENCE_REGISTRY` |
+| `!ref` rectangle cell count (`sheet_to_formulae`/`sheet_to_csv`/`sheet_to_txt`/`sheet_to_json`) | 5,000,000 cells | `packages/xlsx/src/internal/range-guard.cjs` | `ELIXCEE_RANGE_TOO_LARGE`, `compat/differential/classify.mjs`'s `SAFETY_DIVERGENCE_REGISTRY` |
 | Non-finite column/row index (`encode_col`) | rejects `+Infinity` | `packages/xlsx/src/index.cjs` | `ELIXCEE_NON_FINITE_INDEX`, same registry |
 
 Both were added only after empirically confirming the real oracle actually hangs/loops
