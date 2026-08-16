@@ -47,7 +47,9 @@ file I/O yet) with its own, much smaller limit set:
 
 Both were added only after empirically confirming the real oracle actually hangs/loops
 on the corresponding input (a timeout-guarded subprocess run, not a speculative guard) —
-per this project's standing rule against adding resource limits without measurement.
+per this project's standing rule against adding resource limits without measurement. See
+[`docs/limits.md`](limits.md) for the time/RSS measurement behind the 5,000,000-cell
+threshold specifically.
 
 ## Planned limits (not yet implemented — design targets for the phase that builds the
 compat-hardened reader)
