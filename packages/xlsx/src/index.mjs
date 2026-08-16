@@ -22,4 +22,8 @@ export {
   format_cell,
   cell_set_number_format,
   sheet_to_formulae,
+  cell_set_hyperlink,
+  cell_set_internal_link,
+  cell_add_comment,
+  sheet_set_array_formula,
 } from './index.cjs';

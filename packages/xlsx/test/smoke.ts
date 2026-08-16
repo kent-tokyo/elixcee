@@ -36,4 +36,9 @@ const formatted2: string = XLSX.format_cell(cell, 99, { dateNF: 'm/d/yy' });
 
 const formulae: string[] = XLSX.sheet_to_formulae(ws4);
 
-console.log(decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, formatted, formatted2, formulae);
+XLSX.cell_set_hyperlink(cell, 'https://example.com', 'tip');
+XLSX.cell_set_internal_link(cell, 'Sheet1!A1');
+XLSX.cell_add_comment(cell, 'a comment', 'author');
+const ws5: WorkSheet = XLSX.sheet_set_array_formula(ws4, 'A1:A1', 'SUM(1,2)', true);
+
+console.log(decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, ws5, formatted, formatted2, formulae);

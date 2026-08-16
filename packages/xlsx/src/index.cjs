@@ -650,6 +650,72 @@ function sheetToFormulae(sheet) {
   return cmds;
 }
 
+// ---- cell_set_hyperlink / cell_set_internal_link ----
+//
+// Independent port. A falsy target (including "", 0, false, NaN, null, undefined)
+// deletes any existing .l instead of setting one — confirmed live across that whole
+// matrix. No null-check on `cell` itself: a null/undefined cell throws the same native
+// TypeError the oracle throws ("Cannot set properties of null (setting 'l')"),
+// reproduced by deliberately NOT adding a defensive guard.
+function cellSetHyperlink(cell, target, tooltip) {
+  if (!target) {
+    delete cell.l;
+  } else {
+    cell.l = { Target: target };
+    if (tooltip) cell.l.Tooltip = tooltip;
+  }
+  return cell;
+}
+
+// "#" + range is concatenated unconditionally — range=null/undefined produce the
+// (truthy) strings "#null"/"#undefined" as the target, not a no-op — confirmed live.
+function cellSetInternalLink(cell, range, tooltip) {
+  return cellSetHyperlink(cell, '#' + range, tooltip);
+}
+
+// ---- cell_add_comment ----
+//
+// Independent port. Returns undefined, NOT the cell — confirmed live (no `return`
+// statement in the oracle source), unlike cell_set_hyperlink/cell_set_number_format,
+// which do return their cell argument. `author` defaults to "SheetJS" only when falsy
+// (matching `author||"SheetJS"`, so an explicit "" also defaults); `text` has no such
+// default and is stored verbatim, including null/undefined.
+function cellAddComment(cell, text, author) {
+  if (!cell.c) cell.c = [];
+  cell.c.push({ t: text, a: author || 'SheetJS' });
+}
+
+// ---- sheet_set_array_formula ----
+//
+// Independent port. `range` as a STRING is used verbatim for the stored `.F` value
+// (e.g. "A1:A1" stays "A1:A1"); as an OBJECT it goes through encode_range, which
+// collapses a single-cell range to its short form ("A1", no colon) — confirmed live
+// these two produce different `.F` strings for the same logical range. Every cell in
+// the range gets t:'n' / F / v-deleted; only the top-left cell additionally gets `.f`
+// (unconditionally, even when `formula` is undefined — matching `cell.f = formula` with
+// no guard; the `f` key exists with value undefined rather than being omitted,
+// confirmed live) and `.D` (only when `dynamic` is truthy — omitted entirely otherwise,
+// never set to false). Never touches `!ref` — confirmed live, even when the range
+// extends past an existing one. `range`/`formula` are never used as object keys
+// anywhere in this function, so there is no __proto__-style hazard to guard against.
+function sheetSetArrayFormula(ws, range, formula, dynamic) {
+  const rng = typeof range !== 'string' ? range : safeDecodeRange(range);
+  const rngstr = typeof range === 'string' ? range : encodeRange(range);
+  for (let R = rng.s.r; R <= rng.e.r; ++R) {
+    for (let C = rng.s.c; C <= rng.e.c; ++C) {
+      const cell = wsGetCellStub(ws, encodeCell({ r: R, c: C || 0 }));
+      cell.t = 'n';
+      cell.F = rngstr;
+      delete cell.v;
+      if (R === rng.s.r && C === rng.s.c) {
+        cell.f = formula;
+        if (dynamic) cell.D = true;
+      }
+    }
+  }
+  return ws;
+}
+
 // Every function above is declared with a camelCase internal name (encodeCol, ...) —
 // ordinary JS convention within this file — but a plain `{ encode_col: encodeCol }`
 // object-literal assignment does NOT rename an already-named function's own `.name`.
@@ -698,6 +764,10 @@ module.exports = {
   format_cell: formatCell,
   cell_set_number_format: cellSetNumberFormat,
   sheet_to_formulae: sheetToFormulae,
+  cell_set_hyperlink: cellSetHyperlink,
+  cell_set_internal_link: cellSetInternalLink,
+  cell_add_comment: cellAddComment,
+  sheet_set_array_formula: sheetSetArrayFormula,
 };
 
 for (const publicName of Object.keys(module.exports)) nameAs(module.exports[publicName], publicName);

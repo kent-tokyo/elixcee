@@ -91,3 +91,13 @@ export function format_cell(cell: CellObject, v?: unknown, opts?: { dateNF?: str
 export function cell_set_number_format(cell: CellObject, fmt: string | number): CellObject;
 
 export function sheet_to_formulae(worksheet: WorkSheet): string[];
+
+export function cell_set_hyperlink(cell: CellObject, target: string, tooltip?: string): CellObject;
+export function cell_set_internal_link(cell: CellObject, target: string, tooltip?: string): CellObject;
+export function cell_add_comment(cell: CellObject, text: string, author?: string): void;
+export function sheet_set_array_formula(
+  ws: WorkSheet,
+  range: Range | string,
+  formula: string,
+  dynamic?: boolean
+): WorkSheet;
