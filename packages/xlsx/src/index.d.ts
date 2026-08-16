@@ -111,6 +111,14 @@ export function sheet_add_aoa<T>(ws: WorkSheet, data: T[][], opts?: SheetAOAOpts
 export function json_to_sheet<T>(data: T[], opts?: SheetJSONOpts): WorkSheet;
 export function sheet_add_json<T>(ws: WorkSheet, data: T[], opts?: SheetJSONOpts): WorkSheet;
 
+// Not present in xlsx@0.18.5's own types/index.d.ts at all (confirmed: no `get_cell`
+// entry there) even though it's a real runtime export (`sheet_get_cell: ws_get_cell_stub`
+// in the oracle's own source) — this is pure addition, not a narrowing of any existing
+// oracle declaration. Mirrors the runtime's 3 call shapes exactly.
+export function sheet_get_cell(ws: WorkSheet, ref: string): CellObject;
+export function sheet_get_cell(ws: WorkSheet, cell: CellAddress): CellObject;
+export function sheet_get_cell(ws: WorkSheet, row: number, col?: number): CellObject;
+
 export function format_cell(cell: CellObject, v?: unknown, opts?: { dateNF?: string | number }): string;
 export function cell_set_number_format(cell: CellObject, fmt: string | number): CellObject;
 

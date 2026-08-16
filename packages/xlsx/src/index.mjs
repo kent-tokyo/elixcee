@@ -19,6 +19,7 @@ export {
   sheet_add_aoa,
   json_to_sheet,
   sheet_add_json,
+  sheet_get_cell,
   format_cell,
   cell_set_number_format,
   sheet_to_formulae,

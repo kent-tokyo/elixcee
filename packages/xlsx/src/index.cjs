@@ -375,6 +375,22 @@ function wsGetCellStub(ws, ref) {
   return ws[ref] || (ws[ref] = { t: 'z' });
 }
 
+// Public sheet_get_cell = the oracle's ws_get_cell_stub (which it exports verbatim under
+// that name — confirmed by reading compat/node_modules/xlsx/xlsx.js: `sheet_get_cell:
+// ws_get_cell_stub`), accepting all 3 call shapes it does: an A1 string ref (handled by
+// wsGetCellStub above), a CellAddress-like object (recurse via encode_cell), or 0-based
+// (row, col) numbers (recurse via encode_cell({r,c})). Not in xlsx@0.18.5's own
+// types/index.d.ts at all (confirmed: no `get_cell` entry in types/index.d.ts) even
+// though it's a real runtime export — src/index.d.ts adds a type for it as pure
+// ADDITION, not tightening (there is no oracle declaration to narrow). Like
+// wsGetCellStub, this MUTATES: a miss creates a `{t:'z'}` stub in place (and, in dense
+// mode, materializes `ws[R]` if absent) — matches the oracle exactly.
+function sheetGetCell(ws, R, C) {
+  if (typeof R === 'string') return wsGetCellStub(ws, R);
+  if (typeof R !== 'number') return sheetGetCell(ws, encodeCell(R));
+  return sheetGetCell(ws, encodeCell({ r: R, c: C || 0 }));
+}
+
 function sheetAddJson(_ws, js, opts) {
   const o = opts || {};
   const offset = +!o.skipHeader;
@@ -706,8 +722,16 @@ function sheetSetArrayFormula(ws, range, formula, dynamic) {
 // against the oracle). `Object.defineProperty` with `configurable: true` (matching the
 // oracle's own `.name` property descriptor, verified live) — not a plain `fn.name = ...`
 // assignment, which silently no-ops since `.name` is non-writable by default.
+// Exceptions to "every export's .name equals its exact snake_case public key" — the
+// oracle itself breaks that pattern here: `sheet_get_cell: ws_get_cell_stub` assigns the
+// internal helper directly without a wrapper, so `XLSX.utils.sheet_get_cell.name` is
+// genuinely "ws_get_cell_stub" (confirmed live), not "sheet_get_cell". Reproduced as-is
+// per this project's fidelity-over-tidiness rule (compat/differential/metadata.test.mjs
+// is what caught this).
+const NAME_OVERRIDES = { sheet_get_cell: 'ws_get_cell_stub' };
+
 function nameAs(fn, publicName) {
-  Object.defineProperty(fn, 'name', { value: publicName, configurable: true });
+  Object.defineProperty(fn, 'name', { value: NAME_OVERRIDES[publicName] || publicName, configurable: true });
   return fn;
 }
 
@@ -737,6 +761,7 @@ module.exports = {
   sheet_add_aoa: sheetAddAoa,
   json_to_sheet: jsonToSheet,
   sheet_add_json: sheetAddJson,
+  sheet_get_cell: sheetGetCell,
   format_cell: formatCell,
   cell_set_number_format: cellSetNumberFormat,
   sheet_to_formulae: sheetToFormulae,

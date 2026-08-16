@@ -44,4 +44,13 @@ const ws5: WorkSheet = XLSX.sheet_set_array_formula(ws4, 'A1:A1', 'SUM(1,2)', tr
 const csv: string = XLSX.sheet_to_csv(ws5, { FS: ',', blankrows: false });
 const txt: string = XLSX.sheet_to_txt(ws5, { type: 'string' });
 
-console.log(decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, ws5, formatted, formatted2, formulae, csv, txt);
+// sheet_get_cell: all 3 call shapes.
+const gotByRef: XLSX.CellObject = XLSX.sheet_get_cell(ws4, 'A1');
+const gotByAddr: XLSX.CellObject = XLSX.sheet_get_cell(ws4, { r: 0, c: 0 });
+const gotByRC: XLSX.CellObject = XLSX.sheet_get_cell(ws4, 0, 0);
+const gotByRow: XLSX.CellObject = XLSX.sheet_get_cell(ws4, 0);
+
+console.log(
+  decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, ws5,
+  formatted, formatted2, formulae, csv, txt, gotByRef, gotByAddr, gotByRC, gotByRow
+);
