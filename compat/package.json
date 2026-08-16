@@ -12,6 +12,7 @@
     "differential:demo": "node differential/run-demo.mjs",
     "differential:utils": "node differential/xlsx-utils.test.mjs",
     "differential:metadata": "node differential/metadata.test.mjs",
+    "differential:ssf-format": "node differential/ssf-format.test.mjs",
     "classifier:self-check": "node differential/classify.mjs && node differential/normalize.mjs"
   },
   "devDependencies": {
