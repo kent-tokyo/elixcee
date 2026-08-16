@@ -1,6 +1,6 @@
 {
   "name": "@elixcee/xlsx",
-  "version": "0.1.0-phase1b1",
+  "version": "0.0.0-development",
   "private": true,
   "description": "Drop-in replacement for xlsx (SheetJS) — Phase 1B-3: address/workbook utilities, worksheet mutation (sheet_add_aoa/sheet_add_json), sheet_get_cell/sheet_to_json, full SSF-backed number formatting, formula/text export, and cell metadata, no file I/O yet. See ../../docs/xlsx-architecture.md.",
   "license": "MIT",
