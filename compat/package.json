@@ -9,7 +9,9 @@
   },
   "scripts": {
     "oracle:manifest": "node oracle/generate-manifest.mjs",
-    "differential:demo": "node differential/run-demo.mjs"
+    "differential:demo": "node differential/run-demo.mjs",
+    "differential:utils": "node differential/xlsx-utils.test.mjs",
+    "classifier:self-check": "node differential/classify.mjs && node differential/normalize.mjs"
   },
   "devDependencies": {
     "xlsx": "0.18.5"

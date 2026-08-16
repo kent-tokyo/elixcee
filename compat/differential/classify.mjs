@@ -1,27 +1,31 @@
 // The single source of truth for how a divergence between the oracle (xlsx@0.18.5) and
 // @elixcee/xlsx is classified. Cross-referenced from docs/xlsx-security-model.md rather
 // than redefined there. "Roughly the same" is never an acceptable verdict — every
-// comparison must resolve to exactly one of these seven values.
+// comparison must resolve to exactly one of these eight values.
 //
 // Comparisons operate on parsed LOGICAL shape (e.g. sheet_to_json output, cell-object
 // shape), never raw bytes. XLSX.write embeds a timestamp in docProps/core.xml, so a raw
 // byte comparison would spuriously report NONDETERMINISTIC on every run. Callers must
-// normalize (e.g. strip Props timestamps) before calling classify().
+// normalize (e.g. strip Props timestamps) before calling classify() — see
+// compat/differential/normalize.mjs for a normalizer that preserves the distinctions a
+// naive JSON round-trip silently erases (undefined vs. null, array holes, -0, etc.).
 //
-// UNSUPPORTED and INTENTIONAL_SECURITY_DIVERGENCE are NOT settable by a boolean flag at
-// the call site — that would let an unexplained failure be quietly laundered into "not a
-// bug" with zero paper trail, which is exactly how a compatibility report ends up lying.
-// Both require the divergence to be registered below FIRST, with a reason. Any divergence
-// that isn't registered comes back UNCLASSIFIED, which every caller must treat as a test
-// failure (see compat/differential/run-demo.mjs and any Phase 1A+ test file).
+// UNSUPPORTED, INTENTIONAL_SECURITY_DIVERGENCE, and INTENTIONAL_SAFETY_DIVERGENCE are NOT
+// settable by a boolean flag at the call site — that would let an unexplained failure be
+// quietly laundered into "not a bug" with zero paper trail, which is exactly how a
+// compatibility report ends up lying. All three require the divergence to be registered
+// below FIRST, with a reason. Any divergence that isn't registered comes back
+// UNCLASSIFIED, which every caller must treat as a test failure (see
+// compat/differential/run-demo.mjs and any Phase 1A+ test file).
 
 /**
- * @typedef {'MATCH'|'INTENTIONAL_SECURITY_DIVERGENCE'|'UNSUPPORTED'|'BUG'|'ORACLE_AMBIGUITY'|'NONDETERMINISTIC'|'UNCLASSIFIED'} Verdict
+ * @typedef {'MATCH'|'INTENTIONAL_SECURITY_DIVERGENCE'|'INTENTIONAL_SAFETY_DIVERGENCE'|'UNSUPPORTED'|'BUG'|'ORACLE_AMBIGUITY'|'NONDETERMINISTIC'|'UNCLASSIFIED'} Verdict
  */
 
 export const VERDICTS = /** @type {const} */ ([
   'MATCH',
   'INTENTIONAL_SECURITY_DIVERGENCE',
+  'INTENTIONAL_SAFETY_DIVERGENCE',
   'UNSUPPORTED',
   'BUG',
   'ORACLE_AMBIGUITY',
@@ -32,7 +36,14 @@ export const VERDICTS = /** @type {const} */ ([
 /**
  * MATCH — the oracle's and elixcee's outputs are equal on the normalized comparable shape.
  * INTENTIONAL_SECURITY_DIVERGENCE — elixcee errored with a code registered in
- *   SECURITY_DIVERGENCE_REGISTRY (docs/xlsx-security-model.md's limits).
+ *   SECURITY_DIVERGENCE_REGISTRY: untrusted-FILE-parsing attack surfaces (zip bombs, XML
+ *   blowup, prototype pollution) — see docs/xlsx-security-model.md.
+ * INTENTIONAL_SAFETY_DIVERGENCE — elixcee errored with a code registered in
+ *   SAFETY_DIVERGENCE_REGISTRY: pure-function robustness against pathological JS values
+ *   passed directly by a caller (e.g. Infinity causing an unbounded loop), independent of
+ *   any file parsing. Kept distinct from the security registry because the two have
+ *   different threat models (untrusted file vs. untrusted argument) even though both are
+ *   "don't replicate a DoS" divergences.
  * UNSUPPORTED — the oracle API is registered in UNSUPPORTED_ALLOWLIST as not implemented
  *   yet; not a correctness bug.
  * BUG — a divergence a human has triaged and confirmed is a real elixcee defect. classify()
@@ -43,7 +54,7 @@ export const VERDICTS = /** @type {const} */ ([
  *   the judgment call is on record, not silent.
  * NONDETERMINISTIC — the oracle's own output differs across repeated runs on identical
  *   input (oracleA vs oracleB, both real oracle calls).
- * UNCLASSIFIED — a divergence exists and isn't explained by either registry above. This is
+ * UNCLASSIFIED — a divergence exists and isn't explained by any registry above. This is
  *   the default for "not yet triaged," not a soft pass: every runner must fail the run on
  *   it.
  */
@@ -56,11 +67,24 @@ export const UNSUPPORTED_ALLOWLIST = new Map([
   // 'utils.sheet_to_json' => 'Phase 0 demo placeholder — no elixcee implementation exists yet',
 ]);
 
-// Registered intentional security divergences, keyed by the elixcee-side error code that
-// signals them (see docs/xlsx-security-model.md's planned ELIXCEE_* codes). Empty by
-// default — populated once real resource limits throw real codes.
+// Registered intentional SECURITY divergences (untrusted-file-parsing attack surfaces),
+// keyed by the elixcee-side error code that signals them — see
+// docs/xlsx-security-model.md's planned ELIXCEE_* codes. Empty until a real file-parsing
+// limit exists and throws a real code.
 export const SECURITY_DIVERGENCE_REGISTRY = new Map([
   // 'ELIXCEE_ZIP_ENTRY_LIMIT' => 'zip bomb protection, see docs/xlsx-security-model.md',
+]);
+
+// Registered intentional SAFETY divergences (pure-function robustness against
+// pathological arguments, no file parsing involved), keyed by the elixcee-side error
+// code that signals them.
+export const SAFETY_DIVERGENCE_REGISTRY = new Map([
+  [
+    'ELIXCEE_NON_FINITE_INDEX',
+    'utils.encode_col(Infinity) hangs forever on the real oracle (Math.floor(Infinity) ' +
+      'never reaches 0) — confirmed by running it to an OOM kill, not assumed. Elixcee ' +
+      'rejects non-finite column/row indices instead. See packages/xlsx/src/index.cjs.',
+  ],
 ]);
 
 /**
@@ -73,7 +97,8 @@ export const SECURITY_DIVERGENCE_REGISTRY = new Map([
  *   normalization). Optional; omit when only comparing oracle vs. elixcee.
  * @param {unknown} [input.elixcee] elixcee's output for the same input
  * @param {string} [input.elixceeErrorCode] the ELIXCEE_* code elixcee's implementation
- *   threw, if any — checked against SECURITY_DIVERGENCE_REGISTRY.
+ *   threw, if any — checked against SECURITY_DIVERGENCE_REGISTRY and then
+ *   SAFETY_DIVERGENCE_REGISTRY, in that order.
  * @param {boolean} [input.oracleAmbiguous] set when the oracle's own behavior for this
  *   input is known to be inconsistent/underspecified (human-flagged, not inferred here)
  * @param {string} [input.oracleAmbiguityReason] required when oracleAmbiguous is true —
@@ -98,6 +123,9 @@ export function classify({
 
   if (elixceeErrorCode && SECURITY_DIVERGENCE_REGISTRY.has(elixceeErrorCode)) {
     return 'INTENTIONAL_SECURITY_DIVERGENCE';
+  }
+  if (elixceeErrorCode && SAFETY_DIVERGENCE_REGISTRY.has(elixceeErrorCode)) {
+    return 'INTENTIONAL_SAFETY_DIVERGENCE';
   }
 
   if (oracleB !== undefined) {
@@ -143,10 +171,23 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   );
   assert.throws(() => classify({ oracleAmbiguous: true }), /oracleAmbiguityReason/);
 
+  // A registered safety divergence classifies correctly even when oracleA/elixcee differ.
+  assert.equal(
+    classify({ oracleA: '', elixcee: undefined, elixceeErrorCode: 'ELIXCEE_NON_FINITE_INDEX' }),
+    'INTENTIONAL_SAFETY_DIVERGENCE'
+  );
+  // An error code that ISN'T registered must still fall through to UNCLASSIFIED, not
+  // silently pass — codes are not a free pass by existing, only by being registered.
+  assert.equal(
+    classify({ oracleA: '', elixcee: undefined, elixceeErrorCode: 'ELIXCEE_MADE_UP_CODE' }),
+    'UNCLASSIFIED'
+  );
+
   // UNSUPPORTED and INTENTIONAL_SECURITY_DIVERGENCE only fire for registered entries —
-  // exercised for real once Phase 1A populates the registries with actual entries.
-  assert.equal(UNSUPPORTED_ALLOWLIST.size, 0, 'Phase 0: allowlist should start empty');
-  assert.equal(SECURITY_DIVERGENCE_REGISTRY.size, 0, 'Phase 0: security registry should start empty');
+  // exercised for real once a later phase populates these registries with actual entries.
+  assert.equal(UNSUPPORTED_ALLOWLIST.size, 0, 'Phase 1A: allowlist should start empty');
+  assert.equal(SECURITY_DIVERGENCE_REGISTRY.size, 0, 'Phase 1A: security registry should start empty (no file-parsing code exists yet)');
+  assert.equal(SAFETY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one safety divergence registered (ELIXCEE_NON_FINITE_INDEX)');
 
   console.log('classify.mjs self-check: all assertions passed');
 }

@@ -44,6 +44,8 @@ explicitly classified — see [`compat/differential/classify.mjs`](../compat/dif
 - [`compat/differential/`](../compat/differential/) holds the harness that runs the same
   input through both the oracle and `@elixcee/xlsx`, normalizes the results, and
   classifies any divergence.
+- [`docs/compatibility-known-defects.md`](compatibility-known-defects.md) records oracle
+  behaviors that look like bugs but are deliberately reproduced for compatibility anyway.
 
 ## Status
 
