@@ -1,8 +1,9 @@
 // Type shapes mirror xlsx@0.18.5's own types/index.d.ts (CellAddress, Range, Origin/AOA/
 // JSON option interfaces) so existing `xlsx`-typed consumer code keeps compiling
-// unchanged. Phase 1B-1 adds worksheet mutation (sheet_add_aoa/sheet_add_json) and a
-// narrow number-format subset (format_cell/cell_set_number_format) — see
-// docs/xlsx-architecture.md's Phase 1B plan for what's next.
+// unchanged. Phase 1B-1 added worksheet mutation (sheet_add_aoa/sheet_add_json) and a
+// narrow number-format subset (format_cell/cell_set_number_format). Phase 1B-2A adds
+// formula extraction (sheet_to_formulae) and cell metadata (hyperlink/comment/array
+// formula) — see docs/xlsx-architecture.md's Phase 1B plan for what's next.
 
 export interface CellAddress {
   c: number;
@@ -88,3 +89,5 @@ export function sheet_add_json<T>(ws: WorkSheet, data: T[], opts?: SheetJSONOpts
 
 export function format_cell(cell: CellObject, v?: unknown, opts?: { dateNF?: string | number }): string;
 export function cell_set_number_format(cell: CellObject, fmt: string | number): CellObject;
+
+export function sheet_to_formulae(worksheet: WorkSheet): string[];

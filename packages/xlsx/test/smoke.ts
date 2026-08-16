@@ -34,4 +34,6 @@ XLSX.cell_set_number_format(cell, 'General');
 const formatted: string = XLSX.format_cell(cell);
 const formatted2: string = XLSX.format_cell(cell, 99, { dateNF: 'm/d/yy' });
 
-console.log(decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, formatted, formatted2);
+const formulae: string[] = XLSX.sheet_to_formulae(ws4);
+
+console.log(decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, formatted, formatted2, formulae);

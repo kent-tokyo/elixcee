@@ -21,4 +21,5 @@ export {
   sheet_add_json,
   format_cell,
   cell_set_number_format,
+  sheet_to_formulae,
 } from './index.cjs';

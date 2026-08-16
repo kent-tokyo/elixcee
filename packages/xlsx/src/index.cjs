@@ -602,6 +602,54 @@ function jsonToSheet(js, opts) {
   return sheetAddJson(null, js, opts);
 }
 
+// ---- sheet_to_formulae ----
+//
+// Independent port of the oracle's sheet_to_formulae(sheet): walks !ref in row-major
+// order, emitting one "REF=value" string per non-empty cell. Branch order was confirmed
+// against a live oracle run, not guessed — value precedence is: array formula range
+// (x.F, only the top-left cell of the range, which alone carries x.f, contributes; the
+// key becomes the range itself) > formula text (x.f) > stub skip (x.t=='z') > numeric
+// value (x.t=='n') > boolean > CACHED DISPLAY STRING (x.w, checked BEFORE x.t=='s' — a
+// string cell with a `.w` that differs from `.v` emits the `.w`, not `.v`) > skip if `.v`
+// is undefined > quoted string (x.t=='s') > String(x.v) fallback (e.g. a bare Date cell
+// with neither `.f` nor `.w` renders via Date.prototype.toString(), confirmed live — not
+// an ISO string or a serial number). A reversed !ref (s > e after safe_decode_range,
+// which never swaps) makes the loop body never run, returning [] — confirmed live, not
+// a special case in this port.
+function sheetToFormulae(sheet) {
+  if (sheet == null || sheet['!ref'] == null) return [];
+  const r = safeDecodeRange(sheet['!ref']);
+  const dense = Array.isArray(sheet);
+  const cols = [];
+  for (let C = r.s.c; C <= r.e.c; ++C) cols[C] = encodeCol(C);
+  const cmds = [];
+  for (let R = r.s.r; R <= r.e.r; ++R) {
+    const rr = encodeRow(R);
+    for (let C = r.s.c; C <= r.e.c; ++C) {
+      let y = cols[C] + rr;
+      const x = dense ? (sheet[R] || [])[C] : sheet[y];
+      if (x === undefined) continue;
+      let val;
+      if (x.F != null) {
+        y = x.F;
+        if (!x.f) continue;
+        val = x.f;
+        if (y.indexOf(':') === -1) y = y + ':' + y;
+      }
+      if (x.f != null) val = x.f;
+      else if (x.t === 'z') continue;
+      else if (x.t === 'n' && x.v != null) val = '' + x.v;
+      else if (x.t === 'b') val = x.v ? 'TRUE' : 'FALSE';
+      else if (x.w !== undefined) val = "'" + x.w;
+      else if (x.v === undefined) continue;
+      else if (x.t === 's') val = "'" + x.v;
+      else val = '' + x.v;
+      cmds.push(y + '=' + val);
+    }
+  }
+  return cmds;
+}
+
 // Every function above is declared with a camelCase internal name (encodeCol, ...) —
 // ordinary JS convention within this file — but a plain `{ encode_col: encodeCol }`
 // object-literal assignment does NOT rename an already-named function's own `.name`.
@@ -649,6 +697,7 @@ module.exports = {
   sheet_add_json: sheetAddJson,
   format_cell: formatCell,
   cell_set_number_format: cellSetNumberFormat,
+  sheet_to_formulae: sheetToFormulae,
 };
 
 for (const publicName of Object.keys(module.exports)) nameAs(module.exports[publicName], publicName);
