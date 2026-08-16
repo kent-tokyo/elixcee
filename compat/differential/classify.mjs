@@ -211,6 +211,46 @@ export function classify({
   return 'UNCLASSIFIED';
 }
 
+// Per-API x per-verdict rollup — the single source of truth for compatibility-report
+// counts. Reports must never hand-type a verdict breakdown (e.g. "57/57 acceptable"
+// blurring MATCH together with registered divergences into one number); every count in a
+// completion report is expected to trace back to this function's output, not to manual
+// arithmetic. Takes the flat `{api, label, verdict}` results array every differential
+// test file already accumulates and groups it as Map<api, Map<verdict, count>>.
+//
+// Deliberately does NOT merge results across test FILES (e.g. xlsx-utils.test.mjs's
+// public-API fixtures vs. ssf-format.test.mjs's internal SSF-backend conformance
+// fixtures) — each file calls this on its own `results` array and reports its own table.
+// Public API differential fixtures and internal backend conformance fixtures answer
+// different questions (does the public surface match the oracle? vs. does the internal
+// SSF engine choice match the oracle's bundled formatter?) and mixing their totals into
+// one number would hide which one a given count is actually about.
+export function summarizeByApiAndVerdict(results) {
+  const byApi = new Map();
+  for (const r of results) {
+    if (!byApi.has(r.api)) byApi.set(r.api, new Map());
+    const verdicts = byApi.get(r.api);
+    verdicts.set(r.verdict, (verdicts.get(r.verdict) || 0) + 1);
+  }
+  return byApi;
+}
+
+// Renders summarizeByApiAndVerdict()'s output as one line per API, e.g.:
+//   utils.sheet_to_json: MATCH=54 INTENTIONAL_SAFETY_DIVERGENCE=1 INTENTIONAL_SECURITY_DIVERGENCE=2 (total 57)
+// VERDICT_ORDER controls column order (matches VERDICTS' own priority ordering above);
+// verdicts with a zero count for a given api are omitted from that api's line.
+export function formatApiVerdictSummary(byApi) {
+  const lines = [];
+  for (const [api, verdicts] of byApi) {
+    const total = [...verdicts.values()].reduce((a, b) => a + b, 0);
+    const parts = VERDICTS.filter((v) => verdicts.has(v))
+      .map((v) => `${v}=${verdicts.get(v)}`)
+      .join(' ');
+    lines.push(`${api}: ${parts} (total ${total})`);
+  }
+  return lines.join('\n');
+}
+
 function deepEqual(a, b) {
   if (Object.is(a, b)) return true;
   if (typeof a !== typeof b) return false;
@@ -323,6 +363,31 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     2,
     'Phase 1A + 1B-2B: two safety divergences registered (ELIXCEE_NON_FINITE_INDEX, ELIXCEE_RANGE_TOO_LARGE)'
   );
+
+  // summarizeByApiAndVerdict / formatApiVerdictSummary: per-API verdict counts must never
+  // be hand-typed in a report — this is the exact bug the user caught in the Phase 1B-3
+  // report ("57/57 acceptable" hid that 3 of the 57 were registered divergences, not
+  // MATCH). A mixed-verdict api must show every verdict's own count, not a collapsed
+  // pass/fail ratio.
+  {
+    const sample = [
+      { api: 'utils.sheet_to_json', label: 'a', verdict: 'MATCH' },
+      { api: 'utils.sheet_to_json', label: 'b', verdict: 'MATCH' },
+      { api: 'utils.sheet_to_json', label: 'c', verdict: 'INTENTIONAL_SAFETY_DIVERGENCE' },
+      { api: 'utils.sheet_to_json', label: 'd', verdict: 'INTENTIONAL_SECURITY_DIVERGENCE' },
+      { api: 'utils.sheet_to_json', label: 'e', verdict: 'INTENTIONAL_SECURITY_DIVERGENCE' },
+      { api: 'utils.sheet_get_cell', label: 'f', verdict: 'MATCH' },
+    ];
+    const byApi = summarizeByApiAndVerdict(sample);
+    assert.deepEqual(
+      Object.fromEntries([...byApi.get('utils.sheet_to_json').entries()]),
+      { MATCH: 2, INTENTIONAL_SAFETY_DIVERGENCE: 1, INTENTIONAL_SECURITY_DIVERGENCE: 2 }
+    );
+    assert.deepEqual(Object.fromEntries([...byApi.get('utils.sheet_get_cell').entries()]), { MATCH: 1 });
+    const rendered = formatApiVerdictSummary(byApi);
+    assert.ok(rendered.includes('utils.sheet_to_json: MATCH=2 INTENTIONAL_SECURITY_DIVERGENCE=2 INTENTIONAL_SAFETY_DIVERGENCE=1 (total 5)'));
+    assert.ok(rendered.includes('utils.sheet_get_cell: MATCH=1 (total 1)'));
+  }
 
   console.log('classify.mjs self-check: all assertions passed');
 }

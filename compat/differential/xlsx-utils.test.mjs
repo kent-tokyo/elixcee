@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import XLSX from 'xlsx';
 import * as elixcee from '../../packages/xlsx/src/index.mjs';
 import { safeDecodeRange } from '../../packages/xlsx/src/internal/safe-decode-range.cjs';
-import { classify } from './classify.mjs';
+import { classify, summarizeByApiAndVerdict, formatApiVerdictSummary, VERDICTS } from './classify.mjs';
 import { normalize } from './normalize.mjs';
 
 const U = XLSX.utils;
@@ -1197,50 +1197,43 @@ const ACCEPTABLE = new Set([
   'INTENTIONAL_SECURITY_DIVERGENCE',
   'UNSUPPORTED',
 ]);
+// Per-API FAIL detection (BUG/ORACLE_AMBIGUITY/NONDETERMINISTIC/UNCLASSIFIED are never
+// acceptable) is tracked separately from the printed counts below — printed counts come
+// exclusively from classify.mjs's summarizeByApiAndVerdict/formatApiVerdictSummary, never
+// hand-computed here, so a report can never again collapse a mixed-verdict api (e.g. some
+// MATCH + some INTENTIONAL_SECURITY_DIVERGENCE) into a single "N/M acceptable" number that
+// looks like N/M MATCHes.
 const byApi = new Map();
-let totalMatch = 0;
-let totalSafetyDivergence = 0;
-let totalSecurityDivergence = 0;
-let totalUnsupported = 0;
-let totalUnclassified = 0;
-let totalBug = 0;
+const totals = new Map();
 for (const r of results) {
-  if (!byApi.has(r.api)) byApi.set(r.api, { total: 0, ok: 0, other: [], unsupported: [] });
+  if (!byApi.has(r.api)) byApi.set(r.api, { other: [], unsupported: [] });
   const bucket = byApi.get(r.api);
-  bucket.total += 1;
   if (r.verdict === 'UNSUPPORTED') {
-    // Acceptable, but NOT silently folded into `ok` unlabeled — UNSUPPORTED is gated by
-    // an api-wide registry key (classify.mjs), so a real bug elsewhere under the same
-    // api would otherwise hide behind this same bucket. Always printed by label below.
-    bucket.ok += 1;
+    // Not a failure, but still printed by label — UNSUPPORTED is gated by an api-wide
+    // registry key (classify.mjs), so a real bug elsewhere under the same api would
+    // otherwise hide behind this same bucket.
     bucket.unsupported.push(r.label);
-  } else if (ACCEPTABLE.has(r.verdict)) bucket.ok += 1;
-  else bucket.other.push({ label: r.label, verdict: r.verdict });
-  if (r.verdict === 'MATCH') totalMatch += 1;
-  else if (r.verdict === 'INTENTIONAL_SAFETY_DIVERGENCE') totalSafetyDivergence += 1;
-  else if (r.verdict === 'INTENTIONAL_SECURITY_DIVERGENCE') totalSecurityDivergence += 1;
-  else if (r.verdict === 'UNSUPPORTED') totalUnsupported += 1;
-  else if (r.verdict === 'UNCLASSIFIED') totalUnclassified += 1;
-  else if (r.verdict === 'BUG') totalBug += 1;
+  } else if (!ACCEPTABLE.has(r.verdict)) {
+    bucket.other.push({ label: r.label, verdict: r.verdict });
+  }
+  totals.set(r.verdict, (totals.get(r.verdict) || 0) + 1);
 }
 
-console.log('\n=== differential summary (Phase 1A + 1B-1) ===');
+const byApiVerdict = summarizeByApiAndVerdict(results);
+console.log('\n=== Public API differential summary (compat/differential/xlsx-utils.test.mjs) ===');
 let anyFailure = false;
 for (const [api, bucket] of byApi) {
   const status = bucket.other.length === 0 ? 'OK' : 'FAIL';
   if (bucket.other.length > 0) anyFailure = true;
-  console.log(`${status}  ${api}: ${bucket.ok}/${bucket.total} acceptable`);
+  console.log(`${status}  ${formatApiVerdictSummary(new Map([[api, byApiVerdict.get(api)]]))}`);
   for (const o of bucket.other) console.log(`      ${o.verdict}: ${o.label}`);
   for (const label of bucket.unsupported) console.log(`      UNSUPPORTED: ${label}`);
 }
 console.log(`\nsafe_decode_range: 7/7 self-check assertions passed (not oracle-covered — see note above)`);
-console.log('\n=== Totals ===');
-console.log(`normal fixtures (MATCH):            ${totalMatch}`);
-console.log(`intentional safety divergence:      ${totalSafetyDivergence}`);
-console.log(`intentional security divergence:    ${totalSecurityDivergence}`);
-console.log(`unsupported:                        ${totalUnsupported}`);
-console.log(`bug:                                ${totalBug}`);
-console.log(`unclassified:                       ${totalUnclassified}`);
+console.log('\n=== Totals (public API differential fixtures only — see ssf-format.test.mjs separately for internal SSF-backend conformance) ===');
+for (const v of VERDICTS) {
+  if (totals.has(v)) console.log(`${v}:`.padEnd(38) + totals.get(v));
+}
 
 if (anyFailure) {
   console.error('\ndifferential suite FAILED: at least one case is not an acceptable verdict.');
