@@ -26,10 +26,12 @@ XLSX.book_set_sheet_visibility(wb, 0, 1);
 XLSX.book_set_sheet_visibility(wb, 'Sheet1', 0);
 
 const ws2: WorkSheet = XLSX.sheet_add_aoa(ws, [[5, 6]], { origin: 'A3', dense: false });
+const ws3: WorkSheet = XLSX.json_to_sheet([{ a: 1, b: 'x' }, { a: 2, b: 'y' }]);
+const ws4: WorkSheet = XLSX.sheet_add_json(ws3, [{ a: 3, b: 'z' }], { origin: -1, skipHeader: true });
 
 const cell = { t: 'n' as const, v: 1234.5 };
 XLSX.cell_set_number_format(cell, 'General');
 const formatted: string = XLSX.format_cell(cell);
 const formatted2: string = XLSX.format_cell(cell, 99, { dateNF: 'm/d/yy' });
 
-console.log(decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, formatted, formatted2);
+console.log(decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, formatted, formatted2);

@@ -1,8 +1,8 @@
 {
   "name": "@elixcee/xlsx",
-  "version": "0.1.0-phase1a",
+  "version": "0.1.0-phase1b1",
   "private": true,
-  "description": "Drop-in replacement for xlsx (SheetJS) — Phase 1A: pure address/workbook utility API only, no file I/O yet. See ../../docs/xlsx-architecture.md.",
+  "description": "Drop-in replacement for xlsx (SheetJS) — Phase 1B-1: address/workbook utilities plus worksheet mutation (sheet_add_aoa/sheet_add_json) and a narrow number-format subset, no file I/O yet. See ../../docs/xlsx-architecture.md.",
   "license": "MIT",
   "type": "commonjs",
   "main": "./src/index.cjs",

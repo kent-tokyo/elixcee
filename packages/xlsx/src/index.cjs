@@ -1,8 +1,8 @@
 'use strict';
 
 // @elixcee/xlsx — Phase 1A pure utility API (address encode/decode, workbook shells),
-// extended in Phase 1B-1 with worksheet mutation (sheet_add_aoa) and a deliberately
-// narrow number-format subset (format_cell/cell_set_number_format).
+// extended in Phase 1B-1 with worksheet mutation (sheet_add_aoa/sheet_add_json) and a
+// deliberately narrow number-format subset (format_cell/cell_set_number_format).
 // No runtime dependency on the real `xlsx` package (see docs/xlsx-architecture.md's
 // "Non-negotiable" section) — the only `require` below is the package's own internal
 // safe-decode-range helper.
@@ -497,6 +497,111 @@ function aoaToSheet(data, opts) {
   return sheetAddAoa(null, data, opts);
 }
 
+// ---- sheet_add_json / json_to_sheet ----
+//
+// Independent port of the oracle's sheet_add_json(_ws, js, opts): header-row inference
+// from `Object.keys` of each row object (or `opts.header` if given — mutated in place by
+// design, matching the oracle exactly, not cloned), `opts.skipHeader`, origin (same
+// number/-1/string/object forms as sheet_add_aoa, but — confirmed against a live oracle
+// run — WITHOUT the "seed !ref to A1:A1" step sheet_add_aoa does; that asymmetry is a
+// real oracle quirk, reproduced as-is), and Date cells (serial `v` + `z:'m/d/yy'`, but —
+// also confirmed live — no `.w` is ever computed here, unlike sheet_add_aoa).
+//
+// Dense (`_ws` given as an array) is supported only as faithfully as the oracle supports
+// it: scalar values land correctly in the nested array via ws_get_cell_stub, but object-
+// typed JSON values AND the header row are both written as stray string-ref properties
+// on the array (`ws.A1 = ...`) rather than into the nested rows — confirmed live
+// (`sheet_add_json([], [{a:1}])` leaves `ws[0]` `null` and the header text only
+// reachable via `ws.A1`). `opts.dense` itself has no effect when `_ws` is null — also
+// confirmed live (json_to_sheet(data, {dense:true}) still returns a plain sparse
+// object). Reproduced exactly, not "fixed", per this project's fidelity-over-tidiness
+// rule for the real oracle's own quirks. See docs/compatibility-known-defects.md.
+function wsGetCellStub(ws, ref) {
+  if (Array.isArray(ws)) {
+    const RC = decodeCell(ref);
+    if (!ws[RC.r]) ws[RC.r] = [];
+    return ws[RC.r][RC.c] || (ws[RC.r][RC.c] = { t: 'z' });
+  }
+  return ws[ref] || (ws[ref] = { t: 'z' });
+}
+
+function sheetAddJson(_ws, js, opts) {
+  const o = opts || {};
+  const offset = +!o.skipHeader;
+  const ws = _ws || {};
+  let _R = 0;
+  let _C = 0;
+  if (ws && o.origin != null) {
+    if (typeof o.origin === 'number') _R = o.origin;
+    else {
+      const _origin = typeof o.origin === 'string' ? decodeCell(o.origin) : o.origin;
+      _R = _origin.r;
+      _C = _origin.c;
+    }
+  }
+  const range = { s: { c: 0, r: 0 }, e: { c: _C, r: _R + js.length - 1 + offset } };
+  if (ws['!ref']) {
+    const _range = safeDecodeRange(ws['!ref']);
+    range.e.c = Math.max(range.e.c, _range.e.c);
+    range.e.r = Math.max(range.e.r, _range.e.r);
+    if (_R === -1) {
+      _R = _range.e.r + 1;
+      range.e.r = _R + js.length - 1 + offset;
+    }
+  } else if (_R === -1) {
+    _R = 0;
+    range.e.r = js.length - 1 + offset;
+  }
+  const hdr = o.header || [];
+  let C = 0;
+  js.forEach((JS, R) => {
+    Object.keys(JS).forEach((k) => {
+      if ((C = hdr.indexOf(k)) === -1) hdr[(C = hdr.length)] = k;
+      let v = JS[k];
+      let t = 'z';
+      let z = '';
+      const ref = encodeCell({ c: _C + C, r: _R + R + offset });
+      const cell = wsGetCellStub(ws, ref);
+      if (v && typeof v === 'object' && !(v instanceof Date)) {
+        ws[ref] = v;
+      } else {
+        if (typeof v === 'number') t = 'n';
+        else if (typeof v === 'boolean') t = 'b';
+        else if (typeof v === 'string') t = 's';
+        else if (v instanceof Date) {
+          t = 'd';
+          if (!o.cellDates) {
+            t = 'n';
+            v = datenum(v);
+          }
+          z = o.dateNF || 'm/d/yy';
+        } else if (v === null && o.nullError) {
+          t = 'e';
+          v = 0;
+        }
+        cell.t = t;
+        cell.v = v;
+        delete cell.w;
+        delete cell.R;
+        if (z) cell.z = z;
+      }
+    });
+  });
+  range.e.c = Math.max(range.e.c, _C + hdr.length - 1);
+  const __R = encodeRow(_R);
+  if (offset) {
+    for (C = 0; C < hdr.length; ++C) {
+      ws[encodeCol(C + _C) + __R] = { t: 's', v: hdr[C] };
+    }
+  }
+  ws['!ref'] = encodeRange(range);
+  return ws;
+}
+
+function jsonToSheet(js, opts) {
+  return sheetAddJson(null, js, opts);
+}
+
 module.exports = {
   encode_col: encodeCol,
   decode_col: decodeCol,
@@ -512,6 +617,8 @@ module.exports = {
   book_set_sheet_visibility: bookSetSheetVisibility,
   aoa_to_sheet: aoaToSheet,
   sheet_add_aoa: sheetAddAoa,
+  json_to_sheet: jsonToSheet,
+  sheet_add_json: sheetAddJson,
   format_cell: formatCell,
   cell_set_number_format: cellSetNumberFormat,
 };

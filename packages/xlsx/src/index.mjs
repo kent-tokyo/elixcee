@@ -17,6 +17,8 @@ export {
   book_set_sheet_visibility,
   aoa_to_sheet,
   sheet_add_aoa,
+  json_to_sheet,
+  sheet_add_json,
   format_cell,
   cell_set_number_format,
 } from './index.cjs';
