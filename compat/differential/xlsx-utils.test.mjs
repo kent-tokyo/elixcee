@@ -947,6 +947,8 @@ sheetAddDomCase('append onto an existing sheet at origin:-1', (lib) => lib.aoa_t
 sheetAddDomCase('add onto an empty {} target', () => ({}), '<table><tr><td>a</td><td>b</td></tr></table>');
 sheetAddDomCase('dense target', () => [], '<table><tr><td>a</td></tr></table>');
 sheetAddDomCase('return value is the same ws object (identity, checked separately below)', () => ({}), '<table><tr><td>x</td></tr></table>');
+sheetAddDomCase('!ref extends to cover a pre-existing sheet range', (lib) => lib.aoa_to_sheet([['a', 'b'], ['c', 'd']]), '<table><tr><td>e</td></tr></table>', { origin: 'D4' });
+sheetAddDomCase('!merges concatenates onto a sheet that already has merges', (lib) => { const ws = lib.aoa_to_sheet([['x', 'y'], ['z', 'w']]); ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }]; return ws; }, '<table><tr><td colspan="2">merged</td></tr></table>', { origin: 'A3' });
 {
   const ws = {};
   const ret = elixcee.sheet_add_dom(ws, domTable('<table><tr><td>x</td></tr></table>'));
