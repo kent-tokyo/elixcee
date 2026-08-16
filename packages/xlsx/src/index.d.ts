@@ -118,6 +118,20 @@ export interface Sheet2JSONOpts {
   dateNF?: string | number;
 }
 
+// Field name overlaps with Sheet2JSONOpts.header, but the meaning is unrelated (matches
+// the oracle's own two separate interfaces): here header/footer are the HTML document
+// prefix/suffix strings (default HTML_BEGIN/HTML_END), not a JSON key-derivation mode.
+export interface Sheet2HTMLOpts {
+  /** TABLE element id attribute */
+  id?: string;
+  /** Add contenteditable to every cell */
+  editable?: boolean;
+  /** Header HTML */
+  header?: string;
+  /** Footer HTML */
+  footer?: string;
+}
+
 export function encode_col(col: number): string;
 export function decode_col(colstr: string): number;
 export function encode_row(row: number): string;
@@ -173,6 +187,8 @@ export function sheet_to_json(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[
 export function sheet_to_row_object_array<T>(worksheet: WorkSheet, opts?: Sheet2JSONOpts): T[];
 export function sheet_to_row_object_array(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[][];
 export function sheet_to_row_object_array(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[];
+
+export function sheet_to_html(worksheet: WorkSheet, options?: Sheet2HTMLOpts): string;
 
 export function sheet_to_formulae(worksheet: WorkSheet): string[];
 export function sheet_to_csv(worksheet: WorkSheet, options?: Sheet2CSVOpts): string;

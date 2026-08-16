@@ -828,6 +828,115 @@ function sheetToTxt(sheet, opts) {
   return String.fromCharCode(255) + String.fromCharCode(254) + utf16leEncode(s);
 }
 
+// ---- sheet_to_html ----
+//
+// Independent port of the oracle's sheet_to_html/make_html_row/make_html_preamble.
+// opts.header/opts.footer here are the HTML document prefix/suffix strings (default
+// HTML_BEGIN/HTML_END) — an entirely different meaning from sheet_to_json's opts.header
+// (JSON key-derivation mode); the two option interfaces are NOT related despite sharing a
+// field name, matching the oracle's own separate Sheet2HTMLOpts/Sheet2JSONOpts. Merged
+// cells: a non-top-left cell inside a merge is skipped entirely (continue), the top-left
+// gets rowspan/colspan. checkRangeSize (see ./internal/range-guard.cjs) guards the same
+// !ref-rectangle walk-cost DoS already measured for sheet_to_formulae/sheet_to_csv/
+// sheet_to_json — reuses that measurement basis, no separate one needed. Uses the PUBLIC
+// decodeRange (matching the oracle's own call site — sheet_to_html calls decode_range,
+// not safe_decode_range), so a malformed !ref throws here exactly as it does on the
+// oracle, unlike sheet_to_csv/sheet_to_json which use the lenient internal parser.
+// o.dense is set but deliberately never deleted (matches the oracle exactly — confirmed
+// live sheet_to_html leaks `dense` onto a caller's own opts object, unlike sheet_to_csv
+// which does `delete o.dense`) — an opts-mutation-fidelity quirk, not a bug to "fix".
+//
+const HTML_ENTITY_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&apos;', '"': '&quot;' };
+const HTML_DANGEROUS_CHARS_RE = /[&<>'"]/g;
+const HTML_CONTROL_CHARS_RE = /[\u0000-\u001f]/g;
+
+function hexEntity(ch) {
+  return '&#x' + ('000' + ch.charCodeAt(0).toString(16)).slice(-4) + ';';
+}
+
+// Matches the oracle's own escapehtml exactly (text-content context: '\n' -> '<br/>').
+function escapeHtmlText(text) {
+  return String(text).replace(HTML_DANGEROUS_CHARS_RE, (ch) => HTML_ENTITY_MAP[ch]).replace(/\n/g, '<br/>').replace(HTML_CONTROL_CHARS_RE, hexEntity);
+}
+
+const HTML_TAG_PRESERVE_WS_RE = /(^\s|\s$|\n)/;
+
+// Matches the oracle's own writextag exactly -- attribute VALUES are NOT escaped here
+// (matching the oracle's own wxt_helper, which builds `k + '="' + h[k] + '"'` via raw
+// concatenation with no escaping at all). This is a known, live-confirmed defect in the
+// oracle, not a design choice -- see the fix(xlsx) commit that follows this one.
+function buildHtmlTag(tag, inner, attrs) {
+  let attrStr = '';
+  if (attrs) {
+    for (const k of Object.keys(attrs)) attrStr += ' ' + k + '="' + attrs[k] + '"';
+  }
+  if (inner != null) {
+    return '<' + tag + attrStr + (HTML_TAG_PRESERVE_WS_RE.test(inner) ? ' xml:space="preserve"' : '') + '>' + inner + '</' + tag + '>';
+  }
+  return '<' + tag + attrStr + '/>';
+}
+
+function makeHtmlRow(sheet, r, R, o) {
+  const M = sheet['!merges'] || [];
+  const oo = [];
+  for (let C = r.s.c; C <= r.e.c; ++C) {
+    let RS = 0;
+    let CS = 0;
+    for (let j = 0; j < M.length; ++j) {
+      if (M[j].s.r > R || M[j].s.c > C) continue;
+      if (M[j].e.r < R || M[j].e.c < C) continue;
+      if (M[j].s.r < R || M[j].s.c < C) {
+        RS = -1;
+        break;
+      }
+      RS = M[j].e.r - M[j].s.r + 1;
+      CS = M[j].e.c - M[j].s.c + 1;
+      break;
+    }
+    if (RS < 0) continue;
+    const coord = encodeCell({ r: R, c: C });
+    const cell = o.dense ? (sheet[R] || [])[C] : sheet[coord];
+    let w = (cell && cell.v != null && (cell.h || escapeHtmlText(cell.w || (formatCell(cell), cell.w) || ''))) || '';
+    const sp = {};
+    if (RS > 1) sp.rowspan = RS;
+    if (CS > 1) sp.colspan = CS;
+    if (o.editable) {
+      w = '<span contenteditable="true">' + w + '</span>';
+    } else if (cell) {
+      sp['data-t'] = cell.t || 'z';
+      if (cell.v != null) sp['data-v'] = cell.v;
+      if (cell.z != null) sp['data-z'] = cell.z;
+      if (cell.l && (cell.l.Target || '#').charAt(0) !== '#') {
+        w = '<a href="' + cell.l.Target + '">' + w + '</a>';
+      }
+    }
+    sp.id = (o.id || 'sjs') + '-' + coord;
+    oo.push(buildHtmlTag('td', w, sp));
+  }
+  return '<tr>' + oo.join('') + '</tr>';
+}
+
+function makeHtmlPreamble(o) {
+  return '<table' + (o && o.id ? ' id="' + o.id + '"' : '') + '>';
+}
+
+const HTML_BEGIN = '<html><head><meta charset="utf-8"/><title>SheetJS Table Export</title></head><body>';
+const HTML_END = '</body></html>';
+
+function sheetToHtml(sheet, opts) {
+  const o = opts || {};
+  const header = o.header != null ? o.header : HTML_BEGIN;
+  const footer = o.footer != null ? o.footer : HTML_END;
+  const out = [header];
+  const r = decodeRange(sheet['!ref']);
+  checkRangeSize(r);
+  o.dense = Array.isArray(sheet);
+  out.push(makeHtmlPreamble(o));
+  for (let R = r.s.r; R <= r.e.r; ++R) out.push(makeHtmlRow(sheet, r, R, o));
+  out.push('</table>' + footer);
+  return out.join('');
+}
+
 // ---- cell_set_hyperlink / cell_set_internal_link ----
 //
 // Independent port. A falsy target (including "", 0, false, NaN, null, undefined)
@@ -973,6 +1082,7 @@ module.exports = {
   sheet_to_csv: sheetToCsv,
   sheet_to_txt: sheetToTxt,
   sheet_to_json: sheetToJson,
+  sheet_to_html: sheetToHtml,
   sheet_to_formulae: sheetToFormulae,
   sheet_to_row_object_array: sheetToJson,
   sheet_get_cell: sheetGetCell,

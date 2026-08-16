@@ -1,8 +1,8 @@
 'use strict';
 
-// sheet_to_formulae, sheet_to_csv, sheet_to_txt (which delegates to sheet_to_csv), and
-// sheet_to_json all iterate every (row, col) pair inside a worksheet's `!ref` rectangle,
-// regardless of how sparse the actual data is. Confirmed live against the real oracle (xlsx@0.18.5,
+// sheet_to_formulae, sheet_to_csv, sheet_to_txt (which delegates to sheet_to_csv),
+// sheet_to_json, and sheet_to_html all iterate every (row, col) pair inside a
+// worksheet's `!ref` rectangle, regardless of how sparse the actual data is. Confirmed live against the real oracle (xlsx@0.18.5,
 // timeout-guarded subprocess, not assumed): a crafted `!ref` spanning Excel's actual
 // grid maximum ('A1:XFD1048576', ~17.18 billion cells) does not return within 25s on
 // sheet_to_csv; even much smaller full-rectangle spans are already slow on the oracle
