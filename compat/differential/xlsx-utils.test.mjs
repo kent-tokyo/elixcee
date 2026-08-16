@@ -530,6 +530,282 @@ formatCellCase(
 
 runCase('utils.cell_set_number_format', (c, f) => U.cell_set_number_format(c, f), (c, f) => elixcee.cell_set_number_format(c, f), [{ t: 'n', v: 1 }, '0.00'], 'sets cell.z and returns the cell');
 
+// ---- sheet_to_formulae (Phase 1B-2A) ----
+// Branch order confirmed against a live oracle run (see packages/xlsx/src/index.cjs's
+// sheetToFormulae doc comment) rather than assumed from reading the source alone.
+function formulaeCase(label, wsFactory) {
+  runCase('utils.sheet_to_formulae', () => U.sheet_to_formulae(wsFactory()), () => elixcee.sheet_to_formulae(wsFactory()), [], label);
+}
+
+formulaeCase('sparse worksheet, mixed types', () => ({
+  A1: { t: 'n', v: 1 },
+  B1: { t: 's', v: 'hi' },
+  A2: { t: 'b', v: true },
+  B2: { t: 'b', v: false },
+  '!ref': 'A1:B2',
+}));
+formulaeCase('dense worksheet', () => {
+  const ws = [];
+  ws[0] = [{ t: 'n', v: 1 }, { t: 's', v: 'x' }];
+  ws['!ref'] = 'A1:B1';
+  return ws;
+});
+formulaeCase('!ref absent -> []', () => ({}));
+formulaeCase('sheet is null -> []', () => null);
+formulaeCase('string cell', () => ({ A1: { t: 's', v: 'plain' }, '!ref': 'A1:A1' }));
+formulaeCase('number cell', () => ({ A1: { t: 'n', v: 42 }, '!ref': 'A1:A1' }));
+formulaeCase('number cell v=0', () => ({ A1: { t: 'n', v: 0 }, '!ref': 'A1:A1' }));
+formulaeCase('boolean true', () => ({ A1: { t: 'b', v: true }, '!ref': 'A1:A1' }));
+formulaeCase('boolean false', () => ({ A1: { t: 'b', v: false }, '!ref': 'A1:A1' }));
+formulaeCase('Date cell, no w/f (String(v) fallback, not ISO/serial)', () => ({ A1: { t: 'd', v: new Date(2020, 0, 1) }, '!ref': 'A1:A1' }));
+formulaeCase('Date cell with w (w wins over the fallback)', () => ({ A1: { t: 'd', v: new Date(2020, 0, 1), w: '1/1/20' }, '!ref': 'A1:A1' }));
+formulaeCase('error cell, no w', () => ({ A1: { t: 'e', v: 7 }, '!ref': 'A1:A1' }));
+formulaeCase('error cell with w', () => ({ A1: { t: 'e', v: 7, w: '#DIV/0!' }, '!ref': 'A1:A1' }));
+formulaeCase('formula with cached value (formula text wins, not the cached v)', () => ({ A1: { t: 'n', v: 5, f: '1+4' }, '!ref': 'A1:A1' }));
+formulaeCase('formula only, no cached v', () => ({ A1: { t: 'n', f: '1+4' }, '!ref': 'A1:A1' }));
+formulaeCase('array formula, multi-cell (only top-left contributes, keyed by the range)', () => ({
+  A1: { t: 'n', F: 'A1:B2', f: 'SUM(1,2)' },
+  B1: { t: 'n', F: 'A1:B2' },
+  A2: { t: 'n', F: 'A1:B2' },
+  B2: { t: 'n', F: 'A1:B2' },
+  '!ref': 'A1:B2',
+}));
+formulaeCase('array formula, single cell (F has no colon, gets doubled into "A1:A1")', () => ({
+  A1: { t: 'n', F: 'A1', f: 'RAND()' },
+  '!ref': 'A1:A1',
+}));
+formulaeCase('F present, f falsy on the "top-left" -> skipped entirely (shared-formula-like non-contributor)', () => ({
+  A1: { t: 'n', F: 'A1:B1', f: '' },
+  B1: { t: 'n', F: 'A1:B1' },
+  '!ref': 'A1:B1',
+}));
+formulaeCase('empty-ish cell: t set, no v/f/w -> skipped', () => ({ A1: { t: 's' }, '!ref': 'A1:A1' }));
+formulaeCase('stub cell t="z" -> skipped', () => ({ A1: { t: 'z' }, '!ref': 'A1:A1' }));
+formulaeCase('w present, v absent (w still wins, string cell)', () => ({ A1: { t: 's', w: 'rendered' }, '!ref': 'A1:A1' }));
+formulaeCase('invalid cell type with v -> String(v) fallback', () => ({ A1: { t: 'bogus', v: 'raw' }, '!ref': 'A1:A1' }));
+formulaeCase('invalid cell type, no v/f/w -> skipped', () => ({ A1: { t: 'bogus' }, '!ref': 'A1:A1' }));
+formulaeCase('non-ASCII string content', () => ({ A1: { t: 's', v: 'こんにちは' }, '!ref': 'A1:A1' }));
+formulaeCase('reversed !ref -> loop body never runs -> []', () => ({ A1: { t: 'n', v: 1 }, B2: { t: 'n', v: 2 }, '!ref': 'B2:A1' }));
+formulaeCase('sparse array hole (dense, missing row)', () => {
+  const ws = [];
+  ws[0] = [{ t: 'n', v: 1 }];
+  ws[2] = [{ t: 'n', v: 3 }];
+  ws['!ref'] = 'A1:A3';
+  return ws;
+});
+formulaeCase('sparse object hole (missing cell key entirely)', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:B1' }));
+formulaeCase('column boundary (single-column range)', () => ({ C1: { t: 'n', v: 3 }, '!ref': 'C1:C1' }));
+
+// ---- cell_set_hyperlink (Phase 1B-2A) ----
+// Each fixture captures both the mutated cell and a boolean for return-value identity
+// (ret === cell) — comparing the boolean, not object identity itself, since identity
+// doesn't survive normalize()'s structural comparison, but a boolean does.
+function hyperlinkCase(label, cellFactory, target, tooltip) {
+  runCase(
+    'utils.cell_set_hyperlink',
+    () => { const cell = cellFactory(); const ret = U.cell_set_hyperlink(cell, target, tooltip); return { cell, identity: ret === cell }; },
+    () => { const cell = cellFactory(); const ret = elixcee.cell_set_hyperlink(cell, target, tooltip); return { cell, identity: ret === cell }; },
+    [],
+    label
+  );
+}
+
+hyperlinkCase('external URL', () => ({}), 'https://example.com/path');
+hyperlinkCase('mailto:', () => ({}), 'mailto:someone@example.com');
+hyperlinkCase('file URL', () => ({}), 'file:///C:/Users/test/doc.xlsx');
+hyperlinkCase('relative URL', () => ({}), '../sibling/file.xlsx');
+hyperlinkCase('fragment', () => ({}), '#Sheet2!A1');
+hyperlinkCase('tooltip present', () => ({}), 'https://x.com', 'a tooltip');
+hyperlinkCase('tooltip absent', () => ({}), 'https://x.com');
+hyperlinkCase('tooltip empty string (falsy, omitted)', () => ({}), 'https://x.com', '');
+hyperlinkCase('empty string target -> deletes any .l', () => ({ l: { Target: 'old' } }), '');
+hyperlinkCase('null target -> deletes any .l', () => ({ l: { Target: 'old' } }), null);
+hyperlinkCase('undefined target -> deletes any .l', () => ({ l: { Target: 'old' } }), undefined);
+hyperlinkCase('0 target (falsy, non-nullish) -> deletes', () => ({ l: { Target: 'old' } }), 0);
+hyperlinkCase('overwrite existing link', () => ({ l: { Target: '#Old!A1', Tooltip: 'old tip' } }), 'https://new.example.com', 'new tip');
+hyperlinkCase('existing cell object with other fields preserved', () => ({ t: 's', v: 'label', z: '@' }), 'https://x.com');
+hyperlinkCase('empty object cell', () => ({}), 'https://x.com');
+hyperlinkCase('__proto__ as target (stored as a value, not a key)', () => ({}), '__proto__');
+hyperlinkCase('constructor as target', () => ({}), 'constructor');
+hyperlinkCase('non-ASCII URL', () => ({}), 'https://例え.jp/ページ');
+hyperlinkCase('very long URL', () => ({}), 'https://example.com/' + 'a'.repeat(5000));
+
+// ---- cell_set_internal_link (Phase 1B-2A) ----
+// Delegates to cell_set_hyperlink with "#"+range — internal representation is the same
+// { l: { Target, Tooltip? } } shape, just with the target string always "#"-prefixed;
+// verified this matches cell_set_hyperlink's own shape exactly (no separate encoding).
+function internalLinkCase(label, cellFactory, range, tooltip) {
+  runCase(
+    'utils.cell_set_internal_link',
+    () => { const cell = cellFactory(); const ret = U.cell_set_internal_link(cell, range, tooltip); return { cell, identity: ret === cell }; },
+    () => { const cell = cellFactory(); const ret = elixcee.cell_set_internal_link(cell, range, tooltip); return { cell, identity: ret === cell }; },
+    [],
+    label
+  );
+}
+
+internalLinkCase('Sheet1!A1', () => ({}), 'Sheet1!A1');
+internalLinkCase('#Sheet1!A1 (double-hash — range is used verbatim)', () => ({}), '#Sheet1!A1');
+internalLinkCase('sheet name with spaces', () => ({}), 'Sheet 1!A1');
+internalLinkCase("sheet name needing quotes ('Sheet 1'!A1)", () => ({}), "'Sheet 1'!A1");
+internalLinkCase('sheet name with apostrophe', () => ({}), "O'Brien!A1");
+internalLinkCase('named range (no sheet qualifier)', () => ({}), 'MyNamedRange');
+internalLinkCase('fragment only (bare cell ref)', () => ({}), 'A1');
+internalLinkCase('empty string range -> "#" target (truthy, creates a link)', () => ({}), '');
+internalLinkCase('null range -> "#null" target', () => ({}), null);
+internalLinkCase('undefined range -> "#undefined" target', () => ({}), undefined);
+internalLinkCase('overwrite existing link', () => ({ l: { Target: '#Old!A1', Tooltip: 'old' } }), 'Sheet2!B2', 'new tip');
+
+// ---- cell_add_comment (Phase 1B-2A) ----
+// cell_add_comment returns undefined (no `return` in the oracle source) — unlike
+// cell_set_hyperlink/cell_set_internal_link, which return the cell. Captured as a
+// boolean (retIsUndefined) alongside the mutated cell, same reasoning as the identity
+// checks above.
+function commentCase(label, cellFactory, text, author) {
+  runCase(
+    'utils.cell_add_comment',
+    () => { const cell = cellFactory(); const ret = U.cell_add_comment(cell, text, author); return { cell, retIsUndefined: ret === undefined }; },
+    () => { const cell = cellFactory(); const ret = elixcee.cell_add_comment(cell, text, author); return { cell, retIsUndefined: ret === undefined }; },
+    [],
+    label
+  );
+}
+
+commentCase('text only, author omitted -> defaults to "SheetJS"', () => ({}), 'hello');
+commentCase('author present', () => ({}), 'hello', 'Alice');
+commentCase('author empty string (falsy, defaults to "SheetJS")', () => ({}), 'hello', '');
+commentCase('non-ASCII text', () => ({}), 'こんにちは、世界');
+commentCase('text with newlines', () => ({}), 'line1\nline2\r\nline3');
+commentCase('empty text (not defaulted, unlike author)', () => ({}), '');
+commentCase('null text (stored verbatim, not defaulted)', () => ({}), null);
+commentCase('undefined text (stored verbatim, not defaulted)', () => ({}), undefined);
+commentCase('long text', () => ({}), 'x'.repeat(5000));
+commentCase('__proto__ as author (stored as a value, not a key)', () => ({}), 'hi', '__proto__');
+commentCase('__proto__ as text', () => ({}), '__proto__');
+commentCase('empty object cell', () => ({}), 'hi');
+// Multiple comments: two independent calls on the same cell append, not replace.
+runCase(
+  'utils.cell_add_comment',
+  () => { const cell = {}; U.cell_add_comment(cell, 'first', 'A'); U.cell_add_comment(cell, 'second', 'B'); return cell; },
+  () => { const cell = {}; elixcee.cell_add_comment(cell, 'first', 'A'); elixcee.cell_add_comment(cell, 'second', 'B'); return cell; },
+  [],
+  'multiple comments append to the same .c array'
+);
+// Existing comment array (pre-populated .c, e.g. from a parsed file) is appended to.
+runCase(
+  'utils.cell_add_comment',
+  () => { const cell = { c: [{ t: 'existing', a: 'Prior' }] }; U.cell_add_comment(cell, 'new', 'New'); return cell; },
+  () => { const cell = { c: [{ t: 'existing', a: 'Prior' }] }; elixcee.cell_add_comment(cell, 'new', 'New'); return cell; },
+  [],
+  'pre-existing .c comment array is appended to, not replaced'
+);
+// Comment object key order — not captured by classify()'s order-insensitive deepEqual,
+// so checked with a direct assertion (same pattern as Phase 1A's safe_decode_range
+// self-check).
+{
+  const oracleCell = {};
+  U.cell_add_comment(oracleCell, 'txt', 'auth');
+  const elixceeCell = {};
+  elixcee.cell_add_comment(elixceeCell, 'txt', 'auth');
+  assert.deepEqual(
+    Object.keys(oracleCell.c[0]),
+    Object.keys(elixceeCell.c[0]),
+    'cell_add_comment: pushed comment object key order must match the oracle (t, then a)'
+  );
+  assert.deepEqual(Object.keys(oracleCell.c[0]), ['t', 'a'], 'sanity: the oracle itself pushes {t, a} in that order');
+}
+
+// ---- sheet_set_array_formula (Phase 1B-2A) ----
+// Each fixture captures both the resulting worksheet and a boolean for return-value
+// identity (ret === ws).
+function arrayFormulaCase(label, wsFactory, range, formula, dynamic) {
+  runCase(
+    'utils.sheet_set_array_formula',
+    () => { const ws = wsFactory(); const ret = U.sheet_set_array_formula(ws, range, formula, dynamic); return { ws, identity: ret === ws }; },
+    () => { const ws = wsFactory(); const ret = elixcee.sheet_set_array_formula(ws, range, formula, dynamic); return { ws, identity: ret === ws }; },
+    [],
+    label
+  );
+}
+
+arrayFormulaCase('"A1:B2" string range', () => ({}), 'A1:B2', 'SUM(A1:B2)');
+arrayFormulaCase('range object', () => ({}), { s: { r: 0, c: 0 }, e: { r: 1, c: 1 } }, 'SUM(A1:B2)');
+arrayFormulaCase(
+  'single cell: string "A1:A1" kept verbatim vs object range collapsed to "A1" by encode_range',
+  () => ({}),
+  'A1:A1',
+  'X'
+);
+arrayFormulaCase('single cell: object range (collapses .F to "A1", no colon)', () => ({}), { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }, 'X');
+arrayFormulaCase('multiple cells (3x1)', () => ({}), 'A1:C1', 'X');
+arrayFormulaCase('reversed range (s>e after safe_decode_range) -> loop never runs, ws unchanged', () => ({}), 'B2:A1', 'X');
+arrayFormulaCase(
+  'existing cell: other fields (e.g. .z) survive the mutation',
+  () => ({ A1: { t: 's', v: 'old', z: '@' } }),
+  'A1:A1',
+  'NEW'
+);
+arrayFormulaCase(
+  'existing formula: overwritten by the new one',
+  () => ({ A1: { t: 'n', v: 1, f: 'OLD()' } }),
+  'A1:A1',
+  'NEW()'
+);
+arrayFormulaCase('dense worksheet target', () => { const ws = []; ws[0] = [{ t: 's', v: 'x' }]; return ws; }, 'A1:B2', 'D');
+arrayFormulaCase('sparse worksheet target', () => ({}), 'A1:B2', 'S');
+arrayFormulaCase('!ref absent -> stays absent (never set by this function)', () => ({}), 'A1:A1', 'X');
+arrayFormulaCase(
+  '!ref present -> stays exactly as-is, NOT extended even when the range goes past it',
+  () => { const ws = { A1: { t: 'n', v: 1 }, '!ref': 'A1:A1' }; return ws; },
+  'D5:E6',
+  'X'
+);
+arrayFormulaCase('dynamic:true -> .D=true on the top-left cell only', () => ({}), 'A1:B1', 'X', true);
+arrayFormulaCase('dynamic:false -> no .D key at all (not set to false)', () => ({}), 'A1:A1', 'X', false);
+arrayFormulaCase('dynamic omitted -> no .D key', () => ({}), 'A1:A1', 'X');
+arrayFormulaCase('formula with leading =', () => ({}), 'A1:A1', '=SUM(1,2)');
+arrayFormulaCase('formula without leading =', () => ({}), 'A1:A1', 'SUM(1,2)');
+arrayFormulaCase('empty formula string', () => ({}), 'A1:A1', '');
+arrayFormulaCase('null formula (.f set to null, not omitted)', () => ({}), 'A1:A1', null);
+arrayFormulaCase('undefined formula (.f key present with value undefined, not omitted)', () => ({}), 'A1:A1', undefined);
+arrayFormulaCase('invalid range string (no colon, garbage) -> safe_decode_range degrades, does not throw', () => ({}), 'garbage', 'X');
+runCase(
+  'utils.sheet_set_array_formula',
+  () => { try { U.sheet_set_array_formula({}, null, 'X'); return { threw: false }; } catch (e) { return { threw: true, ctor: e.constructor.name }; } },
+  () => { try { elixcee.sheet_set_array_formula({}, null, 'X'); return { threw: false }; } catch (e) { return { threw: true, ctor: e.constructor.name }; } },
+  [],
+  'null range -> native TypeError on both sides (no defensive guard added)'
+);
+runCase(
+  'utils.sheet_set_array_formula',
+  () => { try { U.sheet_set_array_formula({}, undefined, 'X'); return { threw: false }; } catch (e) { return { threw: true, ctor: e.constructor.name }; } },
+  () => { try { elixcee.sheet_set_array_formula({}, undefined, 'X'); return { threw: false }; } catch (e) { return { threw: true, ctor: e.constructor.name }; } },
+  [],
+  'undefined range -> native TypeError on both sides (no defensive guard added)'
+);
+
+// ---- Prototype pollution / prototype corruption probes across Phase 1B-2A APIs ----
+// None of the four cell-metadata functions use a caller-supplied string as an object
+// key (confirmed by reading the ported algorithms: hyperlink targets/tooltips and
+// comment text/author are always VALUES; sheet_set_array_formula's cell keys always
+// come from encode_cell's well-formed output) — these probes exist to have that
+// confirmed on record empirically, not just by code reading, matching this project's
+// established practice (see book_append_sheet's Phase 1A fix for the one case where
+// this assumption was actually wrong).
+for (const poisoned of ['__proto__', 'constructor', 'prototype', 'toString', 'hasOwnProperty']) {
+  hyperlinkCase(`hyperlink target="${poisoned}"`, () => ({}), poisoned);
+  commentCase(`comment author="${poisoned}"`, () => ({}), 'txt', poisoned);
+  commentCase(`comment text="${poisoned}"`, () => ({}), poisoned);
+}
+{
+  const before = Object.getPrototypeOf({});
+  assert.equal(before, Object.prototype, 'sanity: Object.prototype unpolluted before the probes above');
+  // Re-check after every poisoned-key fixture ran above — must still be Object.prototype,
+  // and a fresh {} must still behave like a normal empty object.
+  assert.equal(Object.getPrototypeOf({}), Object.prototype, 'Phase 1B-2A probes must not have polluted the global Object.prototype');
+  assert.equal(({}).polluted, undefined, 'Phase 1B-2A probes must not have added a "polluted" property reachable from a fresh {}');
+}
+
 // ---- safe_decode_range: deliberately NOT public ----
 // Confirmed absent from the real oracle's public API — not just `typeof undefined`, but
 // `hasOwnProperty` false, ruling out an inherited/prototype-chain false negative:
