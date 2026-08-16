@@ -19,9 +19,12 @@ each one relates to the oracle's own types — the classification a completion r
   declaration for at all yet.
 - **INCOMPATIBLE** — elixcee's declaration rejects something the oracle's own types would
   accept, or accepts something the oracle's types reject in a way that changes which
-  real-world consumer code compiles. Not currently used by any entry below — would be a
-  bug if it ever were, since it violates the "never tighten types" rule Phase 1B-3
-  established.
+  real-world consumer code compiles. Ordinarily a bug, since it violates the "never tighten
+  types" rule Phase 1B-3 established — with one deliberate exception below (`consts`),
+  where mirroring the oracle's own (buggy) types would make elixcee's types misdescribe
+  elixcee's own runtime, which is worse than the gap it would close. Every other entry in
+  this table is EXACT or SAFE_EXTENSION; `consts` is the only INCOMPATIBLE one, and it's
+  intentional, not an oversight.
 
 A completion report's "TypeScript surface" count (e.g. "N EXACT, M SAFE_EXTENSION, K
 MISSING") must be built by walking this table, never estimated.
