@@ -59,20 +59,47 @@ export const VERDICTS = /** @type {const} */ ([
  *   it.
  */
 
-// Registered "known-unimplemented" oracle APIs, keyed by dot-path (e.g. "utils.encode_col").
-// Adding an entry here is the ONLY way a divergence classifies as UNSUPPORTED. Empty by
-// default — populate only when an API is genuinely not implemented yet, never as a
-// catch-all for "the output doesn't match and I don't know why."
+// Registered "known-unimplemented" cases, keyed by dot-path API (e.g. "utils.encode_col")
+// -> Map<caseId, reason>. A divergence classifies UNSUPPORTED only when BOTH the api AND
+// the specific caseId are registered — registering an api alone (a blanket "anything
+// under this api is fine") is deliberately impossible with this shape. caseId must
+// uniquely identify the exact input combination (option value + input type), not just
+// describe the API in general, so an unrelated bug under the same api cannot hide behind
+// an already-registered case. Adding an entry here is the ONLY way a divergence
+// classifies as UNSUPPORTED — never a catch-all for "the output doesn't match and I
+// don't know why."
 export const UNSUPPORTED_ALLOWLIST = new Map([
   [
     'utils.format_cell',
-    'Phase 1B-1 deliberately implements only a narrow SSF number-format subset ' +
-      "('General'/numFmtId 0 and 'm/d/yy'/numFmtId 14 — the only two formats " +
-      'sheet_add_aoa/sheet_add_json actually need, confirmed by reading the oracle ' +
-      'source) rather than the ~900-line SSF_format/eval_fmt engine (the standalone ' +
-      '"ssf" npm package, one of the 7 Apache-2.0 deps packages/xlsx deliberately does ' +
-      'not take). Any other format code/id throws ELIXCEE_NUMFMT_UNSUPPORTED instead of ' +
-      'guessing a rendering. See packages/xlsx/src/index.cjs\'s ssfFormat.',
+    new Map([
+      [
+        'z="0.00" (numeric cell, non-General/non-m/d/yy format code)',
+        'Phase 1B-1 deliberately implements only a narrow SSF number-format subset ' +
+          "('General'/numFmtId 0 and 'm/d/yy'/numFmtId 14 — the only two formats " +
+          'sheet_add_aoa actually needs, confirmed by reading the oracle source) rather ' +
+          'than the ~900-line SSF_format/eval_fmt engine (the standalone "ssf" npm ' +
+          'package, one of the 7 Apache-2.0 deps packages/xlsx deliberately does not ' +
+          'take). Throws ELIXCEE_NUMFMT_UNSUPPORTED instead of guessing a rendering. ' +
+          "See packages/xlsx/src/index.cjs's ssfFormat.",
+      ],
+    ]),
+  ],
+  [
+    'utils.sheet_add_aoa',
+    new Map([
+      [
+        'dateNF="yyyy-mm-dd" (Date value, custom format other than "m/d/yy")',
+        "sheet_add_aoa's Date branch computes cell.w via ssfFormat immediately " +
+          "(confirmed live: the real oracle renders \"2026-01-05\" for this exact " +
+          'input) — unlike json_to_sheet/sheet_add_json, which only ever set cell.z ' +
+          'and never call the format engine at all, so a custom dateNF is harmless ' +
+          'there and needs no registration. sheet_add_aoa throws ' +
+          'ELIXCEE_NUMFMT_UNSUPPORTED for any dateNF other than the literal "m/d/yy" ' +
+          '(the one format this narrow SSF subset renders), for both cellDates:true ' +
+          'and the default numeric-serial mode. See packages/xlsx/src/index.cjs\'s ' +
+          'sheetAddAoa Date branch.',
+      ],
+    ]),
   ],
 ]);
 
@@ -108,7 +135,13 @@ export const SAFETY_DIVERGENCE_REGISTRY = new Map([
 /**
  * @param {object} input
  * @param {string} [input.api] dot-path of the oracle API under test (e.g. "utils.encode_col")
- *   — required for a divergence to ever resolve to UNSUPPORTED.
+ *   — required (together with unsupportedCaseId) for a divergence to ever resolve to
+ *   UNSUPPORTED.
+ * @param {string} [input.unsupportedCaseId] the exact case identifier (option value +
+ *   input type, e.g. 'dateNF="yyyy-mm-dd" (Date value, custom format other than
+ *   "m/d/yy")') to look up under UNSUPPORTED_ALLOWLIST.get(api). Both api AND this must
+ *   match a registered entry — an api with no caseId (or a caseId not registered under
+ *   that specific api) never resolves to UNSUPPORTED, by design.
  * @param {unknown} [input.oracleA] first oracle run (or the only oracle run)
  * @param {unknown} [input.oracleB] a second, independent oracle run on the same input —
  *   used to prove the comparison plumbing itself (oracle vs. itself must MATCH after
@@ -130,6 +163,7 @@ export const SAFETY_DIVERGENCE_REGISTRY = new Map([
  */
 export function classify({
   api,
+  unsupportedCaseId,
   oracleA,
   oracleB,
   elixcee,
@@ -162,7 +196,9 @@ export function classify({
 
   if (deepEqual(oracleA, elixcee)) return 'MATCH';
 
-  if (api && UNSUPPORTED_ALLOWLIST.has(api)) return 'UNSUPPORTED';
+  if (api && unsupportedCaseId && UNSUPPORTED_ALLOWLIST.get(api)?.has(unsupportedCaseId)) {
+    return 'UNSUPPORTED';
+  }
 
   return 'UNCLASSIFIED';
 }
@@ -225,12 +261,41 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     'UNCLASSIFIED'
   );
 
-  // UNSUPPORTED only fires for registered entries.
+  // UNSUPPORTED only fires when BOTH api and the exact caseId are registered — an api
+  // with no caseId, or a caseId that doesn't match, must never resolve to UNSUPPORTED.
+  assert.equal(
+    classify({ api: 'utils.format_cell', oracleA: '1234.50', elixcee: undefined }),
+    'UNCLASSIFIED',
+    'api alone (no unsupportedCaseId) must not resolve to UNSUPPORTED — blanket api allowlisting is disallowed'
+  );
+  assert.equal(
+    classify({
+      api: 'utils.format_cell',
+      unsupportedCaseId: 'not a registered case',
+      oracleA: '1234.50',
+      elixcee: undefined,
+    }),
+    'UNCLASSIFIED',
+    'an unregistered caseId under a registered api must still fail closed'
+  );
+  assert.equal(
+    classify({
+      api: 'utils.format_cell',
+      unsupportedCaseId: 'z="0.00" (numeric cell, non-General/non-m/d/yy format code)',
+      oracleA: '1234.50',
+      elixcee: undefined,
+    }),
+    'UNSUPPORTED',
+    'the exact registered (api, caseId) pair resolves to UNSUPPORTED'
+  );
+
   assert.equal(
     UNSUPPORTED_ALLOWLIST.size,
-    1,
-    'Phase 1B-1: exactly one unsupported-api entry registered (format_cell narrow SSF subset)'
+    2,
+    'Phase 1B-2A pre-work: exactly two apis have registered unsupported cases (format_cell, sheet_add_aoa)'
   );
+  assert.equal(UNSUPPORTED_ALLOWLIST.get('utils.format_cell').size, 1, 'format_cell: exactly one registered case (narrow SSF subset)');
+  assert.equal(UNSUPPORTED_ALLOWLIST.get('utils.sheet_add_aoa').size, 1, 'sheet_add_aoa: exactly one registered case (custom dateNF)');
   assert.equal(SECURITY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one security divergence registered (book_append_sheet proto-key)');
   assert.equal(SAFETY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one safety divergence registered (ELIXCEE_NON_FINITE_INDEX)');
 

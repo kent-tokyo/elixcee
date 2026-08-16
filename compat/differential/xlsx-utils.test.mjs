@@ -26,11 +26,15 @@ function record(api, label, verdict) {
 // and a throw-vs-value or mismatched message is not silently treated as equal). If
 // elixcee throws with a `.code` property, it's passed to classify() so a registered
 // safety/security divergence is recognized instead of falling through to UNCLASSIFIED.
-function runCase(api, oracleFn, elixceeFn, args, label) {
+// unsupportedCaseId (optional) is forwarded to classify() as-is — see classify.mjs's
+// UNSUPPORTED_ALLOWLIST doc comment: both api AND this exact caseId must be registered
+// together for a divergence to resolve to UNSUPPORTED, never api alone.
+function runCase(api, oracleFn, elixceeFn, args, label, unsupportedCaseId) {
   const oracleVal = invoke(oracleFn, args);
   const elixceeVal = invoke(elixceeFn, args);
   const verdict = classify({
     api,
+    unsupportedCaseId,
     oracleA: oracleVal,
     elixcee: elixceeVal,
     elixceeErrorCode: elixceeVal.code,
@@ -300,13 +304,14 @@ aoaCase('mixed number/string/boolean', [[1, 'str', true, false]]);
 // across cases) — sheet_add_aoa mutates its `_ws` argument in place, unlike
 // book_append_sheet, so sharing one worksheet across fixtures would leak state and make
 // results order-dependent.
-function sheetAddAoaCase(label, buildOracle, buildElixcee) {
+function sheetAddAoaCase(label, buildOracle, buildElixcee, unsupportedCaseId) {
   runCase(
     'utils.sheet_add_aoa',
     () => buildOracle(U),
     () => buildElixcee(elixcee),
     [],
-    label
+    label,
+    unsupportedCaseId
   );
 }
 const DATE_FIXTURE = new Date(2026, 0, 5);
@@ -352,6 +357,24 @@ sheetAddAoaCase(
 sheetAddAoaCase('dense reuse: _ws is an existing dense array', (u) => u.sheet_add_aoa(u.aoa_to_sheet([[1]], { dense: true }), [[9, 8]], { origin: 'A2' }), (e) => e.sheet_add_aoa(e.aoa_to_sheet([[1]], { dense: true }), [[9, 8]], { origin: 'A2' }));
 sheetAddAoaCase('Date value, default (t:n, serial v, rendered w)', (u) => u.aoa_to_sheet([[DATE_FIXTURE]]), (e) => e.aoa_to_sheet([[DATE_FIXTURE]]));
 sheetAddAoaCase('Date value, cellDates:true (t:d, Date v, rendered w)', (u) => u.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true }), (e) => e.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true }));
+// Backfilled before Phase 1B-2A per user review: confirmed live that the real oracle
+// DOES render a custom dateNF correctly here (SSF_format("yyyy-mm-dd", ...) succeeds),
+// since sheet_add_aoa's Date branch always computes cell.w. elixcee's narrow SSF subset
+// only renders 'm/d/yy', so this throws ELIXCEE_NUMFMT_UNSUPPORTED — a registered,
+// case-specific gap (see classify.mjs's UNSUPPORTED_ALLOWLIST for
+// 'utils.sheet_add_aoa'), not a blanket "sheet_add_aoa is unsupported."
+sheetAddAoaCase(
+  'Date value, dateNF="yyyy-mm-dd" (custom format outside the narrow subset) -> UNSUPPORTED',
+  (u) => u.aoa_to_sheet([[DATE_FIXTURE]], { dateNF: 'yyyy-mm-dd' }),
+  (e) => e.aoa_to_sheet([[DATE_FIXTURE]], { dateNF: 'yyyy-mm-dd' }),
+  'dateNF="yyyy-mm-dd" (Date value, custom format other than "m/d/yy")'
+);
+sheetAddAoaCase(
+  'Date value, cellDates:true, dateNF="yyyy-mm-dd" -> UNSUPPORTED',
+  (u) => u.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true, dateNF: 'yyyy-mm-dd' }),
+  (e) => e.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true, dateNF: 'yyyy-mm-dd' }),
+  'dateNF="yyyy-mm-dd" (Date value, custom format other than "m/d/yy")'
+);
 sheetAddAoaCase('null with nullError:true -> error cell', (u) => u.aoa_to_sheet([[null, 1]], { nullError: true }), (e) => e.aoa_to_sheet([[null, 1]], { nullError: true }));
 sheetAddAoaCase('null with sheetStubs:true -> stub cell', (u) => u.aoa_to_sheet([[null, 1]], { sheetStubs: true }), (e) => e.aoa_to_sheet([[null, 1]], { sheetStubs: true }));
 sheetAddAoaCase('[value, formula] shorthand pair', (u) => u.aoa_to_sheet([[[5, 'A1+A2']]]), (e) => e.aoa_to_sheet([[[5, 'A1+A2']]]));
@@ -386,6 +409,17 @@ jsonCase('formula object value', (u) => u.json_to_sheet([{ a: { t: 'n', v: 1, f:
 jsonCase('error object value', (u) => u.json_to_sheet([{ a: { t: 'e', v: 7 } }]), (e) => e.json_to_sheet([{ a: { t: 'e', v: 7 } }]));
 jsonCase('Date value, default (t:n, serial v, z but no w)', (u) => u.json_to_sheet([{ a: DATE_FIXTURE }]), (e) => e.json_to_sheet([{ a: DATE_FIXTURE }]));
 jsonCase('Date value, cellDates:true', (u) => u.json_to_sheet([{ a: DATE_FIXTURE }], { cellDates: true }), (e) => e.json_to_sheet([{ a: DATE_FIXTURE }], { cellDates: true }));
+// Backfilled before Phase 1B-2A per user review. Unlike sheet_add_aoa, this is a plain
+// MATCH, not an UNSUPPORTED case: confirmed live that json_to_sheet/sheet_add_json never
+// call the format engine at all for Date cells (only `z` gets set, `.w` is never
+// computed here — see the Phase 1B-1 doc comment on sheetAddJson), so an unsupported
+// custom dateNF is harmless — it just becomes the (unrendered) `z` string, identically
+// on both sides.
+jsonCase(
+  'Date value, dateNF="yyyy-mm-dd" (custom format — harmless, no w is ever computed)',
+  (u) => u.json_to_sheet([{ a: DATE_FIXTURE }], { dateNF: 'yyyy-mm-dd' }),
+  (e) => e.json_to_sheet([{ a: DATE_FIXTURE }], { dateNF: 'yyyy-mm-dd' })
+);
 jsonCase(
   '__proto__-named own property (prototype-pollution probe, via JSON.parse)',
   (u) => u.json_to_sheet([JSON.parse('{"__proto__":1,"b":2}')]),
@@ -438,6 +472,15 @@ jsonCase(
   (e) => e.sheet_add_json([], [{ a: 1, b: 'x' }]),
   'utils.sheet_add_json'
 );
+// Backfilled before Phase 1B-2A per user review — same reasoning as json_to_sheet's
+// equivalent fixture above: sheet_add_json never calls the format engine for Date
+// cells, so a custom dateNF is harmless (MATCH), not an UNSUPPORTED case.
+jsonCase(
+  'Date value, dateNF="yyyy-mm-dd" (custom format — harmless, no w is ever computed)',
+  (u) => u.sheet_add_json({}, [{ a: DATE_FIXTURE }], { dateNF: 'yyyy-mm-dd' }),
+  (e) => e.sheet_add_json({}, [{ a: DATE_FIXTURE }], { dateNF: 'yyyy-mm-dd' }),
+  'utils.sheet_add_json'
+);
 
 // ---- format_cell / cell_set_number_format (Phase 1B-1: deliberately narrow SSF
 // subset — see classify.mjs's UNSUPPORTED_ALLOWLIST entry for 'utils.format_cell') ----
@@ -447,7 +490,7 @@ jsonCase(
 // Comparing { out, cell } rather than just the returned string catches a divergence in
 // the mutation itself (e.g. a fixture named "sets cell.z" that returns the right string
 // but never actually writes cell.z would otherwise MATCH by accident).
-function formatCellCase(label, cell, v, opts) {
+function formatCellCase(label, cell, v, opts, unsupportedCaseId) {
   const cellA = cell ? { ...cell } : cell;
   const cellB = cell ? { ...cell } : cell;
   runCase(
@@ -455,7 +498,8 @@ function formatCellCase(label, cell, v, opts) {
     () => ({ out: U.format_cell(cellA, v, opts), cell: cellA }),
     () => ({ out: elixcee.format_cell(cellB, v, opts), cell: cellB }),
     [],
-    label
+    label,
+    unsupportedCaseId
   );
 }
 
@@ -476,7 +520,13 @@ formatCellCase('explicit v param overrides cell.v', { t: 'n', v: 1 }, 5000);
 // UNSUPPORTED_ALLOWLIST entry for 'utils.format_cell') — elixcee throws
 // ELIXCEE_NUMFMT_UNSUPPORTED instead of guessing a rendering, so this is an honest,
 // registered UNSUPPORTED divergence rather than a MATCH.
-formatCellCase('number format outside the narrow subset (0.00) -> UNSUPPORTED', { t: 'n', v: 1234.5, z: '0.00' });
+formatCellCase(
+  'number format outside the narrow subset (0.00) -> UNSUPPORTED',
+  { t: 'n', v: 1234.5, z: '0.00' },
+  undefined,
+  undefined,
+  'z="0.00" (numeric cell, non-General/non-m/d/yy format code)'
+);
 
 runCase('utils.cell_set_number_format', (c, f) => U.cell_set_number_format(c, f), (c, f) => elixcee.cell_set_number_format(c, f), [{ t: 'n', v: 1 }, '0.00'], 'sets cell.z and returns the cell');
 
