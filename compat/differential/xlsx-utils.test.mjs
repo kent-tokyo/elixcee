@@ -479,6 +479,221 @@ jsonCase(
   'utils.sheet_add_json'
 );
 
+// ---- sheet_get_cell (Phase 1B-3) ----
+// Mutates: a miss creates a `{t:'z'}` stub in place (and, in dense mode, materializes
+// `ws[R]` if absent) — each fixture captures both the returned cell and the resulting
+// worksheet shape, same pattern as hyperlinkCase/commentCase above.
+function getCellCase(label, wsFactory, args) {
+  runCase(
+    'utils.sheet_get_cell',
+    () => { const ws = wsFactory(); const out = U.sheet_get_cell(ws, ...args); return { out, ws }; },
+    () => { const ws = wsFactory(); const out = elixcee.sheet_get_cell(ws, ...args); return { out, ws }; },
+    [],
+    label
+  );
+}
+
+getCellCase('string ref, existing cell', () => ({ A1: { t: 's', v: 'hi' } }), ['A1']);
+getCellCase('string ref, miss creates a {t:"z"} stub', () => ({}), ['B2']);
+getCellCase('CellAddress object, existing cell', () => ({ A1: { t: 'n', v: 5 } }), [{ r: 0, c: 0 }]);
+getCellCase('CellAddress object, miss creates a stub', () => ({}), [{ r: 3, c: 2 }]);
+getCellCase('numeric R, C, existing cell', () => ({ B1: { t: 'n', v: 7 } }), [0, 1]);
+getCellCase('numeric R only (C defaults to 0)', () => ({ A2: { t: 'n', v: 9 } }), [1]);
+getCellCase('numeric R, C=0 explicit', () => ({ A1: { t: 's', v: 'x' } }), [0, 0]);
+getCellCase('dense worksheet, existing cell', () => { const ws = []; ws[0] = [{ t: 'n', v: 1 }]; return ws; }, ['A1']);
+getCellCase('dense worksheet, miss materializes ws[R]', () => [], ['C5']);
+getCellCase('dense worksheet, numeric R/C', () => { const ws = []; ws[1] = [, { t: 'n', v: 2 }]; return ws; }, [1, 1]);
+// Repeated miss on the same ref returns the SAME stub object (idempotent) — captures
+// identity as a boolean, same pattern as hyperlinkCase, since object identity itself
+// doesn't survive normalize()'s structural comparison.
+function getCellIdempotentCase(label, wsFactory, args) {
+  runCase(
+    'utils.sheet_get_cell',
+    () => { const ws = wsFactory(); const a = U.sheet_get_cell(ws, ...args); const b = U.sheet_get_cell(ws, ...args); return { a, sameObject: a === b }; },
+    () => { const ws = wsFactory(); const a = elixcee.sheet_get_cell(ws, ...args); const b = elixcee.sheet_get_cell(ws, ...args); return { a, sameObject: a === b }; },
+    [],
+    label
+  );
+}
+getCellIdempotentCase('repeated miss on the same ref returns the SAME stub (idempotent)', () => ({}), ['A1']);
+
+// ---- sheet_to_json (Phase 1B-3) ----
+//
+// Independent port of the oracle's sheet_to_json/make_json_row — see
+// packages/xlsx/src/index.cjs's sheetToJson/makeJsonRow doc comments for the full
+// algorithm notes (header mode dispatch, raw default, error-cell v==0/v!=0 split, the
+// "__proto__"-header hazard and why only that one key needs setJsonRowKey). Boundary
+// matrix per the Phase 1B-3 spec: key order, __proto__ own property, undefined, sparse
+// arrays, Date, NaN, Infinity, -0, non-enumerable property, symbol property — plus the
+// two required security-probe cases (primitive value dropped vs. retained; object value
+// corrupting the oracle's row vs. retained safely by elixcee) and the range-guard reuse.
+function jsonOutCase(label, wsFactory, opts, unsupportedCaseId) {
+  runCase(
+    'utils.sheet_to_json',
+    () => U.sheet_to_json(wsFactory(), opts),
+    () => elixcee.sheet_to_json(wsFactory(), opts),
+    [],
+    label,
+    unsupportedCaseId
+  );
+}
+
+jsonOutCase('basic 2 rows, default header inference', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2], [3, 4]]));
+// Key order: Object.keys() ordering for string keys is creation order, not sorted —
+// confirmed the row's own keys come out in header-column order (a, b), matching insertion
+// order, not e.g. alphabetical.
+jsonOutCase('key order matches header-column order, not alphabetical', (lib) => lib.aoa_to_sheet([['z', 'a'], [1, 2]]));
+jsonOutCase('header:1 (index-number keys, array rows)', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2]]), { header: 1 });
+jsonOutCase('header:"A" (column-letter keys)', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2]]), { header: 'A' });
+jsonOutCase('header: explicit array', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2]]), { header: ['x', 'y'] });
+jsonOutCase('header: explicit array shorter than row width -> extra columns skipped', (lib) => lib.aoa_to_sheet([['a', 'b', 'c'], [1, 2, 3]]), { header: ['x'] });
+jsonOutCase('default header: duplicate text gets "_1" suffix', (lib) => lib.aoa_to_sheet([['a', 'a'], [1, 2]]));
+jsonOutCase('default header: null header cell -> "__EMPTY"', () => ({ A1: { t: 's', v: 'a' }, B2: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:B2' }));
+jsonOutCase('defval fills missing cells', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, undefined]]), { defval: 0 });
+jsonOutCase('defval with entirely missing column (sparse object hole)', () => ({ A1: { t: 's', v: 'a' }, B1: { t: 's', v: 'b' }, A2: { t: 'n', v: 1 }, '!ref': 'A2:B2' }), { defval: 'MISSING' });
+jsonOutCase('raw:true (default) returns raw values', (lib) => lib.aoa_to_sheet([['a'], [1.5]]));
+jsonOutCase('raw:false returns formatted text', (lib) => lib.aoa_to_sheet([['a'], [1.5]]), { raw: false });
+jsonOutCase('raw:undefined behaves like raw:true (key present, value undefined)', (lib) => lib.aoa_to_sheet([['a'], [1.5]]), { raw: undefined });
+jsonOutCase('rawNumbers:false forces formatted numbers even with raw:true', (lib) => { const ws = lib.aoa_to_sheet([['a'], [1234.5]]); ws.A2.z = '#,##0.00'; return ws; }, { rawNumbers: false });
+jsonOutCase('range: string override', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2], [3, 4]]), { range: 'A2:B3' });
+jsonOutCase('range: number (start row, same !ref end)', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2], [3, 4]]), { range: 1 });
+jsonOutCase('range: {s,e} object override', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2], [3, 4]]), { range: { s: { r: 1, c: 0 }, e: { r: 2, c: 1 } } });
+jsonOutCase('!ref absent -> []', () => ({}));
+jsonOutCase('sheet is null -> []', () => null);
+jsonOutCase('dense worksheet', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2]], { dense: true }));
+jsonOutCase('dense worksheet, sparse row (missing row entirely)', (lib) => { const ws = lib.aoa_to_sheet([['a'], [1]], { dense: true }); ws['!ref'] = 'A1:A3'; return ws; });
+jsonOutCase('skipHidden: hidden column omitted', (lib) => { const ws = lib.aoa_to_sheet([['a', 'b'], [1, 2]]); ws['!cols'] = [{ hidden: true }]; return ws; }, { skipHidden: true });
+jsonOutCase('skipHidden: hidden row omitted', (lib) => { const ws = lib.aoa_to_sheet([['a'], [1], [2]]); ws['!rows'] = [, { hidden: true }]; return ws; }, { skipHidden: true });
+jsonOutCase('blankrows default (false-ish): blank rows omitted', () => ({ A1: { t: 's', v: 'h' }, A3: { t: 'n', v: 5 }, '!ref': 'A1:A3' }));
+jsonOutCase('blankrows:true: blank rows included as empty objects', () => ({ A1: { t: 's', v: 'h' }, A3: { t: 'n', v: 5 }, '!ref': 'A1:A3' }), { blankrows: true });
+jsonOutCase('blankrows with header:1: blank rows included by default (opposite polarity)', () => ({ A1: { t: 'n', v: 1 }, A3: { t: 'n', v: 3 }, '!ref': 'A1:A3' }), { header: 1 });
+jsonOutCase('blankrows:false with header:1: blank rows omitted', () => ({ A1: { t: 'n', v: 1 }, A3: { t: 'n', v: 3 }, '!ref': 'A1:A3' }), { header: 1, blankrows: false });
+// Non-enumerable property: __rowNum__ is defined via Object.defineProperty with
+// enumerable:false in both the oracle and elixcee — asserted directly below, not just
+// via the JSON-shaped comparison (Object.keys/JSON.stringify would never see it either
+// way, so the differential comparison alone can't distinguish "absent" from
+// "present-but-non-enumerable").
+jsonOutCase('__rowNum__ present (value-wise, via own descriptor check below)', (lib) => lib.aoa_to_sheet([['a'], [1], [2]]));
+{
+  const wso = U.aoa_to_sheet([['a'], [1], [2]]);
+  const wse = elixcee.aoa_to_sheet([['a'], [1], [2]]);
+  const ro = U.sheet_to_json(wso);
+  const re = elixcee.sheet_to_json(wse);
+  const descO = Object.getOwnPropertyDescriptor(ro[0], '__rowNum__');
+  const descE = Object.getOwnPropertyDescriptor(re[0], '__rowNum__');
+  assert.deepEqual(descE, descO, '__rowNum__ own-property descriptor must match the oracle exactly (value, enumerable:false, writable:false, configurable:false)');
+  assert.equal(descE.enumerable, false, '__rowNum__ must be non-enumerable');
+  assert.deepEqual(Object.keys(re[0]), ['a'], 'Object.keys must not surface __rowNum__');
+}
+// Symbol property: a cell object with an extra symbol-keyed own property must be
+// silently ignored (Object.keys() never returns symbol keys, in the oracle or here) —
+// confirmed rather than assumed, since sheet_to_json's header-computation and row-value
+// loops are both Object.keys()-free (they iterate the numeric column range, not the cell
+// object's own keys), so a symbol property can't influence output either way.
+{
+  const sym = Symbol('marker');
+  const wso = U.aoa_to_sheet([['a'], [1]]);
+  wso.A2[sym] = 'ignored';
+  const wse = elixcee.aoa_to_sheet([['a'], [1]]);
+  wse.A2[sym] = 'ignored';
+  jsonOutCase('cell with an extra symbol-keyed own property (must be ignored)', (lib) => (lib === U ? wso : wse));
+  const re = elixcee.sheet_to_json(wse);
+  assert.equal(Object.getOwnPropertySymbols(re[0]).length, 0, 'a symbol property on an input cell must not propagate to the output row');
+}
+// Date / NaN / Infinity / -0: raw cell injection (not achievable via aoa_to_sheet for
+// the numeric edge cases) so both sides parse an identical pre-built cell model.
+jsonOutCase('Date value, cellDates:true (raw:true returns the Date instance itself)', (lib) => lib.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true }));
+jsonOutCase('Date value, raw:false returns the formatted string', (lib) => lib.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true }), { raw: false });
+jsonOutCase('NaN value (raw cell)', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'n', v: NaN }, '!ref': 'A1:A2' }));
+jsonOutCase('Infinity value (raw cell)', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'n', v: Infinity }, '!ref': 'A1:A2' }));
+jsonOutCase('-Infinity value (raw cell)', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'n', v: -Infinity }, '!ref': 'A1:A2' }));
+jsonOutCase('-0 value (raw cell)', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'n', v: -0 }, '!ref': 'A1:A2' }));
+// undefined: an explicit `undefined` JS value flowing through as a cell's raw value
+// (distinct from a MISSING cell, which the harness already covers via defval fixtures
+// above) — a cell with `v: undefined` and a recognized type hits the `val.t === undefined`
+// check as false (the property exists) but then falls into the `v == null` branch below.
+jsonOutCase('cell with v explicitly undefined, defval set', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'n', v: undefined }, '!ref': 'A1:A2' }), { defval: 'D' });
+jsonOutCase('cell with v explicitly undefined, no defval, raw:true -> skipped (not null)', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'n', v: undefined }, '!ref': 'A1:A2' }));
+// Error cells: v==0 -> null, v!=0 -> undefined (then governed by defval/raw same as any
+// other null-ish cell) — confirmed live, see makeJsonRow's doc comment.
+jsonOutCase('error cell, v==0 -> null', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'e', v: 0 }, '!ref': 'A1:A2' }), { header: 1 });
+jsonOutCase('error cell, v!=0 -> undefined -> skipped without defval', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'e', v: 42 }, '!ref': 'A1:A2' }), { header: 1 });
+jsonOutCase('error cell, v!=0, defval set -> defval used', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'e', v: 42 }, '!ref': 'A1:A2' }), { header: 1, defval: 'ERR' });
+// 'z' stub cell: v==null -> break-then-fallthrough (participates in defval/raw logic);
+// v!=null (unusual, hand-built) -> continue, skipping the cell's column entirely.
+jsonOutCase("'z' stub cell, v null (default stub shape)", () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'z' }, '!ref': 'A1:A2' }), { defval: 'D' });
+jsonOutCase("'z' stub cell with a non-null v (unusual) -> column skipped entirely", () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'z', v: 5 }, '!ref': 'A1:A2' }), { defval: 'D' });
+// Sparse array (dense worksheet with a hole in the middle of the row range).
+jsonOutCase('dense, sparse array hole in the middle', () => { const ws = []; ws[0] = [{ t: 's', v: 'a' }]; ws[1] = [{ t: 'n', v: 1 }]; ws[3] = [{ t: 'n', v: 3 }]; ws['!ref'] = 'A1:A4'; return ws; });
+// Unrecognized cell type throws in both — confirmed live, not assumed.
+jsonOutCase('unrecognized cell type -> throws in both', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'bogus', v: 1 }, '!ref': 'A1:A2' }));
+
+// __proto__/constructor/prototype/toString/hasOwnProperty headers, both via default
+// inference (text header row) and via an explicit opts.header array — see
+// packages/xlsx/src/index.cjs's sheetToJson doc comment for why only "__proto__" via the
+// explicit-array path is a real hazard (constructor/prototype/toString/hasOwnProperty are
+// ordinary non-accessor properties on a plain {}, confirmed live to already MATCH with
+// plain assignment; "__proto__" via the DEFAULT path never reaches the row-write step
+// literally, since header_cnt's own accidental collision-avoidance renames it first).
+for (const poisoned of ['__proto__', 'constructor', 'prototype', 'toString', 'hasOwnProperty']) {
+  jsonOutCase(`default header text = "${poisoned}" (header-collision-avoidance quirk)`, (lib) => lib.aoa_to_sheet([[poisoned, 'b'], [1, 2]]));
+  jsonOutCase(`explicit header array contains "${poisoned}", primitive values`, (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2]]), { header: [poisoned, 'y'] });
+}
+
+// ---- sheet_to_json: registered security divergences (primitive value dropped vs.
+// retained; object value corrupting the oracle's row vs. retained safely) — see
+// classify.mjs's SECURITY_DIVERGENCE_REGISTRY and docs/xlsx-security-model.md. Not
+// comparable via jsonOutCase's plain equality (the oracle's own output IS the defect
+// here), so these use classify() directly with securityDivergenceKey, matching
+// book_append_sheet's "__proto__" sheet-name precedent above.
+{
+  const wso = U.aoa_to_sheet([[1, 2]]);
+  const wse = elixcee.aoa_to_sheet([[1, 2]]);
+  const ro = U.sheet_to_json(wso, { header: ['__proto__', 'y'] });
+  const re = elixcee.sheet_to_json(wse, { header: ['__proto__', 'y'] });
+  const verdict = classify({
+    api: 'utils.sheet_to_json',
+    oracleA: { keys: Object.keys(ro[0]), protoValue: ro[0]['__proto__'] },
+    elixcee: { keys: Object.keys(re[0]), protoValue: re[0]['__proto__'] },
+    securityDivergenceKey: 'sheet_to_json:proto_header_primitive_dropped',
+  });
+  record('utils.sheet_to_json', 'header:["__proto__","y"], primitive value (oracle silently drops it; elixcee retains it)', verdict);
+  assert.deepEqual(Object.keys(ro[0]), ['y'], "sanity: the oracle's own row is missing the __proto__ key entirely");
+  assert.deepEqual(Object.keys(re[0]), ['__proto__', 'y'], 'elixcee must retain the value as an ordinary own key');
+  assert.equal(re[0]['__proto__'], 1, 'the retained value must be the original cell value');
+  assert.equal(Object.getPrototypeOf(re[0]), Object.prototype, "the row's own prototype must be untouched");
+}
+{
+  const wso = U.aoa_to_sheet([[DATE_FIXTURE, 2]], { cellDates: true });
+  const wse = elixcee.aoa_to_sheet([[DATE_FIXTURE, 2]], { cellDates: true });
+  const ro = U.sheet_to_json(wso, { header: ['__proto__', 'y'] });
+  const re = elixcee.sheet_to_json(wse, { header: ['__proto__', 'y'] });
+  const verdict = classify({
+    api: 'utils.sheet_to_json',
+    oracleA: { keys: Object.keys(ro[0]), rowIsCorrupted: ro[0] instanceof Date },
+    elixcee: { keys: Object.keys(re[0]), rowIsCorrupted: re[0] instanceof Date },
+    securityDivergenceKey: 'sheet_to_json:proto_header_object_corruption',
+  });
+  record('utils.sheet_to_json', 'header:["__proto__","y"], Date value (oracle corrupts the row\'s own prototype; elixcee retains it safely)', verdict);
+  assert.equal(ro[0] instanceof Date, true, "sanity: the oracle's own row prototype IS corrupted to a Date instance");
+  assert.equal(re[0] instanceof Date, false, "elixcee's row must NOT be corrupted");
+  assert.equal(Object.getPrototypeOf(re[0]), Object.prototype, "the row's own prototype must be untouched");
+  assert.deepEqual(Object.keys(re[0]), ['__proto__', 'y'], 'elixcee must retain the Date value as an ordinary own key');
+  assert.equal(re[0]['__proto__'] instanceof Date, true, 'the retained value itself is still the original Date');
+  assert.equal(Object.getPrototypeOf({}), Object.prototype, 'global Object.prototype must remain unpolluted throughout');
+}
+
+// A crafted full-grid !ref (~17.18 billion cells) is confirmed to not return within 25s
+// on the real oracle — reuses the same measurement basis as sheet_to_formulae's identical
+// fixture above (docs/limits.md), since sheet_to_json walks the same !ref rectangle
+// shape; never call the oracle with it here.
+runUnsafeForOracleCase(
+  'utils.sheet_to_json',
+  elixcee.sheet_to_json,
+  [{ A1: { t: 'n', v: 1 }, '!ref': 'A1:XFD1048576' }],
+  'full-grid !ref (A1:XFD1048576) [oracle does not return within 25s, not called]'
+);
+
 // ---- format_cell / cell_set_number_format (Phase 1B-1: deliberately narrow SSF
 // subset — see classify.mjs's UNSUPPORTED_ALLOWLIST entry for 'utils.format_cell') ----
 // Shallow clone, not JSON.parse(JSON.stringify(...)) — format_cell mutates its cell

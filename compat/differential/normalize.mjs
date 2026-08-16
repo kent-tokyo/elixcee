@@ -13,7 +13,21 @@
 // undetected in Phase 1A's differential harness — see docs/xlsx-architecture.md's
 // changelog / compat/differential/xlsx-utils.test.mjs history. Every case below is a
 // fixed regression guard, not speculative coverage.
-export function normalize(v) {
+//
+// Phase 1B-3: the oracle's own sheet_to_json can hand back a row object whose OWN
+// [[Prototype]] has been reassigned to a Date instance (confirmed live: `header:
+// ['__proto__']` + a Date-typed cell value hits the `__proto__` accessor's "assign an
+// object" branch). `v instanceof Date` is true for such a row too — `instanceof` walks
+// the prototype chain looking for `Date.prototype`, and it finds it one hop further out,
+// via the corrupted prototype itself. Calling `.toISOString()` on `v` in that branch then
+// throws (`this is not a Date object`) because `v` never actually went through `new
+// Date()` and has no own [[DateValue]] internal slot — internal slots aren't inherited
+// through the prototype chain. `Object.prototype.toString.call(v)` checks that internal
+// slot directly, so it's unaffected by prototype tampering and correctly reports such a
+// row as `'[object Object]'`, not `'[object Date]'`.
+const MAX_DEPTH = 64;
+
+export function normalize(v, seen = new WeakSet(), depth = 0) {
   if (v === undefined) return { __tag: 'undefined' };
   if (v === null) return null;
   if (typeof v === 'number') {
@@ -24,13 +38,23 @@ export function normalize(v) {
     return v;
   }
   if (typeof v !== 'object') return v; // string, boolean
-  if (v instanceof Date) return { __tag: 'Date', iso: v.toISOString() };
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    return { __tag: 'Date', iso: v.toISOString() };
+  }
+
+  // Circular-reference guard: this is a differential-testing harness, not the code under
+  // test, so it must never infinite-recurse just because a fixture (accidentally or as a
+  // crafted probe) hands it a self-referential structure. A depth cap is a backstop for
+  // very deep (but non-circular) structures the WeakSet alone wouldn't catch in time.
+  if (seen.has(v)) return { __tag: 'circular' };
+  if (depth >= MAX_DEPTH) return { __tag: 'max-depth-exceeded' };
+  seen.add(v);
 
   if (Array.isArray(v)) {
     const out = [];
     const len = v.length;
     for (let i = 0; i < len; ++i) {
-      out[i] = i in v ? normalize(v[i]) : { __tag: 'hole' };
+      out[i] = i in v ? normalize(v[i], seen, depth + 1) : { __tag: 'hole' };
     }
     // Non-index own enumerable properties (e.g. "!ref" on a dense worksheet array) —
     // Object.keys() on an array returns index keys first (in numeric order) then
@@ -38,13 +62,13 @@ export function normalize(v) {
     // above, so skip them here to avoid double-processing.
     for (const key of Object.keys(v)) {
       if (/^\d+$/.test(key) && Number(key) < len) continue;
-      out[key] = normalize(v[key]);
+      out[key] = normalize(v[key], seen, depth + 1);
     }
     return out;
   }
 
   const out = {};
-  for (const key of Object.keys(v)) out[key] = normalize(v[key]);
+  for (const key of Object.keys(v)) out[key] = normalize(v[key], seen, depth + 1);
   return out;
 }
 
@@ -110,6 +134,50 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const n2 = normalize(withUndefined);
     assert.deepEqual(n2[1], { __tag: 'undefined' });
     assert.notDeepEqual(n2[1], n[1]); // hole !== explicit undefined
+  }
+
+  // A plain object whose OWN prototype has been reassigned to a Date instance (the exact
+  // shape the oracle's sheet_to_json can produce via a "__proto__" header + Date value)
+  // must not be misidentified as a Date and must not throw — it has no own [[DateValue]]
+  // slot, so it normalizes as an ordinary (empty) object, not a { __tag: 'Date', ... }.
+  {
+    const corrupted = {};
+    Object.setPrototypeOf(corrupted, new Date('2020-01-01T00:00:00.000Z'));
+    assert.equal(corrupted instanceof Date, true); // confirms the hazard is real
+    assert.doesNotThrow(() => normalize(corrupted));
+    assert.deepEqual(normalize(corrupted), {});
+  }
+
+  // Circular references must not infinite-recurse.
+  {
+    const a = { name: 'a' };
+    const b = { name: 'b', a };
+    a.b = b;
+    let n;
+    assert.doesNotThrow(() => { n = normalize(a); });
+    assert.equal(n.name, 'a');
+    assert.equal(n.b.name, 'b');
+    assert.deepEqual(n.b.a, { __tag: 'circular' });
+
+    const self = {};
+    self.self = self;
+    assert.deepEqual(normalize(self), { self: { __tag: 'circular' } });
+  }
+
+  // Very deep (non-circular) structures hit the depth cap instead of overflowing the
+  // call stack or running unbounded.
+  {
+    let deep = { __tag: 'leaf' };
+    for (let i = 0; i < 1000; ++i) deep = { next: deep };
+    let n;
+    assert.doesNotThrow(() => { n = normalize(deep); });
+    let cur = n;
+    let hitCap = false;
+    for (let i = 0; i < 1000; ++i) {
+      if (cur && cur.__tag === 'max-depth-exceeded') { hitCap = true; break; }
+      cur = cur.next;
+    }
+    assert.equal(hitCap, true);
   }
 
   console.log('normalize.mjs self-check: all assertions passed');
