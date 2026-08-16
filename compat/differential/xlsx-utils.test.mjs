@@ -595,6 +595,16 @@ formulaeCase('sparse array hole (dense, missing row)', () => {
 });
 formulaeCase('sparse object hole (missing cell key entirely)', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:B1' }));
 formulaeCase('column boundary (single-column range)', () => ({ C1: { t: 'n', v: 3 }, '!ref': 'C1:C1' }));
+// A crafted full-grid !ref (~17.18 billion cells) is confirmed to not return within 25s
+// on the real oracle (timeout-guarded subprocess, not assumed) — never call it here;
+// see packages/xlsx/src/internal/range-guard.cjs and classify.mjs's
+// SAFETY_DIVERGENCE_REGISTRY for ELIXCEE_RANGE_TOO_LARGE.
+runUnsafeForOracleCase(
+  'utils.sheet_to_formulae',
+  elixcee.sheet_to_formulae,
+  [{ A1: { t: 'n', v: 1 }, '!ref': 'A1:XFD1048576' }],
+  'full-grid !ref (A1:XFD1048576) [oracle does not return within 25s, not called]'
+);
 
 // ---- cell_set_hyperlink (Phase 1B-2A) ----
 // Each fixture captures both the mutated cell and a boolean for return-value identity

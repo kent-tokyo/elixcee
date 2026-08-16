@@ -15,6 +15,7 @@
 // implementation, not copied text; see docs/licensing.md for the licensing boundary.
 
 const { safeDecodeRange } = require('./internal/safe-decode-range.cjs');
+const { checkRangeSize } = require('./internal/range-guard.cjs');
 
 // ---- column ----
 
@@ -615,10 +616,15 @@ function jsonToSheet(js, opts) {
 // with neither `.f` nor `.w` renders via Date.prototype.toString(), confirmed live — not
 // an ISO string or a serial number). A reversed !ref (s > e after safe_decode_range,
 // which never swaps) makes the loop body never run, returning [] — confirmed live, not
-// a special case in this port.
+// a special case in this port. checkRangeSize (see ./internal/range-guard.cjs) rejects
+// pathologically large ranges instead of iterating them — a fix added after this
+// function's initial Phase 1B-2A implementation, once a crafted full-grid !ref was
+// confirmed live to make sheet_to_csv (which walks !ref the same way) not return within
+// 25s on the real oracle.
 function sheetToFormulae(sheet) {
   if (sheet == null || sheet['!ref'] == null) return [];
   const r = safeDecodeRange(sheet['!ref']);
+  checkRangeSize(r);
   const dense = Array.isArray(sheet);
   const cols = [];
   for (let C = r.s.c; C <= r.e.c; ++C) cols[C] = encodeCol(C);

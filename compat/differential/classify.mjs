@@ -130,6 +130,16 @@ export const SAFETY_DIVERGENCE_REGISTRY = new Map([
       'never reaches 0) — confirmed by running it to an OOM kill, not assumed. Elixcee ' +
       'rejects non-finite column/row indices instead. See packages/xlsx/src/index.cjs.',
   ],
+  [
+    'ELIXCEE_RANGE_TOO_LARGE',
+    'sheet_to_formulae/sheet_to_csv/sheet_to_txt all iterate every (row,col) pair in a ' +
+      "worksheet's !ref rectangle regardless of sparsity — confirmed live (timeout-" +
+      "guarded subprocess) that a crafted full-grid !ref ('A1:XFD1048576', ~17.18 " +
+      'billion cells) does not return within 25s on the real oracle\'s sheet_to_csv, and ' +
+      'even much smaller full-rectangle spans are already slow on the oracle itself ' +
+      '(26,000,000 cells: 12-16s). Elixcee rejects ranges above a 5,000,000-cell ' +
+      'threshold instead of iterating them. See packages/xlsx/src/internal/range-guard.cjs.',
+  ],
 ]);
 
 /**
@@ -297,7 +307,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   assert.equal(UNSUPPORTED_ALLOWLIST.get('utils.format_cell').size, 1, 'format_cell: exactly one registered case (narrow SSF subset)');
   assert.equal(UNSUPPORTED_ALLOWLIST.get('utils.sheet_add_aoa').size, 1, 'sheet_add_aoa: exactly one registered case (custom dateNF)');
   assert.equal(SECURITY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one security divergence registered (book_append_sheet proto-key)');
-  assert.equal(SAFETY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one safety divergence registered (ELIXCEE_NON_FINITE_INDEX)');
+  assert.equal(
+    SAFETY_DIVERGENCE_REGISTRY.size,
+    2,
+    'Phase 1A + 1B-2B: two safety divergences registered (ELIXCEE_NON_FINITE_INDEX, ELIXCEE_RANGE_TOO_LARGE)'
+  );
 
   console.log('classify.mjs self-check: all assertions passed');
 }
