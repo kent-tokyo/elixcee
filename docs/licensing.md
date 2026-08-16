@@ -37,16 +37,28 @@ attribution — it cannot simply become MIT by virtue of living in this reposito
 
 ## Current status
 
-**No SheetJS code has been vendored or ported as of Phase 0.**
+**No SheetJS code has been vendored or ported into `@elixcee/xlsx`'s own source.**
 [`compat/oracle`](../compat/oracle) installs and runs the real `xlsx` package as an
-ordinary `devDependency` for introspection and differential testing. That is consumption
-(using the package as intended, via its public API), not redistribution, and carries no
-NOTICE obligation by itself.
+ordinary `devDependency` for introspection and differential testing — that remains pure
+consumption, no NOTICE obligation by itself.
+
+**As of Phase 1B-2B, `packages/xlsx` takes its first real *runtime* dependency**:
+`ssf@0.11.2` (Apache-2.0, transitively pulling in `frac@1.1.2`, also Apache-2.0), used to
+back `format_cell`/`sheet_to_csv`/`sheet_to_txt`'s number-format rendering — see
+[`docs/xlsx-architecture.md`](xlsx-architecture.md)'s "SSF backend" decision for the
+rationale (a deliberate, disclosed choice: compatibility now over a from-scratch
+~900-line format-engine port, with the reimplementation option kept open for a later
+Rust-native phase). This is an ordinary npm `dependencies` declaration — `ssf`/`frac`'s
+own source is never copied into or embedded in this repository's files — but it does mean
+any `npm install @elixcee/xlsx` consumer transitively receives `ssf`/`frac`'s actual
+package contents in their own `node_modules`, which is the normal npm dependency pattern,
+not a §4(b)/(d) "vendored redistribution" case. Neither `ssf` nor `frac` ships an upstream
+`NOTICE` file (checked directly, not assumed — only a `LICENSE`), so the §4(d) NOTICE-
+propagation obligation is not actually triggered; as a conservative practice regardless,
+their license text and package identity are recorded in
+[`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) at the repository root.
 
 If a later phase ever vendors a tarball or CDN copy for install-time redistribution
-(rather than an ordinary `npm install` at build/test time), that **does** trigger
-redistribution obligations and this document must be expanded — with a full per-package
-NOTICE inventory — before doing so.
-
-A complete, per-package license/NOTICE inventory (beyond the license identifiers above)
-is deferred to whichever phase first considers porting or vendoring actual SheetJS logic.
+(rather than an ordinary `npm install`/`dependencies` declaration), that **does** trigger
+full redistribution obligations and this document must be expanded — with a complete
+per-package NOTICE inventory — before doing so.

@@ -220,6 +220,74 @@ phase; elixcee's existing Rust code is untouched.
   I/O (`read`/`readFile`/`write`), the `elixcee-types`/`elixcee-xlsx` crate split. Those
   begin once this utility slice is solid and the phase that tackles `read()` starts.
 
+## SSF backend (Phase 1B-2B)
+
+`format_cell`/`sheet_to_csv`/`sheet_to_txt` need the oracle's number-format ("Format
+Codes") engine — `SSF_format`/`eval_fmt` in the bundled `xlsx.js`, a ~900-line
+format-string parser/evaluator, equivalent to the standalone `ssf` npm package (one of
+the 7 Apache-2.0 SheetJS dependencies). Three options were compared before choosing:
+
+1. **Take `ssf@0.11.2` (exact-pinned) as a real `packages/xlsx` runtime dependency.**
+2. **Clean-room reimplementation** of the format engine, from reading the oracle source.
+3. **An independent, Rust-portable reimplementation** (same as 2, but structured for an
+   eventual `elixcee-ssf`-equivalent Rust/WASM port) — compatibility-equivalent to option
+   2, differing only in internal structure.
+
+**Decision: option 1**, overriding this document's earlier draft recommendation of
+option 3. Rationale (user decision, recorded verbatim in intent): getting xlsx@0.18.5
+users onto `@elixcee/xlsx` with full compatibility now outweighs the near-term value of a
+from-scratch reimplementation that adds no user-visible capability over what the real
+`ssf` package already provides correctly; a full clean-room port is deferred to
+elixcee's eventual Rust-native phase, where `ssf-adapter.cjs` below becomes the single
+swap point. This is **not** a reversal of the zero-dependency philosophy — it is a
+deliberate, disclosed, transitional trade: borrow a correct implementation to reach
+compatibility sooner, then replace it once the Rust core can absorb the work.
+
+Before committing to option 1, its correctness was measured, not assumed: `ssf@0.11.2`'s
+`.format()` was compared against the bundled engine (`XLSX.SSF.format`, a *different*
+export surface than the standalone package but confirmed to run the same algorithm)
+across 1800+ cases in
+[`compat/differential/ssf-format.test.mjs`](../compat/differential/ssf-format.test.mjs)
+— every `table_fmt` built-in numFmtId and its `SSF_default_map` indirection, crossed with
+boundary/date-serial/text/boolean values, plus `date1904`, a custom format table,
+multi-section formats, `[Red]`/conditional sections, fractions, exponential notation, and
+percent/thousands. This surfaced one genuine defect: `ssf@0.11.2`'s own indirection table
+has a copy-paste bug affecting numFmtIds 67-71 (confirmed by reading
+`node_modules/ssf/ssf.js:93-105` — a loop meant to set entries for 69-71 instead reuses
+the preceding block's loop bounds). Corrected in
+[`packages/xlsx/src/internal/ssf-adapter.cjs`](../packages/xlsx/src/internal/ssf-adapter.cjs)
+with a 5-entry pre-correction table, not a fork of `ssf` itself — a narrow, disclosed
+patch for one precisely-diagnosed defect, not a reimplementation.
+
+**Isolation architecture** — `ssf` is `require`d in exactly one file:
+
+```
+format_cell / sheet_to_csv / sheet_to_txt
+    -> src/internal/number-format.cjs   (cell-level orchestration: caching, BErr lookup,
+                                          the two-try fallthrough — ported from the oracle)
+    -> src/internal/ssf-adapter.cjs     (the ONLY file that requires "ssf"; also where the
+                                          numFmtId 67-71 correction lives)
+    -> ssf@0.11.2
+```
+
+No other file reaches into `ssf` directly. Swapping the backend later — e.g. for a
+Rust/WASM-based formatter once elixcee's Rust core grows one — is meant to be a
+single-file change (`ssf-adapter.cjs`'s `format(fmt, v, opts)` contract stays fixed); the
+1800+-case matrix that validated this backend becomes the acceptance suite for that swap
+too.
+
+See [`docs/licensing.md`](licensing.md) for the licensing consequence (an ordinary npm
+`dependencies` declaration, not vendored/bundled source — but still `@elixcee/xlsx`'s
+first real runtime dependency) and
+[`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) for the resulting notice.
+
+`sheet_to_csv`/`sheet_to_txt`/`sheet_to_formulae` also share a
+[`range-guard.cjs`](../packages/xlsx/src/internal/range-guard.cjs) helper: all three walk
+a worksheet's entire `!ref` rectangle regardless of sparsity, and a crafted full-grid
+`!ref` was confirmed live to not return within 25s on the real oracle. See
+[`docs/xlsx-security-model.md`](xlsx-security-model.md) for this as a registered
+`ELIXCEE_RANGE_TOO_LARGE` safety divergence.
+
 ## Findings from generating the Phase 0 manifest
 
 Running `compat/oracle/generate-manifest.mjs` against the real `xlsx@0.18.5` surfaced a

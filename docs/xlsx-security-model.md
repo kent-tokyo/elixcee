@@ -34,6 +34,21 @@ depth cannot cause a Rust stack overflow the way a recursive-descent or DOM-buil
 parser could. It can still cost unbounded time/memory via element/attribute count, which
 is why those are listed as planned limits below, not dismissed as already covered.
 
+## `packages/xlsx` (JS) limits — distinct from the Rust reader above
+
+The table above is specific to `src/reader.rs` (untrusted ZIP/XML file parsing).
+`packages/xlsx` is a separate subsystem (in-memory JS worksheet-object manipulation, no
+file I/O yet) with its own, much smaller limit set:
+
+| Limit | Value | Where | Registered as |
+|---|---|---|---|
+| `!ref` rectangle cell count (`sheet_to_formulae`/`sheet_to_csv`/`sheet_to_txt`) | 5,000,000 cells | `packages/xlsx/src/internal/range-guard.cjs` | `ELIXCEE_RANGE_TOO_LARGE`, `compat/differential/classify.mjs`'s `SAFETY_DIVERGENCE_REGISTRY` |
+| Non-finite column/row index (`encode_col`) | rejects `+Infinity` | `packages/xlsx/src/index.cjs` | `ELIXCEE_NON_FINITE_INDEX`, same registry |
+
+Both were added only after empirically confirming the real oracle actually hangs/loops
+on the corresponding input (a timeout-guarded subprocess run, not a speculative guard) —
+per this project's standing rule against adding resource limits without measurement.
+
 ## Planned limits (not yet implemented — design targets for the phase that builds the
 compat-hardened reader)
 
