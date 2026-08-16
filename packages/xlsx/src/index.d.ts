@@ -31,6 +31,23 @@ export interface WorkBook {
   Workbook?: { Sheets?: Array<{ Hidden?: 0 | 1 | 2 }> };
 }
 
+// The oracle's own types/index.d.ts declares this field as `SHEET_VERYHIDDEN` (no
+// underscore before "HIDDEN"), but its REAL RUNTIME object's own key is
+// `SHEET_VERY_HIDDEN` (confirmed live via Object.getOwnPropertyDescriptor, not assumed
+// from the types file) — a genuine mismatch already present in the oracle itself between
+// its shipped types and its shipped runtime. Declared here as SHEET_VERY_HIDDEN,
+// matching this package's actual runtime `consts` object (packages/xlsx/src/index.cjs) —
+// typing it as SHEET_VERYHIDDEN would type-check but read `undefined` at runtime, which
+// is worse than the gap it would be closing. See docs/typescript-compatibility.md — this
+// is the one deliberate INCOMPATIBLE entry in the classification scheme, chosen over
+// EXACT specifically because mirroring the oracle's admittedly-buggy types here would
+// make elixcee's own types describe elixcee's own runtime incorrectly.
+export interface XLSXConsts {
+  SHEET_VISIBLE: 0;
+  SHEET_HIDDEN: 1;
+  SHEET_VERY_HIDDEN: 2;
+}
+
 export interface OriginOption {
   /** Top-Left cell for the operation (CellAddress, "A1"-style string, or row number) */
   origin?: number | string | CellAddress;
@@ -149,6 +166,14 @@ export function sheet_to_json<T>(worksheet: WorkSheet, opts?: Sheet2JSONOpts): T
 export function sheet_to_json(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[][];
 export function sheet_to_json(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[];
 
+// Not present in xlsx@0.18.5's own types/index.d.ts at all (confirmed absent, the same
+// gap class as sheet_get_cell) despite being a real runtime export — a literal alias for
+// sheet_to_json (confirmed live: same function object, same .name). Typed identically to
+// sheet_to_json's own overload set for that reason.
+export function sheet_to_row_object_array<T>(worksheet: WorkSheet, opts?: Sheet2JSONOpts): T[];
+export function sheet_to_row_object_array(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[][];
+export function sheet_to_row_object_array(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[];
+
 export function sheet_to_formulae(worksheet: WorkSheet): string[];
 export function sheet_to_csv(worksheet: WorkSheet, options?: Sheet2CSVOpts): string;
 export function sheet_to_txt(worksheet: WorkSheet, options?: Sheet2TXTOpts): string;
@@ -162,3 +187,5 @@ export function sheet_set_array_formula(
   formula: string,
   dynamic?: boolean
 ): WorkSheet;
+
+export const consts: XLSXConsts;

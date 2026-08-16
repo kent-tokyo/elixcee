@@ -909,17 +909,34 @@ function sheetSetArrayFormula(ws, range, formula, dynamic) {
 // oracle's own `.name` property descriptor, verified live) — not a plain `fn.name = ...`
 // assignment, which silently no-ops since `.name` is non-writable by default.
 // Exceptions to "every export's .name equals its exact snake_case public key" — the
-// oracle itself breaks that pattern here: `sheet_get_cell: ws_get_cell_stub` assigns the
-// internal helper directly without a wrapper, so `XLSX.utils.sheet_get_cell.name` is
-// genuinely "ws_get_cell_stub" (confirmed live), not "sheet_get_cell". Reproduced as-is
-// per this project's fidelity-over-tidiness rule (compat/differential/metadata.test.mjs
-// is what caught this).
-const NAME_OVERRIDES = { sheet_get_cell: 'ws_get_cell_stub' };
+// oracle itself breaks that pattern in two ways:
+// - `sheet_get_cell: ws_get_cell_stub` assigns the internal helper directly without a
+//   wrapper, so `XLSX.utils.sheet_get_cell.name` is genuinely "ws_get_cell_stub"
+//   (confirmed live), not "sheet_get_cell".
+// - `sheet_to_row_object_array` is a literal alias for the SAME function object as
+//   `sheet_to_json` (confirmed live: `U.sheet_to_row_object_array === U.sheet_to_json`),
+//   which the oracle declared once as `function sheet_to_json(...)` — aliasing a key to
+//   an existing function never renames it, so both keys' `.name` reads "sheet_to_json".
+// Both reproduced as-is per this project's fidelity-over-tidiness rule
+// (compat/differential/metadata.test.mjs is what caught both).
+const NAME_OVERRIDES = { sheet_get_cell: 'ws_get_cell_stub', sheet_to_row_object_array: 'sheet_to_json' };
 
+// nameAs is for FUNCTION exports only — `consts` is a plain data object (no `.name`
+// concept; the oracle's own `consts` has no `.name` property either), so the loop below
+// skips it rather than adding a property the oracle's export doesn't have.
 function nameAs(fn, publicName) {
   Object.defineProperty(fn, 'name', { value: NAME_OVERRIDES[publicName] || publicName, configurable: true });
   return fn;
 }
+
+// SHEET_VERY_HIDDEN (underscore before "HIDDEN"), not SHEET_VERYHIDDEN — confirmed live
+// against the real oracle's RUNTIME object via Object.getOwnPropertyDescriptor, not
+// assumed from its own types/index.d.ts, which actually declares the key as
+// `SHEET_VERYHIDDEN` (no underscore) — a genuine mismatch already present in the oracle
+// itself between its shipped types and its shipped runtime. Reproduced here matching the
+// RUNTIME name, since that's what `XLSX.utils.consts.SHEET_VERY_HIDDEN` actually is at
+// call time; see docs/typescript-compatibility.md for the types-side discrepancy.
+const consts = { SHEET_VISIBLE: 0, SHEET_HIDDEN: 1, SHEET_VERY_HIDDEN: 2 };
 
 // The object literal below (not an intermediate variable reassigned to
 // `module.exports`) is required as-is: Node's ESM loader synthesizes named imports from
@@ -930,34 +947,46 @@ function nameAs(fn, publicName) {
 // load time with "Named export 'encode_col' not found" (confirmed by trying it). The
 // nameAs() loop after this assignment is a pure runtime side effect (mutating each
 // function's own `.name`), which doesn't affect what cjs-module-lexer already parsed.
+//
+// Key order matches the real oracle's own `Object.keys(XLSX.utils)` insertion order
+// exactly (confirmed live), filtered down to the keys this package currently implements
+// — not alphabetical, not grouped by this file's own section comments. A previous
+// version of this literal was grouped by function (address utils, then workbook, then
+// worksheet mutation, etc.) instead, which happened to never be checked against the
+// oracle's actual order until this comparison was added; see
+// compat/differential/metadata.test.mjs's key-order assertion.
 module.exports = {
   encode_col: encodeCol,
-  decode_col: decodeCol,
   encode_row: encodeRow,
-  decode_row: decodeRow,
   encode_cell: encodeCell,
-  decode_cell: decodeCell,
   encode_range: encodeRange,
-  decode_range: decodeRange,
+  decode_col: decodeCol,
+  decode_row: decodeRow,
   split_cell: splitCell,
+  decode_cell: decodeCell,
+  decode_range: decodeRange,
+  format_cell: formatCell,
+  sheet_add_aoa: sheetAddAoa,
+  sheet_add_json: sheetAddJson,
+  aoa_to_sheet: aoaToSheet,
+  json_to_sheet: jsonToSheet,
+  sheet_to_csv: sheetToCsv,
+  sheet_to_txt: sheetToTxt,
+  sheet_to_json: sheetToJson,
+  sheet_to_formulae: sheetToFormulae,
+  sheet_to_row_object_array: sheetToJson,
+  sheet_get_cell: sheetGetCell,
   book_new: bookNew,
   book_append_sheet: bookAppendSheet,
   book_set_sheet_visibility: bookSetSheetVisibility,
-  aoa_to_sheet: aoaToSheet,
-  sheet_add_aoa: sheetAddAoa,
-  json_to_sheet: jsonToSheet,
-  sheet_add_json: sheetAddJson,
-  sheet_get_cell: sheetGetCell,
-  format_cell: formatCell,
   cell_set_number_format: cellSetNumberFormat,
-  sheet_to_json: sheetToJson,
-  sheet_to_formulae: sheetToFormulae,
-  sheet_to_csv: sheetToCsv,
-  sheet_to_txt: sheetToTxt,
   cell_set_hyperlink: cellSetHyperlink,
   cell_set_internal_link: cellSetInternalLink,
   cell_add_comment: cellAddComment,
   sheet_set_array_formula: sheetSetArrayFormula,
+  consts,
 };
 
-for (const publicName of Object.keys(module.exports)) nameAs(module.exports[publicName], publicName);
+for (const publicName of Object.keys(module.exports)) {
+  if (typeof module.exports[publicName] === 'function') nameAs(module.exports[publicName], publicName);
+}
