@@ -9,6 +9,7 @@
 // dependency. See docs/xlsx-architecture.md's "Non-negotiable" section.
 import assert from 'node:assert/strict';
 import XLSX from 'xlsx';
+import { JSDOM } from 'jsdom';
 import * as elixcee from '../../packages/xlsx/src/index.mjs';
 import { safeDecodeRange } from '../../packages/xlsx/src/internal/safe-decode-range.cjs';
 import { classify, summarizeByApiAndVerdict, formatApiVerdictSummary, VERDICTS } from './classify.mjs';
@@ -693,6 +694,294 @@ runUnsafeForOracleCase(
   [{ A1: { t: 'n', v: 1 }, '!ref': 'A1:XFD1048576' }],
   'full-grid !ref (A1:XFD1048576) [oracle does not return within 25s, not called]'
 );
+
+// ---- sheet_to_row_object_array (Phase 1C): a literal alias for sheet_to_json, both on
+// the oracle (confirmed live: U.sheet_to_row_object_array === U.sheet_to_json) and here
+// (elixcee.sheet_to_row_object_array === elixcee.sheet_to_json, same function object —
+// see index.cjs's module.exports). A handful of cases confirming the alias behaves
+// identically is enough; the full boundary matrix already lives under sheet_to_json's own
+// fixtures above and covering it twice would test nothing new. ----
+runCase(
+  'utils.sheet_to_row_object_array',
+  () => U.sheet_to_row_object_array(U.aoa_to_sheet([['a', 'b'], [1, 2]])),
+  () => elixcee.sheet_to_row_object_array(elixcee.aoa_to_sheet([['a', 'b'], [1, 2]])),
+  [],
+  'basic 2 rows, same as sheet_to_json'
+);
+runCase(
+  'utils.sheet_to_row_object_array',
+  () => U.sheet_to_row_object_array(U.aoa_to_sheet([['a', 'b'], [1, 2]]), { header: 1 }),
+  () => elixcee.sheet_to_row_object_array(elixcee.aoa_to_sheet([['a', 'b'], [1, 2]]), { header: 1 }),
+  [],
+  'header:1, same as sheet_to_json'
+);
+runCase(
+  'utils.sheet_to_row_object_array',
+  () => U.sheet_to_row_object_array({}),
+  () => elixcee.sheet_to_row_object_array({}),
+  [],
+  '!ref absent -> []'
+);
+assert.equal(U.sheet_to_row_object_array, U.sheet_to_json, 'sanity: oracle sheet_to_row_object_array is the exact same function object as sheet_to_json');
+assert.equal(elixcee.sheet_to_row_object_array, elixcee.sheet_to_json, 'sanity: elixcee sheet_to_row_object_array is the exact same function object as sheet_to_json');
+assert.equal(elixcee.sheet_to_row_object_array.name, 'sheet_to_json', 'sanity: .name follows the underlying function, not the alias key');
+
+// ---- consts (Phase 1C): a plain data export, not a function — compared by value/shape
+// directly rather than through runCase's invoke-and-normalize machinery, since there's
+// nothing to invoke. ----
+{
+  const oracleConsts = { ...U.consts };
+  const elixceeConsts = { ...elixcee.consts };
+  const verdict = classify({ api: 'utils.consts', oracleA: oracleConsts, elixcee: elixceeConsts });
+  record('utils.consts', 'SHEET_VISIBLE/SHEET_HIDDEN/SHEET_VERY_HIDDEN values', verdict);
+  assert.deepEqual(elixceeConsts, { SHEET_VISIBLE: 0, SHEET_HIDDEN: 1, SHEET_VERY_HIDDEN: 2 });
+  assert.equal(Object.getPrototypeOf(elixcee.consts), Object.prototype, 'consts must be a plain object');
+}
+
+// ---- sheet_to_html (Phase 1C) ----
+//
+// Independent port of the oracle's sheet_to_html/make_html_row/make_html_preamble — see
+// packages/xlsx/src/index.cjs's sheetToHtml doc comment for the full algorithm notes and
+// the 3 HTML-injection findings (2 fixed, 1 reproduced) this function's design is built
+// around. Mutates: make_html_row calls format_cell for its .w-caching side effect, same
+// as format_cell/sheet_get_cell's own fixtures — every case builds a FRESH worksheet per
+// side and captures { out, ws }.
+function htmlCase(label, wsFactory, opts) {
+  runCase(
+    'utils.sheet_to_html',
+    () => { const ws = wsFactory(U); const out = U.sheet_to_html(ws, opts ? { ...opts } : undefined); return { out, ws }; },
+    () => { const ws = wsFactory(elixcee); const out = elixcee.sheet_to_html(ws, opts ? { ...opts } : undefined); return { out, ws }; },
+    [],
+    label
+  );
+}
+
+htmlCase('basic 2x2', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2]]));
+htmlCase('single cell', () => ({ A1: { t: 's', v: 'x' }, '!ref': 'A1:A1' }));
+htmlCase('!ref absent -> throws in both', () => ({}));
+htmlCase('null sheet -> throws in both', () => null);
+htmlCase('dense worksheet', () => { const ws = []; ws[0] = [{ t: 's', v: 'x' }]; ws['!ref'] = 'A1:A1'; return ws; });
+htmlCase('editable:true wraps every cell (even empty)', () => ({ A1: { t: 's', v: 'x' }, '!ref': 'A1:B1' }), { editable: true });
+htmlCase('custom header/footer strings', () => ({ A1: { t: 's', v: 'x' }, '!ref': 'A1:A1' }), { header: '<div>', footer: '</div>' });
+htmlCase('merge: top-left gets colspan, covered cells skipped', (lib) => { const ws = lib.aoa_to_sheet([['a', 'b'], ['c', 'd']]); ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }]; return ws; });
+htmlCase('merge: rowspan', (lib) => { const ws = lib.aoa_to_sheet([['a', 'b'], ['c', 'd']]); ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 1, c: 0 } }]; return ws; });
+htmlCase('formatted numeric cell (custom z, .w caching)', () => ({ A1: { t: 'n', v: 1234.5, z: '0.00' }, '!ref': 'A1:A1' }));
+htmlCase('date cell', () => ({ A1: { t: 'n', v: 46027, z: 'm/d/yy' }, '!ref': 'A1:A1' }));
+htmlCase('boolean/error cells', () => ({ A1: { t: 'b', v: true }, A2: { t: 'e', v: 7 }, '!ref': 'A1:A2' }));
+htmlCase('empty/stub cell (t=z)', () => ({ A1: { t: 'z' }, '!ref': 'A1:A1' }));
+htmlCase('non-ASCII content', () => ({ A1: { t: 's', v: 'こんにちは' }, '!ref': 'A1:A1' }));
+// A newline in cell.v is a control character (U+000A), so it falls under the SAME
+// attribute-escaping divergence as the quote-breakout case above: the oracle's
+// unescaped data-v attribute keeps the literal raw newline character (valid HTML5, if
+// unusual — a `<td data-v="line1\nline2" ...>`), while elixcee's escapeHtmlAttr converts
+// it to `&#x000a;` like every other U+0000-U+001F control character. The TEXT CONTENT
+// (the <td>'s own inner text, not the attribute) is unaffected either way — both sides
+// render "line1<br/>line2" there, since the oracle's own escapehtml already substitutes
+// '\n' -> '<br/>' for that path. Registered under the same key as the quote-breakout
+// case: both are "data-v wasn't escaped on the oracle, now is" — the same fix, a
+// different trigger character.
+{
+  const wso = { A1: { t: 's', v: 'line1\nline2' }, '!ref': 'A1:A1' };
+  const wse = { A1: { t: 's', v: 'line1\nline2' }, '!ref': 'A1:A1' };
+  const oOut = U.sheet_to_html(wso);
+  const eOut = elixcee.sheet_to_html(wse);
+  const verdict = classify({
+    api: 'utils.sheet_to_html',
+    oracleA: { hasEscapedNewlineInAttr: oOut.includes('&#x000a;'), textContent: 'line1<br/>line2' },
+    elixcee: { hasEscapedNewlineInAttr: eOut.includes('&#x000a;'), textContent: 'line1<br/>line2' },
+    securityDivergenceKey: 'sheet_to_html:unescaped_attribute',
+  });
+  record('utils.sheet_to_html', 'newline in cell value: oracle leaves a raw newline in data-v; elixcee escapes it like any other control character', verdict);
+  assert.ok(!oOut.includes('&#x000a;'), 'sanity: the oracle does not escape control characters in data-v');
+  assert.ok(eOut.includes('&#x000a;'), 'elixcee must escape the newline in the attribute');
+  assert.ok(oOut.includes('line1<br/>line2') && eOut.includes('line1<br/>line2'), 'the visible text content must still match on both sides');
+}
+htmlCase('leading/trailing whitespace in cell value (-> xml:space="preserve")', () => ({ A1: { t: 's', v: '  padded  ' }, '!ref': 'A1:A1' }));
+htmlCase('opts.id sets the table id', () => ({ A1: { t: 's', v: 'x' }, '!ref': 'A1:A1' }), { id: 'my-table' });
+
+// Hyperlinks: safe schemes match the oracle exactly; unsafe schemes are where elixcee
+// diverges (findings 1/2 above) — each tested individually since the failure mode/fix
+// differs per case, matching this project's established "test each poisoned variant
+// separately, don't assume they all behave alike" discipline (Phase 1B-3).
+htmlCase('hyperlink: https', () => ({ A1: { t: 's', v: 'x', l: { Target: 'https://example.com' } }, '!ref': 'A1:A1' }));
+htmlCase('hyperlink: http', () => ({ A1: { t: 's', v: 'x', l: { Target: 'http://example.com' } }, '!ref': 'A1:A1' }));
+htmlCase('hyperlink: mailto', () => ({ A1: { t: 's', v: 'x', l: { Target: 'mailto:a@b.com' } }, '!ref': 'A1:A1' }));
+htmlCase('hyperlink: tel', () => ({ A1: { t: 's', v: 'x', l: { Target: 'tel:+1234567890' } }, '!ref': 'A1:A1' }));
+htmlCase('hyperlink: relative path', () => ({ A1: { t: 's', v: 'x', l: { Target: '../foo.xlsx' } }, '!ref': 'A1:A1' }));
+htmlCase('hyperlink: fragment (starts with #, never wrapped at all)', () => ({ A1: { t: 's', v: 'x', l: { Target: '#Sheet2!A1' } }, '!ref': 'A1:A1' }));
+
+// ---- sheet_to_html: registered security divergences — the oracle's own output IS the
+// defect for each of these, so they use classify() directly with securityDivergenceKey,
+// same pattern as book_append_sheet/sheet_to_json's proto-key divergences. ----
+{
+  const wso = { A1: { t: 's', v: 'x" onmouseover="alert(1)" data-x="' }, '!ref': 'A1:A1' };
+  const wse = { A1: { t: 's', v: 'x" onmouseover="alert(1)" data-x="' }, '!ref': 'A1:A1' };
+  const oOut = U.sheet_to_html(wso);
+  const eOut = elixcee.sheet_to_html(wse);
+  const verdict = classify({
+    api: 'utils.sheet_to_html',
+    oracleA: { containsRawHandler: oOut.includes('onmouseover="alert(1)"') },
+    elixcee: { containsRawHandler: eOut.includes('onmouseover="alert(1)"') },
+    securityDivergenceKey: 'sheet_to_html:unescaped_attribute',
+  });
+  record('utils.sheet_to_html', 'cell value with embedded quote breaks out of data-v (oracle creates a live onmouseover handler; elixcee escapes it)', verdict);
+  assert.ok(oOut.includes('onmouseover="alert(1)"'), 'sanity: the oracle\'s own output contains a live event handler');
+  assert.ok(!eOut.includes('onmouseover="alert(1)"'), 'elixcee must not produce a live event handler');
+  assert.ok(eOut.includes('&quot;'), 'elixcee must escape the quote instead');
+}
+{
+  const wso = { A1: { t: 's', v: 'x' }, '!ref': 'A1:A1' };
+  const wse = { A1: { t: 's', v: 'x' }, '!ref': 'A1:A1' };
+  const idPayload = 'x" onmouseover="alert(4)" y="';
+  const oOut = U.sheet_to_html(wso, { id: idPayload });
+  const eOut = elixcee.sheet_to_html(wse, { id: idPayload });
+  const verdict = classify({
+    api: 'utils.sheet_to_html',
+    oracleA: { containsRawHandler: oOut.includes('onmouseover="alert(4)"') },
+    elixcee: { containsRawHandler: eOut.includes('onmouseover="alert(4)"') },
+    securityDivergenceKey: 'sheet_to_html:unescaped_attribute',
+  });
+  record('utils.sheet_to_html', 'opts.id with embedded quote breaks out of the table/cell id (oracle creates a live onmouseover handler; elixcee escapes it)', verdict);
+  assert.ok(oOut.includes('onmouseover="alert(4)"'), 'sanity: the oracle\'s own output contains a live event handler');
+  assert.ok(!eOut.includes('onmouseover="alert(4)"'), 'elixcee must not produce a live event handler');
+}
+for (const [schemeLabel, target] of [
+  ['javascript:', 'javascript:alert(1)'],
+  ['data:text/html', 'data:text/html,<script>alert(1)</script>'],
+  ['vbscript:', 'vbscript:msgbox(1)'],
+]) {
+  const wso = { A1: { t: 's', v: 'click', l: { Target: target } }, '!ref': 'A1:A1' };
+  const wse = { A1: { t: 's', v: 'click', l: { Target: target } }, '!ref': 'A1:A1' };
+  const oOut = U.sheet_to_html(wso);
+  const eOut = elixcee.sheet_to_html(wse);
+  const verdict = classify({
+    api: 'utils.sheet_to_html',
+    oracleA: { hasDangerousHref: oOut.includes('href="' + target) },
+    elixcee: { hasDangerousHref: eOut.includes('href="' + target) },
+    securityDivergenceKey: 'sheet_to_html:unsafe_href_scheme',
+  });
+  record('utils.sheet_to_html', `hyperlink Target with a ${schemeLabel} scheme (oracle renders a clickable, code-executing link; elixcee renders plain text)`, verdict);
+  assert.ok(oOut.includes('href="' + target), `sanity: the oracle's own output contains a clickable ${schemeLabel} link`);
+  assert.ok(!eOut.includes('<a '), `elixcee must not wrap ${schemeLabel} content in an <a> tag at all`);
+  assert.ok(eOut.includes('click'), 'the text content itself must still be present, just not as a link');
+}
+// .h passthrough: REPRODUCED, not fixed — see docs/compatibility-known-defects.md. This
+// is a MATCH fixture (both sides intentionally produce the same, unescaped output), not a
+// registered divergence — the point being verified is that elixcee does NOT silently
+// diverge here by "fixing" something the compatibility decision deliberately leaves as-is.
+htmlCase('cell.h raw HTML passthrough (reproduced by design, see docs/compatibility-known-defects.md)', () => ({ A1: { t: 's', v: 'safe', h: '<img src=x onerror=alert(3)>' }, '!ref': 'A1:A1' }));
+
+// A crafted full-grid !ref (~17.18 billion cells) is confirmed to not return within 25s
+// on the real oracle — reuses the same measurement basis as sheet_to_formulae/
+// sheet_to_json's identical fixtures above (docs/limits.md); never call the oracle here.
+runUnsafeForOracleCase(
+  'utils.sheet_to_html',
+  elixcee.sheet_to_html,
+  [{ A1: { t: 'n', v: 1 }, '!ref': 'A1:XFD1048576' }],
+  'full-grid !ref (A1:XFD1048576) [oracle does not return within 25s, not called]'
+);
+
+// ---- sheet_add_dom / table_to_sheet / table_to_book (Phase 1C) ----
+//
+// Independent port of the oracle's sheet_add_dom/parse_dom_table/table_to_book — see
+// packages/xlsx/src/index.cjs's doc comment for the full algorithm notes. Uses REAL DOM
+// elements (via the jsdom devDependency — testing only, not a packages/xlsx runtime
+// dependency) rather than hand-built duck-typed stubs, so this differential-tests actual
+// DOM API behavior (getElementsByTagName, .children, hasAttribute/getAttribute,
+// getComputedStyle), not just this port's own assumptions about that behavior. A single
+// HTML string builds a FRESH jsdom document (and therefore a fresh table element) per
+// side, per call — the oracle's own sheet_add_dom reads state off the table (hidden-row
+// style, attributes) but never mutates the DOM element itself, so a shared element would
+// be safe too, but building fresh matches this file's established fixture-isolation
+// discipline elsewhere.
+function domTable(html) {
+  return new JSDOM(html).window.document.querySelector('table');
+}
+
+function tableToSheetCase(label, html, opts) {
+  runCase(
+    'utils.table_to_sheet',
+    () => U.table_to_sheet(domTable(html), opts ? { ...opts } : undefined),
+    () => elixcee.table_to_sheet(domTable(html), opts ? { ...opts } : undefined),
+    [],
+    label
+  );
+}
+
+tableToSheetCase('basic 2x2', '<table><tr><td>a</td><td>1</td></tr><tr><td>b</td><td>2</td></tr></table>');
+tableToSheetCase('numeric/boolean text sniffing', '<table><tr><td>3.14</td><td>TRUE</td><td>FALSE</td></tr></table>');
+tableToSheetCase('currency/percent/parenthesized-negative text sniffing', '<table><tr><td>$1,234.56</td><td>50%</td><td>(100)</td></tr></table>');
+tableToSheetCase('date-like text, default (serial number)', '<table><tr><td>2020-01-15</td></tr></table>');
+tableToSheetCase('date-like text, cellDates:true', '<table><tr><td>2020-01-15</td></tr></table>', { cellDates: true });
+tableToSheetCase('month-name date text', '<table><tr><td>March 5, 2020</td></tr></table>');
+tableToSheetCase('non-date text that merely contains digits/letters', '<table><tr><td>Product-42</td></tr></table>');
+tableToSheetCase('rowspan merge', '<table><tr><td rowspan="2">merged</td><td>a</td></tr><tr><td>b</td></tr></table>');
+tableToSheetCase('colspan merge', '<table><tr><td colspan="2">merged</td></tr><tr><td>a</td><td>b</td></tr></table>');
+tableToSheetCase('hyperlink extraction', '<table><tr><td><a href="https://example.com">link</a></td></tr></table>');
+tableToSheetCase('hyperlink to a fragment (not extracted as .l)', '<table><tr><td><a href="#Sheet2!A1">link</a></td></tr></table>');
+tableToSheetCase('data-v/data-t attribute override', '<table><tr><td data-t="n" data-v="42">ignored text</td></tr></table>');
+tableToSheetCase('data-z attribute sets number format', '<table><tr><td data-t="n" data-v="1234.5" data-z="0.00">x</td></tr></table>');
+tableToSheetCase('empty cell -> stub', '<table><tr><td></td><td>x</td></tr></table>');
+tableToSheetCase('opts.raw:true skips all type-sniffing', '<table><tr><td>42</td></tr></table>', { raw: true });
+tableToSheetCase('hidden row via inline style (display:none), default (kept, marked hidden)', '<table><tr style="display:none"><td>hidden</td></tr><tr><td>visible</td></tr></table>');
+tableToSheetCase('hidden row via inline style, opts.display:true (skipped entirely)', '<table><tr style="display:none"><td>hidden</td></tr><tr><td>visible</td></tr></table>', { display: true });
+tableToSheetCase('opts.sheetRows caps rows parsed (and sets !fullref)', '<table><tr><td>1</td></tr><tr><td>2</td></tr><tr><td>3</td></tr></table>', { sheetRows: 2 });
+tableToSheetCase('origin: cell address string', '<table><tr><td>a</td></tr></table>', { origin: 'B2' });
+tableToSheetCase('origin: {r,c} object', '<table><tr><td>a</td></tr></table>', { origin: { r: 1, c: 1 } });
+tableToSheetCase('nbsp/named-entity decode', '<table><tr><td>a&nbsp;b&amp;c</td></tr></table>');
+tableToSheetCase('<br> decodes to a literal newline', '<table><tr><td>line1<br>line2</td></tr></table>');
+tableToSheetCase('empty table (0 rows) -> empty sheet', '<table></table>');
+tableToSheetCase('non-ASCII cell text', '<table><tr><td>こんにちは</td></tr></table>');
+
+// sheet_add_dom mutates its target ws — fresh worksheet per side, capture { out, ws }.
+function sheetAddDomCase(label, wsFactory, html, opts) {
+  runCase(
+    'utils.sheet_add_dom',
+    () => { const ws = wsFactory(U); const out = U.sheet_add_dom(ws, domTable(html), opts ? { ...opts } : undefined); return { out, ws }; },
+    () => { const ws = wsFactory(elixcee); const out = elixcee.sheet_add_dom(ws, domTable(html), opts ? { ...opts } : undefined); return { out, ws }; },
+    [],
+    label
+  );
+}
+sheetAddDomCase('append onto an existing sheet at origin:-1', (lib) => lib.aoa_to_sheet([['x']]), '<table><tr><td>y</td></tr></table>', { origin: -1 });
+sheetAddDomCase('add onto an empty {} target', () => ({}), '<table><tr><td>a</td><td>b</td></tr></table>');
+sheetAddDomCase('dense target', () => [], '<table><tr><td>a</td></tr></table>');
+sheetAddDomCase('return value is the same ws object (identity, checked separately below)', () => ({}), '<table><tr><td>x</td></tr></table>');
+{
+  const ws = {};
+  const ret = elixcee.sheet_add_dom(ws, domTable('<table><tr><td>x</td></tr></table>'));
+  assert.equal(ret, ws, 'sheet_add_dom must return the same object it was given, not a copy');
+}
+
+function tableToBookCase(label, html, opts) {
+  runCase(
+    'utils.table_to_book',
+    () => U.table_to_book(domTable(html), opts ? { ...opts } : undefined),
+    () => elixcee.table_to_book(domTable(html), opts ? { ...opts } : undefined),
+    [],
+    label
+  );
+}
+tableToBookCase('basic', '<table><tr><td>a</td></tr></table>');
+tableToBookCase('custom opts.sheet name', '<table><tr><td>a</td></tr></table>', { sheet: 'MySheet' });
+
+// ---- table_to_book: registered security divergence — the oracle's own output IS the
+// defect, same pattern as book_append_sheet's Phase 1A "__proto__" sheet-name fixture. ----
+{
+  const oWb = U.table_to_book(domTable('<table><tr><td>a</td></tr></table>'), { sheet: '__proto__' });
+  const eWb = elixcee.table_to_book(domTable('<table><tr><td>a</td></tr></table>'), { sheet: '__proto__' });
+  const verdict = classify({
+    api: 'utils.table_to_book',
+    oracleA: { ownSheetKeys: Object.keys(oWb.Sheets), sheetNames: oWb.SheetNames },
+    elixcee: { ownSheetKeys: Object.keys(eWb.Sheets), sheetNames: eWb.SheetNames },
+    securityDivergenceKey: 'table_to_book:proto_key_pollution',
+  });
+  record('utils.table_to_book', 'opts.sheet:"__proto__" (oracle corrupts wb.Sheets prototype; elixcee retains it as data)', verdict);
+  assert.deepEqual(Object.keys(oWb.Sheets), [], 'sanity: the oracle\'s own wb.Sheets ends up with zero own keys');
+  assert.deepEqual(Object.keys(eWb.Sheets), ['__proto__'], 'elixcee must keep the sheet retrievable');
+  assert.equal(Object.getPrototypeOf(eWb.Sheets), Object.prototype, 'wb.Sheets\'s own prototype must be untouched');
+  assert.equal(Object.getPrototypeOf({}), Object.prototype, 'global Object.prototype must remain unpolluted throughout');
+}
 
 // ---- format_cell / cell_set_number_format (Phase 1B-1: deliberately narrow SSF
 // subset — see classify.mjs's UNSUPPORTED_ALLOWLIST entry for 'utils.format_cell') ----

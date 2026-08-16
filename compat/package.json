@@ -16,6 +16,7 @@
     "classifier:self-check": "node differential/classify.mjs && node differential/normalize.mjs"
   },
   "devDependencies": {
+    "jsdom": "^29.1.1",
     "xlsx": "0.18.5"
   }
 }

@@ -24,19 +24,35 @@ const U = XLSX.utils;
 let failures = 0;
 
 for (const key of Object.keys(elixceeCjs)) {
-  const oracleFn = U[key];
-  const elixceeFn = elixceeCjs[key];
-  if (typeof oracleFn !== 'function') {
-    console.error(`FAIL  ${key}: not a function on the real oracle's utils (typeof ${typeof oracleFn})`);
+  const oracleVal = U[key];
+  const elixceeVal = elixceeCjs[key];
+  if (typeof oracleVal !== typeof elixceeVal) {
+    console.error(`FAIL  ${key}: type mismatch (oracle=${typeof oracleVal} elixcee=${typeof elixceeVal})`);
     failures += 1;
     continue;
   }
   const problems = [];
-  if (elixceeFn.name !== oracleFn.name) {
-    problems.push(`name: oracle=${JSON.stringify(oracleFn.name)} elixcee=${JSON.stringify(elixceeFn.name)}`);
-  }
-  if (elixceeFn.length !== oracleFn.length) {
-    problems.push(`length: oracle=${oracleFn.length} elixcee=${elixceeFn.length}`);
+  if (typeof oracleVal === 'function') {
+    // .name/.length are function-only metadata — plain data exports (e.g. `consts`) have
+    // neither and are compared purely by descriptor + value shape below instead.
+    if (elixceeVal.name !== oracleVal.name) {
+      problems.push(`name: oracle=${JSON.stringify(oracleVal.name)} elixcee=${JSON.stringify(elixceeVal.name)}`);
+    }
+    if (elixceeVal.length !== oracleVal.length) {
+      problems.push(`length: oracle=${oracleVal.length} elixcee=${elixceeVal.length}`);
+    }
+  } else {
+    // Data export (e.g. `consts`): compare own enumerable keys and their values/
+    // descriptors directly, since there's no .name/.length to check.
+    const oracleKeys = Object.keys(oracleVal).sort();
+    const elixceeKeys = Object.keys(elixceeVal).sort();
+    if (JSON.stringify(oracleKeys) !== JSON.stringify(elixceeKeys)) {
+      problems.push(`own keys: oracle=${JSON.stringify(oracleKeys)} elixcee=${JSON.stringify(elixceeKeys)}`);
+    } else {
+      for (const k of oracleKeys) {
+        if (oracleVal[k] !== elixceeVal[k]) problems.push(`${key}.${k}: oracle=${JSON.stringify(oracleVal[k])} elixcee=${JSON.stringify(elixceeVal[k])}`);
+      }
+    }
   }
   const oracleDesc = Object.getOwnPropertyDescriptor(U, key);
   const elixceeDesc = Object.getOwnPropertyDescriptor(elixceeCjs, key);
@@ -46,7 +62,7 @@ for (const key of Object.keys(elixceeCjs)) {
     }
   }
   if (elixceeEsm[key] !== elixceeCjs[key]) {
-    problems.push('CJS/ESM identity: elixceeEsm[key] !== elixceeCjs[key] (should be the same function object)');
+    problems.push('CJS/ESM identity: elixceeEsm[key] !== elixceeCjs[key] (should be the same object/function)');
   }
   if (problems.length) {
     console.error(`FAIL  ${key}: ${problems.join('; ')}`);
@@ -57,6 +73,27 @@ for (const key of Object.keys(elixceeCjs)) {
 }
 
 console.log(`\n${Object.keys(elixceeCjs).length - failures}/${Object.keys(elixceeCjs).length} exports match name/length/descriptor/CJS-ESM-identity against the oracle`);
+
+// Key ORDER, not just per-key content — Phase 1C discovered this had never been checked
+// (every key matched individually, but elixcee's module.exports literal had been ordered
+// by this file's own section comments, not the oracle's actual Object.keys() insertion
+// order, undetected across Phases 1A-1B-3). Compares elixcee's own key order against the
+// oracle's FULL key order filtered down to only the keys elixcee currently implements —
+// this must hold at every point during the utils-completion phases, not just once every
+// oracle key is implemented.
+{
+  const oracleOrder = Object.keys(U);
+  const elixceeOrder = Object.keys(elixceeCjs);
+  const oracleFiltered = oracleOrder.filter((k) => elixceeOrder.includes(k));
+  if (JSON.stringify(elixceeOrder) !== JSON.stringify(oracleFiltered)) {
+    console.error('FAIL  key order: elixcee\'s Object.keys() does not match the oracle\'s own relative order');
+    console.error(`      elixcee: ${JSON.stringify(elixceeOrder)}`);
+    console.error(`      oracle:  ${JSON.stringify(oracleFiltered)}`);
+    failures += 1;
+  } else {
+    console.log('OK    key order matches the oracle\'s own Object.keys(XLSX.utils) relative order');
+  }
+}
 
 if (failures > 0) {
   console.error('\nmetadata differential suite FAILED.');
