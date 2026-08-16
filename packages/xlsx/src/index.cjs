@@ -842,10 +842,33 @@ function sheetToTxt(sheet, opts) {
 // decodeRange (matching the oracle's own call site — sheet_to_html calls decode_range,
 // not safe_decode_range), so a malformed !ref throws here exactly as it does on the
 // oracle, unlike sheet_to_csv/sheet_to_json which use the lenient internal parser.
-// o.dense is set but deliberately never deleted (matches the oracle exactly — confirmed
+// o.dense is set but deliberately never deleted (matches the oracle exactly -- confirmed
 // live sheet_to_html leaks `dense` onto a caller's own opts object, unlike sheet_to_csv
-// which does `delete o.dense`) — an opts-mutation-fidelity quirk, not a bug to "fix".
+// which does `delete o.dense`) -- an opts-mutation-fidelity quirk, not a bug to "fix".
 //
+// SECURITY: three distinct HTML-injection-shaped findings from reading + live-probing the
+// oracle's source, each handled differently -- see docs/xlsx-security-model.md for the
+// full writeup:
+// 1. FIXED -- data-t/data-v/data-z/id (both the per-cell id and opts.id, table-level and
+//    per-cell) are built via raw string concatenation with NO escaping on the oracle
+//    (confirmed live: a cell value or opts.id containing a `"` breaks out of the
+//    attribute and injects an arbitrary onXXX handler -- e.g. a cell.v of
+//    `x" onmouseover="alert(1)" y="` produces a LIVE onmouseover handler on the real
+//    oracle's output). escapeHtmlAttr (below) is used for every attribute value this
+//    function builds.
+// 2. FIXED -- cell.l.Target is embedded into `href="..."` with no scheme check (confirmed
+//    live: a `javascript:` Target produces a clickable, code-executing link on the real
+//    oracle -- quote-escaping alone does NOT fix this, since no quote is needed to make a
+//    href value dangerous). isSafeHrefTarget (below) allow-lists http(s)/mailto/tel/ftp/
+//    relative/fragment targets; anything else renders as plain text, no <a> wrapper.
+// 3. REPRODUCED, NOT FIXED -- cell.h (a documented raw-HTML rich-text rendering field) is
+//    used completely as-is when present, with zero escaping, on both the oracle and here.
+//    This is the field's own documented, intentional purpose (rendering rich text like
+//    `<b>bold</b>`) -- escaping it would silently break that feature rather than fix a
+//    bug. `packages/xlsx` has no file reader yet, so `.h` can only enter this function via
+//    a caller explicitly setting it; that caller is responsible for only putting
+//    known-safe HTML there, exactly as a SheetJS consumer already must be today. See
+//    docs/compatibility-known-defects.md.
 const HTML_ENTITY_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&apos;', '"': '&quot;' };
 const HTML_DANGEROUS_CHARS_RE = /[&<>'"]/g;
 const HTML_CONTROL_CHARS_RE = /[\u0000-\u001f]/g;
@@ -859,21 +882,35 @@ function escapeHtmlText(text) {
   return String(text).replace(HTML_DANGEROUS_CHARS_RE, (ch) => HTML_ENTITY_MAP[ch]).replace(/\n/g, '<br/>').replace(HTML_CONTROL_CHARS_RE, hexEntity);
 }
 
+// Attribute-value context: deliberately does NOT substitute '\n' with '<br/>' -- a literal
+// '<br/>' tag injected into a quoted attribute value is itself an escaping bug (the oracle
+// never does this either, since it never escapes attribute values at all; this function is
+// new, not a port of anything in xlsx.js).
+function escapeHtmlAttr(text) {
+  return String(text).replace(HTML_DANGEROUS_CHARS_RE, (ch) => HTML_ENTITY_MAP[ch]).replace(HTML_CONTROL_CHARS_RE, hexEntity);
+}
+
 const HTML_TAG_PRESERVE_WS_RE = /(^\s|\s$|\n)/;
 
-// Matches the oracle's own writextag exactly -- attribute VALUES are NOT escaped here
-// (matching the oracle's own wxt_helper, which builds `k + '="' + h[k] + '"'` via raw
-// concatenation with no escaping at all). This is a known, live-confirmed defect in the
-// oracle, not a design choice -- see the fix(xlsx) commit that follows this one.
+// Matches the oracle's own writextag, plus escaping every attribute value (the fix) --
+// unescaped attribute-value concatenation was the oracle's own bug, not a feature.
 function buildHtmlTag(tag, inner, attrs) {
   let attrStr = '';
   if (attrs) {
-    for (const k of Object.keys(attrs)) attrStr += ' ' + k + '="' + attrs[k] + '"';
+    for (const k of Object.keys(attrs)) attrStr += ' ' + k + '="' + escapeHtmlAttr(attrs[k]) + '"';
   }
   if (inner != null) {
     return '<' + tag + attrStr + (HTML_TAG_PRESERVE_WS_RE.test(inner) ? ' xml:space="preserve"' : '') + '>' + inner + '</' + tag + '>';
   }
   return '<' + tag + attrStr + '/>';
+}
+
+const SAFE_HREF_SCHEME_RE = /^(?:https?|mailto|tel|ftp):/i;
+function isSafeHrefTarget(target) {
+  if (typeof target !== 'string' || target === '') return false;
+  if (target.charAt(0) === '#' || target.charAt(0) === '/') return true;
+  if (target.charAt(0) === '.' && (target.charAt(1) === '/' || (target.charAt(1) === '.' && target.charAt(2) === '/'))) return true;
+  return SAFE_HREF_SCHEME_RE.test(target);
 }
 
 function makeHtmlRow(sheet, r, R, o) {
@@ -907,7 +944,7 @@ function makeHtmlRow(sheet, r, R, o) {
       if (cell.v != null) sp['data-v'] = cell.v;
       if (cell.z != null) sp['data-z'] = cell.z;
       if (cell.l && (cell.l.Target || '#').charAt(0) !== '#') {
-        w = '<a href="' + cell.l.Target + '">' + w + '</a>';
+        w = isSafeHrefTarget(cell.l.Target) ? '<a href="' + escapeHtmlAttr(cell.l.Target) + '">' + w + '</a>' : w;
       }
     }
     sp.id = (o.id || 'sjs') + '-' + coord;
@@ -917,7 +954,7 @@ function makeHtmlRow(sheet, r, R, o) {
 }
 
 function makeHtmlPreamble(o) {
-  return '<table' + (o && o.id ? ' id="' + o.id + '"' : '') + '>';
+  return '<table' + (o && o.id ? ' id="' + escapeHtmlAttr(o.id) + '"' : '') + '>';
 }
 
 const HTML_BEGIN = '<html><head><meta charset="utf-8"/><title>SheetJS Table Export</title></head><body>';

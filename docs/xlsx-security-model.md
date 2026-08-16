@@ -102,6 +102,57 @@ Any code that builds one of these key-indexed structures must use `Object.define
 so that a crafted `"__proto__"` key is stored as ordinary data instead of reaching (or
 being silently swallowed by) the object's own `[[Prototype]]`.
 
+The same rule caught a second, distinct instance during Phase 1C: `utils.table_to_book`'s
+internal sheet-to-workbook construction assigns `sheets[n] = sheet` where `n` comes from a
+caller-controlled `opts.sheet` — confirmed live the oracle's own `wb.Sheets` prototype
+gets corrupted the same way for `opts.sheet: "__proto__"`. Fixed identically
+(`Object.defineProperty`) in `sheetToWorkbookSafe` (`packages/xlsx/src/index.cjs`).
+
+## HTML-injection-safe attribute/URL handling (`sheet_to_html`, Phase 1C)
+
+`utils.sheet_to_html` renders a worksheet as an HTML `<table>` — reading + live-probing
+the oracle's own `make_html_row`/`make_html_preamble` source surfaced three distinct
+HTML-injection-shaped findings, handled three different ways:
+
+1. **Fixed.** `data-t`/`data-v`/`data-z`/`id` (both the per-cell `id` and `opts.id`,
+   table-level and per-cell) are built by the oracle via raw string concatenation with NO
+   escaping at all — confirmed live: a cell value or `opts.id` containing `"` breaks out
+   of the attribute and injects an arbitrary `onXXX` handler that fires the instant the
+   returned markup is rendered by a browser (this function's output is documented as
+   ready-to-render HTML, a common real-world use — SheetJS's own docs show it for exactly
+   that). Applies to any cell value/number-format string/id containing one of `&<>'"` or a
+   U+0000-U+001F control character — ordinary spreadsheet content, not just a crafted
+   probe. `packages/xlsx` escapes every attribute value it builds (`escapeHtmlAttr`,
+   distinct from the text-content escaper `escapeHtmlText` — the two must NOT be shared,
+   since the text-content escaper substitutes `\n` with a literal `<br/>` tag, which would
+   itself be an escaping bug if applied inside a quoted attribute value). Registered as
+   `sheet_to_html:unescaped_attribute`.
+2. **Fixed, separately.** `cell.l.Target` is embedded into `href="..."` with no URI-scheme
+   check at all — confirmed live: a `javascript:` Target produces a clickable,
+   code-executing link in the generated HTML. Quote-escaping (finding 1) does **not** fix
+   this — no quote character is needed to make a `href` value dangerous, so this is a
+   distinct failure mode requiring a distinct fix (a scheme check, not a character
+   escaper) and its own registry entry. `packages/xlsx` allow-lists `http(s)`/`mailto`/
+   `tel`/`ftp`/relative/fragment targets (`isSafeHrefTarget`); anything else renders as
+   plain text with no `<a>` wrapper at all, rather than a link to a rejected scheme.
+   Registered as `sheet_to_html:unsafe_href_scheme`.
+3. **Reproduced, NOT fixed — this is a deliberate compatibility decision, not an
+   oversight.** `cell.h` (a documented raw-HTML rich-text rendering field) is used
+   completely as-is when present, on both the oracle and here — see
+   `docs/compatibility-known-defects.md`. Escaping it would break its own documented
+   purpose (rendering rich text like `<b>bold</b>`) rather than fix a bug. `packages/xlsx`
+   has no file reader yet, so `.h` can only enter this function via a caller explicitly
+   setting it — that caller carries the same sanitization responsibility a real SheetJS
+   consumer already has today. **Revisit this decision once a future phase's file reader
+   can populate `.h` from untrusted rich-text runs** — the "no file I/O yet" premise this
+   decision rests on will no longer hold at that point.
+
+Both fixed findings are registered in `SECURITY_DIVERGENCE_REGISTRY` (not
+`SAFETY_DIVERGENCE_REGISTRY`) — HTML/script injection is a security concern regardless of
+whether the dangerous value entered via untrusted file content or a caller-supplied value,
+unlike the resource-exhaustion divergences above where the file-vs-argument distinction
+matters for the reader's own future threat model.
+
 ## Intentional non-compatibility policy
 
 When matching the oracle's behavior on a given input would mean reproducing a resource-

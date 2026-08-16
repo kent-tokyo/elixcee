@@ -93,6 +93,15 @@ export const SECURITY_DIVERGENCE_REGISTRY = new Map([
       'touched. See packages/xlsx/src/index.cjs\'s bookAppendSheet.',
   ],
   [
+    'table_to_book:proto_key_pollution',
+    'The same hazard as book_append_sheet above, in a different oracle code path: ' +
+      'table_to_book builds its returned WorkBook via a `sheets[n] = sheet` assignment ' +
+      '(n from a caller-controlled opts.sheet), not via book_append_sheet — confirmed ' +
+      'live opts.sheet:"__proto__" corrupts the resulting wb.Sheets prototype the same ' +
+      'way. Fixed identically with Object.defineProperty. See ' +
+      'packages/xlsx/src/index.cjs\'s sheetToWorkbookSafe.',
+  ],
+  [
     'sheet_to_json:proto_header_primitive_dropped',
     'An explicit opts.header array may legitimately contain the literal string ' +
       '"__proto__" (spreadsheet column titled that, or a crafted probe). With a ' +
@@ -115,6 +124,30 @@ export const SECURITY_DIVERGENCE_REGISTRY = new Map([
       'Object.defineProperty write keeps the row a plain object with the value stored as ' +
       'ordinary data, matching the primitive-value divergence\'s reasoning above.',
   ],
+  [
+    'sheet_to_html:unescaped_attribute',
+    'The real oracle builds data-t/data-v/data-z/id (both the per-cell id and opts.id, ' +
+      'table-level and per-cell) via raw string concatenation with NO escaping ' +
+      '(confirmed live: a cell value or opts.id containing `"` breaks out of the ' +
+      'attribute and injects an arbitrary onXXX handler that fires when the output is ' +
+      'inserted into a live DOM). Applies to any cell value/number-format/id containing ' +
+      "one of `&<>'\"` or a \\u0000-\\u001f control character — ordinary spreadsheet " +
+      'content, not just a crafted probe. Elixcee escapes every attribute value it ' +
+      'builds (escapeHtmlAttr). See packages/xlsx/src/index.cjs\'s sheetToHtml doc ' +
+      'comment (finding 1) and docs/xlsx-security-model.md.',
+  ],
+  [
+    'sheet_to_html:unsafe_href_scheme',
+    'cell.l.Target is embedded into `href="..."` with no scheme check on the real ' +
+      'oracle (confirmed live: a `javascript:` Target produces a clickable, ' +
+      'code-executing link in the generated HTML — quote-escaping alone does not fix ' +
+      'this, since no quote character is needed to make a href value dangerous). ' +
+      'Elixcee allow-lists http(s)/mailto/tel/ftp/relative/fragment targets ' +
+      '(isSafeHrefTarget); anything else renders as plain text with no <a> wrapper. A ' +
+      'distinct failure mode from the attribute-escaping divergence above (a scheme ' +
+      'check, not a character-escaping fix), so kept as its own registry entry. See ' +
+      'packages/xlsx/src/index.cjs\'s sheetToHtml doc comment (finding 2).',
+  ],
   // 'ELIXCEE_ZIP_ENTRY_LIMIT' => 'zip bomb protection, see docs/xlsx-security-model.md',
 ]);
 
@@ -130,7 +163,7 @@ export const SAFETY_DIVERGENCE_REGISTRY = new Map([
   ],
   [
     'ELIXCEE_RANGE_TOO_LARGE',
-    'sheet_to_formulae/sheet_to_csv/sheet_to_txt/sheet_to_json all iterate every (row,col) pair in a ' +
+    'sheet_to_formulae/sheet_to_csv/sheet_to_txt/sheet_to_json/sheet_to_html all iterate every (row,col) pair in a ' +
       "worksheet's !ref rectangle regardless of sparsity — confirmed live (timeout-" +
       "guarded subprocess) that a crafted full-grid !ref ('A1:XFD1048576', ~17.18 " +
       'billion cells) does not return within 25s on the real oracle\'s sheet_to_csv, and ' +
@@ -354,9 +387,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   );
   assert.equal(
     SECURITY_DIVERGENCE_REGISTRY.size,
-    3,
-    'Phase 1A + 1B-3: three security divergences registered (book_append_sheet proto-key, ' +
-      'sheet_to_json proto-header primitive-dropped, sheet_to_json proto-header object-corruption)'
+    6,
+    'Phase 1A + 1B-3 + 1C: six security divergences registered (book_append_sheet ' +
+      'proto-key, table_to_book proto-key, sheet_to_json proto-header primitive-dropped, ' +
+      'sheet_to_json proto-header object-corruption, sheet_to_html unescaped attribute, ' +
+      'sheet_to_html unsafe href scheme)'
   );
   assert.equal(
     SAFETY_DIVERGENCE_REGISTRY.size,
