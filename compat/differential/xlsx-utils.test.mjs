@@ -805,6 +805,126 @@ for (const poisoned of ['__proto__', 'constructor', 'prototype', 'toString', 'ha
   assert.equal(({}).polluted, undefined, 'Phase 1B-2A probes must not have added a "polluted" property reachable from a fresh {}');
 }
 
+// ---- format_cell: additional coverage for formats the narrow Phase 1B-1/1B-2A subset
+// could not render (now backed by the real SSF engine, Phase 1B-2B) ----
+formatCellCase('yyyy-mm-dd date format', { t: 'n', v: 46027, z: 'yyyy-mm-dd' });
+formatCellCase('percent format', { t: 'n', v: 0.5, z: '0.00%' });
+formatCellCase('conditional [Red] format, positive branch', { t: 'n', v: 5, z: '0.00;[Red]-0.00' });
+formatCellCase('conditional [Red] format, negative branch', { t: 'n', v: -5, z: '0.00;[Red]-0.00' });
+formatCellCase('exponential format', { t: 'n', v: 123456, z: '0.00E+00' });
+formatCellCase('fraction format', { t: 'n', v: 1.5, z: '# ?/?' });
+formatCellCase('thousands separator format', { t: 'n', v: 1234567, z: '#,##0' });
+formatCellCase('[h]:mm:ss elapsed time format', { t: 'n', v: 1.5, z: '[h]:mm:ss' });
+// A cell.z the SSF engine rejects (confirmed live: an unterminated bracket) falls
+// through to the numFmtId-based General/date default instead of propagating the error
+// — restored in Phase 1B-2B along with the real SSF engine (Phase 1B-1's narrow subset
+// never had a second try to fall through to).
+formatCellCase('cell.z SSF rejects -> falls through to General default', { t: 'n', v: 42, z: '[' });
+
+// ---- sheet_to_csv / sheet_to_txt (Phase 1B-2B) ----
+function csvCase(label, wsFactory, opts) {
+  runCase(
+    'utils.sheet_to_csv',
+    () => sheetToCsvWithFreshOpts(U.sheet_to_csv, wsFactory, opts),
+    () => sheetToCsvWithFreshOpts(elixcee.sheet_to_csv, wsFactory, opts),
+    [],
+    label
+  );
+}
+function txtCase(label, wsFactory, opts) {
+  runCase(
+    'utils.sheet_to_txt',
+    () => sheetToCsvWithFreshOpts(U.sheet_to_txt, wsFactory, opts),
+    () => sheetToCsvWithFreshOpts(elixcee.sheet_to_txt, wsFactory, opts),
+    [],
+    label
+  );
+}
+// Both sheet_to_csv and sheet_to_txt mutate their `opts` argument (sheet_to_csv sets
+// then deletes o.dense; sheet_to_txt sets o.FS/o.RS) — a shared `opts` object handed to
+// both the oracle and elixcee calls would leak mutation from one call into the other
+// (the same class of hazard as Phase 1B-1's shared-worksheet lesson), so every case
+// builds a FRESH worksheet AND a fresh opts object per side. Returns { out, opts } so a
+// fixture can assert on the mutation itself, not just the string output.
+function sheetToCsvWithFreshOpts(fn, wsFactory, opts) {
+  const o = opts ? { ...opts } : undefined;
+  const out = o === undefined ? fn(wsFactory()) : fn(wsFactory(), o);
+  return { out, opts: o };
+}
+
+csvCase('embedded quote', () => ({ A1: { t: 's', v: 'has "quotes" here' }, '!ref': 'A1:A1' }));
+csvCase('embedded newline', () => ({ A1: { t: 's', v: 'line1\nline2' }, '!ref': 'A1:A1' }));
+csvCase('CRLF record separator (opts.RS)', () => ({ A1: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:A2' }), { RS: '\r\n' });
+csvCase('formatted numeric cell (custom z)', () => {
+  const ws = { A1: { t: 'n', v: 1234.5, z: '0.00' }, '!ref': 'A1:A1' };
+  return ws;
+});
+csvCase('formatted date cell', () => ({ A1: { t: 'n', v: 46027, z: 'm/d/yy' }, '!ref': 'A1:A1' }));
+csvCase('boolean cells', () => ({ A1: { t: 'b', v: true }, A2: { t: 'b', v: false }, '!ref': 'A1:A2' }));
+csvCase('error cell', () => ({ A1: { t: 'e', v: 7 }, '!ref': 'A1:A1' }));
+csvCase('formula with cached value (renders the value, not "=formula")', () => ({ A1: { t: 'n', v: 5, f: '1+4' }, '!ref': 'A1:A1' }));
+csvCase('formula only, no cached value (renders "=formula")', () => ({ A1: { t: 'n', f: '1+4' }, '!ref': 'A1:A1' }));
+csvCase('formula containing a comma gets quoted', () => ({ A1: { t: 'n', f: 'SUM(1,2)' }, '!ref': 'A1:A1' }));
+csvCase('w present, differs from v', () => ({ A1: { t: 's', v: 'raw', w: 'rendered' }, '!ref': 'A1:A1' }));
+csvCase('w absent', () => ({ A1: { t: 's', v: 'plain' }, '!ref': 'A1:A1' }));
+csvCase('empty trailing columns', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:D1' }));
+csvCase('empty trailing rows', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:A4' }));
+csvCase(
+  'hidden row skipped with skipHidden:true',
+  () => ({ A1: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:A2', '!rows': [{ hidden: true }, {}] }),
+  { skipHidden: true }
+);
+csvCase(
+  'hidden column skipped with skipHidden:true',
+  () => ({ A1: { t: 'n', v: 1 }, B1: { t: 'n', v: 2 }, '!ref': 'A1:B1', '!cols': [{ hidden: true }, {}] }),
+  { skipHidden: true }
+);
+csvCase(
+  'hidden row/col present but skipHidden not set -> ignored',
+  () => ({ A1: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:A2', '!rows': [{ hidden: true }, {}] })
+);
+csvCase('dense worksheet', () => {
+  const ws = [];
+  ws[0] = [{ t: 'n', v: 1 }, { t: 'n', v: 2 }];
+  ws['!ref'] = 'A1:B1';
+  return ws;
+});
+csvCase('sparse worksheet', () => ({ A1: { t: 'n', v: 1 }, B1: { t: 'n', v: 2 }, '!ref': 'A1:B1' }));
+csvCase('!ref absent -> ""', () => ({}));
+csvCase('sheet is null -> ""', () => null);
+csvCase('non-ASCII content', () => ({ A1: { t: 's', v: 'こんにちは' }, '!ref': 'A1:A1' }));
+csvCase('surrogate pair (emoji) content', () => ({ A1: { t: 's', v: '😀emoji' }, '!ref': 'A1:A1' }));
+csvCase('blankrows default (blank line kept)', () => ({ A1: { t: 'n', v: 1 }, A3: { t: 'n', v: 3 }, '!ref': 'A1:A3' }));
+csvCase('blankrows:false (blank line dropped, separator not doubled)', () => ({ A1: { t: 'n', v: 1 }, A3: { t: 'n', v: 3 }, '!ref': 'A1:A3' }), { blankrows: false });
+csvCase('forceQuotes', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:A1' }), { forceQuotes: true });
+csvCase('rawNumbers:true (skips format_cell for numeric cells)', () => ({ A1: { t: 'n', v: 1234.5, z: '0.00' }, '!ref': 'A1:A1' }), { rawNumbers: true });
+csvCase('"ID"-valued cell gets quoted (SYLK-detection legacy)', () => ({ A1: { t: 's', v: 'ID' }, '!ref': 'A1:A1' }));
+csvCase(
+  'strip:true with FS="." strips the whole row (FS used raw as a regex fragment, only "|" is escaped)',
+  () => ({ A1: { t: 'n', v: 1 }, B1: { t: 'n', v: 2 }, '!ref': 'A1:B1' }),
+  { FS: '.', strip: true }
+);
+// opts.dense is set then deleted by sheet_to_csv, and opts.FS/RS are set by
+// sheet_to_txt — asserted directly on the returned `opts` (see sheetToCsvWithFreshOpts).
+csvCase('opts.dense is set then deleted (mutation fidelity)', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:A1' }), { dense: true });
+
+txtCase('default (BOM + UTF-16LE)', () => ({ A1: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:A2' }));
+txtCase('type:"string" (plain tab/newline text)', () => ({ A1: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:A2' }), { type: 'string' });
+txtCase('empty sheet -> BOM only', () => ({}));
+txtCase('surrogate pair (emoji) content, type:"string"', () => ({ A1: { t: 's', v: '😀emoji' }, '!ref': 'A1:A1' }), { type: 'string' });
+txtCase('opts.FS/RS are set by sheet_to_txt itself (mutation fidelity)', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:A1' }), {});
+
+// ---- security probes: verified live via a timeout-guarded subprocess (not assumed)
+// before being trusted as normal fixtures — see the crafted-full-grid-!ref probe above
+// (ELIXCEE_RANGE_TOO_LARGE) and compat/differential/ssf-format.test.mjs's format-string
+// probes (long format code, many sections, many quote/escape, long numeric strings,
+// crafted conditional formats — all confirmed fast, no new limit added for those). No
+// additional csv/txt-specific limit is added here since none of these terminate slowly
+// on the real oracle.
+csvCase('cell value is NaN', () => ({ A1: { t: 'n', v: NaN }, '!ref': 'A1:A1' }));
+csvCase('cell value is Infinity', () => ({ A1: { t: 'n', v: Infinity }, '!ref': 'A1:A1' }));
+csvCase('very long cell string value (10,000 chars)', () => ({ A1: { t: 's', v: 'x'.repeat(10000) }, '!ref': 'A1:A1' }));
+
 // ---- safe_decode_range: deliberately NOT public ----
 // Confirmed absent from the real oracle's public API — not just `typeof undefined`, but
 // `hasOwnProperty` false, ruling out an inherited/prototype-chain false negative:
