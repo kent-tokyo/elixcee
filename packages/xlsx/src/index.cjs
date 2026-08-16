@@ -16,6 +16,9 @@
 
 const { safeDecodeRange } = require('./internal/safe-decode-range.cjs');
 const { checkRangeSize } = require('./internal/range-guard.cjs');
+const { datenum } = require('./internal/datenum.cjs');
+const { format: ssfFormat } = require('./internal/ssf-adapter.cjs');
+const { formatCell, cellSetNumberFormat } = require('./internal/number-format.cjs');
 
 // ---- column ----
 
@@ -23,13 +26,6 @@ const { checkRangeSize } = require('./internal/range-guard.cjs');
 // and compat/differential/classify.mjs's SAFETY_DIVERGENCE_REGISTRY, which is keyed by
 // these exact strings — do not rename casually).
 const ELIXCEE_NON_FINITE_INDEX = 'ELIXCEE_NON_FINITE_INDEX';
-
-// Thrown by the number-format subsystem (see "number formats" section below) for any
-// numFmtId/format-code outside the deliberately narrow supported subset. Registered in
-// compat/differential/classify.mjs's UNSUPPORTED_ALLOWLIST under 'utils.format_cell' —
-// NOT a SAFETY/SECURITY divergence (no pathological-input or untrusted-file angle), just
-// an honestly-reported implementation gap so a caller never gets a silently-wrong string.
-const ELIXCEE_NUMFMT_UNSUPPORTED = 'ELIXCEE_NUMFMT_UNSUPPORTED';
 
 function encodeCol(col) {
   // The oracle's loop (`for(++col; col; col=Math.floor((col-1)/26))`) never terminates
@@ -239,168 +235,21 @@ function bookSetSheetVisibility(wb, sh, vis) {
   wb.Workbook.Sheets[idx].Hidden = vis;
 }
 
-// ---- number formats (deliberately narrow SSF subset) ----
+// ---- number formats ----
 //
-// The real oracle's number-format engine (SSF_format/eval_fmt, ~900 lines — equivalent
-// to the standalone "ssf" npm package, one of the 7 Apache-2.0 deps packages/xlsx
-// deliberately does not take) is out of scope for Phase 1B-1. Read the actual algorithm
-// (compat/node_modules/xlsx/xlsx.js) to find the ONE thing worksheet-mutation actually
-// needs: sheet_add_aoa's Date branch always formats with `o.dateNF || table_fmt[14]`
-// ('m/d/yy') — nothing else in sheet_add_aoa/sheet_add_json calls SSF_format at all
-// (confirmed live: XLSX.utils.json_to_sheet's Date cells get `z:'m/d/yy'` but no `.w`
-// at all — sheet_add_json never renders a display string). So this section implements
-// exactly two format codes end-to-end — 'General' (numFmtId 0) and 'm/d/yy' (numFmtId
-// 14, the default date format) — plus `datenum` (Date -> Excel serial). Any other
-// format code/id throws ELIXCEE_NUMFMT_UNSUPPORTED rather than guessing a rendering;
-// format_cell registers this gap explicitly (see compat/differential/classify.mjs's
-// UNSUPPORTED_ALLOWLIST under 'utils.format_cell') instead of silently being wrong.
-
-// Ported from the oracle's `datenum` (not `datenum_local`, which is a separate
-// SSF-internal function used only when a raw Date reaches SSF_format directly — the
-// worksheet-mutation call paths below always pre-convert via this one first).
-const DATENUM_BASEDATE = new Date(1899, 11, 30, 0, 0, 0);
-function datenum(v, date1904) {
-  let epoch = v.getTime();
-  if (date1904) epoch -= 1462 * 24 * 60 * 60 * 1000;
-  const dnthresh = DATENUM_BASEDATE.getTime() + (v.getTimezoneOffset() - DATENUM_BASEDATE.getTimezoneOffset()) * 60000;
-  return (epoch - dnthresh) / (24 * 60 * 60 * 1000);
-}
-
-// ---- 'General' number rendering — ported from SSF_general/SSF_general_num and their
-// helpers. Self-contained (no dependency on the format-string interpreter), confirmed by
-// reading the source: these are the only functions SSF_format's General branch reaches.
-function ssfStripDecimal(o) {
-  return o.indexOf('.') === -1 ? o : o.replace(/(?:\.0*|(\.\d*[1-9])0+)$/, '$1');
-}
-function ssfNormalizeExp(o) {
-  if (o.indexOf('E') === -1) return o;
-  return o.replace(/(?:\.0*|(\.\d*[1-9])0+)[Ee]/, '$1E').replace(/(E[+-])(\d)$/, '$10$2');
-}
-function ssfSmallExp(v) {
-  const w = v < 0 ? 12 : 11;
-  let o = ssfStripDecimal(v.toFixed(12));
-  if (o.length <= w) return o;
-  o = v.toPrecision(10);
-  if (o.length <= w) return o;
-  return v.toExponential(5);
-}
-function ssfLargeExp(v) {
-  const o = ssfStripDecimal(v.toFixed(11));
-  return o.length > (v < 0 ? 12 : 11) || o === '0' || o === '-0' ? v.toPrecision(6) : o;
-}
-function ssfGeneralNum(v) {
-  const V = Math.floor(Math.log(Math.abs(v)) * Math.LOG10E);
-  let o;
-  if (V >= -4 && V <= -1) o = v.toPrecision(10 + V);
-  else if (Math.abs(V) <= 9) o = ssfSmallExp(v);
-  else if (V === 10) o = v.toFixed(10).substr(0, 12);
-  else o = ssfLargeExp(v);
-  return ssfStripDecimal(ssfNormalizeExp(o.toUpperCase()));
-}
-function ssfGeneral(v) {
-  switch (typeof v) {
-    case 'string':
-      return v;
-    case 'boolean':
-      return v ? 'TRUE' : 'FALSE';
-    case 'number':
-      return (v | 0) === v ? v.toString(10) : ssfGeneralNum(v);
-    case 'undefined':
-      return '';
-    default:
-      if (v === null) return '';
-      // A raw Date reaching General here (rather than pre-converted to a serial by the
-      // caller) is outside the scope this section supports — see module doc comment.
-      throwNumfmtUnsupported('General rendering of ' + Object.prototype.toString.call(v));
-  }
-}
-
-// ---- 'm/d/yy' (numFmtId 14, the default date format) — ported from SSF_parse_date_code's
-// non-Hijri integer-date branch (only y/m/d are needed; time-of-day/day-of-week are not
-// part of this format string) plus the literal 'm/d/yy' token layout, both confirmed
-// against a live oracle run (including the v|0 NaN->0 coercion and the out-of-range ->
-// "" fallback — see compat/differential/xlsx-utils.test.mjs's format_cell matrix).
-function serialToMDYY(v) {
-  if (v > 2958465 || v < 0) return '';
-  let date = v | 0;
-  let y;
-  let m;
-  let d;
-  if (date === 60) {
-    y = 1900;
-    m = 2;
-    d = 29;
-  } else if (date === 0) {
-    y = 1900;
-    m = 1;
-    d = 0;
-  } else {
-    if (date > 60) --date;
-    const dt = new Date(1900, 0, 1);
-    dt.setDate(dt.getDate() + date - 1);
-    y = dt.getFullYear();
-    m = dt.getMonth() + 1;
-    d = dt.getDate();
-  }
-  return m + '/' + d + '/' + String(((y % 100) + 100) % 100).padStart(2, '0');
-}
-
-function throwNumfmtUnsupported(detail) {
-  const err = new Error('number format not implemented: ' + detail);
-  err.code = ELIXCEE_NUMFMT_UNSUPPORTED;
-  throw err;
-}
-
-// fmt is either a resolved format STRING (cell.z, already has any dateNF substitution
-// applied by the caller) or a bare numFmtId NUMBER (the (cell.XF||{}).numFmtId fallback
-// path, which in this package is always 0 or 14 since nothing here ever sets cell.XF).
-function ssfFormat(fmt, v) {
-  let sfmt = fmt;
-  if (typeof fmt === 'number') {
-    if (fmt === 0) sfmt = 'General';
-    else if (fmt === 14) sfmt = 'm/d/yy';
-    else throwNumfmtUnsupported('numFmtId ' + fmt);
-  }
-  if (sfmt === 'General') return ssfGeneral(v);
-  if (sfmt === 'm/d/yy') return serialToMDYY(v);
-  return throwNumfmtUnsupported('format code ' + JSON.stringify(sfmt));
-}
-
-// Excel BIFF error-code -> display-string lookup, used by format_cell for error cells
-// (cell.v is a numeric code there, not the "#DIV/0!" string). Full table — small and
-// self-contained, no reason to narrow it like the format-string subset above.
-const B_ERR = {
-  0x00: '#NULL!',
-  0x07: '#DIV/0!',
-  0x0f: '#VALUE!',
-  0x17: '#REF!',
-  0x1d: '#NAME?',
-  0x24: '#NUM!',
-  0x2a: '#N/A',
-  0x2b: '#GETTING_DATA',
-  0xff: '#WTF?',
-};
-
-function cellSetNumberFormat(cell, fmt) {
-  cell.z = fmt;
-  return cell;
-}
-
-function safeFormatCell(cell, v) {
-  const q = cell.t === 'd' && v instanceof Date;
-  const val = q ? datenum(v) : v;
-  const w = cell.z != null ? ssfFormat(cell.z, val) : ssfFormat(q ? 14 : 0, val);
-  cell.w = w;
-  return w;
-}
-
-function formatCell(cell, v, o) {
-  if (cell == null || cell.t == null || cell.t === 'z') return '';
-  if (cell.w !== undefined) return cell.w;
-  if (cell.t === 'd' && !cell.z && o && o.dateNF) cell.z = o.dateNF;
-  if (cell.t === 'e') return B_ERR[cell.v] || cell.v;
-  return safeFormatCell(cell, v == null ? cell.v : v);
-}
+// format_cell / cell_set_number_format live in ./internal/number-format.cjs, backed by
+// the real SSF engine via ./internal/ssf-adapter.cjs (see docs/xlsx-architecture.md's
+// "SSF backend" decision — a deliberate, disclosed transitional runtime dependency on
+// `ssf@0.11.2`, confirmed byte-identical to the oracle's bundled engine across an
+// 819-case matrix, replacing Phase 1B-1's deliberately-narrow 'General'/'m/d/yy'-only
+// subset). `datenum` (Date -> Excel serial, unrelated to the format-string engine
+// itself) lives in ./internal/datenum.cjs, shared with sheet_add_aoa/sheet_add_json
+// below.
+//
+// sheet_add_aoa's Date branch calls `ssfFormat` directly (not through format_cell's
+// safeFormatCell two-try fallback) — confirmed live: an aoa_to_sheet() call with a
+// dateNF the SSF engine itself rejects throws, uncaught, unlike format_cell's
+// best-effort ''+v fallback.
 
 // ---- sheet_add_aoa / aoa_to_sheet ----
 //

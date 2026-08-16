@@ -357,23 +357,20 @@ sheetAddAoaCase(
 sheetAddAoaCase('dense reuse: _ws is an existing dense array', (u) => u.sheet_add_aoa(u.aoa_to_sheet([[1]], { dense: true }), [[9, 8]], { origin: 'A2' }), (e) => e.sheet_add_aoa(e.aoa_to_sheet([[1]], { dense: true }), [[9, 8]], { origin: 'A2' }));
 sheetAddAoaCase('Date value, default (t:n, serial v, rendered w)', (u) => u.aoa_to_sheet([[DATE_FIXTURE]]), (e) => e.aoa_to_sheet([[DATE_FIXTURE]]));
 sheetAddAoaCase('Date value, cellDates:true (t:d, Date v, rendered w)', (u) => u.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true }), (e) => e.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true }));
-// Backfilled before Phase 1B-2A per user review: confirmed live that the real oracle
-// DOES render a custom dateNF correctly here (SSF_format("yyyy-mm-dd", ...) succeeds),
-// since sheet_add_aoa's Date branch always computes cell.w. elixcee's narrow SSF subset
-// only renders 'm/d/yy', so this throws ELIXCEE_NUMFMT_UNSUPPORTED — a registered,
-// case-specific gap (see classify.mjs's UNSUPPORTED_ALLOWLIST for
-// 'utils.sheet_add_aoa'), not a blanket "sheet_add_aoa is unsupported."
+// Backfilled before Phase 1B-2A as an UNSUPPORTED case (elixcee's then-narrow SSF
+// subset only rendered 'm/d/yy'); flipped to a plain MATCH in Phase 1B-2B now that
+// sheet_add_aoa's Date branch is backed by the real SSF engine (see
+// packages/xlsx/src/internal/ssf-adapter.cjs) — confirmed live the oracle renders
+// "2026-01-05" here and elixcee now does too.
 sheetAddAoaCase(
-  'Date value, dateNF="yyyy-mm-dd" (custom format outside the narrow subset) -> UNSUPPORTED',
+  'Date value, dateNF="yyyy-mm-dd" (custom format, now fully supported via the real SSF engine)',
   (u) => u.aoa_to_sheet([[DATE_FIXTURE]], { dateNF: 'yyyy-mm-dd' }),
-  (e) => e.aoa_to_sheet([[DATE_FIXTURE]], { dateNF: 'yyyy-mm-dd' }),
-  'dateNF="yyyy-mm-dd" (Date value, custom format other than "m/d/yy")'
+  (e) => e.aoa_to_sheet([[DATE_FIXTURE]], { dateNF: 'yyyy-mm-dd' })
 );
 sheetAddAoaCase(
-  'Date value, cellDates:true, dateNF="yyyy-mm-dd" -> UNSUPPORTED',
+  'Date value, cellDates:true, dateNF="yyyy-mm-dd" (now fully supported)',
   (u) => u.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true, dateNF: 'yyyy-mm-dd' }),
-  (e) => e.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true, dateNF: 'yyyy-mm-dd' }),
-  'dateNF="yyyy-mm-dd" (Date value, custom format other than "m/d/yy")'
+  (e) => e.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true, dateNF: 'yyyy-mm-dd' })
 );
 sheetAddAoaCase('null with nullError:true -> error cell', (u) => u.aoa_to_sheet([[null, 1]], { nullError: true }), (e) => e.aoa_to_sheet([[null, 1]], { nullError: true }));
 sheetAddAoaCase('null with sheetStubs:true -> stub cell', (u) => u.aoa_to_sheet([[null, 1]], { sheetStubs: true }), (e) => e.aoa_to_sheet([[null, 1]], { sheetStubs: true }));
@@ -515,18 +512,10 @@ formatCellCase('null cell -> ""', null);
 formatCellCase('t: "z" -> ""', { t: 'z' });
 formatCellCase('dateNF option sets cell.z when unset', { t: 'd', v: DATE_FIXTURE }, undefined, { dateNF: 'm/d/yy' });
 formatCellCase('explicit v param overrides cell.v', { t: 'n', v: 1 }, 5000);
-// '0.00' is a fully-supported format on the real oracle (renders "1234.50") but is
-// outside this package's deliberately narrow SSF subset (see classify.mjs's
-// UNSUPPORTED_ALLOWLIST entry for 'utils.format_cell') — elixcee throws
-// ELIXCEE_NUMFMT_UNSUPPORTED instead of guessing a rendering, so this is an honest,
-// registered UNSUPPORTED divergence rather than a MATCH.
-formatCellCase(
-  'number format outside the narrow subset (0.00) -> UNSUPPORTED',
-  { t: 'n', v: 1234.5, z: '0.00' },
-  undefined,
-  undefined,
-  'z="0.00" (numeric cell, non-General/non-m/d/yy format code)'
-);
+// Was a registered UNSUPPORTED case through Phase 1B-2A (elixcee's then-narrow SSF
+// subset); flipped to a plain MATCH in Phase 1B-2B — format_cell is now backed by the
+// real SSF engine and renders "1234.50" identically to the oracle.
+formatCellCase('number format previously outside the narrow subset (0.00, now fully supported)', { t: 'n', v: 1234.5, z: '0.00' });
 
 runCase('utils.cell_set_number_format', (c, f) => U.cell_set_number_format(c, f), (c, f) => elixcee.cell_set_number_format(c, f), [{ t: 'n', v: 1 }, '0.00'], 'sets cell.z and returns the cell');
 
@@ -861,10 +850,12 @@ assert.deepEqual(
 // NONDETERMINISTIC, UNCLASSIFIED) fails the run. Per the classification rule:
 // normal-input divergences are BUG, only pre-registered gaps are
 // UNSUPPORTED/*_DIVERGENCE, anything else is UNCLASSIFIED — none of those are silently
-// accepted. UNSUPPORTED only appears for format_cell's deliberately narrow number-format
-// subset (see classify.mjs's UNSUPPORTED_ALLOWLIST) — every label that resolves to it is
-// printed below by name, so a real bug hiding behind the same api key would still be
-// visible on review, not silently absorbed.
+// accepted. classify.mjs's UNSUPPORTED_ALLOWLIST is empty as of Phase 1B-2B (the SSF
+// backend closed the two cases that used to be registered here) — kept in ACCEPTABLE
+// and reported below regardless, since any future gap is expected to be registered by
+// exact (api, caseId), never by api alone, and printed below by label so a real bug
+// hiding behind the same api key would still be visible on review, not silently
+// absorbed.
 const ACCEPTABLE = new Set([
   'MATCH',
   'INTENTIONAL_SAFETY_DIVERGENCE',

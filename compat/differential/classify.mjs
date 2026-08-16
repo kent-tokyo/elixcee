@@ -68,40 +68,15 @@ export const VERDICTS = /** @type {const} */ ([
 // an already-registered case. Adding an entry here is the ONLY way a divergence
 // classifies as UNSUPPORTED — never a catch-all for "the output doesn't match and I
 // don't know why."
-export const UNSUPPORTED_ALLOWLIST = new Map([
-  [
-    'utils.format_cell',
-    new Map([
-      [
-        'z="0.00" (numeric cell, non-General/non-m/d/yy format code)',
-        'Phase 1B-1 deliberately implements only a narrow SSF number-format subset ' +
-          "('General'/numFmtId 0 and 'm/d/yy'/numFmtId 14 — the only two formats " +
-          'sheet_add_aoa actually needs, confirmed by reading the oracle source) rather ' +
-          'than the ~900-line SSF_format/eval_fmt engine (the standalone "ssf" npm ' +
-          'package, one of the 7 Apache-2.0 deps packages/xlsx deliberately does not ' +
-          'take). Throws ELIXCEE_NUMFMT_UNSUPPORTED instead of guessing a rendering. ' +
-          "See packages/xlsx/src/index.cjs's ssfFormat.",
-      ],
-    ]),
-  ],
-  [
-    'utils.sheet_add_aoa',
-    new Map([
-      [
-        'dateNF="yyyy-mm-dd" (Date value, custom format other than "m/d/yy")',
-        "sheet_add_aoa's Date branch computes cell.w via ssfFormat immediately " +
-          "(confirmed live: the real oracle renders \"2026-01-05\" for this exact " +
-          'input) — unlike json_to_sheet/sheet_add_json, which only ever set cell.z ' +
-          'and never call the format engine at all, so a custom dateNF is harmless ' +
-          'there and needs no registration. sheet_add_aoa throws ' +
-          'ELIXCEE_NUMFMT_UNSUPPORTED for any dateNF other than the literal "m/d/yy" ' +
-          '(the one format this narrow SSF subset renders), for both cellDates:true ' +
-          'and the default numeric-serial mode. See packages/xlsx/src/index.cjs\'s ' +
-          'sheetAddAoa Date branch.',
-      ],
-    ]),
-  ],
-]);
+// Empty as of Phase 1B-2B: both previously-registered cases (format_cell's narrow
+// 'General'/'m/d/yy'-only subset, and sheet_add_aoa's custom-dateNF gap that subset
+// caused) were closed when format_cell/sheet_add_aoa switched to the real SSF engine
+// (see docs/xlsx-architecture.md's "SSF backend" decision and
+// packages/xlsx/src/internal/ssf-adapter.cjs) — both now MATCH the oracle for the exact
+// inputs that used to be registered here. A stale UNSUPPORTED entry is exactly the
+// laundering hole this registry exists to prevent, so it was removed rather than left
+// pointing at behavior that no longer diverges.
+export const UNSUPPORTED_ALLOWLIST = new Map();
 
 // Registered intentional SECURITY divergences, keyed either by the elixcee-side error
 // code that signals them (see docs/xlsx-security-model.md's planned ELIXCEE_* codes), or
@@ -273,39 +248,47 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   // UNSUPPORTED only fires when BOTH api and the exact caseId are registered — an api
   // with no caseId, or a caseId that doesn't match, must never resolve to UNSUPPORTED.
-  assert.equal(
-    classify({ api: 'utils.format_cell', oracleA: '1234.50', elixcee: undefined }),
-    'UNCLASSIFIED',
-    'api alone (no unsupportedCaseId) must not resolve to UNSUPPORTED — blanket api allowlisting is disallowed'
-  );
-  assert.equal(
-    classify({
-      api: 'utils.format_cell',
-      unsupportedCaseId: 'not a registered case',
-      oracleA: '1234.50',
-      elixcee: undefined,
-    }),
-    'UNCLASSIFIED',
-    'an unregistered caseId under a registered api must still fail closed'
-  );
-  assert.equal(
-    classify({
-      api: 'utils.format_cell',
-      unsupportedCaseId: 'z="0.00" (numeric cell, non-General/non-m/d/yy format code)',
-      oracleA: '1234.50',
-      elixcee: undefined,
-    }),
-    'UNSUPPORTED',
-    'the exact registered (api, caseId) pair resolves to UNSUPPORTED'
-  );
+  // Exercised against a synthetic entry (not a real one — the allowlist is empty as of
+  // Phase 1B-2B, see its doc comment) so this coverage survives regardless of which real
+  // cases are or aren't registered at any given time.
+  const SYNTHETIC_CASE_ID = '__classify_self_check__: synthetic unsupported case';
+  UNSUPPORTED_ALLOWLIST.set('utils.__self_check_api__', new Map([[SYNTHETIC_CASE_ID, 'test fixture only']]));
+  try {
+    assert.equal(
+      classify({ api: 'utils.__self_check_api__', oracleA: '1234.50', elixcee: undefined }),
+      'UNCLASSIFIED',
+      'api alone (no unsupportedCaseId) must not resolve to UNSUPPORTED — blanket api allowlisting is disallowed'
+    );
+    assert.equal(
+      classify({
+        api: 'utils.__self_check_api__',
+        unsupportedCaseId: 'not a registered case',
+        oracleA: '1234.50',
+        elixcee: undefined,
+      }),
+      'UNCLASSIFIED',
+      'an unregistered caseId under a registered api must still fail closed'
+    );
+    assert.equal(
+      classify({
+        api: 'utils.__self_check_api__',
+        unsupportedCaseId: SYNTHETIC_CASE_ID,
+        oracleA: '1234.50',
+        elixcee: undefined,
+      }),
+      'UNSUPPORTED',
+      'the exact registered (api, caseId) pair resolves to UNSUPPORTED'
+    );
+  } finally {
+    UNSUPPORTED_ALLOWLIST.delete('utils.__self_check_api__');
+  }
 
   assert.equal(
     UNSUPPORTED_ALLOWLIST.size,
-    2,
-    'Phase 1B-2A pre-work: exactly two apis have registered unsupported cases (format_cell, sheet_add_aoa)'
+    0,
+    'Phase 1B-2B: empty — the two Phase 1B-1/1B-2A-era cases (format_cell narrow subset, ' +
+      "sheet_add_aoa custom dateNF) both MATCH now that the real SSF engine is wired in"
   );
-  assert.equal(UNSUPPORTED_ALLOWLIST.get('utils.format_cell').size, 1, 'format_cell: exactly one registered case (narrow SSF subset)');
-  assert.equal(UNSUPPORTED_ALLOWLIST.get('utils.sheet_add_aoa').size, 1, 'sheet_add_aoa: exactly one registered case (custom dateNF)');
   assert.equal(SECURITY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one security divergence registered (book_append_sheet proto-key)');
   assert.equal(
     SAFETY_DIVERGENCE_REGISTRY.size,
