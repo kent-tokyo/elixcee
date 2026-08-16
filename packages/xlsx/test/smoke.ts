@@ -25,4 +25,11 @@ const sheetName: string = XLSX.book_append_sheet(wb, ws, 'Sheet1');
 XLSX.book_set_sheet_visibility(wb, 0, 1);
 XLSX.book_set_sheet_visibility(wb, 'Sheet1', 0);
 
-console.log(decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2);
+const ws2: WorkSheet = XLSX.sheet_add_aoa(ws, [[5, 6]], { origin: 'A3', dense: false });
+
+const cell = { t: 'n' as const, v: 1234.5 };
+XLSX.cell_set_number_format(cell, 'General');
+const formatted: string = XLSX.format_cell(cell);
+const formatted2: string = XLSX.format_cell(cell, 99, { dateNF: 'm/d/yy' });
+
+console.log(decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, formatted, formatted2);
