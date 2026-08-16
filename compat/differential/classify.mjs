@@ -92,6 +92,29 @@ export const SECURITY_DIVERGENCE_REGISTRY = new Map([
       'Object.defineProperty instead, so the sheet stays retrievable and no prototype is ' +
       'touched. See packages/xlsx/src/index.cjs\'s bookAppendSheet.',
   ],
+  [
+    'sheet_to_json:proto_header_primitive_dropped',
+    'An explicit opts.header array may legitimately contain the literal string ' +
+      '"__proto__" (spreadsheet column titled that, or a crafted probe). With a ' +
+      'PRIMITIVE cell value there, the real oracle\'s `row[hdr[C]] = v` invokes ' +
+      "Object.prototype's inherited __proto__ accessor, whose setter is a spec no-op " +
+      'for non-object values — the column\'s data is silently DROPPED (confirmed: the ' +
+      'oracle\'s row object ends up with no "__proto__" own key at all). Per ' +
+      'docs/xlsx-security-model.md, elixcee must retain spreadsheet-derived data rather ' +
+      'than lose it, so it uses Object.defineProperty (setJsonRowKey) instead, keeping ' +
+      'the value as an ordinary own key. See packages/xlsx/src/index.cjs\'s ' +
+      'makeJsonRow/setJsonRowKey.',
+  ],
+  [
+    'sheet_to_json:proto_header_object_corruption',
+    'Same opts.header:["__proto__",...] path as above, but with an OBJECT cell value ' +
+      '(e.g. a Date cell under cellDates:true): the real oracle\'s `row[hdr[C]] = v` ' +
+      "reassigns the ROW's own [[Prototype]] to that object (confirmed: `row instanceof " +
+      'Date === true`, `Object.keys(row).length === 0` — the global Object.prototype ' +
+      'stays clean, but this specific row object is corrupted). Elixcee\'s ' +
+      'Object.defineProperty write keeps the row a plain object with the value stored as ' +
+      'ordinary data, matching the primitive-value divergence\'s reasoning above.',
+  ],
   // 'ELIXCEE_ZIP_ENTRY_LIMIT' => 'zip bomb protection, see docs/xlsx-security-model.md',
 ]);
 
@@ -289,7 +312,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     'Phase 1B-2B: empty — the two Phase 1B-1/1B-2A-era cases (format_cell narrow subset, ' +
       "sheet_add_aoa custom dateNF) both MATCH now that the real SSF engine is wired in"
   );
-  assert.equal(SECURITY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one security divergence registered (book_append_sheet proto-key)');
+  assert.equal(
+    SECURITY_DIVERGENCE_REGISTRY.size,
+    3,
+    'Phase 1A + 1B-3: three security divergences registered (book_append_sheet proto-key, ' +
+      'sheet_to_json proto-header primitive-dropped, sheet_to_json proto-header object-corruption)'
+  );
   assert.equal(
     SAFETY_DIVERGENCE_REGISTRY.size,
     2,

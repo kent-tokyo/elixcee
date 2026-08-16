@@ -76,17 +76,31 @@ Excel data can legitimately contain the strings `__proto__`, `constructor`, or
 JavaScript object key in the SheetJS-compatible surface. `@elixcee/xlsx` must preserve
 that data (it is normal, if unusual, spreadsheet content) **without ever mutating an
 Object's prototype.** The specific call sites where a spreadsheet-derived string becomes
-an object key (net-new work for whichever phase implements them — none of this exists
-yet):
+an object key:
 
 - `utils.sheet_to_json`'s header-row-derived keys become the property names of every
-  emitted row object.
+  emitted row object. **Implemented (Phase 1B-3):** the only reachable hazard is an
+  explicit `opts.header` array containing the literal string `"__proto__"` — the default
+  header-inference path can never produce that literal key (it always gets renamed to
+  `"__proto___NaN"` as an accidental side effect of the oracle's own header-collision
+  counter, reproduced as-is since it isn't itself a hazard — see
+  `packages/xlsx/src/index.cjs`'s `sheetToJson` doc comment). `constructor`/`prototype`/
+  `toString`/`hasOwnProperty` are ordinary (non-accessor) properties and need no special
+  handling — confirmed live these already match the oracle with plain assignment.
+  `makeJsonRow`'s `setJsonRowKey` uses `Object.defineProperty` for every row-key write, so
+  a `"__proto__"` header retains its value as ordinary own data instead of the oracle's
+  own behavior (silently dropping a primitive value, or corrupting that specific row
+  object's own prototype for an object value — both confirmed live, both registered in
+  `compat/differential/classify.mjs`'s `SECURITY_DIVERGENCE_REGISTRY`).
 - Sheet-name-keyed access — `workbook.Sheets[name]` and `utils.book_append_sheet`'s
-  internal sheet-name map.
+  internal sheet-name map. **Implemented (Phase 1A):** see `bookAppendSheet`'s
+  `Object.defineProperty` use and `SECURITY_DIVERGENCE_REGISTRY`'s
+  `book_append_sheet:proto_key_pollution` entry.
 
-Any code that builds one of these key-indexed structures must use `Object.create(null)`
-or a `Map`, never a plain `{}` object literal, so that a crafted `"__proto__"` key is
-stored as ordinary data instead of reaching `Object.prototype`.
+Any code that builds one of these key-indexed structures must use `Object.defineProperty`
+(or `Object.create(null)`/a `Map`), never a plain `row[key] = value` bracket assignment,
+so that a crafted `"__proto__"` key is stored as ordinary data instead of reaching (or
+being silently swallowed by) the object's own `[[Prototype]]`.
 
 ## Intentional non-compatibility policy
 

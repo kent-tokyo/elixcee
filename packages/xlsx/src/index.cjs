@@ -498,6 +498,11 @@ function jsonToSheet(js, opts) {
 // contrast, "prototype" has no inherited own-object value on a plain `{}` (only
 // FUNCTIONS have `.prototype`), so it never collides and passes through unchanged — also
 // confirmed live and reproduced by using an ordinary `{}` rather than special-casing it.
+//
+// The one genuine hazard lives in make_json_row's row-key writes below, not here: the
+// DEFAULT header-inference path above can never produce a literal "__proto__" (it always
+// gets the "_NaN" rename), so the only reachable path is an explicit `opts.header` array
+// containing "__proto__" verbatim — see setJsonRowKey.
 function sheetToJson(sheet, opts) {
   if (sheet == null || sheet['!ref'] == null) return [];
   let header = 0;
@@ -573,6 +578,26 @@ function sheetToJson(sheet, opts) {
   return out;
 }
 
+// A caller-supplied `opts.header` array is the one reachable way a literal "__proto__"
+// (or any other string) becomes hdr[C] verbatim (see sheetToJson's doc comment above).
+// Plain `row[hdr[C]] = v` on that key invokes Object.prototype's inherited __proto__
+// accessor instead of creating a normal own property — confirmed live against the oracle
+// in two distinct ways: (1) a PRIMITIVE value is silently dropped (the setter no-ops for
+// non-object values, so the column's data is lost with no error), and (2) an OBJECT value
+// (e.g. a Date cell under cellDates:true) reassigns the ROW's own [[Prototype]] to that
+// object (`row instanceof Date === true`, `Object.keys(row).length === 0` — a genuine
+// prototype-corruption hazard on that specific row object, not the global
+// Object.prototype, which stays clean either way). Same Object.defineProperty precedent
+// as book_append_sheet above: it always creates a normal own data property regardless of
+// key name — same key order, same enumerability, zero shape divergence from the oracle
+// for every OTHER key, and for "__proto__" itself it retains the data as literal own data
+// instead of losing it (primitive case) or corrupting the row (object case). See
+// docs/xlsx-security-model.md and compat/differential/xlsx-utils.test.mjs's
+// sheet_to_json dangerous-header fixtures.
+function setJsonRowKey(row, key, value) {
+  Object.defineProperty(row, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
 function makeJsonRow(sheet, r, R, cols, header, hdr, dense, o) {
   const rr = encodeRow(R);
   const defval = o.defval;
@@ -582,12 +607,19 @@ function makeJsonRow(sheet, r, R, cols, header, hdr, dense, o) {
   if (header !== 1) {
     Object.defineProperty(row, '__rowNum__', { value: R, enumerable: false });
   }
+  // header === 1 rows are arrays keyed by a numeric index (never "__proto__"), so plain
+  // assignment is always safe there and matches the oracle exactly; every other header
+  // mode can carry a caller-supplied string key and needs setJsonRowKey.
+  function setRow(key, value) {
+    if (header === 1) row[key] = value;
+    else setJsonRowKey(row, key, value);
+  }
   if (!dense || sheet[R]) {
     for (let C = r.s.c; C <= r.e.c; ++C) {
       const val = dense ? sheet[R][C] : sheet[cols[C] + rr];
       if (val === undefined || val.t === undefined) {
         if (defval === undefined) continue;
-        if (hdr[C] != null) row[hdr[C]] = defval;
+        if (hdr[C] != null) setRow(hdr[C], defval);
         continue;
       }
       let v = val.v;
@@ -608,12 +640,12 @@ function makeJsonRow(sheet, r, R, cols, header, hdr, dense, o) {
       }
       if (hdr[C] != null) {
         if (v == null) {
-          if (val.t === 'e' && v === null) row[hdr[C]] = null;
-          else if (defval !== undefined) row[hdr[C]] = defval;
-          else if (raw && v === null) row[hdr[C]] = null;
+          if (val.t === 'e' && v === null) setRow(hdr[C], null);
+          else if (defval !== undefined) setRow(hdr[C], defval);
+          else if (raw && v === null) setRow(hdr[C], null);
           else continue;
         } else {
-          row[hdr[C]] = raw && (val.t !== 'n' || (val.t === 'n' && o.rawNumbers !== false)) ? v : formatCell(val, v, o);
+          setRow(hdr[C], raw && (val.t !== 'n' || (val.t === 'n' && o.rawNumbers !== false)) ? v : formatCell(val, v, o));
         }
         if (v != null) isempty = false;
       }
