@@ -64,7 +64,16 @@ export const VERDICTS = /** @type {const} */ ([
 // default — populate only when an API is genuinely not implemented yet, never as a
 // catch-all for "the output doesn't match and I don't know why."
 export const UNSUPPORTED_ALLOWLIST = new Map([
-  // 'utils.sheet_to_json' => 'Phase 0 demo placeholder — no elixcee implementation exists yet',
+  [
+    'utils.format_cell',
+    'Phase 1B-1 deliberately implements only a narrow SSF number-format subset ' +
+      "('General'/numFmtId 0 and 'm/d/yy'/numFmtId 14 — the only two formats " +
+      'sheet_add_aoa/sheet_add_json actually need, confirmed by reading the oracle ' +
+      'source) rather than the ~900-line SSF_format/eval_fmt engine (the standalone ' +
+      '"ssf" npm package, one of the 7 Apache-2.0 deps packages/xlsx deliberately does ' +
+      'not take). Any other format code/id throws ELIXCEE_NUMFMT_UNSUPPORTED instead of ' +
+      'guessing a rendering. See packages/xlsx/src/index.cjs\'s ssfFormat.',
+  ],
 ]);
 
 // Registered intentional SECURITY divergences, keyed either by the elixcee-side error
@@ -216,9 +225,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     'UNCLASSIFIED'
   );
 
-  // UNSUPPORTED only fires for registered entries — exercised for real once a later
-  // phase populates it with actual entries.
-  assert.equal(UNSUPPORTED_ALLOWLIST.size, 0, 'Phase 1A: allowlist should start empty');
+  // UNSUPPORTED only fires for registered entries.
+  assert.equal(
+    UNSUPPORTED_ALLOWLIST.size,
+    1,
+    'Phase 1B-1: exactly one unsupported-api entry registered (format_cell narrow SSF subset)'
+  );
   assert.equal(SECURITY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one security divergence registered (book_append_sheet proto-key)');
   assert.equal(SAFETY_DIVERGENCE_REGISTRY.size, 1, 'Phase 1A: exactly one safety divergence registered (ELIXCEE_NON_FINITE_INDEX)');
 

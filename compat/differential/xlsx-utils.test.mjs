@@ -1,8 +1,8 @@
-// Permanent Phase 1A differential test suite: runs the boundary-value matrix specified
-// for Phase 1A through both the real oracle (xlsx@0.18.5) and @elixcee/xlsx, classifying
-// every case with classify.mjs. This file itself IS the runnable check — it exits
-// non-zero if anything is left UNCLASSIFIED (or otherwise fails to MATCH), so nothing
-// can pass CI by accident.
+// Permanent differential test suite (Phase 1A + Phase 1B-1): runs the boundary-value
+// matrix specified for each phase through both the real oracle (xlsx@0.18.5) and
+// @elixcee/xlsx, classifying every case with classify.mjs. This file itself IS the
+// runnable check — it exits non-zero if anything is left UNCLASSIFIED (or otherwise
+// fails to resolve to an acceptable verdict), so nothing can pass CI by accident.
 //
 // The oracle (`xlsx`) is imported here, inside compat/, and nowhere else — @elixcee/xlsx
 // itself is imported only via a relative path into packages/xlsx/src, never as an npm
@@ -294,6 +294,192 @@ aoaCase('empty array', []);
 aoaCase('empty row', [[]]);
 aoaCase('mixed number/string/boolean', [[1, 'str', true, false]]);
 
+// ---- sheet_add_aoa (Phase 1B-1: origin, existing-!ref extension/overwrite, dense
+// reuse, Date, formula/error objects, nullError/sheetStubs) ----
+// Each fixture below builds a FRESH worksheet (never reuses a shared module-level `ws`
+// across cases) — sheet_add_aoa mutates its `_ws` argument in place, unlike
+// book_append_sheet, so sharing one worksheet across fixtures would leak state and make
+// results order-dependent.
+function sheetAddAoaCase(label, buildOracle, buildElixcee) {
+  runCase(
+    'utils.sheet_add_aoa',
+    () => buildOracle(U),
+    () => buildElixcee(elixcee),
+    [],
+    label
+  );
+}
+const DATE_FIXTURE = new Date(2026, 0, 5);
+
+sheetAddAoaCase('origin: number', (u) => u.sheet_add_aoa(u.aoa_to_sheet([[0]]), [[1, 2]], { origin: 1 }), (e) => e.sheet_add_aoa(e.aoa_to_sheet([[0]]), [[1, 2]], { origin: 1 }));
+sheetAddAoaCase('origin: "C3" string', (u) => u.sheet_add_aoa(null, [[1, 2]], { origin: 'C3' }), (e) => e.sheet_add_aoa(null, [[1, 2]], { origin: 'C3' }));
+sheetAddAoaCase('origin: {r,c} object', (u) => u.sheet_add_aoa(null, [[1, 2]], { origin: { r: 2, c: 3 } }), (e) => e.sheet_add_aoa(null, [[1, 2]], { origin: { r: 2, c: 3 } }));
+sheetAddAoaCase(
+  'origin: -1 appends after existing !ref',
+  (u) => {
+    const ws = u.aoa_to_sheet([[1, 2]]);
+    return u.sheet_add_aoa(ws, [[3, 4]], { origin: -1 });
+  },
+  (e) => {
+    const ws = e.aoa_to_sheet([[1, 2]]);
+    return e.sheet_add_aoa(ws, [[3, 4]], { origin: -1 });
+  }
+);
+sheetAddAoaCase(
+  'existing !ref extended by a later write past its bounds',
+  (u) => {
+    const ws = u.aoa_to_sheet([[1, 2]]);
+    return u.sheet_add_aoa(ws, [[9]], { origin: 'E5' });
+  },
+  (e) => {
+    const ws = e.aoa_to_sheet([[1, 2]]);
+    return e.sheet_add_aoa(ws, [[9]], { origin: 'E5' });
+  }
+);
+sheetAddAoaCase(
+  'overwriting an existing cell preserves its number format',
+  (u) => {
+    const ws = u.aoa_to_sheet([[1, 2], [3, 4]]);
+    u.cell_set_number_format(ws.A1, '0.00');
+    return u.sheet_add_aoa(ws, [[9]], { origin: 'A1' });
+  },
+  (e) => {
+    const ws = e.aoa_to_sheet([[1, 2], [3, 4]]);
+    e.cell_set_number_format(ws.A1, '0.00');
+    return e.sheet_add_aoa(ws, [[9]], { origin: 'A1' });
+  }
+);
+sheetAddAoaCase('dense reuse: _ws is an existing dense array', (u) => u.sheet_add_aoa(u.aoa_to_sheet([[1]], { dense: true }), [[9, 8]], { origin: 'A2' }), (e) => e.sheet_add_aoa(e.aoa_to_sheet([[1]], { dense: true }), [[9, 8]], { origin: 'A2' }));
+sheetAddAoaCase('Date value, default (t:n, serial v, rendered w)', (u) => u.aoa_to_sheet([[DATE_FIXTURE]]), (e) => e.aoa_to_sheet([[DATE_FIXTURE]]));
+sheetAddAoaCase('Date value, cellDates:true (t:d, Date v, rendered w)', (u) => u.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true }), (e) => e.aoa_to_sheet([[DATE_FIXTURE]], { cellDates: true }));
+sheetAddAoaCase('null with nullError:true -> error cell', (u) => u.aoa_to_sheet([[null, 1]], { nullError: true }), (e) => e.aoa_to_sheet([[null, 1]], { nullError: true }));
+sheetAddAoaCase('null with sheetStubs:true -> stub cell', (u) => u.aoa_to_sheet([[null, 1]], { sheetStubs: true }), (e) => e.aoa_to_sheet([[null, 1]], { sheetStubs: true }));
+sheetAddAoaCase('[value, formula] shorthand pair', (u) => u.aoa_to_sheet([[[5, 'A1+A2']]]), (e) => e.aoa_to_sheet([[[5, 'A1+A2']]]));
+sheetAddAoaCase('[null, formula] shorthand pair', (u) => u.aoa_to_sheet([[[null, 'A1']]]), (e) => e.aoa_to_sheet([[[null, 'A1']]]));
+sheetAddAoaCase('caller-supplied full cell object (formula)', (u) => u.aoa_to_sheet([[{ t: 'n', v: 1, f: 'A1' }]]), (e) => e.aoa_to_sheet([[{ t: 'n', v: 1, f: 'A1' }]]));
+sheetAddAoaCase('caller-supplied full cell object (error)', (u) => u.aoa_to_sheet([[{ t: 'e', v: 7 }]]), (e) => e.aoa_to_sheet([[{ t: 'e', v: 7 }]]));
+sheetAddAoaCase('NaN cell value', (u) => u.aoa_to_sheet([[NaN]]), (e) => e.aoa_to_sheet([[NaN]]));
+sheetAddAoaCase('Infinity cell value', (u) => u.aoa_to_sheet([[Infinity]]), (e) => e.aoa_to_sheet([[Infinity]]));
+
+// ---- json_to_sheet / sheet_add_json (Phase 1B-1) ----
+function jsonCase(label, buildOracle, buildElixcee, api) {
+  runCase(api || 'utils.json_to_sheet', () => buildOracle(U), () => buildElixcee(elixcee), [], label);
+}
+
+jsonCase('basic 2 rows', (u) => u.json_to_sheet([{ a: 1, b: 'x' }, { a: 2, b: 'y' }]), (e) => e.json_to_sheet([{ a: 1, b: 'x' }, { a: 2, b: 'y' }]));
+jsonCase('skipHeader:true', (u) => u.json_to_sheet([{ a: 1, b: 'x' }], { skipHeader: true }), (e) => e.json_to_sheet([{ a: 1, b: 'x' }], { skipHeader: true }));
+jsonCase('header option: partial order, new column appended', (u) => u.json_to_sheet([{ a: 1, b: 2, c: 3 }], { header: ['b'] }), (e) => e.json_to_sheet([{ a: 1, b: 2, c: 3 }], { header: ['b'] }));
+jsonCase(
+  'header option array is mutated in place (deliberate fidelity, not cloned)',
+  (u) => { const hdr = ['b']; u.json_to_sheet([{ a: 1, b: 2, c: 3 }], { header: hdr }); return hdr; },
+  (e) => { const hdr = ['b']; e.json_to_sheet([{ a: 1, b: 2, c: 3 }], { header: hdr }); return hdr; }
+);
+jsonCase('empty array', (u) => u.json_to_sheet([]), (e) => e.json_to_sheet([]));
+jsonCase('empty row object', (u) => u.json_to_sheet([{}]), (e) => e.json_to_sheet([{}]));
+jsonCase('null value, no nullError', (u) => u.json_to_sheet([{ a: null, b: 1 }]), (e) => e.json_to_sheet([{ a: null, b: 1 }]));
+jsonCase('null value, nullError:true', (u) => u.json_to_sheet([{ a: null, b: 1 }], { nullError: true }), (e) => e.json_to_sheet([{ a: null, b: 1 }], { nullError: true }));
+jsonCase('undefined value (own enumerable prop)', (u) => u.json_to_sheet([{ a: undefined, b: 1 }]), (e) => e.json_to_sheet([{ a: undefined, b: 1 }]));
+jsonCase('sparse rows array (hole)', (u) => { const rows = []; rows[0] = { a: 1 }; rows[2] = { a: 3 }; return u.json_to_sheet(rows); }, (e) => { const rows = []; rows[0] = { a: 1 }; rows[2] = { a: 3 }; return e.json_to_sheet(rows); });
+jsonCase('NaN value', (u) => u.json_to_sheet([{ a: NaN }]), (e) => e.json_to_sheet([{ a: NaN }]));
+jsonCase('Infinity value', (u) => u.json_to_sheet([{ a: Infinity }]), (e) => e.json_to_sheet([{ a: Infinity }]));
+jsonCase('formula object value', (u) => u.json_to_sheet([{ a: { t: 'n', v: 1, f: 'A1' } }]), (e) => e.json_to_sheet([{ a: { t: 'n', v: 1, f: 'A1' } }]));
+jsonCase('error object value', (u) => u.json_to_sheet([{ a: { t: 'e', v: 7 } }]), (e) => e.json_to_sheet([{ a: { t: 'e', v: 7 } }]));
+jsonCase('Date value, default (t:n, serial v, z but no w)', (u) => u.json_to_sheet([{ a: DATE_FIXTURE }]), (e) => e.json_to_sheet([{ a: DATE_FIXTURE }]));
+jsonCase('Date value, cellDates:true', (u) => u.json_to_sheet([{ a: DATE_FIXTURE }], { cellDates: true }), (e) => e.json_to_sheet([{ a: DATE_FIXTURE }], { cellDates: true }));
+jsonCase(
+  '__proto__-named own property (prototype-pollution probe, via JSON.parse)',
+  (u) => u.json_to_sheet([JSON.parse('{"__proto__":1,"b":2}')]),
+  (e) => e.json_to_sheet([JSON.parse('{"__proto__":1,"b":2}')])
+);
+jsonCase(
+  'header option containing "__proto__" (prototype-pollution probe)',
+  (u) => u.sheet_add_json({}, [{ x: 1 }], { header: ['__proto__'] }),
+  (e) => e.sheet_add_json({}, [{ x: 1 }], { header: ['__proto__'] }),
+  'utils.sheet_add_json'
+);
+jsonCase(
+  'origin: number',
+  (u) => u.sheet_add_json(u.aoa_to_sheet([[0]]), [{ a: 1 }], { origin: 1 }),
+  (e) => e.sheet_add_json(e.aoa_to_sheet([[0]]), [{ a: 1 }], { origin: 1 }),
+  'utils.sheet_add_json'
+);
+jsonCase(
+  'origin: "C3" string',
+  (u) => u.sheet_add_json(null, [{ a: 1 }], { origin: 'C3' }),
+  (e) => e.sheet_add_json(null, [{ a: 1 }], { origin: 'C3' }),
+  'utils.sheet_add_json'
+);
+jsonCase(
+  'origin: {r,c} object',
+  (u) => u.sheet_add_json(null, [{ a: 1 }], { origin: { r: 2, c: 3 } }),
+  (e) => e.sheet_add_json(null, [{ a: 1 }], { origin: { r: 2, c: 3 } }),
+  'utils.sheet_add_json'
+);
+jsonCase(
+  'origin: -1 appends after existing !ref',
+  (u) => { const ws = u.json_to_sheet([{ a: 1 }]); return u.sheet_add_json(ws, [{ a: 2 }], { origin: -1 }); },
+  (e) => { const ws = e.json_to_sheet([{ a: 1 }]); return e.sheet_add_json(ws, [{ a: 2 }], { origin: -1 }); },
+  'utils.sheet_add_json'
+);
+jsonCase(
+  'overwriting an existing cell preserves its number format',
+  (u) => { const ws = u.json_to_sheet([{ a: 1 }]); u.cell_set_number_format(ws.A2, '0.00'); return u.sheet_add_json(ws, [{ a: 99 }], { skipHeader: true }); },
+  (e) => { const ws = e.json_to_sheet([{ a: 1 }]); e.cell_set_number_format(ws.A2, '0.00'); return e.sheet_add_json(ws, [{ a: 99 }], { skipHeader: true }); },
+  'utils.sheet_add_json'
+);
+jsonCase(
+  'opts.dense has no effect when _ws is null (confirmed oracle quirk, reproduced)',
+  (u) => u.json_to_sheet([{ a: 1 }], { dense: true }),
+  (e) => e.json_to_sheet([{ a: 1 }], { dense: true })
+);
+jsonCase(
+  'dense target: scalar values land in the nested array; header/object values leak as stray string-keyed props (confirmed oracle quirk, reproduced)',
+  (u) => u.sheet_add_json([], [{ a: 1, b: 'x' }]),
+  (e) => e.sheet_add_json([], [{ a: 1, b: 'x' }]),
+  'utils.sheet_add_json'
+);
+
+// ---- format_cell / cell_set_number_format (Phase 1B-1: deliberately narrow SSF
+// subset — see classify.mjs's UNSUPPORTED_ALLOWLIST entry for 'utils.format_cell') ----
+// Shallow clone, not JSON.parse(JSON.stringify(...)) — format_cell mutates its cell
+// argument (caches `.w`, and may set `.z` from opts.dateNF) and several fixtures use a
+// Date-typed `.v`, which a JSON round-trip would silently collapse into an ISO string.
+// Comparing { out, cell } rather than just the returned string catches a divergence in
+// the mutation itself (e.g. a fixture named "sets cell.z" that returns the right string
+// but never actually writes cell.z would otherwise MATCH by accident).
+function formatCellCase(label, cell, v, opts) {
+  const cellA = cell ? { ...cell } : cell;
+  const cellB = cell ? { ...cell } : cell;
+  runCase(
+    'utils.format_cell',
+    () => ({ out: U.format_cell(cellA, v, opts), cell: cellA }),
+    () => ({ out: elixcee.format_cell(cellB, v, opts), cell: cellB }),
+    [],
+    label
+  );
+}
+
+formatCellCase('General: number (integer)', { t: 'n', v: 42 });
+formatCellCase('General: number (float, exercises SSF_general_num)', { t: 'n', v: 1234.5678 });
+formatCellCase('General: string', { t: 's', v: 'hello' });
+formatCellCase('General: boolean', { t: 'b', v: true });
+formatCellCase('m/d/yy: date serial', { t: 'n', v: 46027, z: 'm/d/yy' });
+formatCellCase('m/d/yy: out-of-range serial -> ""', { t: 'n', v: -5, z: 'm/d/yy' });
+formatCellCase('error cell: BErr lookup', { t: 'e', v: 0x07 });
+formatCellCase('cached .w short-circuits formatting', { t: 'n', v: 1234.5, w: 'cached' });
+formatCellCase('null cell -> ""', null);
+formatCellCase('t: "z" -> ""', { t: 'z' });
+formatCellCase('dateNF option sets cell.z when unset', { t: 'd', v: DATE_FIXTURE }, undefined, { dateNF: 'm/d/yy' });
+formatCellCase('explicit v param overrides cell.v', { t: 'n', v: 1 }, 5000);
+// '0.00' is a fully-supported format on the real oracle (renders "1234.50") but is
+// outside this package's deliberately narrow SSF subset (see classify.mjs's
+// UNSUPPORTED_ALLOWLIST entry for 'utils.format_cell') — elixcee throws
+// ELIXCEE_NUMFMT_UNSUPPORTED instead of guessing a rendering, so this is an honest,
+// registered UNSUPPORTED divergence rather than a MATCH.
+formatCellCase('number format outside the narrow subset (0.00) -> UNSUPPORTED', { t: 'n', v: 1234.5, z: '0.00' });
+
+runCase('utils.cell_set_number_format', (c, f) => U.cell_set_number_format(c, f), (c, f) => elixcee.cell_set_number_format(c, f), [{ t: 'n', v: 1 }, '0.00'], 'sets cell.z and returns the cell');
+
 // ---- safe_decode_range: deliberately NOT public ----
 // Confirmed absent from the real oracle's public API — not just `typeof undefined`, but
 // `hasOwnProperty` false, ruling out an inherited/prototype-chain false negative:
@@ -333,13 +519,22 @@ assert.deepEqual(
 );
 
 // ---- summary ----
-// Only MATCH and registered-divergence verdicts (INTENTIONAL_SAFETY_DIVERGENCE,
-// INTENTIONAL_SECURITY_DIVERGENCE) are acceptable outcomes here — everything else
-// (UNSUPPORTED, BUG, ORACLE_AMBIGUITY, NONDETERMINISTIC, UNCLASSIFIED) fails the run.
-// Per the classification rule: normal-input divergences are BUG, only pre-registered
-// gaps are UNSUPPORTED/*_DIVERGENCE, anything else is UNCLASSIFIED — none of those are
-// silently accepted.
-const ACCEPTABLE = new Set(['MATCH', 'INTENTIONAL_SAFETY_DIVERGENCE', 'INTENTIONAL_SECURITY_DIVERGENCE']);
+// MATCH, registered-divergence verdicts (INTENTIONAL_SAFETY_DIVERGENCE,
+// INTENTIONAL_SECURITY_DIVERGENCE), and — new in Phase 1B-1 — registered UNSUPPORTED
+// verdicts are acceptable outcomes here. Everything else (BUG, ORACLE_AMBIGUITY,
+// NONDETERMINISTIC, UNCLASSIFIED) fails the run. Per the classification rule:
+// normal-input divergences are BUG, only pre-registered gaps are
+// UNSUPPORTED/*_DIVERGENCE, anything else is UNCLASSIFIED — none of those are silently
+// accepted. UNSUPPORTED only appears for format_cell's deliberately narrow number-format
+// subset (see classify.mjs's UNSUPPORTED_ALLOWLIST) — every label that resolves to it is
+// printed below by name, so a real bug hiding behind the same api key would still be
+// visible on review, not silently absorbed.
+const ACCEPTABLE = new Set([
+  'MATCH',
+  'INTENTIONAL_SAFETY_DIVERGENCE',
+  'INTENTIONAL_SECURITY_DIVERGENCE',
+  'UNSUPPORTED',
+]);
 const byApi = new Map();
 let totalMatch = 0;
 let totalSafetyDivergence = 0;
@@ -348,10 +543,16 @@ let totalUnsupported = 0;
 let totalUnclassified = 0;
 let totalBug = 0;
 for (const r of results) {
-  if (!byApi.has(r.api)) byApi.set(r.api, { total: 0, ok: 0, other: [] });
+  if (!byApi.has(r.api)) byApi.set(r.api, { total: 0, ok: 0, other: [], unsupported: [] });
   const bucket = byApi.get(r.api);
   bucket.total += 1;
-  if (ACCEPTABLE.has(r.verdict)) bucket.ok += 1;
+  if (r.verdict === 'UNSUPPORTED') {
+    // Acceptable, but NOT silently folded into `ok` unlabeled — UNSUPPORTED is gated by
+    // an api-wide registry key (classify.mjs), so a real bug elsewhere under the same
+    // api would otherwise hide behind this same bucket. Always printed by label below.
+    bucket.ok += 1;
+    bucket.unsupported.push(r.label);
+  } else if (ACCEPTABLE.has(r.verdict)) bucket.ok += 1;
   else bucket.other.push({ label: r.label, verdict: r.verdict });
   if (r.verdict === 'MATCH') totalMatch += 1;
   else if (r.verdict === 'INTENTIONAL_SAFETY_DIVERGENCE') totalSafetyDivergence += 1;
@@ -361,13 +562,14 @@ for (const r of results) {
   else if (r.verdict === 'BUG') totalBug += 1;
 }
 
-console.log('\n=== Phase 1A differential summary ===');
+console.log('\n=== differential summary (Phase 1A + 1B-1) ===');
 let anyFailure = false;
 for (const [api, bucket] of byApi) {
   const status = bucket.other.length === 0 ? 'OK' : 'FAIL';
   if (bucket.other.length > 0) anyFailure = true;
   console.log(`${status}  ${api}: ${bucket.ok}/${bucket.total} acceptable`);
   for (const o of bucket.other) console.log(`      ${o.verdict}: ${o.label}`);
+  for (const label of bucket.unsupported) console.log(`      UNSUPPORTED: ${label}`);
 }
 console.log(`\nsafe_decode_range: 7/7 self-check assertions passed (not oracle-covered — see note above)`);
 console.log('\n=== Totals ===');
@@ -379,7 +581,7 @@ console.log(`bug:                                ${totalBug}`);
 console.log(`unclassified:                       ${totalUnclassified}`);
 
 if (anyFailure) {
-  console.error('\nPhase 1A differential suite FAILED: at least one case is not an acceptable verdict.');
+  console.error('\ndifferential suite FAILED: at least one case is not an acceptable verdict.');
   process.exit(1);
 }
-console.log('\nPhase 1A differential suite passed: every case is MATCH or a registered divergence.');
+console.log('\ndifferential suite passed: every case is MATCH or a registered divergence.');

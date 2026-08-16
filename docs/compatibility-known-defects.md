@@ -38,3 +38,48 @@ XLSX writing, do not add validation or normalization for colon-containing sheet 
 beyond what the oracle itself does — differential-test whatever the oracle actually
 writes to the ZIP for such a name, rather than assuming Excel's own (stricter, and
 UI-context-dependent) rules apply.
+
+---
+
+```yaml
+compatibility-known-defect:
+  api: json_to_sheet / sheet_add_json
+  case: "opts.dense with no existing _ws"
+  oracle_behavior: silently ignored
+  elixcee_behavior: reproduced for compatibility
+```
+
+`sheet_add_json`'s source (unlike `sheet_add_aoa`'s) never reads `opts.dense` at all — it
+always creates `ws = _ws || ({})`, a plain object, regardless of the option. Confirmed
+live: `XLSX.utils.json_to_sheet(data, {dense:true})` returns an ordinary sparse
+(cell-ref-keyed) worksheet, not a dense array. `packages/xlsx` reproduces this exactly
+(no `dense`-option handling in `sheetAddJson`/`jsonToSheet`) rather than "fixing" it to
+honor the option the way `aoa_to_sheet` does. See
+`compat/differential/xlsx-utils.test.mjs`'s `"opts.dense has no effect when _ws is null"`
+fixture.
+
+---
+
+```yaml
+compatibility-known-defect:
+  api: sheet_add_json
+  case: "_ws is an existing dense (array) worksheet"
+  oracle_behavior: header row and object-typed values leak as stray string-keyed
+    properties on the array instead of landing in the nested rows
+  elixcee_behavior: reproduced for compatibility
+```
+
+When `sheet_add_json` IS given an existing dense array as `_ws`, only plain scalar
+values (numbers/strings/booleans/Dates) are written correctly into the nested
+`ws[row][col]` cells (via the internal `ws_get_cell_stub`, ported as `wsGetCellStub`).
+The header row is written via a direct `ws[colLetter + rowNumber] = {...}` string-keyed
+assignment — confirmed live: `sheet_add_json([], [{a:1,b:'x'}])` leaves `ws[0]` as
+`null` while the header text is only reachable via the stray properties `ws.A1`/`ws.B1`.
+Object-typed JSON values (e.g. a caller-supplied full cell object) hit the same
+string-keyed-assignment path (`ws[ref] = v`) regardless of dense/sparse mode, so they
+never actually reach the dense array's nested cell either — the stub created for that
+slot stays `{t:'z'}`. `packages/xlsx` reproduces this exactly, including which specific
+cases are affected (scalars work, headers and object values don't), rather than
+"fixing" `sheet_add_json` to be dense-mode-consistent throughout. See
+`compat/differential/xlsx-utils.test.mjs`'s `"dense target: scalar values land in the
+nested array; header/object values leak as stray string-keyed props"` fixture.
