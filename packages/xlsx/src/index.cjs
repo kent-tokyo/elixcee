@@ -602,6 +602,34 @@ function jsonToSheet(js, opts) {
   return sheetAddJson(null, js, opts);
 }
 
+// Every function above is declared with a camelCase internal name (encodeCol, ...) —
+// ordinary JS convention within this file — but a plain `{ encode_col: encodeCol }`
+// object-literal assignment does NOT rename an already-named function's own `.name`.
+// Confirmed against the live oracle: every exported function's `.name` there equals its
+// exact snake_case public key (e.g. `XLSX.utils.encode_col.name === "encode_col"`),
+// since the oracle source declares its functions with those names directly. Without this
+// step, every elixcee export's `.name` would stay the camelCase internal one (a real,
+// previously-undetected divergence — reflection-based consumer code, or anything that
+// does `Object.values(utils).find(fn => fn.name === "encode_col")`, would silently
+// break). `.length` needs no such correction — it's the function's own declared arity,
+// unaffected by what name it's assigned under, and already matches (verified per-export
+// against the oracle). `Object.defineProperty` with `configurable: true` (matching the
+// oracle's own `.name` property descriptor, verified live) — not a plain `fn.name = ...`
+// assignment, which silently no-ops since `.name` is non-writable by default.
+function nameAs(fn, publicName) {
+  Object.defineProperty(fn, 'name', { value: publicName, configurable: true });
+  return fn;
+}
+
+// The object literal below (not an intermediate variable reassigned to
+// `module.exports`) is required as-is: Node's ESM loader synthesizes named imports from
+// a CJS module via cjs-module-lexer, a static syntax scan that only recognizes this
+// exact `module.exports = { ... }` literal-object pattern (or a sequence of
+// `module.exports.foo = ...` assignments) — routing through a separate variable first
+// breaks that static detection and `import { encode_col } from './index.cjs'` fails at
+// load time with "Named export 'encode_col' not found" (confirmed by trying it). The
+// nameAs() loop after this assignment is a pure runtime side effect (mutating each
+// function's own `.name`), which doesn't affect what cjs-module-lexer already parsed.
 module.exports = {
   encode_col: encodeCol,
   decode_col: decodeCol,
@@ -622,3 +650,5 @@ module.exports = {
   format_cell: formatCell,
   cell_set_number_format: cellSetNumberFormat,
 };
+
+for (const publicName of Object.keys(module.exports)) nameAs(module.exports[publicName], publicName);
