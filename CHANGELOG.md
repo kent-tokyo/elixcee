@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`@elixcee/xlsx` compatibility groundwork (Phase 0)**: investigation and scaffolding for a planned npm package that would be a drop-in replacement for `xlsx@0.18.5` (SheetJS) —
+  - `docs/xlsx-compatibility-goal.md`, `docs/xlsx-architecture.md` (ADR: target crate/npm workspace shape, and concrete resolutions for the `formula`↔`vm` circular type dependency and `reader.rs`'s path-only I/O — neither executed yet), `docs/xlsx-security-model.md` (resource-limit design, prototype-pollution-safe key handling), and `docs/licensing.md` (elixcee is MIT; the `xlsx` package and its 7 transitive SheetJS dependencies are all Apache-2.0)
+  - New `compat/` Node.js project (not part of the Rust build): `compat/oracle/generate-manifest.mjs` installs and introspects the real `xlsx@0.18.5` at runtime (both its CJS and ESM entrypoints) rather than guessing from documentation, producing the committed `compat/oracle/api-manifest.json`; `compat/differential/classify.mjs` defines the six-value compatibility verdict (`MATCH`/`INTENTIONAL_SECURITY_DIVERGENCE`/`UNSUPPORTED`/`BUG`/`ORACLE_AMBIGUITY`/`NONDETERMINISTIC`) future differential tests will use, with a `run-demo.mjs` proving the plumbing
+  - No `elixcee` Rust source, Python binding, CLI, or test behavior changed by this milestone
 - **Hidden row/column evidence** (Milestone B7b): `diagnose`/`diagnose-workbook` now report when a `.Copy`'d range overlaps hidden rows/columns —
   - New `vm::Interval`/`vm::SheetVisibility` types, threaded from XLSX's `<row hidden="1">`/`<col min=".." max=".." hidden="1">` into `Vm.sheet_visibility` the same way `merged_ranges` already is; ODS is explicitly deferred (its reader doesn't expand `table:number-rows-repeated`, so a hidden-row flag can't map to a correct absolute row number yet)
   - New `Vm::hidden_cells_observation()` computes the evidence on demand from the existing `Vm.clipboard` + `sheet_visibility` — no new stored side channel
