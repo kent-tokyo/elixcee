@@ -12,7 +12,7 @@ categories = ["simulation", "text-processing"]
 readme = "README.md"
 
 [workspace]
-members = ["crates/elixcee-types"]
+members = ["crates/elixcee-types", "crates/elixcee-wasm"]
 # fuzz/ is edition 2021 (root is 2024) and built via its own `cargo fuzz`
 # toolchain — excluded so it keeps resolving as its own workspace root
 # rather than being swept into this one.
@@ -54,3 +54,18 @@ toml = "0.8"
 [[bench]]
 name = "vm_bench"
 harness = false
+
+# Used only via `cargo build --profile wasm-release --target wasm32-unknown-unknown -p
+# elixcee-wasm` (crates/elixcee-wasm) — never applied to the default `release` profile, so
+# it can't affect the CLI or `python`-feature build (panic = "abort" in particular would be
+# wrong there: pyo3's extension-module glue needs unwinding to turn a Rust panic into a
+# catchable Python exception). size-optimized + LTO'd + stripped, matching what a
+# size-sensitive wasm-bindgen artifact wants; see docs/xlsx-architecture.md's WASM bridge
+# section for the byte-size measurement this profile was built to produce.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

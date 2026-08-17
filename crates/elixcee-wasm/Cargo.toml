@@ -1,0 +1,14 @@
+[package]
+name = "elixcee-wasm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "wasm-bindgen bridge exposing elixcee's byte-input XLSX reader (reader::read_workbook_from_bytes) to JS — backs @elixcee/xlsx's XLSX.read(). See docs/xlsx-architecture.md."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+elixcee = { path = "../.." }
+wasm-bindgen = "0.2"
