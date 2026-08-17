@@ -510,6 +510,29 @@ runReadCaseBytes(
   { cellDates: true, cellNF: true }
 );
 
+// Every earlier .w/.z/date fixture above has at most one styled cell per sheet, so a
+// mis-keyed (row,col) -> style_ids -> fmtId lookup in worksheet_json (reader.rs/
+// crates/elixcee-wasm) could pass all of them by accident. This mixes 5 distinctly
+// styled/typed cells in one row specifically to exercise per-cell style resolution,
+// not just "a style resolves at all".
+function buildMixedStylesXlsxBytes() {
+  const ws = U.aoa_to_sheet([[new Date(2024, 0, 15), 3.14159, 42, 'hello', true]]);
+  U.cell_set_number_format(ws.B1, '0.00"kg"'); // custom numFmtId (164+, via <numFmts>)
+  // A1 (Date) already got a built-in-ish date format from aoa_to_sheet; C1/D1/E1 stay
+  // General/untouched — matches how real mixed-content sheets look.
+  const wb = U.book_new();
+  U.book_append_sheet(wb, ws, 'S1');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+runReadCaseBytes(
+  'multi-cell sheet mixing date/custom-numeric/general-numeric/string/boolean styles ' +
+    '(per-cell fmtId resolution) with opts.cellDates + opts.cellNF: true',
+  buildMixedStylesXlsxBytes(),
+  undefined,
+  { cellDates: true, cellNF: true }
+);
+
 // ---- read-item 5: browser export condition dispatch ----
 //
 // Confirms LIVE — not just "should work" — that package.json's "browser" condition under
