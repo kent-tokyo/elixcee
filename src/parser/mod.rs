@@ -1692,6 +1692,7 @@ impl Parser {
             self.parse_sheet_property_write(Expr::ObjectVarSheet(name))
         } else if *self.peek() == Tok::Dot
             && (self.is_ident_at(1, "worksheets") || self.is_ident_at(1, "sheets"))
+            && *self.peek_at(2) == Tok::LParen
         {
             // <var>.Worksheets(...)/.Sheets(...) (Phase 2C item 8) — the
             // object-variable sibling of `ThisWorkbook.Worksheets(...)`/
@@ -1702,7 +1703,12 @@ impl Parser {
             // keywords — this just skips the qualifier and re-enters the
             // plain `Worksheets(...)/Sheets(...)` grammar; nothing here (or
             // in the VM — see `ObjectRef::Workbook`) checks that `<var>`
-            // actually holds a Workbook reference.
+            // actually holds a Workbook reference. Guarded on an immediate
+            // `(` — same reason as the `.Range(`/`.Cells(` branch above —
+            // so a paren-less `wb.Worksheets.Count` (a real, if unmodeled,
+            // VBA read) or a UDT field literally named "worksheets"/"sheets"
+            // still falls through to the generic path below instead of a
+            // hard `expected LParen` error.
             self.advance(); // '.'
             self.parse_sheets_stmt()
         } else if *self.peek() == Tok::Dot {
@@ -2233,9 +2239,13 @@ impl Parser {
             self.parse_sheet_property_read(Expr::ObjectVarSheet(name))
         } else if *self.peek() == Tok::Dot
             && (self.is_ident_at(1, "worksheets") || self.is_ident_at(1, "sheets"))
+            && *self.peek_at(2) == Tok::LParen
         {
             // x = <var>.Worksheets(...)/.Sheets(...) — read-side twin
-            // (Phase 2C item 8).
+            // (Phase 2C item 8); same paren guard as the statement-dispatch
+            // branch in `parse_ident_stmt` (a paren-less `wb.Worksheets.
+            // Count` or a UDT field literally named "worksheets"/"sheets"
+            // must still fall through to the generic `RecordGet` path).
             self.advance(); // '.'
             self.parse_sheet_cell_read()
         } else if *self.peek() == Tok::Dot {
@@ -3099,5 +3109,66 @@ mod tests {
         // doesn't error out on it.
         let body = parse_body("Sub MySub()\n    Set ws = ActiveSheet\nEnd Sub\n");
         assert_eq!(body, vec![Stmt::Set { var: "ws".into(), value: ObjectExpr::Var("activesheet".into()) }]);
+    }
+
+    // ── Phase 2C items 7/8: object-variable sheet/workbook qualifiers ────────
+
+    #[test] fn object_var_range_write_parses_to_range_write_with_objectvarsheet() {
+        let body = parse_body("Sub MySub()\n    ws.Range(\"A1\").Value = 5\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::SheetRangeWrite {
+                sheet: Expr::ObjectVarSheet("ws".into()),
+                addr: "A1".into(),
+                is_formula: false,
+                value: Expr::Integer(5),
+            }]
+        );
+    }
+
+    #[test] fn object_var_cells_read_parses_to_sheet_cell_read_with_objectvarsheet() {
+        let body = parse_body("Sub MySub()\n    x = ws.Cells(1, 1).Value\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "x".into(),
+                value: Expr::SheetCellRead {
+                    sheet: Box::new(Expr::ObjectVarSheet("ws".into())),
+                    row: Box::new(Expr::Integer(1)),
+                    col: Box::new(Expr::Integer(1)),
+                },
+            }]
+        );
+    }
+
+    #[test] fn object_var_worksheets_write_parses_identically_to_bare_worksheets() {
+        let with_prefix = parse_body(
+            "Sub MySub()\n    wb.Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n",
+        );
+        let bare = parse_body("Sub MySub()\n    Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n");
+        assert_eq!(with_prefix, bare);
+    }
+
+    // A prior review round found the `.Worksheets(`/`.Sheets(` branches
+    // above missing the immediate-`(` guard their `.Range(`/`.Cells(`
+    // siblings already had — without it, any paren-less `<var>.Worksheets`/
+    // `<var>.Sheets` (a real, if unmodeled, VBA read — `wb.Worksheets.
+    // Count`) or a UDT field literally named "worksheets"/"sheets" would
+    // hit a hard `expected LParen` parse error instead of falling through
+    // to the pre-existing generic `RecordGet`/`RecordSet` no-op path. These
+    // pin the fix; they don't need to assert *what* the fallback parses to,
+    // only that it doesn't error, matching this file's existing "confirms
+    // the parser doesn't error out on it" precedent just above.
+    #[test] fn paren_less_worksheets_property_falls_back_instead_of_erroring() {
+        let _ = parse("Sub MySub()\n    x = wb.Worksheets.Count\nEnd Sub\n").unwrap();
+        let _ = parse("Sub MySub()\n    wb.Sheets.Add\nEnd Sub\n").unwrap();
+    }
+
+    #[test] fn udt_field_literally_named_sheets_still_round_trips() {
+        let body = parse_body("Sub MySub()\n    p.sheets = 5\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::RecordSet { var: "p".into(), field: "sheets".into(), value: Expr::Integer(5) }]
+        );
     }
 }

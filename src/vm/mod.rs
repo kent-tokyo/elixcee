@@ -6085,6 +6085,17 @@ mod tests {
     }
 
     #[test]
+    fn concat_binds_looser_than_plus_minus() {
+        // "x" & 1 + 2 is "x" & (1 + 2) = "x3", not ("x" & 1) + 2. Previously
+        // `&` was folded into the same precedence tier as `+`/`-`
+        // (equal precedence, left-to-right), which would have given the
+        // latter (and likely a runtime type error, since "x1" + 2 isn't
+        // valid VBA arithmetic).
+        let vm = run("Sub MySub()\n    a = \"x\" & 1 + 2\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Str("x3".into()));
+    }
+
+    #[test]
     fn range_value_write_with_and_or_mod_intdiv_pow_all_parse_and_execute() {
         // The exact constructs the integration review found broken at parse
         // time — confirms they now reach the VM and produce real values, not
