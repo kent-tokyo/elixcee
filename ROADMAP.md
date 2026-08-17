@@ -96,6 +96,15 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
     semantics). Now also accepts a parseable numeric string and `Empty`; doesn't attempt
     VBA's fuller numeric-string grammar (currency symbols, locale decimal separators) — no
     evidence it's needed, and this project doesn't guess at locale-specific parsing.
+12. ~~`Str()` shared `CStr()`'s implementation~~ — **fixed** (Unreleased): real VBA's `Str()`
+    reserves a leading space for the sign position on a non-negative number (`Str(459)` is
+    `" 459"`), a genuine behavior difference from `CStr(459)` == `"459"`, not an alias.
+    Found in the same systematic pass as item 11. Now its own arm, scoped to numeric inputs.
+
+This systematic `eval_vba_func` audit (items 10-12) has now covered every function grouped
+or reused in a way that risked one masking another's real behavior; no further candidates
+found by that specific method as of this pass. A fresh audit is still worth doing if this
+file's own scope ever expands (new functions added) or before a next 90+ push.
 
 ## Next candidates, roughly by leverage
 

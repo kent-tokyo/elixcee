@@ -2548,8 +2548,22 @@ impl Vm {
                 let f = to_f64(vals.first().ok_or("CDbl requires 1 argument")?)?;
                 Ok(Variant::Float(f))
             }
-            "cstr" | "str" => {
+            "cstr" => {
                 let s = vals.first().ok_or("CStr requires 1 argument")?.to_string();
+                Ok(Variant::Str(s))
+            }
+            "str" => {
+                // Unlike CStr, real VBA's Str() reserves a leading space
+                // for the sign position on a non-negative number
+                // (`Str(459)` is `" 459"`, not `"459"`) — a well-known VBA
+                // quirk, and a real behavior difference from CStr, not an
+                // alias of it. Scoped to numeric inputs, the only case
+                // Str() is documented for; anything else falls back to the
+                // same plain-Display formatting CStr uses.
+                let v = vals.first().ok_or("Str requires 1 argument")?;
+                let non_negative_number = matches!(v, Variant::Integer(n) if *n >= 0)
+                    || matches!(v, Variant::Float(f) if *f >= 0.0);
+                let s = if non_negative_number { format!(" {}", v) } else { v.to_string() };
                 Ok(Variant::Str(s))
             }
             "val" => {
@@ -3935,6 +3949,26 @@ mod tests {
     fn test_vba_len() {
         let vm = run("Sub MySub()\n    a = Len(\"Hello\")\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn test_vba_str_reserves_a_leading_space_unlike_cstr() {
+        // Real VBA's Str() reserves a leading space for the sign position
+        // on a non-negative number (Str(459) is " 459") -- a real behavior
+        // difference from CStr(459) == "459", not an alias of it. Both used
+        // to share one arm with no space.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    a = Str(459)\n",
+            "    b = Str(-459)\n",
+            "    c = CStr(459)\n",
+            "    d = Str(0)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["a"], Variant::Str(" 459".to_string()));
+        assert_eq!(vm.variables["b"], Variant::Str("-459".to_string()));
+        assert_eq!(vm.variables["c"], Variant::Str("459".to_string()));
+        assert_eq!(vm.variables["d"], Variant::Str(" 0".to_string()));
     }
 
     #[test]

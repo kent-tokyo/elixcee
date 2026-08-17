@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `Str()` was grouped with `CStr()` and shared its implementation — but real VBA's `Str()`
+  reserves a leading space for the sign position on a non-negative number (`Str(459)` is
+  `" 459"`, not `"459"`), a real, documented behavior difference from `CStr(459)` == `"459"`,
+  not an alias of it. Found in the same systematic pass as `IsNumeric` below. Now its own
+  arm, scoped to numeric inputs (the only case `Str()` is documented for); anything else
+  falls back to the same plain formatting `CStr` uses. Previously untested; now covered.
 - `IsNumeric` only checked whether its argument was already an `Integer`/`Float` Variant —
   `IsNumeric("123")` was `False`, missing real VBA's numeric-string recognition entirely.
   Found by a systematic pass over `eval_vba_func` for the same "grouped/never independently
