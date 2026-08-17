@@ -55,13 +55,19 @@ toml = "0.8"
 name = "vm_bench"
 harness = false
 
-# Used only via `cargo build --profile wasm-release --target wasm32-unknown-unknown -p
-# elixcee-wasm` (crates/elixcee-wasm) — never applied to the default `release` profile, so
-# it can't affect the CLI or `python`-feature build (panic = "abort" in particular would be
-# wrong there: pyo3's extension-module glue needs unwinding to turn a Rust panic into a
-# catchable Python exception). size-optimized + LTO'd + stripped, matching what a
-# size-sensitive wasm-bindgen artifact wants; see docs/xlsx-architecture.md's WASM bridge
-# section for the byte-size measurement this profile was built to produce.
+# MEASUREMENT-ONLY — not part of the shipped build. crates/elixcee-wasm/build.sh (the
+# script that actually produces what packages/xlsx vendors) calls `wasm-pack build`, which
+# uses the standard `release` profile, not this one; the 237,825-byte artifact reported in
+# this initiative's docs/commit history came from release + wasm-opt, NOT from
+# wasm-release. This profile exists only so a `cargo build --profile wasm-release --target
+# wasm32-unknown-unknown -p elixcee-wasm` one-off can show whether opt-level="z"/LTO/strip
+# would shrink the module further (useful context if size ever becomes a concern) —
+# regenerate that number by running the command above and checking
+# target/wasm32-unknown-unknown/wasm-release/elixcee_wasm.wasm's size, don't assume it's
+# what ships. Never applied to the default `release` profile, so it can't affect the CLI or
+# `python`-feature build (panic = "abort" in particular would be wrong there: pyo3's
+# extension-module glue needs unwinding to turn a Rust panic into a catchable Python
+# exception).
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"

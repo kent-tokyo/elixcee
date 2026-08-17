@@ -103,6 +103,20 @@ export const UNSUPPORTED_ALLOWLIST = new Map([
           "read() (a pure buffer-API extraction with no behavior change). See " +
           'compat/differential/xlsx-read.test.mjs.',
       ],
+      [
+        "declared <dimension> wider than the populated cell range — reader.rs never parses " +
+          "<dimension> at all, it always computes !ref from the populated-cell bounding box",
+        'reader.rs never reads the worksheet\'s <dimension> tag; !ref is always the ' +
+          'populated-cell bounding box. The oracle trusts <dimension> verbatim instead. ' +
+          'These normally agree for oracle-written files (aoa_to_sheet + XLSX.write always ' +
+          'writes <dimension> == the populated bbox), which is why this went undetected ' +
+          'until a hand-built file with a deliberately wider <dimension> was tried — a ' +
+          'real Excel/LibreOffice file can legitimately have one (e.g. formatting-only ' +
+          'cells past the last populated one). Same disclosure rule as the empty-string ' +
+          'cell gap above: shared by read_workbook and read_workbook_from_bytes, out of ' +
+          'scope to fix under this phase\'s "pure extraction, no behavior change" ' +
+          'requirement. See compat/differential/xlsx-read.test.mjs.',
+      ],
     ]),
   ],
 ]);
@@ -416,9 +430,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   );
   assert.equal(
     UNSUPPORTED_ALLOWLIST.get('read')?.size,
-    1,
-    'Phase 2B: one registered case under "read" — the empty-string cell value gap ' +
-      "(reader.rs's xlsx_sheet_cells never records a zero-length <v> element)"
+    2,
+    'Phase 2B: two registered cases under "read" — the empty-string cell value gap ' +
+      "(reader.rs's xlsx_sheet_cells never records a zero-length <v> element) and the " +
+      'declared-<dimension>-wider-than-data gap (reader.rs never parses <dimension> at all)'
   );
   assert.equal(
     SECURITY_DIVERGENCE_REGISTRY.size,
