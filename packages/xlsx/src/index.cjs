@@ -173,15 +173,14 @@ function splitCell(cstr) {
 // `opts.type === 'base64'` (the oracle's own convention for that value) — other oracle
 // `type` values (binary/array/string/file) are not implemented yet.
 //
-// Cell formulas (`.f`), merged ranges (`!merges`), and — when `opts.cellStyles === true`,
-// matching the oracle's own gate (confirmed live: XLSX.read() never returns !rows/!cols
-// without it) — hidden-row/col `!rows`/`!cols` (see ./internal/read-shape.cjs) ARE mapped.
-// A worksheet's declared `<dimension>` is preferred over the populated-cell bounding box
-// when present (see crates/elixcee-wasm's worksheet_json).
-//
-// Still not feature-complete with the oracle's read(): no formatted display text (`.w`) or
-// date-typed cells (`t:'d'`) — both need `styles.xml` number-format parsing `reader.rs`
-// doesn't do yet (see docs/xlsx-architecture.md).
+// Cell formulas (`.f`), merged ranges (`!merges`), and formatted display text (`.w`) are
+// always mapped. A worksheet's declared `<dimension>` is preferred over the
+// populated-cell bounding box when present (see crates/elixcee-wasm's worksheet_json).
+// Three more fields are gated behind opts, matching the oracle's own gates exactly
+// (confirmed live — none of these are surfaced by default): hidden-row/col `!rows`/
+// `!cols` with `opts.cellStyles`; resolved format-code `.z` with `opts.cellNF`
+// (`opts.cellStyles` implies it); date-typed cells (`t:'d'`) with `opts.cellDates`. See
+// ./internal/read-shape.cjs for all of the above.
 const { shapeWorkBook } = require('./internal/read-shape.cjs');
 
 const ELIXCEE_UNSUPPORTED_READ_TYPE = 'ELIXCEE_UNSUPPORTED_READ_TYPE';

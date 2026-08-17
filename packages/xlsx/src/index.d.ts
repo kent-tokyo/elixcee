@@ -133,14 +133,15 @@ export interface Sheet2HTMLOpts {
 }
 
 // Buffer-first read — see packages/xlsx/src/index.cjs's `read` doc comment for exactly
-// what's supported (Buffer/Uint8Array, or a base64 string with opts.type === 'base64';
-// formulas, merges, and — with opts.cellStyles — hidden-row/col mapping) and what isn't
-// yet (formatted `.w` text, date-typed cells). `opts` is typed narrowly, not the oracle's
-// own ParsingOptions, since only `type`/`cellStyles` have any effect here — declaring the
-// rest would silently promise options this reader does not implement.
+// what's supported: Buffer/Uint8Array, or a base64 string with opts.type === 'base64';
+// formulas and merges always; hidden-row/col mapping with opts.cellStyles; formatted
+// `.w` text always; resolved format-code `.z` with opts.cellNF (opts.cellStyles implies
+// it); date-typed cells (`t:'d'`) with opts.cellDates. `opts` is typed narrowly, not the
+// oracle's own ParsingOptions, since only these fields have any effect here — declaring
+// the rest would silently promise options this reader does not implement.
 export function read(
   data: Uint8Array | number[] | string,
-  opts?: { type?: 'base64'; cellStyles?: boolean }
+  opts?: { type?: 'base64'; cellStyles?: boolean; cellNF?: boolean; cellDates?: boolean }
 ): WorkBook;
 
 export function encode_col(col: number): string;
