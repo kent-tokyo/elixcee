@@ -1,0 +1,53 @@
+name: Publish to crates.io
+
+# Deliberately workflow_dispatch only, not triggered by v* tags — unlike PyPI,
+# crates.io publishing is a separate judgment call each release (elixcee-types
+# is a real public dependency once published; a bad publish can only be
+# yanked, never deleted), not something to fire automatically on every tag.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or ref to publish from (e.g. v0.2.0)"
+        required: true
+        default: "v0.2.0"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # elixcee-types has no dependency on elixcee, so it can publish standalone.
+      # `|| true` lets a re-run tolerate "already exists" if a prior attempt's
+      # publish step succeeded but a later step in the same run failed.
+      - name: cargo publish -p elixcee-types
+        run: cargo publish -p elixcee-types || true
+
+      # elixcee's own dependency on elixcee-types is version-pinned (not
+      # path-only) for publishing, so it needs the crates.io index to have
+      # picked up the elixcee-types upload before it can resolve it.
+      - name: wait for elixcee-types to appear in the crates.io index
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf "https://crates.io/api/v1/crates/elixcee-types/0.1.0" -o /dev/null; then
+              echo "elixcee-types 0.1.0 is live on crates.io"
+              exit 0
+            fi
+            echo "not yet indexed, waiting (attempt $i/30)..."
+            sleep 10
+          done
+          echo "::error::elixcee-types 0.1.0 never appeared in the crates.io index after 5 minutes"
+          exit 1
+
+      - name: cargo publish -p elixcee
+        run: cargo publish -p elixcee
