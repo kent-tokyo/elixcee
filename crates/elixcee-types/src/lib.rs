@@ -141,3 +141,132 @@ pub fn parse_range_addr(addr: &str) -> Option<((u32, u32), (u32, u32))> {
         Some((c, c))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── ExcelError ───────────────────────────────────────────────────────
+
+    #[test]
+    fn excel_error_as_str_covers_every_variant() {
+        assert_eq!(ExcelError::DivZero.as_str(), "#DIV/0!");
+        assert_eq!(ExcelError::NA.as_str(), "#N/A");
+        assert_eq!(ExcelError::Value.as_str(), "#VALUE!");
+        assert_eq!(ExcelError::Ref.as_str(), "#REF!");
+        assert_eq!(ExcelError::Name.as_str(), "#NAME?");
+        assert_eq!(ExcelError::Num.as_str(), "#NUM!");
+        assert_eq!(ExcelError::Null.as_str(), "#NULL!");
+    }
+
+    #[test]
+    fn excel_error_display_matches_as_str() {
+        assert_eq!(ExcelError::DivZero.to_string(), "#DIV/0!");
+    }
+
+    // ── Variant ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn variant_display_formats_every_kind() {
+        assert_eq!(Variant::Integer(42).to_string(), "42");
+        assert_eq!(Variant::Float(3.5).to_string(), "3.5");
+        assert_eq!(Variant::Str("hi".into()).to_string(), "hi");
+        assert_eq!(Variant::Boolean(true).to_string(), "True");
+        assert_eq!(Variant::Boolean(false).to_string(), "False");
+        assert_eq!(Variant::Empty.to_string(), "");
+        assert_eq!(Variant::Error(ExcelError::NA).to_string(), "#N/A");
+        assert_eq!(
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(2)]).to_string(),
+            "[1, 2]"
+        );
+    }
+
+    #[test]
+    fn variant_display_formats_a_date_via_serial_to_display() {
+        assert_eq!(Variant::Date(45000).to_string(), serial_to_display(45000));
+        assert_eq!(Variant::Date(1).to_string(), "1900-01-01");
+    }
+
+    #[test]
+    fn variant_record_display_sorts_keys_for_determinism() {
+        let mut m = std::collections::HashMap::new();
+        m.insert("b".to_string(), Variant::Integer(2));
+        m.insert("a".to_string(), Variant::Integer(1));
+        assert_eq!(Variant::Record(m).to_string(), "{a: 1, b: 2}");
+    }
+
+    // ── CellContent ──────────────────────────────────────────────────────
+
+    #[test]
+    fn cell_content_holds_formula_and_value() {
+        let c = CellContent { formula: Some("=A1+1".into()), value: Variant::Integer(2) };
+        assert_eq!(c.formula.as_deref(), Some("=A1+1"));
+        assert_eq!(c.value, Variant::Integer(2));
+    }
+
+    // ── serial_to_ymd / serial_to_display ───────────────────────────────
+
+    #[test]
+    fn serial_to_ymd_handles_the_epoch() {
+        // Excel serial 1 = 1900-01-01.
+        assert_eq!(serial_to_ymd(1), (1900, 1, 1));
+    }
+
+    #[test]
+    fn serial_to_ymd_reproduces_the_excel_1900_leap_year_bug() {
+        // Verified against this exact (pre-move) algorithm, not assumed:
+        // serials 60 and 61 both decode to 1900-03-01 — this
+        // implementation's `s > 60 { s -= 1 }` offset collapses the
+        // fictitious "1900-02-29" into the following real day rather than
+        // reconstructing it as a distinct date. Not this commit's concern
+        // to change (a pure move preserves it exactly); this test exists
+        // so a future change to this function trips a test, not just a
+        // silent behavior drift.
+        assert_eq!(serial_to_ymd(59), (1900, 2, 28));
+        assert_eq!(serial_to_ymd(60), (1900, 3, 1));
+        assert_eq!(serial_to_ymd(61), (1900, 3, 1));
+        assert_eq!(serial_to_ymd(62), (1900, 3, 2));
+    }
+
+    #[test]
+    fn serial_to_display_formats_as_iso_date() {
+        assert_eq!(serial_to_display(1), "1900-01-01");
+    }
+
+    // ── parse_cell_addr / parse_range_addr ──────────────────────────────
+
+    #[test]
+    fn parse_cell_addr_handles_single_and_double_letter_columns() {
+        assert_eq!(parse_cell_addr("A1"), Some((1, 1)));
+        assert_eq!(parse_cell_addr("Z1"), Some((1, 26)));
+        assert_eq!(parse_cell_addr("AA1"), Some((1, 27)));
+    }
+
+    #[test]
+    fn parse_cell_addr_is_case_insensitive_and_trims_whitespace() {
+        assert_eq!(parse_cell_addr(" a1 "), Some((1, 1)));
+    }
+
+    #[test]
+    fn parse_cell_addr_rejects_malformed_input() {
+        assert_eq!(parse_cell_addr("1A"), None);
+        assert_eq!(parse_cell_addr(""), None);
+        assert_eq!(parse_cell_addr("A"), None);
+    }
+
+    #[test]
+    fn parse_range_addr_handles_a_single_cell_as_a_1x1_range() {
+        assert_eq!(parse_range_addr("B2"), Some(((2, 2), (2, 2))));
+    }
+
+    #[test]
+    fn parse_range_addr_handles_a_two_cell_range() {
+        assert_eq!(parse_range_addr("A1:C3"), Some(((1, 1), (3, 3))));
+    }
+
+    #[test]
+    fn parse_range_addr_rejects_a_malformed_piece() {
+        assert_eq!(parse_range_addr("A1:"), None);
+        assert_eq!(parse_range_addr("!!"), None);
+    }
+}
