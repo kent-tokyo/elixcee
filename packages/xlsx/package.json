@@ -11,6 +11,7 @@
   "exports": {
     ".": {
       "types": "./src/index.d.ts",
+      "browser": "./src/index.browser.mjs",
       "import": "./src/index.mjs",
       "require": "./src/index.cjs"
     }

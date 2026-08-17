@@ -38,6 +38,7 @@
 // from both sides so the comparison stays apples-to-apples rather than favoring elixcee's
 // narrower shape.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -445,6 +446,48 @@ runReadCaseBytes(
   'hidden rows and columns WITHOUT opts.cellStyles (must not surface !rows/!cols by default)',
   buildHiddenRowsColsXlsxBytes()
 );
+
+// ---- read-item 5: browser export condition dispatch ----
+//
+// Confirms LIVE — not just "should work" — that package.json's "browser" condition under
+// exports["."] actually routes to the inlined-bytes/initSync WASM artifact
+// (packages/xlsx/src/internal/wasm/elixcee_wasm.browser.mjs), not the Node glue. "browser"
+// isn't a condition Node activates by default (only bundlers opt into it), so the only
+// faithful way to exercise it without installing a bundler this repo doesn't otherwise
+// need is `node --conditions=browser` — spawned here as a real subprocess reading real
+// oracle-written bytes through '@elixcee/xlsx' via Node's self-referencing package
+// resolution (a package resolving its own name back through its own `exports` map when
+// run from inside that package's directory). `import.meta.resolve` inside the subprocess
+// reports the ACTUAL resolved module URL directly — the unambiguous way to prove which
+// file the "read" being called came from, rather than inferring it from behavior (which
+// would still "pass" even if this silently fell through to the Node entry point, since
+// both produce identical output on valid input).
+{
+  const bytes = buildXlsxBytes([
+    ['S1', [[1, 2, { t: 'n', v: 3, f: 'SUM(A1:B1)' }], ['x', '']]],
+  ]);
+  const b64 = Buffer.from(bytes).toString('base64');
+  const script =
+    "const resolved = import.meta.resolve('@elixcee/xlsx');\n" +
+    "import { read } from '@elixcee/xlsx';\n" +
+    `const wb = read(${JSON.stringify(b64)}, { type: 'base64' });\n` +
+    "process.stdout.write(JSON.stringify({ wb, resolved }));\n";
+  const browserOut = JSON.parse(
+    execFileSync(process.execPath, ['--conditions=browser', '--input-type=module', '-e', script], {
+      cwd: join(here, '../../packages/xlsx'),
+      encoding: 'utf8',
+    })
+  );
+  const nodeOut = elixcee.read(bytes);
+  assert.ok(
+    browserOut.resolved.endsWith('/src/index.browser.mjs'),
+    `expected --conditions=browser to resolve '@elixcee/xlsx' to index.browser.mjs, got: ${browserOut.resolved}`
+  );
+  assert.deepEqual(browserOut.wb, nodeOut, 'browser-condition read() must match the Node read() on the same bytes');
+  console.log(
+    'OK  read: "browser" export condition resolves to index.browser.mjs (the inlined-bytes WASM artifact) and matches the Node path'
+  );
+}
 
 // ---- summary / exit code (matches xlsx-utils.test.mjs's convention) ----
 //
