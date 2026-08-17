@@ -19,6 +19,12 @@ const { checkRangeSize } = require('./internal/range-guard.cjs');
 const { datenum } = require('./internal/datenum.cjs');
 const { format: ssfFormat } = require('./internal/ssf-adapter.cjs');
 const { formatCell, cellSetNumberFormat } = require('./internal/number-format.cjs');
+// The WASM bridge (crates/elixcee-wasm, backed by elixcee's own hand-rolled reader —
+// src/reader.rs's read_workbook_from_bytes) is vendored, prebuilt, under ./internal/wasm —
+// npm consumers have no Rust/wasm-pack toolchain, so the compiled artifact ships committed
+// (see crates/elixcee-wasm/build.sh). Still not a dependency on the real `xlsx` package —
+// this is elixcee's own reader, just compiled to WASM.
+const wasmBridge = require('./internal/wasm/elixcee_wasm.node.cjs');
 
 // ---- column ----
 
@@ -145,6 +151,43 @@ function decodeRange(range) {
 // second slot, not just its digits. Confirmed against the oracle.
 function splitCell(cstr) {
   return cstr.replace(/(\$?[A-Z]*)(\$?\d*)/, '$1,$2').split(',');
+}
+
+// ---- read ----
+//
+// Minimal buffer-first XLSX.read(data, opts) (Phase 2B), backed by the WASM bridge over
+// elixcee's own reader (src/reader.rs) — never the real `xlsx` package (see this file's
+// top doc comment / docs/xlsx-architecture.md's "Non-negotiable" section). Accepts a
+// Buffer/Uint8Array directly (the shape `fs.readFileSync(...)` already produces) or a
+// base64 string with `opts.type === 'base64'` (the oracle's own convention for that value)
+// — other oracle `type` values (binary/array/string/file) are not implemented yet.
+//
+// The returned WorkBook is deliberately not feature-complete with the oracle's read():
+// no cell formulas (`.f`), no formatted display text (`.w`), no date-typed cells (`t:
+// 'd'` — a date serial reads back as a plain number), no hidden-row/col `!rows`/`!cols`
+// mapping. All four gaps trace back to the same root cause: `reader.rs` (elixcee's
+// hand-rolled XLSX reader) never parses `styles.xml` or `<f>` formula elements — see
+// crates/elixcee-wasm/src/lib.rs's `read_workbook` doc comment for the full list. Merged
+// ranges ARE mapped (`!merges`), since `reader.rs` already parses them.
+const ELIXCEE_UNSUPPORTED_READ_TYPE = 'ELIXCEE_UNSUPPORTED_READ_TYPE';
+
+function toBytes(data, opts) {
+  const o = opts || {};
+  if (data instanceof Uint8Array) return data;
+  if (Array.isArray(data)) return Uint8Array.from(data);
+  if (typeof data === 'string' && o.type === 'base64') return Uint8Array.from(Buffer.from(data, 'base64'));
+  const err = new Error(
+    "read(): unsupported input — pass a Buffer/Uint8Array, or a base64 string with opts.type " +
+      "=== 'base64'. Other xlsx@0.18.5 `type` values (binary/array/string/file) are not " +
+      'implemented yet.'
+  );
+  err.code = ELIXCEE_UNSUPPORTED_READ_TYPE;
+  throw err;
+}
+
+function read(data, opts) {
+  const bytes = toBytes(data, opts);
+  return JSON.parse(wasmBridge.readWorkbook(bytes));
 }
 
 // ---- workbook / sheet ----
@@ -1317,7 +1360,7 @@ function tableToBook(table, opts) {
 // oracle's own `.name` property descriptor, verified live) — not a plain `fn.name = ...`
 // assignment, which silently no-ops since `.name` is non-writable by default.
 // Exceptions to "every export's .name equals its exact snake_case public key" — the
-// oracle itself breaks that pattern in three ways:
+// oracle itself breaks that pattern in four ways:
 // - `sheet_get_cell: ws_get_cell_stub` assigns the internal helper directly without a
 //   wrapper, so `XLSX.utils.sheet_get_cell.name` is genuinely "ws_get_cell_stub"
 //   (confirmed live), not "sheet_get_cell".
@@ -1329,12 +1372,19 @@ function tableToBook(table, opts) {
 //   helper assigned directly, so `.name` reads "parse_dom_table" (confirmed live), not
 //   "table_to_sheet". `table_to_book` and `sheet_add_dom`, by contrast, ARE declared with
 //   their own exact public names in the oracle's source, so neither needs an override.
-// All three reproduced as-is per this project's fidelity-over-tidiness rule
-// (compat/differential/metadata.test.mjs is what caught all three).
+// - `read: readSync` — the oracle's top-level `read` export (confirmed live:
+//   `XLSX.read.name === "readSync"`, not "read"; `Object.keys(XLSX)` lists `read` third,
+//   right after `version`/`parse_xlscfb`, not under `.utils` at all — this package's own
+//   flat namespace already diverges from that nesting, a pre-existing Phase 1A decision,
+//   not something this override changes).
+// All four reproduced as-is per this project's fidelity-over-tidiness rule
+// (compat/differential/metadata.test.mjs is what caught the first three; read's own
+// differential test — compat/differential/xlsx-read.test.mjs — checks the fourth).
 const NAME_OVERRIDES = {
   sheet_get_cell: 'ws_get_cell_stub',
   sheet_to_row_object_array: 'sheet_to_json',
   table_to_sheet: 'parse_dom_table',
+  read: 'readSync',
 };
 
 // nameAs is for FUNCTION exports only — `consts` is a plain data object (no `.name`
@@ -1372,6 +1422,7 @@ const consts = { SHEET_VISIBLE: 0, SHEET_HIDDEN: 1, SHEET_VERY_HIDDEN: 2 };
 // oracle's actual order until this comparison was added; see
 // compat/differential/metadata.test.mjs's key-order assertion.
 module.exports = {
+  read,
   encode_col: encodeCol,
   encode_row: encodeRow,
   encode_cell: encodeCell,

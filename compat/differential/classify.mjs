@@ -68,15 +68,44 @@ export const VERDICTS = /** @type {const} */ ([
 // an already-registered case. Adding an entry here is the ONLY way a divergence
 // classifies as UNSUPPORTED — never a catch-all for "the output doesn't match and I
 // don't know why."
-// Empty as of Phase 1B-2B: both previously-registered cases (format_cell's narrow
-// 'General'/'m/d/yy'-only subset, and sheet_add_aoa's custom-dateNF gap that subset
-// caused) were closed when format_cell/sheet_add_aoa switched to the real SSF engine
-// (see docs/xlsx-architecture.md's "SSF backend" decision and
+// The two Phase 1B-1/1B-2A-era cases (format_cell's narrow 'General'/'m/d/yy'-only
+// subset, and sheet_add_aoa's custom-dateNF gap that subset caused) were closed when
+// format_cell/sheet_add_aoa switched to the real SSF engine (see
+// docs/xlsx-architecture.md's "SSF backend" decision and
 // packages/xlsx/src/internal/ssf-adapter.cjs) — both now MATCH the oracle for the exact
-// inputs that used to be registered here. A stale UNSUPPORTED entry is exactly the
-// laundering hole this registry exists to prevent, so it was removed rather than left
-// pointing at behavior that no longer diverges.
-export const UNSUPPORTED_ALLOWLIST = new Map();
+// inputs that used to be registered here, so they were removed rather than left pointing
+// at behavior that no longer diverges (a stale UNSUPPORTED entry is exactly the
+// laundering hole this registry exists to prevent).
+//
+// Phase 2B added one real entry: read()'s empty-string-cell gap, found by
+// compat/differential/xlsx-read.test.mjs, not assumed. `reader.rs`'s hand-rolled pull-XML
+// parser (xlsx_sheet_cells, shared by the path-based read_workbook AND the new
+// read_workbook_from_bytes — not something this WASM bridge introduced) only records a
+// cell's value on an `Ev::Text` event; a `<v></v>` element with zero characters between
+// its tags (confirmed live: this is exactly what the oracle's own writer emits for an
+// empty-string aoa cell) never produces one, so the cell is silently absent from
+// elixcee's output where the oracle reports `{t:"s", v:""}`. Left unfixed rather than
+// patched here: the fix touches shared cell-recording logic that the CLI/VM path also
+// depends on, out of scope for the phase that added read() (see
+// docs/xlsx-architecture.md's "reader.rs buffer-API resolution", which required a pure
+// extraction with no behavior change).
+export const UNSUPPORTED_ALLOWLIST = new Map([
+  [
+    'read',
+    new Map([
+      [
+        'empty-string cell value (<v></v> with zero characters — no Text event for the ' +
+          "pull-XML parser to record, see reader.rs's xlsx_sheet_cells)",
+        'reader.rs\'s Text-event-driven cell recording never fires for a zero-length <v> ' +
+          'element, so an empty-string cell the oracle reports as {t:"s",v:""} is silently ' +
+          'absent from elixcee\'s output. Shared by read_workbook and ' +
+          'read_workbook_from_bytes; fixing it is out of scope for the phase that added ' +
+          "read() (a pure buffer-API extraction with no behavior change). See " +
+          'compat/differential/xlsx-read.test.mjs.',
+      ],
+    ]),
+  ],
+]);
 
 // Registered intentional SECURITY divergences, keyed either by the elixcee-side error
 // code that signals them (see docs/xlsx-security-model.md's planned ELIXCEE_* codes), or
@@ -381,9 +410,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   assert.equal(
     UNSUPPORTED_ALLOWLIST.size,
-    0,
-    'Phase 1B-2B: empty — the two Phase 1B-1/1B-2A-era cases (format_cell narrow subset, ' +
-      "sheet_add_aoa custom dateNF) both MATCH now that the real SSF engine is wired in"
+    1,
+    'Phase 2B: one api registered ("read") — the two Phase 1B-1/1B-2A-era format_cell/' +
+      'sheet_add_aoa cases both MATCH now that the real SSF engine is wired in'
+  );
+  assert.equal(
+    UNSUPPORTED_ALLOWLIST.get('read')?.size,
+    1,
+    'Phase 2B: one registered case under "read" — the empty-string cell value gap ' +
+      "(reader.rs's xlsx_sheet_cells never records a zero-length <v> element)"
   );
   assert.equal(
     SECURITY_DIVERGENCE_REGISTRY.size,

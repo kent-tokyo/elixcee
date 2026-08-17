@@ -19,6 +19,10 @@ const row: number = XLSX.decode_row('1');
 const rowStr: string = XLSX.encode_row(0);
 const parts: [string, string] = XLSX.split_cell('A1');
 
+const wbFromBytes: WorkBook = XLSX.read(new Uint8Array([1, 2, 3]));
+const wbFromArray: WorkBook = XLSX.read([1, 2, 3]);
+const wbFromBase64: WorkBook = XLSX.read('AAAA', { type: 'base64' });
+
 const wb: WorkBook = XLSX.book_new();
 const ws: WorkSheet = XLSX.aoa_to_sheet([[1, 2], [3, 4]]);
 const sheetName: string = XLSX.book_append_sheet(wb, ws, 'Sheet1');
@@ -76,5 +80,6 @@ console.log(
   decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, ws5,
   formatted, formatted2, formulae, csv, txt, gotByRef, gotByAddr, gotByRC, gotByRow,
   rowsGeneric, rowsDefault, rowsHeader1, rowsHeaderA, rowsHeaderArray, rowsDefval, rowsRawTrue,
-  rowsRawFalse, rowsRangeString, rowsRangeNumber, rowsRangeObj, rowsDense
+  rowsRawFalse, rowsRangeString, rowsRangeNumber, rowsRangeObj, rowsDense,
+  wbFromBytes, wbFromArray, wbFromBase64
 );
