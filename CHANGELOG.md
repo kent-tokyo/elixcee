@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.3.0]
+
+Root `elixcee` (Rust crate + Python package) only — `elixcee-types` stays `0.1.0`
+(unchanged, no source changes this release) and `@elixcee/xlsx` stays
+`0.0.0-development`/unpublished. Verified via a fresh-venv install of a locally-built
+wheel, not just `cargo test` (see `Fix`/`Sgn`/`Round`/`CBool` below, all re-checked
+through the real Python API after install).
+
 ### Added
 
 - **`Fix`, `Sgn`, and `Round` VBA functions.** Root-caused via an automated pass over the
