@@ -9,6 +9,12 @@ pub mod snapshot;
 pub mod testworkbook;
 pub mod vm;
 
+/// Shared value types (`Variant`, `ExcelError`, `CellContent`, date-serial
+/// math), physically defined in the `elixcee-types` crate — aliased here so
+/// existing `crate::types::*` references (used internally by `vm`/`formula`)
+/// resolve without every call site needing to know it's an external crate.
+pub use elixcee_types as types;
+
 use vm::{Variant, Vm};
 #[cfg(any(feature = "python", test))]
 use vm::CellContent;
