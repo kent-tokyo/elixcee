@@ -77,7 +77,15 @@ export const VERDICTS = /** @type {const} */ ([
 // at behavior that no longer diverges (a stale UNSUPPORTED entry is exactly the
 // laundering hole this registry exists to prevent).
 //
-// Phase 2B added one real entry: read()'s empty-string-cell gap, found by
+// Phase 2B added two real entries under 'read', both genuine reader.rs DEFECTS rather
+// than capability gaps — by this file's own VERDICTS definitions they are BUG, not
+// UNSUPPORTED. They are registered here anyway, as a disclosed, deliberate exception, so
+// the differential suite stays green without silently laundering them; CHANGELOG.md's
+// 0.2.0 "Known limitations" section says the same thing in public. Whoever next touches
+// `reader.rs`'s cell-recording path should fix these and remove the entries, not treat
+// their presence here as evidence they're intentional.
+//
+// First: read()'s empty-string-cell gap, found by
 // compat/differential/xlsx-read.test.mjs, not assumed. `reader.rs`'s hand-rolled pull-XML
 // parser (xlsx_sheet_cells, shared by the path-based read_workbook AND the new
 // read_workbook_from_bytes — not something this WASM bridge introduced) only records a

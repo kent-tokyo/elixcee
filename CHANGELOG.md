@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.0]
+
+Everything below was previously listed under `[Unreleased]`; this release closes that
+section rather than adding new scope. Two axes were explicitly investigated for this
+release and did **not** reach the bar originally targeted for it — see "Compatibility"
+and "Known limitations" below before reading this as a finished 90-point milestone. It
+isn't; both gaps are disclosed in the same terms they were measured in.
+
 ### Added
 
 - **`@elixcee/xlsx` compatibility groundwork (Phase 0)**: investigation and scaffolding for a planned npm package that would be a drop-in replacement for `xlsx@0.18.5` (SheetJS) —
@@ -54,6 +62,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `WorkbookSheet.merged_ranges` parsed from XLSX `<mergeCell ref="...">` and ODS `table:number-columns-spanned`/`table:number-rows-spanned`, threaded into a new `Vm.merged_ranges` map
   - Unconditional hard errors in every mode that executes the macro (`run`/`diagnose`/`test-workbook`), matching real Excel's Error 1004 regardless of `On Error` state — same posture as B6b/B6c
   - Scope stays Paste-only; multi-area (`Areas`) ranges, hidden/filtered rows, and AutoFilter visible-cells-only copy remain deferred
+- **Sync `XLSX.read(bytes)` MVP and the `elixcee-wasm` bridge** (Phase 2B): a real, working file-reading entry point for `@elixcee/xlsx`, backed by WebAssembly, callable with no `await init()` —
+  - `src/reader.rs`'s `read_workbook` was generalized (pure extraction, no behavior change to the path-based entry point) into `read_workbook_from_archive<R: Read + Seek>` plus a new `pub fn read_workbook_from_bytes(bytes: &[u8])`; `zip::ZipArchive` was already generic, so this needed no new dependency
+  - New `crates/elixcee-wasm` crate (first real use of `wasm-bindgen` in this project — deferred until this exact phase per `docs/xlsx-architecture.md`'s ADR). Node gets `wasm-pack --target nodejs` glue (`readFileSync` + synchronous `WebAssembly.Module`/`Instance` construction — genuinely synchronous, verified live by `require()`-ing it and calling the export with no `await`); the browser target inlines the compiled `.wasm` as base64 into its own glue and calls `initSync` itself rather than depending on a bundler's `.wasm` loader (verified: esbuild does not resolve `.wasm` imports by default) — both design choices come from a feasibility spike recorded in `docs/xlsx-architecture.md`'s "Phase 2B-0" section, including its one open item (an oft-cited "Safari enforces a ~4KB sync-compile ceiling" claim could not be substantiated from current MDN docs and is reported unverified, not as fact)
+  - `XLSX.read(data, opts)` added to `packages/xlsx` — accepts a `Buffer`/`Uint8Array` or `opts.type === 'base64'`; differential-tested against the real oracle via real file-format round-trips (`compat/differential/xlsx-read.test.mjs`): 9 MATCH + 2 registered `UNSUPPORTED` out of 11 cases, on the scope it actually claims (`SheetNames`, per-sheet `!ref`/`!merges`, per-cell `{t,v}` — no formulas, no styles/dates, no `!rows`/`!cols` yet)
+  - `zip`'s default features (`zstd-sys`, `getrandom`'s aes-crypto path) don't compile for `wasm32-unknown-unknown` in this toolchain; trimmed to `default-features = false, features = ["deflate"]` after confirming (by grep) the codebase never uses another compression method — a real fix, not a workaround
+  - Node-only for now: the browser-target artifact is built and verified at the bridge level, but `packages/xlsx`'s public `read()` doesn't yet dispatch to it (no `browser` export condition wired up)
+- **Oracle-neutral VBA differential corpus infrastructure** (Phase 2B): a reusable, backend-swappable differential-testing pipeline for VBA macro execution, under `compat/corpus/` —
+  - Backend-agnostic scenario schema (`compat/corpus/SCHEMA.md`), 581 generated scenarios across 25 categories, an elixcee runner, a LibreOffice UNO runner, a normalizer, and a classifier (`compat/corpus/classify.mjs`, its own file — reuses `compat/differential/classify.mjs`'s verdict vocabulary and anti-laundering discipline rather than importing it, since that file's registries are keyed to the npm API surface, not VBA scenarios) with one new verdict this domain needed: `ORACLE_UNAVAILABLE`
+  - Every result record carries an explicit `oracle` field (`"libreoffice"` today; `"microsoft_excel"` is defined in the schema but has never produced a record — see "Compatibility" below). LibreOffice and Excel results are never merged into one number by this pipeline
+  - An Excel COM adapter **contract** (`compat/oracle-excel-com/CONTRACT.md`, I/O schema, PowerShell scaffold, Windows execution instructions) is defined but explicitly marked `UNVERIFIED` — no Windows/Excel environment exists in this project's current toolchain to run it
+
+### Changed
+
+- `read_workbook`'s XLSX-archive-consuming body is now generic over `R: Read + Seek` internally (`read_workbook_from_archive`); the public `read_workbook(path)` signature and behavior are unchanged
+- Root `Cargo.toml`'s `zip` dependency narrowed from its default feature set to `deflate`-only (see above)
+
+### Fixed
+
+- A silent-wrong-result bug in the new (this release) matching-shape multi-area Paste: `Transpose:=True` was being ignored, writing un-transposed data instead of either transposing correctly or erroring. Caught during the same milestone's self-review, before ever reaching a released version — fixed with a regression test (`matching_shape_multi_area_paste_with_transpose_still_errors_instead_of_silently_mis_pasting`)
+- `ssf@0.11.2`'s numFmtId 67-71 indirection-table bug (see Phase 1B-2B above) — carried forward from before this release, listed here for completeness since it ships in 0.2.0's first tagged release
+
+### Compatibility
+
+Two independent oracle-differential efforts ran this release. Read both before treating any "compatibility" claim below as broader than what it says.
+
+- **`@elixcee/xlsx` vs. the real `xlsx@0.18.5` npm package** (`compat/differential/`, Node-side, oracle always available): 512 MATCH + 14 registered intentional divergences on the `utils.*` surface, 1831/1831 MATCH on the SSF number-format engine, 34/34 export metadata matches, and the new `read()` MVP at 9 MATCH + 2 registered `UNSUPPORTED` (see "Added" above). This axis has a real, complete oracle and these numbers are direct measurements.
+- **VBA macro execution vs. LibreOffice** (`compat/corpus/`, oracle: `"libreoffice"`): of 581 generated scenarios, only **1 produced an actual `MATCH` comparison** and 2 were `NONDETERMINISTIC`; **578 are `ORACLE_UNAVAILABLE`** — LibreOffice, driven headless via `getScriptProvider().getScript().invoke()` in this project's sandboxed environment, hangs indefinitely (confirmed >90s, no CPU activity) on any `Range`/`Cells` access, which is most of what the corpus exercises. Non-object-model code runs and compares fine (proven by a dedicated smoke scenario). **This is a real, reproducibly-measured negative result, not a partial success** — the corpus infrastructure itself is complete and reusable, but it has not yet produced a meaningful VBA-compatibility signal.
+- **VBA macro execution vs. Microsoft Excel**: **not attempted, at all, this release.** No Windows or licensed Excel environment exists in this project's toolchain. `compat/oracle-excel-com/`'s adapter is a contract only (see "Added" above) — treat every "LibreOffice" result above as informative but **not** a proxy for Excel compatibility; LibreOffice's own VBA support is its own compatibility layer, not Microsoft Excel.
+
+### Known limitations
+
+- **The VBA statement/expression parser rejects several ordinary operators and constructs**, confirmed by direct execution against this release's build (not assumed from a report): the `Mod` and `\` (integer division) operators, `^` (exponentiation), infix `And`/`Or`/`Not`/`Xor` in expressions, typed `Function` parameters/return types (`Function f(x As Integer) As Integer`), and `With Range(...)` (only `With Sheets(...)` currently works). Comma-separated `Dim a As Integer, b As Integer` was also flagged as unsupported during investigation but was directly verified working — not everything reported turned out to be real, and this line lists only what was actually confirmed. These are independent of, and larger in likely real-world impact than, this release's new object-model work.
+- **Two `reader.rs` parsing defects**, found via the new `read()` differential suite, shared by both the path-based and byte-based entry points, pre-existing rather than introduced this release: an empty-string cell (`<c t="str"><v></v></c>`, zero characters) never fires the parser's text event and is silently absent instead of `{t:'s', v:''}`; and `<dimension>` is never parsed at all, so `!ref` is always the populated-cell bounding box even when a real Excel/LibreOffice file legitimately declares a wider `<dimension>`. Registered as `UNSUPPORTED` in `compat/differential/classify.mjs` for pragmatic reasons, but by that same file's own definitions these are `BUG`s, not capability gaps — flagged here so they get filed and fixed, not mistaken for roadmap items.
+- Matching-shape multi-area Paste is the only multi-area Paste shape that executes; every other combination (count/shape mismatch, single↔multi either direction) remains diagnose-only. `Set ws = ActiveSheet` / `Set wb = ThisWorkbook` as object variables are not supported (only `Range` expressions are `Set`-able).
+- `@elixcee/xlsx`'s `read()` is Node-only; the browser-target WASM artifact exists and is verified at the bridge level but isn't wired into the package's public API yet.
+- The LibreOffice headless `Range`/`Cells` hang described under "Compatibility" is unresolved — root-caused (headless UNO script invocation, not a scenario-specific issue) but not fixed, so the corpus cannot yet produce broad VBA-compatibility signal in this environment.
+- The Excel COM adapter is a contract and PowerShell scaffold only; it has never been run, against anything, by anyone, in this project's history to date.
 
 ## [0.1.2]
 
