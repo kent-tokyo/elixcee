@@ -1101,13 +1101,24 @@ impl Vm {
             // and matching per-area shapes (pairwise, in order). Every
             // other multi-area shape (count/shape mismatch, or either side
             // single-area) stays diagnose-only exactly as in B7a — see
-            // `multi_area_paste_failure`'s doc comment. `transpose` isn't
-            // modeled for this shape (real Excel's own per-area transpose
-            // semantics aren't obviously well-defined either); a
-            // multi-area Paste ignores it rather than silently
-            // mis-transposing.
+            // `multi_area_paste_failure`'s doc comment.
+            //
+            // `transpose` isn't modeled for this shape (real Excel's own
+            // per-area transpose semantics aren't obviously well-defined
+            // either) — `&& !transpose` below is load-bearing, not
+            // cosmetic: without it, a `Transpose:=True` multi-area paste
+            // would silently write UN-transposed data instead of either
+            // transposing or erroring, trading a loud pre-existing failure
+            // for a silently wrong answer. With it, that case still falls
+            // through to `multi_area_paste_failure` below, unchanged.
+            //
+            // This path also skips `check_merge_conflicts` (unlike the
+            // single-area path below it) — merged-cell conflicts aren't
+            // checked for a multi-area destination. `check_sheet_not_
+            // protected` above still applies.
             if let Some(dest_areas) = dest_areas_probe.clone()
                 && clip.areas.len() > 1
+                && !transpose
                 && dest_areas.len() == clip.areas.len()
                 && clip.areas.iter().zip(dest_areas.iter())
                     .all(|(s, d)| s.rows() == d.rows() && s.cols() == d.cols())
@@ -5320,6 +5331,24 @@ mod tests {
         assert_eq!(vm.get_cell(2, 5), Variant::Integer(20));
         assert_eq!(vm.get_cell(1, 7), Variant::Integer(30));
         assert_eq!(vm.get_cell(2, 7), Variant::Integer(40));
+    }
+
+    #[test]
+    fn matching_shape_multi_area_paste_with_transpose_still_errors_instead_of_silently_mis_pasting() {
+        // `transpose` isn't modeled for the multi-area execution path — it
+        // must fall through to the pre-existing diagnose-only error rather
+        // than silently writing UN-transposed data while claiming success.
+        let prog = parser::parse(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(1,3).Value = 3\n    \
+             Range(\"A1:A1,C1:C1\").Copy\n    \
+             Range(\"E1:E1,G1:G1\").PasteSpecial Transpose:=True\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("not yet supported"), "{:?}", err);
+        assert_eq!(vm.get_cell(1, 5), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 7), Variant::Empty);
     }
 
     #[test]
