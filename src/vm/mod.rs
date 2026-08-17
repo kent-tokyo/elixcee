@@ -2477,9 +2477,51 @@ impl Vm {
                 let f = to_f64(vals.first().ok_or("INT requires 1 argument")?)?;
                 Ok(as_int_if_whole(f.floor()))
             }
-            "clng" | "cint" | "cbool" => {
+            "clng" | "cint" => {
                 let f = to_f64(vals.first().ok_or("CInt/CLng requires 1 argument")?)?;
                 Ok(Variant::Integer(f.round() as i64))
+            }
+            "cbool" => {
+                let v = vals.first().ok_or("CBool requires 1 argument")?;
+                let b = match v {
+                    Variant::Boolean(b) => *b,
+                    // A string is only ever a literal "True"/"False" or a
+                    // numeric-string in real VBA — never routed through the
+                    // shared CLng/CInt numeric-coercion path (that's the
+                    // bug this arm used to have: CBool("True") tried to
+                    // parse "True" as a number and errored).
+                    Variant::Str(s) => match s.trim().to_lowercase().as_str() {
+                        "true"  => true,
+                        "false" => false,
+                        _ => to_f64(v)? != 0.0,
+                    },
+                    other => to_f64(other)? != 0.0,
+                };
+                Ok(Variant::Boolean(b))
+            }
+            "fix" => {
+                // Truncates toward zero — unlike Int(), which floors toward
+                // negative infinity. `Fix(-3.9)` is `-3`, not `-4`.
+                let f = to_f64(vals.first().ok_or("Fix requires 1 argument")?)?;
+                Ok(as_int_if_whole(f.trunc()))
+            }
+            "sgn" => {
+                let f = to_f64(vals.first().ok_or("Sgn requires 1 argument")?)?;
+                let n: i64 = if f > 0.0 { 1 } else if f < 0.0 { -1 } else { 0 };
+                Ok(Variant::Integer(n))
+            }
+            "round" => {
+                // VBA's own Round() uses banker's rounding (round-half-to-
+                // even) — the same convention `to_i64_rounded` documents
+                // for `\`/`Mod` operand coercion — which is NOT what
+                // WorksheetFunction.Round (Excel's ROUND() formula, round-
+                // half-away-from-zero) does. They're genuinely different
+                // functions in real VBA/Excel, not aliases of each other,
+                // so this doesn't share `eval_wsf`'s "round" arm.
+                let f = to_f64(vals.first().ok_or("Round requires 1 argument")?)?;
+                let digits = if vals.len() >= 2 { to_f64(&vals[1])? as i32 } else { 0 };
+                let factor = 10f64.powi(digits);
+                Ok(as_int_if_whole((f * factor).round_ties_even() / factor))
             }
             "cdbl" | "csng" => {
                 let f = to_f64(vals.first().ok_or("CDbl requires 1 argument")?)?;
@@ -3640,6 +3682,69 @@ mod tests {
     fn test_vba_clng() {
         let vm = run("Sub MySub()\n    a = CLng(3.7)\n    b = CLng(-2.5)\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Integer(4));
+    }
+
+    #[test]
+    fn test_vba_fix_truncates_toward_zero() {
+        // Fix() truncates toward zero, unlike Int() which floors toward
+        // negative infinity — Fix(-3.9) is -3, not -4 (see test_vba_int's
+        // Int(-3.1) == -4 for the contrast).
+        let vm = run("Sub MySub()\n    a = Fix(3.9)\n    b = Fix(-3.9)\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(3));
+        assert_eq!(vm.variables["b"], Variant::Integer(-3));
+    }
+
+    #[test]
+    fn test_vba_sgn() {
+        let vm = run("Sub MySub()\n    a = Sgn(-5)\n    b = Sgn(5)\n    c = Sgn(0)\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(-1));
+        assert_eq!(vm.variables["b"], Variant::Integer(1));
+        assert_eq!(vm.variables["c"], Variant::Integer(0));
+    }
+
+    #[test]
+    fn test_vba_round_uses_banker_rounding_unlike_worksheetfunction_round() {
+        // Real VBA's own Round() rounds half-to-even; WorksheetFunction.Round
+        // (Excel's ROUND() formula) rounds half-away-from-zero — genuinely
+        // different functions, not aliases. `Round(2.5)` == 2 (nearest even),
+        // not 3 (which is what WorksheetFunction.Round(2.5) gives).
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    a = Round(3.14159)\n",
+            "    b = Round(-1.5)\n",
+            "    c = Round(2.5)\n",
+            "    d = Round(0.125, 2)\n",
+            "    e = Application.WorksheetFunction.Round(2.5)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["a"], Variant::Integer(3));
+        assert_eq!(vm.variables["b"], Variant::Integer(-2));
+        assert_eq!(vm.variables["c"], Variant::Integer(2));
+        assert_eq!(vm.variables["d"], Variant::Float(0.12));
+        assert_eq!(vm.variables["e"], Variant::Integer(3));
+    }
+
+    #[test]
+    fn test_vba_cbool() {
+        // CBool used to be grouped with CLng/CInt and return a
+        // Variant::Integer via numeric coercion — CBool("True") then tried
+        // to parse "True" as a number and errored. It must return a real
+        // Variant::Boolean, and a literal "True"/"False" string must not
+        // go through numeric parsing at all.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    a = CBool(\"True\")\n",
+            "    b = CBool(\"False\")\n",
+            "    c = CBool(5)\n",
+            "    d = CBool(0)\n",
+            "    t = TypeName(CBool(5))\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Boolean(false));
+        assert_eq!(vm.variables["c"], Variant::Boolean(true));
+        assert_eq!(vm.variables["d"], Variant::Boolean(false));
+        assert_eq!(vm.variables["t"], Variant::Str("Boolean".to_string()));
     }
 
     #[test]

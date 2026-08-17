@@ -8,8 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`Fix`, `Sgn`, and `Round` VBA functions.** Root-caused via an automated pass over the
+  581-scenario corpus's remaining non-parse-error failures (see below), not guessed at:
+  30 of 41 turned out to be `Unknown VBA function` for these three, previously-missing,
+  ordinary built-in functions (13 `Sgn`, 12 `Fix`, 3 `Round`) — not deliberate negative
+  tests. `Fix` truncates toward zero (unlike `Int`, which floors — `Fix(-3.9)` is `-3`, not
+  `-4`). `Sgn` returns -1/0/1. `Round` uses real VBA's own banker's rounding
+  (round-half-to-even), which is a genuinely different function from
+  `WorksheetFunction.Round`/Excel's `ROUND()` formula (round-half-away-from-zero) — `Round`
+  does *not* alias or share an implementation with the pre-existing `WorksheetFunction.Round`
+  arm; verified both give different, each individually correct, answers on the same tied
+  input (`Round(2.5)` is `2`; `WorksheetFunction.Round(2.5)` is `3`).
+
 ### Fixed
 
+- `CBool` was grouped with `CLng`/`CInt` and returned a numeric `Variant::Integer` via the
+  same numeric-coercion path they use — so `CBool(5)` returned `5` typed `Long`, not `True`
+  typed `Boolean` (`TypeName` confirms this live), and `CBool("True")`/`CBool("False")`
+  errored outright trying to parse the literal string as a number. Found while implementing
+  `Fix`/`Sgn`/`Round` above (same corpus failures also involved `CBool`), not something the
+  corpus itself flagged directly — no scenario happened to check `CBool`'s return *type*, only
+  whether the string-literal call errored. Now its own arm: a genuine `"true"`/`"false"`
+  string (case-insensitive) converts directly, anything else numeric-coerces to boolean, and
+  the result is always a real `Variant::Boolean`.
 - Single-line `If cond Then stmt [Else stmt]` (no `End If`) now parses — previously
   unsupported at all (`parse_if` unconditionally required a newline right after `Then`).
   Identifier-led statements (assignment, sub call, array/field write — whatever

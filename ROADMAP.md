@@ -53,6 +53,18 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
    display strings, but not `read`/`readFile` (file-path/stream entry points), `write*`, or
    non-Node browser dispatch beyond the bundled-consumption case (its shared code still has a
    CJS `require('ssf')`).
+7. ~~581-scenario corpus's 41 non-parse-error failures were uncategorized~~ — **root-caused**
+   (Unreleased): a pass over every failure's actual error message/category (not the vague
+   "probably intentional negative scenarios" guess from the previous round) found 30/41 were
+   three missing built-in VBA functions (`Sgn` ×13, `Fix` ×12, `Round` ×3) plus a `CBool`
+   type bug they also exposed — all now fixed (see CHANGELOG). The remaining 11 are correctly
+   left as failures: 8 genuine `Division by zero` (matches real VBA), 2 explicitly-named
+   `unsupported_functions` scenarios (deliberate negative tests), 1 `Timer()` (nondeterministic
+   category — low value to implement, arguably intentional to leave out of a deterministic
+   engine). Corpus is now 570/581 elixcee-side, with every remaining failure understood and
+   correct, not just uninvestigated. Done via an ad-hoc analysis pass, not a new committed
+   script — the corpus is small and fixed-size enough that this didn't seem worth a permanent
+   tool; revisit if the corpus grows or this needs repeating regularly.
 
 ## Next candidates, roughly by leverage
 
