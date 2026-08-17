@@ -242,6 +242,18 @@ fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
         .map(|a| a.value.as_str())
 }
 
+/// True when a named attribute is present and its value is a "true" xsd:boolean literal —
+/// OOXML types attributes like `<row hidden="...">`/`<col hidden="...">` as xsd:boolean,
+/// whose valid lexical space is BOTH "1"/"0" and "true"/"false" (not "1"/"0" only). A
+/// hardcoded `== Some("1")` check missed real files: confirmed live that the oracle's own
+/// writer emits `hidden="1"` for `<row>` but `hidden="true"` for `<col>` (an asymmetry in
+/// the oracle's own writer, not a hypothetical) — so a "1"-only check silently never
+/// recognized an oracle-written hidden column at all. Used for both `<row>` and `<col>`
+/// so the two stay consistent rather than each hardcoding its own literal.
+fn attr_is_true(attrs: &[Attr], name: &str) -> bool {
+    matches!(attr_get(attrs, name), Some("1") | Some("true"))
+}
+
 // Longest real entity is a numeric ref like "&#x10FFFF;" (10 chars between
 // '&' and ';') — bounding the ';' search to this window keeps a run of
 // many unterminated '&' characters O(n) instead of O(n^2) (each `find`
@@ -491,7 +503,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
                         if let Some(r) = attr_get(attrs, "r") {
                             cur_row = r.parse().unwrap_or(0);
                         }
-                        let hidden = attr_get(attrs, "hidden") == Some("1");
+                        let hidden = attr_is_true(attrs, "hidden");
                         if hidden {
                             pending_hidden_row_run = Some(match pending_hidden_row_run {
                                 Some((start, end)) if end + 1 == cur_row => (start, cur_row),
@@ -507,7 +519,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
                         }
                     }
                     "col" => {
-                        if attr_get(attrs, "hidden") == Some("1") {
+                        if attr_is_true(attrs, "hidden") {
                             let min = attr_get(attrs, "min").and_then(|s| s.parse().ok());
                             let max = attr_get(attrs, "max").and_then(|s| s.parse().ok());
                             if let (Some(min), Some(max)) = (min, max) {
@@ -988,6 +1000,23 @@ mod merge_tests {
 </cols><sheetData></sheetData></worksheet>"#;
         let data = xlsx_sheet_cells(xml, &[]);
         assert_eq!(data.hidden_columns, vec![(2, 4)]);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_accepts_the_xsd_boolean_true_literal_for_hidden() {
+        // Confirmed live: the oracle's own writer emits hidden="true" (not "1") for
+        // <col>, while emitting hidden="1" (not "true") for <row> — both are valid
+        // xsd:boolean lexical forms per the OOXML spec, so both must be recognized on
+        // both elements rather than each hardcoding the one literal the writer happened
+        // to use for it.
+        let xml = r#"<worksheet><cols>
+<col min="1" max="1" hidden="true"/>
+</cols><sheetData>
+<row r="1" hidden="true"><c r="A1"><v>1</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.hidden_columns, vec![(1, 1)]);
+        assert_eq!(data.hidden_rows, vec![(1, 1)]);
     }
 
     #[test]
