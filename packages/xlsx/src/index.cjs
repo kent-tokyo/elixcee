@@ -24,7 +24,18 @@ const { formatCell, cellSetNumberFormat } = require('./internal/number-format.cj
 // npm consumers have no Rust/wasm-pack toolchain, so the compiled artifact ships committed
 // (see crates/elixcee-wasm/build.sh). Still not a dependency on the real `xlsx` package —
 // this is elixcee's own reader, just compiled to WASM.
-const wasmBridge = require('./internal/wasm/elixcee_wasm.node.cjs');
+//
+// Required LAZILY (inside `read()`, not here at module top-level) rather than eagerly:
+// this file's own `require('./internal/wasm/elixcee_wasm.node.cjs')` does
+// `require('fs').readFileSync(...)` the moment IT loads — fine for every Node consumer,
+// but the "browser" export condition entry point (index.browser.mjs) re-exports this
+// file's non-read utility functions verbatim and must not trigger that fs read merely by
+// being imported. A caller who never calls read() (the overwhelming majority of this
+// package's existing utils-only surface) also never pays for resolving it.
+let wasmBridge;
+function getWasmBridge() {
+  return wasmBridge || (wasmBridge = require('./internal/wasm/elixcee_wasm.node.cjs'));
+}
 
 // ---- column ----
 
@@ -191,7 +202,7 @@ function toBytes(data, opts) {
 
 function read(data, opts) {
   const bytes = toBytes(data, opts);
-  return shapeWorkBook(JSON.parse(wasmBridge.readWorkbook(bytes)), opts);
+  return shapeWorkBook(JSON.parse(getWasmBridge().readWorkbook(bytes)), opts);
 }
 
 // ---- workbook / sheet ----
