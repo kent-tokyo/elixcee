@@ -2616,7 +2616,23 @@ impl Vm {
                 Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Empty) | None)))
             }
             "isnumeric" => {
-                Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Integer(_)) | Some(Variant::Float(_)))))
+                // Real VBA's IsNumeric also accepts a string that parses as
+                // a number (`IsNumeric("123")` is True) and Empty (an
+                // uninitialized variable coerces to 0 in a numeric
+                // context) — not just an already-numeric Variant. Scoped
+                // to plain decimal/scientific-notation strings (Rust's own
+                // f64 parser, after trimming whitespace); real VBA's fuller
+                // numeric-string grammar (currency symbols, locale-specific
+                // decimal separators, parenthesized negatives, ...) isn't
+                // attempted here — no evidence (corpus or otherwise) it's
+                // needed, and guessing at locale-specific parsing rules
+                // isn't this project's style.
+                let is_numeric = match vals.first() {
+                    Some(Variant::Integer(_)) | Some(Variant::Float(_)) | Some(Variant::Empty) => true,
+                    Some(Variant::Str(s)) => s.trim().parse::<f64>().is_ok(),
+                    _ => false,
+                };
+                Ok(Variant::Boolean(is_numeric))
             }
             "chr" => {
                 let n = to_f64(vals.first().ok_or("Chr requires 1 argument")?)? as u32;
@@ -4327,6 +4343,28 @@ mod tests {
         let vm = run("Sub MySub()\n    Dim arr(3)\n    a = IsArray(arr)\n    b = IsArray(42)\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Boolean(true));
         assert_eq!(vm.variables["b"], Variant::Boolean(false));
+    }
+
+    #[test]
+    fn test_isnumeric_accepts_numeric_strings_not_just_numeric_variants() {
+        // Used to only check the Variant's own type (Integer/Float),
+        // missing real VBA's IsNumeric("123") == True entirely.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    a = IsNumeric(\"123\")\n",
+            "    b = IsNumeric(\"12.5\")\n",
+            "    c = IsNumeric(\" 42 \")\n",
+            "    d = IsNumeric(\"abc\")\n",
+            "    e = IsNumeric(\"12abc\")\n",
+            "    f = IsNumeric(123)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Boolean(true));
+        assert_eq!(vm.variables["c"], Variant::Boolean(true));
+        assert_eq!(vm.variables["d"], Variant::Boolean(false));
+        assert_eq!(vm.variables["e"], Variant::Boolean(false));
+        assert_eq!(vm.variables["f"], Variant::Boolean(true));
     }
 
     // ── Application properties ────────────────────────────────────────────────

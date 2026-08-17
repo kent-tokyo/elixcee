@@ -89,6 +89,13 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
     (`CInt(0.5)` was `1`, not `0`). Now reuses `to_i64_rounded` directly. A pre-existing
     test had computed `CLng(-2.5)` without ever asserting on it — likely how this went
     unnoticed until now.
+11. ~~`IsNumeric` didn't recognize numeric strings~~ — **fixed** (Unreleased): only checked
+    whether the argument was already an `Integer`/`Float` Variant, so `IsNumeric("123")` was
+    `False`. Found by a systematic pass over `eval_vba_func` for the same bug class as items
+    8/10 (functions with real, verifiable, previously-untested gaps against documented VBA
+    semantics). Now also accepts a parseable numeric string and `Empty`; doesn't attempt
+    VBA's fuller numeric-string grammar (currency symbols, locale decimal separators) — no
+    evidence it's needed, and this project doesn't guess at locale-specific parsing.
 
 ## Next candidates, roughly by leverage
 

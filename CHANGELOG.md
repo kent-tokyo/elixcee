@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `IsNumeric` only checked whether its argument was already an `Integer`/`Float` Variant —
+  `IsNumeric("123")` was `False`, missing real VBA's numeric-string recognition entirely.
+  Found by a systematic pass over `eval_vba_func` for the same "grouped/never independently
+  tested" bug class as `CBool`/`CInt`/`CLng` above. Now also accepts a string that parses as
+  a plain decimal/scientific-notation number (after trimming whitespace) and `Empty`
+  (coerces to 0 in a numeric context, matching real VBA). Deliberately not chasing VBA's
+  fuller numeric-string grammar (currency symbols, locale-specific decimal separators,
+  parenthesized negatives) — no evidence any of that is needed, and this project doesn't
+  guess at locale-specific parsing rules. Previously entirely untested; now covered.
 - `CInt`/`CLng` used Rust's default round-half-away-from-zero (`f64::round()`) instead of
   real VBA's banker's rounding (round-half-to-even) — `CInt(0.5)` was `1`, not `0`. Found by
   auditing for the same bug class the `Round()` fix (below) had already been fixed for:
