@@ -132,13 +132,14 @@ pub enum ResolutionFailureKind {
         source_area: Rect,
         destination_area: Rect,
     },
-    /// A multi-area paste shape Milestone B7a doesn't diagnose as
-    /// structurally *wrong*: a single-area source into a multi-area
-    /// destination, or a multi-area-to-multi-area paste that fully matches
-    /// in count and per-area shape. Real Excel would complete either of
-    /// these; elixcee's v1 multi-area foundation is diagnose-only and
-    /// never actually executes a multi-area paste (see `do_paste`'s doc
-    /// comment), so this reports the limitation plainly rather than
+    /// A multi-area paste shape that isn't diagnosed as structurally
+    /// *wrong* but also still isn't executed: a single-area source into a
+    /// multi-area destination, or (as of Milestone B7c item 5) the
+    /// opposite, a multi-area source into a single-area destination. Real
+    /// Excel would complete either of these; elixcee only executes the one
+    /// shape both sides are multi-area with matching `Areas.Count` and
+    /// matching per-area shapes (see `do_paste`'s B7c comment) — this
+    /// variant reports the remaining limitation plainly rather than
     /// silently doing nothing or misreporting a mismatch that isn't there.
     MultiAreaPasteUnsupported {
         source_areas: Vec<Rect>,
@@ -170,6 +171,14 @@ struct ClipboardState {
     /// `do_paste`) and never reads per-area cell values, so none are
     /// snapshotted for `areas.len() > 1`.
     areas: Vec<Rect>,
+    /// Every area's own cell snapshot, `[area_index][row][col]`, parallel
+    /// to `areas` (Milestone B7c item 5) — unlike `cells` (first-area-only,
+    /// and only when `areas.len() == 1`, an existing-test invariant left
+    /// untouched), this is always fully populated, feeding the one
+    /// multi-area Paste shape that's now actually executed (matching
+    /// `Areas.Count`s, matching per-area shapes) rather than only
+    /// diagnosed — see `do_paste`.
+    area_cells: Vec<Vec<Vec<Variant>>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -884,7 +893,9 @@ impl Vm {
     /// sheet, which may differ from the currently active one — see
     /// `read_range_ref_value`'s doc for why that's correct VBA behavior).
     /// `cells`'s "first area only, and only when `areas.len() == 1`" shape
-    /// is UNCHANGED from Milestone B7a (an existing test asserts it).
+    /// is UNCHANGED from Milestone B7a (an existing test asserts it);
+    /// `area_cells` is new — every area's cells, always populated, feeding
+    /// item 5's multi-area Paste.
     fn copy_areas_to_clipboard(&mut self, sheet: String, areas: Vec<Rect>, source_addr: String) {
         let empty: HashMap<(u32, u32), CellContent> = HashMap::new();
         let sheet_cells = self.sheets.get(&sheet).unwrap_or(&empty);
@@ -899,6 +910,13 @@ impl Vm {
         } else {
             Vec::new()
         };
+        let area_cells: Vec<Vec<Vec<Variant>>> = areas.iter()
+            .map(|a| {
+                (a.start_row..=a.end_row)
+                    .map(|r| (a.start_col..=a.end_col).map(|c| get(r, c)).collect())
+                    .collect()
+            })
+            .collect();
         self.clipboard = Some(ClipboardState {
             source_addr,
             src_sheet: sheet,
@@ -907,6 +925,7 @@ impl Vm {
             cells,
             span: self.current_span.unwrap_or(SourceSpan { start: 0, end: 0 }),
             areas,
+            area_cells,
         });
     }
 
@@ -1060,15 +1079,45 @@ impl Vm {
             }
         };
 
-        // Milestone B7a: multi-area foundation — diagnose-only, never
-        // completes (see `multi_area_paste_failure`'s doc comment). Only
-        // taken when source or destination unambiguously parses to more
-        // than one area; an unparseable destination or a single-area-only
-        // paste falls through untouched to the existing logic below.
+        // Milestone B7a: multi-area foundation. Only taken when source or
+        // destination unambiguously parses to more than one area; an
+        // unparseable destination or a single-area-only paste falls
+        // through untouched to the existing logic below.
         let dest_areas_probe = self.resolve_multi_area_addr(dest_addr);
         let is_multi_area = clip.areas.len() > 1
             || dest_areas_probe.as_ref().is_some_and(|d| d.len() > 1);
         if is_multi_area {
+            // Milestone B7c item 5: the one multi-area paste shape that's
+            // now actually executed rather than only diagnosed — source
+            // and destination both multi-area, with the same `Areas.Count`
+            // and matching per-area shapes (pairwise, in order). Every
+            // other multi-area shape (count/shape mismatch, or either side
+            // single-area) stays diagnose-only exactly as in B7a — see
+            // `multi_area_paste_failure`'s doc comment. `transpose` isn't
+            // modeled for this shape (real Excel's own per-area transpose
+            // semantics aren't obviously well-defined either); a
+            // multi-area Paste ignores it rather than silently
+            // mis-transposing.
+            if let Some(dest_areas) = dest_areas_probe.clone()
+                && clip.areas.len() > 1
+                && dest_areas.len() == clip.areas.len()
+                && clip.areas.iter().zip(dest_areas.iter())
+                    .all(|(s, d)| s.rows() == d.rows() && s.cols() == d.cols())
+            {
+                for (i, dst_area) in dest_areas.iter().enumerate() {
+                    let src_area = clip.areas[i];
+                    for r in 0..src_area.rows() {
+                        for c in 0..src_area.cols() {
+                            let v = clip.area_cells[i][r as usize][c as usize].clone();
+                            self.cells_mut().insert(
+                                (dst_area.start_row + r, dst_area.start_col + c),
+                                CellContent { formula: None, value: v },
+                            );
+                        }
+                    }
+                }
+                return Ok(());
+            }
             return Err(self.multi_area_paste_failure(&clip, dest_addr, dest_areas_probe));
         }
 
@@ -1133,12 +1182,12 @@ impl Vm {
         Ok(())
     }
 
-    /// Classifies a multi-area Copy/Paste (Milestone B7a) and returns the
-    /// matching error message — never returns success, since v1's
-    /// multi-area foundation only models the range/geometry and its
-    /// failure modes, not actual multi-area cell copying (see the module's
-    /// B7a design notes). Called only once `do_paste` has already
-    /// established that source or destination has more than one area.
+    /// Classifies a multi-area Copy/Paste and returns the matching error
+    /// message — never returns success. Called only once `do_paste` has
+    /// already established that source or destination has more than one
+    /// area *and* (Milestone B7c item 5) that the shape isn't the one
+    /// matching-`Areas.Count`-and-per-area-shape case `do_paste` now
+    /// executes directly instead of calling this.
     ///
     /// `dest_areas` is `None` when the destination address itself didn't
     /// resolve (malformed, or a named-range miss) — that's a plain invalid-
@@ -1199,10 +1248,10 @@ impl Vm {
             }
         }
 
-        // Nothing structurally wrong (a single-area source into a
-        // multi-area destination, or a fully-matching multi-area-to-
-        // multi-area paste) — still unsupported in v1; see
-        // `MultiAreaPasteUnsupported`'s doc comment.
+        // Nothing structurally wrong, but not the one shape `do_paste`
+        // executes directly (a single-area source into a multi-area
+        // destination, or the reverse) — see `MultiAreaPasteUnsupported`'s
+        // doc comment.
         self.last_resolution_failure = Some(ResolutionFailureKind::MultiAreaPasteUnsupported {
             source_areas,
             destination_areas: dest_areas,
@@ -5184,6 +5233,32 @@ mod tests {
              n = vis.Areas.Count\nEnd Sub\n",
         );
         assert_eq!(vm.variables["n"], Variant::Integer(1));
+    }
+
+    // ── Milestone B7c item 5: multi-area Copy/Paste ──────────────────────────
+
+    #[test]
+    fn matching_shape_multi_area_paste_actually_completes() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(1,3).Value = 3\n    \
+             Range(\"A1:A1,C1:C1\").Copy\n    Range(\"E1:E1,G1:G1\").PasteSpecial\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 7), Variant::Integer(3));
+    }
+
+    #[test]
+    fn matching_shape_multi_area_paste_from_a_union_object_variable() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    \
+             Cells(1,3).Value = 30\n    Cells(2,3).Value = 40\n    \
+             Set u = Union(Range(\"A1:A2\"), Range(\"C1:C2\"))\n    u.Copy\n    \
+             Range(\"E1:E2,G1:G2\").PasteSpecial\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(10));
+        assert_eq!(vm.get_cell(2, 5), Variant::Integer(20));
+        assert_eq!(vm.get_cell(1, 7), Variant::Integer(30));
+        assert_eq!(vm.get_cell(2, 7), Variant::Integer(40));
     }
 
     #[test]
