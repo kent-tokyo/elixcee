@@ -62,9 +62,41 @@ pub fn read_workbook(path: &str) -> Result<Vec<WorkbookSheet>, String> {
 /// resolution"). ODS is intentionally not handled here: it's not part of the xlsx-compat
 /// surface this entry point exists for, and `read_workbook(path)` above still handles it
 /// unchanged for path-based callers.
-pub fn read_workbook_from_bytes(bytes: &[u8]) -> Result<Vec<WorkbookSheet>, String> {
+///
+/// Returns `BufferSheet`, not `WorkbookSheet` — see that type's doc comment for why: the
+/// per-cell formula text and declared `<dimension>` this buffer-first API exposes have no
+/// home on `WorkbookSheet` itself without touching every one of its other construction
+/// sites (`src/vm/mod.rs`'s tests, `src/snapshot.rs`), which are out of scope this phase.
+pub fn read_workbook_from_bytes(bytes: &[u8]) -> Result<Vec<BufferSheet>, String> {
     let archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
     read_workbook_from_archive(archive)
+}
+
+/// A `WorkbookSheet` plus buffer-API-only data (`read_workbook_from_bytes`) that has no
+/// home on `WorkbookSheet` itself: adding a field there would force every existing
+/// `WorkbookSheet { .. }` construction site — including `src/vm/mod.rs`'s direct test
+/// literals and `src/snapshot.rs` — to list it too, none of which are in this phase's scope
+/// (`src/vm/` is frozen/owned elsewhere) or even want this data (the path-based VM/CLI flow
+/// has no use for `!ref`/formula text). Kept as a thin wrapper instead, used only by
+/// `read_workbook_from_bytes` and its WASM-bridge caller.
+pub struct BufferSheet {
+    pub sheet: WorkbookSheet,
+    /// Per-cell raw `<f>...</f>` formula text, 1-based `(row, col)` keys matching
+    /// `sheet.cells` — the formula string exactly as written in the XML (no leading `=`,
+    /// matching the oracle's own `.f` convention), unescaped the same way cell/shared-string
+    /// text already is. Shared/array-formula follower cells (`<f t="shared" si="N"/>`, no
+    /// inline text) are absent here, same as a cell with no `<f>` at all — reader.rs doesn't
+    /// resolve/shift a shared formula's text for non-master cells (a substantially larger
+    /// feature); this only ever captures literal inline formula text, which is exactly what
+    /// every writer this codebase's own tests exercise (`aoa_to_sheet` + `XLSX.write`)
+    /// produces — confirmed live it never emits shared formulas.
+    pub formulas: HashMap<(u32, u32), String>,
+    /// The worksheet's declared `<dimension ref="..."/>` range, 1-based inclusive, when
+    /// present AND trusted — see `parse_dimension_ref`'s doc comment for the oracle's own
+    /// colon-required-in-ref quirk this replicates exactly. `None` when the tag is absent,
+    /// unparseable, degenerate/reversed, or (matching the oracle) a colon-less single-cell
+    /// ref like `ref="A1"`.
+    pub dimension: Option<MergeRect>,
 }
 
 // ── Minimal pull XML parser ───────────────────────────────────────────────────
@@ -283,14 +315,16 @@ fn zip_read_text<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Res
 fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
-    read_workbook_from_archive(archive)
+    // Path-based read_workbook doesn't expose formulas/!ref (see BufferSheet's doc
+    // comment) — discard that half here rather than changing WorkbookSheet itself.
+    Ok(read_workbook_from_archive(archive)?.into_iter().map(|bs| bs.sheet).collect())
 }
 
 /// The body of the XLSX reader, generalized over any `R: Read + Seek` archive source
 /// (a `std::fs::File` for path-based reads, a `Cursor<&[u8]>` for `read_workbook_from_bytes`)
 /// — see `docs/xlsx-architecture.md`'s "reader.rs buffer-API resolution". Pure extraction
 /// from the former `read_xlsx`, no behavior change.
-fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Result<Vec<WorkbookSheet>, String> {
+fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Result<Vec<BufferSheet>, String> {
     let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
 
@@ -314,13 +348,17 @@ fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Res
             Ok(s) => s, Err(_) => continue,
         };
         let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared);
-        sheets.push(WorkbookSheet {
-            name,
-            cells: sheet_data.cells,
-            sheet_id,
-            merged_ranges: sheet_data.merged_ranges,
-            hidden_rows: sheet_data.hidden_rows,
-            hidden_columns: sheet_data.hidden_columns,
+        sheets.push(BufferSheet {
+            sheet: WorkbookSheet {
+                name,
+                cells: sheet_data.cells,
+                sheet_id,
+                merged_ranges: sheet_data.merged_ranges,
+                hidden_rows: sheet_data.hidden_rows,
+                hidden_columns: sheet_data.hidden_columns,
+            },
+            formulas: sheet_data.formulas,
+            dimension: sheet_data.dimension,
         });
     }
     Ok(sheets)
@@ -419,6 +457,11 @@ struct XlsxSheetData {
     /// directly from `<col min=".." max=".." hidden="1">` (Milestone
     /// B7b), already interval-shaped in the XML, no coalescing needed.
     hidden_columns: Vec<(u32, u32)>,
+    /// Per-cell raw `<f>` formula text — see `BufferSheet::formulas`.
+    formulas: HashMap<(u32, u32), String>,
+    /// The worksheet's declared `<dimension>`, when present and trusted —
+    /// see `BufferSheet::dimension` / `parse_dimension_ref`.
+    dimension: Option<MergeRect>,
 }
 
 fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
@@ -428,10 +471,14 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
     let mut hidden_rows: Vec<(u32, u32)> = Vec::new();
     let mut hidden_columns: Vec<(u32, u32)> = Vec::new();
     let mut pending_hidden_row_run: Option<(u32, u32)> = None;
+    let mut formulas: HashMap<(u32, u32), String> = HashMap::new();
+    let mut dimension: Option<MergeRect> = None;
     let mut cur_row: u32 = 0;
     let mut cur_col: u32 = 0;
     let mut cur_type = String::new();
     let mut in_v = false;
+    let mut in_f = false;
+    let mut cur_formula = String::new();
     let mut in_is_t = false; // inside <is><t>
     let mut is_text = String::new();
 
@@ -477,8 +524,20 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
                                 cur_col = col;
                             }
                         is_text.clear();
+                        in_f = false;
+                        cur_formula.clear();
                     }
                     "v" => { in_v = true; }
+                    "f" => {
+                        // A self-closing <f/> (or a shared-formula follower cell,
+                        // <f t="shared" si="N"/>, no inline text) never produces a
+                        // matching Close("f") event — nothing to capture, leave in_f
+                        // false so no stray Text event gets misattributed to it.
+                        if !matches!(ev, Ev::SelfClose(_, _)) {
+                            in_f = true;
+                            cur_formula.clear();
+                        }
+                    }
                     "t" => {
                         // inside <is> for inline strings
                         in_is_t = true;
@@ -489,14 +548,38 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
                             merged_ranges.push(rect);
                         }
                     }
+                    "dimension" if dimension.is_none() => {
+                        dimension = attr_get(attrs, "ref").and_then(parse_dimension_ref);
+                    }
                     _ => {}
                 }
             }
             Ev::Close(ref tag) => {
                 let local = tag.split(':').next_back().unwrap_or(tag.as_str());
                 match local {
-                    "v"  => { in_v = false; }
+                    "v"  => {
+                        // A zero-character <v></v> never produces an Ev::Text event (there's
+                        // no text to emit), so `in_v` is still true here — the Text-event
+                        // handler below never ran for this cell. Route the empty string
+                        // through the same xlsx_parse_cell used for the non-empty path
+                        // (rather than hardcoding a value) so type-specific behavior falls
+                        // out for free: t="str"/"e" -> Str(""), numeric -> parse fails -> no
+                        // cell, t="s" -> index parse fails -> no cell. Confirmed live: the
+                        // oracle's own writer emits exactly this shape for an empty-string
+                        // aoa cell (`<c t="str"><v></v></c>`), reporting {t:"s", v:""}.
+                        if in_v && cur_row > 0 && cur_col > 0
+                            && let Some(c) = xlsx_parse_cell("", &cur_type, shared) {
+                                cells.insert((cur_row, cur_col), c);
+                            }
+                        in_v = false;
+                    }
                     "t"  => { in_is_t = false; }
+                    "f"  => {
+                        if in_f && cur_row > 0 && cur_col > 0 && !cur_formula.is_empty() {
+                            formulas.insert((cur_row, cur_col), cur_formula.clone());
+                        }
+                        in_f = false;
+                    }
                     _ => {}
                 }
             }
@@ -509,6 +592,8 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
                     in_v = false;
                 } else if in_is_t {
                     is_text.push_str(text);
+                } else if in_f {
+                    cur_formula.push_str(text);
                 }
             }
         }
@@ -527,7 +612,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
     if let Some(run) = pending_hidden_row_run.take() {
         hidden_rows.push(run);
     }
-    XlsxSheetData { cells, merged_ranges, hidden_rows, hidden_columns }
+    XlsxSheetData { cells, merged_ranges, hidden_rows, hidden_columns, formulas, dimension }
 }
 
 fn xlsx_parse_cell(v: &str, t: &str, shared: &[String]) -> Option<SheetCell> {
@@ -573,6 +658,21 @@ fn parse_cell_ref(r: &str) -> Option<(u32, u32)> {
 fn parse_merge_ref(s: &str) -> Option<MergeRect> {
     let i = s.find(':')?;
     Some((parse_cell_ref(&s[..i])?, parse_cell_ref(&s[i + 1..])?))
+}
+
+/// Parses a worksheet's `<dimension ref="A1:C3"/>` into a 1-based inclusive rect — mirrors
+/// the oracle's own dimension parsing EXACTLY, including a quirk confirmed by reading
+/// xlsx.js directly (not assumed): its `dimregex = /"(\w*:\w*)"/` requires a literal colon
+/// inside the quoted ref value, so a single-cell dimension like `ref="A1"` (no colon) never
+/// matches at all and is silently NOT trusted — the oracle falls back to its own
+/// populated-cell bounding box in that case, same as reader.rs's existing fallback.
+/// Delegating to `parse_merge_ref` (which already requires a colon via `s.find(':')?`)
+/// replicates this for free rather than needing a second implementation. A
+/// degenerate/reversed range (start > end on either axis) is rejected too, matching the
+/// oracle's own `parse_ws_xml_dim`'s `d.s.r<=d.e.r && d.s.c<=d.e.c` guard.
+fn parse_dimension_ref(s: &str) -> Option<MergeRect> {
+    let (start, end) = parse_merge_ref(s)?;
+    if start.0 <= end.0 && start.1 <= end.1 { Some((start, end)) } else { None }
 }
 
 // ── ODS reader ────────────────────────────────────────────────────────────────
@@ -979,6 +1079,115 @@ mod merge_tests {
         assert_eq!(xml_unescape("a & b"), "a & b");
         assert_eq!(xml_unescape("a &notarealentity forever"), "a &notarealentity forever");
     }
+
+    // ── read() item 1: empty-string cell fix ────────────────────────────────
+
+    #[test]
+    fn xlsx_sheet_cells_records_a_zero_length_string_cell() {
+        // <v></v> with zero characters between the tags — confirmed live this is exactly
+        // what the oracle's own writer emits for an empty-string aoa cell (see
+        // compat/differential/xlsx-read.test.mjs's dedicated case). Previously silently
+        // absent (no Ev::Text event ever fires for an empty element).
+        let xml = r#"<worksheet><sheetData>
+<row r="1"><c r="A1" t="str"><v></v></c><c r="B1" t="str"><v>after</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        match data.cells.get(&(1, 1)) {
+            Some(SheetCell::Str(s)) => assert_eq!(s, ""),
+            other => panic!("expected Str(\"\") at A1, got {:?}", other.is_some()),
+        }
+        assert_eq!(data.cells.len(), 2);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_empty_v_on_a_numeric_cell_yields_no_cell() {
+        // No t= attribute -> numeric parsing. "".parse::<f64>() fails, so (matching a
+        // cell with no <v> content at all) no cell is inserted — the fix must not invent
+        // a numeric value out of an empty string.
+        let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v></v></c></row></sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert!(data.cells.is_empty());
+    }
+
+    // ── read() item 2: <dimension> parsing ──────────────────────────────────
+
+    #[test]
+    fn parse_dimension_ref_reads_a_colon_separated_range() {
+        assert_eq!(parse_dimension_ref("A1:C3"), Some(((1, 1), (3, 3))));
+        assert_eq!(parse_dimension_ref("A1:A1"), Some(((1, 1), (1, 1))));
+    }
+
+    #[test]
+    fn parse_dimension_ref_rejects_a_colon_less_single_cell_ref() {
+        // Mirrors the oracle's own dimregex (/"(\w*:\w*)"/), which requires a literal
+        // colon — a bare "A1" never matches on the oracle either, confirmed by reading
+        // xlsx.js's parse_ws_xml_dim call site directly.
+        assert_eq!(parse_dimension_ref("A1"), None);
+    }
+
+    #[test]
+    fn parse_dimension_ref_rejects_a_reversed_range() {
+        assert_eq!(parse_dimension_ref("C3:A1"), None);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_reads_a_dimension_wider_than_the_populated_cells() {
+        let xml = r#"<worksheet>
+<dimension ref="A1:E10"/>
+<sheetData>
+<row r="1"><c r="A1" t="str"><v>a</v></c></row>
+</sheetData>
+</worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.dimension, Some(((1, 1), (10, 5))));
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_dimension_is_none_when_the_tag_is_absent() {
+        let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.dimension, None);
+    }
+
+    // ── read() item 4: formula (<f>) capture ────────────────────────────────
+
+    #[test]
+    fn xlsx_sheet_cells_captures_inline_formula_text() {
+        let xml = r#"<worksheet><sheetData>
+<row r="1"><c r="A1"><f>SUM(B1:B2)</f><v>3</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.formulas.get(&(1, 1)).map(String::as_str), Some("SUM(B1:B2)"));
+        match data.cells.get(&(1, 1)) {
+            Some(SheetCell::Integer(v)) => assert_eq!(*v, 3),
+            other => panic!("expected Integer(3) at A1, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_shared_formula_follower_with_no_inline_text_captures_nothing() {
+        // <f t="shared" si="0"/> (self-closing, no formula text) — the master cell of a
+        // shared-formula group carries the real text; a follower cell doesn't. reader.rs
+        // doesn't resolve/shift shared-formula text, so this cell simply has no captured
+        // formula (an honest gap, not a wrong value) — see BufferSheet::formulas's doc
+        // comment.
+        let xml = r#"<worksheet><sheetData>
+<row r="1"><c r="A1"><f t="shared" ref="A1:A2" si="0">B1</f><v>1</v></c>
+<c r="A2"><f t="shared" si="0"/><v>2</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.formulas.get(&(1, 1)).map(String::as_str), Some("B1"));
+        assert_eq!(data.formulas.get(&(1, 2)), None);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_formula_text_is_xml_unescaped() {
+        let xml = r#"<worksheet><sheetData>
+<row r="1"><c r="A1"><f>A1&amp;"x"</f><v>1</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[]);
+        assert_eq!(data.formulas.get(&(1, 1)).map(String::as_str), Some(r#"A1&"x""#));
+    }
 }
 
 // ── Buffer-API resolution: read_workbook_from_bytes ─────────────────────────
@@ -1009,7 +1218,8 @@ mod from_bytes_tests {
         let from_bytes = read_workbook_from_bytes(&bytes).expect("read_workbook_from_bytes should succeed");
 
         assert_eq!(from_path.len(), from_bytes.len());
-        for (a, b) in from_path.iter().zip(from_bytes.iter()) {
+        for (a, bs) in from_path.iter().zip(from_bytes.iter()) {
+            let b = &bs.sheet;
             assert_eq!(a.name, b.name);
             assert_eq!(a.sheet_id, b.sheet_id);
             assert_eq!(a.merged_ranges, b.merged_ranges);
