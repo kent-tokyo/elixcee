@@ -793,6 +793,7 @@ fn walk_expr(
         | Expr::RowsCount
         | Expr::ColsCount
         | Expr::ActiveSheetRef
+        | Expr::ObjectVarSheet(_)
         | Expr::RecordGet { .. }
         | Expr::RecordGetNested { .. } => {}
     }

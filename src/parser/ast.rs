@@ -66,6 +66,23 @@ pub enum Expr {
     /// `ThisWorkbook.Worksheets(x)`/`ActiveWorkbook.Worksheets(x)` parse as
     /// a plain `Worksheets(x)`, the qualifier prefix simply skipped.
     ActiveSheetRef,
+    /// A `Set`-assigned object variable used as a sheet qualifier (Phase 2C
+    /// items 7/8) — e.g. `ws.Range("A1")` after `Set ws = ActiveSheet`, or
+    /// `wb.Worksheets("X")` after `Set wb = ThisWorkbook`. Valid wherever a
+    /// plain sheet `Expr` is, same as `ActiveSheetRef`. Holds the lowercase
+    /// variable name; resolved against `Vm::object_variables` at *runtime*
+    /// by `resolve_sheet_expr` — the parser has no variable-type tracking,
+    /// so it can't tell `ws.Range(...)` apart from an ordinary UDT field
+    /// access at parse time (see `parse_ident_stmt`'s dispatch order, which
+    /// only special-cases `.Range(`/`.Cells(`/`.Worksheets(`/`.Sheets(`
+    /// specifically to avoid misreading a genuine `p.range = ...` UDT
+    /// field). A name that turns out not to hold an `ObjectRef::Worksheet`
+    /// (unset, wrong type, or — for the `.Worksheets(...)`/`.Sheets(...)`
+    /// qualifier-skip form — anything at all, since elixcee never checks
+    /// that path holds a Workbook either) surfaces as a runtime error, not
+    /// a parse error, same as `ObjectRef::Range`'s existing "'x' is
+    /// Nothing" precedent.
+    ObjectVarSheet(String),
     RecordGet       { var: String, field: String },           // p.x
     RecordGetNested { var: String, fields: Vec<String> },    // p.a.b.c
     ArrayRecordGet  { name: String, indices: Vec<Expr>, field: String }, // arr(i).f

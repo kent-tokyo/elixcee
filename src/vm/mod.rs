@@ -329,14 +329,46 @@ pub struct HiddenCellsObservation {
     pub visible_cells: u64,
 }
 
-/// An object reference held by a `Set`-assigned variable (Milestone B7c).
-/// Only `Range` exists today; kept as an enum (not a bare `RangeRef`) so a
-/// later milestone can add `Worksheet`/`Workbook` without another
-/// namespace. Deliberately *not* a variant on the shared `Variant` type
-/// from `elixcee-types` — see `Vm::object_variables`'s doc for why.
+/// An object reference held by a `Set`-assigned variable (Milestone B7c;
+/// `Worksheet`/`Workbook` added Phase 2C items 7/8). Kept as an enum (not a
+/// bare `RangeRef`) so `Set ws = ActiveSheet`/`Set wb = ThisWorkbook` can
+/// live in the same namespace as `Set rng = Range(...)`. Deliberately *not*
+/// a variant on the shared `Variant` type from `elixcee-types` — see
+/// `Vm::object_variables`'s doc for why.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ObjectRef {
     Range(RangeRef),
+    /// `Set ws = ActiveSheet` — the lowercase sheet key `ws` now refers to
+    /// (a snapshot of whichever sheet was active at `Set`-time, same as
+    /// real VBA fixing a Worksheet reference's identity at assignment, not
+    /// at each later access — same convention `ObjectRef::Range`'s doc on
+    /// `RangeLit` already established for `Set`).
+    Worksheet(String),
+    /// `Set wb = ThisWorkbook` (or `= ActiveWorkbook`). No payload: elixcee
+    /// only ever has one workbook loaded (see `Expr::WorkbookQualifiedSheet`
+    /// 's doc), so there's nothing to distinguish — this variant exists
+    /// only so the *variable* is a real Workbook-typed object reference
+    /// (`wb.Worksheets(...)`/`.Sheets(...)` resolve through it) instead of
+    /// the pre-Phase-2C silent no-op.
+    Workbook,
+}
+
+/// Narrows an `ObjectRef` to its `Range` payload, or a descriptive error —
+/// `Union`/`.Areas(n)`/`.SpecialCells(...)` only make sense on a Range
+/// object; a `Worksheet`/`Workbook` reference reaching one of them (e.g.
+/// `Union(ws, Range("A1"))` where `ws` came from `Set ws = ActiveSheet`) is
+/// a real VBA type error, not a case any of the three should silently
+/// mishandle.
+fn expect_range_ref(obj: ObjectRef, context: &str) -> Result<RangeRef, String> {
+    match obj {
+        ObjectRef::Range(r) => Ok(r),
+        ObjectRef::Worksheet(_) => {
+            Err(format!("{}: expected a Range object, got a Worksheet reference", context))
+        }
+        ObjectRef::Workbook => {
+            Err(format!("{}: expected a Range object, got a Workbook reference", context))
+        }
+    }
 }
 
 pub struct Vm {
@@ -613,6 +645,24 @@ impl Vm {
             let key = self.active_sheet.clone();
             return Ok((key.clone(), key));
         }
+        // `<var>.Range(...)`/`.Cells(...)` where `var` was `Set`-assigned a
+        // Worksheet reference (Phase 2C item 7, e.g. `Set ws = ActiveSheet`)
+        // — resolved against `object_variables` here, at runtime, since the
+        // parser can't tell `ws` apart from an ordinary variable at parse
+        // time (see `Expr::ObjectVarSheet`'s doc).
+        if let Expr::ObjectVarSheet(name) = sheet_expr {
+            return match self.object_variables.get(name).cloned() {
+                Some(ObjectRef::Worksheet(key)) => Ok((key.clone(), key)),
+                Some(ObjectRef::Workbook) => Err(format!(
+                    "'{}' is a Workbook object — use '{}.Worksheets(name)', not '.Range(...)'/'.Cells(...)' directly",
+                    name, name
+                )),
+                Some(ObjectRef::Range(_)) => {
+                    Err(format!("'{}' is a Range object, not a Worksheet", name))
+                }
+                None => Err(format!("'{}' is Nothing — Set was never called", name)),
+            };
+        }
         let plain = match sheet_expr {
             Expr::WorkbookQualifiedSheet { workbook, sheet } => {
                 let wb_val = self.eval_expr(workbook)?;
@@ -762,7 +812,7 @@ impl Vm {
                 let mut areas: Vec<Rect> = Vec::new();
                 let mut sheet: Option<String> = None;
                 for p in parts {
-                    let ObjectRef::Range(r) = self.eval_object_expr(p)?;
+                    let r = expect_range_ref(self.eval_object_expr(p)?, "Union")?;
                     match &sheet {
                         None => sheet = Some(r.sheet.clone()),
                         Some(s) if *s != r.sheet => {
@@ -778,7 +828,7 @@ impl Vm {
                 }))
             }
             ObjectExpr::Area(base, index) => {
-                let ObjectRef::Range(r) = self.eval_object_expr(base)?;
+                let r = expect_range_ref(self.eval_object_expr(base)?, "Areas")?;
                 let i = to_f64(&self.eval_expr(index)?)? as i64;
                 if i < 1 || i as usize > r.areas.len() {
                     return Err(format!(
@@ -789,7 +839,7 @@ impl Vm {
                 Ok(ObjectRef::Range(RangeRef::single(r.sheet.clone(), r.areas[(i - 1) as usize])))
             }
             ObjectExpr::SpecialCellsVisible(base) => {
-                let ObjectRef::Range(r) = self.eval_object_expr(base)?;
+                let r = expect_range_ref(self.eval_object_expr(base)?, "SpecialCells")?;
                 let areas = self.visible_areas(&r.sheet, &r.areas);
                 if areas.is_empty() {
                     return Err("SpecialCells: no visible cells were found (Error 1004)".to_string());
@@ -1874,7 +1924,7 @@ impl Vm {
             Stmt::RangeObjectCopy { var, dst } => {
                 let obj = self.object_variables.get(var).cloned()
                     .ok_or_else(|| format!("'{}' is Nothing — Set was never called", var))?;
-                let ObjectRef::Range(r) = obj;
+                let r = expect_range_ref(obj, "Copy")?;
                 let display = format!("<{}>", var);
                 self.copy_areas_to_clipboard(r.sheet, r.areas, display);
                 if let Some(dst_addr) = dst {
@@ -1882,23 +1932,48 @@ impl Vm {
                 }
             }
             Stmt::Set { var, value } => {
+                if let ObjectExpr::Var(name) = value {
+                    // `Set ws = ActiveSheet` / `Set wb = ThisWorkbook` /
+                    // `Set wb = ActiveWorkbook` (Phase 2C items 7/8) — these
+                    // three parse as a bare `ObjectExpr::Var` the same as
+                    // any other identifier in object position (the parser
+                    // can't distinguish them from a real object-variable
+                    // reference at parse time — see `ast::ObjectExpr::Var`'s
+                    // doc), so they're recognized here by name, ahead of the
+                    // generic "not a live object variable" no-op below.
+                    // Previously all three fell into that no-op — a bare
+                    // `Set ws = ActiveSheet` silently did nothing.
+                    match name.as_str() {
+                        "activesheet" => {
+                            self.object_variables
+                                .insert(var.clone(), ObjectRef::Worksheet(self.active_sheet.clone()));
+                            return Ok(());
+                        }
+                        "thisworkbook" | "activeworkbook" => {
+                            self.object_variables.insert(var.clone(), ObjectRef::Workbook);
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
                 if let ObjectExpr::Var(name) = value
                     && !self.object_variables.contains_key(name)
                 {
                     // A bare identifier in object position that isn't a
-                    // live object variable — either a genuinely unset `Set
-                    // b = a` or, more commonly, an unmodeled VBA object
-                    // keyword the parser can't distinguish from a variable
-                    // reference at parse time (`ActiveSheet`, `Selection`,
-                    // `Nothing`, ... — `Nothing` in particular needs this:
-                    // `Set rng = Nothing` must stay a no-op, never a hard
-                    // error). No-op, same precedent as `Stmt::Dim`/
-                    // `Stmt::Unsupported` for any other unmodeled
-                    // construct — safer than guessing wrong and raising a
-                    // confusing runtime error. Errors from a *resolvable*
-                    // object expression (an out-of-range `Areas(n)`, a
-                    // cross-sheet `Union`, an invalid `Range(...)` address)
-                    // are unaffected and still propagate below.
+                    // live object variable and isn't one of the three names
+                    // handled above — either a genuinely unset `Set b = a`
+                    // or another unmodeled VBA object keyword the parser
+                    // can't distinguish from a variable reference at parse
+                    // time (`Selection`, `Nothing`, ... — `Nothing` in
+                    // particular needs this: `Set rng = Nothing` must stay a
+                    // no-op, never a hard error). No-op, same precedent as
+                    // `Stmt::Dim`/`Stmt::Unsupported` for any other
+                    // unmodeled construct — safer than guessing wrong and
+                    // raising a confusing runtime error. Errors from a
+                    // *resolvable* object expression (an out-of-range
+                    // `Areas(n)`, a cross-sheet `Union`, an invalid
+                    // `Range(...)` address) are unaffected and still
+                    // propagate below.
                     return Ok(());
                 }
                 let obj = self.eval_object_expr(value)?;
@@ -2296,6 +2371,14 @@ impl Vm {
             // intercepts `ActiveSheetRef` before it ever reaches here, for
             // every use the parser actually produces (Milestone B7c item 6).
             Expr::ActiveSheetRef => Ok(Variant::Str(self.active_sheet.clone())),
+            // Same "only meaningful wrapped inside a sheet-access node"
+            // story as `ActiveSheetRef` above — `resolve_sheet_expr`
+            // intercepts `ObjectVarSheet` before it ever reaches here, for
+            // every use the parser actually produces (Phase 2C items 7/8).
+            Expr::ObjectVarSheet(name) => match self.object_variables.get(name).cloned() {
+                Some(ObjectRef::Worksheet(key)) => Ok(Variant::Str(key)),
+                _ => Err(format!("'{}' is not a Worksheet object variable", name)),
+            },
             Expr::CellsFind { what, find_row } => {
                 let target = self.eval_expr(what)?;
                 let mut keys: Vec<(u32, u32)> = self.cells().keys().cloned().collect();
@@ -6042,5 +6125,55 @@ mod tests {
         );
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+    }
+
+    // ── Phase 2C items 7/8: Set ws = ActiveSheet / Set wb = ThisWorkbook ─────
+
+    #[test]
+    fn set_ws_activesheet_then_range_and_cells_write_and_read() {
+        // Previously a silent no-op (see `Stmt::Set`'s old comment) — `ws`
+        // would stay unset, and `ws.Cells(...)`/`ws.Range(...)` wouldn't
+        // even parse to anything meaningful. Both write and read now
+        // actually reach the sheet.
+        let vm = run(
+            "Sub MySub()\n    Set ws = ActiveSheet\n    ws.Cells(1, 1).Value = 5\n    ws.Range(\"B2\").Value = 9\n    x = ws.Cells(1, 1).Value\n    y = ws.Range(\"B2\").Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(5));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(9));
+        assert_eq!(vm.variables["x"], Variant::Integer(5));
+        assert_eq!(vm.variables["y"], Variant::Integer(9));
+    }
+
+    #[test]
+    fn set_ws_activesheet_captures_a_snapshot_not_a_dynamic_reference() {
+        // Real VBA's `Set` fixes a Worksheet reference's identity at
+        // assignment time — unlike the bare `ActiveSheet` keyword itself
+        // (dynamic; see `activesheet_tracks_the_active_sheet_after_it_
+        // changes`), `ws` must keep pointing at Sheet2 even after the
+        // active sheet reverts to Sheet1 when the `With` block ends.
+        let vm = run(
+            "Sub MySub()\n    With Sheets(\"Sheet2\")\n        Set ws = ActiveSheet\n    End With\n    ws.Cells(1, 1).Value = 42\nEnd Sub\n",
+        );
+        let cell = vm.get_sheet_cells("sheet2").and_then(|s| s.get(&(1, 1))).map(|c| c.value.clone());
+        assert_eq!(cell, Some(Variant::Integer(42)));
+        // And Sheet1 (still the active sheet) is untouched.
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+    }
+
+    #[test]
+    fn set_wb_thisworkbook_then_worksheets_write_targets_the_named_sheet() {
+        let vm = run(
+            "Sub MySub()\n    Set wb = ThisWorkbook\n    wb.Worksheets(\"Data\").Cells(2, 3).Value = 77\nEnd Sub\n",
+        );
+        let cell = vm.get_sheet_cells("data").and_then(|s| s.get(&(2, 3))).map(|c| c.value.clone());
+        assert_eq!(cell, Some(Variant::Integer(77)));
+    }
+
+    #[test]
+    fn set_wb_activeworkbook_then_sheets_read() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Data\").Cells(1, 1).Value = 42\n    Set wb = ActiveWorkbook\n    x = wb.Sheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["x"], Variant::Integer(42));
     }
 }

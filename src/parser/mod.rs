@@ -1672,6 +1672,39 @@ impl Parser {
                 None
             };
             Ok(Stmt::RangeObjectCopy { var: name, dst })
+        } else if *self.peek() == Tok::Dot
+            && (self.is_ident_at(1, "range") || self.is_ident_at(1, "cells"))
+            && *self.peek_at(2) == Tok::LParen
+        {
+            // <var>.Range(addr).Value/Formula = val / <var>.Cells(r,c).Value
+            // = val (Phase 2C item 7) — the object-variable sibling of
+            // `Sheets(...).Range(...)`/`.Cells(...)` (see
+            // `parse_sheet_property_write`), for a `<var>` a `Set var =
+            // ActiveSheet` assigned a Worksheet reference to.
+            // `Expr::ObjectVarSheet` resolves against `Vm::object_variables`
+            // at *runtime* — the parser can't know `<var>`'s type here, same
+            // situation the `.Copy` branch above already accepts. Checked
+            // ahead of the generic `.field = value` branch below (guarded
+            // on an immediate `(` so a genuine UDT field literally named
+            // "range"/"cells" — vanishingly unlikely, but same caution
+            // `WithRecord`'s own `s != "range" && s != "cells"` guard
+            // takes) still falls through there instead).
+            self.parse_sheet_property_write(Expr::ObjectVarSheet(name))
+        } else if *self.peek() == Tok::Dot
+            && (self.is_ident_at(1, "worksheets") || self.is_ident_at(1, "sheets"))
+        {
+            // <var>.Worksheets(...)/.Sheets(...) (Phase 2C item 8) — the
+            // object-variable sibling of `ThisWorkbook.Worksheets(...)`/
+            // `ActiveWorkbook.Worksheets(...)` (see `parse_stmt`'s
+            // "thisworkbook"|"activeworkbook" arm), for a `<var>` a `Set
+            // var = ThisWorkbook` assigned a Workbook reference to. elixcee
+            // only ever has one workbook loaded, so — same as those two
+            // keywords — this just skips the qualifier and re-enters the
+            // plain `Worksheets(...)/Sheets(...)` grammar; nothing here (or
+            // in the VM — see `ObjectRef::Workbook`) checks that `<var>`
+            // actually holds a Workbook reference.
+            self.advance(); // '.'
+            self.parse_sheets_stmt()
         } else if *self.peek() == Tok::Dot {
             // p.field = val  /  p.a.b = val  /  p.method (noop)
             self.advance(); // consume first '.'
@@ -2189,6 +2222,22 @@ impl Parser {
                 return Ok(Expr::ArrayRecordGet { name, indices: args, field });
             }
             Ok(Expr::FuncCall { name, args })
+        } else if *self.peek() == Tok::Dot
+            && (self.is_ident_at(1, "range") || self.is_ident_at(1, "cells"))
+            && *self.peek_at(2) == Tok::LParen
+        {
+            // x = <var>.Range(addr).Value / x = <var>.Cells(r,c).Value —
+            // read-side twin of the statement-dispatch branch in
+            // `parse_ident_stmt` (Phase 2C item 7); see its comment for the
+            // full rationale.
+            self.parse_sheet_property_read(Expr::ObjectVarSheet(name))
+        } else if *self.peek() == Tok::Dot
+            && (self.is_ident_at(1, "worksheets") || self.is_ident_at(1, "sheets"))
+        {
+            // x = <var>.Worksheets(...)/.Sheets(...) — read-side twin
+            // (Phase 2C item 8).
+            self.advance(); // '.'
+            self.parse_sheet_cell_read()
         } else if *self.peek() == Tok::Dot {
             // p.field  or  p.a.b.c
             self.advance(); // consume '.'
