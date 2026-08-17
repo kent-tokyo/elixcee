@@ -5,19 +5,21 @@ shipped, see `CHANGELOG.md` — this file only restates completed work when need
 what's left. Historical phase-by-phase implementation notes (Japanese) live in
 `tasks/todo.md`.
 
-## Current state (0.2.0, released)
+## Current state (0.3.0, released)
 
 - **VBA object model**: `Range`/`Set`/`Union`/`Areas`/`SpecialCells`, multi-area Copy/Paste
   (matching-shape only), `ActiveSheet`/`ThisWorkbook`/`ActiveWorkbook`, `With Range(...)`,
-  typed `Function` params/return, `Mod`/`\`/`^`/`And`/`Or`/`Xor`/`Not` at real VBA precedence.
+  typed `Function` params/return, `Mod`/`\`/`^`/`And`/`Or`/`Xor`/`Not` at real VBA precedence,
+  comma-separated multi-declarator `Dim`, single-line `If cond Then stmt [Else stmt]`,
+  `Fix`/`Sgn`/`Round`/`CBool`/`Date`/`Time`/`Now` built-in functions (0.3.0).
 - **`@elixcee/xlsx`**: all 33 `utils.*` exports differential-tested against the real
   `xlsx@0.18.5` oracle (512 MATCH + 14 disclosed intentional divergences), `SSF` number
   formatting backed by the real `ssf` engine, six real security fixes ported from oracle
   defects. `XLSX.read()` is a working sync WASM bridge (Node + browser), 19/19 MATCH against
   the oracle. `read`/`readFile`/`write*` beyond `read()` are not implemented; npm publish of
   `packages/xlsx` has not happened (`0.0.0-development`).
-- Published: `elixcee` 0.2.0 (crates.io, PyPI), `elixcee-types` 0.1.0 (crates.io), CLI
-  binaries (GitHub Release).
+- Published: `elixcee` 0.3.0 (crates.io, PyPI), `elixcee-types` 0.1.0 (crates.io, unchanged
+  since 0.2.0), CLI binaries (GitHub Release).
 - Self-assessed at 87-89/100 against the project's own scoring framework — not claimed as
   90+ because the VBA-vs-Microsoft-Excel axis has never been exercised (see below).
 
@@ -65,15 +67,22 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
    correct, not just uninvestigated. Done via an ad-hoc analysis pass, not a new committed
    script — the corpus is small and fixed-size enough that this didn't seem worth a permanent
    tool; revisit if the corpus grows or this needs repeating regularly.
-8. **Two small things found while implementing item 7, not fixed (out of scope for that pass)**:
-   - `Round(number, negativeDigits)` (e.g. `Round(1234.5, -2)`) silently returns a plausible
-     answer (`1200`) via `10f64.powi(-2)`; real VBA raises "Invalid procedure call or
-     argument" for a negative `NumDigitsAfterDecimal`. No corpus scenario exercises this.
-   - `Now`/`Date`/`Time` (`src/vm/mod.rs`'s `"now" | "date" | "time"` arm) return a Rust
-     debug-formatted `SystemTime { tv_sec: ..., tv_nsec: ... }` string, not anything
-     resembling a VBA date value — visibly wrong if ever displayed or compared. Same
-     "nondeterministic, low-priority" family as `Timer()` above, but this one's return
-     shape is a bug regardless of the nondeterminism question.
+8. ~~Two small things found while implementing item 7~~ — **fixed** (Unreleased):
+   - `Round(number, negativeDigits)` now errors ("Invalid procedure call or argument"),
+     matching real VBA, instead of silently returning a plausible answer.
+   - `Now`/`Date`/`Time` no longer return a Rust debug-formatted `SystemTime{...}` string.
+     `Date()` returns a real `Variant::Date` matching the system clock; `Time()`/`Now()`
+     return a numerically correct `Variant::Float` rather than `Variant::Date`, since
+     `Variant::Date` is whole-day-only (`i64`) and can't carry a sub-day component without
+     a shared-type change (`TypeName(Time())`/`TypeName(Now())` report `"Double"`, not real
+     VBA's `"Date"` — disclosed, not silent).
+9. **Discovered while fixing item 8, not fixed**: the bare no-parens form of a zero-arg VBA
+   function call (`Date` without `()`) doesn't parse as a function call at all — it's read
+   as an undefined variable instead. Not specific to `Date`/`Now`/`Time`; a general parser
+   gap for zero-arg built-in calls (VBA allows omitting `()` for these). Every corpus
+   scenario and this project's own tests always use the `Date()` form, which works, so this
+   has never blocked anything measured so far — but it's a real gap in real-world VBA source
+   that happens to favor the no-parens style for these particular functions.
 
 ## Next candidates, roughly by leverage
 

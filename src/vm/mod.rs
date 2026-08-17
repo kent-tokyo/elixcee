@@ -2520,6 +2520,13 @@ impl Vm {
                 // so this doesn't share `eval_wsf`'s "round" arm.
                 let f = to_f64(vals.first().ok_or("Round requires 1 argument")?)?;
                 let digits = if vals.len() >= 2 { to_f64(&vals[1])? as i32 } else { 0 };
+                // Unlike WorksheetFunction.Round/Excel's ROUND(), which both
+                // accept a negative NumDigitsAfterDecimal to round left of
+                // the decimal point, real VBA's Round() raises "Invalid
+                // procedure call or argument" for a negative digit count.
+                if digits < 0 {
+                    return Err("Invalid procedure call or argument".into());
+                }
                 let factor = 10f64.powi(digits);
                 Ok(as_int_if_whole((f * factor).round_ties_even() / factor))
             }
@@ -2637,8 +2644,35 @@ impl Vm {
                 let new = vba_to_str(&vals[2]);
                 Ok(Variant::Str(if old.is_empty() { s } else { s.replace(&old as &str, &new as &str) }))
             }
-            "now" | "date" | "time" => {
-                Ok(Variant::Str(format!("{:?}", std::time::SystemTime::now())))
+            // Real VBA's `Now`/`Date`/`Time` all return a Date-typed value —
+            // Excel's own epoch-serial number, split into a whole-day part
+            // (the date) and a 0.0-1.0 fractional part (the time of day).
+            // `date_to_serial`'s 25569 offset (Excel serial of 1970-01-01)
+            // matches the same constant the formula engine's own NOW()
+            // (`formula::eval::func_now`) already uses — kept independent
+            // rather than shared to avoid a new formula<->vm cross-module
+            // dependency for one constant.
+            "date" => {
+                let unix_days = unix_epoch_days();
+                Ok(Variant::Date(unix_days as i64 + 25569))
+            }
+            "time" => {
+                // Time-of-day only, as a fraction — `Variant::Date` is a
+                // whole-day-only `i64` in this codebase (see its doc in
+                // `elixcee-types`), so a sub-day value can't round-trip
+                // through it; `Variant::Float` at least carries the
+                // numerically correct value, same as real VBA's own
+                // internal Double representation for a time-only value.
+                // `TypeName(Time)` will report "Double" here, not real
+                // VBA's "Date" — a known, disclosed gap (see ROADMAP.md),
+                // not something silently wrong.
+                Ok(Variant::Float(unix_seconds_of_day() as f64 / 86400.0))
+            }
+            "now" => {
+                let unix_days = unix_epoch_days();
+                let frac = unix_seconds_of_day() as f64 / 86400.0;
+                // Same TypeName caveat as "time" above.
+                Ok(Variant::Float(unix_days as f64 + 25569.0 + frac))
             }
             // ── Inline conditional ───────────────────────────────────────────
             "iif" => {
@@ -3323,6 +3357,27 @@ fn as_int_if_whole(f: f64) -> Variant {
     }
 }
 
+/// Whole days since the Unix epoch, for `Date`/`Now` — same
+/// `unix_days + 25569` (Excel serial of 1970-01-01) convention the formula
+/// engine's own `func_now` uses.
+fn unix_epoch_days() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 86400
+}
+
+/// Seconds elapsed since local midnight UTC, for `Time`/`Now`'s fractional
+/// time-of-day component.
+fn unix_seconds_of_day() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        % 86400
+}
+
 fn to_cell_index(v: Variant, label: &str) -> Result<u32, String> {
     let f = to_f64(&v)?;
     if f < 1.0 || f.fract() != 0.0 {
@@ -3722,6 +3777,49 @@ mod tests {
         assert_eq!(vm.variables["c"], Variant::Integer(2));
         assert_eq!(vm.variables["d"], Variant::Float(0.12));
         assert_eq!(vm.variables["e"], Variant::Integer(3));
+    }
+
+    #[test]
+    fn test_vba_round_rejects_negative_digits() {
+        // Unlike WorksheetFunction.Round/Excel's ROUND(), real VBA's own
+        // Round() errors on a negative digit count rather than rounding
+        // left of the decimal point.
+        let prog = parser::parse("Sub MySub()\n    a = Round(1234.5, -2)\nEnd Sub\n").unwrap();
+        let err = Vm::new().run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Invalid procedure call or argument");
+    }
+
+    #[test]
+    fn test_vba_date_now_time_return_real_values_not_a_debug_string() {
+        // Used to return a Rust debug-formatted `SystemTime { tv_sec: ...
+        // }` string regardless of which of the three was called — visibly
+        // wrong, not just imprecise. `Date()` must round-trip through the
+        // same Excel-serial epoch math the formula engine's own NOW() uses
+        // (25569 == Excel serial of 1970-01-01), matching the real system
+        // clock; `Time()`/`Now()` must at least be numerically-plausible
+        // Doubles (0.0..1.0 for Time, an Excel-serial-plus-fraction value
+        // for Now), not a debug string, even though `Variant::Date` being
+        // whole-day-only means their `TypeName` can't be "Date" here (a
+        // disclosed, separate gap — see ROADMAP.md).
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    d = Date()\n",
+            "    dt = TypeName(Date())\n",
+            "    t = Time()\n",
+            "    n = Now()\n",
+            "End Sub\n",
+        ));
+        let expected_serial = unix_epoch_days() as i64 + 25569;
+        assert_eq!(vm.variables["d"], Variant::Date(expected_serial));
+        assert_eq!(vm.variables["dt"], Variant::Str("Date".to_string()));
+        match vm.variables["t"] {
+            Variant::Float(f) => assert!((0.0..1.0).contains(&f), "Time() out of range: {f}"),
+            ref other => panic!("expected Variant::Float, got {other:?}"),
+        }
+        match vm.variables["n"] {
+            Variant::Float(f) => assert!(f > 25569.0, "Now() looks wrong: {f}"),
+            ref other => panic!("expected Variant::Float, got {other:?}"),
+        }
     }
 
     #[test]

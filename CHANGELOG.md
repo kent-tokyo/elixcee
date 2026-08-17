@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `Round(number, negativeDigits)` (e.g. `Round(1234.5, -2)`) silently returned a plausible
+  answer instead of erroring — real VBA's own `Round()` raises "Invalid procedure call or
+  argument" for a negative digit count (unlike `WorksheetFunction.Round`/Excel's `ROUND()`
+  formula, which both accept negative digits to round left of the decimal point). Found and
+  disclosed, not fixed, in the 0.3.0 round; fixed now.
+- `Now`/`Date`/`Time` returned a Rust debug-formatted `SystemTime { tv_sec: ..., tv_nsec:
+  ... }` string regardless of which of the three was called — visibly wrong if ever
+  displayed or compared, not just imprecise. `Date()` now returns a real `Variant::Date`
+  matching the actual system clock (Excel-serial epoch math, same `25569` constant the
+  formula engine's own `NOW()` already uses); `Time()`/`Now()` return a numerically correct
+  `Variant::Float` (0.0-1.0 for `Time()`, serial-plus-fraction for `Now()`) rather than a
+  `Variant::Date`, since `Variant::Date` is whole-day-only (`i64`) in this codebase and
+  can't carry a sub-day component without a shared-type change — so `TypeName(Time())`/
+  `TypeName(Now())` report `"Double"`, not real VBA's `"Date"`. A disclosed, narrower gap
+  than the debug-string bug, not a silent one. (Also found, unrelated to this fix and not
+  changed: the bare no-parens form, `Date` without `()`, doesn't parse as a function call
+  at all — a separate, pre-existing, general parser limitation for zero-arg VBA functions,
+  not specific to `Date`/`Now`/`Time`; every corpus scenario and this fix's own tests use
+  the `Date()` form, which works.)
+
 ## [0.3.0]
 
 Root `elixcee` (Rust crate + Python package) only — `elixcee-types` stays `0.1.0`
