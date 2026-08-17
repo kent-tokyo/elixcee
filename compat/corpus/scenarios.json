@@ -1,0 +1,4650 @@
+[
+  {
+    "id": "arithmetic_0001",
+    "category": "arithmetic",
+    "description": "A1 = 2 + 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 + 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0002",
+    "category": "arithmetic",
+    "description": "A1 = 10 + 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 10 + 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0003",
+    "category": "arithmetic",
+    "description": "A1 = 7 + 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 + 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0004",
+    "category": "arithmetic",
+    "description": "A1 = 100 + 9",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 100 + 9\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0005",
+    "category": "arithmetic",
+    "description": "A1 = 1 + 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 + 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0006",
+    "category": "arithmetic",
+    "description": "A1 = 17 + 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 17 + 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0007",
+    "category": "arithmetic",
+    "description": "A1 = 0 + 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 + 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0008",
+    "category": "arithmetic",
+    "description": "A1 = 5 + 0.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 + 0.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0009",
+    "category": "arithmetic",
+    "description": "A1 = -4 + 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -4 + 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0010",
+    "category": "arithmetic",
+    "description": "A1 = 6 + -4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 6 + -4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0011",
+    "category": "arithmetic",
+    "description": "A1 = -3 + -8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -3 + -8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0012",
+    "category": "arithmetic",
+    "description": "A1 = 2.5 + 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2.5 + 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0013",
+    "category": "arithmetic",
+    "description": "A1 = 9.5 + 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 9.5 + 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0014",
+    "category": "arithmetic",
+    "description": "A1 = 1000000 + 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000000 + 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0015",
+    "category": "arithmetic",
+    "description": "A1 = 13 + 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 13 + 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0016",
+    "category": "arithmetic",
+    "description": "A1 = 8 + 8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 8 + 8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0017",
+    "category": "arithmetic",
+    "description": "A1 = 21 + 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 21 + 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0018",
+    "category": "arithmetic",
+    "description": "A1 = 45 + 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 45 + 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0019",
+    "category": "arithmetic",
+    "description": "A1 = 99 + 11",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 99 + 11\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0020",
+    "category": "arithmetic",
+    "description": "A1 = 1 + 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 + 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0021",
+    "category": "arithmetic",
+    "description": "A1 = 3 + 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 + 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0022",
+    "category": "arithmetic",
+    "description": "A1 = 12 + 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 + 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0023",
+    "category": "arithmetic",
+    "description": "A1 = 50 + 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 50 + 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0024",
+    "category": "arithmetic",
+    "description": "A1 = 0.1 + 0.2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0.1 + 0.2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0025",
+    "category": "arithmetic",
+    "description": "A1 = 1.5 + 1.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1.5 + 1.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0026",
+    "category": "arithmetic",
+    "description": "A1 = -1 + -1",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 + -1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0027",
+    "category": "arithmetic",
+    "description": "A1 = 1000 + 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000 + 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0028",
+    "category": "arithmetic",
+    "description": "A1 = 2 + -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 + -2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0029",
+    "category": "arithmetic",
+    "description": "A1 = -7 + 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 + 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0030",
+    "category": "arithmetic",
+    "description": "A1 = 3 + -7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 + -7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0031",
+    "category": "arithmetic",
+    "description": "A1 = 2 - 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 - 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0032",
+    "category": "arithmetic",
+    "description": "A1 = 10 - 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 10 - 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0033",
+    "category": "arithmetic",
+    "description": "A1 = 7 - 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 - 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0034",
+    "category": "arithmetic",
+    "description": "A1 = 100 - 9",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 100 - 9\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0035",
+    "category": "arithmetic",
+    "description": "A1 = 1 - 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 - 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0036",
+    "category": "arithmetic",
+    "description": "A1 = 17 - 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 17 - 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0037",
+    "category": "arithmetic",
+    "description": "A1 = 0 - 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 - 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0038",
+    "category": "arithmetic",
+    "description": "A1 = 5 - 0.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 - 0.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0039",
+    "category": "arithmetic",
+    "description": "A1 = -4 - 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -4 - 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0040",
+    "category": "arithmetic",
+    "description": "A1 = 6 - -4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 6 - -4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0041",
+    "category": "arithmetic",
+    "description": "A1 = -3 - -8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -3 - -8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0042",
+    "category": "arithmetic",
+    "description": "A1 = 2.5 - 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2.5 - 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0043",
+    "category": "arithmetic",
+    "description": "A1 = 9.5 - 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 9.5 - 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0044",
+    "category": "arithmetic",
+    "description": "A1 = 1000000 - 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000000 - 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0045",
+    "category": "arithmetic",
+    "description": "A1 = 13 - 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 13 - 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0046",
+    "category": "arithmetic",
+    "description": "A1 = 8 - 8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 8 - 8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0047",
+    "category": "arithmetic",
+    "description": "A1 = 21 - 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 21 - 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0048",
+    "category": "arithmetic",
+    "description": "A1 = 45 - 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 45 - 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0049",
+    "category": "arithmetic",
+    "description": "A1 = 99 - 11",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 99 - 11\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0050",
+    "category": "arithmetic",
+    "description": "A1 = 1 - 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 - 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0051",
+    "category": "arithmetic",
+    "description": "A1 = 3 - 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 - 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0052",
+    "category": "arithmetic",
+    "description": "A1 = 12 - 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 - 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0053",
+    "category": "arithmetic",
+    "description": "A1 = 50 - 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 50 - 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0054",
+    "category": "arithmetic",
+    "description": "A1 = 0.1 - 0.2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0.1 - 0.2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0055",
+    "category": "arithmetic",
+    "description": "A1 = 1.5 - 1.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1.5 - 1.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0056",
+    "category": "arithmetic",
+    "description": "A1 = -1 - -1",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 - -1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0057",
+    "category": "arithmetic",
+    "description": "A1 = 1000 - 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000 - 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0058",
+    "category": "arithmetic",
+    "description": "A1 = 2 - -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 - -2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0059",
+    "category": "arithmetic",
+    "description": "A1 = -7 - 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 - 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0060",
+    "category": "arithmetic",
+    "description": "A1 = 3 - -7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 - -7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0061",
+    "category": "arithmetic",
+    "description": "A1 = 2 * 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 * 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0062",
+    "category": "arithmetic",
+    "description": "A1 = 10 * 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 10 * 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0063",
+    "category": "arithmetic",
+    "description": "A1 = 7 * 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 * 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0064",
+    "category": "arithmetic",
+    "description": "A1 = 100 * 9",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 100 * 9\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0065",
+    "category": "arithmetic",
+    "description": "A1 = 1 * 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 * 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0066",
+    "category": "arithmetic",
+    "description": "A1 = 17 * 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 17 * 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0067",
+    "category": "arithmetic",
+    "description": "A1 = 0 * 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 * 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0068",
+    "category": "arithmetic",
+    "description": "A1 = 5 * 0.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 * 0.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0069",
+    "category": "arithmetic",
+    "description": "A1 = -4 * 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -4 * 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0070",
+    "category": "arithmetic",
+    "description": "A1 = 6 * -4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 6 * -4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0071",
+    "category": "arithmetic",
+    "description": "A1 = -3 * -8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -3 * -8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0072",
+    "category": "arithmetic",
+    "description": "A1 = 2.5 * 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2.5 * 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0073",
+    "category": "arithmetic",
+    "description": "A1 = 9.5 * 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 9.5 * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0074",
+    "category": "arithmetic",
+    "description": "A1 = 1000000 * 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000000 * 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0075",
+    "category": "arithmetic",
+    "description": "A1 = 13 * 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 13 * 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0076",
+    "category": "arithmetic",
+    "description": "A1 = 8 * 8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 8 * 8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0077",
+    "category": "arithmetic",
+    "description": "A1 = 21 * 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 21 * 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0078",
+    "category": "arithmetic",
+    "description": "A1 = 45 * 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 45 * 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0079",
+    "category": "arithmetic",
+    "description": "A1 = 99 * 11",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 99 * 11\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0080",
+    "category": "arithmetic",
+    "description": "A1 = 1 * 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0081",
+    "category": "arithmetic",
+    "description": "A1 = 3 * 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 * 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0082",
+    "category": "arithmetic",
+    "description": "A1 = 12 * 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 * 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0083",
+    "category": "arithmetic",
+    "description": "A1 = 50 * 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 50 * 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0084",
+    "category": "arithmetic",
+    "description": "A1 = 0.1 * 0.2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0.1 * 0.2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0085",
+    "category": "arithmetic",
+    "description": "A1 = 1.5 * 1.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1.5 * 1.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0086",
+    "category": "arithmetic",
+    "description": "A1 = -1 * -1",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 * -1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0087",
+    "category": "arithmetic",
+    "description": "A1 = 1000 * 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000 * 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0088",
+    "category": "arithmetic",
+    "description": "A1 = 2 * -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 * -2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0089",
+    "category": "arithmetic",
+    "description": "A1 = -7 * 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 * 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0090",
+    "category": "arithmetic",
+    "description": "A1 = 3 * -7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 * -7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0091",
+    "category": "arithmetic",
+    "description": "A1 = 2 / 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 / 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0092",
+    "category": "arithmetic",
+    "description": "A1 = 10 / 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 10 / 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0093",
+    "category": "arithmetic",
+    "description": "A1 = 7 / 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 / 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0094",
+    "category": "arithmetic",
+    "description": "A1 = 100 / 9",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 100 / 9\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0095",
+    "category": "arithmetic",
+    "description": "A1 = 1 / 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 / 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0096",
+    "category": "arithmetic",
+    "description": "A1 = 17 / 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 17 / 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0097",
+    "category": "arithmetic",
+    "description": "A1 = 0 / 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 / 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0098",
+    "category": "arithmetic",
+    "description": "A1 = 5 / 0.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 / 0.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0099",
+    "category": "arithmetic",
+    "description": "A1 = -4 / 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -4 / 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0100",
+    "category": "arithmetic",
+    "description": "A1 = 6 / -4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 6 / -4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0101",
+    "category": "arithmetic",
+    "description": "A1 = -3 / -8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -3 / -8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0102",
+    "category": "arithmetic",
+    "description": "A1 = 2.5 / 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2.5 / 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0103",
+    "category": "arithmetic",
+    "description": "A1 = 9.5 / 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 9.5 / 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0104",
+    "category": "arithmetic",
+    "description": "A1 = 1000000 / 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000000 / 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0105",
+    "category": "arithmetic",
+    "description": "A1 = 13 / 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 13 / 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0106",
+    "category": "arithmetic",
+    "description": "A1 = 8 / 8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 8 / 8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0107",
+    "category": "arithmetic",
+    "description": "A1 = 21 / 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 21 / 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0108",
+    "category": "arithmetic",
+    "description": "A1 = 45 / 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 45 / 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0109",
+    "category": "arithmetic",
+    "description": "A1 = 99 / 11",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 99 / 11\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0110",
+    "category": "arithmetic",
+    "description": "A1 = 1 / 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 / 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0111",
+    "category": "arithmetic",
+    "description": "A1 = 3 / 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 / 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0112",
+    "category": "arithmetic",
+    "description": "A1 = 12 / 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 / 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0113",
+    "category": "arithmetic",
+    "description": "A1 = 50 / 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 50 / 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0114",
+    "category": "arithmetic",
+    "description": "A1 = 0.1 / 0.2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0.1 / 0.2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0115",
+    "category": "arithmetic",
+    "description": "A1 = 1.5 / 1.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1.5 / 1.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0116",
+    "category": "arithmetic",
+    "description": "A1 = -1 / -1",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 / -1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0117",
+    "category": "arithmetic",
+    "description": "A1 = 1000 / 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000 / 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0118",
+    "category": "arithmetic",
+    "description": "A1 = 2 / -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 / -2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0119",
+    "category": "arithmetic",
+    "description": "A1 = -7 / 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 / 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0120",
+    "category": "arithmetic",
+    "description": "A1 = 3 / -7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 / -7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0121",
+    "category": "arithmetic",
+    "description": "A1 = 2 \\ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 \\ 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0122",
+    "category": "arithmetic",
+    "description": "A1 = 10 \\ 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 10 \\ 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0123",
+    "category": "arithmetic",
+    "description": "A1 = 7 \\ 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 \\ 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0124",
+    "category": "arithmetic",
+    "description": "A1 = 100 \\ 9",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 100 \\ 9\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0125",
+    "category": "arithmetic",
+    "description": "A1 = 1 \\ 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 \\ 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0126",
+    "category": "arithmetic",
+    "description": "A1 = 17 \\ 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 17 \\ 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0127",
+    "category": "arithmetic",
+    "description": "A1 = 0 \\ 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 \\ 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0128",
+    "category": "arithmetic",
+    "description": "A1 = 5 \\ 0.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 \\ 0.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0129",
+    "category": "arithmetic",
+    "description": "A1 = -4 \\ 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -4 \\ 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0130",
+    "category": "arithmetic",
+    "description": "A1 = 6 \\ -4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 6 \\ -4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0131",
+    "category": "arithmetic",
+    "description": "A1 = -3 \\ -8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -3 \\ -8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0132",
+    "category": "arithmetic",
+    "description": "A1 = 2.5 \\ 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2.5 \\ 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0133",
+    "category": "arithmetic",
+    "description": "A1 = 9.5 \\ 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 9.5 \\ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0134",
+    "category": "arithmetic",
+    "description": "A1 = 1000000 \\ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000000 \\ 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0135",
+    "category": "arithmetic",
+    "description": "A1 = 13 \\ 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 13 \\ 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0136",
+    "category": "arithmetic",
+    "description": "A1 = 8 \\ 8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 8 \\ 8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0137",
+    "category": "arithmetic",
+    "description": "A1 = 21 \\ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 21 \\ 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0138",
+    "category": "arithmetic",
+    "description": "A1 = 45 \\ 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 45 \\ 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0139",
+    "category": "arithmetic",
+    "description": "A1 = 99 \\ 11",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 99 \\ 11\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0140",
+    "category": "arithmetic",
+    "description": "A1 = 1 \\ 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 \\ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0141",
+    "category": "arithmetic",
+    "description": "A1 = 3 \\ 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 \\ 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0142",
+    "category": "arithmetic",
+    "description": "A1 = 12 \\ 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 \\ 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0143",
+    "category": "arithmetic",
+    "description": "A1 = 50 \\ 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 50 \\ 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0144",
+    "category": "arithmetic",
+    "description": "A1 = 0.1 \\ 0.2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0.1 \\ 0.2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0145",
+    "category": "arithmetic",
+    "description": "A1 = 1.5 \\ 1.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1.5 \\ 1.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0146",
+    "category": "arithmetic",
+    "description": "A1 = -1 \\ -1",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 \\ -1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0147",
+    "category": "arithmetic",
+    "description": "A1 = 1000 \\ 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000 \\ 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0148",
+    "category": "arithmetic",
+    "description": "A1 = 2 \\ -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 \\ -2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0149",
+    "category": "arithmetic",
+    "description": "A1 = -7 \\ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 \\ 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0150",
+    "category": "arithmetic",
+    "description": "A1 = 3 \\ -7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 \\ -7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0151",
+    "category": "arithmetic",
+    "description": "A1 = 2 Mod 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 Mod 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0152",
+    "category": "arithmetic",
+    "description": "A1 = 10 Mod 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 10 Mod 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0153",
+    "category": "arithmetic",
+    "description": "A1 = 7 Mod 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 Mod 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0154",
+    "category": "arithmetic",
+    "description": "A1 = 100 Mod 9",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 100 Mod 9\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0155",
+    "category": "arithmetic",
+    "description": "A1 = 1 Mod 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 Mod 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0156",
+    "category": "arithmetic",
+    "description": "A1 = 17 Mod 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 17 Mod 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0157",
+    "category": "arithmetic",
+    "description": "A1 = 0 Mod 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 Mod 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0158",
+    "category": "arithmetic",
+    "description": "A1 = 5 Mod 0.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 Mod 0.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0159",
+    "category": "arithmetic",
+    "description": "A1 = -4 Mod 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -4 Mod 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0160",
+    "category": "arithmetic",
+    "description": "A1 = 6 Mod -4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 6 Mod -4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0161",
+    "category": "arithmetic",
+    "description": "A1 = -3 Mod -8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -3 Mod -8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0162",
+    "category": "arithmetic",
+    "description": "A1 = 2.5 Mod 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2.5 Mod 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0163",
+    "category": "arithmetic",
+    "description": "A1 = 9.5 Mod 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 9.5 Mod 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0164",
+    "category": "arithmetic",
+    "description": "A1 = 1000000 Mod 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000000 Mod 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0165",
+    "category": "arithmetic",
+    "description": "A1 = 13 Mod 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 13 Mod 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0166",
+    "category": "arithmetic",
+    "description": "A1 = 8 Mod 8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 8 Mod 8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0167",
+    "category": "arithmetic",
+    "description": "A1 = 21 Mod 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 21 Mod 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0168",
+    "category": "arithmetic",
+    "description": "A1 = 45 Mod 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 45 Mod 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0169",
+    "category": "arithmetic",
+    "description": "A1 = 99 Mod 11",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 99 Mod 11\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0170",
+    "category": "arithmetic",
+    "description": "A1 = 1 Mod 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 Mod 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0171",
+    "category": "arithmetic",
+    "description": "A1 = 3 Mod 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 Mod 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0172",
+    "category": "arithmetic",
+    "description": "A1 = 12 Mod 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 Mod 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0173",
+    "category": "arithmetic",
+    "description": "A1 = 50 Mod 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 50 Mod 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0174",
+    "category": "arithmetic",
+    "description": "A1 = 0.1 Mod 0.2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0.1 Mod 0.2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0175",
+    "category": "arithmetic",
+    "description": "A1 = 1.5 Mod 1.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1.5 Mod 1.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0176",
+    "category": "arithmetic",
+    "description": "A1 = -1 Mod -1",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 Mod -1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0177",
+    "category": "arithmetic",
+    "description": "A1 = 1000 Mod 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000 Mod 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0178",
+    "category": "arithmetic",
+    "description": "A1 = 2 Mod -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 Mod -2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0179",
+    "category": "arithmetic",
+    "description": "A1 = -7 Mod 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 Mod 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0180",
+    "category": "arithmetic",
+    "description": "A1 = 3 Mod -7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 Mod -7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0181",
+    "category": "arithmetic",
+    "description": "A1 = 2 ^ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 ^ 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0182",
+    "category": "arithmetic",
+    "description": "A1 = 10 ^ 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 10 ^ 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0183",
+    "category": "arithmetic",
+    "description": "A1 = 7 ^ 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 ^ 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0184",
+    "category": "arithmetic",
+    "description": "A1 = 100 ^ 9",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 100 ^ 9\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0185",
+    "category": "arithmetic",
+    "description": "A1 = 1 ^ 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 ^ 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0186",
+    "category": "arithmetic",
+    "description": "A1 = 17 ^ 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 17 ^ 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0187",
+    "category": "arithmetic",
+    "description": "A1 = 0 ^ 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 ^ 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0188",
+    "category": "arithmetic",
+    "description": "A1 = 5 ^ 0.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 ^ 0.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0189",
+    "category": "arithmetic",
+    "description": "A1 = -4 ^ 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -4 ^ 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0190",
+    "category": "arithmetic",
+    "description": "A1 = 6 ^ -4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 6 ^ -4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0191",
+    "category": "arithmetic",
+    "description": "A1 = -3 ^ -8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -3 ^ -8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0192",
+    "category": "arithmetic",
+    "description": "A1 = 2.5 ^ 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2.5 ^ 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0193",
+    "category": "arithmetic",
+    "description": "A1 = 9.5 ^ 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 9.5 ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0194",
+    "category": "arithmetic",
+    "description": "A1 = 1000000 ^ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000000 ^ 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0195",
+    "category": "arithmetic",
+    "description": "A1 = 13 ^ 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 13 ^ 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0196",
+    "category": "arithmetic",
+    "description": "A1 = 8 ^ 8",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 8 ^ 8\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0197",
+    "category": "arithmetic",
+    "description": "A1 = 21 ^ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 21 ^ 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0198",
+    "category": "arithmetic",
+    "description": "A1 = 45 ^ 6",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 45 ^ 6\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0199",
+    "category": "arithmetic",
+    "description": "A1 = 99 ^ 11",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 99 ^ 11\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0200",
+    "category": "arithmetic",
+    "description": "A1 = 1 ^ 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0201",
+    "category": "arithmetic",
+    "description": "A1 = 3 ^ 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 ^ 4\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0202",
+    "category": "arithmetic",
+    "description": "A1 = 12 ^ 5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 ^ 5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0203",
+    "category": "arithmetic",
+    "description": "A1 = 50 ^ 7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 50 ^ 7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0204",
+    "category": "arithmetic",
+    "description": "A1 = 0.1 ^ 0.2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0.1 ^ 0.2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0205",
+    "category": "arithmetic",
+    "description": "A1 = 1.5 ^ 1.5",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1.5 ^ 1.5\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0206",
+    "category": "arithmetic",
+    "description": "A1 = -1 ^ -1",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 ^ -1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0207",
+    "category": "arithmetic",
+    "description": "A1 = 1000 ^ 1000",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000 ^ 1000\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0208",
+    "category": "arithmetic",
+    "description": "A1 = 2 ^ -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 2 ^ -2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0209",
+    "category": "arithmetic",
+    "description": "A1 = -7 ^ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 ^ 3\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_0210",
+    "category": "arithmetic",
+    "description": "A1 = 3 ^ -7",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 ^ -7\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_div_by_zero_0001",
+    "category": "arithmetic_div_by_zero",
+    "description": "A1 = 5 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_div_by_zero_0002",
+    "category": "arithmetic_div_by_zero",
+    "description": "A1 = -5 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -5 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_div_by_zero_0003",
+    "category": "arithmetic_div_by_zero",
+    "description": "A1 = 0 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arithmetic_div_by_zero_0004",
+    "category": "arithmetic_div_by_zero",
+    "description": "A1 = 3.5 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3.5 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0001",
+    "category": "boolean_logic",
+    "description": "A1 = True And True",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = True And True\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0002",
+    "category": "boolean_logic",
+    "description": "A1 = True And False",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = True And False\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0003",
+    "category": "boolean_logic",
+    "description": "A1 = False And True",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = False And True\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0004",
+    "category": "boolean_logic",
+    "description": "A1 = False And False",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = False And False\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0005",
+    "category": "boolean_logic",
+    "description": "A1 = True Or True",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = True Or True\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0006",
+    "category": "boolean_logic",
+    "description": "A1 = True Or False",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = True Or False\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0007",
+    "category": "boolean_logic",
+    "description": "A1 = False Or True",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = False Or True\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0008",
+    "category": "boolean_logic",
+    "description": "A1 = False Or False",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = False Or False\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0009",
+    "category": "boolean_logic",
+    "description": "A1 = True Xor True",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = True Xor True\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0010",
+    "category": "boolean_logic",
+    "description": "A1 = True Xor False",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = True Xor False\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0011",
+    "category": "boolean_logic",
+    "description": "A1 = False Xor True",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = False Xor True\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0012",
+    "category": "boolean_logic",
+    "description": "A1 = False Xor False",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = False Xor False\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0013",
+    "category": "boolean_logic",
+    "description": "A1 = Not True",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not True\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0014",
+    "category": "boolean_logic",
+    "description": "A1 = Not False",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not False\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0015",
+    "category": "boolean_logic",
+    "description": "A1 = (3 > 5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (3 > 5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0016",
+    "category": "boolean_logic",
+    "description": "A1 = (5 > 3)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (5 > 3)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0017",
+    "category": "boolean_logic",
+    "description": "A1 = (3 = 3)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (3 = 3)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0018",
+    "category": "boolean_logic",
+    "description": "A1 = (3 <> 3)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (3 <> 3)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0019",
+    "category": "boolean_logic",
+    "description": "A1 = (4 >= 4)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (4 >= 4)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0020",
+    "category": "boolean_logic",
+    "description": "A1 = (4 <= 3)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (4 <= 3)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0001",
+    "category": "string_functions",
+    "description": "A1 = UCase(\"hello\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(\"hello\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0002",
+    "category": "string_functions",
+    "description": "A1 = UCase(\"World\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(\"World\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0003",
+    "category": "string_functions",
+    "description": "A1 = UCase(\"  padded  \")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(\"  padded  \")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0004",
+    "category": "string_functions",
+    "description": "A1 = UCase(\"MiXeD CaSe\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(\"MiXeD CaSe\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0005",
+    "category": "string_functions",
+    "description": "A1 = UCase(\"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(\"\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0006",
+    "category": "string_functions",
+    "description": "A1 = UCase(\"a\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(\"a\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0007",
+    "category": "string_functions",
+    "description": "A1 = LCase(\"hello\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(\"hello\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0008",
+    "category": "string_functions",
+    "description": "A1 = LCase(\"World\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(\"World\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0009",
+    "category": "string_functions",
+    "description": "A1 = LCase(\"  padded  \")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(\"  padded  \")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0010",
+    "category": "string_functions",
+    "description": "A1 = LCase(\"MiXeD CaSe\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(\"MiXeD CaSe\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0011",
+    "category": "string_functions",
+    "description": "A1 = LCase(\"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(\"\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0012",
+    "category": "string_functions",
+    "description": "A1 = LCase(\"a\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(\"a\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0013",
+    "category": "string_functions",
+    "description": "A1 = Trim(\"hello\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(\"hello\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0014",
+    "category": "string_functions",
+    "description": "A1 = Trim(\"World\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(\"World\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0015",
+    "category": "string_functions",
+    "description": "A1 = Trim(\"  padded  \")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(\"  padded  \")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0016",
+    "category": "string_functions",
+    "description": "A1 = Trim(\"MiXeD CaSe\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(\"MiXeD CaSe\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0017",
+    "category": "string_functions",
+    "description": "A1 = Trim(\"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(\"\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0018",
+    "category": "string_functions",
+    "description": "A1 = Trim(\"a\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(\"a\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0019",
+    "category": "string_functions",
+    "description": "A1 = Len(\"hello\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(\"hello\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0020",
+    "category": "string_functions",
+    "description": "A1 = Len(\"World\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(\"World\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0021",
+    "category": "string_functions",
+    "description": "A1 = Len(\"  padded  \")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(\"  padded  \")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0022",
+    "category": "string_functions",
+    "description": "A1 = Len(\"MiXeD CaSe\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(\"MiXeD CaSe\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0023",
+    "category": "string_functions",
+    "description": "A1 = Len(\"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(\"\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0024",
+    "category": "string_functions",
+    "description": "A1 = Len(\"a\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(\"a\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0025",
+    "category": "string_functions",
+    "description": "A1 = LTrim(\"hello\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LTrim(\"hello\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0026",
+    "category": "string_functions",
+    "description": "A1 = LTrim(\"World\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LTrim(\"World\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0027",
+    "category": "string_functions",
+    "description": "A1 = LTrim(\"  padded  \")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LTrim(\"  padded  \")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0028",
+    "category": "string_functions",
+    "description": "A1 = LTrim(\"MiXeD CaSe\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LTrim(\"MiXeD CaSe\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0029",
+    "category": "string_functions",
+    "description": "A1 = LTrim(\"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LTrim(\"\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0030",
+    "category": "string_functions",
+    "description": "A1 = LTrim(\"a\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LTrim(\"a\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0031",
+    "category": "string_functions",
+    "description": "A1 = RTrim(\"hello\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = RTrim(\"hello\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0032",
+    "category": "string_functions",
+    "description": "A1 = RTrim(\"World\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = RTrim(\"World\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0033",
+    "category": "string_functions",
+    "description": "A1 = RTrim(\"  padded  \")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = RTrim(\"  padded  \")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0034",
+    "category": "string_functions",
+    "description": "A1 = RTrim(\"MiXeD CaSe\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = RTrim(\"MiXeD CaSe\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0035",
+    "category": "string_functions",
+    "description": "A1 = RTrim(\"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = RTrim(\"\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0036",
+    "category": "string_functions",
+    "description": "A1 = RTrim(\"a\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = RTrim(\"a\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0037",
+    "category": "string_functions",
+    "description": "A1 = Mid(\"hello world\", 1, 5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Mid(\"hello world\", 1, 5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0038",
+    "category": "string_functions",
+    "description": "A1 = Mid(\"hello world\", 7, 5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Mid(\"hello world\", 7, 5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0039",
+    "category": "string_functions",
+    "description": "A1 = Mid(\"abc\", 2, 1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Mid(\"abc\", 2, 1)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0040",
+    "category": "string_functions",
+    "description": "A1 = Left(\"hello\", 2)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Left(\"hello\", 2)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0041",
+    "category": "string_functions",
+    "description": "A1 = Right(\"hello\", 2)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Right(\"hello\", 2)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0042",
+    "category": "string_functions",
+    "description": "A1 = Left(\"hello\", 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Left(\"hello\", 0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0043",
+    "category": "string_functions",
+    "description": "A1 = Right(\"hello\", 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Right(\"hello\", 0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0044",
+    "category": "string_functions",
+    "description": "A1 = Left(\"hi\", 10)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Left(\"hi\", 10)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0045",
+    "category": "string_functions",
+    "description": "A1 = Right(\"hi\", 10)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Right(\"hi\", 10)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0046",
+    "category": "string_functions",
+    "description": "A1 = \"foo\" & \"bar\"",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"foo\" & \"bar\"\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0047",
+    "category": "string_functions",
+    "description": "A1 = \"a\" & \"\"",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"a\" & \"\"\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0048",
+    "category": "string_functions",
+    "description": "A1 = \"\" & \"b\"",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"\" & \"b\"\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0049",
+    "category": "string_functions",
+    "description": "A1 = \"1\" & \"2\"",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"1\" & \"2\"\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0050",
+    "category": "string_functions",
+    "description": "A1 = InStr(\"hello world\", \"world\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = InStr(\"hello world\", \"world\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0051",
+    "category": "string_functions",
+    "description": "A1 = InStr(\"hello\", \"xyz\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = InStr(\"hello\", \"xyz\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0052",
+    "category": "string_functions",
+    "description": "A1 = InStr(\"aaa\", \"a\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = InStr(\"aaa\", \"a\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0053",
+    "category": "string_functions",
+    "description": "A1 = Replace(\"hello world\", \"world\", \"there\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Replace(\"hello world\", \"world\", \"there\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0054",
+    "category": "string_functions",
+    "description": "A1 = Replace(\"aaa\", \"a\", \"b\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Replace(\"aaa\", \"a\", \"b\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "range_readwrite_0001",
+    "category": "range_readwrite",
+    "description": "C2 = f(B2) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Dim x As Double\n  x = Range(\"B2\").Value\n  Range(\"C2\").Value = x * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0002",
+    "category": "range_readwrite",
+    "description": "A2 = f(A1) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Dim x As Double\n  x = Range(\"A1\").Value\n  Range(\"A2\").Value = x + 100\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0003",
+    "category": "range_readwrite",
+    "description": "D3 = f(C3) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Dim x As Double\n  x = Range(\"C3\").Value\n  Range(\"D3\").Value = x - 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0004",
+    "category": "range_readwrite",
+    "description": "B4 = f(B1) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Dim x As Double\n  x = Range(\"B1\").Value\n  Range(\"B4\").Value = x / 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0005",
+    "category": "range_readwrite",
+    "description": "A4 = f(D4) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Dim x As Double\n  x = Range(\"D4\").Value\n  Range(\"A4\").Value = -x\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0006",
+    "category": "range_readwrite",
+    "description": "Cells(...) equivalent write to A1",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Range(\"A1\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0007",
+    "category": "range_readwrite",
+    "description": "Cells(...) equivalent write to B2",
+    "vbaSource": "Sub Scenario()\n  Range(\"B2\").Value = Range(\"B2\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0008",
+    "category": "range_readwrite",
+    "description": "Cells(...) equivalent write to C3",
+    "vbaSource": "Sub Scenario()\n  Range(\"C3\").Value = Range(\"C3\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0009",
+    "category": "range_readwrite",
+    "description": "Cells(...) equivalent write to D4",
+    "vbaSource": "Sub Scenario()\n  Range(\"D4\").Value = Range(\"D4\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0010",
+    "category": "range_readwrite",
+    "description": "Cells(...) equivalent write to A4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A4\").Value = Range(\"A4\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0011",
+    "category": "range_readwrite",
+    "description": "Cells(...) equivalent write to D1",
+    "vbaSource": "Sub Scenario()\n  Range(\"D1\").Value = Range(\"D1\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0012",
+    "category": "range_readwrite",
+    "description": "Cells indexing write near A1",
+    "vbaSource": "Sub Scenario()\n  Cells(1, 1).Value = Cells(1, 1).Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0013",
+    "category": "range_readwrite",
+    "description": "Cells indexing write near B1",
+    "vbaSource": "Sub Scenario()\n  Cells(1, 1).Value = Cells(1, 1).Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "range_readwrite_0014",
+    "category": "range_readwrite",
+    "description": "Cells indexing write near C2",
+    "vbaSource": "Sub Scenario()\n  Cells(1, 1).Value = Cells(1, 1).Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "control_flow_for_0001",
+    "category": "control_flow_for",
+    "description": "Sum 1..5 step 1 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 5 Step 1\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0002",
+    "category": "control_flow_for",
+    "description": "Sum 1..10 step 1 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 10 Step 1\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0003",
+    "category": "control_flow_for",
+    "description": "Sum 1..3 step 1 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 3 Step 1\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0004",
+    "category": "control_flow_for",
+    "description": "Sum 1..10 step 2 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 10 Step 2\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0005",
+    "category": "control_flow_for",
+    "description": "Sum 1..10 step -1 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 10 Step -1\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0006",
+    "category": "control_flow_for",
+    "description": "Sum 1..1 step 1 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 1 Step 1\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0007",
+    "category": "control_flow_for",
+    "description": "Write squares 1..3 down column A",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer\n  For i = 1 To 3\n    Cells(i, 1).Value = i * i\n  Next i\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0008",
+    "category": "control_flow_for",
+    "description": "Write squares 1..5 down column A",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer\n  For i = 1 To 5\n    Cells(i, 1).Value = i * i\n  Next i\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0009",
+    "category": "control_flow_for",
+    "description": "Write squares 1..8 down column A",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer\n  For i = 1 To 8\n    Cells(i, 1).Value = i * i\n  Next i\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0001",
+    "category": "control_flow_do_while",
+    "description": "Do While countdown from 5 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 5\n  Dim total As Double\n  total = 0\n  Do While x > 0\n    total = total + x\n    x = x - 1\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0002",
+    "category": "control_flow_do_while",
+    "description": "Do While countdown from 10 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 10\n  Dim total As Double\n  total = 0\n  Do While x > 0\n    total = total + x\n    x = x - 1\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0003",
+    "category": "control_flow_do_while",
+    "description": "Do While countdown from 1 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 1\n  Dim total As Double\n  total = 0\n  Do While x > 0\n    total = total + x\n    x = x - 1\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0004",
+    "category": "control_flow_do_while",
+    "description": "Do While countdown from 20 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 20\n  Dim total As Double\n  total = 0\n  Do While x > 0\n    total = total + x\n    x = x - 1\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_if_0001",
+    "category": "control_flow_if",
+    "description": "If/ElseIf/Else classify -5 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Double\n  v = -5\n  If v > 0 Then\n    Range(\"A1\").Value = \"positive\"\n  ElseIf v < 0 Then\n    Range(\"A1\").Value = \"negative\"\n  Else\n    Range(\"A1\").Value = \"zero\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_if_0002",
+    "category": "control_flow_if",
+    "description": "If/ElseIf/Else classify 0 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Double\n  v = 0\n  If v > 0 Then\n    Range(\"A1\").Value = \"positive\"\n  ElseIf v < 0 Then\n    Range(\"A1\").Value = \"negative\"\n  Else\n    Range(\"A1\").Value = \"zero\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_if_0003",
+    "category": "control_flow_if",
+    "description": "If/ElseIf/Else classify 5 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Double\n  v = 5\n  If v > 0 Then\n    Range(\"A1\").Value = \"positive\"\n  ElseIf v < 0 Then\n    Range(\"A1\").Value = \"negative\"\n  Else\n    Range(\"A1\").Value = \"zero\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_if_0004",
+    "category": "control_flow_if",
+    "description": "If/ElseIf/Else classify 100 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Double\n  v = 100\n  If v > 0 Then\n    Range(\"A1\").Value = \"positive\"\n  ElseIf v < 0 Then\n    Range(\"A1\").Value = \"negative\"\n  Else\n    Range(\"A1\").Value = \"zero\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_if_0005",
+    "category": "control_flow_if",
+    "description": "If/ElseIf/Else classify -100 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Double\n  v = -100\n  If v > 0 Then\n    Range(\"A1\").Value = \"positive\"\n  ElseIf v < 0 Then\n    Range(\"A1\").Value = \"negative\"\n  Else\n    Range(\"A1\").Value = \"zero\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_select_case_0001",
+    "category": "control_flow_select_case",
+    "description": "Select Case 1 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Integer\n  v = 1\n  Select Case v\n    Case 1\n      Range(\"A1\").Value = \"one\"\n    Case 2, 3\n      Range(\"A1\").Value = \"two_or_three\"\n    Case Is > 10\n      Range(\"A1\").Value = \"big\"\n    Case Else\n      Range(\"A1\").Value = \"other\"\n  End Select\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_select_case_0002",
+    "category": "control_flow_select_case",
+    "description": "Select Case 2 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Integer\n  v = 2\n  Select Case v\n    Case 1\n      Range(\"A1\").Value = \"one\"\n    Case 2, 3\n      Range(\"A1\").Value = \"two_or_three\"\n    Case Is > 10\n      Range(\"A1\").Value = \"big\"\n    Case Else\n      Range(\"A1\").Value = \"other\"\n  End Select\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_select_case_0003",
+    "category": "control_flow_select_case",
+    "description": "Select Case 3 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Integer\n  v = 3\n  Select Case v\n    Case 1\n      Range(\"A1\").Value = \"one\"\n    Case 2, 3\n      Range(\"A1\").Value = \"two_or_three\"\n    Case Is > 10\n      Range(\"A1\").Value = \"big\"\n    Case Else\n      Range(\"A1\").Value = \"other\"\n  End Select\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_select_case_0004",
+    "category": "control_flow_select_case",
+    "description": "Select Case 4 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Integer\n  v = 4\n  Select Case v\n    Case 1\n      Range(\"A1\").Value = \"one\"\n    Case 2, 3\n      Range(\"A1\").Value = \"two_or_three\"\n    Case Is > 10\n      Range(\"A1\").Value = \"big\"\n    Case Else\n      Range(\"A1\").Value = \"other\"\n  End Select\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_select_case_0005",
+    "category": "control_flow_select_case",
+    "description": "Select Case 99 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim v As Integer\n  v = 99\n  Select Case v\n    Case 1\n      Range(\"A1\").Value = \"one\"\n    Case 2, 3\n      Range(\"A1\").Value = \"two_or_three\"\n    Case Is > 10\n      Range(\"A1\").Value = \"big\"\n    Case Else\n      Range(\"A1\").Value = \"other\"\n  End Select\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arrays_0001",
+    "category": "arrays",
+    "description": "Dim arr(2), sum into A1",
+    "vbaSource": "Sub Scenario()\n  Dim arr(2) As Double\n  arr(0) = 1\n  arr(1) = 2\n  arr(2) = 3\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 0 To 2\n    total = total + arr(i)\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arrays_0002",
+    "category": "arrays",
+    "description": "Dim arr(3), sum into A1",
+    "vbaSource": "Sub Scenario()\n  Dim arr(3) As Double\n  arr(0) = 10\n  arr(1) = 20\n  arr(2) = 30\n  arr(3) = 40\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 0 To 3\n    total = total + arr(i)\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arrays_0003",
+    "category": "arrays",
+    "description": "Dim arr(2), sum into A1",
+    "vbaSource": "Sub Scenario()\n  Dim arr(2) As Double\n  arr(0) = -1\n  arr(1) = 0\n  arr(2) = 1\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 0 To 2\n    total = total + arr(i)\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arrays_0004",
+    "category": "arrays",
+    "description": "Dim arr(0), sum into A1",
+    "vbaSource": "Sub Scenario()\n  Dim arr(0) As Double\n  arr(0) = 5\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 0 To 0\n    total = total + arr(i)\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arrays_0005",
+    "category": "arrays",
+    "description": "Array values written to column A",
+    "vbaSource": "Sub Scenario()\n  Dim arr(2) As Double\n  arr(0) = 1\n  arr(1) = 2\n  arr(2) = 3\n  Dim i As Integer\n  For i = 0 To 2\n    Cells(i + 1, 1).Value = arr(i)\n  Next i\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arrays_0006",
+    "category": "arrays",
+    "description": "Array values written to column A",
+    "vbaSource": "Sub Scenario()\n  Dim arr(3) As Double\n  arr(0) = 4\n  arr(1) = 5\n  arr(2) = 6\n  arr(3) = 7\n  Dim i As Integer\n  For i = 0 To 3\n    Cells(i + 1, 1).Value = arr(i)\n  Next i\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0001",
+    "category": "type_conversion",
+    "description": "A1 = CStr(42)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CStr(42)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0002",
+    "category": "type_conversion",
+    "description": "A1 = CStr(3.14)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CStr(3.14)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0003",
+    "category": "type_conversion",
+    "description": "A1 = CInt(\"42\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(\"42\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0004",
+    "category": "type_conversion",
+    "description": "A1 = CDbl(\"3.14\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CDbl(\"3.14\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0005",
+    "category": "type_conversion",
+    "description": "A1 = CBool(1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CBool(1)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0006",
+    "category": "type_conversion",
+    "description": "A1 = CBool(0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CBool(0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0007",
+    "category": "type_conversion",
+    "description": "A1 = Int(3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0008",
+    "category": "type_conversion",
+    "description": "A1 = Int(-3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(-3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0009",
+    "category": "type_conversion",
+    "description": "A1 = Fix(3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0010",
+    "category": "type_conversion",
+    "description": "A1 = Fix(-3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(-3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0011",
+    "category": "type_conversion",
+    "description": "A1 = Abs(-5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(-5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0012",
+    "category": "type_conversion",
+    "description": "A1 = Abs(5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0013",
+    "category": "type_conversion",
+    "description": "A1 = Round(3.14159)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(3.14159)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0014",
+    "category": "type_conversion",
+    "description": "A1 = Sgn(-5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(-5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0015",
+    "category": "type_conversion",
+    "description": "A1 = Sgn(5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0016",
+    "category": "type_conversion",
+    "description": "A1 = Sgn(0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0017",
+    "category": "type_conversion",
+    "description": "A1 = Sqr(16)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sqr(16)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0018",
+    "category": "type_conversion",
+    "description": "A1 = Sqr(2)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sqr(2)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "worksheet_functions_0001",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Sum(A1:D4) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Sum(Range(\"A1:D4\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0002",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Average(A1:D4) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Average(Range(\"A1:D4\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0003",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Min(A1:D4) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Min(Range(\"A1:D4\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0004",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Max(A1:D4) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Max(Range(\"A1:D4\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0005",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Count(A1:D4) over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Count(Range(\"A1:D4\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "nested_calls_0001",
+    "category": "nested_calls",
+    "description": "Scenario calls Helper(2, 3)",
+    "vbaSource": "Function Helper(x As Double, y As Double) As Double\n  Helper = x * x + y\nEnd Function\n\nSub Scenario()\n  Range(\"A1\").Value = Helper(2, 3)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "nested_calls_0002",
+    "category": "nested_calls",
+    "description": "Scenario calls Helper(10, -4)",
+    "vbaSource": "Function Helper(x As Double, y As Double) As Double\n  Helper = x * x + y\nEnd Function\n\nSub Scenario()\n  Range(\"A1\").Value = Helper(10, -4)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "nested_calls_0003",
+    "category": "nested_calls",
+    "description": "Scenario calls Helper(0, 0)",
+    "vbaSource": "Function Helper(x As Double, y As Double) As Double\n  Helper = x * x + y\nEnd Function\n\nSub Scenario()\n  Range(\"A1\").Value = Helper(0, 0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "nested_calls_0004",
+    "category": "nested_calls",
+    "description": "Scenario calls Helper(7, 7)",
+    "vbaSource": "Function Helper(x As Double, y As Double) As Double\n  Helper = x * x + y\nEnd Function\n\nSub Scenario()\n  Range(\"A1\").Value = Helper(7, 7)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "error_handling_0001",
+    "category": "error_handling",
+    "description": "On Error Resume Next swallows a divide-by-zero, A1 stays default then B1 set",
+    "vbaSource": "Sub Scenario()\n  On Error Resume Next\n  Range(\"A1\").Value = 1 / 0\n  Range(\"B1\").Value = \"reached\"\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "error_handling_0002",
+    "category": "error_handling",
+    "description": "On Error GoTo label after a runtime error",
+    "vbaSource": "Sub Scenario()\n  On Error GoTo Handler\n  Dim arr(2) As Integer\n  arr(5) = 1\n  Range(\"A1\").Value = \"no error\"\n  Exit Sub\nHandler:\n  Range(\"A1\").Value = \"caught\"\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "unsupported_functions_0001",
+    "category": "unsupported_functions",
+    "description": "A1 = Application.WorksheetFunction.TextJoin(\",\", True, \"a\", \"b\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.TextJoin(\",\", True, \"a\", \"b\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "unsupported_functions_0002",
+    "category": "unsupported_functions",
+    "description": "A1 = Application.WorksheetFunction.Xlookup(1, Range(\"A1:A4\"), Range(\"B1:B4\"))",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Xlookup(1, Range(\"A1:A4\"), Range(\"B1:B4\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "nondeterministic_0001",
+    "category": "nondeterministic",
+    "description": "A1 = Now() (time-dependent)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Now()\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "nondeterministic_0002",
+    "category": "nondeterministic",
+    "description": "A1 = Timer() (time-dependent)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Timer()\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_handling_mixed_0001",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsNumeric(A1) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0002",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsEmpty(A1) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsEmpty(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0003",
+    "category": "type_handling_mixed",
+    "description": "A1 = VarType(A1) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0004",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsNumeric(B1) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0005",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsEmpty(B1) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsEmpty(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0006",
+    "category": "type_handling_mixed",
+    "description": "A1 = VarType(B1) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0007",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsNumeric(C1) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0008",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsEmpty(C1) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsEmpty(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0009",
+    "category": "type_handling_mixed",
+    "description": "A1 = VarType(C1) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0010",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsNumeric(A2) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0011",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsEmpty(A2) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsEmpty(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0012",
+    "category": "type_handling_mixed",
+    "description": "A1 = VarType(A2) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0013",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsNumeric(B2) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0014",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsEmpty(B2) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsEmpty(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0015",
+    "category": "type_handling_mixed",
+    "description": "A1 = VarType(B2) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0016",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsNumeric(C2) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0017",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsEmpty(C2) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsEmpty(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0018",
+    "category": "type_handling_mixed",
+    "description": "A1 = VarType(C2) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0019",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsNumeric(A3) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0020",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsEmpty(A3) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsEmpty(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0021",
+    "category": "type_handling_mixed",
+    "description": "A1 = VarType(A3) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0022",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsNumeric(B3) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0023",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsEmpty(B3) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsEmpty(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0024",
+    "category": "type_handling_mixed",
+    "description": "A1 = VarType(B3) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0025",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsNumeric(C3) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0026",
+    "category": "type_handling_mixed",
+    "description": "A1 = IsEmpty(C3) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsEmpty(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "type_handling_mixed_0027",
+    "category": "type_handling_mixed",
+    "description": "A1 = VarType(C3) over mixed_types",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "mixed_types"
+  },
+  {
+    "id": "text_fixture_ops_0001",
+    "category": "text_fixture_ops",
+    "description": "A1 = UCase(A1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0002",
+    "category": "text_fixture_ops",
+    "description": "A1 = LCase(A1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0003",
+    "category": "text_fixture_ops",
+    "description": "A1 = Trim(A1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0004",
+    "category": "text_fixture_ops",
+    "description": "A1 = Len(A1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0005",
+    "category": "text_fixture_ops",
+    "description": "A1 = UCase(B1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0006",
+    "category": "text_fixture_ops",
+    "description": "A1 = LCase(B1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0007",
+    "category": "text_fixture_ops",
+    "description": "A1 = Trim(B1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0008",
+    "category": "text_fixture_ops",
+    "description": "A1 = Len(B1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0009",
+    "category": "text_fixture_ops",
+    "description": "A1 = UCase(C1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0010",
+    "category": "text_fixture_ops",
+    "description": "A1 = LCase(C1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0011",
+    "category": "text_fixture_ops",
+    "description": "A1 = Trim(C1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0012",
+    "category": "text_fixture_ops",
+    "description": "A1 = Len(C1) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0013",
+    "category": "text_fixture_ops",
+    "description": "A1 = UCase(A2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0014",
+    "category": "text_fixture_ops",
+    "description": "A1 = LCase(A2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0015",
+    "category": "text_fixture_ops",
+    "description": "A1 = Trim(A2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0016",
+    "category": "text_fixture_ops",
+    "description": "A1 = Len(A2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0017",
+    "category": "text_fixture_ops",
+    "description": "A1 = UCase(B2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0018",
+    "category": "text_fixture_ops",
+    "description": "A1 = LCase(B2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0019",
+    "category": "text_fixture_ops",
+    "description": "A1 = Trim(B2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0020",
+    "category": "text_fixture_ops",
+    "description": "A1 = Len(B2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0021",
+    "category": "text_fixture_ops",
+    "description": "A1 = UCase(C2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0022",
+    "category": "text_fixture_ops",
+    "description": "A1 = LCase(C2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0023",
+    "category": "text_fixture_ops",
+    "description": "A1 = Trim(C2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0024",
+    "category": "text_fixture_ops",
+    "description": "A1 = Len(C2) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0025",
+    "category": "text_fixture_ops",
+    "description": "A1 = UCase(A3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0026",
+    "category": "text_fixture_ops",
+    "description": "A1 = LCase(A3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0027",
+    "category": "text_fixture_ops",
+    "description": "A1 = Trim(A3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0028",
+    "category": "text_fixture_ops",
+    "description": "A1 = Len(A3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0029",
+    "category": "text_fixture_ops",
+    "description": "A1 = UCase(B3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0030",
+    "category": "text_fixture_ops",
+    "description": "A1 = LCase(B3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0031",
+    "category": "text_fixture_ops",
+    "description": "A1 = Trim(B3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0032",
+    "category": "text_fixture_ops",
+    "description": "A1 = Len(B3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0033",
+    "category": "text_fixture_ops",
+    "description": "A1 = UCase(C3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0034",
+    "category": "text_fixture_ops",
+    "description": "A1 = LCase(C3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = LCase(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0035",
+    "category": "text_fixture_ops",
+    "description": "A1 = Trim(C3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Trim(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "text_fixture_ops_0036",
+    "category": "text_fixture_ops",
+    "description": "A1 = Len(C3) over with_text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_text"
+  },
+  {
+    "id": "negatives_fixture_ops_0001",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Abs(A1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0002",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Sgn(A1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0003",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Int(A1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0004",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Fix(A1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(Range(\"A1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0005",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Abs(B1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0006",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Sgn(B1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0007",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Int(B1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0008",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Fix(B1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(Range(\"B1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0009",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Abs(C1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0010",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Sgn(C1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0011",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Int(C1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0012",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Fix(C1) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(Range(\"C1\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0013",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Abs(A2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0014",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Sgn(A2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0015",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Int(A2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0016",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Fix(A2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(Range(\"A2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0017",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Abs(B2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0018",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Sgn(B2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0019",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Int(B2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0020",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Fix(B2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(Range(\"B2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0021",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Abs(C2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0022",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Sgn(C2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0023",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Int(C2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0024",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Fix(C2) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(Range(\"C2\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0025",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Abs(A3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0026",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Sgn(A3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0027",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Int(A3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0028",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Fix(A3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(Range(\"A3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0029",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Abs(B3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0030",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Sgn(B3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0031",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Int(B3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0032",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Fix(B3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(Range(\"B3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0033",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Abs(C3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0034",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Sgn(C3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0035",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Int(C3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "negatives_fixture_ops_0036",
+    "category": "negatives_fixture_ops",
+    "description": "A1 = Fix(C3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(Range(\"C3\").Value)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "for_each_0001",
+    "category": "for_each",
+    "description": "For Each cell In Range(\"A1:D1\"), sum into A1 (numeric_grid, may double-count A1)",
+    "vbaSource": "Sub Scenario()\n  Dim c As Range, total As Double\n  total = 0\n  For Each c In Range(\"A1:D1\")\n    total = total + c.Value\n  Next c\n  Range(\"F1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "for_each_0002",
+    "category": "for_each",
+    "description": "For Each cell In Range(\"A1:A4\"), sum into A1 (numeric_grid, may double-count A1)",
+    "vbaSource": "Sub Scenario()\n  Dim c As Range, total As Double\n  total = 0\n  For Each c In Range(\"A1:A4\")\n    total = total + c.Value\n  Next c\n  Range(\"F1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "for_each_0003",
+    "category": "for_each",
+    "description": "For Each cell In Range(\"A1:D4\"), sum into A1 (numeric_grid, may double-count A1)",
+    "vbaSource": "Sub Scenario()\n  Dim c As Range, total As Double\n  total = 0\n  For Each c In Range(\"A1:D4\")\n    total = total + c.Value\n  Next c\n  Range(\"F1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "for_each_0004",
+    "category": "for_each",
+    "description": "For Each cell In Range(\"B1:C2\"), sum into A1 (numeric_grid, may double-count A1)",
+    "vbaSource": "Sub Scenario()\n  Dim c As Range, total As Double\n  total = 0\n  For Each c In Range(\"B1:C2\")\n    total = total + c.Value\n  Next c\n  Range(\"F1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "with_block_0001",
+    "category": "with_block",
+    "description": "With Range(\"A1\") ... .Value = ... over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    .Value = .Value + 1000\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "with_block_0002",
+    "category": "with_block",
+    "description": "With Range(\"B2\") ... .Value = ... over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  With Range(\"B2\")\n    .Value = .Value + 1000\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "with_block_0003",
+    "category": "with_block",
+    "description": "With Range(\"D4\") ... .Value = ... over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  With Range(\"D4\")\n    .Value = .Value + 1000\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "named_ranges_0001",
+    "category": "named_ranges",
+    "description": "Name A1:B2 as TopLeft, sum via WorksheetFunction over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1:B2\").Name = \"TopLeft\"\n  Range(\"F1\").Value = Application.WorksheetFunction.Sum(Range(\"TopLeft\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "named_ranges_0002",
+    "category": "named_ranges",
+    "description": "Name C1:D2 as TopRight, sum via WorksheetFunction over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C1:D2\").Name = \"TopRight\"\n  Range(\"F1\").Value = Application.WorksheetFunction.Sum(Range(\"TopRight\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "named_ranges_0003",
+    "category": "named_ranges",
+    "description": "Name A1:D1 as FirstRow, sum via WorksheetFunction over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1:D1\").Name = \"FirstRow\"\n  Range(\"F1\").Value = Application.WorksheetFunction.Sum(Range(\"FirstRow\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0006",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Sum(A1:B2) sub-range over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Sum(Range(\"A1:B2\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0007",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Average(A1:B2) sub-range over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Average(Range(\"A1:B2\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0008",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Min(A1:B2) sub-range over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Min(Range(\"A1:B2\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0009",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Max(A1:B2) sub-range over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Max(Range(\"A1:B2\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0010",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Count(A1:B2) sub-range over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Count(Range(\"A1:B2\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "worksheet_functions_0011",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Sum(A1:C3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Sum(Range(\"A1:C3\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "worksheet_functions_0012",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Average(A1:C3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Average(Range(\"A1:C3\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "worksheet_functions_0013",
+    "category": "worksheet_functions",
+    "description": "A1 = WorksheetFunction.Max(A1:C3) over with_negatives",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Max(Range(\"A1:C3\"))\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "with_negatives"
+  },
+  {
+    "id": "arrays_0007",
+    "category": "arrays",
+    "description": "Dim arr(4), max into A1",
+    "vbaSource": "Sub Scenario()\n  Dim arr(4) As Double\n  arr(0) = 2\n  arr(1) = 4\n  arr(2) = 6\n  arr(3) = 8\n  arr(4) = 10\n  Dim i As Integer, m As Double\n  m = arr(0)\n  For i = 1 To 4\n    If arr(i) > m Then m = arr(i)\n  Next i\n  Range(\"A1\").Value = m\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arrays_0008",
+    "category": "arrays",
+    "description": "Dim arr(5), max into A1",
+    "vbaSource": "Sub Scenario()\n  Dim arr(5) As Double\n  arr(0) = 1\n  arr(1) = 1\n  arr(2) = 2\n  arr(3) = 3\n  arr(4) = 5\n  arr(5) = 8\n  Dim i As Integer, m As Double\n  m = arr(0)\n  For i = 1 To 5\n    If arr(i) > m Then m = arr(i)\n  Next i\n  Range(\"A1\").Value = m\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arrays_0009",
+    "category": "arrays",
+    "description": "Dim arr(2), max into A1",
+    "vbaSource": "Sub Scenario()\n  Dim arr(2) As Double\n  arr(0) = -2\n  arr(1) = -4\n  arr(2) = -6\n  Dim i As Integer, m As Double\n  m = arr(0)\n  For i = 1 To 2\n    If arr(i) > m Then m = arr(i)\n  Next i\n  Range(\"A1\").Value = m\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "arrays_0010",
+    "category": "arrays",
+    "description": "Dim arr(0), max into A1",
+    "vbaSource": "Sub Scenario()\n  Dim arr(0) As Double\n  arr(0) = 100\n  Dim i As Integer, m As Double\n  m = arr(0)\n  For i = 1 To 0\n    If arr(i) > m Then m = arr(i)\n  Next i\n  Range(\"A1\").Value = m\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0010",
+    "category": "control_flow_for",
+    "description": "Sum bounded loop 15 step 3 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 15 Step 3\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0011",
+    "category": "control_flow_for",
+    "description": "Sum bounded loop 7 step 1 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 7 Step 1\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0012",
+    "category": "control_flow_for",
+    "description": "Sum bounded loop 20 step 5 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 20 Step 5\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0013",
+    "category": "control_flow_for",
+    "description": "Sum bounded loop 6 step 2 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 6 Step 2\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_for_0014",
+    "category": "control_flow_for",
+    "description": "Sum bounded loop 9 step -3 into A1",
+    "vbaSource": "Sub Scenario()\n  Dim i As Integer, total As Double\n  total = 0\n  For i = 1 To 9 Step -3\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0019",
+    "category": "type_conversion",
+    "description": "A1 = Round(2.71828)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(2.71828)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0020",
+    "category": "type_conversion",
+    "description": "A1 = Round(-1.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(-1.5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0021",
+    "category": "type_conversion",
+    "description": "A1 = CInt(\"7\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(\"7\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0022",
+    "category": "type_conversion",
+    "description": "A1 = CDbl(\"2.5\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CDbl(\"2.5\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0023",
+    "category": "type_conversion",
+    "description": "A1 = CBool(\"True\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CBool(\"True\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0024",
+    "category": "type_conversion",
+    "description": "A1 = CBool(\"False\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CBool(\"False\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0025",
+    "category": "type_conversion",
+    "description": "A1 = Abs(-0.001)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Abs(-0.001)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0026",
+    "category": "type_conversion",
+    "description": "A1 = Sgn(-0.001)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(-0.001)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0027",
+    "category": "type_conversion",
+    "description": "A1 = Int(5.999)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(5.999)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "type_conversion_0028",
+    "category": "type_conversion",
+    "description": "A1 = Fix(5.999)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(5.999)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "grid_transform_0001",
+    "category": "grid_transform",
+    "description": "A1 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Range(\"A1\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0002",
+    "category": "grid_transform",
+    "description": "A1 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Range(\"A1\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0003",
+    "category": "grid_transform",
+    "description": "A1 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Range(\"A1\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0004",
+    "category": "grid_transform",
+    "description": "B1 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B1\").Value = Range(\"B1\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0005",
+    "category": "grid_transform",
+    "description": "B1 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B1\").Value = Range(\"B1\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0006",
+    "category": "grid_transform",
+    "description": "B1 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B1\").Value = Range(\"B1\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0007",
+    "category": "grid_transform",
+    "description": "C1 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C1\").Value = Range(\"C1\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0008",
+    "category": "grid_transform",
+    "description": "C1 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C1\").Value = Range(\"C1\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0009",
+    "category": "grid_transform",
+    "description": "C1 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C1\").Value = Range(\"C1\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0010",
+    "category": "grid_transform",
+    "description": "D1 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D1\").Value = Range(\"D1\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0011",
+    "category": "grid_transform",
+    "description": "D1 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D1\").Value = Range(\"D1\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0012",
+    "category": "grid_transform",
+    "description": "D1 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D1\").Value = Range(\"D1\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0013",
+    "category": "grid_transform",
+    "description": "A2 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A2\").Value = Range(\"A2\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0014",
+    "category": "grid_transform",
+    "description": "A2 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A2\").Value = Range(\"A2\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0015",
+    "category": "grid_transform",
+    "description": "A2 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A2\").Value = Range(\"A2\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0016",
+    "category": "grid_transform",
+    "description": "B2 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B2\").Value = Range(\"B2\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0017",
+    "category": "grid_transform",
+    "description": "B2 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B2\").Value = Range(\"B2\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0018",
+    "category": "grid_transform",
+    "description": "B2 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B2\").Value = Range(\"B2\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0019",
+    "category": "grid_transform",
+    "description": "C2 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C2\").Value = Range(\"C2\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0020",
+    "category": "grid_transform",
+    "description": "C2 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C2\").Value = Range(\"C2\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0021",
+    "category": "grid_transform",
+    "description": "C2 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C2\").Value = Range(\"C2\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0022",
+    "category": "grid_transform",
+    "description": "D2 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D2\").Value = Range(\"D2\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0023",
+    "category": "grid_transform",
+    "description": "D2 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D2\").Value = Range(\"D2\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0024",
+    "category": "grid_transform",
+    "description": "D2 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D2\").Value = Range(\"D2\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0025",
+    "category": "grid_transform",
+    "description": "A3 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A3\").Value = Range(\"A3\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0026",
+    "category": "grid_transform",
+    "description": "A3 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A3\").Value = Range(\"A3\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0027",
+    "category": "grid_transform",
+    "description": "A3 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A3\").Value = Range(\"A3\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0028",
+    "category": "grid_transform",
+    "description": "B3 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B3\").Value = Range(\"B3\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0029",
+    "category": "grid_transform",
+    "description": "B3 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B3\").Value = Range(\"B3\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0030",
+    "category": "grid_transform",
+    "description": "B3 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B3\").Value = Range(\"B3\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0031",
+    "category": "grid_transform",
+    "description": "C3 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C3\").Value = Range(\"C3\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0032",
+    "category": "grid_transform",
+    "description": "C3 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C3\").Value = Range(\"C3\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0033",
+    "category": "grid_transform",
+    "description": "C3 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C3\").Value = Range(\"C3\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0034",
+    "category": "grid_transform",
+    "description": "D3 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D3\").Value = Range(\"D3\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0035",
+    "category": "grid_transform",
+    "description": "D3 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D3\").Value = Range(\"D3\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0036",
+    "category": "grid_transform",
+    "description": "D3 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D3\").Value = Range(\"D3\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0037",
+    "category": "grid_transform",
+    "description": "A4 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A4\").Value = Range(\"A4\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0038",
+    "category": "grid_transform",
+    "description": "A4 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A4\").Value = Range(\"A4\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0039",
+    "category": "grid_transform",
+    "description": "A4 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"A4\").Value = Range(\"A4\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0040",
+    "category": "grid_transform",
+    "description": "B4 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B4\").Value = Range(\"B4\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0041",
+    "category": "grid_transform",
+    "description": "B4 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B4\").Value = Range(\"B4\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0042",
+    "category": "grid_transform",
+    "description": "B4 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"B4\").Value = Range(\"B4\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0043",
+    "category": "grid_transform",
+    "description": "C4 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C4\").Value = Range(\"C4\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0044",
+    "category": "grid_transform",
+    "description": "C4 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C4\").Value = Range(\"C4\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0045",
+    "category": "grid_transform",
+    "description": "C4 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"C4\").Value = Range(\"C4\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0046",
+    "category": "grid_transform",
+    "description": "D4 double in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D4\").Value = Range(\"D4\").Value * 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0047",
+    "category": "grid_transform",
+    "description": "D4 square in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D4\").Value = Range(\"D4\").Value ^ 2\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "grid_transform_0048",
+    "category": "grid_transform",
+    "description": "D4 increment in place over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Range(\"D4\").Value = Range(\"D4\").Value + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  },
+  {
+    "id": "comparison_chains_0001",
+    "category": "comparison_chains",
+    "description": "Classify (1, 2) relationship into A1",
+    "vbaSource": "Sub Scenario()\n  Dim a As Double, b As Double\n  a = 1\n  b = 2\n  If a > b Then\n    Range(\"A1\").Value = \"a_greater\"\n  ElseIf a < b Then\n    Range(\"A1\").Value = \"b_greater\"\n  Else\n    Range(\"A1\").Value = \"equal\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "comparison_chains_0002",
+    "category": "comparison_chains",
+    "description": "Classify (5, 5) relationship into A1",
+    "vbaSource": "Sub Scenario()\n  Dim a As Double, b As Double\n  a = 5\n  b = 5\n  If a > b Then\n    Range(\"A1\").Value = \"a_greater\"\n  ElseIf a < b Then\n    Range(\"A1\").Value = \"b_greater\"\n  Else\n    Range(\"A1\").Value = \"equal\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "comparison_chains_0003",
+    "category": "comparison_chains",
+    "description": "Classify (10, -10) relationship into A1",
+    "vbaSource": "Sub Scenario()\n  Dim a As Double, b As Double\n  a = 10\n  b = -10\n  If a > b Then\n    Range(\"A1\").Value = \"a_greater\"\n  ElseIf a < b Then\n    Range(\"A1\").Value = \"b_greater\"\n  Else\n    Range(\"A1\").Value = \"equal\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "comparison_chains_0004",
+    "category": "comparison_chains",
+    "description": "Classify (0, 0) relationship into A1",
+    "vbaSource": "Sub Scenario()\n  Dim a As Double, b As Double\n  a = 0\n  b = 0\n  If a > b Then\n    Range(\"A1\").Value = \"a_greater\"\n  ElseIf a < b Then\n    Range(\"A1\").Value = \"b_greater\"\n  Else\n    Range(\"A1\").Value = \"equal\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "comparison_chains_0005",
+    "category": "comparison_chains",
+    "description": "Classify (-3, 7) relationship into A1",
+    "vbaSource": "Sub Scenario()\n  Dim a As Double, b As Double\n  a = -3\n  b = 7\n  If a > b Then\n    Range(\"A1\").Value = \"a_greater\"\n  ElseIf a < b Then\n    Range(\"A1\").Value = \"b_greater\"\n  Else\n    Range(\"A1\").Value = \"equal\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "comparison_chains_0006",
+    "category": "comparison_chains",
+    "description": "Classify (100, 1) relationship into A1",
+    "vbaSource": "Sub Scenario()\n  Dim a As Double, b As Double\n  a = 100\n  b = 1\n  If a > b Then\n    Range(\"A1\").Value = \"a_greater\"\n  ElseIf a < b Then\n    Range(\"A1\").Value = \"b_greater\"\n  Else\n    Range(\"A1\").Value = \"equal\"\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0055",
+    "category": "string_functions",
+    "description": "A1 = Mid(\"VBA macro\", 1, 3)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Mid(\"VBA macro\", 1, 3)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0056",
+    "category": "string_functions",
+    "description": "A1 = Mid(\"VBA macro\", 5, 5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Mid(\"VBA macro\", 5, 5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0057",
+    "category": "string_functions",
+    "description": "A1 = Mid(\"x\", 1, 1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Mid(\"x\", 1, 1)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0058",
+    "category": "string_functions",
+    "description": "A1 = InStr(\"the quick brown fox\", \"brown\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = InStr(\"the quick brown fox\", \"brown\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0059",
+    "category": "string_functions",
+    "description": "A1 = InStr(\"aaaa\", \"aa\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = InStr(\"aaaa\", \"aa\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0060",
+    "category": "string_functions",
+    "description": "A1 = Len(\"StringLength\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(\"StringLength\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "string_functions_0061",
+    "category": "string_functions",
+    "description": "A1 = Len(\"a b c d e\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(\"a b c d e\")\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0005",
+    "category": "control_flow_do_while",
+    "description": "Do While countdown from 3 into A1 (extra)",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 3\n  Dim total As Double\n  total = 0\n  Do While x > 0\n    total = total + x\n    x = x - 1\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0006",
+    "category": "control_flow_do_while",
+    "description": "Do While countdown from 7 into A1 (extra)",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 7\n  Dim total As Double\n  total = 0\n  Do While x > 0\n    total = total + x\n    x = x - 1\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0007",
+    "category": "control_flow_do_while",
+    "description": "Do While countdown from 15 into A1 (extra)",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 15\n  Dim total As Double\n  total = 0\n  Do While x > 0\n    total = total + x\n    x = x - 1\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0008",
+    "category": "control_flow_do_while",
+    "description": "Do While countdown from 25 into A1 (extra)",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 25\n  Dim total As Double\n  total = 0\n  Do While x > 0\n    total = total + x\n    x = x - 1\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0009",
+    "category": "control_flow_do_while",
+    "description": "Do While countdown from 2 into A1 (extra)",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 2\n  Dim total As Double\n  total = 0\n  Do While x > 0\n    total = total + x\n    x = x - 1\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0010",
+    "category": "control_flow_do_while",
+    "description": "Do ... Loop Until x*x >= 1",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 0\n  Do\n    x = x + 1\n  Loop Until x * x >= 1\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0011",
+    "category": "control_flow_do_while",
+    "description": "Do ... Loop Until x*x >= 4",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 0\n  Do\n    x = x + 1\n  Loop Until x * x >= 4\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0012",
+    "category": "control_flow_do_while",
+    "description": "Do ... Loop Until x*x >= 9",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 0\n  Do\n    x = x + 1\n  Loop Until x * x >= 9\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0013",
+    "category": "control_flow_do_while",
+    "description": "Do ... Loop Until x*x >= 16",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 0\n  Do\n    x = x + 1\n  Loop Until x * x >= 16\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "control_flow_do_while_0014",
+    "category": "control_flow_do_while",
+    "description": "Do ... Loop Until x*x >= 25",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 0\n  Do\n    x = x + 1\n  Loop Until x * x >= 25\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0021",
+    "category": "boolean_logic",
+    "description": "A1 = (1 < 2) And (2 < 3)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (1 < 2) And (2 < 3)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0022",
+    "category": "boolean_logic",
+    "description": "A1 = (5 < 5) And (5 < 5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (5 < 5) And (5 < 5)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0023",
+    "category": "boolean_logic",
+    "description": "A1 = (-1 < 0) And (0 < 1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (-1 < 0) And (0 < 1)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0024",
+    "category": "boolean_logic",
+    "description": "A1 = (10 < 5) And (5 < 1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (10 < 5) And (5 < 1)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0025",
+    "category": "boolean_logic",
+    "description": "A1 = (-10 >= 0) Or (-10 Mod 2 = 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (-10 >= 0) Or (-10 Mod 2 = 0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0026",
+    "category": "boolean_logic",
+    "description": "A1 = (-1 >= 0) Or (-1 Mod 2 = 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (-1 >= 0) Or (-1 Mod 2 = 0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0027",
+    "category": "boolean_logic",
+    "description": "A1 = (0 >= 0) Or (0 Mod 2 = 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (0 >= 0) Or (0 Mod 2 = 0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0028",
+    "category": "boolean_logic",
+    "description": "A1 = (1 >= 0) Or (1 Mod 2 = 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (1 >= 0) Or (1 Mod 2 = 0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "boolean_logic_0029",
+    "category": "boolean_logic",
+    "description": "A1 = (10 >= 0) Or (10 Mod 2 = 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (10 >= 0) Or (10 Mod 2 = 0)\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": null
+  },
+  {
+    "id": "harness_smoke_0001",
+    "category": "harness_smoke",
+    "description": "Pure local-variable arithmetic, no Range/Cells touched, over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 1 + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
+  }
+]

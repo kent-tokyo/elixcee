@@ -1,0 +1,91 @@
+[
+  {
+    "id": "harness_smoke_0001",
+    "category": "harness_smoke",
+    "oracle": "libreoffice",
+    "ok": true,
+    "status": "DONE",
+    "cells": [
+      {
+        "address": "$Sheet1.$A$1",
+        "type": "number",
+        "value": 1
+      },
+      {
+        "address": "$Sheet1.$B$1",
+        "type": "number",
+        "value": 2
+      },
+      {
+        "address": "$Sheet1.$C$1",
+        "type": "number",
+        "value": 3
+      },
+      {
+        "address": "$Sheet1.$D$1",
+        "type": "number",
+        "value": 4
+      },
+      {
+        "address": "$Sheet1.$A$2",
+        "type": "number",
+        "value": 5
+      },
+      {
+        "address": "$Sheet1.$B$2",
+        "type": "number",
+        "value": 6
+      },
+      {
+        "address": "$Sheet1.$C$2",
+        "type": "number",
+        "value": 7
+      },
+      {
+        "address": "$Sheet1.$D$2",
+        "type": "number",
+        "value": 8
+      },
+      {
+        "address": "$Sheet1.$A$3",
+        "type": "number",
+        "value": 9
+      },
+      {
+        "address": "$Sheet1.$B$3",
+        "type": "number",
+        "value": 10
+      },
+      {
+        "address": "$Sheet1.$C$3",
+        "type": "number",
+        "value": 11
+      },
+      {
+        "address": "$Sheet1.$D$3",
+        "type": "number",
+        "value": 12
+      },
+      {
+        "address": "$Sheet1.$A$4",
+        "type": "number",
+        "value": 13
+      },
+      {
+        "address": "$Sheet1.$B$4",
+        "type": "number",
+        "value": 14
+      },
+      {
+        "address": "$Sheet1.$C$4",
+        "type": "number",
+        "value": 15
+      },
+      {
+        "address": "$Sheet1.$D$4",
+        "type": "number",
+        "value": 16
+      }
+    ]
+  }
+]
