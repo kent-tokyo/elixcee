@@ -2486,8 +2486,14 @@ impl Vm {
                 Ok(as_int_if_whole(f.floor()))
             }
             "clng" | "cint" => {
-                let f = to_f64(vals.first().ok_or("CInt/CLng requires 1 argument")?)?;
-                Ok(Variant::Integer(f.round() as i64))
+                // Real VBA's CInt/CLng use banker's rounding (round-half-
+                // to-even), same as Round() — `to_i64_rounded`'s own doc
+                // comment already claims this ("the same round-half-to-
+                // even ... that CLng/Round use"), but this arm used Rust's
+                // default round-half-away-from-zero until now: `CInt(0.5)`
+                // was `1`, not real VBA's `0`.
+                let v = vals.first().ok_or("CInt/CLng requires 1 argument")?;
+                Ok(Variant::Integer(to_i64_rounded(v)?))
             }
             "cbool" => {
                 let v = vals.first().ok_or("CBool requires 1 argument")?;
@@ -3745,6 +3751,30 @@ mod tests {
     fn test_vba_clng() {
         let vm = run("Sub MySub()\n    a = CLng(3.7)\n    b = CLng(-2.5)\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Integer(4));
+        // -2.5's nearest even integer is -2, not -3 (Rust's own default
+        // f64::round() would give -3, away from zero — see
+        // test_vba_cint_clng_use_banker_rounding for the full tie-case
+        // coverage this single value used to lack an assertion for).
+        assert_eq!(vm.variables["b"], Variant::Integer(-2));
+    }
+
+    #[test]
+    fn test_vba_cint_clng_use_banker_rounding() {
+        // Real VBA's CInt/CLng round half-to-even, like Round() — not
+        // Rust's own default f64::round() (half-away-from-zero). CInt(0.5)
+        // used to be 1, not real VBA's 0.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    a = CInt(0.5)\n",
+            "    b = CInt(1.5)\n",
+            "    c = CLng(2.5)\n",
+            "    d = CLng(-2.5)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["a"], Variant::Integer(0));
+        assert_eq!(vm.variables["b"], Variant::Integer(2));
+        assert_eq!(vm.variables["c"], Variant::Integer(2));
+        assert_eq!(vm.variables["d"], Variant::Integer(-2));
     }
 
     #[test]

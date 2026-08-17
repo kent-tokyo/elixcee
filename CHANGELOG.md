@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `CInt`/`CLng` used Rust's default round-half-away-from-zero (`f64::round()`) instead of
+  real VBA's banker's rounding (round-half-to-even) — `CInt(0.5)` was `1`, not `0`. Found by
+  auditing for the same bug class the `Round()` fix (below) had already been fixed for:
+  `to_i64_rounded` (used by `\`/`Mod` operand coercion) already documented "the same
+  round-half-to-even ... that CLng/Round use," but `CInt`/`CLng`'s own arm never actually
+  used it. Now reuses that exact existing helper — the `test_vba_clng` test had silently
+  computed a tie-case value (`CLng(-2.5)`) without ever asserting on it, which is likely how
+  this went unnoticed; that assertion is filled in now, plus dedicated tie-case coverage.
 - `Round(number, negativeDigits)` (e.g. `Round(1234.5, -2)`) silently returned a plausible
   answer instead of erroring — real VBA's own `Round()` raises "Invalid procedure call or
   argument" for a negative digit count (unlike `WorksheetFunction.Round`/Excel's `ROUND()`

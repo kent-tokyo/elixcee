@@ -82,6 +82,13 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
    three `eval_vba_func` entries that accept zero arguments, so this doesn't generalize to
    "any unrecognized identifier might be a function call" and a genuine variable-name typo
    still errors exactly as before (pinned by a regression test).
+10. ~~`CInt`/`CLng` used away-from-zero rounding, not real VBA's banker's rounding~~ —
+    **fixed** (Unreleased): found by auditing for the same bug class as the `Round()` fix
+    (item 8) — `to_i64_rounded` already documented that `CLng`/`Round` should share the
+    round-half-to-even convention, but `CInt`/`CLng`'s own arm never actually used it
+    (`CInt(0.5)` was `1`, not `0`). Now reuses `to_i64_rounded` directly. A pre-existing
+    test had computed `CLng(-2.5)` without ever asserting on it — likely how this went
+    unnoticed until now.
 
 ## Next candidates, roughly by leverage
 
