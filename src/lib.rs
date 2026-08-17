@@ -66,7 +66,7 @@ fn variant_to_py(py: Python<'_>, v: &Variant) -> Py<PyAny> {
                 .into_any()
         }
         Variant::Date(s) => {
-            let (y, m, d) = crate::formula::eval::serial_to_ymd_pub(*s);
+            let (y, m, d) = crate::types::serial_to_ymd(*s);
             pyo3::types::PyDate::new(py, y, m as u8, d as u8)
                 .map(|dt| dt.into_any().unbind())
                 .unwrap_or_else(|_| serial_to_display(*s).into_pyobject(py).unwrap().into_any().unbind())

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::cell::RefCell;
 
 use crate::vm::{CellContent, ExcelError, Variant};
+use crate::types::{days_in_month, is_leap, serial_to_ymd};
 use super::ast::{BinOpKind, FormulaExpr};
 
 // ── LET/LAMBDA name-binding stack ────────────────────────────────────────────
@@ -1180,17 +1181,14 @@ fn func_ifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
-
-fn is_leap(y: i32) -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
-
-fn days_in_month(y: i32, m: u32) -> u32 {
-    match m {
-        1|3|5|7|8|10|12 => 31,
-        4|6|9|11        => 30,
-        2               => if is_leap(y) { 29 } else { 28 },
-        _               => 0,
-    }
-}
+// is_leap/days_in_month/serial_to_ymd moved to elixcee-types (Phase 2A),
+// imported near the top of this file; serial_to_ymd_pub (a pure wrapper
+// around serial_to_ymd) is dropped now that serial_to_ymd is itself pub.
+// date_to_serial and serial_to_display below are eval.rs-local and stay —
+// serial_to_display in particular is a separate, pre-existing private
+// duplicate of elixcee-types::serial_to_display (same computation, kept
+// as-is rather than deleted, since removing it is a behavior-affecting
+// edit beyond what a pure extraction covers).
 
 /// Excel serial date: Jan 1 1900 = 1. Includes the Excel leap-year bug (Feb 29 1900 = 60).
 fn date_to_serial(y: i32, m: u32, d: u32) -> i64 {
@@ -1208,29 +1206,6 @@ fn date_to_serial(y: i32, m: u32, d: u32) -> i64 {
         serial += 1;
     }
     serial
-}
-
-pub fn serial_to_ymd_pub(s: i64) -> (i32, u32, u32) { serial_to_ymd(s) }
-
-fn serial_to_ymd(mut s: i64) -> (i32, u32, u32) {
-    // Undo the Excel leap-year bug offset for dates after serial 60
-    if s > 60 { s -= 1; }
-    // s is now days since Jan 1 1900 (1-based)
-    let mut y = 1900i32;
-    loop {
-        let days = if is_leap(y) { 366i64 } else { 365 };
-        if s <= days { break; }
-        s -= days;
-        y += 1;
-    }
-    let mut m = 1u32;
-    loop {
-        let dim = days_in_month(y, m) as i64;
-        if s <= dim { break; }
-        s -= dim;
-        m += 1;
-    }
-    (y, m, s as u32)
 }
 
 fn serial_to_display(s: i64) -> String {
@@ -2873,8 +2848,8 @@ fn func_indirect(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>)
         Variant::Str(s) => s,
         other => return Err(format!("INDIRECT: expected string, got {}", other)),
     };
-    // Resolve through vm's public parse_cell_addr / parse_range_addr
-    let ((r1, c1), _) = crate::vm::parse_range_addr(addr_str.trim())
+    // Resolve through elixcee-types's parse_cell_addr / parse_range_addr
+    let ((r1, c1), _) = crate::types::parse_range_addr(addr_str.trim())
         .ok_or_else(|| format!("INDIRECT: invalid reference '{}'", addr_str))?;
     Ok(cells.get(&(r1, c1)).map(|c| c.value.clone()).unwrap_or(Variant::Empty))
 }

@@ -5,37 +5,11 @@ use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, Program, Sourc
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{self, SheetCell, WorkbookSheet};
 
-/// Excel worksheet error values (#DIV/0!, #N/A, etc.)
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExcelError {
-    DivZero, // #DIV/0!
-    NA,      // #N/A
-    Value,   // #VALUE!
-    Ref,     // #REF!
-    Name,    // #NAME?
-    Num,     // #NUM!
-    Null,    // #NULL!
-}
-
-impl ExcelError {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ExcelError::DivZero => "#DIV/0!",
-            ExcelError::NA      => "#N/A",
-            ExcelError::Value   => "#VALUE!",
-            ExcelError::Ref     => "#REF!",
-            ExcelError::Name    => "#NAME?",
-            ExcelError::Num     => "#NUM!",
-            ExcelError::Null    => "#NULL!",
-        }
-    }
-}
-
-impl std::fmt::Display for ExcelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
+/// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
+/// address helpers below are physically defined in `elixcee-types` (Phase
+/// 2A) — re-exported here so every existing `vm::X` / `crate::vm::X`
+/// reference across the codebase keeps resolving unchanged.
+pub use crate::types::{CellContent, ExcelError, Variant, parse_cell_addr, parse_range_addr, serial_to_display};
 
 /// Evidence for a resolution failure (Milestone B6a's `diagnose`
 /// subcommand) — the requested key, what was actually available, and (for
@@ -196,51 +170,6 @@ struct ClipboardState {
     /// `do_paste`) and never reads per-area cell values, so none are
     /// snapshotted for `areas.len() > 1`.
     areas: Vec<Rect>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Variant {
-    Integer(i64),
-    Float(f64),
-    Str(String),
-    Boolean(bool),
-    Date(i64),           // Excel serial date — displays as "YYYY-MM-DD"
-    Error(ExcelError),   // Excel error value (#DIV/0!, #N/A, …)
-    Empty,
-    Array(Vec<Variant>),                  // 0-indexed 1D array
-    Record(std::collections::HashMap<String, Variant>), // UDT instance (p.x, p.y, …)
-}
-
-pub fn serial_to_display(s: i64) -> String {
-    // Reuse formula engine's serial_to_ymd
-    let (y, m, d) = crate::formula::eval::serial_to_ymd_pub(s);
-    format!("{:04}-{:02}-{:02}", y, m, d)
-}
-
-impl std::fmt::Display for Variant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Variant::Integer(n) => write!(f, "{}", n),
-            Variant::Float(v)   => write!(f, "{}", v),
-            Variant::Str(s)     => write!(f, "{}", s),
-            Variant::Boolean(b) => write!(f, "{}", if *b { "True" } else { "False" }),
-            Variant::Date(s)    => write!(f, "{}", serial_to_display(*s)),
-            Variant::Error(e)   => write!(f, "{}", e),
-            Variant::Empty      => write!(f, ""),
-            Variant::Array(a)   => write!(f, "[{}]", a.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")),
-            Variant::Record(m)  => {
-                let mut pairs: Vec<String> = m.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
-                pairs.sort();
-                write!(f, "{{{}}}", pairs.join(", "))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CellContent {
-    pub formula: Option<String>,
-    pub value: Variant,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2409,29 +2338,8 @@ impl Default for Vm {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // ── Range address helpers ─────────────────────────────────────────────────────
-
-fn col_letters_to_num_vm(s: &str) -> u32 {
-    s.chars().fold(0u32, |acc, c| acc * 26 + (c.to_ascii_uppercase() as u32 - b'A' as u32 + 1))
-}
-
-pub fn parse_cell_addr(addr: &str) -> Option<(u32, u32)> {
-    let addr = addr.trim().to_uppercase();
-    let alpha_end = addr.find(|c: char| c.is_ascii_digit())?;
-    if alpha_end == 0 { return None; }
-    let col = col_letters_to_num_vm(&addr[..alpha_end]);
-    let row: u32 = addr[alpha_end..].parse().ok()?;
-    Some((row, col))
-}
-
-pub fn parse_range_addr(addr: &str) -> Option<((u32, u32), (u32, u32))> {
-    let addr = addr.trim();
-    if let Some(i) = addr.find(':') {
-        Some((parse_cell_addr(&addr[..i])?, parse_cell_addr(&addr[i+1..])?))
-    } else {
-        let c = parse_cell_addr(addr)?;
-        Some((c, c))
-    }
-}
+// col_letters_to_num_vm/parse_cell_addr/parse_range_addr moved to
+// elixcee-types (Phase 2A); re-exported near the top of this file.
 
 /// Splits `addr` on top-level commas and parses each piece with
 /// `parse_range_addr` (Milestone B7a) — `"A1:A3,C1:C3"` becomes 2 `Rect`s;
