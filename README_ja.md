@@ -360,9 +360,9 @@ Function DoubleIt(x As Integer) As Integer
 End Function
 ```
 
-`Set`で代入された`Range`/`Worksheet`/`Workbook`オブジェクト変数（実際の参照セマンティクス）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（上記の非表示行・列情報を利用）、領域数・形状が一致する複数領域Copy/Paste、`Mod`/`\`/`^`、式中の`And`/`Or`/`Xor`/`Not`、`With Range(...)`、型付き`Function`の引数・戻り値——すべて対応済みです。
+`Set`で代入された`Range`/`Worksheet`/`Workbook`オブジェクト変数（実際の参照セマンティクス）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（上記の非表示行・列情報を利用）、領域数・形状が一致する複数領域Copy/Paste、`Mod`/`\`/`^`、式中の`And`/`Or`/`Xor`/`Not`（非Boolean値に対する実際のビット演算）、`With Range(...)`、型付き`Function`の引数・戻り値、1つの`Dim`文で複数の変数を宣言する構文（`Dim a As Integer, b As Range`）、単一行`If cond Then stmt [Else stmt]`——すべて対応済みです。
 
-**既知の制限**: `Not`は依然として真偽値への変換で評価される一方、`And`/`Or`/`Xor`は実際のビット演算で処理されるため、`Not 5 And 3`は実際のVBAのビット演算結果とは一致しません。1つの`Dim`文で複数の変数を宣言する構文（`Dim a As Integer, b As Range`）はまだパースできません。複数領域の貼り付けは、両側が複数領域で`Areas.Count`と各領域の形状が一致する場合のみ実行され、それ以外の組み合わせは引き続き診断のみです（上記参照）。
+**既知の制限**: 複数領域の貼り付けは、両側が複数領域で`Areas.Count`と各領域の形状が一致する場合のみ実行され、それ以外の組み合わせは引き続き診断のみです（上記参照）。
 
 ### XLSX.read() — `@elixcee/xlsx`（npm、開発中）
 

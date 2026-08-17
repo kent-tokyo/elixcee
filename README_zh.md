@@ -359,9 +359,9 @@ Function DoubleIt(x As Integer) As Integer
 End Function
 ```
 
-通过 `Set` 赋值的 `Range`/`Worksheet`/`Workbook` 对象变量（真正的引用语义）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（基于上方的隐藏行/列信息）、区域数量与形状匹配的多区域 Copy/Paste、`Mod`/`\`/`^`、表达式中的 `And`/`Or`/`Xor`/`Not`、`With Range(...)`，以及带类型的 `Function` 参数/返回值——均已支持。
+通过 `Set` 赋值的 `Range`/`Worksheet`/`Workbook` 对象变量（真正的引用语义）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（基于上方的隐藏行/列信息）、区域数量与形状匹配的多区域 Copy/Paste、`Mod`/`\`/`^`、表达式中的 `And`/`Or`/`Xor`/`Not`（对非 Boolean 操作数执行真正的按位运算）、`With Range(...)`、带类型的 `Function` 参数/返回值、单条 `Dim` 语句声明多个变量（`Dim a As Integer, b As Range`），以及单行 `If cond Then stmt [Else stmt]`——均已支持。
 
-**已知局限**：`Not` 仍通过布尔真值判断求值，而 `And`/`Or`/`Xor` 执行的是真正的按位运算，因此 `Not 5 And 3` 的结果与真实 VBA 的按位运算结果不一致；单条 `Dim` 语句声明多个变量（`Dim a As Integer, b As Range`）尚不支持解析；多区域粘贴仅在两侧都是多区域且 `Areas.Count` 与各区域形状均匹配时才会执行，其余组合仍仅诊断（见上文）。
+**已知局限**：多区域粘贴仅在两侧都是多区域且 `Areas.Count` 与各区域形状均匹配时才会执行，其余组合仍仅诊断（见上文）。
 
 ### XLSX.read() — `@elixcee/xlsx`（npm，开发中）
 

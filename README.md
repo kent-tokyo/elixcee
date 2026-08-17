@@ -404,15 +404,14 @@ End Function
 `Set`-assigned `Range`/`Worksheet`/`Workbook` object variables (real reference
 semantics), `Union`/`Areas`, `SpecialCells(xlCellTypeVisible)` (built on the hidden
 row/column evidence above), matching-shape multi-area Copy/Paste, `Mod`/`\`/`^`, infix
-`And`/`Or`/`Xor`/`Not`, `With Range(...)`, and typed `Function` parameters/return types
-are all supported.
+`And`/`Or`/`Xor`/`Not` (real bitwise semantics on non-Boolean operands), `With Range(...)`,
+typed `Function` parameters/return types, comma-separated multi-declarator `Dim`
+(`Dim a As Integer, b As Range`), and single-line `If cond Then stmt [Else stmt]` are all
+supported.
 
-**Known gaps**: `Not` still evaluates via boolean-truthy coercion while `And`/`Or`/`Xor`
-do real bitwise math, so `Not 5 And 3` doesn't match real VBA's bitwise result; a single
-`Dim` statement declaring more than one variable (`Dim a As Integer, b As Range`) isn't
-parsed yet; multi-area Paste only executes when both sides are multi-area with matching
-`Areas.Count` and per-area shapes — every other combination stays diagnose-only (see
-above).
+**Known gaps**: multi-area Paste only executes when both sides are multi-area with
+matching `Areas.Count` and per-area shapes — every other combination stays diagnose-only
+(see above).
 
 ### XLSX.read() — `@elixcee/xlsx` (npm, in development)
 

@@ -33,6 +33,7 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | For loop | `For i = 1 To N ... Next i` | Done |
 | For loop (step) | `For i = 10 To 1 Step -2` | Done |
 | If / Else | `If x > 0 Then ... Else ... End If` | Done |
+| Single-line If | `If x > 0 Then y = 1 Else y = 2` | Done |
 | Do While loop | `Do While x > 0 ... Loop` | Done |
 | Select Case | `Select Case x ... End Select` | Done |
 | While / Wend | `While x > 0 ... Wend` | Done |
@@ -44,6 +45,7 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | Function / Call | `Function Foo() ... End Function` | Done |
 | Exit For / Exit Sub | `Exit For`, `Exit Sub` | Done |
 | Array / ReDim | `Dim arr(10)`, `ReDim arr(n)` | Done |
+| Multi-declarator Dim | `Dim a As Integer, b As Range` | Done |
 | Const | `Const PI = 3.14` | Done |
 | Type ... End Type | User-defined types (UDT) | Done |
 | Nested UDT | Field of type UDT (`p.Addr.Street`) | Done |
