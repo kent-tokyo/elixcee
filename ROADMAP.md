@@ -31,8 +31,14 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
    are `ORACLE_UNAVAILABLE` — headless UNO hangs on any `Range`/`Cells` access. Root-caused,
    not fixed (explicitly out of scope for 2B/2C: fixing it doesn't raise elixcee's own
    product value, only this one oracle's usability).
-3. **Comma-separated multi-declarator `Dim`** (`Dim a As Integer, b As Range`) doesn't
-   parse. Now the entire remaining parse-error surface on the 581-scenario corpus (8/581).
+3. ~~Comma-separated multi-declarator `Dim`~~ — **fixed** (Unreleased): `parse_dim` now loops
+   over every comma-separated declarator instead of returning after the first non-built-in
+   one. Corpus's own parse-error count: 8 → 4 (see item 3b, a bug this fix unmasked).
+3b. **Single-line `If cond Then stmt` (no `End If`) doesn't parse at all** — discovered while
+   verifying item 3's fix: the 4 corpus parse errors left after fixing comma-`Dim` are all
+   this, not further `Dim` cases (the old `Dim` bug happened to fail first on the same 4
+   scenarios, masking it). `parse_if` unconditionally requires a newline right after `Then`.
+   Reproduced standalone (`If x > 0 Then y = 5`, no `Dim` involved) — not yet fixed.
 4. **`Not` is boolean-truthy, not bitwise**, while `And`/`Or`/`Xor` do real bitwise math —
    `Not 5 And 3` diverges from real VBA's `2`.
 5. **Multi-area Paste** only executes for the matching-shape case; every other combination
@@ -46,8 +52,11 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 Not committed to a specific order — pick based on what the next release is trying to prove.
 
-- **Comma-separated `Dim`** — small, closes the corpus's entire remaining parse-error gap
-  (item 3). Cheapest item on this list.
+- **Single-line `If cond Then stmt`** (item 3b) — small-to-medium: `parse_if` needs a branch
+  for "no newline after `Then`" that parses one statement inline instead of a block, plus an
+  `ElseIf`/`Else` continuation on the same line is real VBA too (`If x Then a Else b`) and
+  worth scoping in the same pass rather than half-fixing. Newly discovered, real, and now the
+  entire remaining corpus parse-error surface (4/581) — likely the next highest-leverage item.
 - **`Not` bitwise semantics** — small, fixes a real correctness bug now that `And`/`Or`/`Xor`
   expose it (item 4).
 - **Microsoft Excel validation** (item 1) — blocked on getting a Windows+Excel environment,

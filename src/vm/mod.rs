@@ -2093,6 +2093,9 @@ impl Vm {
                 }
             }
             Stmt::Dim => {}
+            Stmt::DimMulti(decls) => {
+                for s in decls { self.exec_stmt_inner(s)?; }
+            }
             Stmt::Unsupported { .. } => {}
             Stmt::DimArray { name, sizes } => {
                 let upper = to_f64(&self.eval_expr(&sizes[0])?)? as usize;
@@ -4615,6 +4618,31 @@ mod tests {
         assert_eq!(vm.variables["x"], Variant::Str("Alice".into()));
         assert_eq!(vm.variables["y"], Variant::Integer(30));
         assert_eq!(vm.variables["z"], Variant::Float(9.5));
+    }
+
+    #[test]
+    fn test_dim_multi_declarator_end_to_end() {
+        // `Dim a As Integer, b As Person` — a comma-separated multi-declarator
+        // Dim mixing a built-in type with a user-defined type. Previously
+        // unparseable (see CHANGELOG.md's Known limitations / ROADMAP.md):
+        // `b As Person` returned early from `parse_dim` without consuming
+        // the rest of the line, so `eat_eol()` hit the trailing comma and
+        // failed the whole macro at parse time.
+        let vm = run(concat!(
+            "Type Person\n",
+            "    Name As String\n",
+            "End Type\n",
+            "\n",
+            "Sub MySub()\n",
+            "    Dim a As Integer, b As Person\n",
+            "    a = 7\n",
+            "    b.Name = \"Alice\"\n",
+            "    x = a\n",
+            "    y = b.Name\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["x"], Variant::Integer(7));
+        assert_eq!(vm.variables["y"], Variant::Str("Alice".into()));
     }
 
     #[test]

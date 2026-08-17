@@ -985,8 +985,29 @@ impl Parser {
             | "boolean" | "string" | "date" | "object" | "variant" | "byte" | "decimal")
     }
 
+    /// `Dim <decl> [, <decl> ...]` — each declarator is parsed by
+    /// `parse_dim_declarator`; a single declarator returns exactly what it
+    /// used to (no `DimMulti` wrapper, so existing single-declarator tests
+    /// stay byte-for-byte unchanged), two or more wrap into `DimMulti`.
     fn parse_dim(&mut self) -> Result<Stmt, String> {
         self.expect_ident("dim")?;
+        let mut decls = vec![self.parse_dim_declarator()?];
+        while *self.peek() == Tok::Comma {
+            self.advance();
+            decls.push(self.parse_dim_declarator()?);
+        }
+        if decls.len() == 1 {
+            Ok(decls.pop().unwrap())
+        } else {
+            Ok(Stmt::DimMulti(decls))
+        }
+    }
+
+    /// One `Dim`/`Public`/`Private`/`Static` declarator: `name [(sizes)] [As
+    /// TypeName]`. Consumes exactly the declarator's own tokens — trailing
+    /// `, nextDecl` is left for the caller's comma loop, and the terminating
+    /// newline is left for the statement dispatcher's `eat_eol()`.
+    fn parse_dim_declarator(&mut self) -> Result<Stmt, String> {
         // dim_array_decl: ident (
         if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::LParen {
             let name = self.consume_ident()?;
@@ -1017,12 +1038,9 @@ impl Parser {
                 }
             }
             // Built-in type or bare Dim → no-op
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
             Ok(Stmt::Dim)
         } else {
-            // dim_rest: skip to EOL
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
-            Ok(Stmt::Dim)
+            Err(format!("expected a variable name in Dim declarator, found {:?}", self.peek()))
         }
     }
 
@@ -2509,6 +2527,34 @@ mod tests {
     #[test] fn test_dim_is_noop() {
         let body = parse_body("Sub MySub()\n    Dim x As Integer\n    x = 42\nEnd Sub\n");
         assert_eq!(body[0], Stmt::Dim);
+    }
+    #[test] fn test_dim_multi_declarator_all_builtin() {
+        let body = parse_body("Sub MySub()\n    Dim a As Integer, b As String\n    a = 1\nEnd Sub\n");
+        assert_eq!(body[0], Stmt::DimMulti(vec![Stmt::Dim, Stmt::Dim]));
+    }
+    #[test] fn test_dim_multi_declarator_mixed_record_type() {
+        // The exact shape called out in CHANGELOG.md's Known limitations as
+        // unparseable before this fix: a built-in-typed declarator followed
+        // by a user-defined-typed one on the same `Dim`.
+        let body = parse_body("Sub MySub()\n    Dim a As Integer, b As MyType\n    a = 1\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::DimMulti(vec![
+                Stmt::Dim,
+                Stmt::DimRecord { var: "b".to_string(), type_name: "mytype".to_string() },
+            ])
+        );
+    }
+    #[test] fn test_dim_multi_declarator_three_way_with_array() {
+        let body = parse_body("Sub MySub()\n    Dim a As Integer, b(3) As Integer, c As MyType\n    a = 1\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::DimMulti(vec![
+                Stmt::Dim,
+                Stmt::DimArray { name: "b".to_string(), sizes: vec![Expr::Integer(3)] },
+                Stmt::DimRecord { var: "c".to_string(), type_name: "mytype".to_string() },
+            ])
+        );
     }
     #[test] fn test_with_block() {
         let body = parse_body("Sub MySub()\n    With Sheet1\n        .Cells(1, 1).Value = 99\n    End With\nEnd Sub\n");

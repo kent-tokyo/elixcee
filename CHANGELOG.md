@@ -8,7 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [0.2.0]
+### Fixed
+
+- Comma-separated multi-declarator `Dim` (`Dim a As Integer, b As Range`) — 0.2.0's last
+  documented gap on the 581-scenario VBA corpus's own parse-error surface. Previously, a
+  declarator with a non-built-in type (e.g. `b As Range`) returned from `parse_dim` as soon
+  as it finished, leaving `, nextDecl` unconsumed; the statement dispatcher's `eat_eol()`
+  then hit the stray comma and hard-failed the whole macro. `parse_dim` now loops over every
+  comma-separated declarator (`parse_dim_declarator`), wrapping 2+ into a new `Stmt::DimMulti`
+  that the VM/`check`/name-resolution passes execute or inspect by replaying each inner
+  declarator through the exact same code path a single-declarator `Dim` already used — no
+  new semantics, just no longer losing the rest of the line. Verified against the real
+  corpus, not just new unit tests: elixcee's own parse-error count on the 581 scenarios goes
+  from 8 to 4.
+- **Discovered while verifying the above, not fixed here**: the 4 remaining corpus parse
+  errors turned out not to be further comma-`Dim` cases — they're a single-line
+  `If cond Then stmt` (no `End If`) that this parser has never supported at all
+  (`parse_if` unconditionally requires a newline right after `Then`). The old comma-`Dim`
+  bug was masking this on the same 4 scenarios (parsing failed at the `Dim` line, before
+  ever reaching the `If` line). Reproduced directly (`If x > 0 Then y = 5` fails standalone,
+  with no `Dim` involved) — tracked in `ROADMAP.md`, not implemented as part of this fix.
 
 Everything below was previously listed under `[Unreleased]`; this release closes that
 section rather than adding new scope. Developed in two internal phases (2B, then 2C after

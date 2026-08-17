@@ -252,6 +252,17 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::DimArrayRecord { name, .. } => {
                 names.insert(name.clone());
             }
+            Stmt::DimMulti(decls) => {
+                for d in decls {
+                    match d {
+                        Stmt::DimRecord { var, .. } => { names.insert(var.clone()); }
+                        Stmt::DimArray { name, .. } | Stmt::DimArrayRecord { name, .. } => {
+                            names.insert(name.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Stmt::RecordSetNested { var, .. } => {
                 names.insert(var.clone());
             }
@@ -540,6 +551,11 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         Stmt::DimArrayRecord { sizes, .. } => {
             for s in sizes {
                 out.push(s);
+            }
+        }
+        Stmt::DimMulti(decls) => {
+            for d in decls {
+                collect_stmt_exprs(d, out);
             }
         }
         Stmt::RecordSetNested { value, .. } => out.push(value),

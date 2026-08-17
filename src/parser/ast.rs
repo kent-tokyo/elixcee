@@ -242,6 +242,11 @@ pub enum Stmt {
     RecordSet { var: String, field: String, value: Expr }, // p.x = val
     DimRecord      { var: String, type_name: String },      // Dim p As PersonType
     DimArrayRecord { name: String, sizes: Vec<Expr>, type_name: String }, // Dim arr(10) As MyType
+    /// `Dim a As Integer, b As Range, c(3) As MyType` — a comma-separated
+    /// multi-declarator `Dim`. Each element is exactly what a single-
+    /// declarator `Dim` would have produced on its own (`Dim`/`DimRecord`/
+    /// `DimArray`/`DimArrayRecord`); the VM just runs them in order.
+    DimMulti(Vec<Stmt>),
     RecordSetNested { var: String, fields: Vec<String>, value: Expr },    // p.a.b = val
     ArrayRecordSet  { name: String, indices: Vec<Expr>, field: String, value: Expr }, // arr(i).f=v
     WithRecord      { var: String, body: Vec<SpannedStmt> },      // With p ... End With
