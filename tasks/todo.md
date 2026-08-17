@@ -86,7 +86,15 @@
 ### 品質・テスト
 - [x] プロパティベーステスト（`proptest` クレート）
 - [x] VBA パーサーのファジングテスト（`cargo-fuzz`）
-- [ ] 実 .xlsx / .ods ファイルを使った E2E 統合テスト
+- [x] 実 .xlsx / .ods ファイルを使った E2E 統合テスト — LibreOffice で実際に生成した
+      `tests/fixtures/e2e/source.{xlsx,ods}` を `calamine`（独立オラクル）と自前
+      reader で読み比べる差分テストを追加（`src/lib.rs::diff_reader_tests::
+      diff_real_producer_{xlsx,ods}`）。この過程で reader.rs の実バグ2件を発見・修正
+      （numeric XML entity 未対応、ODS `number-columns/rows-repeated` 未対応 —
+      いずれも実ファイルで再現確認済み、fix適用前は新テストが実際に fail することも
+      確認済み）。範囲は今回投入した1シナリオ（複数セル型・エンティティ・ODS repeat・
+      非連続行番号・マルチラン共有文字列）のみ — VBA マクロ入り .xlsm や数式セル、
+      巨大ファイル等のE2Eはまだ未着手。
 - [x] ベンチマーク（`cargo bench`）— 大量ループ・大規模セル書き込みの計測
 
 ### VBA 構文（高度）

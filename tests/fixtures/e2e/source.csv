@@ -1,0 +1,9 @@
+Name,Amount,Active,Note
+Alice,42,TRUE,"quote "" amp & lt < gt >"
+Bob,3.5,FALSE,unicode: café ★ 日本語
+,,,
+,,,after-column-gap
+,,,
+,,,
+,,,
+Carol,-7,TRUE,plain
