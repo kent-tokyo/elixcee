@@ -18,25 +18,25 @@
 // CellXf), Themes, SSF — none of which `read_workbook_from_bytes` (src/reader.rs) parses
 // or could parse without a much larger scope than this package's read() (see
 // crates/elixcee-wasm/src/lib.rs's `read_workbook` doc comment for the current exact
-// list — as of this file's own read-item 1-4 work: no formatted `.w`/`.h` text, no
-// date-typed cells (`t:'d'`) — both still need `styles.xml` number-format parsing, see
-// this file's read-item-6 section). Confirmed empirically (not assumed) by writing a
-// plain 3x3 aoa_to_sheet workbook through the oracle and reading it back — every cell
-// came back with `.w` (and strings also got `.h`) even with no formatting ever applied,
-// and the WorkBook itself carried Styles/SSF/Themes objects derived purely from the
-// oracle's own default styles.xml.
+// list). As of read-item 6, `.w` (always) and `.z`/date-typed cells (opts-gated) ARE
+// parsed via styles.xml (numFmts/cellXfs) + date1904 — see this file's read-item-6
+// section for the exact contract. Confirmed empirically (not assumed) by writing a plain
+// 3x3 aoa_to_sheet workbook through the oracle and reading it back — every cell came back
+// with `.w` (and strings also got `.h`, which this package still does not produce) even
+// with no formatting ever applied, and the WorkBook itself carried Styles/SSF/Themes
+// objects derived purely from the oracle's own default styles.xml.
 //
 // classify.mjs's own doc comment says callers must normalize before calling classify() —
 // normalize.mjs does that for type-tagging (NaN/undefined/-0/Date/...). This file adds one
 // more normalization step specific to `read()`: projectWorkBook() strips both sides down
 // to exactly the fields @elixcee/xlsx's read() advertises support for (SheetNames, and per
-// sheet: !ref, !merges, !rows, !cols, and each cell's {t, v, f}). This is a single,
+// sheet: !ref, !merges, !rows, !cols, and each cell's {t, v, f, w, z}). This is a single,
 // up-front, documented scope boundary — not a per-case escape hatch like
 // UNSUPPORTED_ALLOWLIST — so if a genuinely supported field ever diverges, it still
 // surfaces as UNCLASSIFIED/BUG exactly as classify() intends; only fields this package
-// never claimed to produce (.w, .h, t:'d', ...) are excluded, and excluded identically
-// from both sides so the comparison stays apples-to-apples rather than favoring elixcee's
-// narrower shape.
+// never claimed to produce (.h, ...) are excluded, and excluded identically from both
+// sides so the comparison stays apples-to-apples rather than favoring elixcee's narrower
+// shape.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -593,8 +593,8 @@ for (const r of results) {
 
 const byApiVerdict = summarizeByApiAndVerdict(results);
 console.log('\n=== read() differential summary (compat/differential/xlsx-read.test.mjs) ===');
-console.log('Comparison scope: SheetNames, per-sheet !ref/!merges/!rows/!cols, per-cell {t,v,f} — see');
-console.log('this file\'s header comment for why the oracle\'s much richer WorkBook shape is');
+console.log('Comparison scope: SheetNames, per-sheet !ref/!merges/!rows/!cols, per-cell {t,v,f,w,z} —');
+console.log('see this file\'s header comment for why the oracle\'s much richer WorkBook shape is');
 console.log('projected down before comparing.');
 let anyFailure = false;
 for (const [api, bucket] of byApi) {
