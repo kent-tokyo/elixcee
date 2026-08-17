@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Tag or ref to publish from (e.g. v0.2.0)"
+        description: "Tag or ref to publish from (e.g. v0.3.0)"
         required: true
-        default: "v0.2.0"
+        default: "v0.3.0"
 
 permissions:
   contents: read
@@ -28,8 +28,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # elixcee-types has no dependency on elixcee, so it can publish standalone.
-      - name: cargo publish -p elixcee-types
-        run: cargo publish -p elixcee-types
+      # Idempotent across releases: elixcee-types changes far less often than
+      # elixcee itself (this run is the first time it doesn't — still 0.1.0),
+      # so most runs of this workflow should skip this step rather than fail
+      # on crates.io's "already uploaded" error for a version already live.
+      - name: cargo publish -p elixcee-types (skips if this version is already live)
+        id: types
+        run: |
+          VERSION=$(grep -m1 '^version' crates/elixcee-types/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if curl -sf -H "User-Agent: elixcee-ci (https://github.com/kent-tokyo/elixcee)" \
+               "https://crates.io/api/v1/crates/elixcee-types/$VERSION" -o /dev/null; then
+            echo "elixcee-types $VERSION is already published, skipping"
+          else
+            cargo publish -p elixcee-types
+          fi
 
       # elixcee's own dependency on elixcee-types is version-pinned (not
       # path-only) for publishing, so it needs the crates.io index to have
@@ -38,16 +51,17 @@ jobs:
       # policy), so this sends one rather than getting a spurious 403.
       - name: wait for elixcee-types to appear in the crates.io index
         run: |
+          VERSION="${{ steps.types.outputs.version }}"
           for i in $(seq 1 30); do
             if curl -sf -H "User-Agent: elixcee-ci (https://github.com/kent-tokyo/elixcee)" \
-                 "https://crates.io/api/v1/crates/elixcee-types/0.1.0" -o /dev/null; then
-              echo "elixcee-types 0.1.0 is live on crates.io"
+                 "https://crates.io/api/v1/crates/elixcee-types/$VERSION" -o /dev/null; then
+              echo "elixcee-types $VERSION is live on crates.io"
               exit 0
             fi
             echo "not yet indexed, waiting (attempt $i/30)..."
             sleep 10
           done
-          echo "::error::elixcee-types 0.1.0 never appeared in the crates.io index after 5 minutes"
+          echo "::error::elixcee-types $VERSION never appeared in the crates.io index after 5 minutes"
           exit 1
 
       - name: cargo publish -p elixcee
