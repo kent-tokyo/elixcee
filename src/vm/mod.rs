@@ -2274,7 +2274,16 @@ impl Vm {
                 other => Err(format!("Unary minus on non-numeric: {}", other)),
             },
             Expr::UnaryNot(inner) => {
-                Ok(Variant::Boolean(!is_truthy(&self.eval_expr(inner)?)))
+                // Mirrors And/Or/Xor's own logical-vs-bitwise split (see
+                // `eval_binop`): a genuine Boolean gets logical negation: a
+                // numeric operand gets a real bitwise complement (`Not 5` is
+                // `-6`, not `False`) — VBA's own distinction, not a
+                // truthy/falsy coercion.
+                let v = self.eval_expr(inner)?;
+                match v {
+                    Variant::Boolean(b) => Ok(Variant::Boolean(!b)),
+                    other => Ok(Variant::Integer(!to_i64_bitwise(&other)?)),
+                }
             }
             Expr::BinOp { op, lhs, rhs } => {
                 let l = self.eval_expr(lhs)?;
@@ -3659,6 +3668,16 @@ mod tests {
         let vm = run("Sub MySub()\n    a = Not True\n    b = Not False\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Boolean(false));
         assert_eq!(vm.variables["b"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn test_vba_not_is_bitwise_on_numbers() {
+        // Real VBA: `Not 5` is `-6` (bitwise complement), not `False` from a
+        // truthy coercion — and combining it with the already-bitwise `And`
+        // must round-trip to a consistent result: `Not 5 And 3` == 2.
+        let vm = run("Sub MySub()\n    a = Not 5\n    b = Not 5 And 3\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(-6));
+        assert_eq!(vm.variables["b"], Variant::Integer(2));
     }
 
     // ── ElseIf ───────────────────────────────────────────────────────────────

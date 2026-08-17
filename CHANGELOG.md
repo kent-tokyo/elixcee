@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `Not` now does a real bitwise complement on numeric operands (`Not 5` is `-6`, matching real
+  VBA), instead of coercing the operand to truthy/falsy first. Only a genuine `Boolean`
+  operand still gets logical negation — the same logical-vs-bitwise split `And`/`Or`/`Xor`
+  (Phase 2C) already used, `Not` just hadn't been reconciled with it yet (see CHANGELOG's own
+  0.2.0 Known limitations: `Not 5 And 3` used to diverge from real VBA's `2`; it now matches).
 - Comma-separated multi-declarator `Dim` (`Dim a As Integer, b As Range`) — 0.2.0's last
   documented gap on the 581-scenario VBA corpus's own parse-error surface. Previously, a
   declarator with a non-built-in type (e.g. `b As Range`) returned from `parse_dim` as soon

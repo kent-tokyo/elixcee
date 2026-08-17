@@ -39,8 +39,10 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
    this, not further `Dim` cases (the old `Dim` bug happened to fail first on the same 4
    scenarios, masking it). `parse_if` unconditionally requires a newline right after `Then`.
    Reproduced standalone (`If x > 0 Then y = 5`, no `Dim` involved) — not yet fixed.
-4. **`Not` is boolean-truthy, not bitwise**, while `And`/`Or`/`Xor` do real bitwise math —
-   `Not 5 And 3` diverges from real VBA's `2`.
+4. ~~`Not` is boolean-truthy, not bitwise~~ — **fixed** (Unreleased): `Not` now splits
+   logical-vs-bitwise the same way `And`/`Or`/`Xor` already did — a genuine `Boolean` gets
+   logical negation, anything else gets a real bitwise complement. `Not 5 And 3` now matches
+   real VBA's `2`.
 5. **Multi-area Paste** only executes for the matching-shape case; every other combination
    (count/shape mismatch, single↔multi either direction) stays diagnose-only.
 6. **`XLSX.read()`** covers cell values/formulas/dates/dimension/hidden rows-cols/formatting
@@ -57,8 +59,6 @@ Not committed to a specific order — pick based on what the next release is try
   `ElseIf`/`Else` continuation on the same line is real VBA too (`If x Then a Else b`) and
   worth scoping in the same pass rather than half-fixing. Newly discovered, real, and now the
   entire remaining corpus parse-error surface (4/581) — likely the next highest-leverage item.
-- **`Not` bitwise semantics** — small, fixes a real correctness bug now that `And`/`Or`/`Xor`
-  expose it (item 4).
 - **Microsoft Excel validation** (item 1) — blocked on getting a Windows+Excel environment,
   not on engineering effort; the `compat/oracle-excel-com/CONTRACT.md` adapter is already
   written and waiting. Highest-value item on this list once an environment exists.
