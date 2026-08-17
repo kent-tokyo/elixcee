@@ -72,6 +72,41 @@ pub enum VbaBinOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CalcModeValue { Automatic, Manual }
 
+/// A reference-typed expression (Milestone B7c) — evaluates to an object
+/// reference (currently only `Range`, possibly multi-area), never a plain
+/// `Variant`. Kept as its own small AST, separate from `Expr`, matching
+/// VBA's own value-vs-object distinction (`Set` vs plain `=`): `Expr`
+/// always evaluates to a `Variant` in `Vm::eval_expr`, `ObjectExpr` always
+/// evaluates to an `ObjectRef` in `Vm::eval_object_expr`. Only ever appears
+/// as `Stmt::Set`'s RHS, or nested inside another `ObjectExpr` (`Union`'s
+/// args, `Area`'s target, `SpecialCellsVisible`'s target) — the parser only
+/// ever constructs one when it can fully recognize the shape; an
+/// unrecognized `Set <var> = <rhs>` becomes `Stmt::Unsupported` instead of
+/// a hard parse error (see `parse_set`), same no-op-on-unknown-construct
+/// precedent as `Stmt::Dim`/`Stmt::Unsupported` elsewhere.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObjectExpr {
+    /// `Range("A1:B2")` / `Range("A1:A3,C1:C3")` — a literal address,
+    /// resolved against the active sheet at `Set`-evaluation time (real
+    /// VBA fixes a Range object's parent worksheet at creation, not at
+    /// each later `.Value` access — see `Vm::eval_object_expr`).
+    RangeLit(String),
+    /// An existing object variable, e.g. `Set b = a`. Copying the
+    /// underlying `RangeRef` by value already gives real `Set` reference
+    /// semantics here — see the doc on `Vm::object_variables`.
+    Var(String),
+    /// `Union(range1, range2, ...)` (Milestone B7c item 2).
+    Union(Vec<ObjectExpr>),
+    /// `<range>.Areas(n)` (Milestone B7c item 3) — 1-based, real VBA
+    /// indexing. `n` is a plain VBA expression (evaluated as an Integer).
+    Area(Box<ObjectExpr>, Box<Expr>),
+    /// `<range>.SpecialCells(xlCellTypeVisible)` (Milestone B7c item 4) —
+    /// only the `xlCellTypeVisible` constant (or its literal value, `12`)
+    /// is recognized; every other `SpecialCells` type is unmodeled and
+    /// falls back to `Stmt::Unsupported` at parse time.
+    SpecialCellsVisible(Box<ObjectExpr>),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CaseMatch {
     Value(Expr),
@@ -90,6 +125,19 @@ pub enum Stmt {
     /// clipboard only); `Some(addr)` for `Range(src).Copy
     /// Destination:=Range(addr)` (also writes `addr` immediately).
     RangeCopy  { src: String, dst: Option<String> },
+    /// `<var>.Copy` / `<var>.Copy Destination:=Range(addr)` (Milestone
+    /// B7c) — the object-variable sibling of `RangeCopy`, for a source
+    /// produced by `Set` (a `Range("...")` reference, or a `Union`/
+    /// `.Areas(n)`/`.SpecialCells(...)` result). `dst` stays a literal
+    /// address, same convention as `RangeCopy.dst` — pasting *into* an
+    /// object-variable destination isn't modeled.
+    RangeObjectCopy { var: String, dst: Option<String> },
+    /// `Set <var> = <value>` (Milestone B7c item 1) — VBA's object-
+    /// assignment statement. Distinct from `Assignment` (plain `=`)
+    /// because object variables live in `Vm::object_variables`, a
+    /// namespace separate from `Vm::variables`, matching real VBA's own
+    /// requirement that object references be assigned via `Set`.
+    Set { var: String, value: ObjectExpr },
     /// `Range(dest_addr).Paste` / `Range(dest_addr).PasteSpecial
     /// [Transpose:=<expr>]` (Milestone B6b) — pastes the VM's clipboard
     /// contents into `dest_addr`. Real VBA only exposes `Transpose:=` on

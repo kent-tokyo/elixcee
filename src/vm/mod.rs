@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::formula;
-use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, XlDir, XlEndProp};
+use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, XlDir, XlEndProp};
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{self, SheetCell, WorkbookSheet};
 
@@ -271,6 +271,29 @@ impl Interval {
     }
 }
 
+/// Splits `[lo, hi]` into its maximal visible-only sub-intervals, given a
+/// set of hidden intervals (not necessarily sorted, clipped, or
+/// non-overlapping) on the same axis (Milestone B7c's `SpecialCells
+/// (xlCellTypeVisible)`). Pure interval math shared by both the row and
+/// column axis — see `Vm::visible_areas`.
+fn visible_runs(lo: u32, hi: u32, hidden: &[Interval]) -> Vec<Interval> {
+    let mut clipped: Vec<Interval> = hidden.iter().filter_map(|iv| iv.clip(lo, hi)).collect();
+    clipped.sort_by_key(|iv| iv.start);
+    let mut runs = Vec::new();
+    let mut cursor = lo;
+    for h in &clipped {
+        if h.start > cursor {
+            runs.push(Interval { start: cursor, end: h.start - 1 });
+        }
+        cursor = cursor.max(h.end.saturating_add(1));
+        if cursor > hi { break; }
+    }
+    if cursor <= hi {
+        runs.push(Interval { start: cursor, end: hi });
+    }
+    runs
+}
+
 /// Which rows/columns are hidden on one sheet (Milestone B7b), read from
 /// XLSX's `<row hidden="1">`/`<col min=".." max=".." hidden="1">` (ODS is
 /// deferred — see `docs/agent-contract.md`). Threaded into
@@ -295,6 +318,16 @@ pub struct HiddenCellsObservation {
     pub hidden_columns: Vec<Interval>,
     pub total_cells: u64,
     pub visible_cells: u64,
+}
+
+/// An object reference held by a `Set`-assigned variable (Milestone B7c).
+/// Only `Range` exists today; kept as an enum (not a bare `RangeRef`) so a
+/// later milestone can add `Worksheet`/`Workbook` without another
+/// namespace. Deliberately *not* a variant on the shared `Variant` type
+/// from `elixcee-types` — see `Vm::object_variables`'s doc for why.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObjectRef {
+    Range(RangeRef),
 }
 
 pub struct Vm {
@@ -387,6 +420,16 @@ pub struct Vm {
     /// hidden_rows`/`hidden_columns` (XLSX only — ODS is deferred); empty
     /// for any sheet built purely in-VBA.
     sheet_visibility: HashMap<String, SheetVisibility>,
+    /// `Set`-assigned object variables (Milestone B7c) — lowercase name →
+    /// `ObjectRef`, a namespace deliberately separate from `Vm::variables`
+    /// (`Variant`s), matching VBA's own distinction between plain `=` and
+    /// `Set`. Because the *cells themselves* live in `Vm::sheets` (keyed by
+    /// coordinates, not by variable), storing the same `RangeRef` — sheet +
+    /// area coordinates, nothing else — in two variables already gives
+    /// real `Set` reference semantics for free: a write through one
+    /// variable is a write to the shared cell store, immediately visible
+    /// through the other. No `Rc<RefCell<_>>` indirection needed.
+    object_variables: HashMap<String, ObjectRef>,
 }
 
 impl Vm {
@@ -422,6 +465,7 @@ impl Vm {
             protected_sheets: HashSet::new(),
             merged_ranges: HashMap::new(),
             sheet_visibility: HashMap::new(),
+            object_variables: HashMap::new(),
         }
     }
 
@@ -680,6 +724,190 @@ impl Vm {
             return Err(format!("Cannot edit: sheet '{}' is protected", display));
         }
         Ok(())
+    }
+
+    /// Evaluates an `ObjectExpr` to the `ObjectRef` it names (Milestone
+    /// B7c) — the object-typed sibling of `eval_expr`. `Range("...")`
+    /// resolves against `self.active_sheet` *now* (fixed into the returned
+    /// `RangeRef` from this point on — real VBA captures a Range object's
+    /// parent worksheet at creation, not at each later `.Value` access).
+    fn eval_object_expr(&mut self, expr: &ObjectExpr) -> Result<ObjectRef, String> {
+        match expr {
+            ObjectExpr::RangeLit(addr) => {
+                let areas = self.resolve_multi_area_addr(addr)
+                    .ok_or_else(|| format!("Range: invalid address '{}'", addr))?;
+                Ok(ObjectRef::Range(RangeRef { sheet: self.active_sheet.clone(), areas }))
+            }
+            ObjectExpr::Var(name) => self.object_variables.get(name).cloned().ok_or_else(|| {
+                format!("Object variable '{}' is not set (Set was never called, or it holds Nothing)", name)
+            }),
+            ObjectExpr::Union(parts) => {
+                let mut areas: Vec<Rect> = Vec::new();
+                let mut sheet: Option<String> = None;
+                for p in parts {
+                    let ObjectRef::Range(r) = self.eval_object_expr(p)?;
+                    match &sheet {
+                        None => sheet = Some(r.sheet.clone()),
+                        Some(s) if *s != r.sheet => {
+                            return Err("Union: all ranges must be on the same sheet".to_string());
+                        }
+                        Some(_) => {}
+                    }
+                    areas.extend(r.areas);
+                }
+                Ok(ObjectRef::Range(RangeRef {
+                    sheet: sheet.unwrap_or_else(|| self.active_sheet.clone()),
+                    areas,
+                }))
+            }
+            ObjectExpr::Area(base, index) => {
+                let ObjectRef::Range(r) = self.eval_object_expr(base)?;
+                let i = to_f64(&self.eval_expr(index)?)? as i64;
+                if i < 1 || i as usize > r.areas.len() {
+                    return Err(format!(
+                        "Areas: index {} out of range (range has {} area{})",
+                        i, r.areas.len(), if r.areas.len() == 1 { "" } else { "s" }
+                    ));
+                }
+                Ok(ObjectRef::Range(RangeRef::single(r.sheet.clone(), r.areas[(i - 1) as usize])))
+            }
+            ObjectExpr::SpecialCellsVisible(base) => {
+                let ObjectRef::Range(r) = self.eval_object_expr(base)?;
+                let areas = self.visible_areas(&r.sheet, &r.areas);
+                if areas.is_empty() {
+                    return Err("SpecialCells: no visible cells were found (Error 1004)".to_string());
+                }
+                Ok(ObjectRef::Range(RangeRef { sheet: r.sheet, areas }))
+            }
+        }
+    }
+
+    /// `SpecialCells(xlCellTypeVisible)`'s geometry (Milestone B7c item 4):
+    /// every `area` split along both axes by `sheet`'s hidden row/column
+    /// metadata (Milestone B7b's `sheet_visibility`, consumed here rather
+    /// than re-read). Since only *whole* rows/columns can be hidden (never
+    /// partial cells), each area's visible region decomposes exactly into
+    /// the Cartesian product of its maximal visible row-bands and
+    /// column-bands — every resulting `Rect` is genuinely all-visible, and
+    /// their union is exactly the visible-cell set. This matches real
+    /// Excel's own `Areas` grouping when only one axis has hidden spans;
+    /// when both axes do, real Excel's own area-merging heuristic can
+    /// differ in *how many* Areas it reports for the same visible cells —
+    /// unmodeled, since it doesn't change which cells are visible.
+    fn visible_areas(&self, sheet: &str, areas: &[Rect]) -> Vec<Rect> {
+        let empty = SheetVisibility::default();
+        let vis = self.sheet_visibility.get(sheet).unwrap_or(&empty);
+        let mut out = Vec::new();
+        for r in areas {
+            let row_runs = visible_runs(r.start_row, r.end_row, &vis.hidden_rows);
+            let col_runs = visible_runs(r.start_col, r.end_col, &vis.hidden_columns);
+            for rr in &row_runs {
+                for cc in &col_runs {
+                    out.push(Rect {
+                        start_row: rr.start, start_col: cc.start,
+                        end_row: rr.end, end_col: cc.end,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Reads `.Value` through an object variable's `RangeRef` (Milestone
+    /// B7c) — mirrors `Expr::RangeRead`'s single-cell/array split, but
+    /// resolves against the range's own captured `sheet` (fixed at `Set`
+    /// time — see `eval_object_expr`) rather than `self.active_sheet`,
+    /// which may have changed since. A multi-area range has no single
+    /// `.Value` in real VBA either (`Areas(n)` first).
+    fn read_range_ref_value(&self, r: &RangeRef) -> Result<Variant, String> {
+        let area = *r.single_rect().ok_or_else(|| {
+            "Range.Value: multi-area range has no single .Value — read through .Areas(n) instead".to_string()
+        })?;
+        let sheet_cells = self.sheets.get(&r.sheet);
+        let get = |row: u32, col: u32| {
+            sheet_cells.and_then(|s| s.get(&(row, col))).map(|c| c.value.clone()).unwrap_or(Variant::Empty)
+        };
+        if area.start_row == area.end_row && area.start_col == area.end_col {
+            Ok(get(area.start_row, area.start_col))
+        } else {
+            let arr = (area.start_row..=area.end_row)
+                .flat_map(|row| (area.start_col..=area.end_col).map(move |col| (row, col)))
+                .map(|(row, col)| get(row, col))
+                .collect();
+            Ok(Variant::Array(arr))
+        }
+    }
+
+    /// Writes `.Value`/`.Formula` through an object variable's `RangeRef`
+    /// (Milestone B7c) — the write-side twin of `read_range_ref_value`,
+    /// mirroring `Stmt::RangeWrite`'s fill-the-whole-rect behavior but
+    /// against the range's own captured sheet.
+    fn write_range_ref_value(&mut self, r: &RangeRef, is_formula: bool, v: &Variant) -> Result<(), String> {
+        let area = *r.single_rect().ok_or_else(|| {
+            "Range.Value: multi-area range has no single .Value — write through .Areas(n) instead".to_string()
+        })?;
+        self.check_sheet_not_protected(&r.sheet, &r.sheet)?;
+        if is_formula {
+            let s = vba_to_str(v);
+            let prev = self.active_sheet.clone();
+            self.active_sheet = r.sheet.clone();
+            self.cell_index_dirty = true;
+            let result = (|| -> Result<(), String> {
+                for row in area.start_row..=area.end_row {
+                    for col in area.start_col..=area.end_col {
+                        self.set_cell_formula(row, col, &s)?;
+                    }
+                }
+                Ok(())
+            })();
+            self.active_sheet = prev;
+            self.cell_index_dirty = true;
+            result
+        } else {
+            if let Some(cells) = self.sheets.get_mut(&r.sheet) {
+                for row in area.start_row..=area.end_row {
+                    for col in area.start_col..=area.end_col {
+                        cells.insert((row, col), CellContent { formula: None, value: v.clone() });
+                    }
+                }
+            }
+            self.cell_index_dirty = true;
+            Ok(())
+        }
+    }
+
+    /// Populates the clipboard from `areas` on `sheet` (Milestone B7c
+    /// refactor of what was `Stmt::RangeCopy`'s inline body) — shared by
+    /// the literal-address `Stmt::RangeCopy` (`sheet` is always
+    /// `self.active_sheet`) and the new object-variable
+    /// `Stmt::RangeObjectCopy` (`sheet` is the variable's own captured
+    /// sheet, which may differ from the currently active one — see
+    /// `read_range_ref_value`'s doc for why that's correct VBA behavior).
+    /// `cells`'s "first area only, and only when `areas.len() == 1`" shape
+    /// is UNCHANGED from Milestone B7a (an existing test asserts it).
+    fn copy_areas_to_clipboard(&mut self, sheet: String, areas: Vec<Rect>, source_addr: String) {
+        let empty: HashMap<(u32, u32), CellContent> = HashMap::new();
+        let sheet_cells = self.sheets.get(&sheet).unwrap_or(&empty);
+        let get = |row: u32, col: u32| -> Variant {
+            sheet_cells.get(&(row, col)).map(|c| c.value.clone()).unwrap_or(Variant::Empty)
+        };
+        let first = areas[0];
+        let cells: Vec<Vec<Variant>> = if areas.len() == 1 {
+            (first.start_row..=first.end_row)
+                .map(|r| (first.start_col..=first.end_col).map(|c| get(r, c)).collect())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.clipboard = Some(ClipboardState {
+            source_addr,
+            src_sheet: sheet,
+            rows: first.rows(),
+            cols: first.cols(),
+            cells,
+            span: self.current_span.unwrap_or(SourceSpan { start: 0, end: 0 }),
+            areas,
+        });
     }
 
     /// Checks the 3 merged-cell-conflict cases for a Paste (Milestone
@@ -1569,26 +1797,44 @@ impl Vm {
                     .ok_or_else(|| format!("RangeCopy: invalid source range '{}'", src))?;
                 // `resolve_multi_area_addr` never returns `Some(vec![])` — every
                 // comma-separated piece (at least 1) must itself parse.
-                let first = areas[0];
-                let cells: Vec<Vec<Variant>> = if areas.len() == 1 {
-                    (first.start_row..=first.end_row)
-                        .map(|r| (first.start_col..=first.end_col).map(|c| self.get_cell(r, c)).collect())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                self.clipboard = Some(ClipboardState {
-                    source_addr: src.clone(),
-                    src_sheet: self.active_sheet.clone(),
-                    rows: first.rows(),
-                    cols: first.cols(),
-                    cells,
-                    span: self.current_span.unwrap_or(SourceSpan { start: 0, end: 0 }),
-                    areas,
-                });
+                let sheet = self.active_sheet.clone();
+                self.copy_areas_to_clipboard(sheet, areas, src.clone());
                 if let Some(dst_addr) = dst {
                     self.do_paste(dst_addr, false)?;
                 }
+            }
+            Stmt::RangeObjectCopy { var, dst } => {
+                let obj = self.object_variables.get(var).cloned()
+                    .ok_or_else(|| format!("'{}' is Nothing — Set was never called", var))?;
+                let ObjectRef::Range(r) = obj;
+                let display = format!("<{}>", var);
+                self.copy_areas_to_clipboard(r.sheet, r.areas, display);
+                if let Some(dst_addr) = dst {
+                    self.do_paste(dst_addr, false)?;
+                }
+            }
+            Stmt::Set { var, value } => {
+                if let ObjectExpr::Var(name) = value
+                    && !self.object_variables.contains_key(name)
+                {
+                    // A bare identifier in object position that isn't a
+                    // live object variable — either a genuinely unset `Set
+                    // b = a` or, more commonly, an unmodeled VBA object
+                    // keyword the parser can't distinguish from a variable
+                    // reference at parse time (`ActiveSheet`, `Selection`,
+                    // `Nothing`, ... — `Nothing` in particular needs this:
+                    // `Set rng = Nothing` must stay a no-op, never a hard
+                    // error). No-op, same precedent as `Stmt::Dim`/
+                    // `Stmt::Unsupported` for any other unmodeled
+                    // construct — safer than guessing wrong and raising a
+                    // confusing runtime error. Errors from a *resolvable*
+                    // object expression (an out-of-range `Areas(n)`, a
+                    // cross-sheet `Union`, an invalid `Range(...)` address)
+                    // are unaffected and still propagate below.
+                    return Ok(());
+                }
+                let obj = self.eval_object_expr(value)?;
+                self.object_variables.insert(var.clone(), obj);
             }
             Stmt::RangePaste {
                 dest_addr,
@@ -1797,6 +2043,26 @@ impl Vm {
                 for s in body { self.exec_stmt(s)?; if self.exit_flag.is_some() { return Ok(()); } }
             }
             Stmt::RecordSet { var, field, value } => {
+                // `<var>.Value = ...` / `<var>.Formula = ...` where `var`
+                // is a `Set`-assigned object variable (Milestone B7c) —
+                // shares this statement's `<var>.<field> = <value>`
+                // grammar with plain record-field assignment (no separate
+                // AST node needed), disambiguated here at runtime by which
+                // namespace actually holds `var`. `object_variables` is
+                // only ever populated by `Set`, so this can't misfire
+                // against a genuine `Type`-based record that happens to
+                // have a field literally named "value"/"formula".
+                if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
+                    if field == "value" || field == "formula" {
+                        let v = self.eval_expr(value)?;
+                        self.write_range_ref_value(&r, field == "formula", &v)?;
+                    }
+                    // Any other property write on an object variable is a
+                    // harmless no-op, same leniency as the generic
+                    // `.Method`-without-assignment fallback in
+                    // `parse_ident_stmt`.
+                    return Ok(());
+                }
                 let v = self.eval_expr(value)?;
                 let entry = self.variables.entry(var.clone()).or_insert(Variant::Record(std::collections::HashMap::new()));
                 if let Variant::Record(m) = entry {
@@ -1986,12 +2252,32 @@ impl Vm {
                 Ok(Variant::Integer(result as i64))
             }
             Expr::RecordGet { var, field } => {
+                // `x = <var>.Value` where `var` is a `Set`-assigned object
+                // variable (Milestone B7c) — see `Stmt::RecordSet`'s
+                // matching write-side comment for why this is safe to
+                // disambiguate purely by which namespace holds `var`.
+                if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
+                    return if field == "value" {
+                        self.read_range_ref_value(&r)
+                    } else {
+                        Ok(Variant::Empty)
+                    };
+                }
                 match self.variables.get(var) {
                     Some(Variant::Record(m)) => Ok(m.get(field).cloned().unwrap_or(Variant::Empty)),
                     _ => Ok(Variant::Empty),
                 }
             }
             Expr::RecordGetNested { var, fields } => {
+                // `x = <var>.Areas.Count` (Milestone B7c item 3) — same
+                // object-variable disambiguation as above.
+                if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
+                    return if fields.len() == 2 && fields[0] == "areas" && fields[1] == "count" {
+                        Ok(Variant::Integer(r.areas.len() as i64))
+                    } else {
+                        Ok(Variant::Empty)
+                    };
+                }
                 let mut cur = self.variables.get(var).cloned().unwrap_or(Variant::Empty);
                 for f in fields {
                     cur = match cur {
@@ -4764,6 +5050,140 @@ mod tests {
             }
             other => panic!("expected MultiAreaPasteUnsupported, got {:?}", other),
         }
+    }
+
+    // ── Milestone B7c item 1: Range object variables ────────────────────────
+
+    #[test]
+    fn set_and_dot_value_read_write_a_range_object_through_to_the_sheet() {
+        let vm = run(
+            "Sub MySub()\n    Set rng = Range(\"B2\")\n    rng.Value = 42\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(42));
+    }
+
+    #[test]
+    fn set_reference_semantics_a_third_party_write_is_visible_through_every_alias() {
+        // The discriminating case: `Set b = a` must NOT snapshot A1's
+        // value at `Set`-time — it must alias the same coordinates, so a
+        // write through a completely different path (a plain
+        // `Range("A1").Value =`, not through `a` or `b`) is still visible
+        // when reading `b.Value` afterwards. A value-copy implementation
+        // would fail this (it would see whatever A1 held at `Set` time,
+        // i.e. Empty).
+        let vm = run(
+            "Sub MySub()\n    Set a = Range(\"A1\")\n    Set b = a\n    \
+             Range(\"A1\").Value = 9\n    x = b.Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["x"], Variant::Integer(9));
+    }
+
+    #[test]
+    fn range_object_value_read_for_a_multi_cell_area_returns_an_array() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(1,2).Value = 2\n    \
+             Set rng = Range(\"A1:B1\")\n    x = rng.Value\nEnd Sub\n",
+        );
+        assert_eq!(
+            vm.variables["x"],
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(2)])
+        );
+    }
+
+    #[test]
+    fn set_with_an_unresolved_bare_identifier_is_a_no_op_not_a_hard_error() {
+        // `Set rng = Nothing` (and any other unmodeled bare object
+        // keyword, e.g. a future `ActiveSheet` before item 6 lands) must
+        // degrade gracefully — see the doc comment on `Stmt::Set`'s VM
+        // handler.
+        let vm = run("Sub MySub()\n    Set rng = Nothing\n    x = 1\nEnd Sub\n");
+        assert_eq!(vm.variables["x"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn range_object_copy_and_paste_round_trips_through_an_object_variable_source() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 7\n    Set rng = Range(\"A1\")\n    \
+             rng.Copy\n    Range(\"C3\").PasteSpecial\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(7));
+    }
+
+    // ── Milestone B7c item 2: Union ──────────────────────────────────────────
+
+    #[test]
+    fn union_combines_two_ranges_into_one_multi_area_object() {
+        let vm = run(
+            "Sub MySub()\n    Set u = Union(Range(\"A1:A2\"), Range(\"C1:C2\"))\n    \
+             n = u.Areas.Count\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["n"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn union_accepts_object_variables_not_only_range_literals() {
+        let vm = run(
+            "Sub MySub()\n    Set a = Range(\"A1:A2\")\n    Set b = Range(\"C1:C2\")\n    \
+             Set u = Union(a, b)\n    n = u.Areas.Count\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["n"], Variant::Integer(2));
+    }
+
+    // ── Milestone B7c item 3: .Areas ─────────────────────────────────────────
+
+    #[test]
+    fn areas_count_is_1_for_a_single_area_range() {
+        let vm = run("Sub MySub()\n    Set rng = Range(\"A1:B2\")\n    n = rng.Areas.Count\nEnd Sub\n");
+        assert_eq!(vm.variables["n"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn areas_index_returns_the_nth_single_area_range_1_based() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 11\n    Cells(1,3).Value = 33\n    \
+             Set u = Range(\"A1,C1\")\n    Set second = u.Areas(2)\n    x = second.Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["x"], Variant::Integer(33));
+    }
+
+    #[test]
+    fn areas_index_out_of_range_is_a_runtime_error() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Set u = Range(\"A1,C1\")\n    Set bad = u.Areas(3)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("out of range"), "{:?}", err);
+    }
+
+    // ── Milestone B7c item 4: SpecialCells(xlCellTypeVisible) ────────────────
+
+    #[test]
+    fn specialcells_visible_excludes_a_hidden_row() {
+        let mut vm = Vm::new();
+        vm.sheet_visibility.insert(
+            "sheet1".to_string(),
+            SheetVisibility { hidden_rows: vec![Interval { start: 2, end: 2 }], hidden_columns: vec![] },
+        );
+        let prog = parser::parse(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    \
+             Set rng = Range(\"A1:A3\")\n    Set vis = rng.SpecialCells(xlCellTypeVisible)\n    \
+             n = vis.Areas.Count\nEnd Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+        // Row 2 is hidden, splitting A1:A3 into two visible areas: A1 and A3.
+        assert_eq!(vm.variables["n"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn specialcells_visible_is_the_whole_range_when_nothing_is_hidden() {
+        let vm = run(
+            "Sub MySub()\n    Set rng = Range(\"A1:A3\")\n    Set vis = rng.SpecialCells(xlCellTypeVisible)\n    \
+             n = vis.Areas.Count\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["n"], Variant::Integer(1));
     }
 
     #[test]
