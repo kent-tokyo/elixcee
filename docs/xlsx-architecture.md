@@ -300,6 +300,110 @@ systems — this is exactly the kind of fact
 only" rule exists to catch. See `compat/oracle/api-manifest.json`'s `entrypoints.cjs` vs.
 `entrypoints.esm` for the full comparison.
 
+## Phase 2B-0: sync WASM/`read()` bridge feasibility
+
+The fork question, stated exactly as given: can
+`const XLSX = require("@elixcee/xlsx"); const wb = XLSX.read(bytes);` be genuinely
+synchronous — no consumer-facing `await init()` — across CJS, ESM, and browser/bundler
+consumption? If yes, `elixcee-wasm` proceeds on wasm-bindgen. If no, the fallback (already
+pre-authorized) is to split into a Node-native binding, browser-WASM, and JS-fallback
+track instead.
+
+This was investigated with a throwaway spike crate built **outside this repository**
+(scratchpad, own `Cargo.toml`, `wasm-bindgen = "0.2"`, one trivial exported function —
+`probe(bytes: &[u8]) -> usize`). Nothing here was added to the repo: no `wasm-bindgen`
+dependency, no `crates/elixcee-wasm`, no `Cargo.lock` change. Every finding below was
+produced by actually running the built artifact (real `wasm-pack` builds, a real `require`,
+a real Chrome tab), not inferred from documentation, per this project's existing
+確認済み事実-vs-推測 discipline.
+
+**Node — CJS: sync, verified by execution.** `wasm-pack build --target nodejs` emits glue
+that does `require('fs').readFileSync(...)` + `new WebAssembly.Module(bytes)` +
+`new WebAssembly.Instance(module, imports)` at module-load time — synchronous by
+construction, no `init()` export exists at all in this target. Confirmed by running
+`require("./pkg-nodejs/wasm_poc.js")` and calling the exported function on the same line,
+no `await`, no setup call.
+
+**Node — ESM: sync, verified by execution, two independent paths.**
+1. `import XLSX from "<nodejs-target-build>.js"` — Node's ESM-importing-CJS interop loads
+   the same synchronous glue above; confirmed working, no warning.
+2. A plain `import * as wasm from "./file.wasm"` (native ESM WASM-module import, no
+   wasm-bindgen glue involved) also succeeded outright on Node v24.5.0, with only a
+   printed `ExperimentalWarning: Importing WebAssembly module instances is an experimental
+   feature`. Notable, but not something to depend on for a package targeting broad Node
+   version support today — path 1 (ship `--target nodejs`-style glue, let ESM consumers
+   hit it through interop) is the one to build on.
+
+**Browser main-thread sync compile: clean up to 5MB in Chrome 151, untested beyond that.**
+`wasm-bindgen` 0.2.127 ships a real `initSync(module)` export alongside the default async
+`init()` — feeding it an already-in-hand `WebAssembly.Module`/raw bytes compiles and
+instantiates synchronously. The open question was whether the *engine* enforces a
+synchronous-compile size ceiling on the main thread. Tested empirically in a real Chrome
+tab (v151, via `claude-in-chrome`, not headless-only): base64-inlined bytes decoded
+synchronously via `atob`, then `new WebAssembly.Module(bytes)` + `new
+WebAssembly.Instance(...)`, at five sizes (the ~12.7 KB trivial-crate floor, padded via a
+harmless trailing custom section to 50 KB / 500 KB / 2 MB / 5 MB). **All five compiled and
+instantiated synchronously with no error and no console warning**, 0.2–3.9 ms each. Caveat,
+stated plainly: the padding is inert bytes in a custom section, not real code — this
+measured the *loader's* size ceiling, not a realistic parser's compile time, and a real
+`elixcee-xlsx`-sized module's actual synchronous compile latency (likely tens of ms, not
+low-single-digit ms) was not measured here.
+
+MDN's `WebAssembly.Module` documentation does note a caveat — quoted exactly: "Some
+browsers may throw a `RangeError`, as they prohibit compilation and instantiation of Wasm
+with large buffers on the UI thread" — but names no specific browser and gives no size
+figure. A commonly-repeated claim that Safari/WebKit specifically enforces a ~4 KB
+synchronous-compile ceiling could **not** be substantiated from current MDN pages fetched
+this session (the `Module` reference page and the "Loading and running WebAssembly code"
+guide were both checked directly; neither states a number or names Safari). **This is
+reported as unverified, not as fact** — no Safari/WebKit environment was available in this
+session to test directly. The exact harness used for the Chrome test
+(`sync-test.html`) still exists in the scratchpad and can be pointed at real Safari to
+settle this in one step if it matters before committing to the browser leg's design.
+
+**Bundler WASM resolution: not automatic, and that's fine — own the byte-loading instead
+of depending on it.** esbuild (installed fresh, isolated to the spike directory, default
+settings) fails outright on `wasm-pack`'s `--target bundler` output: `No loader is
+configured for ".wasm" files`. This is a real, immediate failure, not an async-related one
+— it means "bundler WASM resolution works out of the box" is **false** as a blanket claim;
+a consumer's bundler needs either explicit loader configuration or a plugin before it will
+touch a raw `.wasm` import. The actionable conclusion is not to depend on generic bundler
+support at all: `@elixcee/xlsx`'s own shipped glue should inline the compiled `.wasm`
+bytes directly (base64 or an equivalent encoding, decoded at module-evaluation time) rather
+than emitting a bare `import "*.wasm"` and hoping the consumer's bundler resolves it — the
+same technique already proven to work synchronously in the Chrome test above. This sidesteps
+the bundler-support question entirely rather than solving it.
+
+**CSP / no-`wasm-unsafe-eval`: clean, catchable failure.** With a page CSP of
+`script-src 'self' 'unsafe-inline'` (deliberately omitting `'wasm-unsafe-eval'`), the same
+synchronous `new WebAssembly.Module(bytes)` call throws a `CompileError` whose message
+names the CSP directive explicitly (`"...violates the following Content Security Policy
+directive because 'unsafe-eval' is not an allowed source..."`). This is a normal,
+catchable JS exception with an identifiable message — a `try { initSync(...) } catch`
+around the browser entry point can detect this specific case and surface a clear,
+documented error rather than an opaque crash.
+
+**Verdict: proceed on wasm-bindgen, per the pre-agreed fork criterion, with two concrete
+design commitments carried into whichever phase builds `elixcee-wasm`:**
+1. Ship `--target nodejs`-style glue for the Node entry point (both `require` and ESM
+   consumers reach it, per the two verified paths above) — no async story needed there at
+   all.
+2. For the browser entry point, inline the WASM bytes into the shipped glue and call
+   `initSync` ourselves, rather than emitting a bundler-dependent `import "*.wasm"` or
+   relying on the default `fetch`-based async `init()`. Wrap the synchronous compile call
+   so a CSP-driven `CompileError` (and, if the unverified Safari ceiling turns out to be
+   real, a `RangeError`) is caught and produces a clear, documented failure rather than an
+   uncaught exception — this is the JS-fallback branch, scoped down from "a whole separate
+   track" to "one catch clause," if the Safari question resolves against us.
+
+No code from this spike is being merged; the crate lived entirely outside the repository
+and is deletable. This section, plus the two design commitments above, is Phase 2B-0's
+complete output — implementing `elixcee-wasm` itself is a separate, not-yet-started phase.
+
+(A stale plan file from an earlier, already-superseded planning session — describing what
+this document's own Phase 0/1A sections above cover, now fully executed — surfaced in this
+session's context. It was recognized as stale and not acted on.)
+
 ## Consequences
 
 Once the formula/VM split and the buffer-API extraction land, `elixcee-xlsx` can exist as
