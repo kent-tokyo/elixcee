@@ -77,57 +77,17 @@ export const VERDICTS = /** @type {const} */ ([
 // at behavior that no longer diverges (a stale UNSUPPORTED entry is exactly the
 // laundering hole this registry exists to prevent).
 //
-// Phase 2B added two real entries under 'read', both genuine reader.rs DEFECTS rather
-// than capability gaps — by this file's own VERDICTS definitions they are BUG, not
-// UNSUPPORTED. They are registered here anyway, as a disclosed, deliberate exception, so
-// the differential suite stays green without silently laundering them; CHANGELOG.md's
-// 0.2.0 "Known limitations" section says the same thing in public. Whoever next touches
-// `reader.rs`'s cell-recording path should fix these and remove the entries, not treat
-// their presence here as evidence they're intentional.
-//
-// First: read()'s empty-string-cell gap, found by
-// compat/differential/xlsx-read.test.mjs, not assumed. `reader.rs`'s hand-rolled pull-XML
-// parser (xlsx_sheet_cells, shared by the path-based read_workbook AND the new
-// read_workbook_from_bytes — not something this WASM bridge introduced) only records a
-// cell's value on an `Ev::Text` event; a `<v></v>` element with zero characters between
-// its tags (confirmed live: this is exactly what the oracle's own writer emits for an
-// empty-string aoa cell) never produces one, so the cell is silently absent from
-// elixcee's output where the oracle reports `{t:"s", v:""}`. Left unfixed rather than
-// patched here: the fix touches shared cell-recording logic that the CLI/VM path also
-// depends on, out of scope for the phase that added read() (see
-// docs/xlsx-architecture.md's "reader.rs buffer-API resolution", which required a pure
-// extraction with no behavior change).
-export const UNSUPPORTED_ALLOWLIST = new Map([
-  [
-    'read',
-    new Map([
-      [
-        'empty-string cell value (<v></v> with zero characters — no Text event for the ' +
-          "pull-XML parser to record, see reader.rs's xlsx_sheet_cells)",
-        'reader.rs\'s Text-event-driven cell recording never fires for a zero-length <v> ' +
-          'element, so an empty-string cell the oracle reports as {t:"s",v:""} is silently ' +
-          'absent from elixcee\'s output. Shared by read_workbook and ' +
-          'read_workbook_from_bytes; fixing it is out of scope for the phase that added ' +
-          "read() (a pure buffer-API extraction with no behavior change). See " +
-          'compat/differential/xlsx-read.test.mjs.',
-      ],
-      [
-        "declared <dimension> wider than the populated cell range — reader.rs never parses " +
-          "<dimension> at all, it always computes !ref from the populated-cell bounding box",
-        'reader.rs never reads the worksheet\'s <dimension> tag; !ref is always the ' +
-          'populated-cell bounding box. The oracle trusts <dimension> verbatim instead. ' +
-          'These normally agree for oracle-written files (aoa_to_sheet + XLSX.write always ' +
-          'writes <dimension> == the populated bbox), which is why this went undetected ' +
-          'until a hand-built file with a deliberately wider <dimension> was tried — a ' +
-          'real Excel/LibreOffice file can legitimately have one (e.g. formatting-only ' +
-          'cells past the last populated one). Same disclosure rule as the empty-string ' +
-          'cell gap above: shared by read_workbook and read_workbook_from_bytes, out of ' +
-          'scope to fix under this phase\'s "pure extraction, no behavior change" ' +
-          'requirement. See compat/differential/xlsx-read.test.mjs.',
-      ],
-    ]),
-  ],
-]);
+// Phase 2B added two real entries under 'read' (empty-string cell values, and
+// <dimension> parsing) — both genuine reader.rs DEFECTS rather than capability gaps, kept
+// here as a disclosed, deliberate exception until fixed (see the removed entries in this
+// file's own git history for the original writeup). Both were fixed in the phase that
+// added formula/dimension/rows-cols support to read() (see src/reader.rs's
+// xlsx_sheet_cells and parse_dimension_ref, and compat/differential/xlsx-read.test.mjs's
+// now-MATCHing cases for the live proof) and removed from here — leaving them would be
+// exactly the stale-entry-laundering this registry exists to prevent. The allowlist is
+// empty again as of that phase, same as it was after the SSF-backend phase closed the
+// two Phase 1B-1/1B-2A-era cases mentioned above.
+export const UNSUPPORTED_ALLOWLIST = new Map([]);
 
 // Registered intentional SECURITY divergences, keyed either by the elixcee-side error
 // code that signals them (see docs/xlsx-security-model.md's planned ELIXCEE_* codes), or
@@ -432,16 +392,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   assert.equal(
     UNSUPPORTED_ALLOWLIST.size,
-    1,
-    'Phase 2B: one api registered ("read") — the two Phase 1B-1/1B-2A-era format_cell/' +
-      'sheet_add_aoa cases both MATCH now that the real SSF engine is wired in'
+    0,
+    'the allowlist is empty again: the two Phase 2B-era "read" cases (empty-string cell ' +
+      "value, declared-<dimension>-wider-than-data) both MATCH now that reader.rs's " +
+      'xlsx_sheet_cells/parse_dimension_ref fix them — same as the earlier Phase ' +
+      '1B-1/1B-2A-era format_cell/sheet_add_aoa cases closing when the real SSF engine ' +
+      'was wired in'
   );
   assert.equal(
-    UNSUPPORTED_ALLOWLIST.get('read')?.size,
-    2,
-    'Phase 2B: two registered cases under "read" — the empty-string cell value gap ' +
-      "(reader.rs's xlsx_sheet_cells never records a zero-length <v> element) and the " +
-      'declared-<dimension>-wider-than-data gap (reader.rs never parses <dimension> at all)'
+    UNSUPPORTED_ALLOWLIST.get('read'),
+    undefined,
+    '"read" has no registered cases left — removed entirely rather than left as an empty Map'
   );
   assert.equal(
     SECURITY_DIVERGENCE_REGISTRY.size,

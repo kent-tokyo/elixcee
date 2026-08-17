@@ -22,6 +22,7 @@ const parts: [string, string] = XLSX.split_cell('A1');
 const wbFromBytes: WorkBook = XLSX.read(new Uint8Array([1, 2, 3]));
 const wbFromArray: WorkBook = XLSX.read([1, 2, 3]);
 const wbFromBase64: WorkBook = XLSX.read('AAAA', { type: 'base64' });
+const wbWithOpts: WorkBook = XLSX.read(new Uint8Array([1, 2, 3]), { cellStyles: true, cellNF: true, cellDates: true });
 
 const wb: WorkBook = XLSX.book_new();
 const ws: WorkSheet = XLSX.aoa_to_sheet([[1, 2], [3, 4]]);
@@ -81,5 +82,5 @@ console.log(
   formatted, formatted2, formulae, csv, txt, gotByRef, gotByAddr, gotByRC, gotByRow,
   rowsGeneric, rowsDefault, rowsHeader1, rowsHeaderA, rowsHeaderArray, rowsDefval, rowsRawTrue,
   rowsRawFalse, rowsRangeString, rowsRangeNumber, rowsRangeObj, rowsDense,
-  wbFromBytes, wbFromArray, wbFromBase64
+  wbFromBytes, wbFromArray, wbFromBase64, wbWithOpts
 );

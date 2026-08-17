@@ -24,7 +24,18 @@ const { formatCell, cellSetNumberFormat } = require('./internal/number-format.cj
 // npm consumers have no Rust/wasm-pack toolchain, so the compiled artifact ships committed
 // (see crates/elixcee-wasm/build.sh). Still not a dependency on the real `xlsx` package —
 // this is elixcee's own reader, just compiled to WASM.
-const wasmBridge = require('./internal/wasm/elixcee_wasm.node.cjs');
+//
+// Required LAZILY (inside `read()`, not here at module top-level) rather than eagerly:
+// this file's own `require('./internal/wasm/elixcee_wasm.node.cjs')` does
+// `require('fs').readFileSync(...)` the moment IT loads — fine for every Node consumer,
+// but the "browser" export condition entry point (index.browser.mjs) re-exports this
+// file's non-read utility functions verbatim and must not trigger that fs read merely by
+// being imported. A caller who never calls read() (the overwhelming majority of this
+// package's existing utils-only surface) also never pays for resolving it.
+let wasmBridge;
+function getWasmBridge() {
+  return wasmBridge || (wasmBridge = require('./internal/wasm/elixcee_wasm.node.cjs'));
+}
 
 // ---- column ----
 
@@ -155,20 +166,23 @@ function splitCell(cstr) {
 
 // ---- read ----
 //
-// Minimal buffer-first XLSX.read(data, opts) (Phase 2B), backed by the WASM bridge over
-// elixcee's own reader (src/reader.rs) — never the real `xlsx` package (see this file's
-// top doc comment / docs/xlsx-architecture.md's "Non-negotiable" section). Accepts a
-// Buffer/Uint8Array directly (the shape `fs.readFileSync(...)` already produces) or a
-// base64 string with `opts.type === 'base64'` (the oracle's own convention for that value)
-// — other oracle `type` values (binary/array/string/file) are not implemented yet.
+// Buffer-first XLSX.read(data, opts), backed by the WASM bridge over elixcee's own reader
+// (src/reader.rs) — never the real `xlsx` package (see this file's top doc comment /
+// docs/xlsx-architecture.md's "Non-negotiable" section). Accepts a Buffer/Uint8Array
+// directly (the shape `fs.readFileSync(...)` already produces) or a base64 string with
+// `opts.type === 'base64'` (the oracle's own convention for that value) — other oracle
+// `type` values (binary/array/string/file) are not implemented yet.
 //
-// The returned WorkBook is deliberately not feature-complete with the oracle's read():
-// no cell formulas (`.f`), no formatted display text (`.w`), no date-typed cells (`t:
-// 'd'` — a date serial reads back as a plain number), no hidden-row/col `!rows`/`!cols`
-// mapping. All four gaps trace back to the same root cause: `reader.rs` (elixcee's
-// hand-rolled XLSX reader) never parses `styles.xml` or `<f>` formula elements — see
-// crates/elixcee-wasm/src/lib.rs's `read_workbook` doc comment for the full list. Merged
-// ranges ARE mapped (`!merges`), since `reader.rs` already parses them.
+// Cell formulas (`.f`), merged ranges (`!merges`), and formatted display text (`.w`) are
+// always mapped. A worksheet's declared `<dimension>` is preferred over the
+// populated-cell bounding box when present (see crates/elixcee-wasm's worksheet_json).
+// Three more fields are gated behind opts, matching the oracle's own gates exactly
+// (confirmed live — none of these are surfaced by default): hidden-row/col `!rows`/
+// `!cols` with `opts.cellStyles`; resolved format-code `.z` with `opts.cellNF`
+// (`opts.cellStyles` implies it); date-typed cells (`t:'d'`) with `opts.cellDates`. See
+// ./internal/read-shape.cjs for all of the above.
+const { shapeWorkBook } = require('./internal/read-shape.cjs');
+
 const ELIXCEE_UNSUPPORTED_READ_TYPE = 'ELIXCEE_UNSUPPORTED_READ_TYPE';
 
 function toBytes(data, opts) {
@@ -187,7 +201,7 @@ function toBytes(data, opts) {
 
 function read(data, opts) {
   const bytes = toBytes(data, opts);
-  return JSON.parse(wasmBridge.readWorkbook(bytes));
+  return shapeWorkBook(JSON.parse(getWasmBridge().readWorkbook(bytes)), opts);
 }
 
 // ---- workbook / sheet ----

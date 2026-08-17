@@ -68,4 +68,33 @@ function format(fmt, v, opts) {
   return ssf.format(fmt, v, opts);
 }
 
-module.exports = { format };
+// ---- read()'s .z / date-typed-cell support (Milestone read-item 6) ----
+//
+// resolveFormatString mirrors format()'s own 3-step numFmtId resolution (opts.table
+// override -> DEFAULT_MAP_CORRECTION indirection -> ssf's own built-in table), but
+// returns the resolved format-code STRING itself rather than delegating to ssf.format —
+// read-shape.cjs needs the string form both to decide date-ness (isDate, below, only
+// accepts a string, confirmed live: `ssf.is_date(14)` is false even though built-in id 14
+// IS "m/d/yy") and to surface as `.z`, which the oracle itself always resolves to a
+// string (confirmed live: even an unstyled cell's `.z` reads back as the literal string
+// "General", never the number 0). A separate function, not a refactor of format() itself,
+// to avoid touching the exact resolution order/dateNF-stripping behavior already verified
+// byte-identical across 819 cases.
+function resolveFormatString(fmt, opts) {
+  if (typeof fmt !== 'number') return fmt == null ? 'General' : fmt;
+  const table = (opts && opts.table) || {};
+  if (hasOwn(table, fmt)) return table[fmt];
+  if (hasOwn(DEFAULT_MAP_CORRECTION, fmt)) {
+    const target = DEFAULT_MAP_CORRECTION[fmt];
+    return hasOwn(table, target) ? table[target] : TARGET_FORMAT[target];
+  }
+  const builtin = ssf.get_table()[fmt];
+  return builtin == null ? 'General' : builtin;
+}
+
+// ssf.is_date operates on a resolved format-code STRING (never a numFmtId) — re-exported
+// verbatim under this package's own naming convention (camelCase, like format/isDate's
+// sibling exports here) rather than requiring 'ssf' a second time elsewhere.
+const isDate = ssf.is_date;
+
+module.exports = { format, resolveFormatString, isDate };
