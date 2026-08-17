@@ -55,9 +55,9 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
    CJS `require('ssf')`).
 7. ~~581-scenario corpus's 41 non-parse-error failures were uncategorized~~ — **root-caused**
    (Unreleased): a pass over every failure's actual error message/category (not the vague
-   "probably intentional negative scenarios" guess from the previous round) found 30/41 were
-   three missing built-in VBA functions (`Sgn` ×13, `Fix` ×12, `Round` ×3) plus a `CBool`
-   type bug they also exposed — all now fixed (see CHANGELOG). The remaining 11 are correctly
+   "probably intentional negative scenarios" guess from the previous round) found 28/41
+   were three missing built-in VBA functions (`Sgn` ×13, `Fix` ×12, `Round` ×3), 2 more were
+   a related `CBool` type bug — all now fixed (see CHANGELOG). The remaining 11 are correctly
    left as failures: 8 genuine `Division by zero` (matches real VBA), 2 explicitly-named
    `unsupported_functions` scenarios (deliberate negative tests), 1 `Timer()` (nondeterministic
    category — low value to implement, arguably intentional to leave out of a deterministic
@@ -65,6 +65,15 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
    correct, not just uninvestigated. Done via an ad-hoc analysis pass, not a new committed
    script — the corpus is small and fixed-size enough that this didn't seem worth a permanent
    tool; revisit if the corpus grows or this needs repeating regularly.
+8. **Two small things found while implementing item 7, not fixed (out of scope for that pass)**:
+   - `Round(number, negativeDigits)` (e.g. `Round(1234.5, -2)`) silently returns a plausible
+     answer (`1200`) via `10f64.powi(-2)`; real VBA raises "Invalid procedure call or
+     argument" for a negative `NumDigitsAfterDecimal`. No corpus scenario exercises this.
+   - `Now`/`Date`/`Time` (`src/vm/mod.rs`'s `"now" | "date" | "time"` arm) return a Rust
+     debug-formatted `SystemTime { tv_sec: ..., tv_nsec: ... }` string, not anything
+     resembling a VBA date value — visibly wrong if ever displayed or compared. Same
+     "nondeterministic, low-priority" family as `Timer()` above, but this one's return
+     shape is a bug regardless of the nondeterminism question.
 
 ## Next candidates, roughly by leverage
 

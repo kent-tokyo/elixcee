@@ -12,9 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **`Fix`, `Sgn`, and `Round` VBA functions.** Root-caused via an automated pass over the
   581-scenario corpus's remaining non-parse-error failures (see below), not guessed at:
-  30 of 41 turned out to be `Unknown VBA function` for these three, previously-missing,
+  28 of 41 turned out to be `Unknown VBA function` for these three, previously-missing,
   ordinary built-in functions (13 `Sgn`, 12 `Fix`, 3 `Round`) — not deliberate negative
-  tests. `Fix` truncates toward zero (unlike `Int`, which floors — `Fix(-3.9)` is `-3`, not
+  tests (2 more of the 41 were the related `CBool` bug below, and 1 was a low-value
+  `Timer()` left unimplemented; see "Known gaps" in `ROADMAP.md` for the full 41-way
+  breakdown). `Fix` truncates toward zero (unlike `Int`, which floors — `Fix(-3.9)` is `-3`, not
   `-4`). `Sgn` returns -1/0/1. `Round` uses real VBA's own banker's rounding
   (round-half-to-even), which is a genuinely different function from
   `WorksheetFunction.Round`/Excel's `ROUND()` formula (round-half-away-from-zero) — `Round`
