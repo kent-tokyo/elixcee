@@ -76,13 +76,12 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
      `Variant::Date` is whole-day-only (`i64`) and can't carry a sub-day component without
      a shared-type change (`TypeName(Time())`/`TypeName(Now())` report `"Double"`, not real
      VBA's `"Date"` — disclosed, not silent).
-9. **Discovered while fixing item 8, not fixed**: the bare no-parens form of a zero-arg VBA
-   function call (`Date` without `()`) doesn't parse as a function call at all — it's read
-   as an undefined variable instead. Not specific to `Date`/`Now`/`Time`; a general parser
-   gap for zero-arg built-in calls (VBA allows omitting `()` for these). Every corpus
-   scenario and this project's own tests always use the `Date()` form, which works, so this
-   has never blocked anything measured so far — but it's a real gap in real-world VBA source
-   that happens to favor the no-parens style for these particular functions.
+9. ~~Bare no-parens zero-arg VBA function calls (`Date` without `()`) didn't parse~~ —
+   **fixed** (Unreleased): a bare identifier now falls back to calling `Date`/`Now`/`Time`
+   as zero-arg functions only after every other variable/constant lookup fails — the only
+   three `eval_vba_func` entries that accept zero arguments, so this doesn't generalize to
+   "any unrecognized identifier might be a function call" and a genuine variable-name typo
+   still errors exactly as before (pinned by a regression test).
 
 ## Next candidates, roughly by leverage
 

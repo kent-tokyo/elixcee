@@ -24,11 +24,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Variant::Date`, since `Variant::Date` is whole-day-only (`i64`) in this codebase and
   can't carry a sub-day component without a shared-type change — so `TypeName(Time())`/
   `TypeName(Now())` report `"Double"`, not real VBA's `"Date"`. A disclosed, narrower gap
-  than the debug-string bug, not a silent one. (Also found, unrelated to this fix and not
-  changed: the bare no-parens form, `Date` without `()`, doesn't parse as a function call
-  at all — a separate, pre-existing, general parser limitation for zero-arg VBA functions,
-  not specific to `Date`/`Now`/`Time`; every corpus scenario and this fix's own tests use
-  the `Date()` form, which works.)
+  than the debug-string bug, not a silent one.
+- The bare no-parens form (`Date` without `()`, real VBA allows omitting `()` on zero-arg
+  functions) didn't parse as a function call at all — `Expr::Var("date")` always hit
+  "Undefined variable". Found alongside the fix above, fixed in the same round: a bare
+  identifier now falls back to calling `Date`/`Now`/`Time` as zero-arg functions only after
+  every other variable/constant lookup fails — scoped to exactly these three names (the only
+  `eval_vba_func` entries that accept zero arguments) rather than a general "any unrecognized
+  identifier might be a function call" rule, so a genuine variable-name typo still errors the
+  same way it always did (verified with a regression test).
 
 ## [0.3.0]
 

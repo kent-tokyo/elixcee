@@ -2265,6 +2265,14 @@ impl Vm {
                     "vbyes"    => Variant::Integer(6),
                     "vbno"     => Variant::Integer(7),
                     "empty" | "null" | "nothing" => return Ok(Variant::Empty),
+                    // Real VBA allows omitting `()` on these three zero-arg
+                    // functions (`Date`, not just `Date()`) — every other
+                    // `eval_vba_func` entry needs at least one argument, so
+                    // this doesn't generalize to "any unrecognized bare
+                    // identifier might be a function call" (that would risk
+                    // masking a genuine variable-name typo as a function
+                    // call instead of the clearer "Undefined variable").
+                    "date" | "now" | "time" => return self.eval_vba_func(name, &[]),
                     _ => return Err(format!("Undefined variable: '{}'", name)),
                 })
             }
@@ -3820,6 +3828,38 @@ mod tests {
             Variant::Float(f) => assert!(f > 25569.0, "Now() looks wrong: {f}"),
             ref other => panic!("expected Variant::Float, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_vba_date_now_time_work_without_parens() {
+        // Real VBA allows omitting `()` on these three zero-arg functions.
+        // `Expr::Var("date")` used to always hit "Undefined variable" — a
+        // bare identifier only recognized these three as a fallback after
+        // failing the ordinary variable/constant lookups, so this doesn't
+        // risk masking a genuine variable-name typo as a function call.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    d = Date\n",
+            "    dt = TypeName(Date)\n",
+            "    t = Time\n",
+            "    n = Now\n",
+            "End Sub\n",
+        ));
+        let expected_serial = unix_epoch_days() as i64 + 25569;
+        assert_eq!(vm.variables["d"], Variant::Date(expected_serial));
+        assert_eq!(vm.variables["dt"], Variant::Str("Date".to_string()));
+        assert!(matches!(vm.variables["t"], Variant::Float(_)));
+        assert!(matches!(vm.variables["n"], Variant::Float(_)));
+    }
+
+    #[test]
+    fn test_undefined_variable_typo_still_errors_after_date_now_time_fallback() {
+        // The new "date"/"now"/"time" bare-identifier fallback must not
+        // swallow a genuine undefined-variable typo into some other
+        // behavior — anything else still hits the same error as before.
+        let prog = parser::parse("Sub MySub()\n    x = someUndefinedVar\nEnd Sub\n").unwrap();
+        let err = Vm::new().run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Undefined variable: 'someundefinedvar'");
     }
 
     #[test]
