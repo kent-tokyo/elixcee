@@ -428,6 +428,16 @@ impl Parser {
         self.expect_tok(Tok::LParen)?;
         let params = self.parse_params()?;
         self.expect_tok(Tok::RParen)?;
+        // Optional return-type annotation: `Function f(...) As Integer`.
+        // Not enforced anywhere (elixcee is dynamically typed at runtime,
+        // same as every parameter's own `As <Type>` — see `parse_params`),
+        // just consumed so it doesn't trip `eat_eol()` below. Previously
+        // unhandled entirely: `Function f(x As Integer) As Integer` failed
+        // with "expected newline, got Ident(\"as\")" right here.
+        if self.is_ident("as") {
+            self.advance();
+            self.consume_ident()?;
+        }
         self.eat_eol()?;
         let body = self.parse_stmts(|p| p.is_end_kw("function"))?;
         self.consume_end_kw("function")?;

@@ -3743,6 +3743,31 @@ mod tests {
         assert_eq!(vm.get_cell(3, 1), Variant::Integer(99));
     }
 
+    // ── Phase 2C item 6: typed Function parameters and return type ───────────
+
+    #[test]
+    fn typed_function_params_and_return_type_parse_and_execute() {
+        // `Function DoubleIt(x As Integer) As Integer` — previously failed
+        // to parse ("expected newline, got Ident(\"as\")") at the return-
+        // type annotation; typed params alone already worked.
+        let prog = parser::parse(
+            "Function DoubleIt(x As Integer) As Integer\n    DoubleIt = x * 2\nEnd Function\nSub MySub()\n    result = DoubleIt(21)\nEnd Sub\n",
+        )
+        .unwrap();
+        assert_eq!(prog.funcs[0].params, vec!["x"]);
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(42));
+    }
+
+    #[test]
+    fn typed_function_multiple_params_and_double_return_type() {
+        let vm = run(
+            "Function Helper(x As Double, y As Double) As Double\n    Helper = x * x + y\nEnd Function\nSub MySub()\n    Range(\"A1\").Value = Helper(2, 3)\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+    }
+
     // ── vb constants ─────────────────────────────────────────────────────────
 
     #[test]
