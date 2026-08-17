@@ -271,7 +271,7 @@ pub fn parse(formula: &str) -> Result<FormulaExpr, String> {
     let expr = p.parse_expr()?;
     p.skip_ws();
     if p.pos < p.chars.len() {
-        Err(format!("Unexpected input at position {}: '{}'", p.pos, &p.chars[p.pos..].iter().collect::<String>()))
+        Err(format!("Unexpected input at position {}: '{}'", p.pos, p.chars[p.pos..].iter().collect::<String>()))
     } else {
         Ok(expr)
     }

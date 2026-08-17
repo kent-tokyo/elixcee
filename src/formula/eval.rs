@@ -9,7 +9,7 @@ use super::ast::{BinOpKind, FormulaExpr};
 // A stack of binding frames; each frame is pushed by LET or a lambda call.
 
 thread_local! {
-    static BINDINGS: RefCell<Vec<HashMap<String, Variant>>> = RefCell::new(vec![]);
+    static BINDINGS: RefCell<Vec<HashMap<String, Variant>>> = const { RefCell::new(vec![]) };
 }
 
 fn push_bindings(frame: HashMap<String, Variant>) {
@@ -52,9 +52,8 @@ pub fn evaluate(
         FormulaExpr::BinOp { op, lhs, rhs } => eval_binop(op, lhs, rhs, cells),
         FormulaExpr::FuncCall { name, args } => {
             // 0-arg "call" is a name reference (LET / LAMBDA parameter)
-            if args.is_empty() {
-                if let Some(v) = lookup_binding(name) { return Ok(v); }
-            }
+            if args.is_empty()
+                && let Some(v) = lookup_binding(name) { return Ok(v); }
             eval_func(name, args, cells)
         }
     }
@@ -125,7 +124,7 @@ fn to_str(v: &Variant) -> String {
         Variant::Date(s)    => serial_to_display(*s),
         Variant::Error(e)   => e.as_str().to_string(),
         Variant::Empty      => String::new(),
-        Variant::Array(a)   => a.iter().map(|x| to_str(x)).collect::<Vec<_>>().join(", "),
+        Variant::Array(a)   => a.iter().map(to_str).collect::<Vec<_>>().join(", "),
         Variant::Record(_)  => "[Record]".into(),
     }
 }
@@ -221,7 +220,7 @@ fn cell_val(cells: &HashMap<(u32, u32), CellContent>, row: u32, col: u32) -> Var
 }
 
 /// Borrow a cell value without cloning. Returns `None` for missing/empty cells.
-fn cell_ref<'a>(cells: &'a HashMap<(u32, u32), CellContent>, row: u32, col: u32) -> Option<&'a Variant> {
+fn cell_ref(cells: &HashMap<(u32, u32), CellContent>, row: u32, col: u32) -> Option<&Variant> {
     cells.get(&(row, col)).map(|c| &c.value)
 }
 
@@ -486,8 +485,8 @@ macro_rules! range_nums_fast {
 
 fn func_sum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     // Fast path: single Range — iterate cell refs without cloning into Vec<Variant>
-    if args.len() == 1 {
-        if let FormulaExpr::Range { c1, r1, c2, r2 } = &args[0] {
+    if args.len() == 1
+        && let FormulaExpr::Range { c1, r1, c2, r2 } = &args[0] {
             let mut sum = 0f64;
             for row in *r1..=*r2 {
                 for col in *c1..=*c2 {
@@ -496,7 +495,6 @@ fn func_sum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
             }
             return Ok(as_integer_if_whole(sum));
         }
-    }
     let sum: f64 = collect_all(args, cells)?.iter()
         .filter_map(|v| if matches!(v, Variant::Str(_)) { None } else { to_float(v).ok() })
         .sum();
@@ -900,9 +898,8 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
         let first = parts[0];
         let last  = *parts.last().unwrap();
         // Prefix check
-        if !first.is_empty() {
-            if text.len() < first.len() || &text[..first.len()] != first { return false; }
-        }
+        if !first.is_empty()
+            && (text.len() < first.len() || &text[..first.len()] != first) { return false; }
         // Suffix check
         if !last.is_empty() {
             if text.len() < last.len() || &text[text.len()-last.len()..] != last { return false; }
@@ -1078,7 +1075,7 @@ fn func_sumif(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) ->
 }
 
 fn func_sumifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() < 3 || args.len() % 2 == 0 { return Err("SUMIFS requires sum_range then pairs of (range,criteria)".into()); }
+    if args.len() < 3 || args.len().is_multiple_of(2) { return Err("SUMIFS requires sum_range then pairs of (range,criteria)".into()); }
     let sum_vals = collect_values(&args[0], cells)?;
     let n = sum_vals.len();
     let mut mask = vec![true; n];
@@ -1099,7 +1096,7 @@ fn func_sumifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
 }
 
 fn func_countifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() < 2 || args.len() % 2 != 0 { return Err("COUNTIFS requires pairs of (range,criteria)".into()); }
+    if args.len() < 2 || !args.len().is_multiple_of(2) { return Err("COUNTIFS requires pairs of (range,criteria)".into()); }
     let first_vals = collect_values(&args[0], cells)?;
     let n = first_vals.len();
     let mut mask = vec![true; n];
@@ -1127,7 +1124,7 @@ fn func_median(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
     if nums.is_empty() { return Err("MEDIAN: no numeric values".into()); }
     nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
     let mid = nums.len() / 2;
-    let result = if nums.len() % 2 == 0 { (nums[mid - 1] + nums[mid]) / 2.0 } else { nums[mid] };
+    let result = if nums.len().is_multiple_of(2) { (nums[mid - 1] + nums[mid]) / 2.0 } else { nums[mid] };
     Ok(as_integer_if_whole(result))
 }
 
@@ -1171,7 +1168,7 @@ fn func_rank(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> 
 // ── Conditional ───────────────────────────────────────────────────────────────
 
 fn func_ifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() < 2 || args.len() % 2 != 0 { return Err("IFS requires an even number of arguments".into()); }
+    if args.len() < 2 || !args.len().is_multiple_of(2) { return Err("IFS requires an even number of arguments".into()); }
     let mut i = 0;
     while i + 1 < args.len() {
         if is_truthy(&evaluate(&args[i], cells)?) {
@@ -1343,12 +1340,10 @@ fn func_xlookup(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) 
             // exact or next smaller
             let mut best: Option<(usize, f64)> = None;
             let key_f = to_float(&key)?;
-            for i in 0..lookup.len() {
-                if let Ok(v) = to_float(&lookup[i]) {
-                    if v <= key_f {
-                        if best.map_or(true, |(_, bv)| v > bv) { best = Some((i, v)); }
-                    }
-                }
+            for (i, l) in lookup.iter().enumerate() {
+                if let Ok(v) = to_float(l)
+                    && v <= key_f
+                        && best.is_none_or(|(_, bv)| v > bv) { best = Some((i, v)); }
             }
             if let Some((i, _)) = best {
                 return Ok(return_arr.get(i).cloned().unwrap_or(Variant::Empty));
@@ -1358,12 +1353,10 @@ fn func_xlookup(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) 
             // exact or next larger
             let mut best: Option<(usize, f64)> = None;
             let key_f = to_float(&key)?;
-            for i in 0..lookup.len() {
-                if let Ok(v) = to_float(&lookup[i]) {
-                    if v >= key_f {
-                        if best.map_or(true, |(_, bv)| v < bv) { best = Some((i, v)); }
-                    }
-                }
+            for (i, l) in lookup.iter().enumerate() {
+                if let Ok(v) = to_float(l)
+                    && v >= key_f
+                        && best.is_none_or(|(_, bv)| v < bv) { best = Some((i, v)); }
             }
             if let Some((i, _)) = best {
                 return Ok(return_arr.get(i).cloned().unwrap_or(Variant::Empty));
@@ -1410,7 +1403,7 @@ fn func_averageif(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>
 }
 
 fn func_averageifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() < 3 || args.len() % 2 == 0 { return Err("AVERAGEIFS requires avg_range then pairs".into()); }
+    if args.len() < 3 || args.len().is_multiple_of(2) { return Err("AVERAGEIFS requires avg_range then pairs".into()); }
     let avg_vals = collect_values(&args[0], cells)?;
     let n = avg_vals.len();
     let mut mask = vec![true; n];
@@ -1460,7 +1453,7 @@ fn func_small(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) ->
 }
 
 fn func_maxifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() < 3 || args.len() % 2 == 0 { return Err("MAXIFS requires max_range then pairs".into()); }
+    if args.len() < 3 || args.len().is_multiple_of(2) { return Err("MAXIFS requires max_range then pairs".into()); }
     let max_vals = collect_values(&args[0], cells)?;
     let n = max_vals.len();
     let mut mask = vec![true; n];
@@ -1481,7 +1474,7 @@ fn func_maxifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
 }
 
 fn func_minifs(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() < 3 || args.len() % 2 == 0 { return Err("MINIFS requires min_range then pairs".into()); }
+    if args.len() < 3 || args.len().is_multiple_of(2) { return Err("MINIFS requires min_range then pairs".into()); }
     let min_vals = collect_values(&args[0], cells)?;
     let n = min_vals.len();
     let mut mask = vec![true; n];
@@ -1614,7 +1607,7 @@ fn func_aggregate(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>
             let mut s = nums.clone(); s.sort_by(|a,b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
             if s.is_empty() { return Err("AGGREGATE: no values".into()); }
             let mid = s.len() / 2;
-            let r = if s.len() % 2 == 0 { (s[mid-1]+s[mid])/2.0 } else { s[mid] };
+            let r = if s.len().is_multiple_of(2) { (s[mid-1]+s[mid])/2.0 } else { s[mid] };
             Ok(as_integer_if_whole(r))
         }
         14 => { // LARGE
@@ -1747,7 +1740,7 @@ fn func_textjoin(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>)
     let delim       = to_str(&evaluate(&args[0], cells)?);
     let ignore_empty= is_truthy(&evaluate(&args[1], cells)?);
     let parts: Vec<String> = collect_all(&args[2..], cells)?.iter()
-        .map(|v| to_str(v))
+        .map(to_str)
         .filter(|s| !ignore_empty || !s.is_empty())
         .collect();
     Ok(Variant::Str(parts.join(&delim)))
@@ -1942,7 +1935,7 @@ fn func_weeknum(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) 
         16     => (dow_jan1 + 1) % 7,    // Sat-start
         _      => return Ok(Variant::Error(ExcelError::Num)),
     };
-    Ok(Variant::Integer(((doy - 1 + offset as i64) / 7 + 1)))
+    Ok(Variant::Integer((doy - 1 + offset as i64) / 7 + 1 ))
 }
 
 fn func_days(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
@@ -2004,11 +1997,10 @@ fn func_datevalue(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>
     let s = to_str(&evaluate(&args[0], cells)?);
     // Support YYYY/MM/DD and YYYY-MM-DD
     let parts: Vec<&str> = if s.contains('/') { s.splitn(3, '/').collect() } else { s.splitn(3, '-').collect() };
-    if parts.len() == 3 {
-        if let (Ok(y), Ok(m), Ok(d)) = (parts[0].trim().parse::<i32>(), parts[1].trim().parse::<u32>(), parts[2].trim().parse::<u32>()) {
+    if parts.len() == 3
+        && let (Ok(y), Ok(m), Ok(d)) = (parts[0].trim().parse::<i32>(), parts[1].trim().parse::<u32>(), parts[2].trim().parse::<u32>()) {
             return Ok(Variant::Date(date_to_serial(y, m, d)));
         }
-    }
     Err(format!("DATEVALUE: cannot parse '{}'", s))
 }
 
@@ -2035,12 +2027,11 @@ fn func_timevalue(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>
     if args.len() != 1 { return Err("TIMEVALUE requires 1 argument".into()); }
     let s = to_str(&evaluate(&args[0], cells)?);
     let parts: Vec<&str> = s.splitn(3, ':').collect();
-    if parts.len() >= 2 {
-        if let (Ok(h), Ok(m)) = (parts[0].trim().parse::<f64>(), parts[1].trim().parse::<f64>()) {
+    if parts.len() >= 2
+        && let (Ok(h), Ok(m)) = (parts[0].trim().parse::<f64>(), parts[1].trim().parse::<f64>()) {
             let sec = if parts.len() == 3 { parts[2].trim().parse::<f64>().unwrap_or(0.0) } else { 0.0 };
             return Ok(Variant::Float((h * 3600.0 + m * 60.0 + sec) / 86400.0));
         }
-    }
     Err(format!("TIMEVALUE: cannot parse '{}'", s))
 }
 
@@ -2156,7 +2147,7 @@ fn func_switch(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
         i += 2;
     }
     // odd remaining arg = default
-    if args.len() % 2 == 0 { evaluate(&args[args.len() - 1], cells) }
+    if args.len().is_multiple_of(2) { evaluate(&args[args.len() - 1], cells) }
     else { Err("SWITCH: no match found".into()) }
 }
 
@@ -2227,20 +2218,18 @@ fn func_xmatch(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -
         -1 => {
             let key_f = to_float(&key)?;
             let mut best: Option<(usize, f64)> = None;
-            for i in 0..lookup.len() {
-                if let Ok(v) = to_float(&lookup[i]) {
-                    if v <= key_f && best.map_or(true, |(_,bv)| v > bv) { best = Some((i, v)); }
-                }
+            for (i, l) in lookup.iter().enumerate() {
+                if let Ok(v) = to_float(l)
+                    && v <= key_f && best.is_none_or(|(_,bv)| v > bv) { best = Some((i, v)); }
             }
             if let Some((i,_)) = best { return Ok(Variant::Integer((i+1) as i64)); }
         }
         1 => {
             let key_f = to_float(&key)?;
             let mut best: Option<(usize, f64)> = None;
-            for i in 0..lookup.len() {
-                if let Ok(v) = to_float(&lookup[i]) {
-                    if v >= key_f && best.map_or(true, |(_,bv)| v < bv) { best = Some((i, v)); }
-                }
+            for (i, l) in lookup.iter().enumerate() {
+                if let Ok(v) = to_float(l)
+                    && v >= key_f && best.is_none_or(|(_,bv)| v < bv) { best = Some((i, v)); }
             }
             if let Some((i,_)) = best { return Ok(Variant::Integer((i+1) as i64)); }
         }
@@ -2732,7 +2721,7 @@ fn num_to_col_letter(mut col: u32) -> String {
 fn func_let(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     // =LET(x, val1, y, val2, ..., result_expr)
     // Must have odd number of args: 2*n+1
-    if args.len() < 3 || args.len() % 2 == 0 {
+    if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err("LET requires an odd number of arguments: LET(name, val, ..., result)".into());
     }
     let mut frame: HashMap<String, Variant> = HashMap::new();
@@ -2938,7 +2927,7 @@ fn eval_as_bool_array(
 ) -> Result<Vec<bool>, String> {
     match expr {
         FormulaExpr::Range { .. } => {
-            Ok(collect_values(expr, cells)?.iter().map(|v| is_truthy(v)).collect())
+            Ok(collect_values(expr, cells)?.iter().map(is_truthy).collect())
         }
         FormulaExpr::BinOp { op, lhs, rhs } => {
             let lhs_vals = collect_values(lhs, cells)?;
@@ -3123,7 +3112,7 @@ fn next_rand_f64() -> f64 {
 }
 
 fn func_randarray(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    let rows        = if args.len() >= 1 { to_float(&evaluate(&args[0], cells)?)? as usize } else { 1 };
+    let rows        = if !args.is_empty() { to_float(&evaluate(&args[0], cells)?)? as usize } else { 1 };
     let cols        = if args.len() >= 2 { to_float(&evaluate(&args[1], cells)?)? as usize } else { 1 };
     let min         = if args.len() >= 3 { to_float(&evaluate(&args[2], cells)?)? } else { 0.0 };
     let max         = if args.len() >= 4 { to_float(&evaluate(&args[3], cells)?)? } else { 1.0 };
@@ -3329,7 +3318,7 @@ fn func_npv(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> R
 }
 
 fn func_irr(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
-    if args.len() < 1 || args.len() > 2 { return Err("IRR requires 1 to 2 arguments".into()); }
+    if args.is_empty() || args.len() > 2 { return Err("IRR requires 1 to 2 arguments".into()); }
     let values = collect_values(&args[0], cells)?;
     let nums: Vec<f64> = values.iter()
         .filter_map(as_f64)
@@ -3602,8 +3591,8 @@ fn choose_elements(
     let vals = flatten_array_vals(collect_values(&args[0], cells)?);
     let len  = vals.len() as i64;
     let mut result = vec![];
-    for i in 1..args.len() {
-        let n = to_float(&evaluate(&args[i], cells)?)? as i64;
+    for arg in &args[1..] {
+        let n = to_float(&evaluate(arg, cells)?)? as i64;
         let idx = if n > 0 { n - 1 } else { len + n };
         if idx < 0 || idx >= len {
             result.push(Variant::Error(ExcelError::Value));
@@ -4775,7 +4764,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_spill_sort() {
         let mut c = HashMap::new();
         c.insert((1,1), CellContent { formula: None, value: Variant::Integer(3) });
@@ -4847,7 +4835,6 @@ mod tests {
             Variant::Array(vec![Variant::Integer(1), Variant::Integer(2), Variant::Integer(3)]));
     }
 
-    #[test]
     #[test]
     fn test_let_basic() {
         let c = HashMap::new();
@@ -5554,7 +5541,7 @@ mod tests {
                     Variant::Float(f)   => *f,
                     other => panic!("expected numeric, got {:?}", other),
                 };
-                assert!(n >= 1.0 && n <= 10.0, "out of [1,10]: {}", n);
+                assert!((1.0..=10.0).contains(&n), "out of [1,10]: {}", n);
             }
         } else { panic!("expected Array"); }
     }
@@ -5589,7 +5576,7 @@ mod tests {
             ]));
         // WRAPROWS with padding: [1,2,3,4,5] wrap=3 → [[1,2,3],[4,5,0]]
         let mut c2 = HashMap::new();
-        for i in 1u32..=5 { c2.insert((i as u32,1), CellContent { formula: None, value: Variant::Integer(i as i64) }); }
+        for i in 1u32..=5 { c2.insert((i,1), CellContent { formula: None, value: Variant::Integer(i as i64) }); }
         assert_eq!(calc("=WRAPROWS(A1:A5, 3, 0)", &c2),
             Variant::Array(vec![
                 Variant::Integer(1), Variant::Integer(2), Variant::Integer(3),
@@ -5612,7 +5599,7 @@ mod tests {
         // WRAPCOLS([1,2,3,4,5], 2, 0): n_cols=3, last col=[5,0]
         // row-major: [1,3,5, 2,4,0]
         let mut c2 = HashMap::new();
-        for i in 1u32..=5 { c2.insert((i as u32,1), CellContent { formula: None, value: Variant::Integer(i as i64) }); }
+        for i in 1u32..=5 { c2.insert((i,1), CellContent { formula: None, value: Variant::Integer(i as i64) }); }
         assert_eq!(calc("=WRAPCOLS(A1:A5, 2, 0)", &c2),
             Variant::Array(vec![
                 Variant::Integer(1), Variant::Integer(3), Variant::Integer(5),

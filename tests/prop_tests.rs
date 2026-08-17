@@ -85,8 +85,8 @@ proptest! {
             );
         }
         let formula_str = format!("=SUM(A1:A{})", n);
-        if let Ok(expr) = formula::parse(&formula_str) {
-            if let Ok(result) = formula::evaluate(&expr, &cells) {
+        if let Ok(expr) = formula::parse(&formula_str)
+            && let Ok(result) = formula::evaluate(&expr, &cells) {
                 let expected: i64 = values.iter().sum();
                 match result {
                     Variant::Integer(v) => prop_assert_eq!(v, expected),
@@ -94,7 +94,6 @@ proptest! {
                     other => prop_assert!(false, "unexpected SUM result: {:?}", other),
                 }
             }
-        }
     }
 
     /// COUNTIF with wildcard patterns must never panic (no exponential recursion).

@@ -788,8 +788,8 @@ impl Parser {
             Tok::Ident(ref s) => {
                 let s = s.clone();
                 // ── UDT With target: .Field = val  /  .A.B = val ──────────────
-                if let Some(var) = self.with_target.clone() {
-                    if s != "range" && s != "cells" {
+                if let Some(var) = self.with_target.clone()
+                    && s != "range" && s != "cells" {
                         let field = self.consume_ident()?.to_lowercase();
                         let mut fields = vec![field];
                         // Collect chained fields: .A.B.C
@@ -817,7 +817,6 @@ impl Parser {
                             ),
                         }));
                     }
-                }
                 match s.as_str() {
                     "range" => {
                         // .Range("addr").Value/Formula = expr

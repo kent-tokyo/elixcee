@@ -554,8 +554,8 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
         "<sheetData>\n",
     ));
 
-    if let Some(cells) = vm.get_sheet_cells(sheet_name) {
-        if !cells.is_empty() {
+    if let Some(cells) = vm.get_sheet_cells(sheet_name)
+        && !cells.is_empty() {
             // Group by row first to avoid O(max_row × total_cells) scanning.
             let mut by_row: std::collections::BTreeMap<u32, Vec<_>> = std::collections::BTreeMap::new();
             for (k @ &(r, c), v) in cells.iter() {
@@ -575,7 +575,6 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
                 out.push_str("</row>\n");
             }
         }
-    }
 
     out.push_str("</sheetData>\n</worksheet>\n");
     out
@@ -686,8 +685,8 @@ fn build_ods_content(vm: &Vm) -> String {
         let escaped = xml_escape(&sheet_name);
         out.push_str(&format!("<table:table table:name=\"{}\">\n", escaped));
 
-        if let Some(cells) = vm.get_sheet_cells(&sheet_name) {
-            if !cells.is_empty() {
+        if let Some(cells) = vm.get_sheet_cells(&sheet_name)
+            && !cells.is_empty() {
                 let max_row = cells.keys().map(|(r,_)| *r).max().unwrap_or(0);
                 let max_col = cells.keys().map(|(_,c)| *c).max().unwrap_or(0);
 
@@ -705,7 +704,6 @@ fn build_ods_content(vm: &Vm) -> String {
                     out.push_str("</table:table-row>\n");
                 }
             }
-        }
 
         out.push_str("</table:table>\n");
     }
@@ -962,7 +960,7 @@ mod diff_reader_tests {
             Some(&Variant::Str("unicode: café ★ 日本語".into())),
             "multi-run <si> (split across two <r><t> runs by a real producer) must concatenate"
         );
-        assert!(mine.get(&(4, 1)).is_none(), "row 4 is blank and dropped entirely from <sheetData> by the real producer");
+        assert!(!mine.contains_key(&(4, 1)), "row 4 is blank and dropped entirely from <sheetData> by the real producer");
         assert_eq!(
             mine.get(&(5, 4)),
             Some(&Variant::Str("after-column-gap".into())),

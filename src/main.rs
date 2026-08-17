@@ -856,13 +856,12 @@ fn main() {
         // Do the (optional) save first so a write failure doesn't leave a
         // success object already printed — --json must emit exactly one
         // JSON object on stdout.
-        if let Some(ref path) = output {
-            if let Err(e) = save_workbook(&vm, path) {
+        if let Some(ref path) = output
+            && let Err(e) = save_workbook(&vm, path) {
                 // The macro already ran successfully — don't drop any MsgBox
                 // text it showed just because the save step failed after.
                 fail_json(ElixceeError::io_error(format!("cannot write '{}': {}", path, e)), &vm.take_messages());
             }
-        }
         let messages = vm.take_messages();
         println!(
             "{{\"schema_version\":1,\"ok\":true,\"entrypoint\":{},\"duration_ms\":{:.3},\"cells\":{},\"messages\":{}}}",

@@ -287,8 +287,8 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     let mut sheets = vec![];
     for (name, rid, sheet_id) in sheet_refs {
         let Some(target) = rels.get(&rid) else { continue };
-        let zip_path = if target.starts_with('/') {
-            target[1..].to_string()
+        let zip_path = if let Some(rest) = target.strip_prefix('/') {
+            rest.to_string()
         } else {
             format!("xl/{}", target)
         };
@@ -315,15 +315,14 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>)> {
     while let Some(ev) = iter.next_ev() {
         if let Ev::SelfClose(ref tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
-            if local == "sheet" {
-                if let (Some(name), Some(rid)) = (
+            if local == "sheet"
+                && let (Some(name), Some(rid)) = (
                     attr_get(attrs, "name"),
                     attr_get(attrs, "id"),
                 ) {
                     let sheet_id = attr_get(attrs, "sheetId").map(|s| s.to_string());
                     result.push((name.to_string(), rid.to_string(), sheet_id));
                 }
-            }
         }
     }
     result
@@ -336,17 +335,15 @@ fn xlsx_rels(xml: &str) -> HashMap<String, String> {
     while let Some(ev) = iter.next_ev() {
         if let Ev::SelfClose(ref tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
-            if local == "Relationship" {
-                if let (Some(id), Some(ty), Some(target)) = (
+            if local == "Relationship"
+                && let (Some(id), Some(ty), Some(target)) = (
                     attr_get(attrs, "Id"),
                     attr_get(attrs, "Type"),
                     attr_get(attrs, "Target"),
-                ) {
-                    if ty.ends_with("/worksheet") {
+                )
+                    && ty.ends_with("/worksheet") {
                         map.insert(id.to_string(), target.to_string());
                     }
-                }
-            }
         }
     }
     map
@@ -456,12 +453,11 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
                     "c" => {
                         cur_type = attr_get(attrs, "t").unwrap_or("").to_string();
                         in_v = false;
-                        if let Some(r) = attr_get(attrs, "r") {
-                            if let Some((row, col)) = parse_cell_ref(r) {
+                        if let Some(r) = attr_get(attrs, "r")
+                            && let Some((row, col)) = parse_cell_ref(r) {
                                 cur_row = row;
                                 cur_col = col;
                             }
-                        }
                         is_text.clear();
                     }
                     "v" => { in_v = true; }
@@ -500,8 +496,8 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
         }
 
         // Emit inline string on </c>
-        if let Ev::Close(ref tag) = ev {
-            if tag.split(':').next_back() == Some("c")
+        if let Ev::Close(ref tag) = ev
+            && tag.split(':').next_back() == Some("c")
                 && cur_type == "inlineStr"
                 && !is_text.is_empty()
                 && cur_row > 0 && cur_col > 0
@@ -509,7 +505,6 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
                 cells.insert((cur_row, cur_col), SheetCell::Str(is_text.clone()));
                 is_text.clear();
             }
-        }
     }
     if let Some(run) = pending_hidden_row_run.take() {
         hidden_rows.push(run);
@@ -707,7 +702,7 @@ struct OdsCellState {
     cell_type: String, val_attr: String, bool_attr: String, text: String,
 }
 
-fn emit_ods_cell(sheets: &mut Vec<WorkbookSheet>, state: OdsCellState) {
+fn emit_ods_cell(sheets: &mut [WorkbookSheet], state: OdsCellState) {
     let sheet = match sheets.last_mut() { Some(s) => s, None => return };
     let cell = ods_make_cell(&state);
     if let Some(c) = cell {
@@ -919,7 +914,7 @@ mod merge_tests {
 </table:table>
 </office:spreadsheet>"#;
         let sheets = ods_parse(xml);
-        assert!(sheets[0].cells.get(&(1, 2)).is_none());
+        assert!(!sheets[0].cells.contains_key(&(1, 2)));
         match sheets[0].cells.get(&(1, 6)) {
             Some(SheetCell::Integer(v)) => assert_eq!(*v, 42),
             other => panic!("expected Integer(42) at (1,6), got {:?}", other.is_some()),
@@ -939,7 +934,7 @@ mod merge_tests {
 </table:table>
 </office:spreadsheet>"#;
         let sheets = ods_parse(xml);
-        assert!(sheets[0].cells.get(&(2, 1)).is_none());
+        assert!(!sheets[0].cells.contains_key(&(2, 1)));
         match sheets[0].cells.get(&(5, 1)) {
             Some(SheetCell::Integer(v)) => assert_eq!(*v, 7),
             other => panic!("expected Integer(7) at (5,1), got {:?}", other.is_some()),

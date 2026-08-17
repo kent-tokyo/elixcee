@@ -571,7 +571,7 @@ impl Vm {
     }
 
     pub fn ensure_sheet(&mut self, name: &str) {
-        self.sheets.entry(name.to_lowercase()).or_insert_with(HashMap::new);
+        self.sheets.entry(name.to_lowercase()).or_default();
     }
 
     pub fn set_active_sheet(&mut self, name: &str) -> Result<(), String> {
@@ -2123,12 +2123,12 @@ impl Vm {
                 Ok(Variant::Integer(s))
             }
             "left" => {
-                let s = vba_to_str(vals.get(0).ok_or("Left requires 2 arguments")?);
+                let s = vba_to_str(vals.first().ok_or("Left requires 2 arguments")?);
                 let n = to_f64(vals.get(1).ok_or("Left requires 2 arguments")?)? as usize;
                 Ok(Variant::Str(s.chars().take(n).collect()))
             }
             "right" => {
-                let s = vba_to_str(vals.get(0).ok_or("Right requires 2 arguments")?);
+                let s = vba_to_str(vals.first().ok_or("Right requires 2 arguments")?);
                 let n = to_f64(vals.get(1).ok_or("Right requires 2 arguments")?)? as usize;
                 let chars: Vec<char> = s.chars().collect();
                 Ok(Variant::Str(chars[chars.len().saturating_sub(n)..].iter().collect()))
@@ -2189,7 +2189,7 @@ impl Vm {
                 let (start, s1, s2) = if vals.len() >= 3 {
                     (to_f64(&vals[0])? as usize, vba_to_str(&vals[1]), vba_to_str(&vals[2]))
                 } else {
-                    (1, vba_to_str(vals.get(0).ok_or("InStr requires at least 2 arguments")?),
+                    (1, vba_to_str(vals.first().ok_or("InStr requires at least 2 arguments")?),
                         vba_to_str(vals.get(1).ok_or("InStr requires at least 2 arguments")?))
                 };
                 let h: Vec<char> = s1.chars().collect();
@@ -2267,7 +2267,7 @@ impl Vm {
             "join" => {
                 if vals.is_empty() { return Err("Join requires at least 1 argument".into()); }
                 let parts = match &vals[0] {
-                    Variant::Array(a) => a.iter().map(|v| vba_to_str(v)).collect::<Vec<_>>(),
+                    Variant::Array(a) => a.iter().map(vba_to_str).collect::<Vec<_>>(),
                     v                 => vec![vba_to_str(v)],
                 };
                 let delim = if vals.len() >= 2 { vba_to_str(&vals[1]) } else { " ".to_string() };
@@ -2600,12 +2600,11 @@ fn topo_sort_formulas(
 
     for (i, (_, _, expr)) in cells.iter().enumerate() {
         for dep in extract_cell_refs(expr) {
-            if let Some(&j) = pos.get(&dep) {
-                if j != i { // skip self-reference
+            if let Some(&j) = pos.get(&dep)
+                && j != i { // skip self-reference
                     adj[j].push(i);
                     in_degree[i] += 1;
                 }
-            }
         }
     }
 
@@ -2638,7 +2637,7 @@ fn vba_to_str(v: &Variant) -> String {
         Variant::Date(s)    => serial_to_display(*s),
         Variant::Error(e)   => e.as_str().to_string(),
         Variant::Empty      => String::new(),
-        Variant::Array(a)   => a.iter().map(|x| vba_to_str(x)).collect::<Vec<_>>().join(", "),
+        Variant::Array(a)   => a.iter().map(vba_to_str).collect::<Vec<_>>().join(", "),
         Variant::Record(_)  => "[Record]".into(),
     }
 }
@@ -2791,17 +2790,16 @@ fn wsf_criteria_match(v: &Variant, criteria: &Variant) -> bool {
             let s = s.trim();
             // Comparison criteria like ">5", "<>0", ">=10"
             if let Some(rest) = s.strip_prefix(">=") {
-                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).map_or(false, |f| f >= n); }
+                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f >= n); }
             } else if let Some(rest) = s.strip_prefix("<=") {
-                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).map_or(false, |f| f <= n); }
+                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f <= n); }
             } else if let Some(rest) = s.strip_prefix("<>") {
-                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).map_or(false, |f| f != n); }
+                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f != n); }
                 return vba_to_str(v).to_lowercase() != rest.to_lowercase();
             } else if let Some(rest) = s.strip_prefix('>') {
-                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).map_or(false, |f| f > n); }
-            } else if let Some(rest) = s.strip_prefix('<') {
-                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).map_or(false, |f| f < n); }
-            }
+                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f > n); }
+            } else if let Some(rest) = s.strip_prefix('<')
+                && let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f < n); }
             // Exact match
             vba_to_str(v).to_lowercase() == s.to_lowercase()
         }
