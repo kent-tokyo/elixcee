@@ -13,41 +13,42 @@
 //! in this crate's Rust code — both entry points call the exact same export below.
 
 use elixcee::diagnostics::json_string;
-use elixcee::reader::{BufferSheet, SheetCell};
+use elixcee::reader::{BufferSheet, BufferWorkbook, SheetCell};
 use wasm_bindgen::prelude::*;
 
 /// Read an in-memory XLSX/XLSM buffer, returning a JSON string shaped like xlsx@0.18.5's
-/// `WorkBook` (`{SheetNames, Sheets}`; each `WorkSheet` a sparse `{"A1": {t,v,f}, ...,
-/// "!ref": "A1:C3", "!merges": [...], "!hiddenRows": [...], "!hiddenCols": [...] }` object
-/// — see `packages/xlsx/src/index.d.ts`'s `WorkBook`/`WorkSheet` types). The JS side
+/// `WorkBook` (`{SheetNames, Sheets}`; each `WorkSheet` a sparse `{"A1": {t,v,f,z}, ...,
+/// "!ref": "A1:C3", "!merges": [...], "!hiddenRows": [...], "!hiddenCols": [...] }` object,
+/// plus workbook-level `"!numFmts"`/`"!date1904"` — see
+/// `packages/xlsx/src/index.d.ts`'s `WorkBook`/`WorkSheet` types). The JS side
 /// (`packages/xlsx/src/index.cjs`'s `read()`) does `JSON.parse` on the result — no
 /// `serde`/`serde_json` dependency needed for a shape this small; reuses
 /// `elixcee::diagnostics::json_string`'s existing hand-rolled escaper (src/diagnostics.rs)
 /// rather than duplicating a JSON writer or adding a dependency.
 ///
-/// `!hiddenRows`/`!hiddenCols` are NOT the oracle's own `!rows`/`!cols` shape (a per-index
-/// sparse array of `{hidden:true}`) — they're `reader.rs`'s native 1-based inclusive
-/// `[start,end]` intervals, passed through as-is. The JS layer expands them into the real
-/// `!rows`/`!cols` shape (and applies the oracle's own `opts.cellStyles` gate — confirmed
-/// live the oracle never emits `!rows`/`!cols` at all without it) — see
-/// `packages/xlsx/src/internal/read-shape.cjs`. Keeping that SheetJS-shape-specific
-/// (0-based, sparse, option-gated) work in JS matches how every other xlsx-shape decision
-/// already lives in `index.cjs`, not here.
-///
-/// Still not feature-complete with the oracle's `read()`: no formatted display text (`.w`)
-/// or date-typed cells (`t:'d'`) — both need `styles.xml` number-format parsing `reader.rs`
-/// doesn't do (see `docs/xlsx-architecture.md` / the read() item-6 tracking). Merged ranges
-/// (`!merges`) and formula text (`.f`) ARE mapped.
+/// `!hiddenRows`/`!hiddenCols`/per-cell `z`/`!numFmts`/`!date1904` are NOT the oracle's own
+/// `read()` shapes — they're `reader.rs`'s raw parsed data (1-based `[start,end]`
+/// intervals; a numFmtId integer; the workbook's custom numFmt table; a bool), passed
+/// through as-is. The JS layer resolves all of this into the oracle's real shapes —
+/// `!rows`/`!cols` (0-based sparse `{hidden:true}` arrays, gated behind `opts.cellStyles` —
+/// confirmed live the oracle never emits them without it), `.w`/`.z` (via the real `ssf`
+/// engine, `.z` gated behind `opts.cellNF`/`opts.cellStyles`), and `t:'d'`-typed cells
+/// (gated behind `opts.cellDates`) — see `packages/xlsx/src/internal/read-shape.cjs`.
+/// Keeping that SheetJS-shape-specific (0-based/sparse/option-gated/SSF-backed) work in JS
+/// matches how every other xlsx-shape decision already lives in `index.cjs`, not here —
+/// and avoids porting SSF's own format-code-to-date heuristic into Rust as a second,
+/// unverified implementation of logic already proven correct across 1831 cases
+/// (compat/differential/ssf-format.test.mjs).
 #[wasm_bindgen(js_name = readWorkbook)]
 pub fn read_workbook(bytes: &[u8]) -> Result<String, JsValue> {
-    let sheets = elixcee::reader::read_workbook_from_bytes(bytes).map_err(|e| JsValue::from_str(&e))?;
-    Ok(workbook_json(&sheets))
+    let wb = elixcee::reader::read_workbook_from_bytes(bytes).map_err(|e| JsValue::from_str(&e))?;
+    Ok(workbook_json(&wb))
 }
 
-fn workbook_json(sheets: &[BufferSheet]) -> String {
+fn workbook_json(wb: &BufferWorkbook) -> String {
     let mut names = String::from("[");
     let mut body = String::from("{");
-    for (i, bs) in sheets.iter().enumerate() {
+    for (i, bs) in wb.sheets.iter().enumerate() {
         if i > 0 {
             names.push(',');
             body.push(',');
@@ -59,7 +60,26 @@ fn workbook_json(sheets: &[BufferSheet]) -> String {
     }
     names.push(']');
     body.push('}');
-    format!("{{\"SheetNames\":{},\"Sheets\":{}}}", names, body)
+
+    let mut out = format!("{{\"SheetNames\":{},\"Sheets\":{}", names, body);
+    if !wb.number_formats.is_empty() {
+        // Deterministic key order — same rationale as worksheet_json's cell sort.
+        let mut ids: Vec<_> = wb.number_formats.keys().collect();
+        ids.sort();
+        out.push_str(",\"!numFmts\":{");
+        for (i, id) in ids.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&json_string(&id.to_string()));
+            out.push(':');
+            out.push_str(&json_string(&wb.number_formats[*id]));
+        }
+        out.push('}');
+    }
+    out.push_str(&format!(",\"!date1904\":{}", wb.date1904));
+    out.push('}');
+    out
 }
 
 fn worksheet_json(bs: &BufferSheet) -> String {
@@ -85,7 +105,7 @@ fn worksheet_json(bs: &BufferSheet) -> String {
         max_c = max_c.max(col);
         out.push_str(&json_string(&cell_ref(row, col)));
         out.push(':');
-        out.push_str(&cell_json(cell, bs.formulas.get(&(row, col))));
+        out.push_str(&cell_json(cell, bs.formulas.get(&(row, col)), bs.style_ids.get(&(row, col))));
     }
 
     // <dimension>, when present and trusted (reader.rs's parse_dimension_ref already
@@ -148,7 +168,7 @@ fn write_hidden_intervals(out: &mut String, key: &str, intervals: &[(u32, u32)])
     out.push(']');
 }
 
-fn cell_json(cell: &SheetCell, formula: Option<&String>) -> String {
+fn cell_json(cell: &SheetCell, formula: Option<&String>, fmt_id: Option<&u32>) -> String {
     let mut out = match cell {
         SheetCell::Integer(v) => format!("{{\"t\":\"n\",\"v\":{}", v),
         SheetCell::Float(v) => format!("{{\"t\":\"n\",\"v\":{}", json_number(*v)),
@@ -158,6 +178,10 @@ fn cell_json(cell: &SheetCell, formula: Option<&String>) -> String {
     if let Some(f) = formula {
         out.push_str(",\"f\":");
         out.push_str(&json_string(f));
+    }
+    if let Some(id) = fmt_id {
+        out.push_str(",\"z\":");
+        out.push_str(&id.to_string());
     }
     out.push('}');
     out
@@ -210,7 +234,15 @@ mod tests {
             },
             formulas: HashMap::new(),
             dimension: None,
+            style_ids: HashMap::new(),
         }
+    }
+
+    // Wraps a single BufferSheet into the BufferWorkbook workbook_json now takes — every
+    // test here exercises one sheet at a time, so this is the common case; number_formats/
+    // date1904-specific tests build a BufferWorkbook directly instead of through this.
+    fn wb1(s: BufferSheet) -> BufferWorkbook {
+        BufferWorkbook { sheets: vec![s], number_formats: HashMap::new(), date1904: false }
     }
 
     #[test]
@@ -223,20 +255,20 @@ mod tests {
 
     #[test]
     fn workbook_json_shapes_an_empty_sheet_with_no_ref() {
-        let json = workbook_json(&[sheet("Sheet1", vec![])]);
-        assert_eq!(json, r#"{"SheetNames":["Sheet1"],"Sheets":{"Sheet1":{}}}"#);
+        let json = workbook_json(&wb1(sheet("Sheet1", vec![])));
+        assert_eq!(json, r#"{"SheetNames":["Sheet1"],"Sheets":{"Sheet1":{}},"!date1904":false}"#);
     }
 
     #[test]
     fn workbook_json_computes_ref_and_cell_types_from_mixed_cells() {
-        let json = workbook_json(&[sheet(
+        let json = workbook_json(&wb1(sheet(
             "Sheet1",
             vec![
                 ((1, 1), SheetCell::Integer(1)),
                 ((2, 2), SheetCell::Str("hi".to_string())),
                 ((3, 1), SheetCell::Bool(true)),
             ],
-        )]);
+        )));
         assert!(json.contains(r#""A1":{"t":"n","v":1}"#));
         assert!(json.contains(r#""B2":{"t":"s","v":"hi"}"#));
         assert!(json.contains(r#""A3":{"t":"b","v":true}"#));
@@ -247,7 +279,7 @@ mod tests {
     fn workbook_json_includes_merges_as_zero_based_ranges() {
         let mut s = sheet("Sheet1", vec![((1, 1), SheetCell::Integer(1))]);
         s.sheet.merged_ranges.push(((1, 1), (1, 3)));
-        let json = workbook_json(&[s]);
+        let json = workbook_json(&wb1(s));
         assert!(json.contains(r#""!merges":[{"s":{"r":0,"c":0},"e":{"r":0,"c":2}}]"#));
     }
 
@@ -264,7 +296,7 @@ mod tests {
     fn worksheet_json_prefers_dimension_over_the_populated_bounding_box() {
         let mut s = sheet("Sheet1", vec![((1, 1), SheetCell::Integer(1))]);
         s.dimension = Some(((1, 1), (10, 5)));
-        let json = workbook_json(&[s]);
+        let json = workbook_json(&wb1(s));
         assert!(json.contains(r#""!ref":"A1:E10""#));
     }
 
@@ -272,13 +304,13 @@ mod tests {
     fn worksheet_json_uses_dimension_even_when_no_cells_are_populated() {
         let mut s = sheet("Sheet1", vec![]);
         s.dimension = Some(((1, 1), (3, 3)));
-        let json = workbook_json(&[s]);
+        let json = workbook_json(&wb1(s));
         assert!(json.contains(r#""!ref":"A1:C3""#));
     }
 
     #[test]
     fn worksheet_json_falls_back_to_the_bounding_box_when_dimension_is_absent() {
-        let json = workbook_json(&[sheet("Sheet1", vec![((2, 2), SheetCell::Integer(1))])]);
+        let json = workbook_json(&wb1(sheet("Sheet1", vec![((2, 2), SheetCell::Integer(1))])));
         assert!(json.contains(r#""!ref":"B2:B2""#));
     }
 
@@ -288,13 +320,13 @@ mod tests {
     fn cell_json_includes_f_when_a_formula_is_present() {
         let mut s = sheet("Sheet1", vec![((1, 1), SheetCell::Integer(3))]);
         s.formulas.insert((1, 1), "SUM(B1:B2)".to_string());
-        let json = workbook_json(&[s]);
+        let json = workbook_json(&wb1(s));
         assert!(json.contains(r#""A1":{"t":"n","v":3,"f":"SUM(B1:B2)"}"#));
     }
 
     #[test]
     fn cell_json_omits_f_when_no_formula_is_present() {
-        let json = workbook_json(&[sheet("Sheet1", vec![((1, 1), SheetCell::Integer(3))])]);
+        let json = workbook_json(&wb1(sheet("Sheet1", vec![((1, 1), SheetCell::Integer(3))])));
         assert!(json.contains(r#""A1":{"t":"n","v":3}"#));
         assert!(!json.contains("\"f\":"));
     }
@@ -306,15 +338,58 @@ mod tests {
         let mut s = sheet("Sheet1", vec![((1, 1), SheetCell::Integer(1))]);
         s.sheet.hidden_rows.push((11, 14));
         s.sheet.hidden_columns.push((2, 2));
-        let json = workbook_json(&[s]);
+        let json = workbook_json(&wb1(s));
         assert!(json.contains(r#""!hiddenRows":[[11,14]]"#));
         assert!(json.contains(r#""!hiddenCols":[[2,2]]"#));
     }
 
     #[test]
     fn worksheet_json_omits_hidden_interval_keys_when_none_are_hidden() {
-        let json = workbook_json(&[sheet("Sheet1", vec![((1, 1), SheetCell::Integer(1))])]);
+        let json = workbook_json(&wb1(sheet("Sheet1", vec![((1, 1), SheetCell::Integer(1))])));
         assert!(!json.contains("!hiddenRows"));
         assert!(!json.contains("!hiddenCols"));
+    }
+
+    // ── read() item 6: per-cell z, workbook !numFmts/!date1904 ──────────────
+
+    #[test]
+    fn cell_json_includes_z_when_a_non_zero_style_id_is_present() {
+        let mut s = sheet("Sheet1", vec![((1, 1), SheetCell::Integer(3))]);
+        s.style_ids.insert((1, 1), 14);
+        let json = workbook_json(&wb1(s));
+        assert!(json.contains(r#""A1":{"t":"n","v":3,"z":14}"#));
+    }
+
+    #[test]
+    fn cell_json_omits_z_when_no_style_id_is_present() {
+        let json = workbook_json(&wb1(sheet("Sheet1", vec![((1, 1), SheetCell::Integer(3))])));
+        assert!(!json.contains("\"z\":"));
+    }
+
+    #[test]
+    fn workbook_json_includes_num_fmts_when_present() {
+        let mut number_formats = HashMap::new();
+        number_formats.insert(164u32, "0.00\"kg\"".to_string());
+        let wb = BufferWorkbook {
+            sheets: vec![sheet("Sheet1", vec![])],
+            number_formats,
+            date1904: false,
+        };
+        let json = workbook_json(&wb);
+        assert!(json.contains(r#""!numFmts":{"164":"0.00\"kg\""}"#));
+    }
+
+    #[test]
+    fn workbook_json_omits_num_fmts_when_empty() {
+        let json = workbook_json(&wb1(sheet("Sheet1", vec![])));
+        assert!(!json.contains("!numFmts"));
+    }
+
+    #[test]
+    fn workbook_json_always_includes_date1904() {
+        let mut wb = wb1(sheet("Sheet1", vec![]));
+        wb.date1904 = true;
+        let json = workbook_json(&wb);
+        assert!(json.contains(r#""!date1904":true"#));
     }
 }

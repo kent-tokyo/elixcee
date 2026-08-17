@@ -63,13 +63,33 @@ pub fn read_workbook(path: &str) -> Result<Vec<WorkbookSheet>, String> {
 /// surface this entry point exists for, and `read_workbook(path)` above still handles it
 /// unchanged for path-based callers.
 ///
-/// Returns `BufferSheet`, not `WorkbookSheet` — see that type's doc comment for why: the
-/// per-cell formula text and declared `<dimension>` this buffer-first API exposes have no
-/// home on `WorkbookSheet` itself without touching every one of its other construction
-/// sites (`src/vm/mod.rs`'s tests, `src/snapshot.rs`), which are out of scope this phase.
-pub fn read_workbook_from_bytes(bytes: &[u8]) -> Result<Vec<BufferSheet>, String> {
+/// Returns `BufferWorkbook`, not `Vec<WorkbookSheet>` — see that type's doc comment for
+/// why: the per-cell formula text, declared `<dimension>`, and now (Milestone read-item 6)
+/// per-cell number-format-id and workbook-level custom number formats / date1904 this
+/// buffer-first API exposes have no home on `WorkbookSheet` itself without touching every
+/// one of its other construction sites (`src/vm/mod.rs`'s tests, `src/snapshot.rs`), which
+/// are out of scope this phase.
+pub fn read_workbook_from_bytes(bytes: &[u8]) -> Result<BufferWorkbook, String> {
     let archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
     read_workbook_from_archive(archive)
+}
+
+/// The buffer-API-only output of `read_workbook_from_bytes`: per-sheet data plus the two
+/// workbook-level pieces item 6 needs (custom number formats, date1904) that don't belong
+/// on any single sheet. See `BufferSheet`'s doc comment for why this whole tree is kept
+/// separate from `WorkbookSheet` rather than growing it.
+pub struct BufferWorkbook {
+    pub sheets: Vec<BufferSheet>,
+    /// Custom number-format definitions from `xl/styles.xml`'s `<numFmts><numFmt
+    /// numFmtId="N" formatCode="..."/></numFmts>` — ids below 164 are reserved for
+    /// built-ins the oracle's own SSF engine already knows (not duplicated here); this map
+    /// only ever holds the file's OWN custom entries, exactly what `xlsx_styles` parsed.
+    /// Empty when the sheet has no custom formats or `styles.xml` is absent.
+    pub number_formats: HashMap<u32, String>,
+    /// Whether the workbook declared `<workbookPr date1904="1"/>` (the 1904 date system) —
+    /// from `xl/workbook.xml`, read once for the whole workbook (all sheets share it, this
+    /// isn't a per-sheet setting). `false` (the default 1900 system) when absent.
+    pub date1904: bool,
 }
 
 /// A `WorkbookSheet` plus buffer-API-only data (`read_workbook_from_bytes`) that has no
@@ -97,6 +117,17 @@ pub struct BufferSheet {
     /// unparseable, degenerate/reversed, or (matching the oracle) a colon-less single-cell
     /// ref like `ref="A1"`.
     pub dimension: Option<MergeRect>,
+    /// Per-cell resolved `numFmtId` (Milestone read-item 6), 1-based `(row, col)` keys —
+    /// only cells with a NON-ZERO id are present (0 == "General", the same as no entry at
+    /// all — matching the oracle's own `fmtid = 0` default when a cell has no `s`
+    /// attribute, an out-of-range one, or an `<xf>` with no `numFmtId`). Resolving this id
+    /// to an actual format STRING (built-in or, via `BufferWorkbook::number_formats`,
+    /// custom) and deciding whether it's date-like is deliberately left to the JS layer
+    /// (`packages/xlsx/src/internal/read-shape.cjs`), which already depends on the real
+    /// `ssf` engine — see that file's doc comment for why porting SSF's own
+    /// format-code-to-date-format heuristic into Rust would be a second, unverified
+    /// implementation of logic already proven correct.
+    pub style_ids: HashMap<(u32, u32), u32>,
 }
 
 // ── Minimal pull XML parser ───────────────────────────────────────────────────
@@ -251,7 +282,7 @@ fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
 /// recognized an oracle-written hidden column at all. Used for both `<row>` and `<col>`
 /// so the two stay consistent rather than each hardcoding its own literal.
 fn attr_is_true(attrs: &[Attr], name: &str) -> bool {
-    matches!(attr_get(attrs, name), Some("1") | Some("true"))
+    matches!(attr_get(attrs, name), Some("1") | Some("true") | Some("TRUE"))
 }
 
 // Longest real entity is a numeric ref like "&#x10FFFF;" (10 chars between
@@ -327,18 +358,19 @@ fn zip_read_text<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Res
 fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
-    // Path-based read_workbook doesn't expose formulas/!ref (see BufferSheet's doc
-    // comment) — discard that half here rather than changing WorkbookSheet itself.
-    Ok(read_workbook_from_archive(archive)?.into_iter().map(|bs| bs.sheet).collect())
+    // Path-based read_workbook doesn't expose formulas/!ref/style ids (see BufferSheet's
+    // doc comment) — discard that half here rather than changing WorkbookSheet itself.
+    Ok(read_workbook_from_archive(archive)?.sheets.into_iter().map(|bs| bs.sheet).collect())
 }
 
 /// The body of the XLSX reader, generalized over any `R: Read + Seek` archive source
 /// (a `std::fs::File` for path-based reads, a `Cursor<&[u8]>` for `read_workbook_from_bytes`)
 /// — see `docs/xlsx-architecture.md`'s "reader.rs buffer-API resolution". Pure extraction
 /// from the former `read_xlsx`, no behavior change.
-fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Result<Vec<BufferSheet>, String> {
+fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Result<BufferWorkbook, String> {
     let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
+    let date1904 = xlsx_workbook_date1904(&wb_xml);
 
     let rels_xml = zip_read_text(&mut archive, "xl/_rels/workbook.xml.rels")?;
     let rels = xlsx_rels(&rels_xml);
@@ -346,6 +378,11 @@ fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Res
     let shared: Vec<String> = match zip_read_text(&mut archive, "xl/sharedStrings.xml") {
         Ok(xml) => xlsx_shared_strings(&xml),
         Err(_)  => vec![],
+    };
+
+    let styles = match zip_read_text(&mut archive, "xl/styles.xml") {
+        Ok(xml) => xlsx_styles(&xml),
+        Err(_)  => XlsxStyles::default(),
     };
 
     let mut sheets = vec![];
@@ -359,7 +396,7 @@ fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Res
         let sheet_xml = match zip_read_text(&mut archive, &zip_path) {
             Ok(s) => s, Err(_) => continue,
         };
-        let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared);
+        let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared, &styles.cell_xfs);
         sheets.push(BufferSheet {
             sheet: WorkbookSheet {
                 name,
@@ -371,9 +408,25 @@ fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Res
             },
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
+            style_ids: sheet_data.style_ids,
         });
     }
-    Ok(sheets)
+    Ok(BufferWorkbook { sheets, number_formats: styles.number_formats, date1904 })
+}
+
+/// Whether `xl/workbook.xml` declares `<workbookPr date1904="1"/>` (the 1904 date
+/// system) — mirrors the oracle's own `parsexmlbool`-based check on this exact attribute
+/// (confirmed by reading xlsx.js's WBPropsDef/date1904 handling directly), via
+/// `attr_is_true`'s same xsd:boolean lexical space.
+fn xlsx_workbook_date1904(xml: &str) -> bool {
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev
+            && tag.split(':').next_back() == Some("workbookPr") {
+                return attr_is_true(attrs, "date1904");
+            }
+    }
+    false
 }
 
 /// Returns `[(sheet_name, rId, sheetId)]` in document order.
@@ -453,6 +506,61 @@ fn xlsx_shared_strings(xml: &str) -> Vec<String> {
     strings
 }
 
+/// `xl/styles.xml`, parsed down to exactly the two pieces read()'s `.w`/`.z`/date-typed-cell
+/// support (Milestone read-item 6) needs — see `BufferWorkbook::number_formats` and
+/// `BufferSheet::style_ids`'s doc comments. Deliberately not a general styles.xml parser:
+/// fonts/fills/borders/cellStyles/cellStyleXfs are never read, matching the oracle's own
+/// cell-format resolution (`cf = styles.CellXf[tag.s]; if (cf.numFmtId != null) ...`,
+/// confirmed by reading xlsx.js directly), which never consults them either.
+#[derive(Default)]
+struct XlsxStyles {
+    /// Custom `<numFmt numFmtId="N" formatCode="...">` definitions — see
+    /// `BufferWorkbook::number_formats`.
+    number_formats: HashMap<u32, String>,
+    /// `<cellXfs><xf numFmtId="N".../></cellXfs>` entries in document order — a cell's
+    /// `s="N"` attribute is a 0-based index into this Vec (`None` when an `<xf>` has no
+    /// `numFmtId` attribute at all, matching the oracle's own `cf.numFmtId != null` check).
+    cell_xfs: Vec<Option<u32>>,
+}
+
+fn xlsx_styles(xml: &str) -> XlsxStyles {
+    let mut iter = XmlIter::new(xml);
+    let mut number_formats: HashMap<u32, String> = HashMap::new();
+    let mut cell_xfs: Vec<Option<u32>> = Vec::new();
+    let mut in_cell_xfs = false;
+
+    while let Some(ev) = iter.next_ev() {
+        match &ev {
+            Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                match local {
+                    "numFmt" => {
+                        if let (Some(id), Some(code)) = (
+                            attr_get(attrs, "numFmtId").and_then(|s| s.parse::<u32>().ok()),
+                            attr_get(attrs, "formatCode"),
+                        ) {
+                            number_formats.insert(id, code.to_string());
+                        }
+                    }
+                    // A self-closing <cellXfs/> (zero entries) never produces a matching
+                    // Close event — only an actual Open sets in_cell_xfs, mirroring how
+                    // xlsx_sheet_cells already guards <f/>.
+                    "cellXfs" if matches!(ev, Ev::Open(_, _)) => { in_cell_xfs = true; }
+                    "xf" if in_cell_xfs => {
+                        cell_xfs.push(attr_get(attrs, "numFmtId").and_then(|s| s.parse::<u32>().ok()));
+                    }
+                    _ => {}
+                }
+            }
+            Ev::Close(tag) => {
+                if tag.split(':').next_back() == Some("cellXfs") { in_cell_xfs = false; }
+            }
+            Ev::Text(_) => {}
+        }
+    }
+    XlsxStyles { number_formats, cell_xfs }
+}
+
 /// Parses a single worksheet XML into a 1-based (row, col) → SheetCell map,
 /// plus any `<mergeCells><mergeCell ref="..."/></mergeCells>` ranges
 /// (Milestone B6c2) and hidden row/column metadata (Milestone B7b).
@@ -474,9 +582,11 @@ struct XlsxSheetData {
     /// The worksheet's declared `<dimension>`, when present and trusted —
     /// see `BufferSheet::dimension` / `parse_dimension_ref`.
     dimension: Option<MergeRect>,
+    /// Per-cell resolved non-zero numFmtId — see `BufferSheet::style_ids`.
+    style_ids: HashMap<(u32, u32), u32>,
 }
 
-fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
+fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> XlsxSheetData {
     let mut iter = XmlIter::new(xml);
     let mut cells: HashMap<(u32, u32), SheetCell> = HashMap::new();
     let mut merged_ranges: Vec<MergeRect> = Vec::new();
@@ -485,6 +595,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
     let mut pending_hidden_row_run: Option<(u32, u32)> = None;
     let mut formulas: HashMap<(u32, u32), String> = HashMap::new();
     let mut dimension: Option<MergeRect> = None;
+    let mut style_ids: HashMap<(u32, u32), u32> = HashMap::new();
     let mut cur_row: u32 = 0;
     let mut cur_col: u32 = 0;
     let mut cur_type = String::new();
@@ -538,6 +649,19 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
                         is_text.clear();
                         in_f = false;
                         cur_formula.clear();
+                        // s="N" is a 0-based index into <cellXfs> (Milestone read-item 6)
+                        // — mirrors the oracle's own `cf = styles.CellXf[tag.s]` resolution
+                        // exactly: an absent/out-of-range index, or an <xf> whose own
+                        // numFmtId attribute was absent, all fall back to 0 (General) —
+                        // matching the oracle's `fmtid = 0` default — so only a resolved
+                        // NON-zero id is worth recording (0 == "no entry" downstream).
+                        if cur_row > 0 && cur_col > 0
+                            && let Some(idx) = attr_get(attrs, "s").and_then(|s| s.parse::<usize>().ok())
+                            && let Some(Some(fmt_id)) = cell_xfs.get(idx)
+                            && *fmt_id != 0
+                        {
+                            style_ids.insert((cur_row, cur_col), *fmt_id);
+                        }
                     }
                     "v" => { in_v = true; }
                     "f" => {
@@ -624,7 +748,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String]) -> XlsxSheetData {
     if let Some(run) = pending_hidden_row_run.take() {
         hidden_rows.push(run);
     }
-    XlsxSheetData { cells, merged_ranges, hidden_rows, hidden_columns, formulas, dimension }
+    XlsxSheetData { cells, merged_ranges, hidden_rows, hidden_columns, formulas, dimension, style_ids }
 }
 
 fn xlsx_parse_cell(v: &str, t: &str, shared: &[String]) -> Option<SheetCell> {
@@ -940,7 +1064,7 @@ mod merge_tests {
 <mergeCell ref="B3:B4"/>
 </mergeCells>
 </worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.cells.len(), 1);
         assert_eq!(data.merged_ranges, vec![((1, 1), (1, 3)), ((3, 2), (4, 2))]);
     }
@@ -948,7 +1072,7 @@ mod merge_tests {
     #[test]
     fn xlsx_sheet_cells_with_no_merge_cells_element_has_empty_merged_ranges() {
         let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert!(data.merged_ranges.is_empty());
         assert!(data.hidden_rows.is_empty());
         assert!(data.hidden_columns.is_empty());
@@ -973,7 +1097,7 @@ mod merge_tests {
 <row r="31" hidden="1"/>
 </sheetData>
 </worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.hidden_rows, vec![(11, 14), (30, 31)]);
         assert_eq!(data.hidden_columns, vec![(2, 2)]);
     }
@@ -988,7 +1112,7 @@ mod merge_tests {
 <row r="5" hidden="1"/>
 <row r="7" hidden="1"/>
 </sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.hidden_rows, vec![(5, 5), (7, 7)]);
     }
 
@@ -998,7 +1122,7 @@ mod merge_tests {
 <col min="2" max="4" hidden="1"/>
 <col min="6" max="6"/>
 </cols><sheetData></sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.hidden_columns, vec![(2, 4)]);
     }
 
@@ -1014,7 +1138,7 @@ mod merge_tests {
 </cols><sheetData>
 <row r="1" hidden="true"><c r="A1"><v>1</v></c></row>
 </sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.hidden_columns, vec![(1, 1)]);
         assert_eq!(data.hidden_rows, vec![(1, 1)]);
     }
@@ -1120,7 +1244,7 @@ mod merge_tests {
         let xml = r#"<worksheet><sheetData>
 <row r="1"><c r="A1" t="str"><v></v></c><c r="B1" t="str"><v>after</v></c></row>
 </sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         match data.cells.get(&(1, 1)) {
             Some(SheetCell::Str(s)) => assert_eq!(s, ""),
             other => panic!("expected Str(\"\") at A1, got {:?}", other.is_some()),
@@ -1134,7 +1258,7 @@ mod merge_tests {
         // cell with no <v> content at all) no cell is inserted — the fix must not invent
         // a numeric value out of an empty string.
         let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v></v></c></row></sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert!(data.cells.is_empty());
     }
 
@@ -1167,14 +1291,14 @@ mod merge_tests {
 <row r="1"><c r="A1" t="str"><v>a</v></c></row>
 </sheetData>
 </worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.dimension, Some(((1, 1), (10, 5))));
     }
 
     #[test]
     fn xlsx_sheet_cells_dimension_is_none_when_the_tag_is_absent() {
         let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.dimension, None);
     }
 
@@ -1185,7 +1309,7 @@ mod merge_tests {
         let xml = r#"<worksheet><sheetData>
 <row r="1"><c r="A1"><f>SUM(B1:B2)</f><v>3</v></c></row>
 </sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.formulas.get(&(1, 1)).map(String::as_str), Some("SUM(B1:B2)"));
         match data.cells.get(&(1, 1)) {
             Some(SheetCell::Integer(v)) => assert_eq!(*v, 3),
@@ -1204,7 +1328,7 @@ mod merge_tests {
 <row r="1"><c r="A1"><f t="shared" ref="A1:A2" si="0">B1</f><v>1</v></c>
 <c r="A2"><f t="shared" si="0"/><v>2</v></c></row>
 </sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.formulas.get(&(1, 1)).map(String::as_str), Some("B1"));
         assert_eq!(data.formulas.get(&(1, 2)), None);
     }
@@ -1214,8 +1338,90 @@ mod merge_tests {
         let xml = r#"<worksheet><sheetData>
 <row r="1"><c r="A1"><f>A1&amp;"x"</f><v>1</v></c></row>
 </sheetData></worksheet>"#;
-        let data = xlsx_sheet_cells(xml, &[]);
+        let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.formulas.get(&(1, 1)).map(String::as_str), Some(r#"A1&"x""#));
+    }
+
+    // ── read() item 6: styles.xml (numFmts/cellXfs), date1904 ──────────────
+
+    #[test]
+    fn xlsx_styles_reads_custom_number_formats_and_cell_xfs_in_order() {
+        let xml = r#"<styleSheet>
+<numFmts count="1"><numFmt numFmtId="164" formatCode="0.00&quot;kg&quot;"/></numFmts>
+<cellXfs count="3">
+<xf numFmtId="0"/>
+<xf numFmtId="2"/>
+<xf numFmtId="164"/>
+</cellXfs>
+</styleSheet>"#;
+        let styles = xlsx_styles(xml);
+        assert_eq!(styles.number_formats.get(&164).map(String::as_str), Some(r#"0.00"kg""#));
+        assert_eq!(styles.cell_xfs, vec![Some(0), Some(2), Some(164)]);
+    }
+
+    #[test]
+    fn xlsx_styles_an_xf_with_no_numfmtid_attribute_resolves_to_none() {
+        let xml = r#"<styleSheet><cellXfs count="1"><xf fontId="0"/></cellXfs></styleSheet>"#;
+        let styles = xlsx_styles(xml);
+        assert_eq!(styles.cell_xfs, vec![None]);
+    }
+
+    #[test]
+    fn xlsx_styles_ignores_xf_entries_outside_cell_xfs() {
+        // <cellStyleXfs>'s <xf> entries must NOT leak into cell_xfs — only <cellXfs>'s
+        // children are the ones a cell's s="N" attribute indexes into (matching the
+        // oracle's own styles.CellXf, built from <cellXfs> alone).
+        let xml = r#"<styleSheet>
+<cellStyleXfs count="1"><xf numFmtId="9"/></cellStyleXfs>
+<cellXfs count="1"><xf numFmtId="14"/></cellXfs>
+</styleSheet>"#;
+        let styles = xlsx_styles(xml);
+        assert_eq!(styles.cell_xfs, vec![Some(14)]);
+    }
+
+    #[test]
+    fn xlsx_styles_handles_an_empty_self_closing_cell_xfs() {
+        let xml = r#"<styleSheet><cellXfs count="0"/></styleSheet>"#;
+        let styles = xlsx_styles(xml);
+        assert!(styles.cell_xfs.is_empty());
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_resolves_a_cells_s_attribute_through_cell_xfs() {
+        let cell_xfs = vec![Some(0u32), Some(14u32)];
+        let xml = r#"<worksheet><sheetData>
+<row r="1"><c r="A1" s="1"><v>45444</v></c><c r="B1" s="0"><v>1</v></c><c r="C1"><v>2</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &cell_xfs);
+        assert_eq!(data.style_ids.get(&(1, 1)), Some(&14));
+        // s="0" (General) and no s= at all both resolve to "no entry" (0 == absent).
+        assert_eq!(data.style_ids.get(&(1, 2)), None);
+        assert_eq!(data.style_ids.get(&(1, 3)), None);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_an_out_of_range_s_index_resolves_to_no_style() {
+        let cell_xfs = vec![Some(14u32)];
+        let xml = r#"<worksheet><sheetData><row r="1"><c r="A1" s="99"><v>1</v></c></row></sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &cell_xfs);
+        assert_eq!(data.style_ids.get(&(1, 1)), None);
+    }
+
+    #[test]
+    fn xlsx_workbook_date1904_defaults_to_false_when_absent() {
+        let xml = r#"<workbook><sheets></sheets></workbook>"#;
+        assert!(!xlsx_workbook_date1904(xml));
+    }
+
+    #[test]
+    fn xlsx_workbook_date1904_reads_the_declared_flag() {
+        let xml = r#"<workbook><workbookPr date1904="1"/><sheets></sheets></workbook>"#;
+        assert!(xlsx_workbook_date1904(xml));
+        // The oracle's own writer/reader accepts "true" too (xsd:boolean), not just "1".
+        let xml2 = r#"<workbook><workbookPr date1904="true"/></workbook>"#;
+        assert!(xlsx_workbook_date1904(xml2));
+        let xml3 = r#"<workbook><workbookPr date1904="0"/></workbook>"#;
+        assert!(!xlsx_workbook_date1904(xml3));
     }
 }
 
@@ -1246,8 +1452,8 @@ mod from_bytes_tests {
         let bytes = std::fs::read(path).expect("fixture should be readable");
         let from_bytes = read_workbook_from_bytes(&bytes).expect("read_workbook_from_bytes should succeed");
 
-        assert_eq!(from_path.len(), from_bytes.len());
-        for (a, bs) in from_path.iter().zip(from_bytes.iter()) {
+        assert_eq!(from_path.len(), from_bytes.sheets.len());
+        for (a, bs) in from_path.iter().zip(from_bytes.sheets.iter()) {
             let b = &bs.sheet;
             assert_eq!(a.name, b.name);
             assert_eq!(a.sheet_id, b.sheet_id);
