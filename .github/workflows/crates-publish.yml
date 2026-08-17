@@ -28,18 +28,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # elixcee-types has no dependency on elixcee, so it can publish standalone.
-      # `|| true` lets a re-run tolerate "already exists" if a prior attempt's
-      # publish step succeeded but a later step in the same run failed.
       - name: cargo publish -p elixcee-types
-        run: cargo publish -p elixcee-types || true
+        run: cargo publish -p elixcee-types
 
       # elixcee's own dependency on elixcee-types is version-pinned (not
       # path-only) for publishing, so it needs the crates.io index to have
-      # picked up the elixcee-types upload before it can resolve it.
+      # picked up the elixcee-types upload before it can resolve it. crates.io's
+      # API rejects requests with no identifying User-Agent (data-access
+      # policy), so this sends one rather than getting a spurious 403.
       - name: wait for elixcee-types to appear in the crates.io index
         run: |
           for i in $(seq 1 30); do
-            if curl -sf "https://crates.io/api/v1/crates/elixcee-types/0.1.0" -o /dev/null; then
+            if curl -sf -H "User-Agent: elixcee-ci (https://github.com/kent-tokyo/elixcee)" \
+                 "https://crates.io/api/v1/crates/elixcee-types/0.1.0" -o /dev/null; then
               echo "elixcee-types 0.1.0 is live on crates.io"
               exit 0
             fi
