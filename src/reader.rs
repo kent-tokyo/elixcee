@@ -3,7 +3,7 @@
 // Row/col indices are 1-based, matching the VM's convention.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Cursor, Read, Seek};
 use zip::ZipArchive;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -54,6 +54,17 @@ pub fn read_workbook(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     } else {
         Err(format!("unsupported file format: {}", path))
     }
+}
+
+/// Read an in-memory XLSX/XLSM (Office Open XML ZIP) buffer into sheets — the buffer-
+/// first entry point the WASM bridge (`crates/elixcee-wasm`) and `@elixcee/xlsx`'s
+/// `XLSX.read()` are built on (see `docs/xlsx-architecture.md`'s "reader.rs buffer-API
+/// resolution"). ODS is intentionally not handled here: it's not part of the xlsx-compat
+/// surface this entry point exists for, and `read_workbook(path)` above still handles it
+/// unchanged for path-based callers.
+pub fn read_workbook_from_bytes(bytes: &[u8]) -> Result<Vec<WorkbookSheet>, String> {
+    let archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    read_workbook_from_archive(archive)
 }
 
 // ── Minimal pull XML parser ───────────────────────────────────────────────────
@@ -260,7 +271,7 @@ fn xml_unescape(s: &str) -> String {
 /// 64 MB decompressed cap per entry — enough for any real spreadsheet XML.
 const ZIP_ENTRY_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
-fn zip_read_text(archive: &mut ZipArchive<std::fs::File>, name: &str) -> Result<String, String> {
+fn zip_read_text<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Result<String, String> {
     let mut entry = archive.by_name(name).map_err(|e| format!("{}: {}", name, e))?;
     let mut s = String::new();
     entry.by_ref().take(ZIP_ENTRY_MAX_BYTES).read_to_string(&mut s).map_err(|e| e.to_string())?;
@@ -271,8 +282,15 @@ fn zip_read_text(archive: &mut ZipArchive<std::fs::File>, name: &str) -> Result<
 
 fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    read_workbook_from_archive(archive)
+}
 
+/// The body of the XLSX reader, generalized over any `R: Read + Seek` archive source
+/// (a `std::fs::File` for path-based reads, a `Cursor<&[u8]>` for `read_workbook_from_bytes`)
+/// — see `docs/xlsx-architecture.md`'s "reader.rs buffer-API resolution". Pure extraction
+/// from the former `read_xlsx`, no behavior change.
+fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Result<Vec<WorkbookSheet>, String> {
     let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
 
@@ -960,5 +978,49 @@ mod merge_tests {
     fn xml_unescape_leaves_an_unterminated_ampersand_literal() {
         assert_eq!(xml_unescape("a & b"), "a & b");
         assert_eq!(xml_unescape("a &notarealentity forever"), "a &notarealentity forever");
+    }
+}
+
+// ── Buffer-API resolution: read_workbook_from_bytes ─────────────────────────
+#[cfg(test)]
+mod from_bytes_tests {
+    use super::*;
+
+    // The path-based and bytes-based entry points must read the exact same real .xlsx
+    // fixture into equal sheet data — read_workbook_from_bytes is meant to be a pure
+    // buffer-input alternative to read_workbook(path), not a second implementation with
+    // its own drift (see docs/xlsx-architecture.md's "reader.rs buffer-API resolution").
+    fn cell_map_eq(a: &HashMap<(u32, u32), SheetCell>, b: &HashMap<(u32, u32), SheetCell>) -> bool {
+        if a.len() != b.len() { return false; }
+        a.iter().all(|(k, v)| match (v, b.get(k)) {
+            (SheetCell::Integer(x), Some(SheetCell::Integer(y))) => x == y,
+            (SheetCell::Float(x), Some(SheetCell::Float(y))) => x == y,
+            (SheetCell::Str(x), Some(SheetCell::Str(y))) => x == y,
+            (SheetCell::Bool(x), Some(SheetCell::Bool(y))) => x == y,
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_matches_read_workbook_on_a_real_xlsx_fixture() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/e2e/source.xlsx");
+        let from_path = read_workbook(path).expect("read_workbook(path) should succeed");
+        let bytes = std::fs::read(path).expect("fixture should be readable");
+        let from_bytes = read_workbook_from_bytes(&bytes).expect("read_workbook_from_bytes should succeed");
+
+        assert_eq!(from_path.len(), from_bytes.len());
+        for (a, b) in from_path.iter().zip(from_bytes.iter()) {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.sheet_id, b.sheet_id);
+            assert_eq!(a.merged_ranges, b.merged_ranges);
+            assert_eq!(a.hidden_rows, b.hidden_rows);
+            assert_eq!(a.hidden_columns, b.hidden_columns);
+            assert!(cell_map_eq(&a.cells, &b.cells));
+        }
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_a_non_zip_buffer() {
+        assert!(read_workbook_from_bytes(b"not a zip file").is_err());
     }
 }

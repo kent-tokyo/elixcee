@@ -3,6 +3,7 @@
 // `module.exports = {...}` shape via cjs-module-lexer, so this works without a build
 // step or duplicated logic.
 export {
+  read,
   encode_col,
   encode_row,
   encode_cell,

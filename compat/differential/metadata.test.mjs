@@ -23,7 +23,17 @@ import * as elixceeEsm from '../../packages/xlsx/src/index.mjs';
 const U = XLSX.utils;
 let failures = 0;
 
+// `read` (Phase 2B) is the one export that isn't a `utils.*` member at all — the oracle's
+// own `read` lives at the top level (`XLSX.read`, confirmed live: `U.read === undefined`,
+// `Object.keys(XLSX)` lists `read` third, right after `version`/`parse_xlscfb`). Comparing
+// it against `XLSX.utils` in the loop below would always report a type mismatch for a
+// reason that has nothing to do with this package's own correctness — it's checked against
+// the right oracle surface (`XLSX`) in its own block instead, and excluded from the
+// utils-key-order check further down for the same reason.
+const READ_ONLY_KEY = 'read';
+
 for (const key of Object.keys(elixceeCjs)) {
+  if (key === READ_ONLY_KEY) continue;
   const oracleVal = U[key];
   const elixceeVal = elixceeCjs[key];
   if (typeof oracleVal !== typeof elixceeVal) {
@@ -72,6 +82,36 @@ for (const key of Object.keys(elixceeCjs)) {
   }
 }
 
+// `read` against its real oracle counterpart (top-level `XLSX.read`, not `XLSX.utils`) —
+// see READ_ONLY_KEY's comment above for why this lives in its own block.
+{
+  const oracleRead = XLSX.read;
+  const elixceeRead = elixceeCjs.read;
+  const problems = [];
+  if (elixceeRead.name !== oracleRead.name) {
+    problems.push(`name: oracle=${JSON.stringify(oracleRead.name)} elixcee=${JSON.stringify(elixceeRead.name)}`);
+  }
+  if (elixceeRead.length !== oracleRead.length) {
+    problems.push(`length: oracle=${oracleRead.length} elixcee=${elixceeRead.length}`);
+  }
+  const oracleDesc = Object.getOwnPropertyDescriptor(XLSX, 'read');
+  const elixceeDesc = Object.getOwnPropertyDescriptor(elixceeCjs, 'read');
+  for (const flag of ['enumerable', 'writable', 'configurable']) {
+    if (oracleDesc[flag] !== elixceeDesc[flag]) {
+      problems.push(`descriptor.${flag}: oracle=${oracleDesc[flag]} elixcee=${elixceeDesc[flag]}`);
+    }
+  }
+  if (elixceeEsm.read !== elixceeCjs.read) {
+    problems.push('CJS/ESM identity: elixceeEsm.read !== elixceeCjs.read (should be the same function)');
+  }
+  if (problems.length) {
+    console.error(`FAIL  read (vs top-level XLSX.read): ${problems.join('; ')}`);
+    failures += 1;
+  } else {
+    console.log('OK    read (vs top-level XLSX.read, not XLSX.utils)');
+  }
+}
+
 console.log(`\n${Object.keys(elixceeCjs).length - failures}/${Object.keys(elixceeCjs).length} exports match name/length/descriptor/CJS-ESM-identity against the oracle`);
 
 // Key ORDER, not just per-key content — Phase 1C discovered this had never been checked
@@ -83,7 +123,9 @@ console.log(`\n${Object.keys(elixceeCjs).length - failures}/${Object.keys(elixce
 // oracle key is implemented.
 {
   const oracleOrder = Object.keys(U);
-  const elixceeOrder = Object.keys(elixceeCjs);
+  // read excluded — it isn't a utils.* member (see READ_ONLY_KEY's comment above), so it
+  // has no position in Object.keys(XLSX.utils) to compare against.
+  const elixceeOrder = Object.keys(elixceeCjs).filter((k) => k !== READ_ONLY_KEY);
   const oracleFiltered = oracleOrder.filter((k) => elixceeOrder.includes(k));
   if (JSON.stringify(elixceeOrder) !== JSON.stringify(oracleFiltered)) {
     console.error('FAIL  key order: elixcee\'s Object.keys() does not match the oracle\'s own relative order');

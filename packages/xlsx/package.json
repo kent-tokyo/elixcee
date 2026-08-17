@@ -2,7 +2,7 @@
   "name": "@elixcee/xlsx",
   "version": "0.0.0-development",
   "private": true,
-  "description": "Drop-in replacement for xlsx (SheetJS) — Phase 1C: full utils surface (aliases/constants, HTML export, DOM table conversion) plus everything from earlier phases, no file I/O yet. See ../../docs/xlsx-architecture.md.",
+  "description": "Drop-in replacement for xlsx (SheetJS) — Phase 2B: minimal buffer-first read() backed by a WASM bridge over elixcee's own reader, plus the full utils surface (aliases/constants, HTML export, DOM table conversion) from earlier phases. See ../../docs/xlsx-architecture.md.",
   "license": "MIT",
   "type": "commonjs",
   "main": "./src/index.cjs",

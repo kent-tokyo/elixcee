@@ -12,7 +12,7 @@ categories = ["simulation", "text-processing"]
 readme = "README.md"
 
 [workspace]
-members = ["crates/elixcee-types"]
+members = ["crates/elixcee-types", "crates/elixcee-wasm"]
 # fuzz/ is edition 2021 (root is 2024) and built via its own `cargo fuzz`
 # toolchain — excluded so it keeps resolving as its own workspace root
 # rather than being swept into this one.
@@ -28,7 +28,16 @@ python = ["dep:pyo3", "pyo3/extension-module"]
 [dependencies]
 elixcee-types = { path = "crates/elixcee-types" }
 pyo3 = { version = "0.29.0", optional = true }
-zip = "7"
+# default-features off: elixcee only ever reads/writes Stored/Deflated zip entries
+# (grep-confirmed — no zstd/bzip2/lzma/AES anywhere in src/), but zip's *default*
+# feature set pulls in zstd-sys (a C library) and getrandom's aes-crypto path, both
+# of which fail to compile for wasm32-unknown-unknown in this toolchain (no C
+# codegen backend for that triple). "deflate" alone covers Stored (always
+# available) + Deflated via zlib-rs (pure Rust), closing the gap with no feature
+# loss for any real .xlsx/.xlsm/.ods (Excel/LibreOffice always emit Stored/
+# Deflated) — see crates/elixcee-wasm's Cargo.toml doc comment and
+# docs/xlsx-architecture.md's Phase 2B-0/2B WASM bridge section.
+zip = { version = "7", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 calamine   = "0.24"
@@ -45,3 +54,24 @@ toml = "0.8"
 [[bench]]
 name = "vm_bench"
 harness = false
+
+# MEASUREMENT-ONLY — not part of the shipped build. crates/elixcee-wasm/build.sh (the
+# script that actually produces what packages/xlsx vendors) calls `wasm-pack build`, which
+# uses the standard `release` profile, not this one; the 237,825-byte artifact reported in
+# this initiative's docs/commit history came from release + wasm-opt, NOT from
+# wasm-release. This profile exists only so a `cargo build --profile wasm-release --target
+# wasm32-unknown-unknown -p elixcee-wasm` one-off can show whether opt-level="z"/LTO/strip
+# would shrink the module further (useful context if size ever becomes a concern) —
+# regenerate that number by running the command above and checking
+# target/wasm32-unknown-unknown/wasm-release/elixcee_wasm.wasm's size, don't assume it's
+# what ships. Never applied to the default `release` profile, so it can't affect the CLI or
+# `python`-feature build (panic = "abort" in particular would be wrong there: pyo3's
+# extension-module glue needs unwinding to turn a Rust panic into a catchable Python
+# exception).
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
