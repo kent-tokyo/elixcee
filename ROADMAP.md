@@ -36,10 +36,13 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
    one. Corpus's own parse-error count: 8 → 4 (see item 3b, a bug this fix unmasked).
 3b. ~~Single-line `If cond Then stmt` (no `End If`) doesn't parse at all~~ — **fixed**
    (Unreleased): discovered while verifying item 3's fix (the 4 corpus parse errors left
-   after fixing comma-`Dim` were all this, not further `Dim` cases). Only identifier-led
-   inline statements are recognized (covers 100% of what the corpus actually uses here);
-   a keyword-led branch degrades to `Stmt::Unsupported` instead of hard-erroring. Corpus's
-   own parse-error count is now 0/581, verified by rerunning the corpus, not just unit tests.
+   after fixing comma-`Dim` were all this, not further `Dim` cases). Identifier-led inline
+   statements are recognized (covers 100% of what the corpus actually uses here), plus
+   `Exit For|Do|Sub|Function`/`GoTo <label>` handled explicitly — an early version routed
+   those through the generic identifier-statement parser too, which silently turned
+   `If done Then Exit Sub` into a no-op instead of exiting (caught in review, fixed before
+   shipping — see CHANGELOG). Corpus's own parse-error count is 0/581, verified by
+   rerunning the corpus, not just unit tests.
 4. ~~`Not` is boolean-truthy, not bitwise~~ — **fixed** (Unreleased): `Not` now splits
    logical-vs-bitwise the same way `And`/`Or`/`Xor` already did — a genuine `Boolean` gets
    logical negation, anything else gets a real bitwise complement. `Not 5 And 3` now matches

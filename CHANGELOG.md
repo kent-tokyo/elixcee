@@ -12,15 +12,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Single-line `If cond Then stmt [Else stmt]` (no `End If`) now parses — previously
   unsupported at all (`parse_if` unconditionally required a newline right after `Then`).
-  Only identifier-led statements (assignment, sub call, array/field write — whatever
-  `parse_ident_stmt` already covers) are recognized inline; this project's own
-  581-scenario VBA corpus never uses anything else here (surveyed directly). A
-  keyword-led branch (e.g. `Then Exit Sub`) degrades to `Stmt::Unsupported` rather than a
-  hard parse error, matching `parse_set`'s existing unmodeled-target precedent. This was
-  discovered, not hunted for: it's what the comma-`Dim` fix above unmasked on the 4
-  corpus scenarios that fix's own parse-error count didn't reach 0 on. With this fix, the
-  corpus's parse-error count is now genuinely 0/581 (verified by rerunning
-  `compat/corpus/run-elixcee.mjs`, not assumed from the unit tests alone).
+  Identifier-led statements (assignment, sub call, array/field write — whatever
+  `parse_ident_stmt` already covers) are recognized inline, and `Exit For|Do|Sub|Function`
+  / `GoTo <label>` are handled explicitly rather than routed through `parse_ident_stmt` —
+  the first implementation didn't do this and silently turned `If done Then Exit Sub` into
+  a no-op that let execution fall through instead of exiting, caught in review before this
+  ever shipped (verified live: `y = 99` after `If x > 0 Then Exit Sub` no longer runs).
+  Anything still unrecognized degrades to `Stmt::Unsupported`, same precedent as
+  `parse_set`'s unmodeled-target fallback and the identical fallback an ordinary
+  unparenthesized bare sub call already hits in block-form VBA — not a new risk this adds.
+  This was discovered, not hunted for: it's what the comma-`Dim` fix below unmasked on the
+  4 corpus scenarios that fix's own parse-error count didn't reach 0 on. With this fix,
+  the corpus's parse-error count is genuinely 0/581 (verified by rerunning
+  `compat/corpus/run-elixcee.mjs` — the *committed* `compat/corpus/results/` snapshot
+  still shows the pre-fix numbers, since that file is regenerated on demand, not on every
+  commit; don't read it as current without rerunning it).
+- Comma-separated `Dim`'s built-in/bare-declarator branch (below) lost its old tolerance
+  for trailing per-declarator syntax it doesn't model (e.g. `Dim s As String * 10`'s
+  fixed-length-string suffix) when the comma loop was added — the first implementation
+  returned immediately instead of consuming up to the next comma, so that syntax now
+  hard-failed `eat_eol()` instead of being silently skipped like it always was. Caught in
+  review before shipping; both the fixed-length-string case and its combination with a
+  second comma-declarator (`Dim s As String * 10, i As Integer`) are covered by tests.
 - `Not` now does a real bitwise complement on numeric operands (`Not 5` is `-6`, matching real
   VBA), instead of coercing the operand to truthy/falsy first. Only a genuine `Boolean`
   operand still gets logical negation — the same logical-vs-bitwise split `And`/`Or`/`Xor`
@@ -37,14 +50,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   new semantics, just no longer losing the rest of the line. Verified against the real
   corpus, not just new unit tests: elixcee's own parse-error count on the 581 scenarios goes
   from 8 to 4.
-- **Discovered while verifying the above, not fixed here**: the 4 remaining corpus parse
-  errors turned out not to be further comma-`Dim` cases — they're a single-line
-  `If cond Then stmt` (no `End If`) that this parser has never supported at all
-  (`parse_if` unconditionally requires a newline right after `Then`). The old comma-`Dim`
-  bug was masking this on the same 4 scenarios (parsing failed at the `Dim` line, before
-  ever reaching the `If` line). Reproduced directly (`If x > 0 Then y = 5` fails standalone,
-  with no `Dim` involved) — tracked in `ROADMAP.md`, not implemented as part of this fix.
-
 Everything below was previously listed under `[Unreleased]`; this release closes that
 section rather than adding new scope. Developed in two internal phases (2B, then 2C after
 an integration review found real gaps in 2B's first pass): 2B added the VBA object model

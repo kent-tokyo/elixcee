@@ -3718,6 +3718,31 @@ mod tests {
         assert_eq!(vm.variables["y"], Variant::Integer(2));
     }
 
+    #[test]
+    fn test_single_line_if_exit_sub_actually_exits() {
+        // Routing `Exit Sub` through the generic identifier-statement parser
+        // (as if it were a bare, unrecognized identifier) would silently
+        // no-op it instead of exiting — the statement after the single-line
+        // If would then wrongly still run. `y` must stay unset.
+        let vm = run("Sub MySub()\n    x = 1\n    If x > 0 Then Exit Sub\n    y = 99\nEnd Sub\n");
+        assert!(!vm.variables.contains_key("y"));
+    }
+
+    #[test]
+    fn test_single_line_if_goto_actually_jumps() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    x = 1\n",
+            "    If x > 0 Then GoTo Skip\n",
+            "    y = 99\n",
+            "Skip:\n",
+            "    z = 1\n",
+            "End Sub\n",
+        ));
+        assert!(!vm.variables.contains_key("y"));
+        assert_eq!(vm.variables["z"], Variant::Integer(1));
+    }
+
     // ── Exit ─────────────────────────────────────────────────────────────────
 
     #[test]

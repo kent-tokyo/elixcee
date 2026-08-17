@@ -653,15 +653,27 @@ impl Parser {
 
     /// One inline statement for a single-line `If`/`Else` branch. Only
     /// identifier-led statements (assignment, sub call, array/field write —
-    /// whatever `parse_ident_stmt` covers) are recognized; this project's
-    /// own 581-scenario VBA corpus never uses anything else here (surveyed
-    /// directly, not assumed — see ROADMAP.md). A keyword-led branch (e.g.
-    /// `Then Exit Sub`) degrades to `Stmt::Unsupported` rather than a hard
-    /// parse error, same precedent as `parse_set`'s unmodeled-target
-    /// fallback: an otherwise-working macro should still run.
+    /// whatever `parse_ident_stmt` covers) are recognized, plus `Exit
+    /// For|Do|Sub|Function` and `GoTo <label>` handled explicitly (see
+    /// below — routing them through `parse_ident_stmt` instead would
+    /// silently no-op a control-flow transfer, not just skip an unmodeled
+    /// feature). This project's own 581-scenario VBA corpus never uses
+    /// anything else here (surveyed directly, not assumed — see
+    /// ROADMAP.md). Anything still unrecognized degrades to
+    /// `Stmt::Unsupported` rather than a hard parse error, same precedent
+    /// as `parse_set`'s unmodeled-target fallback and — importantly — the
+    /// exact same fallback a bare unparenthesized sub call already hits in
+    /// ordinary block-form VBA (`parse_ident_stmt`'s own "bare ident —
+    /// noop" case): this isn't a new risk single-line `If` introduces, just
+    /// the existing one reused.
     fn parse_single_line_if_branch(&mut self) -> Result<SpannedStmt, String> {
         let start = self.peek_span().start;
-        let stmt = if matches!(self.peek(), Tok::Ident(_)) {
+        let stmt = if self.is_ident("exit") {
+            self.parse_exit()?
+        } else if self.is_ident("goto") {
+            self.advance();
+            Stmt::GoTo(self.consume_ident()?)
+        } else if matches!(self.peek(), Tok::Ident(_)) {
             self.parse_ident_stmt()?
         } else {
             while !matches!(self.peek(), Tok::Newline | Tok::Eof) && !self.is_ident("else") {
@@ -1081,10 +1093,22 @@ impl Parser {
                     return Ok(Stmt::DimRecord { var, type_name });
                 }
             }
-            // Built-in type or bare Dim → no-op
+            // Built-in type or bare Dim → no-op. Consume any trailing
+            // per-declarator syntax this grammar doesn't model (e.g. `As
+            // String * 10`'s fixed-length-string suffix) up to the next
+            // declarator-separating comma, so it reaches the outer comma
+            // loop instead of hard-failing at `eat_eol()` — the
+            // single-declarator form had this same tolerance (bounded by
+            // EOL instead of comma) before the comma loop existed.
+            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof) { self.advance(); }
             Ok(Stmt::Dim)
         } else {
-            Err(format!("expected a variable name in Dim declarator, found {:?}", self.peek()))
+            // Not even an identifier here (malformed `Dim`) — same
+            // permissive no-op the pre-comma-loop parser gave any
+            // unparseable `Dim` line, just bounded by comma now so a
+            // trailing `, nextDecl` still reaches the outer loop.
+            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof) { self.advance(); }
+            Ok(Stmt::Dim)
         }
     }
 
@@ -2622,6 +2646,19 @@ mod tests {
                 Stmt::DimRecord { var: "c".to_string(), type_name: "mytype".to_string() },
             ])
         );
+    }
+    #[test] fn test_dim_fixed_length_string_trailing_syntax_is_tolerated() {
+        // `As String * 10`'s fixed-length suffix isn't modeled by
+        // `parse_dim_declarator`, but it must still be tolerated (consumed,
+        // not left for `eat_eol()` to choke on) the same way a
+        // single-declarator `Dim` always tolerated unmodeled trailing
+        // syntax on its own line, before the comma loop existed.
+        let body = parse_body("Sub MySub()\n    Dim s As String * 10\n    s = \"hi\"\nEnd Sub\n");
+        assert_eq!(body[0], Stmt::Dim);
+    }
+    #[test] fn test_dim_fixed_length_string_mixed_with_comma_declarator() {
+        let body = parse_body("Sub MySub()\n    Dim s As String * 10, i As Integer\n    i = 1\nEnd Sub\n");
+        assert_eq!(body[0], Stmt::DimMulti(vec![Stmt::Dim, Stmt::Dim]));
     }
     #[test] fn test_with_block() {
         let body = parse_body("Sub MySub()\n    With Sheet1\n        .Cells(1, 1).Value = 99\n    End With\nEnd Sub\n");
