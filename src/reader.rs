@@ -199,13 +199,60 @@ fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
         .map(|a| a.value.as_str())
 }
 
+// Longest real entity is a numeric ref like "&#x10FFFF;" (10 chars between
+// '&' and ';') — bounding the ';' search to this window keeps a run of
+// many unterminated '&' characters O(n) instead of O(n^2) (each `find`
+// would otherwise rescan to the end of the string).
+const MAX_ENTITY_BODY_LEN: usize = 12;
+
 fn xml_unescape(s: &str) -> String {
     if !s.contains('&') { return s.to_string(); }
-    s.replace("&amp;",  "&")
-     .replace("&lt;",   "<")
-     .replace("&gt;",   ">")
-     .replace("&quot;", "\"")
-     .replace("&apos;", "'")
+    // Single forward pass, each '&...;' consumed at most once — chained
+    // .replace() calls (the previous implementation) double-unescape
+    // input like the literal text "&amp;lt;", which must stay "&lt;", not
+    // become "<": replacing "&amp;" first turns it into "&lt;", and the
+    // very next replace pass then corrupts that into "<".
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp + 1..];
+        let window_end = after.len().min(MAX_ENTITY_BODY_LEN);
+        let decoded = after[..window_end].find(';').and_then(|semi| {
+            let entity = &after[..semi];
+            let ch = match entity {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                _ => entity.strip_prefix('#').and_then(|numeric| {
+                    let code = if let Some(hex) = numeric.strip_prefix('x').or_else(|| numeric.strip_prefix('X')) {
+                        u32::from_str_radix(hex, 16).ok()
+                    } else {
+                        numeric.parse::<u32>().ok()
+                    };
+                    code.and_then(char::from_u32)
+                }),
+            };
+            ch.map(|c| (c, semi))
+        });
+        match decoded {
+            Some((c, semi)) => {
+                out.push(c);
+                rest = &after[semi + 1..];
+            }
+            None => {
+                // Not a recognized entity (or no ';' nearby) — keep the
+                // '&' literal, matching the previous implementation's
+                // tolerance for bare/unrecognized '&' in real-world input.
+                out.push('&');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 // ── Helper: read a ZIP entry into a String ────────────────────────────────────
@@ -533,6 +580,19 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
     let mut in_text_p = false;
     let mut cell_text = String::new();
     let mut pending_cell: Option<OdsCellState> = None;
+    // `table:number-*-repeated`: ODS's sparse-representation mechanism —
+    // one <table-row>/<table-cell> element stands for N identical rows/
+    // columns (LibreOffice uses this heavily, not just for trailing empty
+    // runs but for any horizontal/vertical run of matching cells, so
+    // real data routinely follows a repeated-empty block). Only the first
+    // copy's content is ever written (matching emit_ods_cell's existing
+    // convention); these track how far to advance row/col for the *next*
+    // element so later real cells land at the correct coordinates instead
+    // of being shifted left/up by the width of the skipped repeat. Kept
+    // as an arithmetic skip, not a literal expansion loop, so a
+    // pathological number-rows-repeated="1048576" costs O(1), not O(n).
+    let mut row_repeat: u32 = 1;
+    let mut col_repeat: u32 = 1;
 
     while let Some(ev) = iter.next_ev() {
         match &ev {
@@ -554,17 +614,27 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                         in_sheet = true;
                         row = 0;
                         col = 0;
+                        row_repeat = 1;
                     }
                     "table-row" if in_sheet => {
-                        row += 1;
+                        row += row_repeat;
                         col = 0;
+                        col_repeat = 1;
                         pending_cell = None;
+                        row_repeat = attr_get(attrs, "number-rows-repeated")
+                            .and_then(|v| v.parse().ok())
+                            .filter(|n| *n >= 1)
+                            .unwrap_or(1);
                     }
                     "table-cell" | "covered-table-cell" if in_sheet => {
                         if let Some(state) = pending_cell.take() {
                             emit_ods_cell(&mut sheets, state);
                         }
-                        col += 1;
+                        col += col_repeat;
+                        col_repeat = attr_get(attrs, "number-columns-repeated")
+                            .and_then(|v| v.parse().ok())
+                            .filter(|n| *n >= 1)
+                            .unwrap_or(1);
                         let cell_type = attr_get(attrs, "value-type").unwrap_or("").to_string();
                         let val_attr  = attr_get(attrs, "value").unwrap_or("").to_string();
                         let bool_attr = attr_get(attrs, "boolean-value").unwrap_or("").to_string();
@@ -833,5 +903,67 @@ mod merge_tests {
 </office:spreadsheet>"#;
         let sheets = ods_parse(xml);
         assert!(sheets[0].merged_ranges.is_empty());
+    }
+
+    #[test]
+    fn ods_parse_skips_column_position_past_a_repeated_empty_cell_run() {
+        // LibreOffice represents a run of empty cells as ONE <table-cell
+        // table:number-columns-repeated="N"/> rather than N elements — a
+        // real value following that run must land at column 6, not 2.
+        let xml = r#"<office:spreadsheet>
+<table:table table:name="Sheet1">
+<table:table-row>
+<table:table-cell table:number-columns-repeated="5"/>
+<table:table-cell office:value-type="float" office:value="42"/>
+</table:table-row>
+</table:table>
+</office:spreadsheet>"#;
+        let sheets = ods_parse(xml);
+        assert!(sheets[0].cells.get(&(1, 2)).is_none());
+        match sheets[0].cells.get(&(1, 6)) {
+            Some(SheetCell::Integer(v)) => assert_eq!(*v, 42),
+            other => panic!("expected Integer(42) at (1,6), got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn ods_parse_skips_row_position_past_a_repeated_empty_row_run() {
+        let xml = r#"<office:spreadsheet>
+<table:table table:name="Sheet1">
+<table:table-row table:number-rows-repeated="4">
+<table:table-cell office:value-type="string"><text:p>skip</text:p></table:table-cell>
+</table:table-row>
+<table:table-row>
+<table:table-cell office:value-type="float" office:value="7"/>
+</table:table-row>
+</table:table>
+</office:spreadsheet>"#;
+        let sheets = ods_parse(xml);
+        assert!(sheets[0].cells.get(&(2, 1)).is_none());
+        match sheets[0].cells.get(&(5, 1)) {
+            Some(SheetCell::Integer(v)) => assert_eq!(*v, 7),
+            other => panic!("expected Integer(7) at (5,1), got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn xml_unescape_decodes_numeric_character_references() {
+        assert_eq!(xml_unescape("&#65;&#x42;&#X43;"), "ABC");
+    }
+
+    #[test]
+    fn xml_unescape_does_not_double_unescape_a_literal_escaped_entity() {
+        // The text "&lt;" (a literal, already-escaped less-than sign)
+        // written into an XML value must itself be escaped as "&amp;lt;".
+        // Unescaping it once must yield "&lt;", not "<" — a chained
+        // .replace("&amp;","&") then .replace("&lt;","<") would corrupt
+        // this by unescaping twice.
+        assert_eq!(xml_unescape("&amp;lt;"), "&lt;");
+    }
+
+    #[test]
+    fn xml_unescape_leaves_an_unterminated_ampersand_literal() {
+        assert_eq!(xml_unescape("a & b"), "a & b");
+        assert_eq!(xml_unescape("a &notarealentity forever"), "a &notarealentity forever");
     }
 }
