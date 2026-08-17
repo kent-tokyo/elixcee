@@ -792,6 +792,7 @@ fn walk_expr(
         | Expr::RangeRead { .. }
         | Expr::RowsCount
         | Expr::ColsCount
+        | Expr::ActiveSheetRef
         | Expr::RecordGet { .. }
         | Expr::RecordGetNested { .. } => {}
     }

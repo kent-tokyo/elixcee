@@ -605,6 +605,14 @@ impl Vm {
     /// has its own pre-B6a fallback (auto-vivify on write, silent `Empty`
     /// on read) that only applies when `strict_resolution` is off.
     fn resolve_sheet_expr(&mut self, sheet_expr: &Expr) -> Result<(String, String), String> {
+        // `ActiveSheet` (Milestone B7c item 6) resolves directly to
+        // `self.active_sheet` — it's already exactly the key/display pair
+        // every other branch below is working to produce, and (unlike a
+        // name/index lookup) it can't fail to resolve.
+        if let Expr::ActiveSheetRef = sheet_expr {
+            let key = self.active_sheet.clone();
+            return Ok((key.clone(), key));
+        }
         let plain = match sheet_expr {
             Expr::WorkbookQualifiedSheet { workbook, sheet } => {
                 let wb_val = self.eval_expr(workbook)?;
@@ -2272,6 +2280,11 @@ impl Vm {
                         .to_string(),
                 )
             }
+            // Same "only meaningful wrapped inside a sheet-access node" story
+            // as `WorkbookQualifiedSheet` above — `resolve_sheet_expr`
+            // intercepts `ActiveSheetRef` before it ever reaches here, for
+            // every use the parser actually produces (Milestone B7c item 6).
+            Expr::ActiveSheetRef => Ok(Variant::Str(self.active_sheet.clone())),
             Expr::CellsFind { what, find_row } => {
                 let target = self.eval_expr(what)?;
                 let mut keys: Vec<(u32, u32)> = self.cells().keys().cloned().collect();
@@ -4037,6 +4050,54 @@ mod tests {
     #[test] fn test_with_sheets_restores_active() {
         let vm = run("Sub MySub()\n    Cells(1,1).Value = 1\n    With Sheets(\"Sheet2\")\n        .Cells(1,1).Value = 2\n    End With\n    x = Cells(1,1).Value\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(1)); // active sheet unchanged
+    }
+
+    // ── Milestone B7c item 6: ThisWorkbook / ActiveWorkbook / ActiveSheet ────
+
+    #[test]
+    fn activesheet_cells_write_and_read_target_the_active_sheet() {
+        let vm = run(
+            "Sub MySub()\n    ActiveSheet.Cells(1,1).Value = 5\n    x = ActiveSheet.Cells(1,1).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(5));
+        assert_eq!(vm.variables["x"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn activesheet_range_write_and_read() {
+        let vm = run(
+            "Sub MySub()\n    ActiveSheet.Range(\"B2\").Value = 9\n    x = ActiveSheet.Range(\"B2\").Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(9));
+        assert_eq!(vm.variables["x"], Variant::Integer(9));
+    }
+
+    #[test]
+    fn activesheet_tracks_the_active_sheet_after_it_changes() {
+        // Real VBA's ActiveSheet is dynamic — it reflects whichever sheet
+        // is active *at the moment it's evaluated*, unlike a Range object
+        // (which fixes its parent sheet at creation time).
+        let vm = run(
+            "Sub MySub()\n    With Sheets(\"Sheet2\")\n        ActiveSheet.Cells(1,1).Value = 42\n    End With\nEnd Sub\n",
+        );
+        let cell = vm.get_sheet_cells("sheet2").and_then(|s| s.get(&(1, 1))).map(|c| c.value.clone());
+        assert_eq!(cell, Some(Variant::Integer(42)));
+    }
+
+    #[test]
+    fn thisworkbook_worksheets_cell_write_targets_the_named_sheet() {
+        let vm = run("Sub MySub()\n    ThisWorkbook.Worksheets(\"Data\").Cells(2,3).Value = 77\nEnd Sub\n");
+        let cell = vm.get_sheet_cells("data").and_then(|s| s.get(&(2, 3))).map(|c| c.value.clone());
+        assert_eq!(cell, Some(Variant::Integer(77)));
+    }
+
+    #[test]
+    fn activeworkbook_worksheets_range_read_targets_the_named_sheet() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Data\").Cells(1,1).Value = 42\n    \
+             x = ActiveWorkbook.Worksheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["x"], Variant::Integer(42));
     }
 
     #[test] fn test_sheets_add() {

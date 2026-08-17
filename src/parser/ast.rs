@@ -57,6 +57,15 @@ pub enum Expr {
     RowsCount,
     ColsCount,
     CellsEndProp { row: Box<Expr>, col: Box<Expr>, dir: XlDir, prop: XlEndProp },
+    /// `ActiveSheet` used as a sheet qualifier (Milestone B7c item 6) —
+    /// e.g. `ActiveSheet.Range("A1").Value`. Valid wherever a plain sheet
+    /// `Expr` is (see `WorkbookQualifiedSheet`'s doc for the list); resolved
+    /// to `Vm.active_sheet` by `resolve_sheet_expr`. `ThisWorkbook`/
+    /// `ActiveWorkbook` don't need their own node — elixcee only ever loads
+    /// one workbook (see `WorkbookQualifiedSheet`'s doc), so
+    /// `ThisWorkbook.Worksheets(x)`/`ActiveWorkbook.Worksheets(x)` parse as
+    /// a plain `Worksheets(x)`, the qualifier prefix simply skipped.
+    ActiveSheetRef,
     RecordGet       { var: String, field: String },           // p.x
     RecordGetNested { var: String, fields: Vec<String> },    // p.a.b.c
     ArrayRecordGet  { name: String, indices: Vec<Expr>, field: String }, // arr(i).f

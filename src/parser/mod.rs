@@ -496,6 +496,29 @@ impl Parser {
             "worksheetfunction" => { let s = self.parse_wsf_call_stmt(None)?; self.eat_eol()?; Ok(Some(s)) }
             "worksheets" | "sheets" => { let s = self.parse_sheets_stmt()?; self.eat_eol()?; Ok(Some(s)) }
             "workbooks" => { let s = self.parse_workbook_qualified_stmt()?; self.eat_eol()?; Ok(Some(s)) }
+            // `ActiveSheet.Range(...)`/`.Cells(...)`/`.Delete`/... (Milestone
+            // B7c item 6) — same suffix grammar as `Worksheets(...)`, just
+            // rooted at `Expr::ActiveSheetRef` instead of a parenthesized key.
+            "activesheet" => {
+                self.advance();
+                let s = self.parse_sheet_property_write(Expr::ActiveSheetRef)?;
+                self.eat_eol()?;
+                Ok(Some(s))
+            }
+            // `ThisWorkbook.Worksheets(...)` / `ActiveWorkbook.Worksheets(...)`
+            // (Milestone B7c item 6) — elixcee only ever has one workbook
+            // loaded (see `Expr::WorkbookQualifiedSheet`'s doc), so these
+            // are just the bare `Worksheets(...)`/`Sheets(...)` form with an
+            // always-true qualifier: skip it and re-enter the same parse.
+            "thisworkbook" | "activeworkbook"
+                if self.is_ident_at(2, "worksheets") || self.is_ident_at(2, "sheets") =>
+            {
+                self.advance(); // 'thisworkbook' | 'activeworkbook'
+                self.expect_tok(Tok::Dot)?;
+                let s = self.parse_sheets_stmt()?;
+                self.eat_eol()?;
+                Ok(Some(s))
+            }
             // Access/scope modifiers before Dim/Const inside a sub
             "public" | "private" | "static" | "friend" => {
                 self.advance(); // consume modifier
@@ -1743,6 +1766,25 @@ impl Parser {
                     "workbooks" => self.parse_workbook_qualified_read(),
                     "application" => self.parse_application_wsf_expr(),
                     "worksheetfunction" => self.parse_wsf_expr(),
+                    // `ActiveSheet.Range(...)`/`.Cells(...)` (Milestone B7c
+                    // item 6). Only when followed by `.` — a bare
+                    // `ActiveSheet` (e.g. an unmodeled `Set ws =
+                    // ActiveSheet`) falls through to `parse_ident_expr`
+                    // like any other unrecognized bare identifier.
+                    "activesheet" if *self.peek_at(1) == Tok::Dot => {
+                        self.advance();
+                        self.parse_sheet_property_read(Expr::ActiveSheetRef)
+                    }
+                    // `ThisWorkbook.Worksheets(...)` / `ActiveWorkbook.
+                    // Worksheets(...)` (Milestone B7c item 6) — see the
+                    // matching statement-dispatch arm in `parse_stmt`.
+                    "thisworkbook" | "activeworkbook"
+                        if self.is_ident_at(2, "worksheets") || self.is_ident_at(2, "sheets") =>
+                    {
+                        self.advance();
+                        self.expect_tok(Tok::Dot)?;
+                        self.parse_sheet_cell_read()
+                    }
                     _ => self.parse_ident_expr(),
                 }
             }
@@ -2785,5 +2827,46 @@ mod tests {
     #[test] fn bare_range_object_copy_has_no_destination() {
         let body = parse_body("Sub MySub()\n    Set rng = Range(\"A1\")\n    rng.Copy\nEnd Sub\n");
         assert_eq!(body[1], Stmt::RangeObjectCopy { var: "rng".into(), dst: None });
+    }
+
+    // ── Milestone B7c item 6: ThisWorkbook / ActiveWorkbook / ActiveSheet ────
+
+    #[test] fn activesheet_cell_write_parses_to_sheet_cell_write_with_activesheetref() {
+        let body = parse_body("Sub MySub()\n    ActiveSheet.Cells(1, 1).Value = 5\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::SheetCellWrite {
+                sheet: Expr::ActiveSheetRef,
+                row: Expr::Integer(1),
+                col: Expr::Integer(1),
+                value: Expr::Integer(5),
+            }]
+        );
+    }
+
+    #[test] fn thisworkbook_worksheets_cell_write_parses_identically_to_bare_worksheets() {
+        let with_prefix = parse_body(
+            "Sub MySub()\n    ThisWorkbook.Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n",
+        );
+        let bare = parse_body("Sub MySub()\n    Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n");
+        assert_eq!(with_prefix, bare);
+    }
+
+    #[test] fn activeworkbook_worksheets_range_read_parses_identically_to_bare_worksheets() {
+        let with_prefix = parse_body(
+            "Sub MySub()\n    x = ActiveWorkbook.Worksheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n",
+        );
+        let bare = parse_body("Sub MySub()\n    x = Worksheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n");
+        assert_eq!(with_prefix, bare);
+    }
+
+    #[test] fn a_bare_activesheet_without_a_dot_is_not_captured_by_the_activesheet_grammar() {
+        // `Set ws = ActiveSheet` — a bare `ActiveSheet` with no `.property`
+        // suffix falls through to a plain identifier (harmless; the VM
+        // treats an unresolved bare object-variable reference as a no-op —
+        // see `Stmt::Set`'s doc comment). This just confirms the parser
+        // doesn't error out on it.
+        let body = parse_body("Sub MySub()\n    Set ws = ActiveSheet\nEnd Sub\n");
+        assert_eq!(body, vec![Stmt::Set { var: "ws".into(), value: ObjectExpr::Var("activesheet".into()) }]);
     }
 }
