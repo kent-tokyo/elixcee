@@ -16,24 +16,27 @@
 // {SheetNames, Sheets}: Directory (CFB/zip part listing), Workbook (WBProps/CalcPr/
 // Views/...), Props/Custprops/Deps, Strings, Styles (NumberFmt/Fonts/Fills/Borders/
 // CellXf), Themes, SSF — none of which `read_workbook_from_bytes` (src/reader.rs) parses
-// or could parse without a much larger scope than this MVP (see
-// crates/elixcee-wasm/src/lib.rs's `read_workbook` doc comment for the exact list: no
-// cell formulas, no formatted `.w`/`.h` text, no date-typed cells, no `!rows`/`!cols`).
-// Confirmed empirically (not assumed) by writing a plain 3x3 aoa_to_sheet workbook through
-// the oracle and reading it back — every cell came back with `.w` (and strings also got
-// `.h`) even with no formatting ever applied, and the WorkBook itself carried Styles/SSF/
-// Themes objects derived purely from the oracle's own default styles.xml.
+// or could parse without a much larger scope than this package's read() (see
+// crates/elixcee-wasm/src/lib.rs's `read_workbook` doc comment for the current exact
+// list — as of this file's own read-item 1-4 work: no formatted `.w`/`.h` text, no
+// date-typed cells (`t:'d'`) — both still need `styles.xml` number-format parsing, see
+// this file's read-item-6 section). Confirmed empirically (not assumed) by writing a
+// plain 3x3 aoa_to_sheet workbook through the oracle and reading it back — every cell
+// came back with `.w` (and strings also got `.h`) even with no formatting ever applied,
+// and the WorkBook itself carried Styles/SSF/Themes objects derived purely from the
+// oracle's own default styles.xml.
 //
 // classify.mjs's own doc comment says callers must normalize before calling classify() —
 // normalize.mjs does that for type-tagging (NaN/undefined/-0/Date/...). This file adds one
 // more normalization step specific to `read()`: projectWorkBook() strips both sides down
 // to exactly the fields @elixcee/xlsx's read() advertises support for (SheetNames, and per
-// sheet: !ref, !merges, and each cell's {t, v} only). This is a single, up-front,
-// documented scope boundary — not a per-case escape hatch like UNSUPPORTED_ALLOWLIST — so
-// if a genuinely supported field (t, v, !ref, !merges, SheetNames) ever diverges, it still
-// surfaces as UNCLASSIFIED/BUG exactly as classify() intends; only fields this MVP never
-// claimed to produce are excluded, and excluded identically from both sides so the
-// comparison stays apples-to-apples rather than favoring elixcee's narrower shape.
+// sheet: !ref, !merges, !rows, !cols, and each cell's {t, v, f}). This is a single,
+// up-front, documented scope boundary — not a per-case escape hatch like
+// UNSUPPORTED_ALLOWLIST — so if a genuinely supported field ever diverges, it still
+// surfaces as UNCLASSIFIED/BUG exactly as classify() intends; only fields this package
+// never claimed to produce (.w, .h, t:'d', ...) are excluded, and excluded identically
+// from both sides so the comparison stays apples-to-apples rather than favoring elixcee's
+// narrower shape.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +67,23 @@ function projectWorkBook(wb) {
   return { SheetNames: wb.SheetNames, Sheets: sheets };
 }
 
+// !rows/!cols: projected down to just the `hidden` flag on each present (non-hole) slot,
+// on BOTH sides — the oracle's own !cols entries also carry a `width` (and !rows an `hpx`/
+// `hpt`) computed from column-width/row-height metadata reader.rs doesn't parse and
+// read()'s doc comment never promised (confirmed live: `{hidden:true,width:null}` vs this
+// package's `{hidden:true}` — a field neither side is being compared on, not a false
+// MATCH). Real array holes (a non-hidden row/col slot) are preserved as holes, not filled
+// with `undefined`/`null` — normalize.mjs distinguishes a hole from an explicit value, and
+// so does the real oracle's own output (confirmed live via `in`).
+function projectRowsOrCols(arr) {
+  if (arr == null) return undefined;
+  const out = new Array(arr.length);
+  for (let i = 0; i < arr.length; i++) {
+    if (i in arr) out[i] = { hidden: !!arr[i].hidden };
+  }
+  return out;
+}
+
 function projectSheet(ws) {
   if (ws == null) return null;
   const out = {};
@@ -72,12 +92,22 @@ function projectSheet(ws) {
       out['!ref'] = ws['!ref'];
     } else if (key === '!merges') {
       out['!merges'] = ws['!merges'].map((m) => ({ s: { r: m.s.r, c: m.s.c }, e: { r: m.e.r, c: m.e.c } }));
+    } else if (key === '!rows') {
+      out['!rows'] = projectRowsOrCols(ws['!rows']);
+    } else if (key === '!cols') {
+      out['!cols'] = projectRowsOrCols(ws['!cols']);
     } else if (CELL_REF_RE.test(key)) {
-      out[key] = { t: ws[key].t, v: ws[key].v };
+      // .f (Milestone read-item 4) is safe to compare unconditionally: every case in this
+      // file that doesn't set a formula has it `undefined` on BOTH sides (a plain property
+      // access on a key neither side's cell object has), so this can never manufacture a
+      // false MATCH/mismatch for a case that isn't actually testing formulas.
+      out[key] = { t: ws[key].t, v: ws[key].v, f: ws[key].f };
     }
-    // Every other key (!cols, !rows, !fullref, !type, ...) is out of this MVP's scope —
-    // silently dropped from BOTH sides, not just elixcee's, so its absence can never look
-    // like a false MATCH for a field neither side is being compared on.
+    // Every other key (!fullref, !type, ...) is out of this MVP's scope — silently dropped
+    // from BOTH sides, not just elixcee's, so its absence can never look like a false
+    // MATCH for a field neither side is being compared on. `.w`/`.z`/date-typed cells
+    // (`t:'d'`) are deliberately NOT widened into the per-cell projection above either —
+    // see this file's read-item-6 section for why.
   }
   return out;
 }
@@ -107,10 +137,12 @@ function invokeRead(fn, bytes) {
 
 // The common comparison step, independent of where `bytes` came from (the oracle's own
 // writer via buildXlsxBytes, a real fixture file read from disk, or a hand-built zip —
-// see the two case groups below).
-function runReadCaseBytes(label, bytes, unsupportedCaseId) {
-  const oracleVal = invokeRead((b) => XLSX.read(b, { type: 'buffer' }), bytes);
-  const elixceeVal = invokeRead((b) => elixcee.read(b), bytes);
+// see the two case groups below). `readOpts`, when given, is passed to BOTH sides'
+// read() (e.g. `{cellStyles: true}` for the !rows/!cols cases — see this file's own
+// read-item-3 section for why that option matters).
+function runReadCaseBytes(label, bytes, unsupportedCaseId, readOpts) {
+  const oracleVal = invokeRead((b) => XLSX.read(b, Object.assign({ type: 'buffer' }, readOpts)), bytes);
+  const elixceeVal = invokeRead((b) => elixcee.read(b, readOpts), bytes);
   const verdict = classify({
     api: 'read',
     unsupportedCaseId,
@@ -122,18 +154,9 @@ function runReadCaseBytes(label, bytes, unsupportedCaseId) {
   return verdict;
 }
 
-function runReadCase(label, sheets, unsupportedCaseId) {
-  return runReadCaseBytes(label, buildXlsxBytes(sheets), unsupportedCaseId);
+function runReadCase(label, sheets, unsupportedCaseId, readOpts) {
+  return runReadCaseBytes(label, buildXlsxBytes(sheets), unsupportedCaseId, readOpts);
 }
-
-// caseIds for the two registered gaps below — kept as named constants so the call sites
-// and the classify.mjs registry entries can't drift out of sync with each other.
-const EMPTY_STRING_CELL_CASE_ID =
-  'empty-string cell value (<v></v> with zero characters — no Text event for the ' +
-  "pull-XML parser to record, see reader.rs's xlsx_sheet_cells)";
-const DIMENSION_WIDER_THAN_DATA_CASE_ID =
-  "declared <dimension> wider than the populated cell range — reader.rs never parses " +
-  "<dimension> at all, it always computes !ref from the populated-cell bounding box";
 
 // ---- a minimal hand-built .xlsx (STORED-only zip, no compression library needed) ----
 //
@@ -331,30 +354,33 @@ runReadCase('boundary numeric values (large integer, small float, negative float
   ]],
 ]);
 
-// ---- discovered gap: empty-string cell values ----
+// ---- FIXED gap: empty-string cell values ----
 //
-// Found by this test file, not assumed: the oracle's writer emits an empty-string aoa
-// cell as a real `<c r="B1" t="str"><v></v></c>` (confirmed by inspecting the actual
-// written sheet1.xml) — a self-closing-content `<v>` element with ZERO characters between
-// its open and close tags. `reader.rs`'s hand-rolled pull-XML parser (`xlsx_sheet_cells`)
-// only records a cell's value on an `Ev::Text` event; an empty element never produces one
-// (there's no text to emit), so `in_v` is set on `<v>` and cleared on `</v>` with no
-// `cells.insert(...)` ever happening in between — the cell is silently absent from
-// elixcee's output, while the oracle reports `{t:"s", v:""}`.
-//
-// This is a real, narrow parser gap in `reader.rs` itself (shared by BOTH the path-based
-// `read_workbook` and the new `read_workbook_from_bytes` — not something introduced by
-// this WASM bridge or read() MVP), left unfixed here deliberately: fixing it means
-// changing `xlsx_sheet_cells`'s shared Text-event-driven cell-recording logic, which
-// affects the CLI/VM path too and was explicitly out of scope for this phase's "pure
-// extraction, no behavior change" requirement (docs/xlsx-architecture.md's "reader.rs
-// buffer-API resolution"). Registered below (see classify.mjs's UNSUPPORTED_ALLOWLIST)
-// rather than silently worked around, so it stays visible for a future fix.
-runReadCase(
-  'empty-string cell value (known reader.rs gap — registered UNSUPPORTED)',
-  [['S1', [['before', '', 'after']]]],
-  EMPTY_STRING_CELL_CASE_ID
-);
+// Found by this test file (originally registered UNSUPPORTED, see git history), now
+// fixed: the oracle's writer emits an empty-string aoa cell as a real
+// `<c r="B1" t="str"><v></v></c>` (confirmed by inspecting the actual written sheet1.xml)
+// — a self-closing-content `<v>` element with ZERO characters between its open and close
+// tags. `reader.rs`'s xlsx_sheet_cells now routes the empty string through the same
+// xlsx_parse_cell used for the non-empty path on `</v>` when no Ev::Text ever fired for
+// it, so `{t:"s", v:""}` is recorded like the oracle instead of the cell being silently
+// absent. Shared by read_workbook and read_workbook_from_bytes. No longer registered in
+// classify.mjs's UNSUPPORTED_ALLOWLIST — this is a plain MATCH case now.
+runReadCase('empty-string cell value (formerly a reader.rs gap — now fixed)', [
+  ['S1', [['before', '', 'after']]],
+]);
+
+// A formula (.f) roundtrip case (Milestone read-item 4) — reader.rs now captures
+// per-cell <f>...</f> text; the oracle's own aoa writer accepts a plain cell object
+// ({t,v,f}) verbatim in an aoa slot (sheet_add_aoa's "caller-supplied full cell object"
+// branch — confirmed live it writes an independent <f> per cell, never a shared formula,
+// so a literal capture-the-inline-text approach is enough for every fixture this suite
+// builds).
+runReadCase('formula cells (.f roundtrip)', [
+  ['S1', [
+    [1, 2, { t: 'n', v: 3, f: 'SUM(A1:B1)' }],
+    [4, 5, { t: 'n', v: 9, f: 'SUM(A2:B2)' }],
+  ]],
+]);
 
 // A real .xlsx produced by a real writer (see tests/fixtures/e2e/source.xlsx's own commit,
 // "add real-producer E2E fixtures, cross-checked with calamine") rather than the oracle's
@@ -369,22 +395,55 @@ runReadCaseBytes(
   readFileSync(join(here, '../../tests/fixtures/e2e/source.xlsx'))
 );
 
-// Discovered gap #2: reader.rs never parses the worksheet's declared <dimension> tag at
-// all — !ref always comes from the populated-cell bounding box instead. The oracle trusts
-// <dimension> verbatim. These normally agree (every oracle-written file has them equal,
-// which is why none of the cases above caught this), but a real Excel/LibreOffice file can
-// legitimately declare a WIDER dimension (e.g. formatting-only cells past the last
-// populated one) — confirmed here with a hand-built file that does exactly that (see
-// buildDimensionWiderThanDataXlsxBytes above): oracle reports "!ref":"A1:E10" (the declared
-// dimension), elixcee reports "!ref":"A1:B2" (the populated bounding box). Same disclosure
-// rule as the empty-string-cell gap: a real, pre-existing reader.rs limitation (shared by
-// read_workbook and read_workbook_from_bytes), out of scope to fix under this phase's
-// "pure extraction, no behavior change" requirement, registered rather than silently
-// worked around.
+// ---- FIXED gap #2: <dimension> parsing (Milestone read-item 2) ----
+//
+// reader.rs previously never parsed the worksheet's declared <dimension> tag at all —
+// !ref always came from the populated-cell bounding box instead. It now does, replicating
+// the oracle's own quirks exactly (a colon-less single-cell ref like "A1" is NOT trusted,
+// matching the oracle's own dimregex; a reversed range is rejected too — see
+// parse_dimension_ref's doc comment). A real Excel/LibreOffice file can legitimately
+// declare a WIDER dimension than its populated cells (e.g. formatting-only cells past the
+// last populated one) — exercised here with a hand-built file that does exactly that (see
+// buildDimensionWiderThanDataXlsxBytes above). No longer registered in classify.mjs's
+// UNSUPPORTED_ALLOWLIST — this is a plain MATCH case now.
 runReadCaseBytes(
-  'declared <dimension> wider than populated cells (known reader.rs gap — registered UNSUPPORTED)',
-  buildDimensionWiderThanDataXlsxBytes(),
-  DIMENSION_WIDER_THAN_DATA_CASE_ID
+  'declared <dimension> wider than populated cells (formerly a reader.rs gap — now fixed)',
+  buildDimensionWiderThanDataXlsxBytes()
+);
+
+// ---- read-item 3: !rows/!cols (requires opts.cellStyles, matching the oracle) ----
+//
+// Confirmed live against the real oracle (not assumed): XLSX.read() never returns
+// !rows/!cols AT ALL — even for a file with genuinely hidden rows/columns — unless the
+// caller also passes {cellStyles: true} (see compat/node_modules/xlsx/xlsx.js's
+// parse_ws_xml_cols/parse_ws_xml_data cellStyles guards). packages/xlsx's read() now
+// mirrors that gate exactly (see ./internal/read-shape.cjs) rather than always surfacing
+// reader.rs's already-parsed hidden-row/col data, which would diverge from the oracle's
+// own default-opts behavior. Two cases: with the option (both sides project down to just
+// the `hidden` flag per row/col slot — see projectRowsOrCols's doc comment for why width/
+// height metadata is excluded), and without it (regression guard that the gate actually
+// suppresses !rows/!cols by default, not just that read() runs).
+function buildHiddenRowsColsXlsxBytes() {
+  const ws = U.aoa_to_sheet([[1, 2], [3, 4], [5, 6]]);
+  ws['!rows'] = [];
+  ws['!rows'][1] = { hidden: true };
+  ws['!cols'] = [];
+  ws['!cols'][0] = { hidden: true };
+  const wb = U.book_new();
+  U.book_append_sheet(wb, ws, 'S1');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+runReadCaseBytes(
+  'hidden rows and columns with opts.cellStyles: true (!rows/!cols)',
+  buildHiddenRowsColsXlsxBytes(),
+  undefined,
+  { cellStyles: true }
+);
+
+runReadCaseBytes(
+  'hidden rows and columns WITHOUT opts.cellStyles (must not surface !rows/!cols by default)',
+  buildHiddenRowsColsXlsxBytes()
 );
 
 // ---- summary / exit code (matches xlsx-utils.test.mjs's convention) ----
@@ -405,7 +464,7 @@ for (const r of results) {
 
 const byApiVerdict = summarizeByApiAndVerdict(results);
 console.log('\n=== read() differential summary (compat/differential/xlsx-read.test.mjs) ===');
-console.log('Comparison scope: SheetNames, per-sheet !ref/!merges, per-cell {t,v} only — see');
+console.log('Comparison scope: SheetNames, per-sheet !ref/!merges/!rows/!cols, per-cell {t,v,f} — see');
 console.log('this file\'s header comment for why the oracle\'s much richer WorkBook shape is');
 console.log('projected down before comparing.');
 let anyFailure = false;
@@ -432,14 +491,30 @@ console.log('\nread() differential suite passed: every case matches on its decla
 {
   const projected = projectSheet({
     A1: { t: 's', v: 'hi', w: 'hi', h: 'hi' },
-    '!ref': 'A1:A1',
+    B1: { t: 'n', v: 3, f: 'SUM(A1:A1)' },
+    '!ref': 'A1:B1',
+    '!merges': [{ s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }],
+    '!cols': [{ hidden: true, width: 12 }],
+  });
+  assert.deepEqual(projected, {
+    A1: { t: 's', v: 'hi', f: undefined },
+    B1: { t: 'n', v: 3, f: 'SUM(A1:A1)' },
+    '!ref': 'A1:B1',
     '!merges': [{ s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }],
     '!cols': [{ hidden: true }],
   });
-  assert.deepEqual(projected, {
-    A1: { t: 's', v: 'hi' },
-    '!ref': 'A1:A1',
-    '!merges': [{ s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }],
-  });
-  assert.equal('!cols' in projected, false);
+  // .w/.h (formatted display text / rich HTML — read-item 6, not landed) stay excluded
+  // from the per-cell projection even though the field-by-field assert.deepEqual above
+  // wouldn't itself catch a stray extra key (deepEqual on A1 only checks the keys it
+  // lists) — assert that explicitly.
+  assert.equal('w' in projected.A1, false);
+  assert.equal('h' in projected.A1, false);
+
+  // A hole (non-hidden slot) in !rows/!cols must stay a real hole after projection, not
+  // become an explicit `undefined`/`null` entry — normalize.mjs (and the real oracle's
+  // own output) treats those as distinct.
+  const withHole = projectSheet({ '!rows': [{ hidden: true }, , { hidden: false }] });
+  assert.equal(0 in withHole['!rows'], true);
+  assert.equal(1 in withHole['!rows'], false);
+  assert.deepEqual(withHole['!rows'][2], { hidden: false });
 }

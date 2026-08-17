@@ -155,20 +155,24 @@ function splitCell(cstr) {
 
 // ---- read ----
 //
-// Minimal buffer-first XLSX.read(data, opts) (Phase 2B), backed by the WASM bridge over
-// elixcee's own reader (src/reader.rs) — never the real `xlsx` package (see this file's
-// top doc comment / docs/xlsx-architecture.md's "Non-negotiable" section). Accepts a
-// Buffer/Uint8Array directly (the shape `fs.readFileSync(...)` already produces) or a
-// base64 string with `opts.type === 'base64'` (the oracle's own convention for that value)
-// — other oracle `type` values (binary/array/string/file) are not implemented yet.
+// Buffer-first XLSX.read(data, opts), backed by the WASM bridge over elixcee's own reader
+// (src/reader.rs) — never the real `xlsx` package (see this file's top doc comment /
+// docs/xlsx-architecture.md's "Non-negotiable" section). Accepts a Buffer/Uint8Array
+// directly (the shape `fs.readFileSync(...)` already produces) or a base64 string with
+// `opts.type === 'base64'` (the oracle's own convention for that value) — other oracle
+// `type` values (binary/array/string/file) are not implemented yet.
 //
-// The returned WorkBook is deliberately not feature-complete with the oracle's read():
-// no cell formulas (`.f`), no formatted display text (`.w`), no date-typed cells (`t:
-// 'd'` — a date serial reads back as a plain number), no hidden-row/col `!rows`/`!cols`
-// mapping. All four gaps trace back to the same root cause: `reader.rs` (elixcee's
-// hand-rolled XLSX reader) never parses `styles.xml` or `<f>` formula elements — see
-// crates/elixcee-wasm/src/lib.rs's `read_workbook` doc comment for the full list. Merged
-// ranges ARE mapped (`!merges`), since `reader.rs` already parses them.
+// Cell formulas (`.f`), merged ranges (`!merges`), and — when `opts.cellStyles === true`,
+// matching the oracle's own gate (confirmed live: XLSX.read() never returns !rows/!cols
+// without it) — hidden-row/col `!rows`/`!cols` (see ./internal/read-shape.cjs) ARE mapped.
+// A worksheet's declared `<dimension>` is preferred over the populated-cell bounding box
+// when present (see crates/elixcee-wasm's worksheet_json).
+//
+// Still not feature-complete with the oracle's read(): no formatted display text (`.w`) or
+// date-typed cells (`t:'d'`) — both need `styles.xml` number-format parsing `reader.rs`
+// doesn't do yet (see docs/xlsx-architecture.md).
+const { shapeWorkBook } = require('./internal/read-shape.cjs');
+
 const ELIXCEE_UNSUPPORTED_READ_TYPE = 'ELIXCEE_UNSUPPORTED_READ_TYPE';
 
 function toBytes(data, opts) {
@@ -187,7 +191,7 @@ function toBytes(data, opts) {
 
 function read(data, opts) {
   const bytes = toBytes(data, opts);
-  return JSON.parse(wasmBridge.readWorkbook(bytes));
+  return shapeWorkBook(JSON.parse(wasmBridge.readWorkbook(bytes)), opts);
 }
 
 // ---- workbook / sheet ----
