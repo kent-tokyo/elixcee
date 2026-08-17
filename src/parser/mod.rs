@@ -484,6 +484,7 @@ impl Parser {
                 self.eat_eol()?;
                 Ok(Some(Stmt::Resume { next }))
             }
+            "set"     => { let s = self.parse_set()?; self.eat_eol()?; Ok(Some(s)) }
             "dim"     => { let s = self.parse_dim()?; self.eat_eol()?; Ok(Some(s)) }
             "redim"   => { let s = self.parse_redim()?; self.eat_eol()?; Ok(Some(s)) }
             "const"   => { let s = self.parse_const()?; self.eat_eol()?; Ok(Some(s)) }
@@ -495,6 +496,29 @@ impl Parser {
             "worksheetfunction" => { let s = self.parse_wsf_call_stmt(None)?; self.eat_eol()?; Ok(Some(s)) }
             "worksheets" | "sheets" => { let s = self.parse_sheets_stmt()?; self.eat_eol()?; Ok(Some(s)) }
             "workbooks" => { let s = self.parse_workbook_qualified_stmt()?; self.eat_eol()?; Ok(Some(s)) }
+            // `ActiveSheet.Range(...)`/`.Cells(...)`/`.Delete`/... (Milestone
+            // B7c item 6) — same suffix grammar as `Worksheets(...)`, just
+            // rooted at `Expr::ActiveSheetRef` instead of a parenthesized key.
+            "activesheet" => {
+                self.advance();
+                let s = self.parse_sheet_property_write(Expr::ActiveSheetRef)?;
+                self.eat_eol()?;
+                Ok(Some(s))
+            }
+            // `ThisWorkbook.Worksheets(...)` / `ActiveWorkbook.Worksheets(...)`
+            // (Milestone B7c item 6) — elixcee only ever has one workbook
+            // loaded (see `Expr::WorkbookQualifiedSheet`'s doc), so these
+            // are just the bare `Worksheets(...)`/`Sheets(...)` form with an
+            // always-true qualifier: skip it and re-enter the same parse.
+            "thisworkbook" | "activeworkbook"
+                if self.is_ident_at(2, "worksheets") || self.is_ident_at(2, "sheets") =>
+            {
+                self.advance(); // 'thisworkbook' | 'activeworkbook'
+                self.expect_tok(Tok::Dot)?;
+                let s = self.parse_sheets_stmt()?;
+                self.eat_eol()?;
+                Ok(Some(s))
+            }
             // Access/scope modifiers before Dim/Const inside a sub
             "public" | "private" | "static" | "friend" => {
                 self.advance(); // consume modifier
@@ -946,6 +970,125 @@ impl Parser {
             while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
             Ok(Stmt::Dim)
         }
+    }
+
+    // ── Object references (Milestone B7c) ──────────────────────────────────────
+
+    /// `Set <var> = <rhs>` — dispatched from `parse_stmt` like `Dim`/`Const`.
+    /// If `<rhs>` isn't a shape `parse_object_expr` recognizes (e.g. `Set d =
+    /// CreateObject(...)`, `Set rng = Nothing`, `Set ws = ActiveWorkbook.
+    /// Sheets(1)`), the whole statement degrades to `Stmt::Unsupported`
+    /// rather than a hard parse error — same precedent as `Stmt::Dim`/the
+    /// generic `.Method` no-op in `parse_ident_stmt`: an otherwise-working
+    /// macro that happens to use an unmodeled `Set` target should still run.
+    fn parse_set(&mut self) -> Result<Stmt, String> {
+        self.expect_ident("set")?;
+        let var = self.consume_ident()?;
+        self.expect_tok(Tok::Eq)?;
+        match self.parse_object_expr()? {
+            Some(value) => Ok(Stmt::Set { var, value }),
+            None => {
+                // NOT `skip_to_eol()` — that also consumes the trailing
+                // newline, and `parse_stmt`'s "set" dispatch arm already
+                // calls `eat_eol()` after this returns (same double-
+                // consumption pitfall `parse_ident_stmt`'s "bare ident"
+                // no-op branch avoids the same way).
+                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                Ok(Stmt::Unsupported {
+                    reason: format!(
+                        "'Set {} = ...' targets an unmodeled object expression and was skipped",
+                        var
+                    ),
+                })
+            }
+        }
+    }
+
+    /// Parses one reference-typed expression: `Range("...")`, an existing
+    /// object variable, or `Union(...)`/`.Areas(n)`/`.SpecialCells(...)`
+    /// applied to either of those. Returns `Ok(None)` (not `Err`) for
+    /// anything it doesn't recognize — callers must still consume/skip the
+    /// remainder of the statement themselves (see `parse_set`); partial
+    /// speculative token consumption before bailing is harmless since every
+    /// caller falls back to `skip_to_eol` on `None`.
+    fn parse_object_expr(&mut self) -> Result<Option<ObjectExpr>, String> {
+        match self.peek().clone() {
+            Tok::Ident(ref s) if s == "range" => {
+                self.advance();
+                self.expect_tok(Tok::LParen)?;
+                let addr = self.consume_str()?.to_uppercase();
+                self.expect_tok(Tok::RParen)?;
+                self.parse_object_suffix(ObjectExpr::RangeLit(addr))
+            }
+            Tok::Ident(ref s) if s == "union" => {
+                self.advance();
+                self.expect_tok(Tok::LParen)?;
+                let mut parts = vec![];
+                loop {
+                    match self.parse_object_expr()? {
+                        Some(p) => parts.push(p),
+                        None => return Ok(None),
+                    }
+                    if *self.peek() == Tok::Comma { self.advance(); } else { break; }
+                }
+                self.expect_tok(Tok::RParen)?;
+                self.parse_object_suffix(ObjectExpr::Union(parts))
+            }
+            Tok::Ident(name) => {
+                // A bare identifier in object position: an existing object
+                // variable (`Set b = a`, `Set b = a.Areas(1)`). Anything
+                // followed by '(' here (a function call we don't model,
+                // e.g. `CreateObject(...)`) is left unrecognized.
+                self.advance();
+                if *self.peek() == Tok::LParen {
+                    Ok(None)
+                } else {
+                    self.parse_object_suffix(ObjectExpr::Var(name))
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Chains zero or more `.Areas(n)` / `.SpecialCells(xlCellTypeVisible)`
+    /// suffixes onto `base`. Any other `.property` (notably `.Value`, which
+    /// belongs to a different grammar entirely — see `Stmt::RecordSet`'s
+    /// object-variable special case in the VM) is left unconsumed: this
+    /// function only ever advances past a `.` it's about to fully parse.
+    fn parse_object_suffix(&mut self, base: ObjectExpr) -> Result<Option<ObjectExpr>, String> {
+        let mut cur = base;
+        loop {
+            if *self.peek() != Tok::Dot { break; }
+            let is_areas = self.is_ident_at(1, "areas");
+            let is_special = self.is_ident_at(1, "specialcells");
+            if !is_areas && !is_special { break; }
+            self.advance(); // '.'
+            self.advance(); // 'areas' | 'specialcells'
+            if is_areas {
+                self.expect_tok(Tok::LParen)?;
+                let index = self.parse_expr()?;
+                self.expect_tok(Tok::RParen)?;
+                cur = ObjectExpr::Area(Box::new(cur), Box::new(index));
+            } else {
+                self.expect_tok(Tok::LParen)?;
+                let recognized = match self.peek().clone() {
+                    Tok::Ident(ref s) if s == "xlcelltypevisible" => { self.advance(); true }
+                    Tok::Int(12) => { self.advance(); true }
+                    _ => false,
+                };
+                if !recognized {
+                    // Unrecognized SpecialCells type — consume through the
+                    // matching ')' so the caller's eventual `skip_to_eol`
+                    // still lands cleanly, then bail.
+                    while *self.peek() != Tok::RParen && *self.peek() != Tok::Eof { self.advance(); }
+                    if *self.peek() == Tok::RParen { self.advance(); }
+                    return Ok(None);
+                }
+                self.expect_tok(Tok::RParen)?;
+                cur = ObjectExpr::SpecialCellsVisible(Box::new(cur));
+            }
+        }
+        Ok(Some(cur))
     }
 
     fn parse_redim(&mut self) -> Result<Stmt, String> {
@@ -1455,6 +1598,26 @@ impl Parser {
             self.advance();
             let value = self.parse_expr()?;
             Ok(Stmt::Assignment { var: name, value })
+        } else if *self.peek() == Tok::Dot && self.is_ident_at(1, "copy") {
+            // <var>.Copy [Destination:=Range(addr)] — the object-variable
+            // sibling of `Range("addr").Copy` (see `parse_range_stmt`'s
+            // "copy" arm, same `Destination:=` grammar). Checked ahead of
+            // the generic `.field`/`.field = value` branch below so `.Copy`
+            // never gets swallowed into a bogus `RecordSet`/`Unsupported`.
+            self.advance(); // '.'
+            self.advance(); // 'copy'
+            let dst = if self.is_ident("destination") {
+                self.advance();
+                self.expect_tok(Tok::ColonEq)?;
+                self.expect_ident("range")?;
+                self.expect_tok(Tok::LParen)?;
+                let d = self.consume_str()?;
+                self.expect_tok(Tok::RParen)?;
+                Some(d)
+            } else {
+                None
+            };
+            Ok(Stmt::RangeObjectCopy { var: name, dst })
         } else if *self.peek() == Tok::Dot {
             // p.field = val  /  p.a.b = val  /  p.method (noop)
             self.advance(); // consume first '.'
@@ -1603,6 +1766,25 @@ impl Parser {
                     "workbooks" => self.parse_workbook_qualified_read(),
                     "application" => self.parse_application_wsf_expr(),
                     "worksheetfunction" => self.parse_wsf_expr(),
+                    // `ActiveSheet.Range(...)`/`.Cells(...)` (Milestone B7c
+                    // item 6). Only when followed by `.` — a bare
+                    // `ActiveSheet` (e.g. an unmodeled `Set ws =
+                    // ActiveSheet`) falls through to `parse_ident_expr`
+                    // like any other unrecognized bare identifier.
+                    "activesheet" if *self.peek_at(1) == Tok::Dot => {
+                        self.advance();
+                        self.parse_sheet_property_read(Expr::ActiveSheetRef)
+                    }
+                    // `ThisWorkbook.Worksheets(...)` / `ActiveWorkbook.
+                    // Worksheets(...)` (Milestone B7c item 6) — see the
+                    // matching statement-dispatch arm in `parse_stmt`.
+                    "thisworkbook" | "activeworkbook"
+                        if self.is_ident_at(2, "worksheets") || self.is_ident_at(2, "sheets") =>
+                    {
+                        self.advance();
+                        self.expect_tok(Tok::Dot)?;
+                        self.parse_sheet_cell_read()
+                    }
                     _ => self.parse_ident_expr(),
                 }
             }
@@ -2565,5 +2747,126 @@ mod tests {
         let collisions = find_cross_module_func_collisions(&modules);
         assert_eq!(collisions.len(), 1);
         assert_eq!(collisions[0].0, "foo");
+    }
+
+    // ── Milestone B7c: Set / object references ───────────────────────────────
+
+    #[test] fn set_range_literal_parses_to_stmt_set_with_a_range_lit_object_expr() {
+        let body = parse_body("Sub MySub()\n    Set rng = Range(\"A1:B2\")\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::Set { var: "rng".into(), value: ObjectExpr::RangeLit("A1:B2".into()) }]
+        );
+    }
+
+    #[test] fn set_from_another_object_variable_parses_to_object_expr_var() {
+        let body = parse_body("Sub MySub()\n    Set a = Range(\"A1\")\n    Set b = a\nEnd Sub\n");
+        assert_eq!(body[1], Stmt::Set { var: "b".into(), value: ObjectExpr::Var("a".into()) });
+    }
+
+    #[test] fn set_union_of_two_range_literals_parses_to_object_expr_union() {
+        let body = parse_body(
+            "Sub MySub()\n    Set u = Union(Range(\"A1:A2\"), Range(\"C1:C2\"))\nEnd Sub\n",
+        );
+        assert_eq!(
+            body,
+            vec![Stmt::Set {
+                var: "u".into(),
+                value: ObjectExpr::Union(vec![
+                    ObjectExpr::RangeLit("A1:A2".into()),
+                    ObjectExpr::RangeLit("C1:C2".into()),
+                ]),
+            }]
+        );
+    }
+
+    #[test] fn set_areas_index_parses_to_object_expr_area() {
+        let body = parse_body("Sub MySub()\n    Set u = Range(\"A1,C1\")\n    Set a = u.Areas(1)\nEnd Sub\n");
+        assert_eq!(
+            body[1],
+            Stmt::Set {
+                var: "a".into(),
+                value: ObjectExpr::Area(Box::new(ObjectExpr::Var("u".into())), Box::new(Expr::Integer(1))),
+            }
+        );
+    }
+
+    #[test] fn set_specialcells_visible_parses_to_object_expr_special_cells_visible() {
+        let body = parse_body(
+            "Sub MySub()\n    Set u = Range(\"A1:A3\")\n    Set v = u.SpecialCells(xlCellTypeVisible)\nEnd Sub\n",
+        );
+        assert_eq!(
+            body[1],
+            Stmt::Set {
+                var: "v".into(),
+                value: ObjectExpr::SpecialCellsVisible(Box::new(ObjectExpr::Var("u".into()))),
+            }
+        );
+    }
+
+    #[test] fn set_with_an_unrecognized_rhs_degrades_to_unsupported_not_a_parse_error() {
+        // `CreateObject(...)` isn't a modeled object expression — this must
+        // stay a soft no-op (see `parse_set`'s doc comment), not a hard
+        // parse error that would take down an otherwise-parseable module.
+        let body = parse_body(
+            "Sub MySub()\n    Set d = CreateObject(\"Scripting.Dictionary\")\nEnd Sub\n",
+        );
+        assert!(matches!(body[0], Stmt::Unsupported { .. }), "{:?}", body[0]);
+    }
+
+    #[test] fn range_object_copy_with_destination_parses_to_range_object_copy() {
+        let body = parse_body(
+            "Sub MySub()\n    Set rng = Range(\"A1\")\n    rng.Copy Destination:=Range(\"B1\")\nEnd Sub\n",
+        );
+        assert_eq!(
+            body[1],
+            Stmt::RangeObjectCopy { var: "rng".into(), dst: Some("B1".into()) }
+        );
+    }
+
+    #[test] fn bare_range_object_copy_has_no_destination() {
+        let body = parse_body("Sub MySub()\n    Set rng = Range(\"A1\")\n    rng.Copy\nEnd Sub\n");
+        assert_eq!(body[1], Stmt::RangeObjectCopy { var: "rng".into(), dst: None });
+    }
+
+    // ── Milestone B7c item 6: ThisWorkbook / ActiveWorkbook / ActiveSheet ────
+
+    #[test] fn activesheet_cell_write_parses_to_sheet_cell_write_with_activesheetref() {
+        let body = parse_body("Sub MySub()\n    ActiveSheet.Cells(1, 1).Value = 5\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::SheetCellWrite {
+                sheet: Expr::ActiveSheetRef,
+                row: Expr::Integer(1),
+                col: Expr::Integer(1),
+                value: Expr::Integer(5),
+            }]
+        );
+    }
+
+    #[test] fn thisworkbook_worksheets_cell_write_parses_identically_to_bare_worksheets() {
+        let with_prefix = parse_body(
+            "Sub MySub()\n    ThisWorkbook.Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n",
+        );
+        let bare = parse_body("Sub MySub()\n    Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n");
+        assert_eq!(with_prefix, bare);
+    }
+
+    #[test] fn activeworkbook_worksheets_range_read_parses_identically_to_bare_worksheets() {
+        let with_prefix = parse_body(
+            "Sub MySub()\n    x = ActiveWorkbook.Worksheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n",
+        );
+        let bare = parse_body("Sub MySub()\n    x = Worksheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n");
+        assert_eq!(with_prefix, bare);
+    }
+
+    #[test] fn a_bare_activesheet_without_a_dot_is_not_captured_by_the_activesheet_grammar() {
+        // `Set ws = ActiveSheet` — a bare `ActiveSheet` with no `.property`
+        // suffix falls through to a plain identifier (harmless; the VM
+        // treats an unresolved bare object-variable reference as a no-op —
+        // see `Stmt::Set`'s doc comment). This just confirms the parser
+        // doesn't error out on it.
+        let body = parse_body("Sub MySub()\n    Set ws = ActiveSheet\nEnd Sub\n");
+        assert_eq!(body, vec![Stmt::Set { var: "ws".into(), value: ObjectExpr::Var("activesheet".into()) }]);
     }
 }

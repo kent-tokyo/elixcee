@@ -181,6 +181,10 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::SetAppProp { .. } => {}
             Stmt::RangeWrite { .. } => {}
             Stmt::RangeCopy { .. } => {}
+            Stmt::RangeObjectCopy { .. } => {}
+            Stmt::Set { var, .. } => {
+                names.insert(var.clone());
+            }
             Stmt::RangePaste { .. } => {}
             Stmt::SheetRangePaste { .. } => {}
             Stmt::SheetProtection { .. } => {}
@@ -415,6 +419,11 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         Stmt::SetAppProp { value, .. } => out.push(value),
         Stmt::RangeWrite { value, .. } => out.push(value),
         Stmt::RangeCopy { .. } => {}
+        Stmt::RangeObjectCopy { .. } => {}
+        // `Set`'s RHS is an `ObjectExpr`, a separate AST from `Expr` — its
+        // one nested `Expr` (an `Areas(n)` index) isn't walked for
+        // undefined-function detection; out of scope for this pass.
+        Stmt::Set { .. } => {}
         Stmt::RangePaste { transpose, .. } => {
             if let Some(e) = transpose {
                 out.push(e);
@@ -783,6 +792,7 @@ fn walk_expr(
         | Expr::RangeRead { .. }
         | Expr::RowsCount
         | Expr::ColsCount
+        | Expr::ActiveSheetRef
         | Expr::RecordGet { .. }
         | Expr::RecordGetNested { .. } => {}
     }

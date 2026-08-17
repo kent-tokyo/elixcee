@@ -900,18 +900,21 @@ argument with a comma inside it, exactly like real VBA's own union syntax.
 No parser/grammar change was needed for this (the comma is inside the
 string, not a VBA-level argument separator); only the runtime address
 parser (`parse_multi_area_addr`, alongside the existing single-rect
-`parse_range_addr`) splits on top-level commas. **Not supported** (all
-deferred, per the same reasoning as B6a's `Dim arr(1 To N)` non-goal — no
-storable Range object exists to hang them on): `Union(...)`, the `Areas`/
+`parse_range_addr`) splits on top-level commas. `Union(...)`, the `Areas`/
 `Areas.Count`/`Areas(n)` VBA-visible property, and `Dim rng As Range` /
-`Set rng = ...` Range object variables in general (the `Variant` enum
-gained no `Range` variant).
+`Set rng = ...` Range object variables were all still-deferred at the time
+this section was written — **they now exist, see "Range object variables,
+Union, Areas, SpecialCells, and multi-area Paste (Milestone B7c)" below.**
 
-**Diagnose-only, by design**: v1 never actually completes (writes cells
-for) a multi-area paste — not even when source and destination areas fully
-correspond in count and shape. Multi-area `.Copy` succeeds (the clipboard
-records area geometry), but multi-area `.Paste`/`.PasteSpecial` always
-ends in one of 4 classified failures instead:
+**Diagnose-only for most shapes, one shape now executes (B7c)**: v1
+(B7a) never actually completed (wrote cells for) a multi-area paste —
+not even when source and destination areas fully corresponded in count
+and shape. As of Milestone B7c, the one fully-matching shape (both sides
+multi-area, same `Areas.Count`, matching per-area shapes, paired in
+order) now actually pastes; see the B7c section below for exactly which
+shape and what's still excluded (`Transpose:=`, merged-cell conflict
+checking). Every other shape below is unchanged from B7a and still ends
+in one of 4 classified failures instead:
 
 - **`MULTI_AREA_TO_SINGLE_AREA_PASTE`**: source has more than one area,
   destination has exactly one. Evidence: `source_areas`, `destination_areas`
@@ -923,12 +926,13 @@ ends in one of 4 classified failures instead:
   rows/columns. Evidence: `area_index` (1-based, the first mismatching
   pair), `source_area`, `destination_area`.
 - **`MULTI_AREA_PASTE_UNSUPPORTED`**: the catch-all for shapes the other 3
-  don't name — a single-area source into a multi-area destination, or a
-  multi-area-to-multi-area paste that fully matches in count and shape.
-  Real Excel would complete either of these; elixcee's v1 foundation
-  can't yet, so this reports the limitation plainly rather than silently
-  doing nothing or misreporting a mismatch that isn't there. Evidence:
-  `source_areas`, `destination_areas`.
+  don't name — a single-area source into a multi-area destination, or (as
+  of B7c) the reverse, a multi-area source into a single-area destination.
+  (Before B7c this also covered the fully-matching multi-to-multi case;
+  that shape now executes instead — see the B7c section below.) Real
+  Excel would complete these too; elixcee doesn't yet, so this reports the
+  limitation plainly rather than silently doing nothing or misreporting a
+  mismatch that isn't there. Evidence: `source_areas`, `destination_areas`.
 
 Every area's evidence is `{"address": "...", "rows": N, "columns": N}` —
 `columns` (not `cols`), and nested per area — a different convention from
@@ -958,15 +962,17 @@ merged-cell layout to cross-reference.
 
 ### Explicit non-goals (this milestone)
 
-`Union()`, `Areas`/`Areas.Count`/`Areas(n)`, and `Dim rng As Range`/
-`Set rng = ...` Range object variables (see "Supported syntax" above);
-actually completing (writing cells for) any multi-area paste, even a
-fully-matching one; hidden/filtered-row awareness (B7b);
-`SpecialCells(xlCellTypeVisible)` (B7c); and shrinking (B5b) — B7a is
-explicitly sequenced ahead of shrinking because most structural failures
-(multi-area, filtered rows) come from workbook layout, not drawn cell
-values, so there was nothing for shrinking to minimize until this
-structural model existed.
+`Union()`, `Areas`/`Areas.Count`/`Areas(n)`, `Dim rng As Range`/
+`Set rng = ...` Range object variables, actually completing (writing
+cells for) any multi-area paste, hidden/filtered-row awareness (B7b), and
+`SpecialCells(xlCellTypeVisible)` were all non-goals **at the time B7a
+shipped** — all have since landed (B7b, B7c; see their own sections
+below), except a multi-area paste still only executes for the one
+fully-matching shape (B7c), not every shape. Shrinking (B5b) is still a
+non-goal here — B7a was explicitly sequenced ahead of it because most
+structural failures (multi-area, filtered rows) come from workbook
+layout, not drawn cell values, so there was nothing for shrinking to
+minimize until this structural model existed.
 
 ## Hidden row/column evidence (Milestone B7b)
 
@@ -1066,10 +1072,89 @@ statement, never on drawn cell values, so it fires identically on case 0
 
 ### Explicit non-goals (this milestone)
 
-AutoFilter condition evaluation, `SpecialCells(xlCellTypeVisible)`
-execution, generating `RangeRef.areas` from filter/hidden results (B7c),
-a strict manual-vs-filter-hidden distinction, outline/group expand state,
-any Excel-faithful Copy/Paste behavior change for hidden cells (still
-copies/pastes them exactly as before — this milestone only adds
-observability), ODS hidden-row/column support, and multi-area-source
-hidden-cell observations.
+AutoFilter condition evaluation, a strict manual-vs-filter-hidden
+distinction, outline/group expand state, any Excel-faithful Copy/Paste
+behavior change for hidden cells (still copies/pastes them exactly as
+before — this milestone only adds observability), ODS hidden-row/column
+support, and multi-area-source hidden-cell observations.
+`SpecialCells(xlCellTypeVisible)` execution and generating
+`RangeRef.areas` from hidden-row/column results were also non-goals here
+— both have since landed in Milestone B7c (below), consuming this
+milestone's `sheet_visibility` data directly rather than re-deriving it.
+
+## Range object variables, Union, Areas, SpecialCells, and multi-area Paste (Milestone B7c)
+
+B7a/B7b built the range-geometry and hidden-cell-metadata foundation; B7c
+is the VBA object-reference layer on top of it: `Dim rng As Range`,
+`Set rng = Range(...)`, `Union(...)`, `.Areas`, `SpecialCells
+(xlCellTypeVisible)`, one multi-area Copy/Paste shape that now actually
+executes, and `ThisWorkbook`/`ActiveWorkbook`/`ActiveSheet`. This
+milestone is entirely inside the VBA language runtime (parser + `Vm`) —
+it adds no new `--json` fields of its own. The one place it changes this
+contract is `diagnose`'s `MULTI_AREA_PASTE_UNSUPPORTED` firing condition,
+already corrected in the B7a section above.
+
+**Object variables are a namespace, not a `Variant`**: `Set`-assigned
+variables live in `Vm.object_variables` (`String` → `ObjectRef`), kept
+separate from `Vm.variables` (`Variant`s) — mirroring VBA's own
+`Set`-vs-`=` distinction, and deliberately *not* a new `Variant` variant,
+since `Variant` is defined in the shared `elixcee-types` crate that the
+WASM bridge also consumes. `ObjectRef::Range` is just the existing B7a
+`RangeRef` (sheet + area coordinates) — no cell values are stored in it,
+so two variables holding the same `RangeRef` already get real `Set`
+reference semantics for free: cell values live in `Vm.sheets`, keyed by
+coordinates, so a write through one variable is a write to that shared
+store, immediately visible when reading through any other variable
+referencing the same coordinates.
+
+**`.Value`/`.Formula`/`.Areas.Count` ride existing grammar**: `<var>.Value
+= x`, `x = <var>.Value`, and `x = <var>.Areas.Count` reuse the pre-existing
+generic `<var>.<field>` statement/expression grammar (record field
+get/set) rather than adding new syntax — disambiguated purely at runtime
+by whether `var` is a key in `object_variables`, which only `Set` ever
+populates. `<var>.Copy [Destination:=Range(addr)]` and `.Areas(n)`/
+`.SpecialCells(xlCellTypeVisible)` are genuinely new grammar.
+
+**`SpecialCells(xlCellTypeVisible)`** decomposes each area into the
+Cartesian product of its maximal visible row-bands and column-bands
+(computed from B7b's `Vm.sheet_visibility`) — exactly the visible-cell
+set, though not necessarily grouped into the same number of `Areas` real
+Excel would report when *both* axes have hidden spans (Excel's own
+area-merging heuristic there is unmodeled; the cell set itself is
+correct). Raises an error (no VBA exception type modeled — a plain
+runtime error) if every cell in the range is hidden, matching real
+Excel's "No cells were found."
+
+**Multi-area Paste: one shape now executes.** `do_paste` still diagnoses
+(never writes cells for) a single-area source into a multi-area
+destination, the reverse, or a count/shape mismatch — see the B7a
+section's 4 classified failures. The one shape that now actually pastes:
+both sides multi-area, matching `Areas.Count`, matching per-area shapes,
+copied pairwise in source-to-destination order. `Transpose:=True` on that
+shape still falls through to the diagnose-only path rather than silently
+writing un-transposed data, and merged-cell conflict checking
+(Milestone B6c2) is not applied to this path.
+
+**`ThisWorkbook`/`ActiveWorkbook`/`ActiveSheet`**: `ActiveSheet` resolves
+dynamically (at each access) to `Vm.active_sheet` and works anywhere a
+`Worksheets(...)`/`Sheets(...)` reference does (`.Range(...)`,
+`.Cells(...)`, `.Delete`, ...). `ThisWorkbook`/`ActiveWorkbook` need no
+new resolution logic — elixcee only ever loads one workbook, so
+`ThisWorkbook.Worksheets(x)`/`ActiveWorkbook.Worksheets(x)` parse as a
+plain `Worksheets(x)`/`Sheets(x)`, the qualifier simply skipped. **Not
+supported**: `Set ws = ActiveSheet` / `Set wb = ThisWorkbook` as
+Worksheet/Workbook *object* variables — only the `Range`-producing object
+expressions above are `Set`-able; a bare `ActiveSheet`/`ThisWorkbook` on a
+`Set` RHS with no further `.Worksheets(...)`/property suffix falls
+through to a harmless no-op, same as any other unmodeled `Set` target.
+
+### Explicit non-goals (this milestone)
+
+`Set`-ing `ActiveSheet`/`ThisWorkbook`/`ActiveWorkbook` themselves as
+object variables (only `Range` object expressions are `Set`-able); a
+multi-area source pasted into a single-area destination (or the reverse)
+actually executing; `Transpose:=` on the multi-area execution path;
+merged-cell conflict checking on the multi-area execution path;
+`SpecialCells` types other than `xlCellTypeVisible`; and any new
+`--json` field (this milestone changes one existing root cause's firing
+condition — see the B7a section — but adds no new field or code).
