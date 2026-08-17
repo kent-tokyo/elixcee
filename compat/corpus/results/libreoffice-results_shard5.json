@@ -1,0 +1,586 @@
+[
+  {
+    "id": "type_handling_mixed_0002",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0003",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0004",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0005",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0006",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0007",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0008",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0009",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0010",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0011",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0012",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0013",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0014",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0015",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0016",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0017",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0018",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0019",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0020",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0021",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0022",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0023",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0024",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0025",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0026",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "type_handling_mixed_0027",
+    "category": "type_handling_mixed",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0001",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0002",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0003",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0004",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0005",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0006",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0007",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0008",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0009",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0010",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0011",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0012",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0013",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0014",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0015",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0016",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0017",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0018",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0019",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0020",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0021",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0022",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0023",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0024",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0025",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0026",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0027",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0028",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0029",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0030",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0031",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0032",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0033",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0034",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0035",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "text_fixture_ops_0036",
+    "category": "text_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0001",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0002",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0003",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0004",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0005",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0006",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0007",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0008",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0009",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0010",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  },
+  {
+    "id": "negatives_fixture_ops_0011",
+    "category": "negatives_fixture_ops",
+    "oracle": "libreoffice",
+    "ok": false,
+    "status": "TIMEOUT",
+    "cells": []
+  }
+]
