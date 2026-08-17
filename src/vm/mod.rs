@@ -5989,4 +5989,33 @@ mod tests {
         assert_eq!(vm.get_cell(3, 1), Variant::Integer(8));
         assert_eq!(vm.get_cell(4, 1), Variant::Boolean(false));
     }
+
+    // ── Phase 2C: With Range(...) ─────────────────────────────────────────────
+
+    #[test]
+    fn with_range_bare_value_reads_and_writes_the_with_target() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1, 1).Value = 5\n    With Range(\"A1\")\n        .Value = .Value + 1000\n    End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1005));
+    }
+
+    #[test]
+    fn with_range_bare_value_write_alone() {
+        let vm = run("Sub MySub()\n    With Range(\"B2\")\n        .Value = 42\n    End With\nEnd Sub\n");
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(42));
+    }
+
+    #[test]
+    fn with_range_nested_range_reference_still_works() {
+        // A nested `.Range(...)`/`.Cells(...)` inside a `With Range(...)`
+        // body is its own independent reference, not the With's own target
+        // — same convention `parse_with_dot_stmt` already used for
+        // `With Sheets(...)`.
+        let vm = run(
+            "Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n        .Range(\"B1\").Value = 2\n    End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+    }
 }

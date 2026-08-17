@@ -150,11 +150,18 @@ struct Parser {
     pos: usize,
     /// Variable name currently targeted by `With p` (None outside a With block).
     with_target: Option<String>,
+    /// Range address currently targeted by `With Range("addr")` (None
+    /// outside such a block) — lets a bare `.Value`/`.Formula` inside the
+    /// body (no explicit `.Range(...)`/`.Cells(...)` prefix) resolve
+    /// against this address, the same way `with_target` lets a bare
+    /// `.Field` resolve against a UDT variable. Shadowed/restored the same
+    /// way `with_target` is, so nested With blocks of either kind work.
+    with_range_target: Option<String>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Tok>, spans: Vec<(u32, u32)>) -> Self {
-        Parser { tokens, spans, pos: 0, with_target: None }
+        Parser { tokens, spans, pos: 0, with_target: None, with_range_target: None }
     }
 
     fn peek(&self) -> &Tok {
@@ -770,13 +777,36 @@ impl Parser {
             return Ok(Stmt::With { body });
         }
 
+        // ── Range("addr") — literal address on the active sheet ──────────────
+        // Same literal-only scope as the `Sheets("name")` branch above (no
+        // general expression target); a bare `.Value`/`.Formula` inside the
+        // body resolves against this address via `with_range_target`, the
+        // Range-target twin of `with_target` (UDT fields).
+        if self.is_ident("range") {
+            self.advance();
+            self.expect_tok(Tok::LParen)?;
+            let addr = self.consume_str()?;
+            self.expect_tok(Tok::RParen)?;
+            self.eat_eol()?;
+            let prev_with_target = self.with_target.take();
+            let prev_range_target = self.with_range_target.replace(addr);
+            let body = self.parse_with_body()?;
+            self.with_target = prev_with_target;
+            self.with_range_target = prev_range_target;
+            self.consume_end_kw("with")?;
+            self.skip_nl();
+            return Ok(Stmt::With { body });
+        }
+
         // ── With <variable> — UDT target ─────────────────────────────────────
         if let Tok::Ident(_) = self.peek().clone() {
             let var = self.consume_ident()?.to_lowercase();
             self.eat_eol()?;
             let prev = self.with_target.replace(var.clone());
+            let prev_range_target = self.with_range_target.take();
             let body = self.parse_with_body()?;
             self.with_target = prev;
+            self.with_range_target = prev_range_target;
             self.consume_end_kw("with")?;
             self.skip_nl();
             return Ok(Stmt::WithRecord { var, body });
@@ -815,6 +845,16 @@ impl Parser {
         match self.peek().clone() {
             Tok::Ident(ref s) => {
                 let s = s.clone();
+                // ── With Range("addr") target: bare .Value/.Formula = val ─────
+                if let Some(addr) = self.with_range_target.clone()
+                    && (s == "value" || s == "formula") {
+                        self.advance(); // consume 'value'/'formula'
+                        let is_formula = s == "formula";
+                        self.expect_tok(Tok::Eq)?;
+                        let value = self.parse_expr()?;
+                        self.eat_eol()?;
+                        return Ok(Some(Stmt::RangeWrite { addr, is_formula, value }));
+                    }
                 // ── UDT With target: .Field = val  /  .A.B = val ──────────────
                 if let Some(var) = self.with_target.clone()
                     && s != "range" && s != "cells" {
@@ -1912,6 +1952,13 @@ impl Parser {
                     }
                     _ => self.parse_ident_expr(),
                 }
+            }
+            // ── bare `.Value` inside a `With Range("addr")` block ─────────────
+            Tok::Dot if self.with_range_target.is_some() && self.is_ident_at(1, "value") => {
+                let addr = self.with_range_target.clone().expect("checked by guard above");
+                self.advance(); // consume '.'
+                self.advance(); // consume 'value'
+                Ok(Expr::RangeRead { addr })
             }
             // ── `.Field` inside a `With p` block ──────────────────────────────
             Tok::Dot => {
