@@ -74,8 +74,17 @@ pub enum Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum VbaBinOp {
     Add, Sub, Mul, Div,
+    /// `Mod` — modulus. Result sign follows the dividend (left operand),
+    /// same convention as Rust's `%`.
+    Mod,
+    /// `\` — integer division, truncating toward zero (same convention as
+    /// Rust's integer `/`).
+    IntDiv,
+    /// `^` — exponentiation.
+    Pow,
     Eq, Ne, Lt, Le, Gt, Ge,
     Concat,
+    And, Or, Xor,
 }
 
 #[derive(Debug, Clone, PartialEq)]

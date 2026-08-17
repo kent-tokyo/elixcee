@@ -3194,9 +3194,32 @@ fn to_cell_index(v: Variant, label: &str) -> Result<u32, String> {
     Ok(f as u32)
 }
 
+/// VBA's `\`/`Mod` operators round each operand to a whole number first
+/// (real VBA coerces to Long via the same round-half-to-even — "banker's
+/// rounding" — that `CLng`/`Round` use, not truncation and not Rust's
+/// default round-half-away-from-zero `f64::round()`) before doing integer
+/// division/modulus. E.g. `5 \ 0.5`: 0.5 rounds to 0 (nearest even), giving
+/// `5 \ 0` — a division-by-zero error, not `5 \ 1`.
+fn to_i64_rounded(v: &Variant) -> Result<i64, String> {
+    Ok(to_f64(v)?.round_ties_even() as i64)
+}
+
+/// `And`/`Or`/`Xor`/(unary) `Not`'s numeric-context coercion: same
+/// round-to-Long as `to_i64_rounded`, except a `Boolean` converts to VBA's
+/// actual internal bit pattern (`True` = -1 i.e. all-ones, `False` = 0),
+/// not `to_f64`'s `1.0`/`0.0` — needed so a mixed `<number> And <boolean>`
+/// bitwise-ANDs against the Boolean's real all-ones/all-zeros pattern (e.g.
+/// `5 And True` = 5, not 1).
+fn to_i64_bitwise(v: &Variant) -> Result<i64, String> {
+    match v {
+        Variant::Boolean(b) => Ok(if *b { -1 } else { 0 }),
+        other => to_i64_rounded(other),
+    }
+}
+
 fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> {
     match op {
-        VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div => {
+        VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div | VbaBinOp::Pow => {
             let lf = to_f64(&l)?;
             let rf = to_f64(&r)?;
             let result = match op {
@@ -3207,9 +3230,48 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
                     if rf == 0.0 { return Err("Division by zero".into()); }
                     lf / rf
                 }
+                VbaBinOp::Pow => lf.powf(rf),
                 _ => unreachable!(),
             };
             Ok(as_int_if_whole(result))
+        }
+        VbaBinOp::IntDiv | VbaBinOp::Mod => {
+            let li = to_i64_rounded(&l)?;
+            let ri = to_i64_rounded(&r)?;
+            let result = match op {
+                VbaBinOp::IntDiv => li.checked_div(ri),
+                VbaBinOp::Mod    => li.checked_rem(ri),
+                _ => unreachable!(),
+            };
+            match result {
+                Some(v) => Ok(Variant::Integer(v)),
+                None if ri == 0 => Err("Division by zero".into()),
+                None => Err("Integer division overflow".into()),
+            }
+        }
+        VbaBinOp::And | VbaBinOp::Or | VbaBinOp::Xor => {
+            // Both operands genuinely Boolean → logical op, Boolean result
+            // (VBA's own distinction between the "logical" and "bitwise"
+            // reading of the same operator). Otherwise, numeric bitwise op.
+            if let (Variant::Boolean(lb), Variant::Boolean(rb)) = (&l, &r) {
+                let result = match op {
+                    VbaBinOp::And => *lb && *rb,
+                    VbaBinOp::Or  => *lb || *rb,
+                    VbaBinOp::Xor => *lb != *rb,
+                    _ => unreachable!(),
+                };
+                Ok(Variant::Boolean(result))
+            } else {
+                let li = to_i64_bitwise(&l)?;
+                let ri = to_i64_bitwise(&r)?;
+                let result = match op {
+                    VbaBinOp::And => li & ri,
+                    VbaBinOp::Or  => li | ri,
+                    VbaBinOp::Xor => li ^ ri,
+                    _ => unreachable!(),
+                };
+                Ok(Variant::Integer(result))
+            }
         }
         VbaBinOp::Concat => Ok(Variant::Str(format!("{}{}", l, r))),
         VbaBinOp::Eq  => Ok(Variant::Boolean(vba_eq(&l, &r))),
@@ -5794,5 +5856,137 @@ mod tests {
     #[test]
     fn hidden_cells_observation_is_none_when_nothing_was_copied() {
         assert_eq!(Vm::new().hidden_cells_observation(), None);
+    }
+
+    // ── Phase 2C: Mod / \ / ^ / infix And Or Xor Not ─────────────────────────
+
+    #[test]
+    fn mod_operator_computes_modulus() {
+        let vm = run("Sub MySub()\n    a = 7 Mod 3\n    b = -7 Mod 3\n    c = 7 Mod -3\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        // Result sign follows the dividend (left operand), same as Rust's `%`.
+        assert_eq!(vm.variables["b"], Variant::Integer(-1));
+        assert_eq!(vm.variables["c"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn intdiv_operator_truncates_toward_zero() {
+        let vm = run("Sub MySub()\n    a = 7 \\ 2\n    b = -7 \\ 2\n    c = 2 \\ 3\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(3));
+        assert_eq!(vm.variables["b"], Variant::Integer(-3)); // truncated, not floored (-4)
+        assert_eq!(vm.variables["c"], Variant::Integer(0));
+    }
+
+    #[test]
+    fn intdiv_and_mod_round_fractional_operands_half_to_even_first() {
+        // 0.5 rounds to 0 (nearest even), not 1 — so `5 \ 0.5` is `5 \ 0`.
+        let prog = parser::parse("Sub MySub()\n    Cells(1, 1).Value = 5 \\ 0.5\nEnd Sub\n").unwrap();
+        assert!(Vm::new().run_sub(&prog, "mysub").is_err());
+        // 2.5 rounds to 2 (nearest even), not 3.
+        let vm = run("Sub MySub()\n    a = 2.5 \\ 4\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(0));
+    }
+
+    #[test]
+    fn pow_operator_computes_exponentiation() {
+        let vm = run("Sub MySub()\n    a = 2 ^ 3\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(8));
+    }
+
+    #[test]
+    fn pow_binds_tighter_than_unary_minus() {
+        // -2 ^ 2 is -(2 ^ 2) = -4, not (-2) ^ 2 = 4.
+        let vm = run("Sub MySub()\n    a = -2 ^ 2\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(-4));
+    }
+
+    #[test]
+    fn pow_accepts_a_negative_exponent() {
+        let vm = run("Sub MySub()\n    a = 2 ^ -1\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Float(0.5));
+    }
+
+    #[test]
+    fn pow_is_left_associative() {
+        // 2 ^ 3 ^ 2 is (2 ^ 3) ^ 2 = 64, not 2 ^ (3 ^ 2) = 512.
+        let vm = run("Sub MySub()\n    a = 2 ^ 3 ^ 2\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(64));
+    }
+
+    #[test]
+    fn full_precedence_chain_matches_real_vba() {
+        // 2 + 3 * 2 ^ 2 = 2 + 3*4 = 2 + 12 = 14 (not 20, not 100).
+        let vm = run("Sub MySub()\n    a = 2 + 3 * 2 ^ 2\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(14));
+    }
+
+    #[test]
+    fn infix_and_or_xor_compute_boolean_logic() {
+        let vm = run(
+            "Sub MySub()\n    a = True And False\n    b = True Or False\n    c = True Xor True\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(false));
+        assert_eq!(vm.variables["b"], Variant::Boolean(true));
+        assert_eq!(vm.variables["c"], Variant::Boolean(false));
+    }
+
+    #[test]
+    fn and_or_xor_do_numeric_bitwise_math_on_non_boolean_operands() {
+        let vm = run("Sub MySub()\n    a = 6 And 3\n    b = 6 Or 1\n    c = 5 Xor 1\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(2));
+        assert_eq!(vm.variables["b"], Variant::Integer(7));
+        assert_eq!(vm.variables["c"], Variant::Integer(4));
+    }
+
+    #[test]
+    fn not_binds_looser_than_comparison_and_tighter_than_and() {
+        // `Not a And b` is `(Not a) And b`, not `Not (a And b)`.
+        let vm = run(
+            "Sub MySub()\n    a = Not False And True\n    b = Not (False And True)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Boolean(true));
+        // `Not x = y` is `Not (x = y)`, not `(Not x) = y`.
+        let vm2 = run("Sub MySub()\n    a = Not 1 = 2\nEnd Sub\n");
+        assert_eq!(vm2.variables["a"], Variant::Boolean(true)); // Not(1=2) = Not(False) = True
+    }
+
+    #[test]
+    fn if_not_condition_works() {
+        let vm = run(
+            "Sub MySub()\n    x = False\n    If Not x Then\n        a = 1\n    Else\n        a = 2\n    End If\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn or_binds_looser_than_and() {
+        // a Or b And c is a Or (b And c), not (a Or b) And c.
+        let vm = run(
+            "Sub MySub()\n    a = True Or False And False\nEnd Sub\n",
+        );
+        // True Or (False And False) = True Or False = True.
+        // (True Or False) And False would be False — this distinguishes them.
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn parenthesized_expression_supports_and_or_xor() {
+        let vm = run("Sub MySub()\n    a = (True And False) Or True\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn range_value_write_with_and_or_mod_intdiv_pow_all_parse_and_execute() {
+        // The exact constructs the integration review found broken at parse
+        // time — confirms they now reach the VM and produce real values, not
+        // just "doesn't error".
+        let vm = run(
+            "Sub MySub()\n    Range(\"A1\").Value = 2 Mod 3\n    Range(\"A2\").Value = 7 \\ 3\n    Range(\"A3\").Value = 2 ^ 3\n    Range(\"A4\").Value = True And False\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(3, 1), Variant::Integer(8));
+        assert_eq!(vm.get_cell(4, 1), Variant::Boolean(false));
     }
 }
