@@ -3729,6 +3729,19 @@ mod tests {
     }
 
     #[test]
+    fn test_single_line_if_exit_sub_then_else_on_one_line() {
+        // `If cond Then Exit Sub Else stmt` — makes sure parse_exit's own
+        // fixed-arity `consume_ident()` (for the Exit target) doesn't
+        // swallow a following `Else` the way GoTo's label parse could.
+        let exits = run("Sub MySub()\n    x = 5\n    If x > 0 Then Exit Sub Else y = 1\n    y = 2\nEnd Sub\n");
+        assert!(!exits.variables.contains_key("y"));
+
+        let takes_else = run("Sub MySub()\n    x = -1\n    If x > 0 Then Exit Sub Else y = 1\n    z = y\nEnd Sub\n");
+        assert_eq!(takes_else.variables["y"], Variant::Integer(1));
+        assert_eq!(takes_else.variables["z"], Variant::Integer(1));
+    }
+
+    #[test]
     fn test_single_line_if_goto_actually_jumps() {
         let vm = run(concat!(
             "Sub MySub()\n",
