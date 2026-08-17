@@ -2,27 +2,29 @@
 
 /**
  * Read an in-memory XLSX/XLSM buffer, returning a JSON string shaped like xlsx@0.18.5's
- * `WorkBook` (`{SheetNames, Sheets}`; each `WorkSheet` a sparse `{"A1": {t,v,f}, ...,
- * "!ref": "A1:C3", "!merges": [...], "!hiddenRows": [...], "!hiddenCols": [...] }` object
- * — see `packages/xlsx/src/index.d.ts`'s `WorkBook`/`WorkSheet` types). The JS side
+ * `WorkBook` (`{SheetNames, Sheets}`; each `WorkSheet` a sparse `{"A1": {t,v,f,fmtId}, ...,
+ * "!ref": "A1:C3", "!merges": [...], "!hiddenRows": [...], "!hiddenCols": [...] }` object,
+ * plus workbook-level `"!numFmts"`/`"!date1904"` — see
+ * `packages/xlsx/src/index.d.ts`'s `WorkBook`/`WorkSheet` types). The JS side
  * (`packages/xlsx/src/index.cjs`'s `read()`) does `JSON.parse` on the result — no
  * `serde`/`serde_json` dependency needed for a shape this small; reuses
  * `elixcee::diagnostics::json_string`'s existing hand-rolled escaper (src/diagnostics.rs)
  * rather than duplicating a JSON writer or adding a dependency.
  *
- * `!hiddenRows`/`!hiddenCols` are NOT the oracle's own `!rows`/`!cols` shape (a per-index
- * sparse array of `{hidden:true}`) — they're `reader.rs`'s native 1-based inclusive
- * `[start,end]` intervals, passed through as-is. The JS layer expands them into the real
- * `!rows`/`!cols` shape (and applies the oracle's own `opts.cellStyles` gate — confirmed
- * live the oracle never emits `!rows`/`!cols` at all without it) — see
- * `packages/xlsx/src/internal/read-shape.cjs`. Keeping that SheetJS-shape-specific
- * (0-based, sparse, option-gated) work in JS matches how every other xlsx-shape decision
- * already lives in `index.cjs`, not here.
- *
- * Still not feature-complete with the oracle's `read()`: no formatted display text (`.w`)
- * or date-typed cells (`t:'d'`) — both need `styles.xml` number-format parsing `reader.rs`
- * doesn't do (see `docs/xlsx-architecture.md` / the read() item-6 tracking). Merged ranges
- * (`!merges`) and formula text (`.f`) ARE mapped.
+ * `!hiddenRows`/`!hiddenCols`/per-cell `fmtId`/`!numFmts`/`!date1904` are NOT the oracle's
+ * own `read()` shapes — they're `reader.rs`'s raw parsed data (1-based `[start,end]`
+ * intervals; a numFmtId integer; the workbook's custom numFmt table; a bool), passed
+ * through as-is. The JS layer resolves all of this into the oracle's real shapes —
+ * `!rows`/`!cols` (0-based sparse `{hidden:true}` arrays, gated behind `opts.cellStyles` —
+ * confirmed live the oracle never emits them without it), `.w`/`.z` (via the real `ssf`
+ * engine, `.z` gated behind `opts.cellNF`/`opts.cellStyles` and always a resolved format
+ * STRING, never the raw `fmtId` integer), and `t:'d'`-typed cells (gated behind
+ * `opts.cellDates`) — see `packages/xlsx/src/internal/read-shape.cjs`. Keeping that
+ * SheetJS-shape-specific (0-based/sparse/option-gated/SSF-backed) work in JS
+ * matches how every other xlsx-shape decision already lives in `index.cjs`, not here —
+ * and avoids porting SSF's own format-code-to-date heuristic into Rust as a second,
+ * unverified implementation of logic already proven correct across 1831 cases
+ * (compat/differential/ssf-format.test.mjs).
  * @param {Uint8Array} bytes
  * @returns {string}
  */

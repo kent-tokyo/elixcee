@@ -6,6 +6,15 @@
 // entry points (see index.cjs and the browser entry added for the "browser" export
 // condition) share one implementation instead of drifting.
 //
+// This module `require`s 'ssf' (via ssf-adapter.cjs) and ./datenum.cjs, both real,
+// disclosed dependencies of this package already (see docs/xlsx-architecture.md's "SSF
+// backend" decision) — not new ones. That does mean index.browser.mjs's `read`, which
+// shares this module for its !rows/!cols/.w/.z/date handling, is no longer reachable in a
+// literal bundler-less browser tab beyond what a bundler resolves for it — see
+// index.browser.mjs's own doc comment for that disclosed, accepted trade-off.
+const { format: ssfFormat, resolveFormatString, isDate } = require('./ssf-adapter.cjs');
+const { numdate } = require('./datenum.cjs');
+//
 // ---- !rows / !cols (Milestone read-item 3) ----
 //
 // crates/elixcee-wasm emits reader.rs's already-parsed hidden-row/col data as internal
@@ -37,7 +46,65 @@ function expandHiddenIntervals(intervals) {
   return out;
 }
 
-function shapeSheet(ws, opts) {
+// ---- .w / .z / date-typed cells (Milestone read-item 6) ----
+//
+// crates/elixcee-wasm emits a per-cell "fmtId" (a raw numFmtId integer, only when
+// non-zero) and workbook-level "!numFmts" (custom <numFmt> definitions) — reader.rs's raw
+// parsed styles.xml data, not yet resolved to an actual format-code STRING or checked for
+// date-ness. That resolution — and all of `.w`'s actual number/date/text formatting — is
+// done here via the real `ssf` engine (ssf-adapter.cjs), the same one already verified
+// byte-identical to the oracle's own bundled engine across 1831 cases
+// (compat/differential/ssf-format.test.mjs), rather than a second, unverified
+// reimplementation of SSF's format-code parsing in Rust.
+//
+// Three independently-confirmed-live oracle behaviors this reproduces exactly:
+// 1. `.w` is unconditional (present on every cell regardless of any opts) — confirmed
+//    live: even a completely unstyled cell gets a `.w` (General-formatted).
+// 2. `.z` requires opts.cellNF === true (opts.cellStyles implies it, confirmed live:
+//    `if(o.cellStyles) o.cellNF = true` in the oracle's own read() entry). When present,
+//    `.z` is ALWAYS a resolved format STRING, even "General" literally — never the raw
+//    numFmtId integer.
+// 3. `t:'d'` requires opts.cellDates === true AND the resolved format is date-like
+//    (isDate) AND the cell is numeric — confirmed live: XLSX.read() never returns a
+//    date-typed cell without cellDates, even for an obviously date-formatted numeric
+//    cell (numFmtId 14 / "m/d/yy"). The Date object itself is built via numdate(), which
+//    (confirmed live against a real date1904 workbook) deliberately does NOT account for
+//    date1904 — matching a genuine inconsistency in the real oracle itself, where `.w`
+//    DOES shift for a date1904 file but the cellDates `.v` Date object does not. See
+//    datenum.cjs's numdate doc comment for the full writeup.
+//
+// String cells: `.w` is always the literal `.v` (no SSF text-section formatting applied).
+// Boolean cells: `.w` is always "TRUE"/"FALSE". Both are deliberate, disclosed scope
+// limits — a custom format's 4th ("text") section changing a string/boolean's rendered
+// text is a real but rare oracle feature this does not replicate; every fixture this
+// package's own tests exercise uses the unstyled/default case, so this is an honest
+// omission, not a silently wrong claim of support.
+function shapeCell(cell, opts, numFmts, date1904) {
+  const table = numFmts || {};
+  const resolved = resolveFormatString(cell.fmtId || 0, { table });
+  delete cell.fmtId; // never leak the raw wire integer
+
+  if (cell.t === 's') {
+    cell.w = cell.v;
+  } else if (cell.t === 'b') {
+    cell.w = cell.v ? 'TRUE' : 'FALSE';
+  } else if (cell.t === 'n') {
+    cell.w = ssfFormat(resolved, cell.v, { date1904 });
+  }
+
+  if (opts && (opts.cellNF || opts.cellStyles)) {
+    cell.z = resolved;
+  }
+
+  if (opts && opts.cellDates && cell.t === 'n' && isDate(resolved)) {
+    cell.t = 'd';
+    cell.v = numdate(cell.v);
+  }
+}
+
+const CELL_REF_RE = /^[A-Z]+[0-9]+$/;
+
+function shapeSheet(ws, opts, numFmts, date1904) {
   if (ws == null) return ws;
   const hiddenRows = ws['!hiddenRows'];
   const hiddenCols = ws['!hiddenCols'];
@@ -47,13 +114,20 @@ function shapeSheet(ws, opts) {
     if (hiddenRows) ws['!rows'] = expandHiddenIntervals(hiddenRows);
     if (hiddenCols) ws['!cols'] = expandHiddenIntervals(hiddenCols);
   }
+  for (const key of Object.keys(ws)) {
+    if (CELL_REF_RE.test(key)) shapeCell(ws[key], opts, numFmts, date1904);
+  }
   return ws;
 }
 
 // Mutates and returns `wb` in place — the WASM bridge's JSON.parse output is a fresh
 // object with no other owner, so there's no reason to clone before reshaping it.
 function shapeWorkBook(wb, opts) {
-  for (const name of wb.SheetNames) shapeSheet(wb.Sheets[name], opts);
+  const numFmts = wb['!numFmts'];
+  const date1904 = !!wb['!date1904'];
+  delete wb['!numFmts'];
+  delete wb['!date1904'];
+  for (const name of wb.SheetNames) shapeSheet(wb.Sheets[name], opts, numFmts, date1904);
   return wb;
 }
 

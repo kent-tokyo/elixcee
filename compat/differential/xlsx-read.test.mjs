@@ -98,17 +98,18 @@ function projectSheet(ws) {
     } else if (key === '!cols') {
       out['!cols'] = projectRowsOrCols(ws['!cols']);
     } else if (CELL_REF_RE.test(key)) {
-      // .f (Milestone read-item 4) is safe to compare unconditionally: every case in this
-      // file that doesn't set a formula has it `undefined` on BOTH sides (a plain property
-      // access on a key neither side's cell object has), so this can never manufacture a
-      // false MATCH/mismatch for a case that isn't actually testing formulas.
-      out[key] = { t: ws[key].t, v: ws[key].v, f: ws[key].f };
+      // .f/.w/.z (Milestone read-item 4/6) are safe to compare unconditionally: every
+      // case that doesn't exercise them has the field `undefined` on BOTH sides (a plain
+      // property access on a key neither side's cell object has for that case), so this
+      // can never manufacture a false MATCH/mismatch for a case that isn't testing them.
+      // .w in particular was verified live across every cell type already exercised
+      // below (string/number/boolean, including the boundary-numeric-values case) before
+      // being widened in here — see this file's read-item-6 section.
+      out[key] = { t: ws[key].t, v: ws[key].v, f: ws[key].f, w: ws[key].w, z: ws[key].z };
     }
     // Every other key (!fullref, !type, ...) is out of this MVP's scope — silently dropped
     // from BOTH sides, not just elixcee's, so its absence can never look like a false
-    // MATCH for a field neither side is being compared on. `.w`/`.z`/date-typed cells
-    // (`t:'d'`) are deliberately NOT widened into the per-cell projection above either —
-    // see this file's read-item-6 section for why.
+    // MATCH for a field neither side is being compared on.
   }
   return out;
 }
@@ -447,6 +448,68 @@ runReadCaseBytes(
   buildHiddenRowsColsXlsxBytes()
 );
 
+// ---- read-item 6: .w / .z / date-typed cells ────────────────────────────
+//
+// reader.rs now parses xl/styles.xml (numFmts + cellXfs) and the workbook's date1904
+// flag; the JS layer (read-shape.cjs) resolves that into .w (always computed — confirmed
+// live the oracle emits it unconditionally for every cell), .z (gated behind
+// opts.cellNF/opts.cellStyles, always a resolved format STRING even "General"), and
+// date-typed cells (gated behind opts.cellDates AND a date-like resolved format — the
+// underlying serial value is unaffected either way) via the real `ssf` engine already
+// verified byte-identical to the oracle's own across 1831 cases
+// (compat/differential/ssf-format.test.mjs). See read-shape.cjs's own doc comment for the
+// exact contract, confirmed live against the oracle, including a genuine oracle
+// inconsistency this reproduces on purpose: a date1904 workbook's .w shifts by the
+// 1462-day offset but its cellDates .v Date object does not (datenum.cjs's numdate).
+//
+// projectSheet was widened above to compare .w/.z unconditionally (verified first,
+// per-field, across every cell type the 14 cases above already exercise — string,
+// number, boolean, including the boundary-numeric-values case — before being widened,
+// per this file's read-item-6 section in its own header comment).
+function buildNumberFormatXlsxBytes() {
+  const ws = U.aoa_to_sheet([[42, 3.14159, 45444]]);
+  U.cell_set_number_format(ws.A1, '0.00'); // built-in numFmtId (2)
+  U.cell_set_number_format(ws.C1, '0.00"kg"'); // custom numFmtId (164+, via <numFmts>)
+  const wb = U.book_new();
+  U.book_append_sheet(wb, ws, 'S1');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+runReadCaseBytes(
+  'number-format resolution (.w/.z) with opts.cellNF: true — built-in and custom formats',
+  buildNumberFormatXlsxBytes(),
+  undefined,
+  { cellNF: true }
+);
+
+runReadCase(
+  'date-typed cells with opts.cellDates: true (date and date-time values)',
+  [['S1', [[new Date(2024, 0, 15, 13, 45, 30)], [new Date(2020, 11, 31)]]]],
+  undefined,
+  { cellDates: true }
+);
+
+runReadCase(
+  'the same date-formatted cells WITHOUT opts.cellDates stay numeric (t:"n"), not "d"',
+  [['S1', [[new Date(2024, 0, 15)]]]]
+);
+
+// A real date1904 workbook — the genuine oracle inconsistency (.w shifts, cellDates .v
+// does not) called out in this section's header comment, exercised end-to-end rather
+// than just asserted about.
+function buildDate1904XlsxBytes() {
+  const ws = U.aoa_to_sheet([[new Date(2024, 0, 15)]]);
+  const wb = { SheetNames: ['S1'], Sheets: { S1: ws }, Workbook: { WBProps: { date1904: true } } };
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+runReadCaseBytes(
+  'a date1904 workbook with opts.cellDates + opts.cellNF: true',
+  buildDate1904XlsxBytes(),
+  undefined,
+  { cellDates: true, cellNF: true }
+);
+
 // ---- read-item 5: browser export condition dispatch ----
 //
 // Confirms LIVE — not just "should work" — that package.json's "browser" condition under
@@ -533,24 +596,24 @@ console.log('\nread() differential suite passed: every case matches on its decla
 // cases above (this file IS the runnable check, like every other file in this directory).
 {
   const projected = projectSheet({
-    A1: { t: 's', v: 'hi', w: 'hi', h: 'hi' },
-    B1: { t: 'n', v: 3, f: 'SUM(A1:A1)' },
+    A1: { t: 's', v: 'hi', w: 'hi', h: '<b>hi</b>' },
+    B1: { t: 'n', v: 3, f: 'SUM(A1:A1)', w: '3', z: 'General' },
     '!ref': 'A1:B1',
     '!merges': [{ s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }],
     '!cols': [{ hidden: true, width: 12 }],
   });
   assert.deepEqual(projected, {
-    A1: { t: 's', v: 'hi', f: undefined },
-    B1: { t: 'n', v: 3, f: 'SUM(A1:A1)' },
+    A1: { t: 's', v: 'hi', f: undefined, w: 'hi', z: undefined },
+    B1: { t: 'n', v: 3, f: 'SUM(A1:A1)', w: '3', z: 'General' },
     '!ref': 'A1:B1',
     '!merges': [{ s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }],
     '!cols': [{ hidden: true }],
   });
-  // .w/.h (formatted display text / rich HTML — read-item 6, not landed) stay excluded
-  // from the per-cell projection even though the field-by-field assert.deepEqual above
-  // wouldn't itself catch a stray extra key (deepEqual on A1 only checks the keys it
-  // lists) — assert that explicitly.
-  assert.equal('w' in projected.A1, false);
+  // .h (rich-HTML text — never claimed as supported, out of this package's scope
+  // entirely, unlike .w/.z which item 6 now computes) stays excluded from the per-cell
+  // projection even though the field-by-field assert.deepEqual above wouldn't itself
+  // catch a stray extra key (deepEqual on A1 only checks the keys it lists) — assert
+  // that explicitly.
   assert.equal('h' in projected.A1, false);
 
   // A hole (non-hidden slot) in !rows/!cols must stay a real hole after projection, not

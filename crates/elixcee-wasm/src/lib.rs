@@ -17,7 +17,7 @@ use elixcee::reader::{BufferSheet, BufferWorkbook, SheetCell};
 use wasm_bindgen::prelude::*;
 
 /// Read an in-memory XLSX/XLSM buffer, returning a JSON string shaped like xlsx@0.18.5's
-/// `WorkBook` (`{SheetNames, Sheets}`; each `WorkSheet` a sparse `{"A1": {t,v,f,z}, ...,
+/// `WorkBook` (`{SheetNames, Sheets}`; each `WorkSheet` a sparse `{"A1": {t,v,f,fmtId}, ...,
 /// "!ref": "A1:C3", "!merges": [...], "!hiddenRows": [...], "!hiddenCols": [...] }` object,
 /// plus workbook-level `"!numFmts"`/`"!date1904"` — see
 /// `packages/xlsx/src/index.d.ts`'s `WorkBook`/`WorkSheet` types). The JS side
@@ -26,15 +26,16 @@ use wasm_bindgen::prelude::*;
 /// `elixcee::diagnostics::json_string`'s existing hand-rolled escaper (src/diagnostics.rs)
 /// rather than duplicating a JSON writer or adding a dependency.
 ///
-/// `!hiddenRows`/`!hiddenCols`/per-cell `z`/`!numFmts`/`!date1904` are NOT the oracle's own
-/// `read()` shapes — they're `reader.rs`'s raw parsed data (1-based `[start,end]`
+/// `!hiddenRows`/`!hiddenCols`/per-cell `fmtId`/`!numFmts`/`!date1904` are NOT the oracle's
+/// own `read()` shapes — they're `reader.rs`'s raw parsed data (1-based `[start,end]`
 /// intervals; a numFmtId integer; the workbook's custom numFmt table; a bool), passed
 /// through as-is. The JS layer resolves all of this into the oracle's real shapes —
 /// `!rows`/`!cols` (0-based sparse `{hidden:true}` arrays, gated behind `opts.cellStyles` —
 /// confirmed live the oracle never emits them without it), `.w`/`.z` (via the real `ssf`
-/// engine, `.z` gated behind `opts.cellNF`/`opts.cellStyles`), and `t:'d'`-typed cells
-/// (gated behind `opts.cellDates`) — see `packages/xlsx/src/internal/read-shape.cjs`.
-/// Keeping that SheetJS-shape-specific (0-based/sparse/option-gated/SSF-backed) work in JS
+/// engine, `.z` gated behind `opts.cellNF`/`opts.cellStyles` and always a resolved format
+/// STRING, never the raw `fmtId` integer), and `t:'d'`-typed cells (gated behind
+/// `opts.cellDates`) — see `packages/xlsx/src/internal/read-shape.cjs`. Keeping that
+/// SheetJS-shape-specific (0-based/sparse/option-gated/SSF-backed) work in JS
 /// matches how every other xlsx-shape decision already lives in `index.cjs`, not here —
 /// and avoids porting SSF's own format-code-to-date heuristic into Rust as a second,
 /// unverified implementation of logic already proven correct across 1831 cases
@@ -117,7 +118,20 @@ fn worksheet_json(bs: &BufferSheet) -> String {
     let ref_range = bs.dimension.or_else(|| (!first).then_some(((min_r, min_c), (max_r, max_c))));
     if let Some(((r1, c1), (r2, c2))) = ref_range {
         out.push_str(",\"!ref\":");
-        out.push_str(&json_string(&format!("{}:{}", cell_ref(r1, c1), cell_ref(r2, c2))));
+        // A single-cell range collapses to just the cell ref, no colon — matching the
+        // oracle's own encode_range (`start === end ? start : start + ':' + end`),
+        // ALWAYS used to build !ref regardless of source (bounding box or a trusted
+        // <dimension>, even one written as "A1:A1" in the XML — confirmed live: the
+        // oracle's own !ref is never the raw <dimension> text echoed back verbatim, it's
+        // always re-encoded through encode_range). Found via a real divergence (a
+        // single-populated-cell sheet reading back as "A1:A1" here vs the oracle's "A1"),
+        // not assumed.
+        let start = cell_ref(r1, c1);
+        if r1 == r2 && c1 == c2 {
+            out.push_str(&json_string(&start));
+        } else {
+            out.push_str(&json_string(&format!("{}:{}", start, cell_ref(r2, c2))));
+        }
     }
 
     if !sheet.merged_ranges.is_empty() {
@@ -180,7 +194,13 @@ fn cell_json(cell: &SheetCell, formula: Option<&String>, fmt_id: Option<&u32>) -
         out.push_str(&json_string(f));
     }
     if let Some(id) = fmt_id {
-        out.push_str(",\"z\":");
+        // "fmtId", not the oracle's own "z" — an internal wire key holding a raw
+        // numFmtId integer, not yet the resolved format-code STRING the oracle's real
+        // `.z` always is (even "General" is a string, never a number, on the oracle —
+        // confirmed live). Matches the !hiddenRows/!hiddenCols wire-vs-real-shape
+        // convention above rather than overloading `.z`'s two different meanings under
+        // one key name. See read-shape.cjs, which resolves this into the real `.z`/`.w`.
+        out.push_str(",\"fmtId\":");
         out.push_str(&id.to_string());
     }
     out.push('}');
@@ -310,8 +330,30 @@ mod tests {
 
     #[test]
     fn worksheet_json_falls_back_to_the_bounding_box_when_dimension_is_absent() {
+        let json = workbook_json(&wb1(sheet(
+            "Sheet1",
+            vec![((2, 2), SheetCell::Integer(1)), ((3, 4), SheetCell::Integer(2))],
+        )));
+        assert!(json.contains(r#""!ref":"B2:D3""#));
+    }
+
+    // A single populated cell (or a single-cell <dimension>) must collapse !ref to just
+    // the cell ref, no colon — matching the oracle's own encode_range convention. Found
+    // via a real divergence (see this section's own commit), not assumed.
+    #[test]
+    fn worksheet_json_collapses_a_single_cell_bounding_box_ref_no_colon() {
         let json = workbook_json(&wb1(sheet("Sheet1", vec![((2, 2), SheetCell::Integer(1))])));
-        assert!(json.contains(r#""!ref":"B2:B2""#));
+        assert!(json.contains(r#""!ref":"B2""#));
+        assert!(!json.contains("\"!ref\":\"B2:B2\""));
+    }
+
+    #[test]
+    fn worksheet_json_collapses_a_single_cell_dimension_ref_no_colon() {
+        let mut s = sheet("Sheet1", vec![((1, 1), SheetCell::Integer(1))]);
+        s.dimension = Some(((1, 1), (1, 1)));
+        let json = workbook_json(&wb1(s));
+        assert!(json.contains(r#""!ref":"A1""#));
+        assert!(!json.contains("\"!ref\":\"A1:A1\""));
     }
 
     // ── read() item 4: formula (.f) ──────────────────────────────────────────
@@ -350,20 +392,20 @@ mod tests {
         assert!(!json.contains("!hiddenCols"));
     }
 
-    // ── read() item 6: per-cell z, workbook !numFmts/!date1904 ──────────────
+    // ── read() item 6: per-cell fmtId, workbook !numFmts/!date1904 ──────────
 
     #[test]
-    fn cell_json_includes_z_when_a_non_zero_style_id_is_present() {
+    fn cell_json_includes_fmt_id_when_a_non_zero_style_id_is_present() {
         let mut s = sheet("Sheet1", vec![((1, 1), SheetCell::Integer(3))]);
         s.style_ids.insert((1, 1), 14);
         let json = workbook_json(&wb1(s));
-        assert!(json.contains(r#""A1":{"t":"n","v":3,"z":14}"#));
+        assert!(json.contains(r#""A1":{"t":"n","v":3,"fmtId":14}"#));
     }
 
     #[test]
-    fn cell_json_omits_z_when_no_style_id_is_present() {
+    fn cell_json_omits_fmt_id_when_no_style_id_is_present() {
         let json = workbook_json(&wb1(sheet("Sheet1", vec![((1, 1), SheetCell::Integer(3))])));
-        assert!(!json.contains("\"z\":"));
+        assert!(!json.contains("\"fmtId\":"));
     }
 
     #[test]
