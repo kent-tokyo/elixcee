@@ -329,14 +329,46 @@ pub struct HiddenCellsObservation {
     pub visible_cells: u64,
 }
 
-/// An object reference held by a `Set`-assigned variable (Milestone B7c).
-/// Only `Range` exists today; kept as an enum (not a bare `RangeRef`) so a
-/// later milestone can add `Worksheet`/`Workbook` without another
-/// namespace. Deliberately *not* a variant on the shared `Variant` type
-/// from `elixcee-types` — see `Vm::object_variables`'s doc for why.
+/// An object reference held by a `Set`-assigned variable (Milestone B7c;
+/// `Worksheet`/`Workbook` added Phase 2C items 7/8). Kept as an enum (not a
+/// bare `RangeRef`) so `Set ws = ActiveSheet`/`Set wb = ThisWorkbook` can
+/// live in the same namespace as `Set rng = Range(...)`. Deliberately *not*
+/// a variant on the shared `Variant` type from `elixcee-types` — see
+/// `Vm::object_variables`'s doc for why.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ObjectRef {
     Range(RangeRef),
+    /// `Set ws = ActiveSheet` — the lowercase sheet key `ws` now refers to
+    /// (a snapshot of whichever sheet was active at `Set`-time, same as
+    /// real VBA fixing a Worksheet reference's identity at assignment, not
+    /// at each later access — same convention `ObjectRef::Range`'s doc on
+    /// `RangeLit` already established for `Set`).
+    Worksheet(String),
+    /// `Set wb = ThisWorkbook` (or `= ActiveWorkbook`). No payload: elixcee
+    /// only ever has one workbook loaded (see `Expr::WorkbookQualifiedSheet`
+    /// 's doc), so there's nothing to distinguish — this variant exists
+    /// only so the *variable* is a real Workbook-typed object reference
+    /// (`wb.Worksheets(...)`/`.Sheets(...)` resolve through it) instead of
+    /// the pre-Phase-2C silent no-op.
+    Workbook,
+}
+
+/// Narrows an `ObjectRef` to its `Range` payload, or a descriptive error —
+/// `Union`/`.Areas(n)`/`.SpecialCells(...)` only make sense on a Range
+/// object; a `Worksheet`/`Workbook` reference reaching one of them (e.g.
+/// `Union(ws, Range("A1"))` where `ws` came from `Set ws = ActiveSheet`) is
+/// a real VBA type error, not a case any of the three should silently
+/// mishandle.
+fn expect_range_ref(obj: ObjectRef, context: &str) -> Result<RangeRef, String> {
+    match obj {
+        ObjectRef::Range(r) => Ok(r),
+        ObjectRef::Worksheet(_) => {
+            Err(format!("{}: expected a Range object, got a Worksheet reference", context))
+        }
+        ObjectRef::Workbook => {
+            Err(format!("{}: expected a Range object, got a Workbook reference", context))
+        }
+    }
 }
 
 pub struct Vm {
@@ -613,6 +645,24 @@ impl Vm {
             let key = self.active_sheet.clone();
             return Ok((key.clone(), key));
         }
+        // `<var>.Range(...)`/`.Cells(...)` where `var` was `Set`-assigned a
+        // Worksheet reference (Phase 2C item 7, e.g. `Set ws = ActiveSheet`)
+        // — resolved against `object_variables` here, at runtime, since the
+        // parser can't tell `ws` apart from an ordinary variable at parse
+        // time (see `Expr::ObjectVarSheet`'s doc).
+        if let Expr::ObjectVarSheet(name) = sheet_expr {
+            return match self.object_variables.get(name).cloned() {
+                Some(ObjectRef::Worksheet(key)) => Ok((key.clone(), key)),
+                Some(ObjectRef::Workbook) => Err(format!(
+                    "'{}' is a Workbook object — use '{}.Worksheets(name)', not '.Range(...)'/'.Cells(...)' directly",
+                    name, name
+                )),
+                Some(ObjectRef::Range(_)) => {
+                    Err(format!("'{}' is a Range object, not a Worksheet", name))
+                }
+                None => Err(format!("'{}' is Nothing — Set was never called", name)),
+            };
+        }
         let plain = match sheet_expr {
             Expr::WorkbookQualifiedSheet { workbook, sheet } => {
                 let wb_val = self.eval_expr(workbook)?;
@@ -762,7 +812,7 @@ impl Vm {
                 let mut areas: Vec<Rect> = Vec::new();
                 let mut sheet: Option<String> = None;
                 for p in parts {
-                    let ObjectRef::Range(r) = self.eval_object_expr(p)?;
+                    let r = expect_range_ref(self.eval_object_expr(p)?, "Union")?;
                     match &sheet {
                         None => sheet = Some(r.sheet.clone()),
                         Some(s) if *s != r.sheet => {
@@ -778,7 +828,7 @@ impl Vm {
                 }))
             }
             ObjectExpr::Area(base, index) => {
-                let ObjectRef::Range(r) = self.eval_object_expr(base)?;
+                let r = expect_range_ref(self.eval_object_expr(base)?, "Areas")?;
                 let i = to_f64(&self.eval_expr(index)?)? as i64;
                 if i < 1 || i as usize > r.areas.len() {
                     return Err(format!(
@@ -789,7 +839,7 @@ impl Vm {
                 Ok(ObjectRef::Range(RangeRef::single(r.sheet.clone(), r.areas[(i - 1) as usize])))
             }
             ObjectExpr::SpecialCellsVisible(base) => {
-                let ObjectRef::Range(r) = self.eval_object_expr(base)?;
+                let r = expect_range_ref(self.eval_object_expr(base)?, "SpecialCells")?;
                 let areas = self.visible_areas(&r.sheet, &r.areas);
                 if areas.is_empty() {
                     return Err("SpecialCells: no visible cells were found (Error 1004)".to_string());
@@ -1874,7 +1924,7 @@ impl Vm {
             Stmt::RangeObjectCopy { var, dst } => {
                 let obj = self.object_variables.get(var).cloned()
                     .ok_or_else(|| format!("'{}' is Nothing — Set was never called", var))?;
-                let ObjectRef::Range(r) = obj;
+                let r = expect_range_ref(obj, "Copy")?;
                 let display = format!("<{}>", var);
                 self.copy_areas_to_clipboard(r.sheet, r.areas, display);
                 if let Some(dst_addr) = dst {
@@ -1882,23 +1932,48 @@ impl Vm {
                 }
             }
             Stmt::Set { var, value } => {
+                if let ObjectExpr::Var(name) = value {
+                    // `Set ws = ActiveSheet` / `Set wb = ThisWorkbook` /
+                    // `Set wb = ActiveWorkbook` (Phase 2C items 7/8) — these
+                    // three parse as a bare `ObjectExpr::Var` the same as
+                    // any other identifier in object position (the parser
+                    // can't distinguish them from a real object-variable
+                    // reference at parse time — see `ast::ObjectExpr::Var`'s
+                    // doc), so they're recognized here by name, ahead of the
+                    // generic "not a live object variable" no-op below.
+                    // Previously all three fell into that no-op — a bare
+                    // `Set ws = ActiveSheet` silently did nothing.
+                    match name.as_str() {
+                        "activesheet" => {
+                            self.object_variables
+                                .insert(var.clone(), ObjectRef::Worksheet(self.active_sheet.clone()));
+                            return Ok(());
+                        }
+                        "thisworkbook" | "activeworkbook" => {
+                            self.object_variables.insert(var.clone(), ObjectRef::Workbook);
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
                 if let ObjectExpr::Var(name) = value
                     && !self.object_variables.contains_key(name)
                 {
                     // A bare identifier in object position that isn't a
-                    // live object variable — either a genuinely unset `Set
-                    // b = a` or, more commonly, an unmodeled VBA object
-                    // keyword the parser can't distinguish from a variable
-                    // reference at parse time (`ActiveSheet`, `Selection`,
-                    // `Nothing`, ... — `Nothing` in particular needs this:
-                    // `Set rng = Nothing` must stay a no-op, never a hard
-                    // error). No-op, same precedent as `Stmt::Dim`/
-                    // `Stmt::Unsupported` for any other unmodeled
-                    // construct — safer than guessing wrong and raising a
-                    // confusing runtime error. Errors from a *resolvable*
-                    // object expression (an out-of-range `Areas(n)`, a
-                    // cross-sheet `Union`, an invalid `Range(...)` address)
-                    // are unaffected and still propagate below.
+                    // live object variable and isn't one of the three names
+                    // handled above — either a genuinely unset `Set b = a`
+                    // or another unmodeled VBA object keyword the parser
+                    // can't distinguish from a variable reference at parse
+                    // time (`Selection`, `Nothing`, ... — `Nothing` in
+                    // particular needs this: `Set rng = Nothing` must stay a
+                    // no-op, never a hard error). No-op, same precedent as
+                    // `Stmt::Dim`/`Stmt::Unsupported` for any other
+                    // unmodeled construct — safer than guessing wrong and
+                    // raising a confusing runtime error. Errors from a
+                    // *resolvable* object expression (an out-of-range
+                    // `Areas(n)`, a cross-sheet `Union`, an invalid
+                    // `Range(...)` address) are unaffected and still
+                    // propagate below.
                     return Ok(());
                 }
                 let obj = self.eval_object_expr(value)?;
@@ -2296,6 +2371,14 @@ impl Vm {
             // intercepts `ActiveSheetRef` before it ever reaches here, for
             // every use the parser actually produces (Milestone B7c item 6).
             Expr::ActiveSheetRef => Ok(Variant::Str(self.active_sheet.clone())),
+            // Same "only meaningful wrapped inside a sheet-access node"
+            // story as `ActiveSheetRef` above — `resolve_sheet_expr`
+            // intercepts `ObjectVarSheet` before it ever reaches here, for
+            // every use the parser actually produces (Phase 2C items 7/8).
+            Expr::ObjectVarSheet(name) => match self.object_variables.get(name).cloned() {
+                Some(ObjectRef::Worksheet(key)) => Ok(Variant::Str(key)),
+                _ => Err(format!("'{}' is not a Worksheet object variable", name)),
+            },
             Expr::CellsFind { what, find_row } => {
                 let target = self.eval_expr(what)?;
                 let mut keys: Vec<(u32, u32)> = self.cells().keys().cloned().collect();
@@ -3194,9 +3277,32 @@ fn to_cell_index(v: Variant, label: &str) -> Result<u32, String> {
     Ok(f as u32)
 }
 
+/// VBA's `\`/`Mod` operators round each operand to a whole number first
+/// (real VBA coerces to Long via the same round-half-to-even — "banker's
+/// rounding" — that `CLng`/`Round` use, not truncation and not Rust's
+/// default round-half-away-from-zero `f64::round()`) before doing integer
+/// division/modulus. E.g. `5 \ 0.5`: 0.5 rounds to 0 (nearest even), giving
+/// `5 \ 0` — a division-by-zero error, not `5 \ 1`.
+fn to_i64_rounded(v: &Variant) -> Result<i64, String> {
+    Ok(to_f64(v)?.round_ties_even() as i64)
+}
+
+/// `And`/`Or`/`Xor`/(unary) `Not`'s numeric-context coercion: same
+/// round-to-Long as `to_i64_rounded`, except a `Boolean` converts to VBA's
+/// actual internal bit pattern (`True` = -1 i.e. all-ones, `False` = 0),
+/// not `to_f64`'s `1.0`/`0.0` — needed so a mixed `<number> And <boolean>`
+/// bitwise-ANDs against the Boolean's real all-ones/all-zeros pattern (e.g.
+/// `5 And True` = 5, not 1).
+fn to_i64_bitwise(v: &Variant) -> Result<i64, String> {
+    match v {
+        Variant::Boolean(b) => Ok(if *b { -1 } else { 0 }),
+        other => to_i64_rounded(other),
+    }
+}
+
 fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> {
     match op {
-        VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div => {
+        VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div | VbaBinOp::Pow => {
             let lf = to_f64(&l)?;
             let rf = to_f64(&r)?;
             let result = match op {
@@ -3207,9 +3313,48 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
                     if rf == 0.0 { return Err("Division by zero".into()); }
                     lf / rf
                 }
+                VbaBinOp::Pow => lf.powf(rf),
                 _ => unreachable!(),
             };
             Ok(as_int_if_whole(result))
+        }
+        VbaBinOp::IntDiv | VbaBinOp::Mod => {
+            let li = to_i64_rounded(&l)?;
+            let ri = to_i64_rounded(&r)?;
+            let result = match op {
+                VbaBinOp::IntDiv => li.checked_div(ri),
+                VbaBinOp::Mod    => li.checked_rem(ri),
+                _ => unreachable!(),
+            };
+            match result {
+                Some(v) => Ok(Variant::Integer(v)),
+                None if ri == 0 => Err("Division by zero".into()),
+                None => Err("Integer division overflow".into()),
+            }
+        }
+        VbaBinOp::And | VbaBinOp::Or | VbaBinOp::Xor => {
+            // Both operands genuinely Boolean → logical op, Boolean result
+            // (VBA's own distinction between the "logical" and "bitwise"
+            // reading of the same operator). Otherwise, numeric bitwise op.
+            if let (Variant::Boolean(lb), Variant::Boolean(rb)) = (&l, &r) {
+                let result = match op {
+                    VbaBinOp::And => *lb && *rb,
+                    VbaBinOp::Or  => *lb || *rb,
+                    VbaBinOp::Xor => *lb != *rb,
+                    _ => unreachable!(),
+                };
+                Ok(Variant::Boolean(result))
+            } else {
+                let li = to_i64_bitwise(&l)?;
+                let ri = to_i64_bitwise(&r)?;
+                let result = match op {
+                    VbaBinOp::And => li & ri,
+                    VbaBinOp::Or  => li | ri,
+                    VbaBinOp::Xor => li ^ ri,
+                    _ => unreachable!(),
+                };
+                Ok(Variant::Integer(result))
+            }
         }
         VbaBinOp::Concat => Ok(Variant::Str(format!("{}{}", l, r))),
         VbaBinOp::Eq  => Ok(Variant::Boolean(vba_eq(&l, &r))),
@@ -3679,6 +3824,31 @@ mod tests {
         let mut vm = Vm::new();
         vm.run_sub(&prog, "mysub").unwrap();
         assert_eq!(vm.get_cell(3, 1), Variant::Integer(99));
+    }
+
+    // ── Phase 2C item 6: typed Function parameters and return type ───────────
+
+    #[test]
+    fn typed_function_params_and_return_type_parse_and_execute() {
+        // `Function DoubleIt(x As Integer) As Integer` — previously failed
+        // to parse ("expected newline, got Ident(\"as\")") at the return-
+        // type annotation; typed params alone already worked.
+        let prog = parser::parse(
+            "Function DoubleIt(x As Integer) As Integer\n    DoubleIt = x * 2\nEnd Function\nSub MySub()\n    result = DoubleIt(21)\nEnd Sub\n",
+        )
+        .unwrap();
+        assert_eq!(prog.funcs[0].params, vec!["x"]);
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(42));
+    }
+
+    #[test]
+    fn typed_function_multiple_params_and_double_return_type() {
+        let vm = run(
+            "Function Helper(x As Double, y As Double) As Double\n    Helper = x * x + y\nEnd Function\nSub MySub()\n    Range(\"A1\").Value = Helper(2, 3)\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
     }
 
     // ── vb constants ─────────────────────────────────────────────────────────
@@ -5794,5 +5964,227 @@ mod tests {
     #[test]
     fn hidden_cells_observation_is_none_when_nothing_was_copied() {
         assert_eq!(Vm::new().hidden_cells_observation(), None);
+    }
+
+    // ── Phase 2C: Mod / \ / ^ / infix And Or Xor Not ─────────────────────────
+
+    #[test]
+    fn mod_operator_computes_modulus() {
+        let vm = run("Sub MySub()\n    a = 7 Mod 3\n    b = -7 Mod 3\n    c = 7 Mod -3\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        // Result sign follows the dividend (left operand), same as Rust's `%`.
+        assert_eq!(vm.variables["b"], Variant::Integer(-1));
+        assert_eq!(vm.variables["c"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn intdiv_operator_truncates_toward_zero() {
+        let vm = run("Sub MySub()\n    a = 7 \\ 2\n    b = -7 \\ 2\n    c = 2 \\ 3\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(3));
+        assert_eq!(vm.variables["b"], Variant::Integer(-3)); // truncated, not floored (-4)
+        assert_eq!(vm.variables["c"], Variant::Integer(0));
+    }
+
+    #[test]
+    fn intdiv_and_mod_round_fractional_operands_half_to_even_first() {
+        // 0.5 rounds to 0 (nearest even), not 1 — so `5 \ 0.5` is `5 \ 0`.
+        let prog = parser::parse("Sub MySub()\n    Cells(1, 1).Value = 5 \\ 0.5\nEnd Sub\n").unwrap();
+        assert!(Vm::new().run_sub(&prog, "mysub").is_err());
+        // 2.5 rounds to 2 (nearest even), not 3.
+        let vm = run("Sub MySub()\n    a = 2.5 \\ 4\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(0));
+    }
+
+    #[test]
+    fn pow_operator_computes_exponentiation() {
+        let vm = run("Sub MySub()\n    a = 2 ^ 3\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(8));
+    }
+
+    #[test]
+    fn pow_binds_tighter_than_unary_minus() {
+        // -2 ^ 2 is -(2 ^ 2) = -4, not (-2) ^ 2 = 4.
+        let vm = run("Sub MySub()\n    a = -2 ^ 2\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(-4));
+    }
+
+    #[test]
+    fn pow_accepts_a_negative_exponent() {
+        let vm = run("Sub MySub()\n    a = 2 ^ -1\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Float(0.5));
+    }
+
+    #[test]
+    fn pow_is_left_associative() {
+        // 2 ^ 3 ^ 2 is (2 ^ 3) ^ 2 = 64, not 2 ^ (3 ^ 2) = 512.
+        let vm = run("Sub MySub()\n    a = 2 ^ 3 ^ 2\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(64));
+    }
+
+    #[test]
+    fn full_precedence_chain_matches_real_vba() {
+        // 2 + 3 * 2 ^ 2 = 2 + 3*4 = 2 + 12 = 14 (not 20, not 100).
+        let vm = run("Sub MySub()\n    a = 2 + 3 * 2 ^ 2\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(14));
+    }
+
+    #[test]
+    fn infix_and_or_xor_compute_boolean_logic() {
+        let vm = run(
+            "Sub MySub()\n    a = True And False\n    b = True Or False\n    c = True Xor True\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(false));
+        assert_eq!(vm.variables["b"], Variant::Boolean(true));
+        assert_eq!(vm.variables["c"], Variant::Boolean(false));
+    }
+
+    #[test]
+    fn and_or_xor_do_numeric_bitwise_math_on_non_boolean_operands() {
+        let vm = run("Sub MySub()\n    a = 6 And 3\n    b = 6 Or 1\n    c = 5 Xor 1\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(2));
+        assert_eq!(vm.variables["b"], Variant::Integer(7));
+        assert_eq!(vm.variables["c"], Variant::Integer(4));
+    }
+
+    #[test]
+    fn not_binds_looser_than_comparison_and_tighter_than_and() {
+        // `Not a And b` is `(Not a) And b`, not `Not (a And b)`.
+        let vm = run(
+            "Sub MySub()\n    a = Not False And True\n    b = Not (False And True)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Boolean(true));
+        // `Not x = y` is `Not (x = y)`, not `(Not x) = y`.
+        let vm2 = run("Sub MySub()\n    a = Not 1 = 2\nEnd Sub\n");
+        assert_eq!(vm2.variables["a"], Variant::Boolean(true)); // Not(1=2) = Not(False) = True
+    }
+
+    #[test]
+    fn if_not_condition_works() {
+        let vm = run(
+            "Sub MySub()\n    x = False\n    If Not x Then\n        a = 1\n    Else\n        a = 2\n    End If\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn or_binds_looser_than_and() {
+        // a Or b And c is a Or (b And c), not (a Or b) And c.
+        let vm = run(
+            "Sub MySub()\n    a = True Or False And False\nEnd Sub\n",
+        );
+        // True Or (False And False) = True Or False = True.
+        // (True Or False) And False would be False — this distinguishes them.
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn parenthesized_expression_supports_and_or_xor() {
+        let vm = run("Sub MySub()\n    a = (True And False) Or True\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn concat_binds_looser_than_plus_minus() {
+        // "x" & 1 + 2 is "x" & (1 + 2) = "x3", not ("x" & 1) + 2. Previously
+        // `&` was folded into the same precedence tier as `+`/`-`
+        // (equal precedence, left-to-right), which would have given the
+        // latter (and likely a runtime type error, since "x1" + 2 isn't
+        // valid VBA arithmetic).
+        let vm = run("Sub MySub()\n    a = \"x\" & 1 + 2\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Str("x3".into()));
+    }
+
+    #[test]
+    fn range_value_write_with_and_or_mod_intdiv_pow_all_parse_and_execute() {
+        // The exact constructs the integration review found broken at parse
+        // time — confirms they now reach the VM and produce real values, not
+        // just "doesn't error".
+        let vm = run(
+            "Sub MySub()\n    Range(\"A1\").Value = 2 Mod 3\n    Range(\"A2\").Value = 7 \\ 3\n    Range(\"A3\").Value = 2 ^ 3\n    Range(\"A4\").Value = True And False\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(3, 1), Variant::Integer(8));
+        assert_eq!(vm.get_cell(4, 1), Variant::Boolean(false));
+    }
+
+    // ── Phase 2C: With Range(...) ─────────────────────────────────────────────
+
+    #[test]
+    fn with_range_bare_value_reads_and_writes_the_with_target() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1, 1).Value = 5\n    With Range(\"A1\")\n        .Value = .Value + 1000\n    End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1005));
+    }
+
+    #[test]
+    fn with_range_bare_value_write_alone() {
+        let vm = run("Sub MySub()\n    With Range(\"B2\")\n        .Value = 42\n    End With\nEnd Sub\n");
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(42));
+    }
+
+    #[test]
+    fn with_range_nested_range_reference_still_works() {
+        // A nested `.Range(...)`/`.Cells(...)` inside a `With Range(...)`
+        // body is its own independent reference, not the With's own target
+        // — same convention `parse_with_dot_stmt` already used for
+        // `With Sheets(...)`.
+        let vm = run(
+            "Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n        .Range(\"B1\").Value = 2\n    End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+    }
+
+    // ── Phase 2C items 7/8: Set ws = ActiveSheet / Set wb = ThisWorkbook ─────
+
+    #[test]
+    fn set_ws_activesheet_then_range_and_cells_write_and_read() {
+        // Previously a silent no-op (see `Stmt::Set`'s old comment) — `ws`
+        // would stay unset, and `ws.Cells(...)`/`ws.Range(...)` wouldn't
+        // even parse to anything meaningful. Both write and read now
+        // actually reach the sheet.
+        let vm = run(
+            "Sub MySub()\n    Set ws = ActiveSheet\n    ws.Cells(1, 1).Value = 5\n    ws.Range(\"B2\").Value = 9\n    x = ws.Cells(1, 1).Value\n    y = ws.Range(\"B2\").Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(5));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(9));
+        assert_eq!(vm.variables["x"], Variant::Integer(5));
+        assert_eq!(vm.variables["y"], Variant::Integer(9));
+    }
+
+    #[test]
+    fn set_ws_activesheet_captures_a_snapshot_not_a_dynamic_reference() {
+        // Real VBA's `Set` fixes a Worksheet reference's identity at
+        // assignment time — unlike the bare `ActiveSheet` keyword itself
+        // (dynamic; see `activesheet_tracks_the_active_sheet_after_it_
+        // changes`), `ws` must keep pointing at Sheet2 even after the
+        // active sheet reverts to Sheet1 when the `With` block ends.
+        let vm = run(
+            "Sub MySub()\n    With Sheets(\"Sheet2\")\n        Set ws = ActiveSheet\n    End With\n    ws.Cells(1, 1).Value = 42\nEnd Sub\n",
+        );
+        let cell = vm.get_sheet_cells("sheet2").and_then(|s| s.get(&(1, 1))).map(|c| c.value.clone());
+        assert_eq!(cell, Some(Variant::Integer(42)));
+        // And Sheet1 (still the active sheet) is untouched.
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+    }
+
+    #[test]
+    fn set_wb_thisworkbook_then_worksheets_write_targets_the_named_sheet() {
+        let vm = run(
+            "Sub MySub()\n    Set wb = ThisWorkbook\n    wb.Worksheets(\"Data\").Cells(2, 3).Value = 77\nEnd Sub\n",
+        );
+        let cell = vm.get_sheet_cells("data").and_then(|s| s.get(&(2, 3))).map(|c| c.value.clone());
+        assert_eq!(cell, Some(Variant::Integer(77)));
+    }
+
+    #[test]
+    fn set_wb_activeworkbook_then_sheets_read() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Data\").Cells(1, 1).Value = 42\n    Set wb = ActiveWorkbook\n    x = wb.Sheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["x"], Variant::Integer(42));
     }
 }

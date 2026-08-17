@@ -13,6 +13,8 @@ enum Tok {
     Eq, Ne, Lt, Le, Gt, Ge,
     // Arithmetic / string
     Plus, Minus, Star, Slash, Amp,
+    Backslash, // integer division (`\`)
+    Caret,     // exponentiation (`^`)
     // Punctuation
     LParen, RParen, Comma, Dot, ColonEq, Colon,
     // End of line
@@ -74,6 +76,8 @@ fn tokenize(input: &str) -> (Vec<Tok>, Vec<(u32, u32)>) {
             '*' => { pos += 1; toks.push(Tok::Star); }
             '/' => { pos += 1; toks.push(Tok::Slash); }
             '&' => { pos += 1; toks.push(Tok::Amp); }
+            '\\' => { pos += 1; toks.push(Tok::Backslash); }
+            '^' => { pos += 1; toks.push(Tok::Caret); }
             '(' => { pos += 1; toks.push(Tok::LParen); }
             ')' => { pos += 1; toks.push(Tok::RParen); }
             ',' => { pos += 1; toks.push(Tok::Comma); }
@@ -146,11 +150,18 @@ struct Parser {
     pos: usize,
     /// Variable name currently targeted by `With p` (None outside a With block).
     with_target: Option<String>,
+    /// Range address currently targeted by `With Range("addr")` (None
+    /// outside such a block) — lets a bare `.Value`/`.Formula` inside the
+    /// body (no explicit `.Range(...)`/`.Cells(...)` prefix) resolve
+    /// against this address, the same way `with_target` lets a bare
+    /// `.Field` resolve against a UDT variable. Shadowed/restored the same
+    /// way `with_target` is, so nested With blocks of either kind work.
+    with_range_target: Option<String>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Tok>, spans: Vec<(u32, u32)>) -> Self {
-        Parser { tokens, spans, pos: 0, with_target: None }
+        Parser { tokens, spans, pos: 0, with_target: None, with_range_target: None }
     }
 
     fn peek(&self) -> &Tok {
@@ -417,6 +428,16 @@ impl Parser {
         self.expect_tok(Tok::LParen)?;
         let params = self.parse_params()?;
         self.expect_tok(Tok::RParen)?;
+        // Optional return-type annotation: `Function f(...) As Integer`.
+        // Not enforced anywhere (elixcee is dynamically typed at runtime,
+        // same as every parameter's own `As <Type>` — see `parse_params`),
+        // just consumed so it doesn't trip `eat_eol()` below. Previously
+        // unhandled entirely: `Function f(x As Integer) As Integer` failed
+        // with "expected newline, got Ident(\"as\")" right here.
+        if self.is_ident("as") {
+            self.advance();
+            self.consume_ident()?;
+        }
         self.eat_eol()?;
         let body = self.parse_stmts(|p| p.is_end_kw("function"))?;
         self.consume_end_kw("function")?;
@@ -766,13 +787,36 @@ impl Parser {
             return Ok(Stmt::With { body });
         }
 
+        // ── Range("addr") — literal address on the active sheet ──────────────
+        // Same literal-only scope as the `Sheets("name")` branch above (no
+        // general expression target); a bare `.Value`/`.Formula` inside the
+        // body resolves against this address via `with_range_target`, the
+        // Range-target twin of `with_target` (UDT fields).
+        if self.is_ident("range") {
+            self.advance();
+            self.expect_tok(Tok::LParen)?;
+            let addr = self.consume_str()?;
+            self.expect_tok(Tok::RParen)?;
+            self.eat_eol()?;
+            let prev_with_target = self.with_target.take();
+            let prev_range_target = self.with_range_target.replace(addr);
+            let body = self.parse_with_body()?;
+            self.with_target = prev_with_target;
+            self.with_range_target = prev_range_target;
+            self.consume_end_kw("with")?;
+            self.skip_nl();
+            return Ok(Stmt::With { body });
+        }
+
         // ── With <variable> — UDT target ─────────────────────────────────────
         if let Tok::Ident(_) = self.peek().clone() {
             let var = self.consume_ident()?.to_lowercase();
             self.eat_eol()?;
             let prev = self.with_target.replace(var.clone());
+            let prev_range_target = self.with_range_target.take();
             let body = self.parse_with_body()?;
             self.with_target = prev;
+            self.with_range_target = prev_range_target;
             self.consume_end_kw("with")?;
             self.skip_nl();
             return Ok(Stmt::WithRecord { var, body });
@@ -811,6 +855,16 @@ impl Parser {
         match self.peek().clone() {
             Tok::Ident(ref s) => {
                 let s = s.clone();
+                // ── With Range("addr") target: bare .Value/.Formula = val ─────
+                if let Some(addr) = self.with_range_target.clone()
+                    && (s == "value" || s == "formula") {
+                        self.advance(); // consume 'value'/'formula'
+                        let is_formula = s == "formula";
+                        self.expect_tok(Tok::Eq)?;
+                        let value = self.parse_expr()?;
+                        self.eat_eol()?;
+                        return Ok(Some(Stmt::RangeWrite { addr, is_formula, value }));
+                    }
                 // ── UDT With target: .Field = val  /  .A.B = val ──────────────
                 if let Some(var) = self.with_target.clone()
                     && s != "range" && s != "cells" {
@@ -1618,6 +1672,45 @@ impl Parser {
                 None
             };
             Ok(Stmt::RangeObjectCopy { var: name, dst })
+        } else if *self.peek() == Tok::Dot
+            && (self.is_ident_at(1, "range") || self.is_ident_at(1, "cells"))
+            && *self.peek_at(2) == Tok::LParen
+        {
+            // <var>.Range(addr).Value/Formula = val / <var>.Cells(r,c).Value
+            // = val (Phase 2C item 7) — the object-variable sibling of
+            // `Sheets(...).Range(...)`/`.Cells(...)` (see
+            // `parse_sheet_property_write`), for a `<var>` a `Set var =
+            // ActiveSheet` assigned a Worksheet reference to.
+            // `Expr::ObjectVarSheet` resolves against `Vm::object_variables`
+            // at *runtime* — the parser can't know `<var>`'s type here, same
+            // situation the `.Copy` branch above already accepts. Checked
+            // ahead of the generic `.field = value` branch below (guarded
+            // on an immediate `(` so a genuine UDT field literally named
+            // "range"/"cells" — vanishingly unlikely, but same caution
+            // `WithRecord`'s own `s != "range" && s != "cells"` guard
+            // takes) still falls through there instead).
+            self.parse_sheet_property_write(Expr::ObjectVarSheet(name))
+        } else if *self.peek() == Tok::Dot
+            && (self.is_ident_at(1, "worksheets") || self.is_ident_at(1, "sheets"))
+            && *self.peek_at(2) == Tok::LParen
+        {
+            // <var>.Worksheets(...)/.Sheets(...) (Phase 2C item 8) — the
+            // object-variable sibling of `ThisWorkbook.Worksheets(...)`/
+            // `ActiveWorkbook.Worksheets(...)` (see `parse_stmt`'s
+            // "thisworkbook"|"activeworkbook" arm), for a `<var>` a `Set
+            // var = ThisWorkbook` assigned a Workbook reference to. elixcee
+            // only ever has one workbook loaded, so — same as those two
+            // keywords — this just skips the qualifier and re-enters the
+            // plain `Worksheets(...)/Sheets(...)` grammar; nothing here (or
+            // in the VM — see `ObjectRef::Workbook`) checks that `<var>`
+            // actually holds a Workbook reference. Guarded on an immediate
+            // `(` — same reason as the `.Range(`/`.Cells(` branch above —
+            // so a paren-less `wb.Worksheets.Count` (a real, if unmodeled,
+            // VBA read) or a UDT field literally named "worksheets"/"sheets"
+            // still falls through to the generic path below instead of a
+            // hard `expected LParen` error.
+            self.advance(); // '.'
+            self.parse_sheets_stmt()
         } else if *self.peek() == Tok::Dot {
             // p.field = val  /  p.a.b = val  /  p.method (noop)
             self.advance(); // consume first '.'
@@ -1676,12 +1769,68 @@ impl Parser {
         Ok(args)
     }
 
+    // Precedence climbing, lowest (outermost/loosest-binding) to highest
+    // (innermost/tightest-binding), matching real VBA's documented operator
+    // precedence exactly:
+    //   Xor < Or < And < Not < comparison < & < (+ -) < Mod < \ < (* /)
+    //   < unary - < ^
+    // Every tier below is a thin left-associative "climb one level, loop on
+    // same-tier operators" wrapper, same shape as the pre-existing
+    // parse_comparison/parse_additive/parse_term this replaces — Xor/Or/And
+    // are just three more copies of that shape at looser precedence, and
+    // Mod/\ two more copies slotted between (+ -) and (* /).
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_comparison()
+        self.parse_xor()
+    }
+
+    fn parse_xor(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_or()?;
+        while self.is_ident("xor") {
+            self.advance();
+            let rhs = self.parse_or()?;
+            lhs = Expr::BinOp { op: VbaBinOp::Xor, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_or(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_and()?;
+        while self.is_ident("or") {
+            self.advance();
+            let rhs = self.parse_and()?;
+            lhs = Expr::BinOp { op: VbaBinOp::Or, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_and(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_not_level()?;
+        while self.is_ident("and") {
+            self.advance();
+            let rhs = self.parse_not_level()?;
+            lhs = Expr::BinOp { op: VbaBinOp::And, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    // `Not` is a prefix operator, not an infix one — real VBA has no `a Not
+    // b` form — but it sits in the middle of the precedence table (looser
+    // than comparison, tighter than And/Or/Xor), so `Not a And b` must parse
+    // as `(Not a) And b`, and `Not a = b` as `Not (a = b)`. Recurses into
+    // itself (not straight to parse_comparison) so a stacked `Not Not x`
+    // still parses, same allowance the pre-existing unary-minus chain makes
+    // for `- -x`.
+    fn parse_not_level(&mut self) -> Result<Expr, String> {
+        if self.is_ident("not") {
+            self.advance();
+            Ok(Expr::UnaryNot(Box::new(self.parse_not_level()?)))
+        } else {
+            self.parse_comparison()
+        }
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, String> {
-        let mut lhs = self.parse_additive()?;
+        let mut lhs = self.parse_concat()?;
         loop {
             let op = match self.peek() {
                 Tok::Eq    => VbaBinOp::Eq,
@@ -1693,30 +1842,63 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let rhs = self.parse_additive()?;
+            let rhs = self.parse_concat()?;
             lhs = Expr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    // `&` (string concat) binds tighter than comparison but looser than
+    // `+`/`-` — e.g. `"x" & 1 + 2` is `"x" & (1 + 2)` = "x3", not `("x" & 1)
+    // + 2`. Previously folded into the same tier as `+`/`-` (equal
+    // precedence, left-to-right); split out here to match real VBA.
+    fn parse_concat(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_additive()?;
+        while *self.peek() == Tok::Amp {
+            self.advance();
+            let rhs = self.parse_additive()?;
+            lhs = Expr::BinOp { op: VbaBinOp::Concat, lhs: Box::new(lhs), rhs: Box::new(rhs) };
         }
         Ok(lhs)
     }
 
     fn parse_additive(&mut self) -> Result<Expr, String> {
-        let mut lhs = self.parse_term()?;
+        let mut lhs = self.parse_modop()?;
         loop {
             let op = match self.peek() {
                 Tok::Plus  => VbaBinOp::Add,
                 Tok::Minus => VbaBinOp::Sub,
-                Tok::Amp   => VbaBinOp::Concat,
                 _ => break,
             };
             self.advance();
-            let rhs = self.parse_term()?;
+            let rhs = self.parse_modop()?;
             lhs = Expr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
         }
         Ok(lhs)
     }
 
+    fn parse_modop(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_intdiv()?;
+        while self.is_ident("mod") {
+            self.advance();
+            let rhs = self.parse_intdiv()?;
+            lhs = Expr::BinOp { op: VbaBinOp::Mod, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_intdiv(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_term()?;
+        while *self.peek() == Tok::Backslash {
+            self.advance();
+            let rhs = self.parse_term()?;
+            lhs = Expr::BinOp { op: VbaBinOp::IntDiv, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
     fn parse_term(&mut self) -> Result<Expr, String> {
-        let mut lhs = self.parse_factor()?;
+        let mut lhs = self.parse_unary()?;
         loop {
             let op = match self.peek() {
                 Tok::Star  => VbaBinOp::Mul,
@@ -1724,19 +1906,48 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let rhs = self.parse_factor()?;
+            let rhs = self.parse_unary()?;
             lhs = Expr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
         }
         Ok(lhs)
     }
 
-    fn parse_factor(&mut self) -> Result<Expr, String> {
+    // Unary minus binds looser than `^` overall (`-2 ^ 2` is `-(2 ^ 2)` =
+    // -4) but a `^`'s immediate right-hand operand may still start with its
+    // own unary minus (`2 ^ -2` is 2 ^ (-2)) — see `parse_pow_operand`.
+    // Recurses into itself so a stacked `- -x` still parses, matching the
+    // pre-existing single-level behavior's intent but now allowing repeats.
+    fn parse_unary(&mut self) -> Result<Expr, String> {
         if *self.peek() == Tok::Minus {
             self.advance();
-            Ok(Expr::UnaryMinus(Box::new(self.parse_primary()?)))
-        } else if self.is_ident("not") {
+            Ok(Expr::UnaryMinus(Box::new(self.parse_unary()?)))
+        } else {
+            self.parse_pow()
+        }
+    }
+
+    // Exponentiation — highest precedence. Left-associative (`2 ^ 3 ^ 2` is
+    // `(2 ^ 3) ^ 2` = 64), matching real VBA's documented left-to-right
+    // evaluation rather than the right-associative convention some other
+    // languages use for `^`/`**`.
+    fn parse_pow(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_pow_operand()?;
+        while *self.peek() == Tok::Caret {
             self.advance();
-            Ok(Expr::UnaryNot(Box::new(self.parse_primary()?)))
+            let rhs = self.parse_pow_operand()?;
+            lhs = Expr::BinOp { op: VbaBinOp::Pow, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    // A `^` operand, allowing one tightly-bound leading unary minus so `2 ^
+    // -2` parses as `2 ^ (-2)` — without this, `-2` on the right of `^`
+    // would have nowhere to bind, since plain unary minus sits at a looser
+    // tier than `^` (see `parse_unary`).
+    fn parse_pow_operand(&mut self) -> Result<Expr, String> {
+        if *self.peek() == Tok::Minus {
+            self.advance();
+            Ok(Expr::UnaryMinus(Box::new(self.parse_pow_operand()?)))
         } else {
             self.parse_primary()
         }
@@ -1746,7 +1957,10 @@ impl Parser {
         match self.peek().clone() {
             Tok::LParen => {
                 self.advance();
-                let e = self.parse_comparison()?;
+                // Full expression grammar, not just parse_comparison — a
+                // parenthesized sub-expression can contain And/Or/Xor/Not
+                // too (e.g. `(a And b) Or c`).
+                let e = self.parse_expr()?;
                 self.expect_tok(Tok::RParen)?;
                 Ok(e)
             }
@@ -1787,6 +2001,13 @@ impl Parser {
                     }
                     _ => self.parse_ident_expr(),
                 }
+            }
+            // ── bare `.Value` inside a `With Range("addr")` block ─────────────
+            Tok::Dot if self.with_range_target.is_some() && self.is_ident_at(1, "value") => {
+                let addr = self.with_range_target.clone().expect("checked by guard above");
+                self.advance(); // consume '.'
+                self.advance(); // consume 'value'
+                Ok(Expr::RangeRead { addr })
             }
             // ── `.Field` inside a `With p` block ──────────────────────────────
             Tok::Dot => {
@@ -2007,6 +2228,26 @@ impl Parser {
                 return Ok(Expr::ArrayRecordGet { name, indices: args, field });
             }
             Ok(Expr::FuncCall { name, args })
+        } else if *self.peek() == Tok::Dot
+            && (self.is_ident_at(1, "range") || self.is_ident_at(1, "cells"))
+            && *self.peek_at(2) == Tok::LParen
+        {
+            // x = <var>.Range(addr).Value / x = <var>.Cells(r,c).Value —
+            // read-side twin of the statement-dispatch branch in
+            // `parse_ident_stmt` (Phase 2C item 7); see its comment for the
+            // full rationale.
+            self.parse_sheet_property_read(Expr::ObjectVarSheet(name))
+        } else if *self.peek() == Tok::Dot
+            && (self.is_ident_at(1, "worksheets") || self.is_ident_at(1, "sheets"))
+            && *self.peek_at(2) == Tok::LParen
+        {
+            // x = <var>.Worksheets(...)/.Sheets(...) — read-side twin
+            // (Phase 2C item 8); same paren guard as the statement-dispatch
+            // branch in `parse_ident_stmt` (a paren-less `wb.Worksheets.
+            // Count` or a UDT field literally named "worksheets"/"sheets"
+            // must still fall through to the generic `RecordGet` path).
+            self.advance(); // '.'
+            self.parse_sheet_cell_read()
         } else if *self.peek() == Tok::Dot {
             // p.field  or  p.a.b.c
             self.advance(); // consume '.'
@@ -2868,5 +3109,66 @@ mod tests {
         // doesn't error out on it.
         let body = parse_body("Sub MySub()\n    Set ws = ActiveSheet\nEnd Sub\n");
         assert_eq!(body, vec![Stmt::Set { var: "ws".into(), value: ObjectExpr::Var("activesheet".into()) }]);
+    }
+
+    // ── Phase 2C items 7/8: object-variable sheet/workbook qualifiers ────────
+
+    #[test] fn object_var_range_write_parses_to_range_write_with_objectvarsheet() {
+        let body = parse_body("Sub MySub()\n    ws.Range(\"A1\").Value = 5\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::SheetRangeWrite {
+                sheet: Expr::ObjectVarSheet("ws".into()),
+                addr: "A1".into(),
+                is_formula: false,
+                value: Expr::Integer(5),
+            }]
+        );
+    }
+
+    #[test] fn object_var_cells_read_parses_to_sheet_cell_read_with_objectvarsheet() {
+        let body = parse_body("Sub MySub()\n    x = ws.Cells(1, 1).Value\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "x".into(),
+                value: Expr::SheetCellRead {
+                    sheet: Box::new(Expr::ObjectVarSheet("ws".into())),
+                    row: Box::new(Expr::Integer(1)),
+                    col: Box::new(Expr::Integer(1)),
+                },
+            }]
+        );
+    }
+
+    #[test] fn object_var_worksheets_write_parses_identically_to_bare_worksheets() {
+        let with_prefix = parse_body(
+            "Sub MySub()\n    wb.Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n",
+        );
+        let bare = parse_body("Sub MySub()\n    Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n");
+        assert_eq!(with_prefix, bare);
+    }
+
+    // A prior review round found the `.Worksheets(`/`.Sheets(` branches
+    // above missing the immediate-`(` guard their `.Range(`/`.Cells(`
+    // siblings already had — without it, any paren-less `<var>.Worksheets`/
+    // `<var>.Sheets` (a real, if unmodeled, VBA read — `wb.Worksheets.
+    // Count`) or a UDT field literally named "worksheets"/"sheets" would
+    // hit a hard `expected LParen` parse error instead of falling through
+    // to the pre-existing generic `RecordGet`/`RecordSet` no-op path. These
+    // pin the fix; they don't need to assert *what* the fallback parses to,
+    // only that it doesn't error, matching this file's existing "confirms
+    // the parser doesn't error out on it" precedent just above.
+    #[test] fn paren_less_worksheets_property_falls_back_instead_of_erroring() {
+        let _ = parse("Sub MySub()\n    x = wb.Worksheets.Count\nEnd Sub\n").unwrap();
+        let _ = parse("Sub MySub()\n    wb.Sheets.Add\nEnd Sub\n").unwrap();
+    }
+
+    #[test] fn udt_field_literally_named_sheets_still_round_trips() {
+        let body = parse_body("Sub MySub()\n    p.sheets = 5\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::RecordSet { var: "p".into(), field: "sheets".into(), value: Expr::Integer(5) }]
+        );
     }
 }
