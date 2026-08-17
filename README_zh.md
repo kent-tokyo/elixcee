@@ -307,7 +307,7 @@ Fixture 格式与 `--seed`/`--case` 复现方式与 `test-workbook` 完全相同
 }
 ```
 
-这是一个基础性的里程碑：`Union()`、`Areas` 属性、`Dim rng As Range` 对象变量目前都还不支持，v1 中任何多区域粘贴都不会真正完成——即使源区域与目标区域的数量和形状完全匹配也是如此。完整范围和另外 3 个分类代码见 [docs/agent-contract.md](docs/agent-contract.md)。
+`Union()`、`Areas`、`Dim rng As Range`/`Set` 对象变量，以及区域数量和形状完全匹配时的多区域粘贴，现已支持——详见下方"VBA 对象模型"。上述 4 个分类代码仍适用于所有不完全匹配的多区域情况（数量或形状不一致，或仅一侧为多区域）。完整范围见 [docs/agent-contract.md](docs/agent-contract.md)。
 
 ### 隐藏行/列证据
 
@@ -328,7 +328,44 @@ Fixture 格式与 `--seed`/`--case` 复现方式与 `test-workbook` 完全相同
 }
 ```
 
-这是未来 `SpecialCells(xlCellTypeVisible)` 的基础——Copy/Paste 本身的行为不受影响（隐藏单元格仍会像以前一样被复制/粘贴）。目前仅支持 XLSX，ODS 留待后续。完整范围见 [docs/agent-contract.md](docs/agent-contract.md)。
+这是下方 `SpecialCells(xlCellTypeVisible)` 所依赖的基础信息——普通 Copy/Paste 本身的行为不受影响（隐藏单元格仍会像以前一样被复制/粘贴）。目前仅支持 XLSX，ODS 留待后续。完整范围见 [docs/agent-contract.md](docs/agent-contract.md)。
+
+### VBA 对象模型
+
+```vb
+Dim rng As Range
+Set rng = Range("A1:B2")
+rng.Value = 5                        ' 真正的 Set 引用语义——是别名，不是拷贝
+
+Dim u As Range
+Set u = Union(Range("A1"), Range("D1"))
+Range("C1").Value = u.Areas.Count    ' 2
+
+Dim ws As Worksheet
+Set ws = ActiveSheet
+ws.Range("A1").Value = 1
+
+Range("F1").Value = 7 Mod 3          ' 1
+Range("F2").Value = 2 ^ 3            ' 8
+Range("F3").Value = 7 \ 3            ' 2（整数除法）
+If Not (a And b) Then MsgBox "ok"
+
+With Range("A1:B2")
+  .Value = 5
+End With
+
+Function DoubleIt(x As Integer) As Integer
+  DoubleIt = x * 2
+End Function
+```
+
+通过 `Set` 赋值的 `Range`/`Worksheet`/`Workbook` 对象变量（真正的引用语义）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（基于上方的隐藏行/列信息）、区域数量与形状匹配的多区域 Copy/Paste、`Mod`/`\`/`^`、表达式中的 `And`/`Or`/`Xor`/`Not`、`With Range(...)`，以及带类型的 `Function` 参数/返回值——均已支持。
+
+**已知局限**：`Not` 仍通过布尔真值判断求值，而 `And`/`Or`/`Xor` 执行的是真正的按位运算，因此 `Not 5 And 3` 的结果与真实 VBA 的按位运算结果不一致；单条 `Dim` 语句声明多个变量（`Dim a As Integer, b As Range`）尚不支持解析；多区域粘贴仅在两侧都是多区域且 `Areas.Count` 与各区域形状均匹配时才会执行，其余组合仍仅诊断（见上文）。
+
+### XLSX.read() — `@elixcee/xlsx`（npm，开发中）
+
+在开发中的 npm 包 `@elixcee/xlsx`（尚未发布；兼容性计划与同步桥接设计见 [docs/xlsx-architecture.md](docs/xlsx-architecture.md)）中，已实现同步、基于 WebAssembly 的 `XLSX.read(bytes)`——无需 `await init()`。返回工作表名、`!ref`、`!merges`、`!rows`/`!cols`（隐藏行/列），以及每个单元格的 `{t, v, f, w, z}`——值、公式文本、格式化显示字符串、以及通过真实 `styles.xml`/数字格式解析得到的日期型单元格。针对真实的 `xlsx@0.18.5` 包做了差分测试，在其声明的范围内为 19/19 MATCH。目前仅支持 Node——浏览器版本的构建产物已就绪并在桥接层验证通过，但尚未接入公开 API。
 
 ### 从源码构建
 

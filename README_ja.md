@@ -308,7 +308,7 @@ elixcee diagnose-workbook fixture.toml --json
 }
 ```
 
-これは基盤となるマイルストーンです。`Union()`、`Areas` プロパティ、`Dim rng As Range` によるオブジェクト変数はまだ未対応で、複数領域の貼り付けはv1では——コピー元と貼り付け先の領域が完全に一致する場合でも——実際には完了しません。全体像とその他3つの分類コードは [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
+`Union()`、`Areas`、`Dim rng As Range`/`Set` によるオブジェクト変数、および領域数・形状が完全一致する場合の複数領域貼り付けは、現在対応済みです——詳細は下記「VBAオブジェクトモデル」を参照してください。上記の4つの分類コードは、領域数や形状が一致しない、または片側のみ複数領域といった、完全一致しないすべてのケースに引き続き適用されます。全体像は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
 
 ### 非表示行・列の証拠情報
 
@@ -329,7 +329,44 @@ elixcee diagnose-workbook fixture.toml --json
 }
 ```
 
-これは将来の `SpecialCells(xlCellTypeVisible)` が土台にする基盤機能です——Copy/Paste自体の挙動は変わりません（非表示セルもこれまで通りコピー・貼り付けされます）。対応はXLSXのみで、ODSは後続課題です。全体像は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
+これは下記の `SpecialCells(xlCellTypeVisible)` が土台にしている情報です——通常のCopy/Paste自体の挙動は変わりません（非表示セルもこれまで通りコピー・貼り付けされます）。対応はXLSXのみで、ODSは後続課題です。全体像は [docs/agent-contract.md](docs/agent-contract.md) を参照してください。
+
+### VBAオブジェクトモデル
+
+```vb
+Dim rng As Range
+Set rng = Range("A1:B2")
+rng.Value = 5                        ' 実際のSet参照セマンティクス——コピーではなくエイリアス
+
+Dim u As Range
+Set u = Union(Range("A1"), Range("D1"))
+Range("C1").Value = u.Areas.Count    ' 2
+
+Dim ws As Worksheet
+Set ws = ActiveSheet
+ws.Range("A1").Value = 1
+
+Range("F1").Value = 7 Mod 3          ' 1
+Range("F2").Value = 2 ^ 3            ' 8
+Range("F3").Value = 7 \ 3            ' 2（整数除算）
+If Not (a And b) Then MsgBox "ok"
+
+With Range("A1:B2")
+  .Value = 5
+End With
+
+Function DoubleIt(x As Integer) As Integer
+  DoubleIt = x * 2
+End Function
+```
+
+`Set`で代入された`Range`/`Worksheet`/`Workbook`オブジェクト変数（実際の参照セマンティクス）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（上記の非表示行・列情報を利用）、領域数・形状が一致する複数領域Copy/Paste、`Mod`/`\`/`^`、式中の`And`/`Or`/`Xor`/`Not`、`With Range(...)`、型付き`Function`の引数・戻り値——すべて対応済みです。
+
+**既知の制限**: `Not`は依然として真偽値への変換で評価される一方、`And`/`Or`/`Xor`は実際のビット演算で処理されるため、`Not 5 And 3`は実際のVBAのビット演算結果とは一致しません。1つの`Dim`文で複数の変数を宣言する構文（`Dim a As Integer, b As Range`）はまだパースできません。複数領域の貼り付けは、両側が複数領域で`Areas.Count`と各領域の形状が一致する場合のみ実行され、それ以外の組み合わせは引き続き診断のみです（上記参照）。
+
+### XLSX.read() — `@elixcee/xlsx`（npm、開発中）
+
+同期的でWebAssembly版の`XLSX.read(bytes)`——`await init()`不要——が、開発中のnpmパッケージ`@elixcee/xlsx`（未公開。互換性の取り組みと同期ブリッジの設計は [docs/xlsx-architecture.md](docs/xlsx-architecture.md) を参照）に実装されています。シート名、`!ref`、`!merges`、`!rows`/`!cols`（非表示行・列）、セルごとの`{t, v, f, w, z}`（値・数式テキスト・書式済み表示文字列・日付型セル、実際の`styles.xml`/数値書式解析による）を返します。実物の`xlsx@0.18.5`パッケージに対する差分テストで、宣言している対応範囲について19/19 MATCH。現時点ではNode専用です——ブラウザ向けartifactはビルド・ブリッジレベルでの検証は済んでいますが、公開APIへの配線はまだです。
 
 ### ソースからビルド
 

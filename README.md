@@ -340,11 +340,11 @@ recognized by `.Copy`, but pasting it is diagnose-only: `diagnose`/
 }
 ```
 
-This is a foundation milestone: `Union()`, the `Areas` property, and
-`Dim rng As Range` object variables aren't supported yet, and no
-multi-area paste actually completes in v1 — even one where the source and
-destination areas match exactly. Full scope and the other 3 classified
-codes: [docs/agent-contract.md](docs/agent-contract.md).
+`Union()`, `Areas`, `Dim rng As Range`/`Set` object variables, and matching-shape
+multi-area paste are now implemented — see "VBA object model" below. The 4 classified
+codes above still apply to every multi-area shape that doesn't match exactly (different
+area counts or shapes, or either side single-area): full scope in
+[docs/agent-contract.md](docs/agent-contract.md).
 
 ### Hidden row/column evidence
 
@@ -368,10 +368,63 @@ error, just a new `observations` field, present alongside (or instead of)
 }
 ```
 
-This is the foundation `SpecialCells(xlCellTypeVisible)` will build on
-later — Copy/Paste itself is unaffected (hidden cells still copy/paste
-exactly as before). XLSX only; ODS is deferred. Full scope:
-[docs/agent-contract.md](docs/agent-contract.md).
+This is what `SpecialCells(xlCellTypeVisible)` (below) builds on — plain Copy/Paste
+itself is unaffected (hidden cells still copy/paste exactly as before). XLSX only; ODS
+is deferred. Full scope: [docs/agent-contract.md](docs/agent-contract.md).
+
+### VBA object model
+
+```vb
+Dim rng As Range
+Set rng = Range("A1:B2")
+rng.Value = 5                        ' real Set reference semantics — an alias, not a copy
+
+Dim u As Range
+Set u = Union(Range("A1"), Range("D1"))
+Range("C1").Value = u.Areas.Count    ' 2
+
+Dim ws As Worksheet
+Set ws = ActiveSheet
+ws.Range("A1").Value = 1
+
+Range("F1").Value = 7 Mod 3          ' 1
+Range("F2").Value = 2 ^ 3            ' 8
+Range("F3").Value = 7 \ 3            ' 2 (integer division)
+If Not (a And b) Then MsgBox "ok"
+
+With Range("A1:B2")
+  .Value = 5
+End With
+
+Function DoubleIt(x As Integer) As Integer
+  DoubleIt = x * 2
+End Function
+```
+
+`Set`-assigned `Range`/`Worksheet`/`Workbook` object variables (real reference
+semantics), `Union`/`Areas`, `SpecialCells(xlCellTypeVisible)` (built on the hidden
+row/column evidence above), matching-shape multi-area Copy/Paste, `Mod`/`\`/`^`, infix
+`And`/`Or`/`Xor`/`Not`, `With Range(...)`, and typed `Function` parameters/return types
+are all supported.
+
+**Known gaps**: `Not` still evaluates via boolean-truthy coercion while `And`/`Or`/`Xor`
+do real bitwise math, so `Not 5 And 3` doesn't match real VBA's bitwise result; a single
+`Dim` statement declaring more than one variable (`Dim a As Integer, b As Range`) isn't
+parsed yet; multi-area Paste only executes when both sides are multi-area with matching
+`Areas.Count` and per-area shapes — every other combination stays diagnose-only (see
+above).
+
+### XLSX.read() — `@elixcee/xlsx` (npm, in development)
+
+A synchronous, WebAssembly-backed `XLSX.read(bytes)` — no `await init()` required — is
+implemented in the in-development `@elixcee/xlsx` npm package (not yet published; see
+[docs/xlsx-architecture.md](docs/xlsx-architecture.md) for the compatibility initiative
+and the sync-bridge design). It returns sheet names, `!ref`, `!merges`, `!rows`/`!cols`
+(hidden rows/columns), and per-cell `{t, v, f, w, z}` — values, formula text, formatted
+display strings, and date-typed cells, resolved via real `styles.xml`/number-format
+parsing. Differential-tested against the real `xlsx@0.18.5` package: 19/19 MATCH on its
+declared scope. Node-only for now — the browser artifact is built and verified at the
+bridge level but isn't wired into the package's public API yet.
 
 ### Build from source
 
