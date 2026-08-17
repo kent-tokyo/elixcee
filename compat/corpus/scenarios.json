@@ -4638,5 +4638,13 @@
     "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (10 >= 0) Or (10 Mod 2 = 0)\nEnd Sub\n",
     "entrypoint": "Scenario",
     "workbook": null
+  },
+  {
+    "id": "harness_smoke_0001",
+    "category": "harness_smoke",
+    "description": "Pure local-variable arithmetic, no Range/Cells touched, over numeric_grid",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 1 + 1\nEnd Sub\n",
+    "entrypoint": "Scenario",
+    "workbook": "numeric_grid"
   }
 ]

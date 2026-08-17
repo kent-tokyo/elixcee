@@ -477,6 +477,21 @@ for (const v of [-10, -1, 0, 1, 10]) {
   add('boolean_logic', `A1 = (${v} >= 0) Or (${v} Mod 2 = 0)`, `  Range("A1").Value = (${v} >= 0) Or (${v} Mod 2 = 0)`);
 }
 
+// ---------------------------------------------------------------------------
+// harness_smoke: touches NO Range/Cells at all (pure local-variable arithmetic), so it
+// does not hit the Range/Cells hang documented in README.md's "Known, reproducible
+// limitation" section. Its only purpose is to prove the LibreOffice runner's full
+// pipeline end to end — module insertion, nested invoke, cell dump, normalize, classify —
+// on at least one real, non-timed-out data point, using the numeric_grid fixture so both
+// engines dump the same 16 pre-existing cells untouched. See README.md for what this
+// scenario found.
+add(
+  'harness_smoke',
+  'Pure local-variable arithmetic, no Range/Cells touched, over numeric_grid',
+  '  Dim x As Integer\n  x = 1 + 1',
+  'numeric_grid'
+);
+
 fs.writeFileSync(path.join(DIR, 'scenarios.json'), JSON.stringify(scenarios, null, 2) + '\n');
 
 const byCategory = new Map();

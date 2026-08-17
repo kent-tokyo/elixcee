@@ -15,6 +15,20 @@
 // returns 0 for a text cell (a real elixcee number could also legitimately be 0 — reading
 // it via getValue() alone would silently manufacture a false MATCH on that address; see
 // the harness's use of getType() for why this matters).
+//
+// KNOWN, NOT-YET-FIXED GAP: a VBA Boolean written via `Range(...).Value = True` has no
+// distinct UNO CellContentType — LibreOffice reports it as an ordinary VALUE cell holding
+// the number 1, indistinguishable at the getType() level from a real numeric 1 (telling
+// them apart would need a NumberFormat check, not implemented here). elixcee, by
+// contrast, serializes VBA Booleans as real JSON `true`/`false` (see
+// docs/agent-contract.md). Comparing here (`true` vs. `1`) fails strict equality, so a
+// scenario that legitimately matches on a Boolean cell would currently classify
+// UNCLASSIFIED instead of MATCH — a false MISMATCH, not a false MATCH, so it fails safe,
+// but it is real noise, not yet worked around. Not exercised by this milestone's actual
+// run: every `boolean_logic`-category scenario timed out in run-libreoffice.mjs before
+// reaching a cell dump (see README.md), so this gap has not yet produced an incorrect
+// classification in a real result — it would on the first Boolean cell that reaches this
+// comparison after the underlying LibreOffice hang (see README.md) is fixed.
 
 /**
  * @param {{sheet?: string, address: string, value: unknown}} cell

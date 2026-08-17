@@ -4058,5 +4058,11 @@
     "oracle": "libreoffice",
     "classification": "ORACLE_UNAVAILABLE",
     "reason": "oracle backend status: TIMEOUT"
+  },
+  {
+    "id": "harness_smoke_0001",
+    "category": "harness_smoke",
+    "oracle": "libreoffice",
+    "classification": "MATCH"
   }
 ]

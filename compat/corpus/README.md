@@ -81,11 +81,20 @@ needs no merging step.
 `run-libreoffice.mjs`'s harness macro invokes each scenario's Sub via
 `oDoc.getScriptProvider().getScript(uri).invoke(Array(), Array(), Array())` — the
 standard, documented way to run a Basic/VBA macro embedded in a document from another
-running macro. This works and completes quickly for VBA that doesn't touch the Excel
-object model (confirmed with a trivial `x = 1 + 1` body). It **hangs indefinitely** — not
-slow, not eventually-completing; confirmed still hung after 90+ seconds with no CPU
-activity change — as soon as the invoked code touches `Range(...)` or `Cells(...)`,
-whether reading or writing, confirmed identically across:
+running macro. This works end to end — module insertion, invocation, and the post-invoke
+cell dump (`CurrentController.ActiveSheet`, `gotoEndOfUsedArea`, `getType()` branching,
+TSV encoding) all the way through to a real `MATCH` classification — for VBA that doesn't
+touch the Excel object model: `scenarios.json`'s permanent `harness_smoke_0001` scenario
+(`Dim x As Integer: x = 1 + 1` over the `numeric_grid` fixture) is the proof: elixcee and
+LibreOffice both dump the same 16 pre-existing grid cells, and `run-classify.mjs`
+classifies it `MATCH` — the one scenario in this corpus with a real, non-timed-out
+cross-engine comparison. See `results/classify-results.json`.
+
+Every *other* scenario in this corpus touches `Range`/`Cells` by design (that's the VBA
+object-model surface elixcee implements), and there the same invocation path **hangs
+indefinitely** — not slow, not eventually-completing; confirmed still hung after 90+
+seconds with no CPU activity change — as soon as the invoked code touches `Range(...)` or
+`Cells(...)`, whether reading or writing, confirmed identically across:
 
 - an in-memory document (`private:factory/scalc`) vs. a document saved to real `.xlsm`
   (via the `Calc MS Excel 2007 VBA XML` filter) and reopened fresh,
@@ -156,5 +165,32 @@ non-obvious pitfalls were found and fixed:
 `getType()` (VALUE/TEXT/FORMULA) rather than a bare `getValue()` — `getValue()` returns
 `0` for a text cell, and elixcee can legitimately also produce a real `0` for a numeric
 cell at the same address; comparing via `getValue()` alone would silently manufacture a
-false MATCH on that address. See the task's final report for the actual count of
-scenarios (if any) where elixcee produced a plausible-looking but incorrect result.
+false MATCH on that address. (A related, not-yet-fixed gap in the *other* direction —
+LibreOffice reporting a VBA Boolean as an indistinguishable-from-`1` VALUE cell — is
+documented in `normalize.mjs`'s doc comment; it fails safe, as a spurious mismatch rather
+than a spurious match, and was not exercised by this run.)
+
+**What this milestone's actual run found**: 578 of 580 corpus scenarios never reached a
+comparison at all (`ORACLE_UNAVAILABLE` — LibreOffice timed out before producing a cell
+dump), so the silent-wrong-result detector built into `classify.mjs`/`normalize.mjs` was
+exercised on only one real cross-engine comparison (`harness_smoke_0001`, `MATCH`) plus
+the 2 `NONDETERMINISTIC` scenarios that are never compared by value. The honest count is
+**"0 silent wrong results detected, out of 1 scenario where detection was actually
+possible"** — not "0 found" in the sense of a clean bill of health across the corpus.
+Nearly the entire detection capability this milestone built is real and correct but
+unexercised, pending the LibreOffice hang above (or a future Excel COM run, see
+`../oracle-excel-com/`) actually producing comparable output for the rest of the corpus.
+
+## A note on the operator-parsing gaps found in elixcee's own results
+
+Running the corpus against elixcee (`results/elixcee-results.json`) surfaced 169 parse/
+runtime failures. Most are legitimate VBA syntax elixcee's parser does not yet accept —
+confirmed to be a *general* parsing gap, not a `Range`-specific one, by testing each
+operator both as a direct `Range(...).Value = ...` assignment and as a plain local
+variable assignment (`x = 17 Mod 5`): the integer-division operator (`\`), the `Mod`
+operator, and the exponentiation operator (`^`) all fail identically in both forms with
+the same `E2001 expected newline` parse error. Also observed: infix `And`/`Or`/`Not`/`Xor`
+in a value expression, typed `Function` parameter/return annotations, comma-separated
+multi-variable `Dim`, and `With` over a `Range` object (vs. the documented-supported
+`With Sheets(...)`) all fail to parse. See `../oracle-excel-com/UNVERIFIED.md` item 3 for
+how these carry forward into what a future Excel run should prioritize confirming.
