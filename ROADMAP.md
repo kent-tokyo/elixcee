@@ -34,11 +34,12 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 3. ~~Comma-separated multi-declarator `Dim`~~ — **fixed** (Unreleased): `parse_dim` now loops
    over every comma-separated declarator instead of returning after the first non-built-in
    one. Corpus's own parse-error count: 8 → 4 (see item 3b, a bug this fix unmasked).
-3b. **Single-line `If cond Then stmt` (no `End If`) doesn't parse at all** — discovered while
-   verifying item 3's fix: the 4 corpus parse errors left after fixing comma-`Dim` are all
-   this, not further `Dim` cases (the old `Dim` bug happened to fail first on the same 4
-   scenarios, masking it). `parse_if` unconditionally requires a newline right after `Then`.
-   Reproduced standalone (`If x > 0 Then y = 5`, no `Dim` involved) — not yet fixed.
+3b. ~~Single-line `If cond Then stmt` (no `End If`) doesn't parse at all~~ — **fixed**
+   (Unreleased): discovered while verifying item 3's fix (the 4 corpus parse errors left
+   after fixing comma-`Dim` were all this, not further `Dim` cases). Only identifier-led
+   inline statements are recognized (covers 100% of what the corpus actually uses here);
+   a keyword-led branch degrades to `Stmt::Unsupported` instead of hard-erroring. Corpus's
+   own parse-error count is now 0/581, verified by rerunning the corpus, not just unit tests.
 4. ~~`Not` is boolean-truthy, not bitwise~~ — **fixed** (Unreleased): `Not` now splits
    logical-vs-bitwise the same way `And`/`Or`/`Xor` already did — a genuine `Boolean` gets
    logical negation, anything else gets a real bitwise complement. `Not 5 And 3` now matches
@@ -54,11 +55,6 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 Not committed to a specific order — pick based on what the next release is trying to prove.
 
-- **Single-line `If cond Then stmt`** (item 3b) — small-to-medium: `parse_if` needs a branch
-  for "no newline after `Then`" that parses one statement inline instead of a block, plus an
-  `ElseIf`/`Else` continuation on the same line is real VBA too (`If x Then a Else b`) and
-  worth scoping in the same pass rather than half-fixing. Newly discovered, real, and now the
-  entire remaining corpus parse-error surface (4/581) — likely the next highest-leverage item.
 - **Microsoft Excel validation** (item 1) — blocked on getting a Windows+Excel environment,
   not on engineering effort; the `compat/oracle-excel-com/CONTRACT.md` adapter is already
   written and waiting. Highest-value item on this list once an environment exists.

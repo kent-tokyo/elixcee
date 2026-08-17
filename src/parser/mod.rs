@@ -614,6 +614,9 @@ impl Parser {
         self.expect_ident("if")?;
         let condition = self.parse_expr()?;
         self.expect_ident("then")?;
+        if !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+            return self.parse_single_line_if(condition);
+        }
         self.eat_eol()?;
         let then_body = self.parse_stmts(|p| {
             p.is_elseif() || p.is_ident("else") || p.is_end_kw("if")
@@ -630,6 +633,47 @@ impl Parser {
         self.consume_end_kw("if")?;
         self.skip_nl();
         Ok(Stmt::If { condition, then_body, else_body })
+    }
+
+    /// `If cond Then stmt [Else stmt]` all on one line, no `End If` — real
+    /// VBA grammar only allows a single optional `Else` here, never
+    /// `ElseIf`. Entered once `parse_if` sees a non-newline token right
+    /// after `Then`.
+    fn parse_single_line_if(&mut self, condition: Expr) -> Result<Stmt, String> {
+        let then_body = vec![self.parse_single_line_if_branch()?];
+        let else_body = if self.is_ident("else") {
+            self.advance();
+            vec![self.parse_single_line_if_branch()?]
+        } else {
+            vec![]
+        };
+        self.eat_eol()?;
+        Ok(Stmt::If { condition, then_body, else_body })
+    }
+
+    /// One inline statement for a single-line `If`/`Else` branch. Only
+    /// identifier-led statements (assignment, sub call, array/field write —
+    /// whatever `parse_ident_stmt` covers) are recognized; this project's
+    /// own 581-scenario VBA corpus never uses anything else here (surveyed
+    /// directly, not assumed — see ROADMAP.md). A keyword-led branch (e.g.
+    /// `Then Exit Sub`) degrades to `Stmt::Unsupported` rather than a hard
+    /// parse error, same precedent as `parse_set`'s unmodeled-target
+    /// fallback: an otherwise-working macro should still run.
+    fn parse_single_line_if_branch(&mut self) -> Result<SpannedStmt, String> {
+        let start = self.peek_span().start;
+        let stmt = if matches!(self.peek(), Tok::Ident(_)) {
+            self.parse_ident_stmt()?
+        } else {
+            while !matches!(self.peek(), Tok::Newline | Tok::Eof) && !self.is_ident("else") {
+                self.advance();
+            }
+            Stmt::Unsupported {
+                reason: "single-line 'If ... Then ...' branch isn't a recognized statement shape"
+                    .to_string(),
+            }
+        };
+        let end = self.peek_span().start;
+        Ok(SpannedStmt { stmt, span: SourceSpan { start, end } })
     }
 
     fn parse_elseif_chain(&mut self) -> Result<Vec<SpannedStmt>, String> {
@@ -2492,6 +2536,29 @@ mod tests {
         let body = parse_body("Sub MySub()\n    If a > 0 Then\n        b = 1\n    Else\n        b = 0\n    End If\nEnd Sub\n");
         if let Stmt::If { then_body, else_body, .. } = &body[0] {
             assert_eq!(then_body.len(), 1); assert_eq!(else_body.len(), 1);
+        }
+    }
+    #[test] fn test_single_line_if_no_else() {
+        let body = parse_body("Sub MySub()\n    If a > m Then m = a\n    n = 1\nEnd Sub\n");
+        assert!(matches!(&body[0], Stmt::If { .. }));
+        if let Stmt::If { then_body, else_body, .. } = &body[0] {
+            assert_eq!(then_body.len(), 1);
+            assert!(else_body.is_empty());
+            assert!(matches!(&then_body[0].stmt, Stmt::Assignment { var, .. } if var == "m"));
+        }
+        // The statement on the line after the single-line If must still parse.
+        assert_eq!(body.len(), 2);
+        assert!(matches!(&body[1], Stmt::Assignment { var, .. } if var == "n"));
+    }
+    #[test] fn test_single_line_if_with_else() {
+        let body = parse_body("Sub MySub()\n    If a > 0 Then b = 1 Else b = 0\nEnd Sub\n");
+        if let Stmt::If { then_body, else_body, .. } = &body[0] {
+            assert_eq!(then_body.len(), 1);
+            assert_eq!(else_body.len(), 1);
+            assert!(matches!(&then_body[0].stmt, Stmt::Assignment { .. }));
+            assert!(matches!(&else_body[0].stmt, Stmt::Assignment { .. }));
+        } else {
+            panic!("expected Stmt::If");
         }
     }
     #[test] fn test_comparison_expr() {

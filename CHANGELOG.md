@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Single-line `If cond Then stmt [Else stmt]` (no `End If`) now parses — previously
+  unsupported at all (`parse_if` unconditionally required a newline right after `Then`).
+  Only identifier-led statements (assignment, sub call, array/field write — whatever
+  `parse_ident_stmt` already covers) are recognized inline; this project's own
+  581-scenario VBA corpus never uses anything else here (surveyed directly). A
+  keyword-led branch (e.g. `Then Exit Sub`) degrades to `Stmt::Unsupported` rather than a
+  hard parse error, matching `parse_set`'s existing unmodeled-target precedent. This was
+  discovered, not hunted for: it's what the comma-`Dim` fix above unmasked on the 4
+  corpus scenarios that fix's own parse-error count didn't reach 0 on. With this fix, the
+  corpus's parse-error count is now genuinely 0/581 (verified by rerunning
+  `compat/corpus/run-elixcee.mjs`, not assumed from the unit tests alone).
 - `Not` now does a real bitwise complement on numeric operands (`Not 5` is `-6`, matching real
   VBA), instead of coercing the operand to truthy/falsy first. Only a genuine `Boolean`
   operand still gets logical negation — the same logical-vs-bitwise split `And`/`Or`/`Xor`

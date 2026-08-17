@@ -3688,6 +3688,36 @@ mod tests {
         assert_eq!(vm.variables["r"], Variant::Integer(2));
     }
 
+    #[test]
+    fn test_single_line_if_end_to_end() {
+        // The exact shape found unparseable in the 581-scenario VBA corpus
+        // (arrays_0007..0010) while verifying the comma-Dim fix: a
+        // single-line `If cond Then stmt` with no `End If`, used as a
+        // running-max accumulator inside a loop.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Dim arr(3) As Double\n",
+            "    arr(0) = 2\n",
+            "    arr(1) = 9\n",
+            "    arr(2) = 4\n",
+            "    arr(3) = 1\n",
+            "    Dim i As Integer, m As Double\n",
+            "    m = arr(0)\n",
+            "    For i = 1 To 3\n",
+            "        If arr(i) > m Then m = arr(i)\n",
+            "    Next i\n",
+            "    result = m\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["result"], Variant::Integer(9));
+    }
+
+    #[test]
+    fn test_single_line_if_else_end_to_end() {
+        let vm = run("Sub MySub()\n    x = 3\n    If x > 10 Then y = 1 Else y = 2\nEnd Sub\n");
+        assert_eq!(vm.variables["y"], Variant::Integer(2));
+    }
+
     // ── Exit ─────────────────────────────────────────────────────────────────
 
     #[test]
