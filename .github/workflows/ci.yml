@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # Explicit so pyo3's build script always finds a real interpreter
+      # from this job's own PATH — never an inherited/ambient $PYO3_PYTHON
+      # or $VIRTUAL_ENV from whatever happened to run before it.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Export PYO3_PYTHON
+        run: echo "PYO3_PYTHON=$(python3 -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: cargo build --release --workspace
+        run: cargo build --release --workspace
+
+      # --lib, not the full crate: the "python" feature enables pyo3's
+      # extension-module (no libpython linked in, by design — see
+      # pyproject.toml/maturin), which can fail to *link* the `elixcee`
+      # binary target even though the library itself is fine. --lib checks
+      # what maturin actually builds.
+      - name: cargo check --features python --lib
+        run: cargo check --features python --lib
+
+      # elixcee-types only, matching the standing policy that root crate's
+      # pre-existing clippy warnings aren't a release blocker (tracked
+      # separately in tasks/todo.md) — this crate is held to -D warnings
+      # because it started clean and should stay that way.
+      - name: cargo clippy -p elixcee-types
+        run: cargo clippy -p elixcee-types --all-targets -- -D warnings
