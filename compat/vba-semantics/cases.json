@@ -2177,6 +2177,272 @@
     "entrypoint": "Scenario"
   },
   {
+    "id": "isnull_of_null_is_true",
+    "category": "null_propagation",
+    "description": "IsNull(Null) is True",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnull_of_empty_is_false",
+    "category": "null_propagation",
+    "description": "IsNull(Empty) is False",
+    "vbaSource": "Sub Scenario()\n  Dim e\n  Range(\"A1\").Value = IsNull(e)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isempty_of_null_is_false",
+    "category": "null_propagation",
+    "description": "IsEmpty(Null) is False",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsEmpty(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isempty_of_empty_is_true",
+    "category": "null_propagation",
+    "description": "IsEmpty(Empty) is True",
+    "vbaSource": "Sub Scenario()\n  Dim e\n  Range(\"A1\").Value = IsEmpty(e)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "typename_of_null_is_null",
+    "category": "null_propagation",
+    "description": "TypeName(Null) is \"Null\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = TypeName(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "vartype_of_null_is_vbnull",
+    "category": "null_propagation",
+    "description": "VarType(Null) is 1 (vbNull)",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = VarType(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "vartype_of_empty_is_vbempty",
+    "category": "null_propagation",
+    "description": "VarType(Empty) is 0 (vbEmpty)",
+    "vbaSource": "Sub Scenario()\n  Dim e\n  Range(\"A1\").Value = VarType(e)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_plus_number_is_null",
+    "category": "null_propagation",
+    "description": "Null + number is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n + 5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "number_plus_null_is_null",
+    "category": "null_propagation",
+    "description": "number + Null is Null (right-hand side)",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 + n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_minus_number_is_null",
+    "category": "null_propagation",
+    "description": "Null - number is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n - 1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_times_number_is_null",
+    "category": "null_propagation",
+    "description": "Null * number is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n * 3)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_divided_by_number_is_null_not_a_division_error",
+    "category": "null_propagation",
+    "description": "Null / number is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n / 2)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "number_divided_by_null_is_null_not_division_by_zero",
+    "category": "null_propagation",
+    "description": "number / Null is Null, not a Division by zero error",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 / n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_arithmetic_result_is_not_zero",
+    "category": "null_propagation",
+    "description": "A Null arithmetic result is Null, not the number 0",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = (n + 5 = 0)\n  Range(\"A1\").Value = IsNull(n + 5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "typename_of_a_null_arithmetic_result_is_null",
+    "category": "null_propagation",
+    "description": "TypeName(Null + 5) is \"Null\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = TypeName(n + 5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "empty_plus_number_is_still_the_number_not_null",
+    "category": "null_propagation",
+    "description": "Empty + number returns the number unchanged (Empty does NOT propagate)",
+    "vbaSource": "Sub Scenario()\n  Dim e\n  Range(\"A1\").Value = e + 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ampersand_null_on_the_left_is_empty_string",
+    "category": "null_propagation",
+    "description": "Null & string treats the Null as \"\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = n & \"abc\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ampersand_null_on_the_right_is_empty_string",
+    "category": "null_propagation",
+    "description": "string & Null treats the Null as \"\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = \"abc\" & n\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ampersand_both_null_is_null_via_typename",
+    "category": "null_propagation",
+    "description": "TypeName(Null & Null) is \"Null\"",
+    "vbaSource": "Sub Scenario()\n  Dim n1, n2\n  n1 = Null\n  n2 = Null\n  Range(\"A1\").Value = TypeName(n1 & n2)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_lt_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 < Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 < n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_le_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 <= Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 <= n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_gt_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 > Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 > n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_ge_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 >= Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 >= n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_eq_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 = Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 = n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_ne_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 <> Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 <> n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_with_null_left_operand_is_null",
+    "category": "null_propagation",
+    "description": "Null < 5 is Null (left-hand side)",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n < 5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_equals_null_is_null_not_true",
+    "category": "null_propagation",
+    "description": "Null = Null is Null, not True",
+    "vbaSource": "Sub Scenario()\n  Dim n1, n2\n  n1 = Null\n  n2 = Null\n  Range(\"A1\").Value = IsNull(n1 = n2)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ordinary_comparison_still_returns_a_boolean",
+    "category": "null_propagation",
+    "description": "A comparison with no Null operand still returns a plain Boolean",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (3 < 5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "false_and_null_is_false_not_null",
+    "category": "null_propagation",
+    "description": "False And Null is False",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = (False And n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "true_and_null_is_null",
+    "category": "null_propagation",
+    "description": "True And Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(True And n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "true_or_null_is_true_not_null",
+    "category": "null_propagation",
+    "description": "True Or Null is True",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = (True Or n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "false_or_null_is_null",
+    "category": "null_propagation",
+    "description": "False Or Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(False Or n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_with_a_null_operand_is_null",
+    "category": "null_propagation",
+    "description": "True Xor Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(True Xor n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_null_is_null",
+    "category": "null_propagation",
+    "description": "Not Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(Not n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "if_null_condition_is_treated_as_false",
+    "category": "null_propagation",
+    "description": "If Null Then takes the Else branch (Null condition is treated as False)",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  If n Then\n    Range(\"A1\").Value = 1\n  Else\n    Range(\"A1\").Value = 2\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "if_null_comparison_condition_is_treated_as_false",
+    "category": "null_propagation",
+    "description": "A comparison that evaluates to Null is also treated as False by If",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  If 5 > n Then\n    Range(\"A1\").Value = 1\n  Else\n    Range(\"A1\").Value = 2\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "do_while_null_condition_never_enters_the_loop",
+    "category": "null_propagation",
+    "description": "A Do While loop with a Null condition never runs its body",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Do While n\n    Range(\"A1\").Value = 99\n  Loop\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_passed_to_a_numeric_function_raises_invalid_use_of_null",
+    "category": "null_propagation",
+    "description": "Abs(Null) raises \"Invalid use of Null\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = Abs(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
     "id": "colon_two_statements_one_line",
     "category": "colon_statement_separator",
     "description": "Two assignments separated by a colon on one line",

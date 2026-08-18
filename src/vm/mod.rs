@@ -2359,7 +2359,15 @@ impl Vm {
                     "vbcancel" => Variant::Integer(2),
                     "vbyes"    => Variant::Integer(6),
                     "vbno"     => Variant::Integer(7),
-                    "empty" | "null" | "nothing" => return Ok(Variant::Empty),
+                    // `Null` is its own value, not Empty: "no valid data"
+                    // versus "uninitialized". Folding the two together (as
+                    // this line used to) made every documented Null rule
+                    // unobservable. `Nothing` stays Empty — it's the null
+                    // *object* reference, and object state lives in
+                    // `object_variables`, not in a `Variant` (see
+                    // `Expr::IsNothing`).
+                    "null" => return Ok(Variant::Null),
+                    "empty" | "nothing" => return Ok(Variant::Empty),
                     // Real VBA allows omitting `()` on these three zero-arg
                     // functions (`Date`, not just `Date()`) — every other
                     // `eval_vba_func` entry needs at least one argument, so
@@ -2374,6 +2382,9 @@ impl Vm {
             Expr::UnaryMinus(inner) => match self.eval_expr(inner)? {
                 Variant::Integer(n) => Ok(Variant::Integer(-n)),
                 Variant::Float(f)   => Ok(Variant::Float(-f)),
+                // Same documented rule as binary `-`: "If one or both
+                // expressions are Null expressions, result is Null."
+                Variant::Null       => Ok(Variant::Null),
                 other => Err(format!("Unary minus on non-numeric: {}", other)),
             },
             Expr::UnaryNot(inner) => {
@@ -2385,6 +2396,9 @@ impl Vm {
                 let v = self.eval_expr(inner)?;
                 match v {
                     Variant::Boolean(b) => Ok(Variant::Boolean(!b)),
+                    // Documented on the Not operator page: `Not Null` is
+                    // Null — the third row of its own truth table.
+                    Variant::Null => Ok(Variant::Null),
                     other => Ok(Variant::Integer(!to_i64_bitwise(&other)?)),
                 }
             }
@@ -2742,9 +2756,12 @@ impl Vm {
                 let f = to_f64(vals.first().ok_or("Sqr requires 1 argument")?)?;
                 Ok(Variant::Float(f.sqrt()))
             }
-            "isnull" | "isempty" => {
-                Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Empty) | None)))
-            }
+            // Genuinely different questions, so no longer one shared arm:
+            // IsNull asks "is this the Null value", IsEmpty asks "is this an
+            // uninitialized Variant". IsNull(Empty) and IsEmpty(Null) are
+            // both False in real VBA.
+            "isnull"  => Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Null)))),
+            "isempty" => Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Empty) | None))),
             "isnumeric" => {
                 // Real VBA's IsNumeric also accepts a string that parses as
                 // a number (`IsNumeric("123")` is True) and Empty (an
@@ -2857,6 +2874,7 @@ impl Vm {
                     Variant::Error(_)   => "Error",
                     Variant::Array(_)   => "Variant()",
                     Variant::Empty      => "Empty",
+                    Variant::Null       => "Null",
                     Variant::Record(_)  => "Object",
                 };
                 Ok(Variant::Str(name.into()))
@@ -2864,6 +2882,7 @@ impl Vm {
             "vartype" => {
                 let n: i64 = match vals.first().ok_or("VarType requires 1 argument")? {
                     Variant::Empty      => 0,
+                    Variant::Null       => 1,  // vbNull
                     Variant::Integer(_) => 3,  // vbLong
                     Variant::Float(_)   => 5,  // vbDouble
                     Variant::Str(_)     => 8,  // vbString
@@ -3234,7 +3253,10 @@ fn vba_to_str(v: &Variant) -> String {
         Variant::Boolean(b) => if *b { "True".into() } else { "False".into() },
         Variant::Date(s)    => serial_to_display(*s),
         Variant::Error(e)   => e.as_str().to_string(),
-        Variant::Empty      => String::new(),
+        // "Any expression that is Empty is also treated as a zero-length
+        // string"; a lone Null concatenates the same way (the both-Null
+        // case is decided earlier, in `null_rule`).
+        Variant::Empty | Variant::Null => String::new(),
         Variant::Array(a)   => a.iter().map(vba_to_str).collect::<Vec<_>>().join(", "),
         Variant::Record(_)  => "[Record]".into(),
     }
@@ -3461,6 +3483,12 @@ fn to_f64(v: &Variant) -> Result<f64, String> {
         Variant::Date(s)    => Ok(*s as f64),
         Variant::Error(e)   => Err(e.to_string()),
         Variant::Empty      => Ok(0.0),
+        // Real VBA error 94. Unlike Empty (documented as 0 in a numeric
+        // context), Null has no numeric value at all. Every documented
+        // Null-propagating operator short-circuits before reaching here, so
+        // this only fires where a Null genuinely can't propagate (e.g. a
+        // function argument that must be a number).
+        Variant::Null       => Err("Invalid use of Null".into()),
         Variant::Str(s)     => s.parse::<f64>().map_err(|_| format!("Cannot convert '{}' to number", s)),
         Variant::Array(_)   => Err("Cannot convert array to number".into()),
         Variant::Record(_)  => Err("Cannot convert record to number".into()),
@@ -3489,6 +3517,10 @@ fn is_truthy(v: &Variant) -> bool {
         Variant::Date(_)    => true,
         Variant::Error(_)   => false,
         Variant::Empty      => false,
+        // Documented on the If...Then...Else statement page: "If condition
+        // is Null, condition is treated as False." Not an error — this is
+        // the one place VBA gives Null a Boolean reading.
+        Variant::Null       => false,
         Variant::Array(a)   => !a.is_empty(),
         Variant::Record(_)  => true,
     }
@@ -3632,11 +3664,87 @@ fn to_i64_bitwise(v: &Variant) -> Result<i64, String> {
     }
 }
 
+/// Applies every documented Null rule for `op` before the ordinary
+/// coercion path ever sees the operands, returning `Some(result)` when Null
+/// decides the answer. All sourced from Microsoft's own VBA language
+/// reference, fetched live rather than recalled:
+///
+/// - `+`/`-` (and the rest of arithmetic): "If one or both expressions are
+///   Null expressions, result is Null."
+/// - `&`: "If both expressions are Null, result is Null. However, if only
+///   one expression is Null, that expression is treated as a zero-length
+///   string." — the one operator where a single Null does *not* propagate.
+/// - comparison operators: each of `<`, `<=`, `>`, `>=`, `=`, `<>` lists
+///   "Null if expression1 or expression2 = Null" as a third outcome
+///   alongside True/False.
+/// - `And`/`Or`/`Xor`/`Not`: three-valued truth tables in which Null does
+///   *not* uniformly propagate — `False And Null` is False and
+///   `True Or Null` is True, because those two answers are already
+///   determined without knowing the missing operand.
+///
+/// Returning `Option` rather than short-circuiting inside `eval_binop`'s own
+/// arms keeps each rule stated once, next to its citation, instead of spread
+/// across seven operator branches.
+fn null_rule(op: &VbaBinOp, l: &Variant, r: &Variant) -> Option<Variant> {
+    let l_null = matches!(l, Variant::Null);
+    let r_null = matches!(r, Variant::Null);
+    if !l_null && !r_null { return None; }
+    match op {
+        VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div
+        | VbaBinOp::Pow | VbaBinOp::IntDiv | VbaBinOp::Mod
+        | VbaBinOp::Eq | VbaBinOp::Ne | VbaBinOp::Lt | VbaBinOp::Le
+        | VbaBinOp::Gt | VbaBinOp::Ge => Some(Variant::Null),
+        // Only both-Null concatenates to Null; a single Null is "".
+        VbaBinOp::Concat => {
+            if l_null && r_null { Some(Variant::Null) } else { None }
+        }
+        // `False And Null` -> False; `Null And False` -> False; everything
+        // else involving Null -> Null.
+        VbaBinOp::And => {
+            if matches!(l, Variant::Boolean(false)) || matches!(r, Variant::Boolean(false)) {
+                Some(Variant::Boolean(false))
+            } else {
+                Some(Variant::Null)
+            }
+        }
+        // `True Or Null` -> True; `Null Or True` -> True; everything else
+        // involving Null -> Null.
+        VbaBinOp::Or => {
+            if matches!(l, Variant::Boolean(true)) || matches!(r, Variant::Boolean(true)) {
+                Some(Variant::Boolean(true))
+            } else {
+                Some(Variant::Null)
+            }
+        }
+        // "However, if either expression is Null, result is also Null."
+        VbaBinOp::Xor => Some(Variant::Null),
+    }
+}
+
+/// `to_f64` for an *arithmetic operator's* operand: a string that can't
+/// convert to a number gets real VBA's own wording for that situation
+/// ("One expression is a numeric data type and the other is a String |
+/// A `Type mismatch` error occurs" — the + operator reference), instead of
+/// `to_f64`'s internal coercion-failure text.
+///
+/// Deliberately a wrapper rather than a change to `to_f64` itself: that
+/// helper has ~54 call sites across the VM (loop bounds, array indices,
+/// function arguments, …), each with its own correct real-VBA wording for
+/// its own failure, and only the arithmetic operators are documented to say
+/// "Type mismatch" here. Every other `to_f64` message is untouched.
+fn arith_to_f64(v: &Variant) -> Result<f64, String> {
+    match v {
+        Variant::Str(s) if s.parse::<f64>().is_err() => Err("Type mismatch".into()),
+        other => to_f64(other),
+    }
+}
+
 fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> {
+    if let Some(v) = null_rule(op, &l, &r) { return Ok(v); }
     match op {
         VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div | VbaBinOp::Pow => {
-            let lf = to_f64(&l)?;
-            let rf = to_f64(&r)?;
+            let lf = arith_to_f64(&l)?;
+            let rf = arith_to_f64(&r)?;
             let result = match op {
                 VbaBinOp::Add => lf + rf,
                 VbaBinOp::Sub => lf - rf,
@@ -3688,7 +3796,14 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
                 Ok(Variant::Integer(result))
             }
         }
-        VbaBinOp::Concat => Ok(Variant::Str(format!("{}{}", l, r))),
+        VbaBinOp::Concat => {
+            // A single Null operand is documented to concatenate as a
+            // zero-length string, exactly like Empty (the both-Null case
+            // already returned Null in `null_rule`).
+            let l = if matches!(l, Variant::Null) { Variant::Empty } else { l };
+            let r = if matches!(r, Variant::Null) { Variant::Empty } else { r };
+            Ok(Variant::Str(format!("{}{}", l, r)))
+        }
         VbaBinOp::Eq  => Ok(Variant::Boolean(vba_eq(&l, &r))),
         VbaBinOp::Ne  => Ok(Variant::Boolean(!vba_eq(&l, &r))),
         VbaBinOp::Lt  => Ok(Variant::Boolean(vba_cmp(&l, &r)? == std::cmp::Ordering::Less)),
@@ -4576,9 +4691,14 @@ mod tests {
     // ── Empty / Null / Nothing ────────────────────────────────────────────────
 
     #[test] fn test_empty_literal() {
+        // `Null` is no longer folded into `Empty` — they are genuinely
+        // different VBA values (see `Variant::Null`), which is what makes
+        // every documented Null-propagation rule expressible. `Nothing`
+        // stays Empty: it's the null *object* reference, tracked in
+        // `object_variables`, not a `Variant`.
         let vm = run("Sub MySub()\n    a = Empty\n    b = Null\n    c = Nothing\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Empty);
-        assert_eq!(vm.variables["b"], Variant::Empty);
+        assert_eq!(vm.variables["b"], Variant::Null);
         assert_eq!(vm.variables["c"], Variant::Empty);
     }
 
@@ -7093,6 +7213,120 @@ mod tests {
         // that isn't one at all keeps its pre-existing record behavior.
         let vm = run("Sub MySub()\n    p.x = 3\n    y = p.x\nEnd Sub\n");
         assert_eq!(vm.variables["y"], Variant::Integer(3));
+    }
+
+    // ── Variant::Null — VBA's "no valid data" value ─────────────────────────
+    // Every expectation below is the documented rule from Microsoft's own VBA
+    // language reference (the +, -, &, comparison, And/Or/Xor/Not operator
+    // pages and the If...Then...Else statement page), not elixcee's prior
+    // behavior — which folded Null into Empty and so got all of them wrong.
+
+    #[test]
+    fn null_is_distinct_from_empty() {
+        let vm = run(
+            "Sub MySub()\n    Dim e\n    n = Null\n    a = IsNull(n)\n    b = IsEmpty(n)\n    \
+             c = IsNull(e)\n    d = IsEmpty(e)\n    t = TypeName(n)\n    v = VarType(n)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Boolean(false));
+        assert_eq!(vm.variables["c"], Variant::Boolean(false));
+        assert_eq!(vm.variables["d"], Variant::Boolean(true));
+        assert_eq!(vm.variables["t"], Variant::Str("Null".into()));
+        assert_eq!(vm.variables["v"], Variant::Integer(1)); // vbNull
+    }
+
+    #[test]
+    fn arithmetic_propagates_null_from_either_side() {
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    a = n + 5\n    b = 5 + n\n    c = n - 1\n    \
+             d = n * 3\n    e = 2 + 3\nEnd Sub\n",
+        );
+        for k in ["a", "b", "c", "d"] {
+            assert_eq!(vm.variables[k], Variant::Null, "{} should be Null", k);
+        }
+        // Ordinary arithmetic is untouched.
+        assert_eq!(vm.variables["e"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn concat_propagates_null_only_when_both_sides_are_null() {
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    a = n & \"x\"\n    b = \"x\" & n\n    \
+             c = n & n\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Str("x".into()));
+        assert_eq!(vm.variables["b"], Variant::Str("x".into()));
+        assert_eq!(vm.variables["c"], Variant::Null);
+    }
+
+    #[test]
+    fn every_comparison_operator_propagates_null() {
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    a = (5 < n)\n    b = (5 <= n)\n    c = (5 > n)\n    \
+             d = (5 >= n)\n    e = (5 = n)\n    f = (5 <> n)\n    g = (n = n)\n    \
+             h = (3 < 5)\nEnd Sub\n",
+        );
+        for k in ["a", "b", "c", "d", "e", "f", "g"] {
+            assert_eq!(vm.variables[k], Variant::Null, "{} should be Null", k);
+        }
+        // Ordinary comparison is untouched.
+        assert_eq!(vm.variables["h"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn logical_operators_follow_the_documented_three_valued_tables() {
+        // The two rows where Null does NOT propagate — the answer is already
+        // determined without the missing operand.
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    a = (False And n)\n    b = (True And n)\n    \
+             c = (True Or n)\n    d = (False Or n)\n    e = (True Xor n)\n    \
+             f = (Not n)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(false));
+        assert_eq!(vm.variables["b"], Variant::Null);
+        assert_eq!(vm.variables["c"], Variant::Boolean(true));
+        assert_eq!(vm.variables["d"], Variant::Null);
+        assert_eq!(vm.variables["e"], Variant::Null);
+        assert_eq!(vm.variables["f"], Variant::Null);
+    }
+
+    #[test]
+    fn a_null_condition_is_treated_as_false_not_an_error() {
+        // Documented on the If...Then...Else page: "If condition is Null,
+        // condition is treated as False."
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    taken = 0\n    If n Then\n        taken = 1\n    \
+             Else\n        taken = 2\n    End If\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["taken"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn a_null_reaching_a_genuinely_numeric_context_raises_error_94() {
+        assert_eq!(
+            run_err("Sub MySub()\n    n = Null\n    x = Abs(n)\nEnd Sub\n"),
+            "Invalid use of Null"
+        );
+    }
+
+    #[test]
+    fn a_non_numeric_string_operand_of_an_arithmetic_operator_is_a_type_mismatch() {
+        // Documented on the + operator page: "One expression is a numeric
+        // data type and the other is a String | A `Type mismatch` error
+        // occurs." Scoped to the arithmetic operators — `to_f64`'s own
+        // message, and its ~53 other call sites, are unchanged.
+        assert_eq!(
+            run_err("Sub MySub()\n    Dim v1, v2\n    v1 = \"abc\"\n    v2 = 3\n    x = v1 + v2\nEnd Sub\n"),
+            "Type mismatch"
+        );
+    }
+
+    #[test]
+    fn a_numeric_looking_string_still_adds_rather_than_type_mismatching() {
+        // The complement of the test above: `arith_to_f64` must only fire on
+        // a string that genuinely can't convert.
+        let vm = run("Sub MySub()\n    Dim v1, v2\n    v1 = \"34\"\n    v2 = 6\n    x = v1 + v2\nEnd Sub\n");
+        assert_eq!(vm.variables["x"], Variant::Integer(40));
     }
 
     #[test]

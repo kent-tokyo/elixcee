@@ -109,6 +109,10 @@ fn to_float(v: &Variant) -> Result<f64, String> {
         Variant::Date(s)    => Ok(*s as f64),
         Variant::Error(e)   => Err(e.to_string()),
         Variant::Empty      => Ok(0.0),
+        // VBA Null never reaches the worksheet-formula engine (a Null is
+        // never stored in a cell -- see the write path, which treats it as
+        // blank). Grouped with Empty for the same reason a blank cell is 0.
+        Variant::Null       => Ok(0.0),
         Variant::Str(s)     => s.parse::<f64>()
             .map_err(|_| format!("Cannot convert '{}' to a number", s)),
         Variant::Array(_)   => Err("Cannot convert array to number".into()),
@@ -124,7 +128,7 @@ fn to_str(v: &Variant) -> String {
         Variant::Boolean(b) => if *b { "TRUE".into() } else { "FALSE".into() },
         Variant::Date(s)    => serial_to_display(*s),
         Variant::Error(e)   => e.as_str().to_string(),
-        Variant::Empty      => String::new(),
+        Variant::Empty | Variant::Null => String::new(),
         Variant::Array(a)   => a.iter().map(to_str).collect::<Vec<_>>().join(", "),
         Variant::Record(_)  => "[Record]".into(),
     }
@@ -138,7 +142,7 @@ fn is_truthy(v: &Variant) -> bool {
         Variant::Str(s)     => !s.is_empty(),
         Variant::Date(_)    => true,
         Variant::Error(_)   => false,
-        Variant::Empty      => false,
+        Variant::Empty | Variant::Null => false,
         Variant::Array(a)   => !a.is_empty(),
         Variant::Record(_)  => true,
     }
@@ -2272,7 +2276,8 @@ fn func_n(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Res
 fn func_type_fn(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) -> Result<Variant, String> {
     if args.len() != 1 { return Err("TYPE requires 1 argument".into()); }
     let code = match evaluate(&args[0], cells)? {
-        Variant::Integer(_) | Variant::Float(_) | Variant::Date(_) | Variant::Empty => 1,
+        Variant::Integer(_) | Variant::Float(_) | Variant::Date(_)
+        | Variant::Empty | Variant::Null => 1,
         Variant::Str(_)     => 2,
         Variant::Boolean(_) => 4,
         Variant::Error(_)   => 16,

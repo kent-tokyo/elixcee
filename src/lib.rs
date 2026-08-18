@@ -602,7 +602,7 @@ fn xlsx_cell_xml(cell_ref: &str, v: &Variant, str_index: &std::collections::Hash
         Variant::Boolean(b) => Some(format!(
             "<c r=\"{}\" t=\"b\"><v>{}</v></c>", cell_ref, if *b { 1 } else { 0 }
         )),
-        Variant::Empty | Variant::Array(_) | Variant::Record(_) => None,
+        Variant::Empty | Variant::Null | Variant::Array(_) | Variant::Record(_) => None,
     }
 }
 
@@ -747,7 +747,7 @@ fn ods_cell_xml(v: &Variant) -> String {
             r#"<table:table-cell office:value-type="string"><text:p>{}</text:p></table:table-cell>"#,
             xml_escape(e.as_str())
         ),
-        Variant::Empty | Variant::Array(_) | Variant::Record(_) => "<table:table-cell/>".to_string(),
+        Variant::Empty | Variant::Null | Variant::Array(_) | Variant::Record(_) => "<table:table-cell/>".to_string(),
     }
 }
 

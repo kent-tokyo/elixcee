@@ -84,7 +84,13 @@ pub fn variant_to_json(v: &Variant) -> String {
         }
         Variant::Date(s) => json_string(&crate::vm::serial_to_display(*s)),
         Variant::Error(e) => json_string(e.as_str()),
-        Variant::Empty => "null".into(),
+        // VBA's `Null` serializes as JSON null, same as `Empty` — neither
+        // has a representable cell value, and adding a new `--json` shape
+        // for one of them would be a contract change (see
+        // docs/agent-contract.md). The Empty-vs-Null distinction is a
+        // VBA-language one, observable via `IsNull`/`TypeName`, not a
+        // wire-format one.
+        Variant::Empty | Variant::Null => "null".into(),
         Variant::Array(_) => json_string("[array]"),
         Variant::Record(_) => json_string("[record]"),
     }

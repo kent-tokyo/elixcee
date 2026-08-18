@@ -720,14 +720,12 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     '& with both operands Null produces Null (unlike the one-Null case)',
     '  Dim r1, r2\n  r1 = Null\n  r2 = Null\n  Range("A1").Value = IsNull(r1 & r2)',
     { value: true },
-    'Documented (ampersand operator): "If both expressions are Null, result is Null." Distinct from the only-one-Null case, which treats the Null side as "". Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value.',
-    'elixcee\'s & always converts each operand to a string first (Null becomes ""), so both-Null gives "" (IsNull => False) instead of propagating Null (IsNull => True) -- found while building this suite from Microsoft\'s own documented distinction, not previously disclosed.');
+    'Documented (ampersand operator): "If both expressions are Null, result is Null." Distinct from the only-one-Null case, which treats the Null side as "". Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value. (Fixed this round: elixcee used to stringify both operands to "" first, giving IsNull => False.)');
   addCase('plus_null_propagates_null', CAT,
     '+ with a Null operand always produces Null',
     '  Dim r\n  r = Null\n  Range("A1").Value = IsNull(r + 5)',
     { value: true },
-    'Documented (+ operator): "If one or both expressions are Null, result is Null" -- unlike + with Empty (which returns the other operand unchanged) or & with one Null (which treats it as ""). Asserted via IsNull() for the same JSON-representability reason as the & case above.',
-    'elixcee\'s + treats Null the same as Empty (coerces to 0 numerically) instead of propagating Null, so r + 5 gives 5 (IsNull => False) instead of Null (IsNull => True) -- found while building this suite, not previously disclosed.');
+    'Documented (+ operator): "If one or both expressions are Null, result is Null" -- unlike + with Empty (which returns the other operand unchanged) or & with one Null (which treats it as ""). Asserted via IsNull() for the same JSON-representability reason as the & case above. (Fixed this round: elixcee used to treat Null exactly like Empty and coerce it to 0.)');
   addCase('plus_boolean_true_uses_negative_one', CAT,
     'True + a number arithmetic-coerces True as -1, not 1',
     '  Range("A1").Value = True + 5',
@@ -747,8 +745,7 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     '+ between a non-numeric-string Variant and a numeric Variant raises Type mismatch',
     '  Dim Var1, Var2\n  Var1 = "abc"\n  Var2 = 3\n  Range("A1").Value = Var1 + Var2',
     { error: 'Type mismatch' },
-    'Adding a numeric Variant to a string Variant that cannot itself convert to a number raises a Type mismatch error in real VBA -- well-established, unambiguous VBA behavior.',
-    'elixcee does correctly raise a runtime error here (not silently coerce), but with message "Cannot convert \'abc\' to number" instead of VBA\'s "Type mismatch". Not fixed this round: the message comes from to_f64, a single shared numeric-coercion helper with ~54 call sites across the VM (arithmetic, comparisons, loop bounds, array indexing, etc.), and renaming its message without auditing every call site\'s own correct real-VBA wording risks introducing a wrong message elsewhere -- unlike the narrowly-scoped array-out-of-bounds message fix earlier this round. Found while building this suite.');
+    'Documented (+ operator): "One expression is a numeric data type and the other is a String -> A Type mismatch error occurs." (Fixed this round, and narrowly: the wording is applied by a new arith_to_f64 wrapper used only by eval_binop\'s arithmetic arms, NOT by changing the shared to_f64 helper -- its ~53 other call sites, each with its own correct real-VBA wording for its own failure, are untouched. That shared-helper blast radius was the exact reason this stayed disclosed rather than fixed when the category was first written.)');
 }
 
 // ── comparison_coercion ──────────────────────────────────────────────────────
@@ -798,8 +795,7 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     'Any comparison with a Null operand produces Null, not True or False',
     '  Dim r\n  r = Null\n  Range("A1").Value = IsNull(5 < r)',
     { value: true },
-    'Documented (comparison operators table): every comparison operator lists "Null if expression1 or expression2 = Null" as a third, separate outcome alongside True/False. Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value, same convention as the Null cases in operator_coercion.',
-    'elixcee\'s comparison operators never produce Null -- Null numeric-coerces to 0 via to_f64 (same root cause as operator_coercion\'s plus_null_propagates_null/ampersand_both_null_propagates_null: no VM-wide concept of a Null result value distinct from Empty/0), so 5 < r is evaluated as 5 < 0 = False instead of Null. Found while building this suite, not previously disclosed.');
+    'Documented (comparison operators table): every comparison operator lists "Null if expression1 or expression2 = Null" as a third, separate outcome alongside True/False. Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value, same convention as the Null cases in operator_coercion. (Fixed this round: Null used to numeric-coerce to 0, making 5 < r evaluate as 5 < 0 = False.)');
   addCase('compare_two_variant_strings_lexical_not_numeric', CAT,
     'Two string Variants compare lexically even when both look numeric',
     '  Dim Var1, Var2\n  Var1 = "10"\n  Var2 = "9"\n  Range("A1").Value = (Var1 < Var2)',
@@ -970,6 +966,189 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     { value: 20 },
     'Real VBA\'s Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element).',
     'elixcee has no Array() builtin at all (actual: undefined_sub_or_function "Unknown VBA function: \'array\'") -- the only way to build an array is a Dim/ReDim declaration plus individual element assignments. Found while building this suite, not previously disclosed.');
+}
+
+// ── null_propagation ─────────────────────────────────────────────────────────
+// VBA's Null ("no valid data", as from a database NULL) is a genuinely different value
+// from Empty (an uninitialized Variant), and every operator has its own documented rule
+// for it. All of them were fetched live from Microsoft's VBA language reference while
+// building this category, not recalled: the + operator page ("If one or both expressions
+// are Null expressions, result is Null"), the minus operator page (same sentence), the
+// ampersand operator page ("If both expressions are Null, result is Null. However, if only
+// one expression is Null, that expression is treated as a zero-length string"), the
+// comparison-operators table ("Null if expression1 or expression2 = Null" for all six),
+// the And/Or/Xor/Not pages' three-valued truth tables, and the If...Then...Else statement
+// page ("If condition is Null, condition is treated as False").
+//
+// Null is asserted through IsNull()/TypeName()/VarType() rather than by writing it to a
+// cell -- the convention operator_coercion's own Null cases already established, since a
+// Null cell value is not a well-formed --json cell value.
+//
+// Deliberately NOT covered: Select Case with a Null test expression. The Select Case
+// reference documents only that testexpression is "matched" against each expressionlist,
+// and says nothing about Null; deriving an answer from that would be a guess, and this
+// suite does not encode guesses. Left uncovered rather than covered wrongly.
+{
+  const CAT = 'null_propagation';
+  // ── Null is not Empty ──────────────────────────────────────────────────────
+  addCase('isnull_of_null_is_true', CAT, 'IsNull(Null) is True',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n)',
+    { value: true }, 'IsNull() reports whether a Variant holds the Null value.');
+  addCase('isnull_of_empty_is_false', CAT, 'IsNull(Empty) is False',
+    '  Dim e\n  Range("A1").Value = IsNull(e)',
+    { value: false },
+    'Null and Empty are different VBA values: an uninitialized Variant is Empty, and Empty is not Null. IsNull() must distinguish them, not answer for "has no useful value".');
+  addCase('isempty_of_null_is_false', CAT, 'IsEmpty(Null) is False',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsEmpty(n)',
+    { value: false },
+    'The mirror image of isnull_of_empty_is_false: a Variant explicitly assigned Null is no longer uninitialized, so IsEmpty() is False. Together the two cases pin that neither predicate answers for the other value.');
+  addCase('isempty_of_empty_is_true', CAT, 'IsEmpty(Empty) is True',
+    '  Dim e\n  Range("A1").Value = IsEmpty(e)',
+    { value: true },
+    'The unchanged baseline of the pair above — splitting IsNull from IsEmpty must not break the ordinary uninitialized-variable answer.');
+  addCase('typename_of_null_is_null', CAT, 'TypeName(Null) is "Null"',
+    '  Dim n\n  n = Null\n  Range("A1").Value = TypeName(n)',
+    { value: 'Null' },
+    'TypeName() names the Variant\'s own subtype: a Null-valued Variant reports "Null", not "Empty".');
+  addCase('vartype_of_null_is_vbnull', CAT, 'VarType(Null) is 1 (vbNull)',
+    '  Dim n\n  n = Null\n  Range("A1").Value = VarType(n)',
+    { value: 1 },
+    'vbNull is 1 and vbEmpty is 0 — two distinct documented VarType constants, which is itself evidence the language treats them as different values.');
+  addCase('vartype_of_empty_is_vbempty', CAT, 'VarType(Empty) is 0 (vbEmpty)',
+    '  Dim e\n  Range("A1").Value = VarType(e)',
+    { value: 0 },
+    'The complement of vartype_of_null_is_vbnull, confirming the split did not simply relabel Empty.');
+
+  // ── Arithmetic propagates Null from either side ────────────────────────────
+  addCase('null_plus_number_is_null', CAT, 'Null + number is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n + 5)',
+    { value: true }, 'Documented (+ operator): "If one or both expressions are Null expressions, result is Null."');
+  addCase('number_plus_null_is_null', CAT, 'number + Null is Null (right-hand side)',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(5 + n)',
+    { value: true },
+    'The rule is "one or both expressions", so it must fire from either side — a left-operand-only check would pass the sibling case and fail this one.');
+  addCase('null_minus_number_is_null', CAT, 'Null - number is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n - 1)',
+    { value: true }, 'Documented (minus operator): "If one or both expressions are Null expressions, result is Null."');
+  addCase('null_times_number_is_null', CAT, 'Null * number is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n * 3)',
+    { value: true },
+    'The multiplication operator carries the same documented sentence as + and -, so a third arithmetic operator confirms the rule is applied per-operator-class rather than hard-coded for +.');
+  addCase('null_divided_by_number_is_null_not_a_division_error', CAT,
+    'Null / number is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n / 2)',
+    { value: true },
+    'Null propagation is decided before the operands are coerced to numbers, so division never sees a 0-coerced Null. A Null-coercing implementation would instead compute 0 / 2 = 0.');
+  addCase('number_divided_by_null_is_null_not_division_by_zero', CAT,
+    'number / Null is Null, not a Division by zero error',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(5 / n)',
+    { value: true },
+    'The sharpest case for "propagate before coercing": an implementation that coerced Null to 0 would raise Division by zero here instead of returning Null.');
+  addCase('null_arithmetic_result_is_not_zero', CAT,
+    'A Null arithmetic result is Null, not the number 0',
+    '  Dim n\n  n = Null\n  Range("A1").Value = (n + 5 = 0)\n  Range("A1").Value = IsNull(n + 5)',
+    { value: true },
+    'Second, independent confirmation that n + 5 is genuinely Null rather than a 0 that merely happens to be falsy: TypeName/IsNull, not truthiness, is what distinguishes them.');
+  addCase('typename_of_a_null_arithmetic_result_is_null', CAT,
+    'TypeName(Null + 5) is "Null"',
+    '  Dim n\n  n = Null\n  Range("A1").Value = TypeName(n + 5)',
+    { value: 'Null' },
+    'Asserts the propagated *value*\'s own type rather than a predicate over it — a Null-coercing implementation would report "Long" here.');
+  addCase('empty_plus_number_is_still_the_number_not_null', CAT,
+    'Empty + number returns the number unchanged (Empty does NOT propagate)',
+    '  Dim e\n  Range("A1").Value = e + 5',
+    { value: 5 },
+    'Documented (+ operator): "if only one expression is Empty, the other expression is returned unchanged as result." The load-bearing contrast case: adding Null propagation must not accidentally make Empty propagate too.');
+
+  // ── & concatenation: only both-Null propagates ─────────────────────────────
+  addCase('ampersand_null_on_the_left_is_empty_string', CAT,
+    'Null & string treats the Null as ""',
+    '  Dim n\n  n = Null\n  Range("A1").Value = n & "abc"',
+    { value: 'abc' },
+    'Documented (ampersand operator): "if only one expression is Null, that expression is treated as a zero-length string ("") when concatenated with the other expression."');
+  addCase('ampersand_null_on_the_right_is_empty_string', CAT,
+    'string & Null treats the Null as ""',
+    '  Dim n\n  n = Null\n  Range("A1").Value = "abc" & n',
+    { value: 'abc' },
+    'Same documented rule from the other side — the one-Null exception is symmetric, and must not render as the text "Null".');
+  addCase('ampersand_both_null_is_null_via_typename', CAT,
+    'TypeName(Null & Null) is "Null"',
+    '  Dim n1, n2\n  n1 = Null\n  n2 = Null\n  Range("A1").Value = TypeName(n1 & n2)',
+    { value: 'Null' },
+    'Documented (ampersand operator): "If both expressions are Null, result is Null." Asserted via TypeName rather than IsNull for independence from the IsNull cases above — & is the single operator where one Null does not propagate but two do.');
+
+  // ── Comparison operators: every one propagates ─────────────────────────────
+  for (const [op, id] of [['<', 'lt'], ['<=', 'le'], ['>', 'gt'], ['>=', 'ge'], ['=', 'eq'], ['<>', 'ne']]) {
+    addCase(`compare_${id}_with_null_right_operand_is_null`, CAT,
+      `5 ${op} Null is Null`,
+      `  Dim n\n  n = Null\n  Range("A1").Value = IsNull(5 ${op} n)`,
+      { value: true },
+      `Documented (comparison operators table): the ${op} row lists "Null if expression1 or expression2 = Null" as a third outcome alongside True and False. Each of the six operators is checked separately because the table states the rule per-operator.`);
+  }
+  addCase('compare_with_null_left_operand_is_null', CAT,
+    'Null < 5 is Null (left-hand side)',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n < 5)',
+    { value: true },
+    '"expression1 or expression2 = Null" — either side triggers it, so the left-operand position needs its own case.');
+  addCase('null_equals_null_is_null_not_true', CAT,
+    'Null = Null is Null, not True',
+    '  Dim n1, n2\n  n1 = Null\n  n2 = Null\n  Range("A1").Value = IsNull(n1 = n2)',
+    { value: true },
+    'The most counter-intuitive row of the table, and the one an ordinary equality implementation gets wrong: two Nulls are not "equal", because there is no data to compare — the result is Null again.');
+  addCase('ordinary_comparison_still_returns_a_boolean', CAT,
+    'A comparison with no Null operand still returns a plain Boolean',
+    '  Range("A1").Value = (3 < 5)',
+    { value: true },
+    'Regression guard: adding a third possible comparison outcome must not disturb the ordinary two-valued case.');
+
+  // ── Logical operators: documented three-valued tables ──────────────────────
+  addCase('false_and_null_is_false_not_null', CAT, 'False And Null is False',
+    '  Dim n\n  n = Null\n  Range("A1").Value = (False And n)',
+    { value: false },
+    'Documented (And operator truth table): the "False / Null / False" row. Null does NOT uniformly propagate through And — the answer is already determined without knowing the missing operand. This is the case a blanket "any Null makes Null" rule gets wrong.');
+  addCase('true_and_null_is_null', CAT, 'True And Null is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(True And n)',
+    { value: true },
+    'Documented (And operator truth table): the "True / Null / Null" row — here the missing operand genuinely decides the answer, so the result is Null.');
+  addCase('true_or_null_is_true_not_null', CAT, 'True Or Null is True',
+    '  Dim n\n  n = Null\n  Range("A1").Value = (True Or n)',
+    { value: true },
+    'Documented (Or operator truth table): the "True / Null / True" row — the Or mirror of False And Null.');
+  addCase('false_or_null_is_null', CAT, 'False Or Null is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(False Or n)',
+    { value: true },
+    'Documented (Or operator truth table): the "False / Null / Null" row. Together with true_or_null_is_true_not_null this pins both halves of Or\'s three-valued behavior.');
+  addCase('xor_with_a_null_operand_is_null', CAT, 'True Xor Null is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(True Xor n)',
+    { value: true },
+    'Documented (Xor operator): "However, if either expression is Null, result is also Null." Unlike And/Or, Xor propagates unconditionally — one operand can never determine an exclusive-or.');
+  addCase('not_null_is_null', CAT, 'Not Null is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(Not n)',
+    { value: true },
+    'Documented (Not operator truth table): the third row, "Null -> Null".');
+
+  // ── Null as a condition ────────────────────────────────────────────────────
+  addCase('if_null_condition_is_treated_as_false', CAT,
+    'If Null Then takes the Else branch (Null condition is treated as False)',
+    '  Dim n\n  n = Null\n  If n Then\n    Range("A1").Value = 1\n  Else\n    Range("A1").Value = 2\n  End If',
+    { value: 2 },
+    'Documented explicitly on the If...Then...Else statement page: "If condition is Null, condition is treated as False." Not an error, and not True — verified from the reference precisely because this is the one place VBA gives Null a Boolean reading.');
+  addCase('if_null_comparison_condition_is_treated_as_false', CAT,
+    'A comparison that evaluates to Null is also treated as False by If',
+    '  Dim n\n  n = Null\n  If 5 > n Then\n    Range("A1").Value = 1\n  Else\n    Range("A1").Value = 2\n  End If',
+    { value: 2 },
+    'The realistic form of the rule: the Null does not appear literally in the condition, it arrives as the *result* of a comparison against a Null operand. Combines the comparison rule and the If rule in one scenario.');
+  addNoCellWrittenCase('do_while_null_condition_never_enters_the_loop', CAT,
+    'A Do While loop with a Null condition never runs its body',
+    '  Dim n\n  n = Null\n  Do While n\n    Range("A1").Value = 99\n  Loop',
+    'A Null condition being treated as False must apply to loop conditions too, not just If — the body must never execute, so no cell is written at all.');
+
+  // ── Null in a genuinely numeric context ────────────────────────────────────
+  addCase('null_passed_to_a_numeric_function_raises_invalid_use_of_null', CAT,
+    'Abs(Null) raises "Invalid use of Null"',
+    '  Dim n\n  n = Null\n  Range("A1").Value = Abs(n)',
+    { error: 'Invalid use of Null' },
+    'Where Null cannot propagate — a function argument that must genuinely be a number — real VBA raises run-time error 94, "Invalid use of Null". Unlike Empty, which is documented to behave as 0 in a numeric context, Null has no numeric value at all.');
 }
 
 // ── colon_statement_separator ────────────────────────────────────────────────
