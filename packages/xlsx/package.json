@@ -2,7 +2,7 @@
   "name": "@elixcee/xlsx",
   "version": "0.0.0-development",
   "private": true,
-  "description": "Drop-in replacement for xlsx (SheetJS) — Phase 2B: minimal buffer-first read() backed by a WASM bridge over elixcee's own reader, plus the full utils surface (aliases/constants, HTML export, DOM table conversion) from earlier phases. See ../../docs/xlsx-architecture.md.",
+  "description": "In-progress drop-in-compatible reimplementation of xlsx (SheetJS): all utils.* exports and XLSX.read() are implemented and differential-tested against the real package; write()/writeFile()/readFile() are not implemented yet. See README.md.",
   "license": "MIT",
   "type": "commonjs",
   "main": "./src/index.cjs",

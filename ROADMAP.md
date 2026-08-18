@@ -87,13 +87,18 @@ recorded as exhausted: no further candidates were found by either method as of t
    non-Node browser dispatch beyond the bundled-consumption case (its shared code still has a
    CJS `require('ssf')`). No Rust writer exists at all yet, for either XLSX or ODS format.
 7. **`packages/xlsx` is not currently publishable, even as an alpha** — three concrete,
-   verified blockers, not a vague "needs polish": `package.json`'s `"private": true` hard-
-   blocks `npm publish` outright; first publish of a scoped package needs `--access public`
-   or `publishConfig.access: "public"`, neither set; and there is no package-level
-   `README.md`, so `npm`'s registry page would show only the `description` field, which opens
-   with "Drop-in replacement for xlsx" without disclosing that `write*`/`readFile` are
-   unimplemented — actively misleading for a release whose own premise is "read-focused,
-   honestly scoped." See "npm/JS/WASM findings" below for the full investigation.
+   verified blockers, not a vague "needs polish". One is now fixed (Unreleased):
+   ~~there was no package-level `README.md`, so `npm`'s registry page would show only the
+   `description` field, which opened with "Drop-in replacement for xlsx" without disclosing
+   that `write*`/`readFile` are unimplemented~~ — `packages/xlsx/README.md` now exists
+   (confirmed via `npm pack --dry-run` that it's actually included in the tarball, npm
+   includes it automatically regardless of the `files` array), stating current scope
+   honestly, and `description` no longer opens with an unqualified "drop-in replacement"
+   claim. **Two blockers remain, both deliberately left alone — they're a real "should this
+   become publishable" policy stance, not a mechanical fix**: `package.json`'s
+   `"private": true` hard-blocks `npm publish` outright; first publish of a scoped package
+   also needs `--access public` or `publishConfig.access: "public"`, neither set. See
+   "npm/JS/WASM findings" below for the full investigation.
 8. ~~No Node/WASM/JS testing wired into CI at all~~ — **partially fixed** (Unreleased):
    `.github/workflows/ci.yml` gained a `node-js` job (Node 20/22 matrix) running
    `packages/xlsx`'s TypeScript typecheck (with and without the DOM lib) and all four of

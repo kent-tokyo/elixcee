@@ -28,9 +28,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `metadata`). Previously none of this ran anywhere except a developer's own machine, despite
   every command already working — verified live before wiring each one in, not assumed from
   this file's own previously-claimed numbers.
+- **`packages/xlsx/README.md`** — a package-level README, previously absent (npm's registry
+  page would have shown only the `description` field, which opened with an unqualified
+  "Drop-in replacement for xlsx" and never disclosed `write*`/`readFile` are unimplemented).
+  States current scope honestly: what's implemented (all 33 `utils.*` exports, `SSF`,
+  `XLSX.read()`, each with its own differential-testing numbers), what isn't
+  (`write*`/`readFile`), and points to `THIRD_PARTY_NOTICES.md`/`docs/compatibility-known-
+  defects.md` for licensing and disclosed divergences. `description` in `package.json`
+  updated to match (no longer opens with an unqualified drop-in-replacement claim).
+  Confirmed via `npm pack --dry-run` that the new README is actually included in the
+  tarball (npm does this automatically regardless of the `files` array). This closes one of
+  three concrete `packages/xlsx` alpha-publish blockers found this round — the other two
+  (`"private": true`, missing `publishConfig.access`) are a real publishability policy
+  decision, deliberately left alone here, not a mechanical fix.
 
 ### Fixed
 
+- All 3 READMEs' "XLSX.read()" section still claimed the browser-target WASM artifact
+  "isn't wired into the package's public API yet" — true as of Phase 2B, but Phase 2C
+  (already shipped in 0.3.0) added exactly that wiring (a `"browser"` export condition).
+  Found while writing `packages/xlsx/README.md` (see "Added" above) and cross-checked
+  against this file's own Phase 2C entry, which already correctly described the fix — only
+  the top-level READMEs had gone stale. Corrected to state the real remaining caveat: the
+  browser entry point assumes bundled consumption (its shared code has a CJS
+  `require('ssf')`), not that it's unwired.
 - `Dim x` (and `Dim x As <builtin type>`) was a complete no-op — the variable name was
   never recorded at all, so `IsEmpty(x)`/`x + 5`/any read before assignment hit "Undefined
   variable" instead of real VBA's `Empty`. An extremely common real-world VBA idiom

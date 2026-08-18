@@ -422,8 +422,10 @@ and the sync-bridge design). It returns sheet names, `!ref`, `!merges`, `!rows`/
 (hidden rows/columns), and per-cell `{t, v, f, w, z}` — values, formula text, formatted
 display strings, and date-typed cells, resolved via real `styles.xml`/number-format
 parsing. Differential-tested against the real `xlsx@0.18.5` package: 19/19 MATCH on its
-declared scope. Node-only for now — the browser artifact is built and verified at the
-bridge level but isn't wired into the package's public API yet.
+declared scope. Works in both Node (CJS/ESM) and the browser (a `"browser"` export
+condition routes to the inlined-bytes/`initSync` WASM artifact) — the browser entry
+point assumes bundled consumption, though: its shared code has a CJS `require('ssf')`,
+so it's not literal no-build `<script type="module">` usage.
 
 ### Build from source
 

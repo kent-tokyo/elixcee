@@ -366,7 +366,7 @@ End Function
 
 ### XLSX.read() — `@elixcee/xlsx`（npm、開発中）
 
-同期的でWebAssembly版の`XLSX.read(bytes)`——`await init()`不要——が、開発中のnpmパッケージ`@elixcee/xlsx`（未公開。互換性の取り組みと同期ブリッジの設計は [docs/xlsx-architecture.md](docs/xlsx-architecture.md) を参照）に実装されています。シート名、`!ref`、`!merges`、`!rows`/`!cols`（非表示行・列）、セルごとの`{t, v, f, w, z}`（値・数式テキスト・書式済み表示文字列・日付型セル、実際の`styles.xml`/数値書式解析による）を返します。実物の`xlsx@0.18.5`パッケージに対する差分テストで、宣言している対応範囲について19/19 MATCH。現時点ではNode専用です——ブラウザ向けartifactはビルド・ブリッジレベルでの検証は済んでいますが、公開APIへの配線はまだです。
+同期的でWebAssembly版の`XLSX.read(bytes)`——`await init()`不要——が、開発中のnpmパッケージ`@elixcee/xlsx`（未公開。互換性の取り組みと同期ブリッジの設計は [docs/xlsx-architecture.md](docs/xlsx-architecture.md) を参照）に実装されています。シート名、`!ref`、`!merges`、`!rows`/`!cols`（非表示行・列）、セルごとの`{t, v, f, w, z}`（値・数式テキスト・書式済み表示文字列・日付型セル、実際の`styles.xml`/数値書式解析による）を返します。実物の`xlsx@0.18.5`パッケージに対する差分テストで、宣言している対応範囲について19/19 MATCH。Node（CJS/ESM）とブラウザの両方で動作します（`"browser"` export conditionが、インライン化されたバイト列と`initSync`によるWASM artifactへ配線済み）——ただしブラウザ向けエントリポイントはバンドル利用を前提としています（共有コードにCJSの`require('ssf')`が含まれるため）。ビルド不要の`<script type="module">`でそのまま使える形ではありません。
 
 ### ソースからビルド
 

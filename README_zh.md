@@ -365,7 +365,7 @@ End Function
 
 ### XLSX.read() — `@elixcee/xlsx`（npm，开发中）
 
-在开发中的 npm 包 `@elixcee/xlsx`（尚未发布；兼容性计划与同步桥接设计见 [docs/xlsx-architecture.md](docs/xlsx-architecture.md)）中，已实现同步、基于 WebAssembly 的 `XLSX.read(bytes)`——无需 `await init()`。返回工作表名、`!ref`、`!merges`、`!rows`/`!cols`（隐藏行/列），以及每个单元格的 `{t, v, f, w, z}`——值、公式文本、格式化显示字符串、以及通过真实 `styles.xml`/数字格式解析得到的日期型单元格。针对真实的 `xlsx@0.18.5` 包做了差分测试，在其声明的范围内为 19/19 MATCH。目前仅支持 Node——浏览器版本的构建产物已就绪并在桥接层验证通过，但尚未接入公开 API。
+在开发中的 npm 包 `@elixcee/xlsx`（尚未发布；兼容性计划与同步桥接设计见 [docs/xlsx-architecture.md](docs/xlsx-architecture.md)）中，已实现同步、基于 WebAssembly 的 `XLSX.read(bytes)`——无需 `await init()`。返回工作表名、`!ref`、`!merges`、`!rows`/`!cols`（隐藏行/列），以及每个单元格的 `{t, v, f, w, z}`——值、公式文本、格式化显示字符串、以及通过真实 `styles.xml`/数字格式解析得到的日期型单元格。针对真实的 `xlsx@0.18.5` 包做了差分测试，在其声明的范围内为 19/19 MATCH。同时支持 Node（CJS/ESM）与浏览器（`"browser"` export condition 已接入内联字节 + `initSync` 的 WASM artifact）——不过浏览器入口点假定通过打包工具使用（其共享代码中含有 CJS 的 `require('ssf')`），并非可直接以 `<script type="module">` 免构建使用的形式。
 
 ### 从源码构建
 
