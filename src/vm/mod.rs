@@ -3166,8 +3166,8 @@ fn flat_nums(vals: &[Variant]) -> Vec<f64> {
     let mut out = vec![];
     for v in vals {
         match v {
-            Variant::Array(a) => out.extend(a.iter().filter_map(|x| to_f64(x).ok())),
-            _ => { if let Ok(f) = to_f64(v) { out.push(f); } }
+            Variant::Array(a) => out.extend(a.iter().filter_map(|x| to_f64_excel(x).ok())),
+            _ => { if let Ok(f) = to_f64_excel(v) { out.push(f); } }
         }
     }
     out
@@ -3230,26 +3230,26 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
             let sum_range  = if vals.len() >= 3 { flat_all(&vals[2..3]) } else { crit_range.clone() };
             let total: f64 = crit_range.iter().zip(sum_range.iter())
                 .filter(|(cv, _)| wsf_criteria_match(cv, criteria))
-                .filter_map(|(_, sv)| to_f64(sv).ok())
+                .filter_map(|(_, sv)| to_f64_excel(sv).ok())
                 .sum();
             Ok(as_int_if_whole(total))
         }
         "round" => {
             if vals.is_empty() { return Err("WorksheetFunction.Round requires arguments".into()); }
-            let f = to_f64(&vals[0])?;
-            let digits = if vals.len() >= 2 { to_f64(&vals[1])? as i32 } else { 0 };
+            let f = to_f64_excel(&vals[0])?;
+            let digits = if vals.len() >= 2 { to_f64_excel(&vals[1])? as i32 } else { 0 };
             let factor = 10f64.powi(digits);
             Ok(as_int_if_whole((f * factor).round() / factor))
         }
-        "abs"   => { let f = to_f64(vals.first().ok_or("Abs: no arg")?)?; Ok(as_int_if_whole(f.abs())) }
-        "sqrt"  => { let f = to_f64(vals.first().ok_or("Sqrt: no arg")?)?; Ok(Variant::Float(f.sqrt())) }
+        "abs"   => { let f = to_f64_excel(vals.first().ok_or("Abs: no arg")?)?; Ok(as_int_if_whole(f.abs())) }
+        "sqrt"  => { let f = to_f64_excel(vals.first().ok_or("Sqrt: no arg")?)?; Ok(Variant::Float(f.sqrt())) }
         "power" => {
             if vals.len() < 2 { return Err("Power requires 2 arguments".into()); }
-            Ok(as_int_if_whole(to_f64(&vals[0])?.powf(to_f64(&vals[1])?)))
+            Ok(as_int_if_whole(to_f64_excel(&vals[0])?.powf(to_f64_excel(&vals[1])?)))
         }
         "log"   => {
-            let x = to_f64(vals.first().ok_or("Log: no arg")?)?;
-            let base = if vals.len() >= 2 { to_f64(&vals[1])? } else { std::f64::consts::E };
+            let x = to_f64_excel(vals.first().ok_or("Log: no arg")?)?;
+            let base = if vals.len() >= 2 { to_f64_excel(&vals[1])? } else { std::f64::consts::E };
             Ok(Variant::Float(x.log(base)))
         }
         "match" => {
@@ -3266,7 +3266,7 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
             // Index(array, row_num [, col_num])
             if vals.len() < 2 { return Err("Index: requires at least 2 arguments".into()); }
             let arr = flat_all(&vals[0..1]);
-            let idx = (to_f64(&vals[1])? as usize).saturating_sub(1);
+            let idx = (to_f64_excel(&vals[1])? as usize).saturating_sub(1);
             Ok(arr.get(idx).cloned().unwrap_or(Variant::Error(ExcelError::Ref)))
         }
         _ => Err(format!("WorksheetFunction.{} is not implemented", func)),
@@ -3371,6 +3371,19 @@ fn to_f64(v: &Variant) -> Result<f64, String> {
         Variant::Str(s)     => s.parse::<f64>().map_err(|_| format!("Cannot convert '{}' to number", s)),
         Variant::Array(_)   => Err("Cannot convert array to number".into()),
         Variant::Record(_)  => Err("Cannot convert record to number".into()),
+    }
+}
+
+/// Same as to_f64, but for WorksheetFunction.* (eval_wsf/flat_nums) call sites only:
+/// Application.WorksheetFunction bridges into Excel's own calculation engine, so its
+/// Boolean coercion matches a worksheet formula (TRUE=1), not VBA's own True=-1 --
+/// confirmed live (WorksheetFunction.Sum(True, True) is 2 in real VBA, not -2). Found when
+/// the True=-1 fix to plain to_f64 silently changed this too, since flat_nums used to share
+/// it; every other Variant kind coerces identically either way.
+fn to_f64_excel(v: &Variant) -> Result<f64, String> {
+    match v {
+        Variant::Boolean(b) => Ok(if *b { 1.0 } else { 0.0 }),
+        other => to_f64(other),
     }
 }
 
@@ -4194,6 +4207,23 @@ mod tests {
         ));
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
         assert_eq!(vm.get_cell(2, 1), Variant::Integer(-1));
+    }
+
+    #[test]
+    fn test_worksheet_function_boolean_coercion_uses_excel_not_vba_semantics() {
+        // WorksheetFunction.* bridges into Excel's own calculation engine, so its Boolean
+        // coercion matches a worksheet formula (TRUE=1), not VBA's own True=-1 -- fixing
+        // to_f64 for VBA's own arithmetic (see test_boolean_true_is_negative_one_in_arithmetic)
+        // silently changed this too, since flat_nums/eval_wsf used to share that same
+        // function. WorksheetFunction.Sum(True, True) must stay 2, not become -2.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Range(\"A1\").Value = WorksheetFunction.Sum(True, True)\n",
+            "    Range(\"A2\").Value = True + True\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(-2));
     }
 
     #[test]
