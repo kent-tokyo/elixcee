@@ -19,9 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   split, ...), used to compute 208 generated cases' expected outcomes programmatically. Six-
   verdict classification (`MATCH_DOCUMENTED_SEMANTICS`/`EXPECTED_ERROR`/`NONDETERMINISTIC`/
   `KNOWN_LIMITATION`/`BUG`/`UNCLASSIFIED`); `BUG`/`UNCLASSIFIED` both gate at 0. Current
-  state: 198 `MATCH_DOCUMENTED_SEMANTICS` + 7 `EXPECTED_ERROR` + 2 `NONDETERMINISTIC` + 1
-  disclosed `KNOWN_LIMITATION` (array-out-of-bounds error message text doesn't match real
-  VBA's exact wording) = 208, 0 `BUG`. See `compat/vba-semantics/README.md`.
+  state: 198 `MATCH_DOCUMENTED_SEMANTICS` + 8 `EXPECTED_ERROR` + 2 `NONDETERMINISTIC` = 208,
+  0 `BUG`, 0 `UNCLASSIFIED`, 0 `KNOWN_LIMITATION` (the suite's first run found one disclosed
+  gap — array-out-of-bounds error message text — fixed in the same round; see "Fixed" below).
+  See `compat/vba-semantics/README.md`.
 - **CI now runs `@elixcee/xlsx`'s own tests.** `.github/workflows/ci.yml` gained a `node-js`
   job (Node 20/22 matrix): `packages/xlsx`'s TypeScript typecheck (with and without the DOM
   lib present) and all four `compat/differential/` suites (`utils`/`ssf-format`/`read`/
@@ -51,6 +52,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Array out-of-bounds errors used elixcee's own diagnostic wording (`"Array 'arr': index N
+  out of bounds (len=N)"`) instead of real VBA's actual runtime error 9 message,
+  `"Subscript out of range"` — found and disclosed as a `compat/vba-semantics/`
+  `KNOWN_LIMITATION` when that suite first ran, fixed in the same round rather than left
+  registered. Safe to change: `docs/agent-contract.md` already documents `message` as free
+  text, not a stable/matchable field (`code`/`kind` are); `diagnose`/`diagnose-workbook`
+  already read the rich per-failure detail (array name, index, bounds) from a structured
+  `ResolutionFailureKind` side channel set alongside this string, not by parsing it — so
+  nothing that actually depends on the old wording broke.
 - All 3 READMEs' "XLSX.read()" section still claimed the browser-target WASM artifact
   "isn't wired into the package's public API yet" — true as of Phase 2B, but Phase 2C
   (already shipped in 0.3.0) added exactly that wiring (a `"browser"` export condition).

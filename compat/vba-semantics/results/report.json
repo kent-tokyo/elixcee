@@ -2,9 +2,9 @@
   "total": 208,
   "counts": {
     "MATCH_DOCUMENTED_SEMANTICS": 198,
-    "EXPECTED_ERROR": 7,
+    "EXPECTED_ERROR": 8,
     "NONDETERMINISTIC": 2,
-    "KNOWN_LIMITATION": 1,
+    "KNOWN_LIMITATION": 0,
     "BUG": 0,
     "UNCLASSIFIED": 0
   },
@@ -1122,10 +1122,8 @@
     {
       "id": "array_oob_message",
       "category": "empty_null_error",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee raises a runtime error for this (correct control flow), but with its own diagnostic message (\"Array 'arr': index N out of bounds (len=N)\") rather than real VBA's exact wording — found while building this suite, not previously disclosed. Message-text fidelity here is lower-value than the many gaps already tracked in ROADMAP.md, so registered rather than fixed in this pass.",
-      "documented": "real VBA: error \"Subscript out of range\"",
-      "actual": "error \"Array 'arr': index 10 out of bounds (len=4)\""
+      "verdict": "EXPECTED_ERROR",
+      "reason": "Real VBA's documented runtime error for an out-of-bounds array index is \"Subscript out of range\" (error 9). Was elixcee's own diagnostic wording until this suite found and disclosed the gap; fixed in the same round (see CHANGELOG.md) — no knownLimitation needed anymore."
     },
     {
       "id": "left_zero_len",

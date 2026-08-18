@@ -318,8 +318,7 @@ function vbaLiteral(n) {
   addCase('array_oob_message', CAT, 'Array out-of-bounds error message',
     '  Dim arr(3)\n  Range("A1").Value = arr(10)',
     { error: 'Subscript out of range' },
-    'Real VBA\'s documented runtime error for an out-of-bounds array index is "Subscript out of range" (error 9).',
-    'elixcee raises a runtime error for this (correct control flow), but with its own diagnostic message ("Array \'arr\': index N out of bounds (len=N)") rather than real VBA\'s exact wording — found while building this suite, not previously disclosed. Message-text fidelity here is lower-value than the many gaps already tracked in ROADMAP.md, so registered rather than fixed in this pass.');
+    'Real VBA\'s documented runtime error for an out-of-bounds array index is "Subscript out of range" (error 9). Was elixcee\'s own diagnostic wording until this suite found and disclosed the gap; fixed in the same round (see CHANGELOG.md) — no knownLimitation needed anymore.');
 }
 
 // ── string_boundaries ────────────────────────────────────────────────────────

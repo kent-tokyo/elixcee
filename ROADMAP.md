@@ -22,8 +22,9 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
   `compat/corpus/classify-elixcee-outcomes.mjs` explains elixcee's own pass/fail outcome
   for all 581 corpus scenarios by exact scenario ID (0 `UNEXPLAINED`, 0 `MISMATCH`); the new
   `compat/vba-semantics/` suite (208 cases) checks VALUE correctness against documented real
-  VBA semantics, not just pass/fail (0 `BUG`, 0 `UNCLASSIFIED`, 1 disclosed
-  `KNOWN_LIMITATION`) — see each directory's own README for what it measures and doesn't.
+  VBA semantics, not just pass/fail (0 `BUG`, 0 `UNCLASSIFIED`, 0 `KNOWN_LIMITATION` — its
+  first run found one disclosed gap, fixed in the same round rather than left registered) —
+  see each directory's own README for what it measures and doesn't.
   CI now also runs `packages/xlsx`'s TypeScript typecheck and all four `compat/differential/`
   suites on a Node 20/22 matrix (`.github/workflows/ci.yml`'s new `node-js` job) — previously
   none of this ran anywhere except a developer's own machine.
@@ -72,11 +73,15 @@ recorded as exhausted: no further candidates were found by either method as of t
    correctly needs a real oracle to verify against (LibreOffice's is broken, Excel's doesn't
    exist here) — implementing more without one risks guessing at real Excel Paste semantics,
    against this project's own stated epistemics.
-4. **`Array` out-of-bounds error message text doesn't match real VBA's exact wording**
-   ("Array 'arr': index N out of bounds (len=N)" vs. real VBA's "Subscript out of range").
-   The error *condition* is correct (a real runtime error fires); only the message text
-   diverges. Disclosed as a `KNOWN_LIMITATION` in `compat/vba-semantics/expected-results.json`
-   rather than fixed — lower-value than the gaps already tracked here.
+4. ~~`Array` out-of-bounds error message text didn't match real VBA's exact wording~~ —
+   **fixed** (Unreleased): was `"Array 'arr': index N out of bounds (len=N)"`, now real
+   VBA's own `"Subscript out of range"` verbatim, matching this codebase's existing
+   convention for other runtime error messages (e.g. `"Division by zero"` carries no extra
+   detail either). Safe to change: confirmed via `docs/agent-contract.md`'s own documented
+   policy that `message` is free text, not a stable/matchable field (`code`/`kind` are), and
+   that `diagnose`/`diagnose-workbook` already read the rich per-failure detail (array name,
+   index, bounds) from a structured `ResolutionFailureKind` side channel, not by parsing
+   this string. `compat/vba-semantics/`'s one `KNOWN_LIMITATION` is now 0.
 5. **`Time()`/`Now()` report `TypeName` `"Double"`, not real VBA's `"Date"`.** `Variant::Date`
    is whole-day-only (`i64`) in this codebase and can't carry a sub-day component without a
    structural, shared-type change (`elixcee-types`' public enum, semver-relevant). Design

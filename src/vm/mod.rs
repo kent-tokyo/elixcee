@@ -730,10 +730,16 @@ impl Vm {
             lower: 0,
             upper: len as i64 - 1,
         });
-        format!(
-            "Array '{}': index {} out of bounds (len={})",
-            name, idx, len
-        )
+        // Real VBA's runtime error 9 message, verbatim — no array
+        // name/index/length embellishment, matching this codebase's own
+        // established convention for other runtime errors (e.g. "Division
+        // by zero" carries no extra detail either). The rich per-failure
+        // detail this used to put inline is not lost: `diagnose`/
+        // `diagnose-workbook` already read it from the structured
+        // `last_resolution_failure` side channel set just above, not by
+        // parsing this string — see docs/agent-contract.md's own note that
+        // `message` is free text, not a stable/matchable field.
+        "Subscript out of range".to_string()
     }
 
     /// If `strict_resolution` is on and `key` doesn't name an existing
@@ -4986,7 +4992,7 @@ mod tests {
         let prog = parser::parse("Sub MySub()\n    Dim arr(3)\n    arr(9) = 1\nEnd Sub\n").unwrap();
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
-        assert_eq!(err, "Array 'arr': index 9 out of bounds (len=4)");
+        assert_eq!(err, "Subscript out of range");
         match vm.take_resolution_failure() {
             Some(ResolutionFailureKind::ArrayIndexOutOfBounds {
                 name,

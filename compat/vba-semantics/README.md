@@ -70,6 +70,7 @@ logical/bitwise, `Str`/`CStr`/`Val`, `IsNumeric`, `TypeName`/`VarType`, `Date`/`
 `Empty`/`Null`/error values, string boundaries, array indices, Range values, error kind).
 Not padded to hit a round number — coverage depth varies by category based on how much
 real semantic subtlety each one has (numeric rounding has the most tie-breaking/edge-case
-richness; Range value round-tripping has the least). 0 `BUG`, 0 `UNCLASSIFIED`, 1 disclosed
-`KNOWN_LIMITATION` (array-out-of-bounds error message text doesn't match real VBA's exact
-wording, though the error *condition* is correct).
+richness; Range value round-tripping has the least). 0 `BUG`, 0 `UNCLASSIFIED`,
+0 `KNOWN_LIMITATION` — the suite's first run found one disclosed gap (array-out-of-bounds
+error message text didn't match real VBA's exact wording, though the error *condition* was
+already correct) and it was fixed in the same round rather than left registered.
