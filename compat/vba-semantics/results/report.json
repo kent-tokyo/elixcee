@@ -1,7 +1,7 @@
 {
-  "total": 301,
+  "total": 320,
   "counts": {
-    "MATCH_DOCUMENTED_SEMANTICS": 253,
+    "MATCH_DOCUMENTED_SEMANTICS": 272,
     "EXPECTED_ERROR": 18,
     "NONDETERMINISTIC": 2,
     "KNOWN_LIMITATION": 28,
@@ -1870,6 +1870,120 @@
       "reason": "elixcee has no Array() builtin at all (actual: undefined_sub_or_function \"Unknown VBA function: 'array'\") -- the only way to build an array is a Dim/ReDim declaration plus individual element assignments. Found while building this suite, not previously disclosed.",
       "documented": "real VBA: 20",
       "actual": "expected value 20, but the scenario errored: Unknown VBA function: 'array'"
+    },
+    {
+      "id": "colon_two_statements_one_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Both statements on the colon-separated line must execute, in order -- exactly the form Microsoft's own comparison-operators example uses (`Var1 = \"5\": Var2 = 4`). 1 + 2 = 3 proves neither was dropped."
+    },
+    {
+      "id": "colon_three_statements_one_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The separator chains: a line is a list of statements, not a pair. 1 + 2 + 3 = 6 proves the third statement ran too, not just the first two."
+    },
+    {
+      "id": "colon_inside_string_literal_is_not_a_separator",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A `:` inside a string literal is literal text, not a statement separator -- the string must survive intact AND the statement after the real separator must still run. This is the case a pre-tokenize `:`-to-newline rewrite corrupts."
+    },
+    {
+      "id": "colon_after_msgbox_with_colon_in_message",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Baseline companion to colon_inside_string_literal_is_not_a_separator: the same colon-bearing string literal as a MsgBox argument on its own line, confirming the literal is not itself the thing under test."
+    },
+    {
+      "id": "colon_msgbox_then_statement_same_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The colon after a MsgBox whose argument itself contains a colon must separate the two statements at the *real* separator only -- the Range write runs, and the message text is unaffected."
+    },
+    {
+      "id": "colon_label_then_statement_same_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "`Skip:` is a line-label declaration whose own trailing colon is part of the label syntax, not a separator between two statements -- but a statement may still follow it on the same line, and must execute when the label is jumped to."
+    },
+    {
+      "id": "colon_label_line_still_a_valid_jump_target",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The GoTo must skip the guarded write entirely; nothing is written. Confirms treating `label:` as a label (rather than as an empty statement plus a separator) did not break the label as a jump target."
+    },
+    {
+      "id": "colon_single_line_if_then_first_statement",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Documented (If...Then...Else statement): `statements` is \"One or more statements separated by colons; executed if condition is True\". The first of the two runs when the condition is True."
+    },
+    {
+      "id": "colon_single_line_if_then_second_statement",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Same documented rule, asserted on the second statement of the Then list -- Microsoft's own worked example is `If A > 10 Then A = A + 1 : B = B + A : C = C + B`, where every colon-separated statement is gated by the one condition."
+    },
+    {
+      "id": "colon_single_line_if_false_skips_the_whole_then_list",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The colon-separated statements belong to the Then branch, so a False condition must skip ALL of them -- if the second one leaked out into the enclosing statement list it would run unconditionally and write B1."
+    },
+    {
+      "id": "colon_single_line_if_else_takes_rest_of_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A single-line If ends only at end-of-line, and `elsestatements` is documented as \"One or more statements\" -- so everything after `Else` on the line, including past a colon, belongs to the Else branch and runs together when the condition is False."
+    },
+    {
+      "id": "colon_single_line_if_true_skips_the_whole_else_list",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The true branch exits the Sub, so neither Else-list statement may run -- the complement of colon_single_line_if_else_takes_rest_of_line, proving the second Else statement is genuinely gated by the condition rather than being an unconditional trailing statement."
+    },
+    {
+      "id": "colon_exit_sub_after_a_statement_on_the_same_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A control-transfer statement in the second colon position must transfer control for real -- the guarded write on the following line must never run, so no cell appears at all."
+    },
+    {
+      "id": "colon_inside_for_loop_body_on_the_header_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The colon terminates a block-construct header and each body statement just as a newline does: 1 + 2 + 3 = 6 proves the loop ran its body three times rather than being mis-parsed into a single flat statement list."
+    },
+    {
+      "id": "colon_inside_do_loop_on_one_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A second, independent block construct (Do...Loop rather than For...Next) confirming the separator terminates block headers and bodies generally, not just in the one construct."
+    },
+    {
+      "id": "colon_inside_with_block_on_one_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The separator must work inside a With body too, where a leading `.member` statement -- not an identifier -- follows the colon."
+    },
+    {
+      "id": "colon_run_of_empty_statements",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Consecutive separators delimit an empty statement, which does nothing -- both real statements must still run. Guards against an off-by-one in separator consumption."
+    },
+    {
+      "id": "colon_dim_then_assignment_same_line",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A declaration and an assignment on one colon-separated line -- the shape most commonly written by hand in real VBA modules."
+    },
+    {
+      "id": "colon_named_argument_is_not_a_separator",
+      "category": "colon_statement_separator",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "VBA's named-argument syntax `Name:=value` contains a colon that is part of the `:=` token, not a statement separator -- the Copy must still receive its Destination, proving the separator logic did not split the argument off."
     }
   ]
 }

@@ -2105,5 +2105,138 @@
     "description": "The Array(...) builtin function is not implemented",
     "vbaSource": "Sub Scenario()\n  Dim arr\n  arr = Array(10, 20, 30)\n  Range(\"A1\").Value = arr(1)\nEnd Sub\n",
     "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_two_statements_one_line",
+    "category": "colon_statement_separator",
+    "description": "Two assignments separated by a colon on one line",
+    "vbaSource": "Sub Scenario()\n  a = 1: b = 2\n  Range(\"A1\").Value = a + b\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_three_statements_one_line",
+    "category": "colon_statement_separator",
+    "description": "Three assignments separated by colons on one line",
+    "vbaSource": "Sub Scenario()\n  a = 1: b = 2: c = 3\n  Range(\"A1\").Value = a + b + c\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_inside_string_literal_is_not_a_separator",
+    "category": "colon_statement_separator",
+    "description": "A colon inside a string literal does not split the statement",
+    "vbaSource": "Sub Scenario()\n  s = \"10:30\": Range(\"A1\").Value = s\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_after_msgbox_with_colon_in_message",
+    "category": "colon_statement_separator",
+    "description": "MsgBox \"x:y\": Exit-adjacent statement on the same line",
+    "vbaSource": "Sub Scenario()\n  MsgBox \"10:30\"\n  Range(\"A1\").Value = 1\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_msgbox_then_statement_same_line",
+    "category": "colon_statement_separator",
+    "description": "MsgBox \"10:30\": Range write on the same line",
+    "vbaSource": "Sub Scenario()\n  MsgBox \"10:30\": Range(\"A1\").Value = 1\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_label_then_statement_same_line",
+    "category": "colon_statement_separator",
+    "description": "label: statement — a label and a statement on one line",
+    "vbaSource": "Sub Scenario()\n  GoTo Skip\n  Range(\"B1\").Value = 99\nSkip: Range(\"A1\").Value = 7\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_label_line_still_a_valid_jump_target",
+    "category": "colon_statement_separator",
+    "description": "A label with a statement after it on the same line is still jumped over correctly",
+    "vbaSource": "Sub Scenario()\n  GoTo Skip\n  Range(\"A1\").Value = 99\nSkip:\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_then_first_statement",
+    "category": "colon_statement_separator",
+    "description": "Single-line If Then with a colon-separated statement list — first statement runs",
+    "vbaSource": "Sub Scenario()\n  x = 5\n  If x > 0 Then Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_then_second_statement",
+    "category": "colon_statement_separator",
+    "description": "Single-line If Then with a colon-separated statement list — second statement also runs",
+    "vbaSource": "Sub Scenario()\n  x = 5\n  If x > 0 Then Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_false_skips_the_whole_then_list",
+    "category": "colon_statement_separator",
+    "description": "A false single-line If skips every colon-separated statement in its Then list",
+    "vbaSource": "Sub Scenario()\n  x = -5\n  If x > 0 Then Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_else_takes_rest_of_line",
+    "category": "colon_statement_separator",
+    "description": "Single-line If ... Else with a colon-separated Else list",
+    "vbaSource": "Sub Scenario()\n  x = -5\n  If x > 0 Then Range(\"C1\").Value = 9 Else Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_true_skips_the_whole_else_list",
+    "category": "colon_statement_separator",
+    "description": "A true single-line If skips every colon-separated statement in its Else list",
+    "vbaSource": "Sub Scenario()\n  x = 5\n  If x > 0 Then Exit Sub Else Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_exit_sub_after_a_statement_on_the_same_line",
+    "category": "colon_statement_separator",
+    "description": "Exit Sub as the second colon-separated statement really exits",
+    "vbaSource": "Sub Scenario()\n  x = 1: Exit Sub\n  Range(\"A1\").Value = 99\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_inside_for_loop_body_on_the_header_line",
+    "category": "colon_statement_separator",
+    "description": "For header, body and Next all on one colon-separated line",
+    "vbaSource": "Sub Scenario()\n  total = 0\n  For i = 1 To 3: total = total + i: Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_inside_do_loop_on_one_line",
+    "category": "colon_statement_separator",
+    "description": "Do While header, body and Loop all on one colon-separated line",
+    "vbaSource": "Sub Scenario()\n  i = 0\n  Do While i < 3: i = i + 1: Loop\n  Range(\"A1\").Value = i\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_inside_with_block_on_one_line",
+    "category": "colon_statement_separator",
+    "description": "With header, body and End With all on one colon-separated line",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\"): .Value = 5: End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_run_of_empty_statements",
+    "category": "colon_statement_separator",
+    "description": "A run of consecutive colons is an empty statement, not an error",
+    "vbaSource": "Sub Scenario()\n  a = 1:: b = 2\n  Range(\"A1\").Value = a + b\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_dim_then_assignment_same_line",
+    "category": "colon_statement_separator",
+    "description": "Dim and an assignment separated by a colon",
+    "vbaSource": "Sub Scenario()\n  Dim x: x = 5\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_named_argument_is_not_a_separator",
+    "category": "colon_statement_separator",
+    "description": "A `:=` named argument is not a statement separator",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1\n  Range(\"A1\").Copy Destination:=Range(\"B1\")\n  Range(\"C1\").Value = Range(\"B1\").Value\nEnd Sub\n",
+    "entrypoint": "Scenario"
   }
 ]

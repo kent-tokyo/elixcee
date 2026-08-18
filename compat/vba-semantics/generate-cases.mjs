@@ -922,6 +922,113 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     'elixcee has no Array() builtin at all (actual: undefined_sub_or_function "Unknown VBA function: \'array\'") -- the only way to build an array is a Dim/ReDim declaration plus individual element assignments. Found while building this suite, not previously disclosed.');
 }
 
+// ── colon_statement_separator ────────────────────────────────────────────────
+// Real VBA's `:` multi-statement-per-line separator. Two independent Microsoft
+// citations underpin this whole category, both fetched live from the VBA language
+// reference while building it rather than recalled: (a) the If...Then...Else statement
+// page documents a single-line If's `statements` part as "One or more statements
+// separated by colons; executed if condition is True", with the worked example
+// `If A > 10 Then A = A + 1 : B = B + A : C = C + B`; (b) the comparison-operators page's
+// own example code uses the separator outside any If at all --
+// `Var1 = "5": Var2 = 4    ' Initialize variables.` -- confirming it's a general
+// statement separator, not an If-only affordance.
+// The three cases that a naive "replace `:` with a newline before tokenizing"
+// implementation would silently get wrong are pinned deliberately: a `:` inside a string
+// literal, a `label:` declaration (one statement, not two), and a single-line If's own
+// Then/Else clause boundary (where the colon extends the *branch*, not the enclosing
+// statement list). Every case below was verified live against elixcee before being
+// encoded, same as every other category here.
+{
+  const CAT = 'colon_statement_separator';
+  addCase('colon_two_statements_one_line', CAT, 'Two assignments separated by a colon on one line',
+    '  a = 1: b = 2\n  Range("A1").Value = a + b',
+    { value: 3 },
+    'Both statements on the colon-separated line must execute, in order -- exactly the form Microsoft\'s own comparison-operators example uses (`Var1 = "5": Var2 = 4`). 1 + 2 = 3 proves neither was dropped.');
+  addCase('colon_three_statements_one_line', CAT, 'Three assignments separated by colons on one line',
+    '  a = 1: b = 2: c = 3\n  Range("A1").Value = a + b + c',
+    { value: 6 },
+    'The separator chains: a line is a list of statements, not a pair. 1 + 2 + 3 = 6 proves the third statement ran too, not just the first two.');
+  addCase('colon_inside_string_literal_is_not_a_separator', CAT,
+    'A colon inside a string literal does not split the statement',
+    '  s = "10:30": Range("A1").Value = s',
+    { value: '10:30' },
+    'A `:` inside a string literal is literal text, not a statement separator -- the string must survive intact AND the statement after the real separator must still run. This is the case a pre-tokenize `:`-to-newline rewrite corrupts.');
+  addCase('colon_after_msgbox_with_colon_in_message', CAT,
+    'MsgBox "x:y": Exit-adjacent statement on the same line',
+    '  MsgBox "10:30"\n  Range("A1").Value = 1',
+    { value: 1 },
+    'Baseline companion to colon_inside_string_literal_is_not_a_separator: the same colon-bearing string literal as a MsgBox argument on its own line, confirming the literal is not itself the thing under test.');
+  addCase('colon_msgbox_then_statement_same_line', CAT,
+    'MsgBox "10:30": Range write on the same line',
+    '  MsgBox "10:30": Range("A1").Value = 1',
+    { value: 1 },
+    'The colon after a MsgBox whose argument itself contains a colon must separate the two statements at the *real* separator only -- the Range write runs, and the message text is unaffected.');
+  addCase('colon_label_then_statement_same_line', CAT,
+    'label: statement — a label and a statement on one line',
+    '  GoTo Skip\n  Range("B1").Value = 99\nSkip: Range("A1").Value = 7',
+    { value: 7 },
+    '`Skip:` is a line-label declaration whose own trailing colon is part of the label syntax, not a separator between two statements -- but a statement may still follow it on the same line, and must execute when the label is jumped to.');
+  addNoCellWrittenCase('colon_label_line_still_a_valid_jump_target', CAT,
+    'A label with a statement after it on the same line is still jumped over correctly',
+    '  GoTo Skip\n  Range("A1").Value = 99\nSkip:',
+    'The GoTo must skip the guarded write entirely; nothing is written. Confirms treating `label:` as a label (rather than as an empty statement plus a separator) did not break the label as a jump target.');
+  addCase('colon_single_line_if_then_first_statement', CAT,
+    'Single-line If Then with a colon-separated statement list — first statement runs',
+    '  x = 5\n  If x > 0 Then Range("A1").Value = 1: Range("B1").Value = 2',
+    { value: 1 },
+    'Documented (If...Then...Else statement): `statements` is "One or more statements separated by colons; executed if condition is True". The first of the two runs when the condition is True.');
+  addCase('colon_single_line_if_then_second_statement', CAT,
+    'Single-line If Then with a colon-separated statement list — second statement also runs',
+    '  x = 5\n  If x > 0 Then Range("A1").Value = 1: Range("B1").Value = 2',
+    { value: 2, address: 'B1' },
+    'Same documented rule, asserted on the second statement of the Then list -- Microsoft\'s own worked example is `If A > 10 Then A = A + 1 : B = B + A : C = C + B`, where every colon-separated statement is gated by the one condition.');
+  addNoCellWrittenCase('colon_single_line_if_false_skips_the_whole_then_list', CAT,
+    'A false single-line If skips every colon-separated statement in its Then list',
+    '  x = -5\n  If x > 0 Then Range("A1").Value = 1: Range("B1").Value = 2',
+    'The colon-separated statements belong to the Then branch, so a False condition must skip ALL of them -- if the second one leaked out into the enclosing statement list it would run unconditionally and write B1.');
+  addCase('colon_single_line_if_else_takes_rest_of_line', CAT,
+    'Single-line If ... Else with a colon-separated Else list',
+    '  x = -5\n  If x > 0 Then Range("C1").Value = 9 Else Range("A1").Value = 1: Range("B1").Value = 2',
+    { value: 2, address: 'B1' },
+    'A single-line If ends only at end-of-line, and `elsestatements` is documented as "One or more statements" -- so everything after `Else` on the line, including past a colon, belongs to the Else branch and runs together when the condition is False.');
+  addNoCellWrittenCase('colon_single_line_if_true_skips_the_whole_else_list', CAT,
+    'A true single-line If skips every colon-separated statement in its Else list',
+    '  x = 5\n  If x > 0 Then Exit Sub Else Range("A1").Value = 1: Range("B1").Value = 2',
+    'The true branch exits the Sub, so neither Else-list statement may run -- the complement of colon_single_line_if_else_takes_rest_of_line, proving the second Else statement is genuinely gated by the condition rather than being an unconditional trailing statement.');
+  addNoCellWrittenCase('colon_exit_sub_after_a_statement_on_the_same_line', CAT,
+    'Exit Sub as the second colon-separated statement really exits',
+    '  x = 1: Exit Sub\n  Range("A1").Value = 99',
+    'A control-transfer statement in the second colon position must transfer control for real -- the guarded write on the following line must never run, so no cell appears at all.');
+  addCase('colon_inside_for_loop_body_on_the_header_line', CAT,
+    'For header, body and Next all on one colon-separated line',
+    '  total = 0\n  For i = 1 To 3: total = total + i: Next i\n  Range("A1").Value = total',
+    { value: 6 },
+    'The colon terminates a block-construct header and each body statement just as a newline does: 1 + 2 + 3 = 6 proves the loop ran its body three times rather than being mis-parsed into a single flat statement list.');
+  addCase('colon_inside_do_loop_on_one_line', CAT,
+    'Do While header, body and Loop all on one colon-separated line',
+    '  i = 0\n  Do While i < 3: i = i + 1: Loop\n  Range("A1").Value = i',
+    { value: 3 },
+    'A second, independent block construct (Do...Loop rather than For...Next) confirming the separator terminates block headers and bodies generally, not just in the one construct.');
+  addCase('colon_inside_with_block_on_one_line', CAT,
+    'With header, body and End With all on one colon-separated line',
+    '  With Range("A1"): .Value = 5: End With',
+    { value: 5 },
+    'The separator must work inside a With body too, where a leading `.member` statement -- not an identifier -- follows the colon.');
+  addCase('colon_run_of_empty_statements', CAT, 'A run of consecutive colons is an empty statement, not an error',
+    '  a = 1:: b = 2\n  Range("A1").Value = a + b',
+    { value: 3 },
+    'Consecutive separators delimit an empty statement, which does nothing -- both real statements must still run. Guards against an off-by-one in separator consumption.');
+  addCase('colon_dim_then_assignment_same_line', CAT, 'Dim and an assignment separated by a colon',
+    '  Dim x: x = 5\n  Range("A1").Value = x',
+    { value: 5 },
+    'A declaration and an assignment on one colon-separated line -- the shape most commonly written by hand in real VBA modules.');
+  addCase('colon_named_argument_is_not_a_separator', CAT,
+    'A `:=` named argument is not a statement separator',
+    '  Range("A1").Value = 1\n  Range("A1").Copy Destination:=Range("B1")\n  Range("C1").Value = Range("B1").Value',
+    { value: 1, address: 'C1' },
+    'VBA\'s named-argument syntax `Name:=value` contains a colon that is part of the `:=` token, not a statement separator -- the Copy must still receive its Destination, proving the separator logic did not split the argument off.');
+}
+
 // ── write output ─────────────────────────────────────────────────────────────
 fs.writeFileSync(path.join(DIR, 'cases.json'), JSON.stringify(cases, null, 2) + '\n');
 fs.writeFileSync(path.join(DIR, 'expected-results.json'), JSON.stringify(expected, null, 2) + '\n');

@@ -228,18 +228,51 @@ impl Parser {
         while *self.peek() == Tok::Newline { self.advance(); }
     }
 
-    fn eat_eol(&mut self) -> Result<(), String> {
+    /// Consumes whatever ends the statement just parsed: a newline, EOF, or
+    /// a `:` statement separator (real VBA's multi-statement-per-line form,
+    /// `a = 1: b = 2`). A `:` is consumed but *no* newline is — the caller's
+    /// own statement loop simply parses the next statement from the same
+    /// line, so each one keeps its own `SourceSpan` exactly the way
+    /// newline-separated statements already do. `:` reaches here as its own
+    /// `Tok::Colon` (the tokenizer never produces one from inside a string
+    /// literal, and `:=` is a separate `Tok::ColonEq`), so this can't
+    /// misfire on `MsgBox "10:30"` or a `Destination:=` named argument. A
+    /// label's own trailing `:` is also consumed here — `parse_ident_stmt`
+    /// deliberately leaves it in place so `label1: a = 1` works.
+    fn eat_stmt_end(&mut self) -> Result<(), String> {
         match self.peek() {
             Tok::Newline => { self.advance(); Ok(()) }
             Tok::Eof     => Ok(()),
+            Tok::Colon   => {
+                // `a = 1:: b = 2` — an empty statement between two colons is
+                // legal VBA and means nothing; collapse a run of them.
+                while *self.peek() == Tok::Colon { self.advance(); }
+                Ok(())
+            }
             t => Err(format!("expected newline, got {:?}", t)),
         }
     }
 
-    // Consume to end of line (inclusive of the newline token)
+    // Consume to end of line (inclusive of the newline token). Deliberately
+    // does NOT stop at a `:` — its callers skip a whole *line* (a block
+    // header, an `Option` declaration), not one statement.
     fn skip_to_eol(&mut self) {
-        while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
-        if *self.peek() == Tok::Newline { self.advance(); }
+        loop {
+            match self.peek() {
+                Tok::Newline => { self.advance(); return; }
+                Tok::Eof => return,
+                _ => { self.advance(); }
+            }
+        }
+    }
+
+    /// Consume up to (not including) whatever ends the current statement —
+    /// newline, EOF, or a `:` separator. The `skip_to_eol` sibling for the
+    /// "this line isn't recognized, skip it" paths that run *inside*
+    /// `parse_simple_stmt_no_eol`, so an unrecognized statement doesn't
+    /// swallow the colon-separated statements after it on the same line.
+    fn skip_to_stmt_end(&mut self) {
+        while !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
     }
 
     fn is_end_kw(&self, kw: &str) -> bool {
@@ -386,7 +419,7 @@ impl Parser {
     fn parse_type_def(&mut self) -> Result<TypeDef, String> {
         self.expect_ident("type")?;
         let name = self.consume_ident()?.to_lowercase();
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let mut fields = vec![];
         loop {
             self.skip_nl();
@@ -415,7 +448,7 @@ impl Parser {
         self.expect_tok(Tok::LParen)?;
         let params = self.parse_params()?;
         self.expect_tok(Tok::RParen)?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_end_kw("sub"))?;
         self.consume_end_kw("sub")?;
         self.skip_nl();
@@ -431,14 +464,14 @@ impl Parser {
         // Optional return-type annotation: `Function f(...) As Integer`.
         // Not enforced anywhere (elixcee is dynamically typed at runtime,
         // same as every parameter's own `As <Type>` — see `parse_params`),
-        // just consumed so it doesn't trip `eat_eol()` below. Previously
+        // just consumed so it doesn't trip `eat_stmt_end()` below. Previously
         // unhandled entirely: `Function f(x As Integer) As Integer` failed
         // with "expected newline, got Ident(\"as\")" right here.
         if self.is_ident("as") {
             self.advance();
             self.consume_ident()?;
         }
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_end_kw("function"))?;
         self.consume_end_kw("function")?;
         self.skip_nl();
@@ -480,13 +513,13 @@ impl Parser {
         // caught by `prop_vba_assignment_parses` before it shipped).
         if *self.peek_at(1) == Tok::Eq {
             let s = self.parse_ident_stmt()?;
-            self.eat_eol()?;
+            self.eat_stmt_end()?;
             return Ok(Some(s));
         }
 
         // Block constructs self-manage their own terminator (End X / Next /
         // Loop / Wend, each already followed by `skip_nl()`) — they don't
-        // go through `parse_simple_stmt_no_eol`/`eat_eol()` at all, and
+        // go through `parse_simple_stmt_no_eol`/`eat_stmt_end()` at all, and
         // (being blocks, not single statements) don't belong inside a
         // single-line `If`'s Then/Else branch either.
         if self.is_ident("do")     { return Ok(Some(self.parse_do_loop()?)); }
@@ -498,7 +531,7 @@ impl Parser {
         if self.is_ident("while")  { return Ok(Some(self.parse_while_wend()?)); }
 
         let s = self.parse_simple_stmt_no_eol()?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         Ok(Some(s))
     }
 
@@ -507,7 +540,7 @@ impl Parser {
     /// which self-manage their own terminator and don't make sense inside
     /// a single-line `If`'s Then/Else branch anyway) — WITHOUT consuming
     /// the trailing newline/terminator. Shared by `parse_stmt` (which calls
-    /// `eat_eol()` right after) and `parse_single_line_if_branch` (which
+    /// `eat_stmt_end()` right after) and `parse_single_line_if_branch` (which
     /// checks for `Else`/newline itself instead) — extracted specifically
     /// so a single-line `If`'s branches get the *same* statement coverage
     /// block-form VBA already has. Before this, `parse_single_line_if_branch`
@@ -585,13 +618,13 @@ impl Parser {
                 } else if self.is_ident("const") {
                     self.parse_const()
                 } else {
-                    while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                    self.skip_to_stmt_end();
                     Ok(Stmt::Dim)
                 }
             }
             // Debug.Print / Debug.Assert → no-op
             "debug" => {
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: "Debug.Print/Debug.Assert has no effect (no-op)".to_string(),
                 })
@@ -613,7 +646,7 @@ impl Parser {
             self.advance();
             Some(self.parse_expr()?)
         } else { None };
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("next"))?;
         self.expect_ident("next")?;
         if matches!(self.peek(), Tok::Ident(_)) { self.advance(); } // optional loop var
@@ -627,7 +660,7 @@ impl Parser {
         let var = self.consume_ident()?;
         self.expect_ident("in")?;
         let range_addr = self.parse_for_each_source()?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("next"))?;
         self.expect_ident("next")?;
         if matches!(self.peek(), Tok::Ident(_)) { self.advance(); }
@@ -652,10 +685,13 @@ impl Parser {
         self.expect_ident("if")?;
         let condition = self.parse_expr()?;
         self.expect_ident("then")?;
-        if !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+        // `Tok::Colon` counts as end-of-header, not the start of a
+        // single-line branch: `If x Then:` ... `End If` is the block form
+        // with an empty statement after `Then`, not a one-liner.
+        if !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon) {
             return self.parse_single_line_if(condition);
         }
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let then_body = self.parse_stmts(|p| {
             p.is_elseif() || p.is_ident("else") || p.is_end_kw("if")
         })?;
@@ -663,7 +699,7 @@ impl Parser {
             self.parse_elseif_chain()?
         } else if self.is_ident("else") {
             self.advance(); // "else"
-            self.eat_eol()?;
+            self.eat_stmt_end()?;
             self.parse_stmts(|p| p.is_end_kw("if"))?
         } else {
             vec![]
@@ -678,15 +714,33 @@ impl Parser {
     /// `ElseIf`. Entered once `parse_if` sees a non-newline token right
     /// after `Then`.
     fn parse_single_line_if(&mut self, condition: Expr) -> Result<Stmt, String> {
-        let then_body = vec![self.parse_single_line_if_branch()?];
+        let then_body = self.parse_single_line_if_branch_list()?;
         let else_body = if self.is_ident("else") {
             self.advance();
-            vec![self.parse_single_line_if_branch()?]
+            self.parse_single_line_if_branch_list()?
         } else {
             vec![]
         };
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         Ok(Stmt::If { condition, then_body, else_body })
+    }
+
+    /// One single-line-`If` branch: a `:`-separated *list* of statements, not
+    /// just one. Microsoft's own If...Then...Else reference documents
+    /// `statements` as "One or more statements separated by colons; executed
+    /// if condition is True", with the worked example
+    /// `If A > 10 Then A = A + 1 : B = B + A : C = C + B`. The same applies
+    /// to `elsestatements` after `Else` — a single-line `If` ends only at
+    /// end-of-line, so `If x Then a = 1 Else b = 2: c = 3` puts *both*
+    /// `b = 2` and `c = 3` in the Else branch.
+    fn parse_single_line_if_branch_list(&mut self) -> Result<Vec<SpannedStmt>, String> {
+        let mut out = vec![self.parse_single_line_if_branch()?];
+        while *self.peek() == Tok::Colon {
+            while *self.peek() == Tok::Colon { self.advance(); }
+            if matches!(self.peek(), Tok::Newline | Tok::Eof) || self.is_ident("else") { break; }
+            out.push(self.parse_single_line_if_branch()?);
+        }
+        Ok(out)
     }
 
     /// One inline statement for a single-line `If`/`Else` branch — reuses
@@ -708,7 +762,9 @@ impl Parser {
         let stmt = if matches!(self.peek(), Tok::Ident(_)) {
             self.parse_simple_stmt_no_eol()?
         } else {
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) && !self.is_ident("else") {
+            while !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon)
+                && !self.is_ident("else")
+            {
                 self.advance();
             }
             Stmt::Unsupported {
@@ -725,7 +781,7 @@ impl Parser {
         self.consume_elseif();
         let condition = self.parse_expr()?;
         self.expect_ident("then")?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let then_body = self.parse_stmts(|p| {
             p.is_elseif() || p.is_ident("else") || p.is_end_kw("if")
         })?;
@@ -733,7 +789,7 @@ impl Parser {
             self.parse_elseif_chain()?
         } else if self.is_ident("else") {
             self.advance();
-            self.eat_eol()?;
+            self.eat_stmt_end()?;
             self.parse_stmts(|p| p.is_end_kw("if"))?
         } else {
             vec![]
@@ -748,7 +804,7 @@ impl Parser {
         let pre_cond = if self.is_ident("while") || self.is_ident("until") {
             Some(self.parse_do_cond()?)
         } else { None };
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("loop"))?;
         self.expect_ident("loop")?;
         let post_cond = if self.is_ident("while") || self.is_ident("until") {
@@ -768,7 +824,7 @@ impl Parser {
     fn parse_while_wend(&mut self) -> Result<Stmt, String> {
         self.expect_ident("while")?;
         let condition = self.parse_expr()?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("wend"))?;
         self.expect_ident("wend")?;
         self.skip_nl();
@@ -783,7 +839,7 @@ impl Parser {
         self.expect_ident("select")?;
         self.expect_ident("case")?;
         let expr = self.parse_expr()?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         self.skip_nl();
         let mut cases = vec![];
         let mut else_body = vec![];
@@ -795,11 +851,11 @@ impl Parser {
             self.advance(); // "case"
             if self.is_ident("else") {
                 self.advance(); // "else"
-                self.eat_eol()?;
+                self.eat_stmt_end()?;
                 else_body = self.parse_stmts(|p| p.is_ident("case") || p.is_end_kw("select"))?;
             } else {
                 let matches = self.parse_case_match_list()?;
-                self.eat_eol()?;
+                self.eat_stmt_end()?;
                 let body = self.parse_stmts(|p| p.is_ident("case") || p.is_end_kw("select"))?;
                 cases.push((matches, body));
             }
@@ -861,7 +917,7 @@ impl Parser {
                 self.advance();
                 let name = self.consume_str()?.to_lowercase();
                 self.expect_tok(Tok::RParen)?;
-                self.eat_eol()?;
+                self.eat_stmt_end()?;
                 let body = self.parse_with_body()?;
                 self.consume_end_kw("with")?;
                 self.skip_nl();
@@ -885,7 +941,7 @@ impl Parser {
             self.expect_tok(Tok::LParen)?;
             let addr = self.consume_str()?;
             self.expect_tok(Tok::RParen)?;
-            self.eat_eol()?;
+            self.eat_stmt_end()?;
             let prev_with_target = self.with_target.take();
             let prev_range_target = self.with_range_target.replace(addr);
             let body = self.parse_with_body()?;
@@ -899,7 +955,7 @@ impl Parser {
         // ── With <variable> — UDT target ─────────────────────────────────────
         if let Tok::Ident(_) = self.peek().clone() {
             let var = self.consume_ident()?.to_lowercase();
-            self.eat_eol()?;
+            self.eat_stmt_end()?;
             let prev = self.with_target.replace(var.clone());
             let prev_range_target = self.with_range_target.take();
             let body = self.parse_with_body()?;
@@ -950,7 +1006,7 @@ impl Parser {
                         let is_formula = s == "formula";
                         self.expect_tok(Tok::Eq)?;
                         let value = self.parse_expr()?;
-                        self.eat_eol()?;
+                        self.eat_stmt_end()?;
                         return Ok(Some(Stmt::RangeWrite { addr, is_formula, value }));
                     }
                 // ── UDT With target: .Field = val  /  .A.B = val ──────────────
@@ -966,7 +1022,7 @@ impl Parser {
                         if *self.peek() == Tok::Eq {
                             self.advance();
                             let value = self.parse_expr()?;
-                            self.eat_eol()?;
+                            self.eat_stmt_end()?;
                             return if fields.len() == 1 {
                                 Ok(Some(Stmt::RecordSet { var, field: fields.remove(0), value }))
                             } else {
@@ -995,7 +1051,7 @@ impl Parser {
                         let is_formula = prop == "formula";
                         self.expect_tok(Tok::Eq)?;
                         let value = self.parse_expr()?;
-                        self.eat_eol()?;
+                        self.eat_stmt_end()?;
                         Ok(Some(Stmt::RangeWrite { addr, is_formula, value }))
                     }
                     "cells" => {
@@ -1010,7 +1066,7 @@ impl Parser {
                         self.expect_ident("value")?;
                         self.expect_tok(Tok::Eq)?;
                         let value = self.parse_expr()?;
-                        self.eat_eol()?;
+                        self.eat_stmt_end()?;
                         Ok(Some(Stmt::CellWrite { row, col, value }))
                     }
                     _ => {
@@ -1094,7 +1150,7 @@ impl Parser {
     /// One `Dim`/`Public`/`Private`/`Static` declarator: `name [(sizes)] [As
     /// TypeName]`. Consumes exactly the declarator's own tokens — trailing
     /// `, nextDecl` is left for the caller's comma loop, and the terminating
-    /// newline is left for the statement dispatcher's `eat_eol()`.
+    /// newline is left for the statement dispatcher's `eat_stmt_end()`.
     fn parse_dim_declarator(&mut self) -> Result<Stmt, String> {
         // dim_array_decl: ident (
         if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::LParen {
@@ -1129,17 +1185,17 @@ impl Parser {
             // per-declarator syntax this grammar doesn't model (e.g. `As
             // String * 10`'s fixed-length-string suffix) up to the next
             // declarator-separating comma, so it reaches the outer comma
-            // loop instead of hard-failing at `eat_eol()` — the
+            // loop instead of hard-failing at `eat_stmt_end()` — the
             // single-declarator form had this same tolerance (bounded by
             // EOL instead of comma) before the comma loop existed.
-            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof) { self.advance(); }
+            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
             Ok(Stmt::DimBare { var })
         } else {
             // Not even an identifier here (malformed `Dim`) — same
             // permissive no-op the pre-comma-loop parser gave any
             // unparseable `Dim` line, just bounded by comma now so a
             // trailing `, nextDecl` still reaches the outer loop.
-            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof) { self.advance(); }
+            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
             Ok(Stmt::Dim)
         }
     }
@@ -1162,10 +1218,10 @@ impl Parser {
             None => {
                 // NOT `skip_to_eol()` — that also consumes the trailing
                 // newline, and `parse_stmt`'s "set" dispatch arm already
-                // calls `eat_eol()` after this returns (same double-
+                // calls `eat_stmt_end()` after this returns (same double-
                 // consumption pitfall `parse_ident_stmt`'s "bare ident"
                 // no-op branch avoids the same way).
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: format!(
                         "'Set {} = ...' targets an unmodeled object expression and was skipped",
@@ -1443,13 +1499,11 @@ impl Parser {
                     }),
                     _ => {
                         // Leave the trailing newline for the caller's own
-                        // `eat_eol()` (the "range" dispatch arm) — unlike
+                        // `eat_stmt_end()` (the "range" dispatch arm) — unlike
                         // `skip_to_eol()`, which would consume it too and
                         // cause a spurious "expected newline" error when
                         // this is the last statement before End Sub.
-                        while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                            self.advance();
-                        }
+                        self.skip_to_stmt_end();
                         Ok(Stmt::Unsupported {
                             reason: format!("EntireRow/EntireColumn.{} is not implemented", method),
                         })
@@ -1467,7 +1521,7 @@ impl Parser {
             }
             _ => {
                 // range_noop_stmt
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: format!("Range property/method '{}' is not implemented", prop),
                 })
@@ -1645,9 +1699,7 @@ impl Parser {
                 })
             }
             _ => {
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                    self.advance();
-                }
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: format!("Sheets(...).{} is not implemented", method),
                 })
@@ -1663,17 +1715,13 @@ impl Parser {
             self.advance(); // dot
             let method = self.consume_ident()?;
             if method == "add" {
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                    self.advance();
-                }
+                self.skip_to_stmt_end();
                 return Ok(Stmt::SheetsAdd);
             }
-            // Leave the trailing newline for the caller's own `eat_eol()`
+            // Leave the trailing newline for the caller's own `eat_stmt_end()`
             // (the "worksheets"/"sheets" dispatch arm) — see the identical
             // note on the EntireRow/EntireColumn fallback above.
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                self.advance();
-            }
+            self.skip_to_stmt_end();
             return Ok(Stmt::Unsupported {
                 reason: format!("Sheets.{} is not implemented", method),
             });
@@ -1696,9 +1744,7 @@ impl Parser {
         self.expect_tok(Tok::RParen)?;
         self.expect_tok(Tok::Dot)?;
         if !(self.is_ident("worksheets") || self.is_ident("sheets")) {
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                self.advance();
-            }
+            self.skip_to_stmt_end();
             return Ok(Stmt::Unsupported {
                 reason:
                     "Workbooks(...) is only supported followed by .Worksheets(...)/.Sheets(...)"
@@ -1719,9 +1765,11 @@ impl Parser {
     // ident-starting: assignment, array_write, call_stmt (without Call keyword)
     fn parse_ident_stmt(&mut self) -> Result<Stmt, String> {
         let name = self.consume_ident()?;
-        // Label: "ErrHandler:"
+        // Label: "ErrHandler:". The `:` is deliberately NOT consumed here —
+        // `eat_stmt_end` takes it as the statement terminator, which is what
+        // makes real VBA's `label1: a = 1` (a label and a statement on one
+        // line) parse as two statements rather than a parse error.
         if *self.peek() == Tok::Colon {
-            self.advance();
             return Ok(Stmt::Label(name));
         }
         if *self.peek() == Tok::LParen {
@@ -1751,11 +1799,9 @@ impl Parser {
                     Ok(Stmt::ArrayRecordSet { name, indices: args, field, value })
                 } else {
                     // Leave the trailing newline for the caller's own
-                    // `eat_eol()` (the ident-statement dispatch fallback) —
+                    // `eat_stmt_end()` (the ident-statement dispatch fallback) —
                     // see the identical note on the EntireRow fallback above.
-                    while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                        self.advance();
-                    }
+                    self.skip_to_stmt_end();
                     Ok(Stmt::Unsupported {
                         reason: format!(
                             "'{}(...).{}' read without assignment has no effect",
@@ -1850,10 +1896,8 @@ impl Parser {
             } else {
                 // p.Method / property access without assignment — skip to
                 // EOL (noop). Leave the trailing newline for the caller's
-                // own `eat_eol()` — see the identical note above.
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                    self.advance();
-                }
+                // own `eat_stmt_end()` — see the identical note above.
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: format!(
                         "'{}.{}' read without assignment has no effect",
@@ -1864,7 +1908,7 @@ impl Parser {
             }
         } else {
             // Bare ident — noop
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+            self.skip_to_stmt_end();
             Ok(Stmt::Unsupported {
                 reason: format!(
                     "'{}' as a bare statement (no Call keyword or parentheses) is not supported and was skipped",
@@ -2688,7 +2732,7 @@ mod tests {
     #[test] fn test_dim_fixed_length_string_trailing_syntax_is_tolerated() {
         // `As String * 10`'s fixed-length suffix isn't modeled by
         // `parse_dim_declarator`, but it must still be tolerated (consumed,
-        // not left for `eat_eol()` to choke on) the same way a
+        // not left for `eat_stmt_end()` to choke on) the same way a
         // single-declarator `Dim` always tolerated unmodeled trailing
         // syntax on its own line, before the comma loop existed.
         let body = parse_body("Sub MySub()\n    Dim s As String * 10\n    s = \"hi\"\nEnd Sub\n");
@@ -3364,5 +3408,109 @@ mod tests {
             body,
             vec![Stmt::RecordSet { var: "p".into(), field: "sheets".into(), value: Expr::Integer(5) }]
         );
+    }
+
+    // ── `:` statement separator ──────────────────────────────────────────
+    // Real VBA's multi-statement-per-line form. Handled in the parser (the
+    // tokenizer's own `Tok::Colon`), never as a pre-tokenize string rewrite
+    // of `:` to a newline — which would corrupt `MsgBox "10:30"`, break the
+    // `label:` declaration form, and mangle a single-line `If`'s own
+    // Then/Else boundary. Each of those three is pinned below.
+
+    #[test] fn colon_separates_two_statements_on_one_line() {
+        let body = parse_body("Sub MySub()\n    a = 1: b = 2\nEnd Sub\n");
+        assert_eq!(body, vec![
+            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
+            Stmt::Assignment { var: "b".into(), value: Expr::Integer(2) },
+        ]);
+    }
+
+    #[test] fn colon_separates_three_statements_on_one_line() {
+        let body = parse_body("Sub MySub()\n    a = 1: b = 2: c = 3\nEnd Sub\n");
+        assert_eq!(body.len(), 3);
+        assert_eq!(body[2], Stmt::Assignment { var: "c".into(), value: Expr::Integer(3) });
+    }
+
+    #[test] fn colon_inside_a_string_literal_is_not_a_separator() {
+        // The load-bearing case against a naive `:`→newline pre-rewrite.
+        let body = parse_body("Sub MySub()\n    MsgBox \"10:30\": a = 1\nEnd Sub\n");
+        assert_eq!(body, vec![
+            Stmt::MsgBox { message: Expr::Str("10:30".into()) },
+            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
+        ]);
+    }
+
+    #[test] fn label_followed_by_a_statement_on_the_same_line() {
+        let body = parse_body("Sub MySub()\n    label1: a = 1\nEnd Sub\n");
+        assert_eq!(body, vec![
+            Stmt::Label("label1".into()),
+            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
+        ]);
+    }
+
+    #[test] fn a_bare_label_on_its_own_line_still_parses_as_just_a_label() {
+        let body = parse_body("Sub MySub()\n    errh:\n    a = 1\nEnd Sub\n");
+        assert_eq!(body, vec![
+            Stmt::Label("errh".into()),
+            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
+        ]);
+    }
+
+    #[test] fn single_line_if_then_takes_a_colon_separated_statement_list() {
+        // Microsoft's own worked example shape: every colon-separated
+        // statement after `Then` belongs to the Then branch.
+        let body = parse_body("Sub MySub()\n    If x > 10 Then a = 1: b = 2: c = 3\nEnd Sub\n");
+        match &body[0] {
+            Stmt::If { then_body, else_body, .. } => {
+                assert_eq!(then_body.len(), 3);
+                assert!(else_body.is_empty());
+            }
+            other => panic!("expected If, got {:?}", other),
+        }
+    }
+
+    #[test] fn single_line_if_else_takes_everything_after_else_on_the_line() {
+        let body = parse_body("Sub MySub()\n    If x Then a = 1 Else b = 2: c = 3\nEnd Sub\n");
+        match &body[0] {
+            Stmt::If { then_body, else_body, .. } => {
+                assert_eq!(then_body.len(), 1);
+                assert_eq!(else_body.len(), 2);
+            }
+            other => panic!("expected If, got {:?}", other),
+        }
+    }
+
+    #[test] fn colon_separated_statements_keep_their_own_distinct_spans() {
+        // Not collapsed into one span: an error on the second statement must
+        // point at the second statement, exactly as a newline-separated one
+        // would (`SourceSpan` accuracy is what `--json`'s `location` reports).
+        let sub = parse("Sub MySub()\n    a = 1: b = 2\nEnd Sub\n").unwrap()
+            .subs.into_iter().next().unwrap();
+        assert_ne!(sub.body[0].span.start, sub.body[1].span.start);
+        // `b` starts after `a = 1: ` on the same line.
+        assert!(sub.body[1].span.start > sub.body[0].span.start);
+    }
+
+    #[test] fn colon_terminates_a_block_construct_header_and_body() {
+        let body = parse_body("Sub MySub()\n    For i = 1 To 3: a = i: Next i\nEnd Sub\n");
+        match &body[0] {
+            Stmt::For { body, .. } => assert_eq!(body.len(), 1),
+            other => panic!("expected For, got {:?}", other),
+        }
+    }
+
+    #[test] fn trailing_colon_after_then_still_parses_as_a_block_if() {
+        let body = parse_body("Sub MySub()\n    If x Then:\n    a = 1\n    End If\nEnd Sub\n");
+        match &body[0] {
+            Stmt::If { then_body, .. } => assert_eq!(then_body.len(), 1),
+            other => panic!("expected block If, got {:?}", other),
+        }
+    }
+
+    #[test] fn named_argument_colon_equals_is_not_a_statement_separator() {
+        // `:=` tokenizes as `Tok::ColonEq`, never `Tok::Colon`.
+        let body = parse_body(
+            "Sub MySub()\n    Range(\"A1\").Copy Destination:=Range(\"B1\")\nEnd Sub\n");
+        assert_eq!(body.len(), 1);
     }
 }
