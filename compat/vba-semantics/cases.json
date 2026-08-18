@@ -2075,7 +2075,7 @@
     "id": "option_base_one_not_respected",
     "category": "array_bounds",
     "description": "Option Base 1 does not change the default lower bound",
-    "vbaSource": "Sub Scenario()\nOption Base 1\nSub Scenario()\n  Dim arr(5)\n  Range(\"A1\").Value = LBound(arr)\nEnd Sub\n\nEnd Sub\n",
+    "vbaSource": "Option Base 1\nSub Scenario()\n  Dim arr(5)\n  Range(\"A1\").Value = LBound(arr)\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {

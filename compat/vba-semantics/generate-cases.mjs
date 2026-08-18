@@ -40,6 +40,14 @@ const expected = {};
  * report.mjs's BUG/UNCLASSIFIED-must-be-0 gate exists specifically so a real regression on
  * one of those can't hide. */
 function addCase(id, category, description, vbaBody, expectedSpec, reason, knownLimitation) {
+  // A vbaBody containing its own Sub/Function/Option declaration means it needs a full
+  // module (addCaseWithSource) instead -- wrapping it in another Sub Scenario() here would
+  // silently produce a nested-Sub-inside-Sub mess that isn't the VBA the case claims to
+  // test. Caught twice by review this round (once fixed before shipping, once not); this
+  // guard makes a third instance a thrown error instead of a silently-wrong case.
+  if (/^\s*(Sub|Function|Option)\s/mi.test(vbaBody)) {
+    throw new Error(`addCase('${id}'): vbaBody looks like a full module (contains Sub/Function/Option) -- use addCaseWithSource instead`);
+  }
   addCaseWithSource(id, category, description, `Sub Scenario()\n${vbaBody}\nEnd Sub\n`, expectedSpec, reason, knownLimitation);
 }
 
@@ -887,7 +895,7 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     { value: 2 },
     'Real VBA supports an explicit lower bound in a Dim/ReDim size clause -- Dim arr(2 To 8) declares indices 2 through 8 inclusive, so LBound(arr) is 2.',
     'elixcee\'s array-declarator parser only accepts a single upper-bound expression per dimension (Dim arr(5)), not a lo To hi pair -- Dim arr(2 To 8) fails to parse entirely (actual: parse_error "expected RParen, got Ident(\\"to\\")"). Found while building this suite, not previously disclosed.');
-  addCase('option_base_one_not_respected', CAT, 'Option Base 1 does not change the default lower bound',
+  addCaseWithSource('option_base_one_not_respected', CAT, 'Option Base 1 does not change the default lower bound',
     'Option Base 1\nSub Scenario()\n  Dim arr(5)\n  Range("A1").Value = LBound(arr)\nEnd Sub\n',
     { value: 1 },
     'Documented: an Option Base 1 statement at module level changes the default lower bound (for Dim declarations that don\'t give an explicit lower bound) from 0 to 1.',
