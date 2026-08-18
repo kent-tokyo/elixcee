@@ -392,40 +392,62 @@ Range("F2").Value = 2 ^ 3            ' 8
 Range("F3").Value = 7 \ 3            ' 2 (integer division)
 If Not (a And b) Then MsgBox "ok"
 
-With Range("A1:B2")
+With Cells(r, c)                     ' any target expression, evaluated once
   .Value = 5
+  If .Value > 0 Then .Value = .Value + 1   ' .member works at any nesting depth
 End With
+
+Set rng = Range("A1"): Set rng2 = rng: Set rng = Nothing
+rng2.Value = 1                       ' aliases survive Set ... = Nothing on the original
+rng.Value = 2                        ' raises "Object variable or With block variable not set"
+
+Dim n
+n = Null
+If IsNull(n + 5) Then MsgBox "Null propagates through +"   ' True
 
 Function DoubleIt(x As Integer) As Integer
   DoubleIt = x * 2
 End Function
 ```
 
-`Set`-assigned `Range`/`Worksheet`/`Workbook` object variables (real reference
-semantics), `Union`/`Areas`, `SpecialCells(xlCellTypeVisible)` (built on the hidden
-row/column evidence above), matching-shape multi-area Copy/Paste, `Mod`/`\`/`^`, infix
-`And`/`Or`/`Xor`/`Not` (real bitwise semantics on non-Boolean operands), `With Range(...)`,
-typed `Function` parameters/return types, comma-separated multi-declarator `Dim`
-(`Dim a As Integer, b As Range`), and single-line `If cond Then stmt [Else stmt]` are all
-supported.
+`Set`-assigned `Range`/`Worksheet`/`Workbook` object variables with real reference
+semantics — including a genuine unset/`Nothing` state (member access through a never-`Set`
+or explicitly-`Nothing` variable raises real VBA's "Object variable or With block variable
+not set"; `Set x = Nothing` clears only `x`, not any alias made from it earlier) —
+`Union`/`Areas`, `SpecialCells(xlCellTypeVisible)` (built on the hidden row/column evidence
+above), matching-shape multi-area Copy/Paste, `Mod`/`\`/`^`, infix `And`/`Or`/`Xor`/`Not`
+(real bitwise semantics on non-Boolean operands), a runtime `With` stack (any target
+expression — including a computed one like `With Cells(r, c)` — evaluated once, with
+`.member` resolving correctly at any nesting depth inside `If`/`For`/`Do`/`Select Case`),
+`Variant`'s `Null` (documented VBA propagation through `+`/`&`/comparisons, distinct from
+`Empty`), the `:` multi-statement-per-line separator, typed `Function` parameters/return
+types, comma-separated multi-declarator `Dim` (`Dim a As Integer, b As Range`), and
+single-line `If cond Then stmt [Else stmt]` are all supported.
 
 **Known gaps**: multi-area Paste only executes when both sides are multi-area with
 matching `Areas.Count` and per-area shapes — every other combination stays diagnose-only
 (see above).
 
-### XLSX.read() — `@elixcee/xlsx` (npm, in development)
+### XLSX.read()/readFile() — `@elixcee/xlsx` (npm, in development)
 
 A synchronous, WebAssembly-backed `XLSX.read(bytes)` — no `await init()` required — is
 implemented in the in-development `@elixcee/xlsx` npm package (not yet published; see
 [docs/xlsx-architecture.md](docs/xlsx-architecture.md) for the compatibility initiative
-and the sync-bridge design). It returns sheet names, `!ref`, `!merges`, `!rows`/`!cols`
-(hidden rows/columns), and per-cell `{t, v, f, w, z}` — values, formula text, formatted
-display strings, and date-typed cells, resolved via real `styles.xml`/number-format
-parsing. Differential-tested against the real `xlsx@0.18.5` package: 19/19 MATCH on its
-declared scope. Works in both Node (CJS/ESM) and the browser (a `"browser"` export
-condition routes to the inlined-bytes/`initSync` WASM artifact) — the browser entry
-point assumes bundled consumption, though: its shared code has a CJS `require('ssf')`,
-so it's not literal no-build `<script type="module">` usage.
+and the sync-bridge design), along with `readFile()`/`readFileSync()` (Node-only; the
+browser entry point throws rather than faking a filesystem). They return sheet names,
+`!ref`, `!merges`, `!rows`/`!cols` (hidden rows/columns), and per-cell `{t, v, f, w, z}` —
+values, formula text, formatted display strings, and date-typed cells, resolved via real
+`styles.xml`/number-format parsing. Differential-tested against the real `xlsx@0.18.5`
+package: 30 MATCH + 3 disclosed cases (one root cause — `src/reader.rs` currently trims
+significant `xml:space="preserve"` whitespace; see CHANGELOG.md). Works in Node (CJS/ESM)
+and the browser: a `"browser"` export condition routes to the inlined-bytes/`initSync`
+WASM artifact, verified not just by Node simulating that export condition but by an actual
+headless Chrome process loading a real bundle and reading `XLSX.read()`'s result back out
+of the page's own DOM (no Safari claim). The browser entry point still assumes bundled
+consumption — its shared code has a CJS `require('ssf')`, so it's not literal no-build
+`<script type="module">` usage — but a real packed-npm-tarball install (not a relative
+import into this repo) and CJS/ESM bundling both round-trip cleanly with no manual asset
+copy step required anymore.
 
 ### Build from source
 

@@ -351,22 +351,31 @@ Range("F2").Value = 2 ^ 3            ' 8
 Range("F3").Value = 7 \ 3            ' 2（整数除算）
 If Not (a And b) Then MsgBox "ok"
 
-With Range("A1:B2")
+With Cells(r, c)                     ' 任意の対象式を、一度だけ評価
   .Value = 5
+  If .Value > 0 Then .Value = .Value + 1   ' .memberはどの深さのネストでも解決される
 End With
+
+Set rng = Range("A1"): Set rng2 = rng: Set rng = Nothing
+rng2.Value = 1                       ' rngがNothingになってもエイリアスは生き続ける
+rng.Value = 2                        ' "Object variable or With block variable not set"
+
+Dim n
+n = Null
+If IsNull(n + 5) Then MsgBox "Nullは+を伝播する"   ' True
 
 Function DoubleIt(x As Integer) As Integer
   DoubleIt = x * 2
 End Function
 ```
 
-`Set`で代入された`Range`/`Worksheet`/`Workbook`オブジェクト変数（実際の参照セマンティクス）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（上記の非表示行・列情報を利用）、領域数・形状が一致する複数領域Copy/Paste、`Mod`/`\`/`^`、式中の`And`/`Or`/`Xor`/`Not`（非Boolean値に対する実際のビット演算）、`With Range(...)`、型付き`Function`の引数・戻り値、1つの`Dim`文で複数の変数を宣言する構文（`Dim a As Integer, b As Range`）、単一行`If cond Then stmt [Else stmt]`——すべて対応済みです。
+`Set`で代入された`Range`/`Worksheet`/`Workbook`オブジェクト変数——実際の参照セマンティクスに加え、真のunset/`Nothing`状態も持つ（一度も`Set`されていない、または明示的に`Nothing`にされた変数へのメンバーアクセスは実際のVBAの「オブジェクト変数、または With ブロック変数が設定されていません」エラーを送出し、`Set x = Nothing`は`x`自身のみを解除し、以前に作成したエイリアスには影響しない）——`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（上記の非表示行・列情報を利用）、領域数・形状が一致する複数領域Copy/Paste、`Mod`/`\`/`^`、式中の`And`/`Or`/`Xor`/`Not`（非Boolean値に対する実際のビット演算）、ランタイムの`With`スタック（`With Cells(r, c)`のような計算対象式も含め一度だけ評価され、`.member`は`If`/`For`/`Do`/`Select Case`内のどの深さのネストでも正しく解決される）、`Variant`の`Null`（`Empty`とは異なる、`+`/`&`/比較演算子を通じた文書化されたVBAの伝播規則）、`:`による複数文区切り、型付き`Function`の引数・戻り値、1つの`Dim`文で複数の変数を宣言する構文（`Dim a As Integer, b As Range`）、単一行`If cond Then stmt [Else stmt]`——すべて対応済みです。
 
 **既知の制限**: 複数領域の貼り付けは、両側が複数領域で`Areas.Count`と各領域の形状が一致する場合のみ実行され、それ以外の組み合わせは引き続き診断のみです（上記参照）。
 
-### XLSX.read() — `@elixcee/xlsx`（npm、開発中）
+### XLSX.read()/readFile() — `@elixcee/xlsx`（npm、開発中）
 
-同期的でWebAssembly版の`XLSX.read(bytes)`——`await init()`不要——が、開発中のnpmパッケージ`@elixcee/xlsx`（未公開。互換性の取り組みと同期ブリッジの設計は [docs/xlsx-architecture.md](docs/xlsx-architecture.md) を参照）に実装されています。シート名、`!ref`、`!merges`、`!rows`/`!cols`（非表示行・列）、セルごとの`{t, v, f, w, z}`（値・数式テキスト・書式済み表示文字列・日付型セル、実際の`styles.xml`/数値書式解析による）を返します。実物の`xlsx@0.18.5`パッケージに対する差分テストで、宣言している対応範囲について19/19 MATCH。Node（CJS/ESM）とブラウザの両方で動作します（`"browser"` export conditionが、インライン化されたバイト列と`initSync`によるWASM artifactへ配線済み）——ただしブラウザ向けエントリポイントはバンドル利用を前提としています（共有コードにCJSの`require('ssf')`が含まれるため）。ビルド不要の`<script type="module">`でそのまま使える形ではありません。
+同期的でWebAssembly版の`XLSX.read(bytes)`——`await init()`不要——が、開発中のnpmパッケージ`@elixcee/xlsx`（未公開。互換性の取り組みと同期ブリッジの設計は [docs/xlsx-architecture.md](docs/xlsx-architecture.md) を参照）に実装されており、`readFile()`/`readFileSync()`（Node専用。ブラウザ向けエントリポイントは偽のファイルシステムを装う代わりに例外を送出）も加わりました。シート名、`!ref`、`!merges`、`!rows`/`!cols`（非表示行・列）、セルごとの`{t, v, f, w, z}`（値・数式テキスト・書式済み表示文字列・日付型セル、実際の`styles.xml`/数値書式解析による）を返します。実物の`xlsx@0.18.5`パッケージに対する差分テストで、30 MATCH + 開示済み3ケース（根本原因は1つ——`src/reader.rs`が現在`xml:space="preserve"`の有意な空白をトリムしてしまう。詳細はCHANGELOG.md参照）。Node（CJS/ESM）とブラウザの両方で動作します（`"browser"` export conditionが、インライン化されたバイト列と`initSync`によるWASM artifactへ配線済み)——この配線は、Nodeが当該export conditionをシミュレートするだけでなく、実際のヘッドレスChromeプロセスが実物のbundleを読み込み、ページ自身のDOMから`XLSX.read()`の結果を取得することでも検証済みです（Safariは非対応・未検証）。ブラウザ向けエントリポイントは依然としてバンドル利用を前提としています（共有コードにCJSの`require('ssf')`が含まれるため）——ビルド不要の`<script type="module">`でそのまま使える形ではありません——が、実物のnpm tarballインストール（このリポジトリへの相対importではなく）とCJS/ESMバンドルはいずれも、手動でのアセットコピー不要でそのまま動作するようになりました。
 
 ### ソースからビルド
 

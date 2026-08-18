@@ -5,42 +5,50 @@ shipped, see `CHANGELOG.md` — this file only restates completed work when need
 what's left. Historical phase-by-phase implementation notes (Japanese) live in
 `tasks/todo.md`.
 
-## Current state (0.3.0 released; unreleased work since, not yet version-bumped)
+## Current state (0.4.0 released; unreleased work since — VBA structural semantics +
+`@elixcee/xlsx` consumer/browser validation — not yet version-bumped)
 
 - **VBA object model**: `Range`/`Set`/`Union`/`Areas`/`SpecialCells`, matching-shape
-  multi-area Copy/Paste, `ActiveSheet`/`ThisWorkbook`/`ActiveWorkbook`, `With Range(...)`,
-  typed `Function` params/return, `Mod`/`\`/`^`/`And`/`Or`/`Xor`/`Not` at real VBA precedence
-  (real bitwise semantics on non-Boolean operands), comma-separated multi-declarator `Dim`,
-  single-line `If cond Then stmt [Else stmt]`. `Dim x` now registers a real `Empty`-valued
-  variable (was a complete no-op before this round — see "Recently fixed" below).
+  multi-area Copy/Paste, `ActiveSheet`/`ThisWorkbook`/`ActiveWorkbook`, a **runtime** `With`
+  stack (any target expression, including `With Cells(r, c)`; `.member` resolves correctly
+  at any nesting depth inside `If`/`For`/`Do`/`Select Case`), real object-variable
+  unset/`Nothing` state (alias-safe: `Set r2 = r` survives `Set r = Nothing`), `Variant::Null`
+  with documented Null-propagation through `+`/`&`/comparisons, the `:` multi-statement
+  separator, typed `Function` params/return, `Mod`/`\`/`^`/`And`/`Or`/`Xor`/`Not` at real VBA
+  precedence (real bitwise semantics on non-Boolean operands), comma-separated
+  multi-declarator `Dim`, single-line `If cond Then stmt [Else stmt]`. `Dim x` registers a
+  real `Empty`-valued variable. See CHANGELOG.md's `[Unreleased]` "VBA structural semantics"
+  section for the full detail on the four newest additions.
 - **Built-in functions**: `Fix`/`Sgn`/`Round`(banker's rounding, rejects negative digits)/
   `CBool`/`CInt`/`CLng`(also banker's rounding)/`IsNumeric`(numeric strings)/`Str`(leading-
   space quirk, distinct from `CStr`)/`Val`(leading-numeric-prefix parsing)/`Date`/`Time`/
-  `Now` (real values, callable with or without parens).
-- **Test infrastructure**: two new committed, oracle-independent classifiers, distinct from
-  the existing LibreOffice/Excel oracle-comparison axis (`compat/corpus/classify.mjs`):
+  `Now` (real values, callable with or without parens)/`Array(...)`.
+- **Test infrastructure**: two committed, oracle-independent classifiers, distinct from the
+  existing LibreOffice/Excel oracle-comparison axis (`compat/corpus/classify.mjs`):
   `compat/corpus/classify-elixcee-outcomes.mjs` explains elixcee's own pass/fail outcome
-  for all 581 corpus scenarios by exact scenario ID (0 `UNEXPLAINED`, 0 `MISMATCH`); the new
-  `compat/vba-semantics/` suite (208 cases) checks VALUE correctness against documented real
-  VBA semantics, not just pass/fail (0 `BUG`, 0 `UNCLASSIFIED`, 0 `KNOWN_LIMITATION` — its
-  first run found one disclosed gap, fixed in the same round rather than left registered) —
-  see each directory's own README for what it measures and doesn't.
-  CI now also runs `packages/xlsx`'s TypeScript typecheck and all four `compat/differential/`
-  suites on a Node 20/22 matrix (`.github/workflows/ci.yml`'s new `node-js` job) — previously
-  none of this ran anywhere except a developer's own machine.
+  for all 581 corpus scenarios by exact scenario ID (0 `UNEXPLAINED`, 0 `MISMATCH`); the
+  `compat/vba-semantics/` suite (**386 cases**, up from 208 at 0.3.0) checks VALUE
+  correctness against documented real VBA semantics, not just pass/fail (0 `BUG`,
+  0 `UNCLASSIFIED`, 19 `KNOWN_LIMITATION` — see item 10 below for the full breakdown) — see
+  each directory's own README for what it measures and doesn't. CI runs `packages/xlsx`'s
+  TypeScript typecheck, all four `compat/differential/` suites plus their own self-checks,
+  a real packed-npm-tarball consumer smoke, and a `wasm` job that builds
+  `crates/elixcee-wasm` fresh and runs both a Node/browser-condition smoke and a **real
+  headless-Chrome** smoke — see item 8 below.
 - **`@elixcee/xlsx`**: all 33 `utils.*` exports differential-tested against the real
   `xlsx@0.18.5` oracle (512 MATCH + 14 disclosed intentional divergences), `SSF` number
   formatting backed by the real `ssf` engine, six real security fixes ported from oracle
-  defects. `XLSX.read()` is a working sync WASM bridge (Node + browser), 19/19 MATCH against
-  the oracle. `read`/`readFile`/`write*` beyond `read()` are not implemented; npm publish of
-  `packages/xlsx` has not happened (`0.0.0-development`, currently **not publishable as-is**
-  — see "npm/JS/WASM findings" below).
-- Published: `elixcee` 0.3.0 (crates.io, PyPI), `elixcee-types` 0.1.0 (crates.io, unchanged
+  defects. `XLSX.read()`/`readFile()`/`readFileSync()` are a working sync WASM bridge (Node
+  + browser), 30 MATCH + 3 disclosed (one root cause, `src/reader.rs`'s `xml:space`
+  handling — see CHANGELOG.md) against the oracle. `write*` remains unimplemented; npm
+  publish of `packages/xlsx` has not happened (`0.0.0-development`, currently **not
+  publishable as-is** — see "npm/JS/WASM findings" below).
+- Published: `elixcee` 0.4.0 (crates.io, PyPI), `elixcee-types` 0.1.0 (crates.io, unchanged
   since 0.2.0), CLI binaries (GitHub Release).
-- Self-assessed at 87-89/100 against the project's own scoring framework as of 0.3.0's
-  release — not re-scored here (this file doesn't set that number; see CHANGELOG.md history
-  for how it's been assigned each round) — not claimed as 90+ because the VBA-vs-Microsoft-
-  Excel axis has never been exercised (see "Known gaps" below).
+- Not re-scored in this file (see CHANGELOG.md history for how the project's own scoring
+  framework has been applied each round) — not claimed as validated against Microsoft Excel
+  itself anywhere, because the VBA-vs-Excel axis has never been exercised (see "Known gaps"
+  below); this round's own work is explicit that it doesn't change that.
 
 ## Recently fixed (this round — full detail and evidence in CHANGELOG.md's `[Unreleased]`)
 
@@ -87,10 +95,15 @@ recorded as exhausted: no further candidates were found by either method as of t
    structural, shared-type change (`elixcee-types`' public enum, semver-relevant). Design
    completed, not yet implemented — see `docs/date-time-runtime-model-adr.md` and "Date/Time
    runtime model" below.
-6. **`XLSX.read()`** covers cell values/formulas/dates/dimension/hidden rows-cols/formatting
-   display strings, but not `read`/`readFile` (file-path/stream entry points), `write*`, or
-   non-Node browser dispatch beyond the bundled-consumption case (its shared code still has a
-   CJS `require('ssf')`). No Rust writer exists at all yet, for either XLSX or ODS format.
+6. **`XLSX.read()`/`readFile()`/`readFileSync()`** cover cell values/formulas/dates/
+   dimension/hidden rows-cols/formatting display strings, but not `write*`, or non-Node
+   browser dispatch beyond the bundled-consumption case (its shared code still has a CJS
+   `require('ssf')`; `readFile`/`readFileSync` are Node-only by nature and throw
+   `ELIXCEE_UNSUPPORTED_IN_BROWSER` from the browser entry point rather than faking a
+   filesystem). No Rust writer exists at all yet, for either XLSX or ODS format. Also: all
+   three read entry points share `src/reader.rs`'s defect trimming `xml:space="preserve"`
+   whitespace (see CHANGELOG.md's `[Unreleased]`) — disclosed via
+   `compat/differential/classify.mjs`'s `UNSUPPORTED_ALLOWLIST`, not fixed.
 7. **`packages/xlsx` is not currently publishable, even as an alpha** — three concrete,
    verified blockers, not a vague "needs polish". One is now fixed (Unreleased):
    ~~there was no package-level `README.md`, so `npm`'s registry page would show only the
@@ -104,37 +117,45 @@ recorded as exhausted: no further candidates were found by either method as of t
    `"private": true` hard-blocks `npm publish` outright; first publish of a scoped package
    also needs `--access public` or `publishConfig.access: "public"`, neither set. See
    "npm/JS/WASM findings" below for the full investigation.
-8. ~~No Node/WASM/JS testing wired into CI at all~~ — **fixed** (Unreleased):
-   `.github/workflows/ci.yml` gained a `node-js` job (Node 20/22 matrix) running
-   `packages/xlsx`'s TypeScript typecheck (with and without the DOM lib), all four of
-   `compat/`'s differential suites (`utils`/`ssf-format`/`read`/`metadata`), and
+8. ~~No Node/WASM/JS testing wired into CI at all~~ — **fixed**, including real-browser
+   coverage as of the structural-semantics/consumer-validation round (Unreleased):
+   `.github/workflows/ci.yml`'s `node-js` job (Node 20/22 matrix) runs `packages/xlsx`'s
+   TypeScript typecheck (with and without the DOM lib), all four of `compat/`'s
+   differential suites (`utils`/`ssf-format`/`read`+`readFile`/`metadata`),
    `packages/xlsx/scripts/audit-pack-contents.mjs` (asserts every file `npm pack --dry-run`
-   would actually publish: required files present, nothing forbidden, nothing unexpected
-   under `src/internal/`); and a separate `wasm` job that builds `crates/elixcee-wasm`
-   fresh (both `wasm-pack --target nodejs`/`--target web`, not just trusting the
-   already-vendored copy the `node-js` job consumes) and runs
-   `packages/xlsx/scripts/wasm-smoke.mjs` — Node sync `read()`, the `"browser"` export
-   condition actually resolving *and running* (via `node --conditions=browser`, self-
-   referencing the package by name — genuinely more than a resolution check, but this is
-   still Node simulating the condition, not a real browser; no real browser executes
-   anywhere in this project's CI, and Safari support is not claimed anywhere), a minimal
-   `esbuild` bundle with `XLSX.read()` called from inside it, and the current WASM binary
-   size logged (263,204 bytes as of this round — recorded, not gated against any
-   threshold; no prior baseline exists to compare against, and gating without one would be
-   exactly the kind of unjustified threshold this project avoids elsewhere). Every command
-   verified working live before wiring either job in, not assumed from CHANGELOG.md's
-   claimed numbers. One real consumer caveat found while writing the bundle check, not
-   previously disclosed: the Node/CJS WASM loader (`elixcee_wasm.node.cjs`, wasm-pack's own
-   generated code) locates its `.wasm` file via a `__dirname`-relative path, which is
-   bundle-output-relative once bundled — a consumer bundling this package's Node entry must
-   bundle to CJS (ESM bundle output has no `__dirname` at all — a `ReferenceError`, not a
-   silent failure) and copy `elixcee_wasm_bg.wasm` next to their bundle output, or
-   externalize the loader instead. Not fixed this round (would mean patching wasm-pack's
-   own generated boilerplate); `wasm-smoke.mjs`'s header comment has the full detail.
-   Genuinely still not built (a separate, bigger undertaking — see "npm/JS/WASM findings"
-   below): real in-browser execution in CI (would need a headless-browser runner, e.g.
-   Playwright — not added, matching "no large browser-test framework"); a WASM size
-   *regression* check (the size is recorded now, but nothing fails CI if it grows).
+   would actually publish), `compat/differential/`'s `classify.mjs`/`normalize.mjs`
+   self-checks (existing scripts, never wired into CI before now), and a real
+   packed-tarball consumer smoke (`npm run pack:consumer` — a genuine `npm pack` + `npm
+   install` into a throwaway `node_modules`, not a relative-path shortcut). The `wasm` job
+   builds `crates/elixcee-wasm` fresh (both `wasm-pack --target nodejs`/`--target web`) and
+   runs `packages/xlsx/scripts/wasm-smoke.mjs` (Node sync `read()`; the `"browser"` export
+   condition resolving *and running* under `node --conditions=browser` — still Node
+   simulating the condition, not a real browser, and labelled as such everywhere; CJS *and*
+   ESM esbuild bundles, each with `XLSX.read()` called from inside; WASM size logged, not
+   gated) plus `packages/xlsx/scripts/browser-smoke.mjs` — **a real headless Chrome/Chromium
+   process**, launched via Chrome's own `--dump-dom` (no browser-driver dependency added),
+   serving an esbuild bundle over real HTTP and reading `XLSX.read()`'s result back out of
+   the page's own DOM. This is genuinely distinct from the `--conditions=browser` check
+   above and is never described using that check's language. Safari is not covered and not
+   claimed anywhere. Every command verified working live before wiring either job in.
+
+   **The `__dirname`-relative `.wasm`-lookup consumer caveat (disclosed above as "not fixed
+   this round") is now fixed**: the Node/CJS WASM loader inlines its compiled WASM as
+   base64, mirroring the technique the browser loader already used
+   (`crates/elixcee-wasm/build-node-inline.mjs`, generated by `build.sh`, never hand-patched
+   — a fresh rebuild reproduces the committed artifact byte-for-byte). No `.wasm`-copy step
+   is required for CJS or ESM bundling anymore; browser bundling, previously broken outright
+   (`esbuild --platform=browser` failed resolving `fs`), now works too. Package-size impact
+   versus 0.4.0, measured not guessed: packed tarball 339,098 → 380,005 bytes (+12.1%),
+   unpacked +12.7%, WASM payload itself unchanged at 263 KB (only its base64 containers
+   grew — no `.wasm` file is vendored raw anymore, avoiding double-shipping the same bytes).
+   See CHANGELOG.md's `[Unreleased]` for the full writeup, including why options B/C/D
+   (a stable wrapper, a `bundler` export condition, an externalize-and-document approach)
+   were considered and rejected in favor of inlining.
+
+   Still genuinely not built: a WASM size *regression* check (the size is recorded now, but
+   nothing fails CI if it grows — a real policy call on what threshold and what to do when a
+   legitimate feature grows it, deliberately not attempted).
 9. **`@elixcee` npm scope ownership is unconfirmed** — cannot be resolved from this
    environment (`npm whoami` returns 401; no working publish credential exists locally, no
    analogous GitHub Actions secret exists yet either, unlike `CARGO_REGISTRY_TOKEN` for
@@ -180,28 +201,35 @@ full report; this is a summary)
 Investigated, not implemented or published: CI coverage, npm scope ownership, and
 `packages/xlsx` alpha-release readiness.
 
-- **Now wired into `.github/workflows/ci.yml`'s `node-js` job** (each verified live before
+- **Wired into `.github/workflows/ci.yml`'s `node-js` job** (each verified live before
   wiring, not assumed): `compat/differential/`'s utils (512 MATCH + 14 divergences)/
-  SSF (1831/1831)/read (19/19)/metadata (34/34) suites; `packages/xlsx`'s TypeScript
-  typecheck, both with and without the DOM lib present; a new `npm pack` content-audit
-  script (`packages/xlsx/scripts/audit-pack-contents.mjs` — required files present, nothing
-  forbidden, nothing unexpected under `src/internal/`, checked against `npm pack --dry-run
-  --json`'s own file list, currently 17 files / 338.8 kB packed). CJS↔ESM export identity is
-  asserted as part of the metadata suite (`metadata.test.mjs`), so it's covered too.
-- **Also now wired, in a separate new `wasm` job** (both `wasm-pack` targets built fresh,
-  esbuild added as `packages/xlsx`'s one new devDependency): a Node sync `read()` smoke
-  test, the `"browser"` export condition resolving *and running* under
-  `node --conditions=browser` (Node simulating the condition — no real browser executes in
-  this project's CI, no Safari claim anywhere), a minimal esbuild bundle with an in-bundle
-  `XLSX.read()` call, and the WASM binary size logged (263.2 kB as of this round, not
-  gated). See item 8 above for the full detail, including a real consumer caveat found
-  while building the bundle check (Node/CJS WASM loader's `__dirname`-relative `.wasm`
-  lookup needs the file copied alongside a bundled consumer's own output).
-- **Still doesn't exist at all**: real in-browser execution in CI (would need a headless-
-  browser runner — not added, matching "no large browser-test framework"); a WASM binary
-  size *regression* check (the size is recorded now; nothing fails CI if it grows) — a real
-  policy call (what threshold, what to do when a legitimate feature grows it), deliberately
-  not attempted this round.
+  SSF (1831/1831)/read+readFile (30 MATCH + 3 disclosed)/metadata (36/36) suites, plus
+  `classify.mjs`/`normalize.mjs`'s own self-checks; `packages/xlsx`'s TypeScript typecheck,
+  both with and without the DOM lib present; the `npm pack` content-audit script
+  (`packages/xlsx/scripts/audit-pack-contents.mjs`); and a **real packed-tarball consumer
+  smoke** (`npm run pack:consumer` — genuine `npm pack` + `npm install` into a throwaway
+  `node_modules` under `os.tmpdir()`, exercising `require`/`import`/TypeScript/`read()`/
+  the `browser` condition entirely from inside that install, never a relative-path
+  shortcut back into this repo). CJS↔ESM export identity is asserted as part of the
+  metadata suite, so it's covered too.
+- **Wired into a separate `wasm` job** (both `wasm-pack` targets built fresh; `esbuild`
+  remains `packages/xlsx`'s only added devDependency across both rounds, zero new
+  dependencies added for the browser-smoke work below): a Node sync `read()` smoke test,
+  the `"browser"` export condition resolving *and running* under `node --conditions=browser`
+  (Node simulating the condition — still labelled as such, not claimed as browser coverage
+  on its own), CJS *and* ESM esbuild bundles each with an in-bundle `XLSX.read()` call, the
+  WASM binary size logged (not gated), and — new this round — **a real headless
+  Chrome/Chromium smoke test** (`npm run browser:smoke`, via Chrome's own `--dump-dom`, no
+  browser-driver dependency): an actual browser process loads a real bundle over real HTTP
+  and the result is read back out of the page's own DOM. This is genuinely distinct from
+  the `--conditions=browser` check and is never described using its language anywhere. No
+  Safari claim anywhere. The `__dirname`-relative `.wasm`-lookup caveat mentioned in earlier
+  drafts of this file is now fixed (base64-inlined into the Node loader too, mirroring the
+  browser loader) — see item 8 above and CHANGELOG.md for the full writeup and the measured
+  package-size impact (+12.1% packed, WASM payload itself unchanged).
+- **Still doesn't exist at all**: a WASM binary size *regression* check (the size is
+  recorded now; nothing fails CI if it grows) — a real policy call (what threshold, what to
+  do when a legitimate feature grows it), deliberately not attempted this round.
 - **0.2.0-alpha.1 (read+write) scope, if ever pursued**: `readFile` is near-free (pure
   WASM-bridge wiring onto the already-working `read_workbook_from_bytes`). `write`/
   `writeFile`/`writeFileSync` need a genuinely new Rust writer module — none exists for

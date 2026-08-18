@@ -350,22 +350,31 @@ Range("F2").Value = 2 ^ 3            ' 8
 Range("F3").Value = 7 \ 3            ' 2（整数除法）
 If Not (a And b) Then MsgBox "ok"
 
-With Range("A1:B2")
+With Cells(r, c)                     ' 任意目标表达式，只求值一次
   .Value = 5
+  If .Value > 0 Then .Value = .Value + 1   ' .member 在任意嵌套深度都能正确解析
 End With
+
+Set rng = Range("A1"): Set rng2 = rng: Set rng = Nothing
+rng2.Value = 1                       ' 即使 rng 被置 Nothing，别名依然存活
+rng.Value = 2                        ' 抛出 "Object variable or With block variable not set"
+
+Dim n
+n = Null
+If IsNull(n + 5) Then MsgBox "Null 会通过 + 传播"   ' True
 
 Function DoubleIt(x As Integer) As Integer
   DoubleIt = x * 2
 End Function
 ```
 
-通过 `Set` 赋值的 `Range`/`Worksheet`/`Workbook` 对象变量（真正的引用语义）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（基于上方的隐藏行/列信息）、区域数量与形状匹配的多区域 Copy/Paste、`Mod`/`\`/`^`、表达式中的 `And`/`Or`/`Xor`/`Not`（对非 Boolean 操作数执行真正的按位运算）、`With Range(...)`、带类型的 `Function` 参数/返回值、单条 `Dim` 语句声明多个变量（`Dim a As Integer, b As Range`），以及单行 `If cond Then stmt [Else stmt]`——均已支持。
+通过 `Set` 赋值的 `Range`/`Worksheet`/`Workbook` 对象变量——不仅有真正的引用语义，还具备真实的未设置/`Nothing` 状态（从未 `Set` 过或已显式置为 `Nothing` 的变量上的成员访问，会抛出真实 VBA 的 "Object variable or With block variable not set" 错误；`Set x = Nothing` 只清除 `x` 自身，不影响此前创建的别名）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（基于上方的隐藏行/列信息）、区域数量与形状匹配的多区域 Copy/Paste、`Mod`/`\`/`^`、表达式中的 `And`/`Or`/`Xor`/`Not`（对非 Boolean 操作数执行真正的按位运算）、运行时 `With` 栈（任意目标表达式——包括如 `With Cells(r, c)` 这样的计算表达式——只求值一次，`.member` 在 `If`/`For`/`Do`/`Select Case` 内任意嵌套深度都能正确解析）、`Variant` 的 `Null`（区别于 `Empty`，遵循文档化的 VBA 传播规则，贯穿 `+`/`&`/比较运算符）、`:` 多语句分隔符、带类型的 `Function` 参数/返回值、单条 `Dim` 语句声明多个变量（`Dim a As Integer, b As Range`），以及单行 `If cond Then stmt [Else stmt]`——均已支持。
 
 **已知局限**：多区域粘贴仅在两侧都是多区域且 `Areas.Count` 与各区域形状均匹配时才会执行，其余组合仍仅诊断（见上文）。
 
-### XLSX.read() — `@elixcee/xlsx`（npm，开发中）
+### XLSX.read()/readFile() — `@elixcee/xlsx`（npm，开发中）
 
-在开发中的 npm 包 `@elixcee/xlsx`（尚未发布；兼容性计划与同步桥接设计见 [docs/xlsx-architecture.md](docs/xlsx-architecture.md)）中，已实现同步、基于 WebAssembly 的 `XLSX.read(bytes)`——无需 `await init()`。返回工作表名、`!ref`、`!merges`、`!rows`/`!cols`（隐藏行/列），以及每个单元格的 `{t, v, f, w, z}`——值、公式文本、格式化显示字符串、以及通过真实 `styles.xml`/数字格式解析得到的日期型单元格。针对真实的 `xlsx@0.18.5` 包做了差分测试，在其声明的范围内为 19/19 MATCH。同时支持 Node（CJS/ESM）与浏览器（`"browser"` export condition 已接入内联字节 + `initSync` 的 WASM artifact）——不过浏览器入口点假定通过打包工具使用（其共享代码中含有 CJS 的 `require('ssf')`），并非可直接以 `<script type="module">` 免构建使用的形式。
+在开发中的 npm 包 `@elixcee/xlsx`（尚未发布；兼容性计划与同步桥接设计见 [docs/xlsx-architecture.md](docs/xlsx-architecture.md)）中，已实现同步、基于 WebAssembly 的 `XLSX.read(bytes)`——无需 `await init()`——现在还加入了 `readFile()`/`readFileSync()`（仅限 Node；浏览器入口点会直接抛出异常，而不是伪造一个文件系统）。返回工作表名、`!ref`、`!merges`、`!rows`/`!cols`（隐藏行/列），以及每个单元格的 `{t, v, f, w, z}`——值、公式文本、格式化显示字符串、以及通过真实 `styles.xml`/数字格式解析得到的日期型单元格。针对真实的 `xlsx@0.18.5` 包做了差分测试，共 30 项 MATCH + 3 项已披露的例外（同一根因——`src/reader.rs` 目前会裁剪掉 `xml:space="preserve"` 标记的有效空白，详见 CHANGELOG.md）。同时支持 Node（CJS/ESM）与浏览器（`"browser"` export condition 已接入内联字节 + `initSync` 的 WASM artifact）——这一链路不仅通过 Node 模拟该 export condition 验证，还通过真实的无头 Chrome 进程加载实际打包产物、并从页面自身 DOM 中读取 `XLSX.read()` 结果验证过（不支持也未验证 Safari）。浏览器入口点仍然假定通过打包工具使用（其共享代码中含有 CJS 的 `require('ssf')`），并非可直接以 `<script type="module">` 免构建使用的形式——但真实的 npm tarball 安装（而非相对本仓库的 import）以及 CJS/ESM 打包现在都能直接工作，无需手动复制任何资源文件。
 
 ### 从源码构建
 
