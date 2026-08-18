@@ -43,8 +43,13 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
   handling — see CHANGELOG.md) against the oracle. `write*` remains unimplemented; npm
   publish of `packages/xlsx` has not happened (`0.0.0-development`, currently **not
   publishable as-is** — see "npm/JS/WASM findings" below).
-- Published: `elixcee` 0.4.0 (crates.io, PyPI), `elixcee-types` 0.1.0 (crates.io, unchanged
-  since 0.2.0), CLI binaries (GitHub Release).
+- Published: `elixcee` 0.5.0 and `elixcee-types` 0.2.0 on crates.io (the enum-variant-
+  addition semver bump `Variant::Null` required — see CHANGELOG.md's "`elixcee-types`
+  0.2.0" section). **PyPI (`elixcee` 0.5.0) and the CLI GitHub Release (`bin-v0.5.0`) are
+  not yet done as of this note** — crates.io publish and PyPI/CLI release are separate,
+  independently-approved steps in this project's process; PyPI still serves `elixcee`
+  0.4.0, the CLI GitHub Release still serves `bin-v0.3.0` (0.4.0's CLI binaries were never
+  released at all — a pre-existing gap, not caused by this round, not yet resolved).
 - Not re-scored in this file (see CHANGELOG.md history for how the project's own scoring
   framework has been applied each round) — not claimed as validated against Microsoft Excel
   itself anywhere, because the VBA-vs-Excel axis has never been exercised (see "Known gaps"
