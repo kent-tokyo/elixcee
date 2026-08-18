@@ -5,131 +5,154 @@ shipped, see `CHANGELOG.md` — this file only restates completed work when need
 what's left. Historical phase-by-phase implementation notes (Japanese) live in
 `tasks/todo.md`.
 
-## Current state (0.3.0, released)
+## Current state (0.3.0 released; unreleased work since, not yet version-bumped)
 
-- **VBA object model**: `Range`/`Set`/`Union`/`Areas`/`SpecialCells`, multi-area Copy/Paste
-  (matching-shape only), `ActiveSheet`/`ThisWorkbook`/`ActiveWorkbook`, `With Range(...)`,
-  typed `Function` params/return, `Mod`/`\`/`^`/`And`/`Or`/`Xor`/`Not` at real VBA precedence,
-  comma-separated multi-declarator `Dim`, single-line `If cond Then stmt [Else stmt]`,
-  `Fix`/`Sgn`/`Round`/`CBool`/`Date`/`Time`/`Now` built-in functions (0.3.0).
+- **VBA object model**: `Range`/`Set`/`Union`/`Areas`/`SpecialCells`, matching-shape
+  multi-area Copy/Paste, `ActiveSheet`/`ThisWorkbook`/`ActiveWorkbook`, `With Range(...)`,
+  typed `Function` params/return, `Mod`/`\`/`^`/`And`/`Or`/`Xor`/`Not` at real VBA precedence
+  (real bitwise semantics on non-Boolean operands), comma-separated multi-declarator `Dim`,
+  single-line `If cond Then stmt [Else stmt]`. `Dim x` now registers a real `Empty`-valued
+  variable (was a complete no-op before this round — see "Recently fixed" below).
+- **Built-in functions**: `Fix`/`Sgn`/`Round`(banker's rounding, rejects negative digits)/
+  `CBool`/`CInt`/`CLng`(also banker's rounding)/`IsNumeric`(numeric strings)/`Str`(leading-
+  space quirk, distinct from `CStr`)/`Val`(leading-numeric-prefix parsing)/`Date`/`Time`/
+  `Now` (real values, callable with or without parens).
+- **Test infrastructure**: two new committed, oracle-independent classifiers, distinct from
+  the existing LibreOffice/Excel oracle-comparison axis (`compat/corpus/classify.mjs`):
+  `compat/corpus/classify-elixcee-outcomes.mjs` explains elixcee's own pass/fail outcome
+  for all 581 corpus scenarios by exact scenario ID (0 `UNEXPLAINED`, 0 `MISMATCH`); the new
+  `compat/vba-semantics/` suite (208 cases) checks VALUE correctness against documented real
+  VBA semantics, not just pass/fail (0 `BUG`, 0 `UNCLASSIFIED`, 1 disclosed
+  `KNOWN_LIMITATION`) — see each directory's own README for what it measures and doesn't.
 - **`@elixcee/xlsx`**: all 33 `utils.*` exports differential-tested against the real
   `xlsx@0.18.5` oracle (512 MATCH + 14 disclosed intentional divergences), `SSF` number
   formatting backed by the real `ssf` engine, six real security fixes ported from oracle
   defects. `XLSX.read()` is a working sync WASM bridge (Node + browser), 19/19 MATCH against
   the oracle. `read`/`readFile`/`write*` beyond `read()` are not implemented; npm publish of
-  `packages/xlsx` has not happened (`0.0.0-development`).
+  `packages/xlsx` has not happened (`0.0.0-development`, currently **not publishable as-is**
+  — see "npm/JS/WASM findings" below).
 - Published: `elixcee` 0.3.0 (crates.io, PyPI), `elixcee-types` 0.1.0 (crates.io, unchanged
   since 0.2.0), CLI binaries (GitHub Release).
-- Self-assessed at 87-89/100 against the project's own scoring framework — not claimed as
-  90+ because the VBA-vs-Microsoft-Excel axis has never been exercised (see below).
+- Self-assessed at 87-89/100 against the project's own scoring framework as of 0.3.0's
+  release — not re-scored here (this file doesn't set that number; see CHANGELOG.md history
+  for how it's been assigned each round) — not claimed as 90+ because the VBA-vs-Microsoft-
+  Excel axis has never been exercised (see "Known gaps" below).
 
-## Known gaps (from CHANGELOG's "Known limitations", not re-litigated here)
+## Recently fixed (this round — full detail and evidence in CHANGELOG.md's `[Unreleased]`)
+
+Comma-separated `Dim`; single-line `If`/`Else` (plus two safety gaps a review caught before
+shipping: `Exit`/`GoTo` inside it, and comma-`Dim`'s trailing-syntax tolerance); `Not`
+bitwise semantics; `Fix`/`Sgn`/`Round`/`CBool` (root-caused via an automated pass over the
+581-scenario corpus's non-parse-error failures); `Round`'s negative-digit rejection;
+`Date`/`Time`/`Now`'s real values and no-parens calling; `CInt`/`CLng` banker's rounding;
+`IsNumeric` numeric-string recognition; `Str()` vs `CStr()`'s leading-space distinction;
+`Val()`'s leading-numeric-prefix parsing; `Dim`'s `Empty`-variable registration (found by
+the new `compat/vba-semantics/` suite's first run). The last several were found by two
+different systematic methods — an `eval_vba_func` source-code audit, and (once it existed)
+the new suite itself — rather than one-off bug reports, and that audit is itself now
+recorded as exhausted: no further candidates were found by either method as of this round.
+
+## Known gaps
 
 1. **No Microsoft Excel validation, at all.** Every VBA differential result to date is
    against LibreOffice, not Excel — and LibreOffice's own VBA layer is not a verified proxy
    for Excel's. No Windows/Excel environment has ever been available in this project's
-   toolchain. This is the single largest gap blocking a 90+ claim.
+   toolchain. This is the single largest gap blocking a 90+ claim. The
+   `compat/oracle-excel-com/CONTRACT.md` adapter is written and waiting for one.
 2. **LibreOffice headless oracle is broken for most of the VBA corpus.** 578/581 scenarios
    are `ORACLE_UNAVAILABLE` — headless UNO hangs on any `Range`/`Cells` access. Root-caused,
-   not fixed (explicitly out of scope for 2B/2C: fixing it doesn't raise elixcee's own
-   product value, only this one oracle's usability).
-3. ~~Comma-separated multi-declarator `Dim`~~ — **fixed** (Unreleased): `parse_dim` now loops
-   over every comma-separated declarator instead of returning after the first non-built-in
-   one. Corpus's own parse-error count: 8 → 4 (see item 3b, a bug this fix unmasked).
-3b. ~~Single-line `If cond Then stmt` (no `End If`) doesn't parse at all~~ — **fixed**
-   (Unreleased): discovered while verifying item 3's fix (the 4 corpus parse errors left
-   after fixing comma-`Dim` were all this, not further `Dim` cases). Identifier-led inline
-   statements are recognized (covers 100% of what the corpus actually uses here), plus
-   `Exit For|Do|Sub|Function`/`GoTo <label>` handled explicitly — an early version routed
-   those through the generic identifier-statement parser too, which silently turned
-   `If done Then Exit Sub` into a no-op instead of exiting (caught in review, fixed before
-   shipping — see CHANGELOG). Corpus's own parse-error count is 0/581, verified by
-   rerunning the corpus, not just unit tests.
-4. ~~`Not` is boolean-truthy, not bitwise~~ — **fixed** (Unreleased): `Not` now splits
-   logical-vs-bitwise the same way `And`/`Or`/`Xor` already did — a genuine `Boolean` gets
-   logical negation, anything else gets a real bitwise complement. `Not 5 And 3` now matches
-   real VBA's `2`.
-5. **Multi-area Paste** only executes for the matching-shape case; every other combination
-   (count/shape mismatch, single↔multi either direction) stays diagnose-only.
+   not fixed (explicitly ruled out twice already: fixing it doesn't raise elixcee's own
+   product value, only this one oracle's usability — revisit only if the corpus itself
+   becomes the bottleneck rather than VBA coverage).
+3. **Multi-area Paste** only executes for the matching-shape case; every other combination
+   (count/shape mismatch, single↔multi either direction) stays diagnose-only. Extending this
+   correctly needs a real oracle to verify against (LibreOffice's is broken, Excel's doesn't
+   exist here) — implementing more without one risks guessing at real Excel Paste semantics,
+   against this project's own stated epistemics.
+4. **`Array` out-of-bounds error message text doesn't match real VBA's exact wording**
+   ("Array 'arr': index N out of bounds (len=N)" vs. real VBA's "Subscript out of range").
+   The error *condition* is correct (a real runtime error fires); only the message text
+   diverges. Disclosed as a `KNOWN_LIMITATION` in `compat/vba-semantics/expected-results.json`
+   rather than fixed — lower-value than the gaps already tracked here.
+5. **`Time()`/`Now()` report `TypeName` `"Double"`, not real VBA's `"Date"`.** `Variant::Date`
+   is whole-day-only (`i64`) in this codebase and can't carry a sub-day component without a
+   structural, shared-type change (`elixcee-types`' public enum, semver-relevant). See "Next
+   candidates" below — a design (not implementation) is the next step here.
 6. **`XLSX.read()`** covers cell values/formulas/dates/dimension/hidden rows-cols/formatting
    display strings, but not `read`/`readFile` (file-path/stream entry points), `write*`, or
    non-Node browser dispatch beyond the bundled-consumption case (its shared code still has a
-   CJS `require('ssf')`).
-7. ~~581-scenario corpus's 41 non-parse-error failures were uncategorized~~ — **root-caused**
-   (Unreleased): a pass over every failure's actual error message/category (not the vague
-   "probably intentional negative scenarios" guess from the previous round) found 28/41
-   were three missing built-in VBA functions (`Sgn` ×13, `Fix` ×12, `Round` ×3), 2 more were
-   a related `CBool` type bug — all now fixed (see CHANGELOG). The remaining 11 are correctly
-   left as failures: 8 genuine `Division by zero` (matches real VBA), 2 explicitly-named
-   `unsupported_functions` scenarios (deliberate negative tests), 1 `Timer()` (nondeterministic
-   category — low value to implement, arguably intentional to leave out of a deterministic
-   engine). Corpus is now 570/581 elixcee-side, with every remaining failure understood and
-   correct, not just uninvestigated. Done via an ad-hoc analysis pass, not a new committed
-   script — the corpus is small and fixed-size enough that this didn't seem worth a permanent
-   tool; revisit if the corpus grows or this needs repeating regularly.
-8. ~~Two small things found while implementing item 7~~ — **fixed** (Unreleased):
-   - `Round(number, negativeDigits)` now errors ("Invalid procedure call or argument"),
-     matching real VBA, instead of silently returning a plausible answer.
-   - `Now`/`Date`/`Time` no longer return a Rust debug-formatted `SystemTime{...}` string.
-     `Date()` returns a real `Variant::Date` matching the system clock; `Time()`/`Now()`
-     return a numerically correct `Variant::Float` rather than `Variant::Date`, since
-     `Variant::Date` is whole-day-only (`i64`) and can't carry a sub-day component without
-     a shared-type change (`TypeName(Time())`/`TypeName(Now())` report `"Double"`, not real
-     VBA's `"Date"` — disclosed, not silent).
-9. ~~Bare no-parens zero-arg VBA function calls (`Date` without `()`) didn't parse~~ —
-   **fixed** (Unreleased): a bare identifier now falls back to calling `Date`/`Now`/`Time`
-   as zero-arg functions only after every other variable/constant lookup fails — the only
-   three `eval_vba_func` entries that accept zero arguments, so this doesn't generalize to
-   "any unrecognized identifier might be a function call" and a genuine variable-name typo
-   still errors exactly as before (pinned by a regression test).
-10. ~~`CInt`/`CLng` used away-from-zero rounding, not real VBA's banker's rounding~~ —
-    **fixed** (Unreleased): found by auditing for the same bug class as the `Round()` fix
-    (item 8) — `to_i64_rounded` already documented that `CLng`/`Round` should share the
-    round-half-to-even convention, but `CInt`/`CLng`'s own arm never actually used it
-    (`CInt(0.5)` was `1`, not `0`). Now reuses `to_i64_rounded` directly. A pre-existing
-    test had computed `CLng(-2.5)` without ever asserting on it — likely how this went
-    unnoticed until now.
-11. ~~`IsNumeric` didn't recognize numeric strings~~ — **fixed** (Unreleased): only checked
-    whether the argument was already an `Integer`/`Float` Variant, so `IsNumeric("123")` was
-    `False`. Found by a systematic pass over `eval_vba_func` for the same bug class as items
-    8/10 (functions with real, verifiable, previously-untested gaps against documented VBA
-    semantics). Now also accepts a parseable numeric string and `Empty`; doesn't attempt
-    VBA's fuller numeric-string grammar (currency symbols, locale decimal separators) — no
-    evidence it's needed, and this project doesn't guess at locale-specific parsing.
-12. ~~`Str()` shared `CStr()`'s implementation~~ — **fixed** (Unreleased): real VBA's `Str()`
-    reserves a leading space for the sign position on a non-negative number (`Str(459)` is
-    `" 459"`), a genuine behavior difference from `CStr(459)` == `"459"`, not an alias.
-    Found in the same systematic pass as item 11. Now its own arm, scoped to numeric inputs.
+   CJS `require('ssf')`). No Rust writer exists at all yet, for either XLSX or ODS format.
+7. **`packages/xlsx` is not currently publishable, even as an alpha** — three concrete,
+   verified blockers, not a vague "needs polish": `package.json`'s `"private": true` hard-
+   blocks `npm publish` outright; first publish of a scoped package needs `--access public`
+   or `publishConfig.access: "public"`, neither set; and there is no package-level
+   `README.md`, so `npm`'s registry page would show only the `description` field, which opens
+   with "Drop-in replacement for xlsx" without disclosing that `write*`/`readFile` are
+   unimplemented — actively misleading for a release whose own premise is "read-focused,
+   honestly scoped." See "npm/JS/WASM findings" below for the full investigation.
+8. **No Node/WASM/JS testing wired into CI at all.** `.github/workflows/ci.yml` runs Rust
+   workspace tests, a release build, a Python feature check, and `elixcee-types` clippy —
+   nothing Node-related. See "npm/JS/WASM findings" below for exactly what's missing vs.
+   what already works locally and just needs wiring.
+9. **`@elixcee` npm scope ownership is unconfirmed** — cannot be resolved from this
+   environment (`npm whoami` returns 401; no working publish credential exists locally, no
+   analogous GitHub Actions secret exists yet either, unlike `CARGO_REGISTRY_TOKEN` for
+   crates.io). Only the human maintainer can check this (`npm login` then `npm org ls
+   elixcee`, or the npmjs.com web UI). (Corrects a stale, dangling citation this file
+   previously had, pointing at a CHANGELOG.md "Phase 0 scope-ownership note" that doesn't
+   actually exist in CHANGELOG.md's text — found and fixed this round.)
 
-This systematic `eval_vba_func` audit (items 10-12) covered every function grouped or
-reused in a way that risked one masking another's real behavior; no further candidates
-were found by that specific method. A fresh audit is still worth doing if this file's own
-scope ever expands (new functions added) or before a next 90+ push.
+## npm/JS/WASM findings (from a dedicated investigation this round — see git history for the
+full report; this is a summary)
 
-13. ~~`Val()` required its entire argument to parse as a number~~ — **fixed** (Unreleased):
-    `Val("123abc")` was `0`, not real VBA's `123`, which parses a leading numeric prefix
-    and stops at the first character that doesn't fit. Found while designing the value-
-    correctness suite below (item 14) — the same bug class as items 11/12, found by a
-    different route (writing a reference implementation for `Val()` while authoring test
-    cases, rather than a source-code audit pass). Scoped to the core grammar; real VBA's
-    documented embedded-whitespace-stripping inside the numeric prefix isn't attempted.
+Investigated, not implemented or published: CI coverage, npm scope ownership, and
+`packages/xlsx` alpha-release readiness.
 
-## Next candidates, roughly by leverage
+- **What already works locally and just needs CI wiring** (verified live, not assumed):
+  `compat/differential/`'s utils (512 MATCH + 14 divergences)/SSF (1831/1831)/read
+  (19/19)/metadata (34/34) suites all still pass when actually re-run; `packages/xlsx`'s
+  TypeScript compiles cleanly both with and without the DOM lib present; CJS↔ESM export
+  identity is already asserted by `metadata.test.mjs`.
+- **What doesn't exist at all yet, not just unwired**: an `npm pack` content-audit script (a
+  manual dry-run is clean today — 16 files, 337.4 kB, nothing missing or unwanted — but
+  nothing asserts this in CI); a real browser-bundler smoke test (no bundler is installed in
+  this project's toolchain at all); a WASM binary size regression check (current baseline:
+  `elixcee_wasm_bg.wasm` 263.0 kB, `elixcee_wasm.browser.mjs` 359.4 kB inlined-base64, no
+  threshold recorded anywhere).
+- **0.2.0-alpha.1 (read+write) scope, if ever pursued**: `readFile` is near-free (pure
+  WASM-bridge wiring onto the already-working `read_workbook_from_bytes`). `write`/
+  `writeFile`/`writeFileSync` need a genuinely new Rust writer module — none exists for
+  either XLSX or ODS today (confirmed by grep: no `write_workbook`/`writer.rs` anywhere in
+  `src/`). One concrete risk to check *before* building, not assume: whether the `zip` crate
+  feature set already trimmed for `wasm32-unknown-unknown` compatibility (`deflate`-only, no
+  `zstd`) even supports *writing* under that target, not just reading.
+- **`check-versions.sh` has no awareness of `packages/xlsx/package.json`'s own version** —
+  only reconciles root `Cargo.toml` vs `pyproject.toml`. `0.0.0-development` could drift
+  silently relative to a real release version with no CI signal.
 
-Not committed to a specific order — pick based on what the next release is trying to prove.
+## Date/Time runtime model — design needed, not started
 
-- **Microsoft Excel validation** (item 1) — blocked on getting a Windows+Excel environment,
-  not on engineering effort; the `compat/oracle-excel-com/CONTRACT.md` adapter is already
-  written and waiting. Highest-value item on this list once an environment exists.
-- **LibreOffice headless hang** (item 2) — would unblock 578 currently-dead corpus scenarios,
-  but was explicitly ruled out twice already as not raising elixcee's own product value.
-  Worth revisiting only if the corpus itself becomes the bottleneck rather than VBA coverage.
-- **`XLSX.read`/`readFile`/`write*`** — extends `@elixcee/xlsx` from "can read what B7/2C's
-  read() covers" toward actual drop-in file I/O parity with SheetJS.
-- **General multi-area Paste** (item 5) — object-model completeness beyond what B7c shipped.
-- **`packages/xlsx` npm publish** — currently `0.0.0-development`; would need a version/scope
-  decision (see `CHANGELOG.md`'s Phase 0 note on `@elixcee` npm-scope ownership being
-  unconfirmed) before it's a real release candidate.
+`Variant::Date(i64)` is whole-day-only, a structural reason `Time()`/`Now()` can't report
+`TypeName` `"Date"` (see "Known gaps" #5). Fixing this properly touches `elixcee-types`'
+public enum (semver-relevant: would be `elixcee-types` 0.2.0, `elixcee` 0.4.0-shaped, not a
+patch). Before any implementation, this needs a written comparison of at least:
+
+- **A**: change `Variant::Date(i64)` to `Variant::DateSerial(f64)` (breaking).
+- **B**: keep `Variant::Date(i64)`, add a new `Variant::DateTime(f64)` alongside it
+  (additive, non-breaking to existing `Date`-typed code paths).
+- **C**: a `DateTime`-capable value only in some internal runtime representation, never
+  exposed through the public `Variant` enum at all.
+
+Each option needs to be checked against: the Rust public API surface, `elixcee-types`'
+semver impact, the Python bindings' `date`/`datetime`/`time` mapping, JSON (`--json` cell-
+value serialization — see the `compat/vba-semantics/` finding that `Date` already renders as
+a formatted string, not a raw serial, in that output), the formula engine's own date
+handling, XLSX serial-number round-tripping, `date1904` mode, the historical Excel
+serial-60 leap-year bug (real Excel treats 1900 as a leap year; whether/how a fix should
+replicate that quirk for compatibility is itself a real question), arithmetic/comparison
+operators, WASM payload size, and backwards compatibility for existing `Variant::Date`
+consumers. This is design work — an ADR and a recommendation — not a task to implement
+without that decision being made first.
 
 ## Non-goals (still, per existing ADRs)
 

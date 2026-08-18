@@ -8,8 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`compat/vba-semantics/`, a new VBA value-correctness suite** — a genuinely different
+  question from `compat/corpus/`'s own "does elixcee run without erroring": is the VALUE
+  elixcee produces the one real, documented VBA semantics says it should be. Needs no
+  oracle — `reference/*.mjs` are small, independently-checkable pure-JS reference
+  implementations of documented real VBA semantics (banker's rounding, `Str()`'s
+  leading-space quirk, `Val()`'s prefix parsing, `And`/`Or`/`Xor`/`Not`'s logical-vs-bitwise
+  split, ...), used to compute 208 generated cases' expected outcomes programmatically. Six-
+  verdict classification (`MATCH_DOCUMENTED_SEMANTICS`/`EXPECTED_ERROR`/`NONDETERMINISTIC`/
+  `KNOWN_LIMITATION`/`BUG`/`UNCLASSIFIED`); `BUG`/`UNCLASSIFIED` both gate at 0. Current
+  state: 198 `MATCH_DOCUMENTED_SEMANTICS` + 7 `EXPECTED_ERROR` + 2 `NONDETERMINISTIC` + 1
+  disclosed `KNOWN_LIMITATION` (array-out-of-bounds error message text doesn't match real
+  VBA's exact wording) = 208, 0 `BUG`. See `compat/vba-semantics/README.md`.
+
 ### Fixed
 
+- `Dim x` (and `Dim x As <builtin type>`) was a complete no-op — the variable name was
+  never recorded at all, so `IsEmpty(x)`/`x + 5`/any read before assignment hit "Undefined
+  variable" instead of real VBA's `Empty`. An extremely common real-world VBA idiom
+  (`Dim x`, then `If IsEmpty(x) Then ...` before ever assigning it), found on the very
+  first run of the new `compat/vba-semantics/` suite (see "Added" above), not by
+  source-code audit. `x` now registers as a real `Empty`-valued variable when `Dim`'d.
 - `Val()` required its argument to parse as a number in its *entirety* — `Val("123abc")`
   was `0`, not real VBA's `123`. Real VBA's `Val()` parses a leading numeric prefix and
   stops at the first character that doesn't fit, only returning `0` when there's no valid
