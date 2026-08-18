@@ -76,8 +76,9 @@ recorded as exhausted: no further candidates were found by either method as of t
    rather than fixed — lower-value than the gaps already tracked here.
 5. **`Time()`/`Now()` report `TypeName` `"Double"`, not real VBA's `"Date"`.** `Variant::Date`
    is whole-day-only (`i64`) in this codebase and can't carry a sub-day component without a
-   structural, shared-type change (`elixcee-types`' public enum, semver-relevant). See "Next
-   candidates" below — a design (not implementation) is the next step here.
+   structural, shared-type change (`elixcee-types`' public enum, semver-relevant). Design
+   completed, not yet implemented — see `docs/date-time-runtime-model-adr.md` and "Date/Time
+   runtime model" below.
 6. **`XLSX.read()`** covers cell values/formulas/dates/dimension/hidden rows-cols/formatting
    display strings, but not `read`/`readFile` (file-path/stream entry points), `write*`, or
    non-Node browser dispatch beyond the bundled-consumption case (its shared code still has a
@@ -130,29 +131,20 @@ Investigated, not implemented or published: CI coverage, npm scope ownership, an
   only reconciles root `Cargo.toml` vs `pyproject.toml`. `0.0.0-development` could drift
   silently relative to a real release version with no CI signal.
 
-## Date/Time runtime model — design needed, not started
+## Date/Time runtime model — designed, not implemented
 
 `Variant::Date(i64)` is whole-day-only, a structural reason `Time()`/`Now()` can't report
 `TypeName` `"Date"` (see "Known gaps" #5). Fixing this properly touches `elixcee-types`'
 public enum (semver-relevant: would be `elixcee-types` 0.2.0, `elixcee` 0.4.0-shaped, not a
-patch). Before any implementation, this needs a written comparison of at least:
-
-- **A**: change `Variant::Date(i64)` to `Variant::DateSerial(f64)` (breaking).
-- **B**: keep `Variant::Date(i64)`, add a new `Variant::DateTime(f64)` alongside it
-  (additive, non-breaking to existing `Date`-typed code paths).
-- **C**: a `DateTime`-capable value only in some internal runtime representation, never
-  exposed through the public `Variant` enum at all.
-
-Each option needs to be checked against: the Rust public API surface, `elixcee-types`'
-semver impact, the Python bindings' `date`/`datetime`/`time` mapping, JSON (`--json` cell-
-value serialization — see the `compat/vba-semantics/` finding that `Date` already renders as
-a formatted string, not a raw serial, in that output), the formula engine's own date
-handling, XLSX serial-number round-tripping, `date1904` mode, the historical Excel
-serial-60 leap-year bug (real Excel treats 1900 as a leap year; whether/how a fix should
-replicate that quirk for compatibility is itself a real question), arithmetic/comparison
-operators, WASM payload size, and backwards compatibility for existing `Variant::Date`
-consumers. This is design work — an ADR and a recommendation — not a task to implement
-without that decision being made first.
+patch). Full comparison, grounded in verified facts about the current codebase (not just
+the option list), lives in `docs/date-time-runtime-model-adr.md` — three options compared
+(A: change `Variant::Date(i64)` to `Variant::DateSerial(f64)`, breaking; B: keep `Date`,
+add an additive `Variant::DateTime(f64)`; C: an internal-only representation never exposed
+through `Variant` — shown not to actually solve the problem, since `Now()`'s return value
+must be a real `Variant` to be assignable to a VBA variable at all). **Recommendation: B**
+— same `elixcee-types` 0.2.0 version-bump cost as A, but far less code churn and zero
+observable-behavior change for any value that's `Variant::Date` today. Not implemented —
+this is a design document awaiting a decision, not a task in progress.
 
 ## Non-goals (still, per existing ADRs)
 
