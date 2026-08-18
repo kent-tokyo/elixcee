@@ -3110,6 +3110,11 @@ impl Vm {
                 Ok(Variant::Integer(n))
             }
             // ── Array functions ──────────────────────────────────────────────
+            // `Array(a, b, c)` builds a zero-based Variant array from its
+            // arguments — exactly `Variant::Array`'s own shape (elixcee's
+            // arrays are 0-indexed), so this needs no conversion. `Array()`
+            // with no arguments is a legal empty array.
+            "array" => Ok(Variant::Array(vals.to_vec())),
             "split" => {
                 if vals.is_empty() { return Err("Split requires at least 1 argument".into()); }
                 let s = vba_to_str(&vals[0]);

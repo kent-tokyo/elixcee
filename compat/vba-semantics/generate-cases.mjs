@@ -1051,11 +1051,14 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     { value: 5 },
     'Real VBA supports declaring a dynamic array with empty parentheses and sizing it later via ReDim -- Dim arr() followed by ReDim arr(5) is valid VBA that gives UBound(arr) = 5.',
     'elixcee\'s array-declarator parser requires at least one dimension-size expression inside the parens -- Dim arr() fails to parse entirely (actual: parse_error "unexpected token in expression: RParen"). Only the ReDim-without-a-prior-sized-Dim spelling works around this. Found while building this suite, not previously disclosed.');
-  addCase('array_builtin_function_unsupported', CAT, 'The Array(...) builtin function is not implemented',
+  addCase('array_builtin_function_unsupported', CAT, 'The Array(...) builtin function builds a zero-based array',
     '  Dim arr\n  arr = Array(10, 20, 30)\n  Range("A1").Value = arr(1)',
     { value: 20 },
-    'Real VBA\'s Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element).',
-    'elixcee has no Array() builtin at all (actual: undefined_sub_or_function "Unknown VBA function: \'array\'") -- the only way to build an array is a Dim/ReDim declaration plus individual element assignments. Found while building this suite, not previously disclosed.');
+    'Real VBA\'s Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element). (Fixed this round: elixcee had no Array() builtin at all, so the only way to build an array was a Dim/ReDim declaration plus individual element assignments.)');
+  addCase('array_builtin_first_and_last_elements', CAT, 'Array(...) indexes from 0 through UBound',
+    '  Dim arr\n  arr = Array(10, 20, 30)\n  Range("A1").Value = arr(0) + arr(2) + UBound(arr)',
+    { value: 42 },
+    'Confirms the zero-based bound independently of the middle-element case: arr(0)=10, arr(2)=30, and UBound is 2 for three elements — 10+30+2 = 42.');
 }
 
 // ── null_propagation ─────────────────────────────────────────────────────────

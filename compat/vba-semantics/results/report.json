@@ -1,10 +1,10 @@
 {
-  "total": 385,
+  "total": 386,
   "counts": {
-    "MATCH_DOCUMENTED_SEMANTICS": 340,
+    "MATCH_DOCUMENTED_SEMANTICS": 342,
     "EXPECTED_ERROR": 23,
     "NONDETERMINISTIC": 2,
-    "KNOWN_LIMITATION": 20,
+    "KNOWN_LIMITATION": 19,
     "BUG": 0,
     "UNCLASSIFIED": 0
   },
@@ -2012,10 +2012,14 @@
     {
       "id": "array_builtin_function_unsupported",
       "category": "array_bounds",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee has no Array() builtin at all (actual: undefined_sub_or_function \"Unknown VBA function: 'array'\") -- the only way to build an array is a Dim/ReDim declaration plus individual element assignments. Found while building this suite, not previously disclosed.",
-      "documented": "real VBA: 20",
-      "actual": "expected value 20, but the scenario errored: Unknown VBA function: 'array'"
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Real VBA's Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element). (Fixed this round: elixcee had no Array() builtin at all, so the only way to build an array was a Dim/ReDim declaration plus individual element assignments.)"
+    },
+    {
+      "id": "array_builtin_first_and_last_elements",
+      "category": "array_bounds",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Confirms the zero-based bound independently of the middle-element case: arr(0)=10, arr(2)=30, and UBound is 2 for three elements — 10+30+2 = 42."
     },
     {
       "id": "isnull_of_null_is_true",

@@ -8,6 +8,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### VBA structural semantics
+
+Four language-level gaps closed, each verified against Microsoft's own VBA language
+reference (fetched live, not recalled) before being encoded as an expectation.
+`compat/vba-semantics/` grew **301 → 386 cases**, with `KNOWN_LIMITATION` **28 → 19**
+(nine genuinely fixed, annotations removed rather than weakened — never by changing what a
+case expects). `compat/corpus/`'s 581-scenario regression baseline stays at 0 `UNEXPLAINED`
+/ 0 `MISMATCH`; `cargo test --workspace` passes; `report.json` is byte-identical across two
+consecutive runs.
+
+#### Added
+
+- **The `:` multi-statement-per-line separator** — `a = 1: b = 2: c = 3`, `label1: a = 1`,
+  `MsgBox "x": Exit Sub`, `For i = 1 To 3: … : Next i`, and a single-line `If`'s own
+  `:`-separated Then/Else statement lists (per the If…Then…Else reference: "One or more
+  statements separated by colons; executed if condition is True", example
+  `If A > 10 Then A = A + 1 : B = B + A : C = C + B`). Handled in the parser via the
+  tokenizer's existing `Tok::Colon`, **never** as a pre-tokenize `:`→newline rewrite —
+  which would corrupt a colon inside a string literal, break the `label:` form, and mangle
+  the single-line `If`'s clause boundary. All three are pinned by tests. Each
+  colon-separated statement keeps its own `SourceSpan`, so `--json`'s `location` still
+  points at the individual statement, not the line.
+- **`Variant::Null`** — VBA's "no valid data" value, now genuinely distinct from `Empty`
+  (an uninitialized Variant). Implements the documented rules: arithmetic propagates Null
+  from either side (and *before* operand coercion, so `5 / Null` is Null, not a
+  Division-by-zero error); `&` propagates only when *both* sides are Null (a single Null is
+  a zero-length string); all six comparison operators produce Null, including
+  `Null = Null`; `And`/`Or`/`Xor`/`Not` follow their three-valued truth tables, in which
+  Null does *not* uniformly propagate (`False And Null` is False, `True Or Null` is True);
+  `If Null Then` treats the condition as False (documented, not an error); `IsNull` and
+  `IsEmpty` are now separate questions; `TypeName(Null)`/`VarType(Null)` are `"Null"`/`1`;
+  and a Null reaching a genuinely numeric context raises error 94, `Invalid use of Null`.
+  Adds **no new external surface** — Null serializes exactly as `Empty` already does (JSON
+  `null` / Python `None` / blank cell), so `--json`, the Python bindings and the xlsx/ods
+  writers are unchanged.
+- **`ObjectRef::Nothing`** — a real unset/Nothing state for object variables.
+  `Dim r As Range|Worksheet|Workbook` registers the name as declared-but-unset;
+  `Set r = Nothing` assigns the null reference (it used to silently no-op); every
+  member-access path raises real VBA's error 91 text, `Object variable or With block
+  variable not set`, from one shared constant. `Set r = Nothing` clears only `r` — a
+  `Set r2 = r` alias made earlier stays live and still reads and writes through to the same
+  Range. `<var> Is Nothing` now parses and reflects each variable's own state (only the
+  `Is Nothing` shape; a general `a Is b` is still unparsed rather than guessed at).
+- **New stable error code `E1007`/`object_variable_not_set`**, documented in
+  `docs/agent-contract.md` — a genuinely new error condition, not free-text reuse of an
+  existing code.
+- **`Array(...)`** builtin — builds a zero-based Variant array from its arguments.
+
+#### Changed
+
+- **`With`-target resolution is now a runtime mechanism, not a parse-time textual
+  rewrite.** The target expression is captured unevaluated (`ast::WithTarget`), evaluated
+  **once** on block entry, and pushed onto `Vm::with_stack`; a bare `.member` is a
+  first-class statement and expression form (`Stmt::WithDot`/`Expr::WithDot`) resolved
+  against the innermost entry wherever it appears in the AST. Consequences:
+  `With Cells(r, c)` (any computed target) works; a bare `.member` works at any nesting
+  depth inside `If`/`For`/`Do`/`Select Case` in the body; reassigning a target variable
+  inside the body no longer could (and still cannot) retarget the block; nesting restores
+  each outer target in turn; and the stack is popped on *every* exit path, including
+  `Exit Sub`/`Exit For` and a runtime error, so a target can't leak into whatever runs
+  next. The parser's `with_target`/`with_range_target` fields and the `Stmt::WithRecord`
+  variant are gone.
+- **`With ws` (a Worksheet-typed object variable) now qualifies `.Cells(r, c)` to that
+  worksheet.** It previously wrote to whatever sheet happened to be active — a real,
+  previously-undisclosed bug, surfaced by the runtime-stack work.
+- **`For Each c In Range(...)` binds the loop variable as a live single-cell Range object**
+  as well as a plain value, so `c.Value` reads that cell. It previously fell through to the
+  UDT path and silently yielded `Empty`. Found by `compat/corpus/` reacting to the
+  `Dim c As Range` change above, not by source audit.
+- **A non-numeric string operand of an arithmetic operator raises `Type mismatch`**, real
+  VBA's documented wording. Applied narrowly, via a new `arith_to_f64` wrapper used only by
+  `eval_binop`'s arithmetic arms — the shared `to_f64` helper and its ~53 other call sites,
+  each with its own correct wording for its own failure, are untouched. That blast radius
+  was the exact reason this stayed disclosed rather than fixed when it was first found.
+- `Dim x: x = 5` now parses — the declarator's trailing-syntax tolerance loop was swallowing
+  the `:` separator. Found by a new suite case, not by source audit.
+
 ## [0.4.0]
 
 Root `elixcee` (Rust crate + Python package) only — `elixcee-types` and `elixcee-wasm`

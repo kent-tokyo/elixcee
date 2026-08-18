@@ -65,45 +65,36 @@ a real bug into a passing case by weakening what's expected.
 
 ## Current state
 
-301 cases across 18 categories: the original 12 (numeric conversion/rounding, negative
+386 cases across 25 categories: the original 12 (numeric conversion/rounding, negative
 `\`/`Mod`, logical/bitwise, `Str`/`CStr`/`Val`, `IsNumeric`, `TypeName`/`VarType`,
 `Date`/`Time`/`Now`, `Empty`/`Null`/error values, string boundaries, array indices, Range
-values, error kind), plus six added to reach the 300+ target: division by zero, invalid
-procedure arguments, overflow, single-line-If control transfer, `Exit`
-Sub/Function/For/Do, object-Nothing access, `+`-vs-`&` operator coercion, comparison-
-operator coercion, `Select Case` matching, `With` block resolution, and array bounds.
+values, error kind), plus division by zero, invalid procedure arguments, overflow,
+single-line-If control transfer, `Exit` Sub/Function/For/Do, object-Nothing access,
+`+`-vs-`&` operator coercion, comparison-operator coercion, `Select Case` matching, `With`
+block resolution, and array bounds — and, added for the VBA-structural-semantics round,
+**`null_propagation`** (38), **`colon_statement_separator`** (19), plus large expansions of
+`with_block_resolution` (6 → 23) and `object_nothing_access` (2 → 12).
 Not padded to hit a round number — coverage depth varies by category based on how much
 real semantic subtlety each one has (numeric rounding has the most tie-breaking/edge-case
 richness; `Select Case` matching, being unambiguous control flow with no type-coercion
 question, has none of its 9 cases end up as a disclosed gap).
 
-0 `BUG`, 0 `UNCLASSIFIED`. 28 `KNOWN_LIMITATION` — every one a divergence found *by*
-building this suite (verified against Microsoft's own VBA language reference where the
-answer wasn't already common knowledge), not previously disclosed anywhere else in the
-project, and none fixed this round (a fixed divergence isn't `KNOWN_LIMITATION` by
-definition — it's `MATCH_DOCUMENTED_SEMANTICS`; several *other* divergences found while
-building this same suite, e.g. the Boolean-arithmetic and Empty-equality bugs, were fixed
-and so don't appear here — see CHANGELOG.md). Grouped by root cause rather than by count:
+0 `BUG`, 0 `UNCLASSIFIED`. **19 `KNOWN_LIMITATION`, down from 28** — nine were genuinely
+fixed in the structural-semantics round (a fixed divergence isn't `KNOWN_LIMITATION` by
+definition — it becomes `MATCH_DOCUMENTED_SEMANTICS`/`EXPECTED_ERROR`, and its
+`knownLimitation` annotation is *removed*, not weakened): the three Null-propagation ones,
+the two object-variable unset/Nothing ones, the two `With`-target ones, the `Type mismatch`
+error-message one, and the missing `Array()` builtin. See CHANGELOG.md for what each fix
+actually changed. The remaining 19, grouped by root cause rather than by count:
 
 - **No declared/runtime type-width tracking** (12): `CInt`/`CLng` silently truncate instead
   of raising `Overflow` on out-of-range values (5); a `Left`/`Right`/`Mid`/`Chr`/`InStr`
   call with an out-of-domain argument (negative length, zero start, out-of-range char code)
   silently clamps instead of raising `Invalid procedure call or argument` (7).
-- **Array declaration/resize gaps** (6): `Dim arr(lo To hi)` and `Dim arr()` (empty parens,
+- **Array declaration/resize gaps** (5): `Dim arr(lo To hi)` and `Dim arr()` (empty parens,
   for a later `ReDim`) both fail to parse; `Option Base 1` is parsed but not honored;
   `UBound(arr, dimension)` ignores its dimension argument; `Erase` on a fixed-size array
-  doesn't reset elements to their type default; the `Array(...)` builtin isn't implemented
-  at all.
-- **No Null-propagation semantics anywhere in the VM** (3): `+`, `&` (when *both* operands
-  are Null — one-Null-side already correctly degrades to `""`), and every comparison
-  operator coerce Null to 0/`""` instead of producing Null.
-- **No object-variable unset/Nothing state** (2): a never-`Set` object variable's member
-  access silently no-ops instead of raising "Object variable ... not set"; `Set x = Nothing`
-  silently no-ops instead of actually clearing the reference.
-- **`With`-target resolution is a parse-time literal-string rewrite, not a runtime-resolved
-  stack** (2): can't target a computed expression like `Cells(r, c)`, and a bare `.member`
-  nested inside another block construct (`If`/`For`/`Do`/`Select Case`) within the body
-  isn't recognized.
+  doesn't reset elements to their type default.
 - **No per-Variant stored-type tag distinguishing "string that looks numeric" from
   "genuine number"** (1): `+` between two Variants that both hold strings numeric-adds
   instead of concatenating, even though real VBA's own documented rule concatenates
@@ -114,17 +105,16 @@ and so don't appear here — see CHANGELOG.md). Grouped by root cause rather tha
   Deliberately not "fixed" — the current behavior is far more useful for the overwhelmingly
   more common real-world case (numeric-string-vs-number threshold checks), and the fix
   would need to invert it for every caller, not just this one case.
-- **Error message text only, condition already correct** (1): a numeric Variant plus a
-  non-numeric-string Variant does correctly raise a runtime error (not a silent wrong
-  value), but with elixcee's own coercion-failure wording instead of real VBA's "Type
-  mismatch". Not fixed this round: the message comes from a single helper shared by ~54
-  call sites across the VM, and renaming it without auditing every other caller's own
-  correct wording risks introducing a wrong message elsewhere.
 
-Two more parser gaps were found alongside this work but are *not* in this suite (each is a
-"does it parse at all" question, closer to `compat/corpus/`'s own scope than a value-
-correctness one): the `:` multi-statement-per-line separator doesn't parse at all
-(`a = 1: b = 2` fails), and the two `With`-target gaps above are confirmed only for the
-specific shapes tested (`Cells(...)` as a target, one level of `If` nesting) — not
-exhaustively characterized across every possible target expression or nesting depth. See
-`ROADMAP.md`/`CHANGELOG.md` for the full disclosure.
+Two divergences found alongside the structural-semantics work are *not* in this suite,
+because the shapes this suite can express don't distinguish them; both are recorded in
+`ROADMAP.md`'s known-defects list instead: `Range.Range(...)`/`Range.Cells(...)` inside a
+`With <range>` body resolve absolutely rather than relative to the base range, and a line
+skipped wholesale as an unrecognized *block header* still swallows its trailing
+`:`-separated statements.
+
+One deliberate non-coverage decision: **`Select Case` with a `Null` test expression.**
+Microsoft's `Select Case` reference documents only that `testexpression` is "matched"
+against each `expressionlist` and says nothing about `Null`. Deriving an answer from that
+would be a guess, and this suite doesn't encode guesses — so it's left uncovered rather
+than covered wrongly.

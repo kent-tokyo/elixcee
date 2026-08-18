@@ -2291,8 +2291,15 @@
   {
     "id": "array_builtin_function_unsupported",
     "category": "array_bounds",
-    "description": "The Array(...) builtin function is not implemented",
+    "description": "The Array(...) builtin function builds a zero-based array",
     "vbaSource": "Sub Scenario()\n  Dim arr\n  arr = Array(10, 20, 30)\n  Range(\"A1\").Value = arr(1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "array_builtin_first_and_last_elements",
+    "category": "array_bounds",
+    "description": "Array(...) indexes from 0 through UBound",
+    "vbaSource": "Sub Scenario()\n  Dim arr\n  arr = Array(10, 20, 30)\n  Range(\"A1\").Value = arr(0) + arr(2) + UBound(arr)\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
