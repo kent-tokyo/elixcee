@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.0]
+
+Root `elixcee` (Rust crate + Python package) only — `elixcee-types` and `elixcee-wasm`
+both stay `0.1.0` (no source changes this release; `elixcee-wasm`'s vendored build output
+was regenerated to pick up the fixes below, but its own `src/` wasn't touched) and
+`@elixcee/xlsx` stays `0.0.0-development`/unpublished. Covers this round's `compat/vba-
+semantics/` expansion (208 → 301 cases, 0 `BUG`/0 `UNCLASSIFIED`, 28 disclosed
+`KNOWN_LIMITATION`s — see that entry below and `compat/vba-semantics/README.md` for the
+full breakdown), the new `wasm` CI job, and several real behavior-changing bug fixes found
+while building the suite (Boolean arithmetic, `WorksheetFunction` numeric coercion, `Empty`
+equality, single-line-`If` statement recognition) — all gates green before this bump:
+`cargo test --workspace` (683 passing), `cargo build --release --workspace`,
+`cargo check --features python --lib`, `cargo clippy -p elixcee-types -- -D warnings`, the
+existing 581-scenario `compat/corpus/` suite (0 `UNEXPLAINED`/0 `MISMATCH`, unchanged), and
+the new `wasm`/existing `node-js` CI jobs both confirmed green on real GitHub Actions, not
+just locally.
+
 ### Added
 
 - **`compat/vba-semantics/`, a new VBA value-correctness suite** — a genuinely different
