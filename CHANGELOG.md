@@ -10,12 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.5.0]
 
-Root `elixcee` (Rust crate + Python package) only — `elixcee-types` stays `0.1.0` (gained
-the new `Variant::Null` public enum variant, a semver-relevant addition to review before
-its own next publish, but not itself version-bumped this round), `elixcee-wasm` stays
-`0.1.0` (no source changes; its vendored build output was regenerated to pick up the VM
-changes below), and `@elixcee/xlsx` stays `0.0.0-development`/unpublished/`"private": true`
-(none touched). Built via two parallel, disjoint-scope worktree branches — VBA structural
+Root `elixcee` (Rust crate + Python package) **and** `elixcee-types` (`0.1.0` → `0.2.0`,
+a minor bump, not a patch — see "`elixcee-types` 0.2.0" below for why). `elixcee-wasm`
+stays `0.1.0` (no source changes; its vendored build output was regenerated to pick up the
+VM changes below, and its own `elixcee-types`/`elixcee` path dependencies carry no version
+requirement to update), and `@elixcee/xlsx` stays
+`0.0.0-development`/unpublished/`"private": true` (none touched). Built via two parallel,
+disjoint-scope worktree branches — VBA structural
 semantics (parser/VM: colon-statement separator, `Variant::Null` with documented
 propagation rules, real object-variable unset/`Nothing` state, a runtime `With` stack) and
 `@elixcee/xlsx` consumer/browser validation (a real packed-tarball install smoke, a real
@@ -38,6 +39,18 @@ down from 28, deterministic across 2 runs); the existing 581-scenario `compat/co
 metadata suites (all passing, read+readFile now 30 MATCH + 3 disclosed); a fresh
 `wasm-pack` rebuild of both targets verified via the real packed-tarball consumer smoke and
 a real headless-Chrome smoke (not just Node simulating the `browser` export condition).
+
+### `elixcee-types` 0.2.0
+
+- **Added `Variant::Null`** to the public `Variant` enum (see "VBA structural semantics"
+  below for what it's for). **This is a public-enum-variant addition, not a purely additive
+  change** — any downstream consumer doing an exhaustive `match` on `Variant` (rather than
+  ending in a `_ =>` catch-all) fails to compile against this version until it adds a
+  `Variant::Null` arm. Bumped `0.1.0` → `0.2.0` (a real minor bump, not left at `0.1.0`)
+  specifically because of this — `elixcee` `0.5.0` depends on `elixcee-types = "0.2.0"`
+  (previously `"0.1.0"`), so a `cargo build`/`cargo publish` of `elixcee` against the old
+  `elixcee-types` `0.1.0` on crates.io would fail to resolve `Variant::Null` at all. No
+  other public API surface changed.
 
 ### VBA structural semantics
 
