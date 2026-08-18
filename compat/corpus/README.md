@@ -36,6 +36,30 @@ against a source that wasn't actually used.
   vocabulary this reuses).
 - `run-classify.mjs` — joins the two results files on scenario id, classifies every
   scenario, writes `results/classify-results.json`, prints the summary table.
+- `expected-outcomes.json` / `classify-elixcee-outcomes.mjs` — a **different, oracle-
+  independent** axis: explains elixcee's own pass/fail outcome (not a comparison against
+  LibreOffice or Excel — see "Two independent axes" below).
+
+## Two independent axes — don't conflate them
+
+This directory measures two genuinely different things, and a number from one is never a
+substitute for the other:
+
+1. **elixcee vs. an oracle** (`classify.mjs`/`run-classify.mjs`, `results/classify-
+   results.json`) — did elixcee produce the *same value* as LibreOffice (or, someday,
+   Excel)? This needs a working oracle; see the framing note above and the headless-hang
+   limitation below for why this axis currently produces almost no real `MATCH` verdicts.
+2. **elixcee vs. itself** (`expected-outcomes.json`/`classify-elixcee-outcomes.mjs`,
+   `results/elixcee-outcomes-classified.json`) — did elixcee do what elixcee itself is
+   documented to do? This needs no oracle at all — every non-`PASS` scenario is registered
+   by exact scenario ID with the exact expected error kind/message and a human-written
+   reason grounded in documented real-VBA semantics (division-by-zero genuinely erroring,
+   a worksheet function genuinely being unimplemented, ...). It answers "is elixcee's own
+   behavior internally consistent and understood", not "does elixcee match Excel". Run
+   `node run-elixcee.mjs && node classify-elixcee-outcomes.mjs` to reproduce; the script
+   exits non-zero if any scenario is `UNEXPLAINED` (fails with no registered reason) or
+   `MISMATCH` (registered, but now fails a *different* way than what's registered) — see
+   the script's own header comment for the full verdict vocabulary.
 
 ## How to re-run everything
 

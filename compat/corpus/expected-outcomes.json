@@ -1,0 +1,69 @@
+{
+  "_readme": "Registry of scenario IDs whose elixcee-side outcome is expected to be something other than a plain success, read by classify-elixcee-outcomes.mjs. Every entry is a deliberate, evidence-backed claim — 'this scenario SHOULD fail this specific way, and that is correct VBA behavior, not a bug' — never an excuse to make a genuinely-broken scenario pass the CI gate. Mirrors the anti-laundering discipline compat/differential/classify.mjs's UNSUPPORTED_ALLOWLIST already documents: a new entry needs a real reason. classify-elixcee-outcomes.mjs cross-checks BOTH expectedErrorKind and expectedErrorMessage (exact string, not a substring/fuzzy match) against the actual run, so a regression that changes *how* or *why* a scenario fails still surfaces as MISMATCH rather than silently keeping the old classification. Registering a scenario as 'harness' kind (a timeout/hang/crash) here is never valid — see the script's own header.",
+  "arithmetic_0128": {
+    "classification": "EXPECTED_RUNTIME_ERROR",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "Division by zero",
+    "reason": "5 \\ 0.5 — VBA's \\ (integer division) rounds each operand to a whole number first via banker's rounding (round-half-to-even), not truncation. 0.5 rounds to 0 (nearest even), giving 5 \\ 0 — a real division by zero, matching real VBA, not a bug."
+  },
+  "arithmetic_0144": {
+    "classification": "EXPECTED_RUNTIME_ERROR",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "Division by zero",
+    "reason": "0.1 \\ 0.2 — both operands round to 0 before the \\ operator divides (0.1 and 0.2 are both closer to 0 than to 1), giving a real division by zero."
+  },
+  "arithmetic_0158": {
+    "classification": "EXPECTED_RUNTIME_ERROR",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "Division by zero",
+    "reason": "5 Mod 0.5 — same operand-rounding rule as \\ applies to Mod. 0.5 rounds to 0 (nearest even), giving 5 Mod 0 — a real division by zero."
+  },
+  "arithmetic_0174": {
+    "classification": "EXPECTED_RUNTIME_ERROR",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "Division by zero",
+    "reason": "0.1 Mod 0.2 — both operands round to 0 before Mod divides, giving a real division by zero."
+  },
+  "arithmetic_div_by_zero_0001": {
+    "classification": "EXPECTED_RUNTIME_ERROR",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "Division by zero",
+    "reason": "5 / 0 — a literal division by zero. Real VBA raises the same runtime error."
+  },
+  "arithmetic_div_by_zero_0002": {
+    "classification": "EXPECTED_RUNTIME_ERROR",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "Division by zero",
+    "reason": "-5 / 0 — a literal division by zero."
+  },
+  "arithmetic_div_by_zero_0003": {
+    "classification": "EXPECTED_RUNTIME_ERROR",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "Division by zero",
+    "reason": "0 / 0 — a literal division by zero (indeterminate form still errors in real VBA, it does not produce NaN)."
+  },
+  "arithmetic_div_by_zero_0004": {
+    "classification": "EXPECTED_RUNTIME_ERROR",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "Division by zero",
+    "reason": "3.5 / 0 — a literal division by zero."
+  },
+  "unsupported_functions_0001": {
+    "classification": "EXPECTED_UNSUPPORTED",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "WorksheetFunction.textjoin is not implemented",
+    "reason": "Application.WorksheetFunction.TextJoin — deliberately unimplemented worksheet function (this scenario's own category name is 'unsupported_functions'; it exists specifically to exercise the not-implemented path, not to pass)."
+  },
+  "unsupported_functions_0002": {
+    "classification": "EXPECTED_UNSUPPORTED",
+    "expectedErrorKind": "runtime_error",
+    "expectedErrorMessage": "WorksheetFunction.xlookup is not implemented",
+    "reason": "Application.WorksheetFunction.Xlookup — deliberately unimplemented worksheet function, same reasoning as unsupported_functions_0001."
+  },
+  "nondeterministic_0002": {
+    "classification": "NONDETERMINISTIC",
+    "expectedErrorKind": "undefined_sub_or_function",
+    "expectedErrorMessage": "Unknown VBA function: 'timer'",
+    "reason": "Timer() is not implemented. Its own category is 'nondeterministic' (time-dependent output would make this scenario unable to have a fixed expected value even if Timer() were implemented), so leaving it unimplemented is low-value to fix and the failure is registered rather than chased."
+  }
+}
