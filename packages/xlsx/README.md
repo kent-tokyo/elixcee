@@ -43,6 +43,26 @@ before depending on this for anything beyond the surface it actually covers.
 Calling any of these today will fail (they're simply not exported), not silently
 misbehave — this package never claims a capability it doesn't have.
 
+## Bundling
+
+Both shipped WASM loaders inline the compiled `.wasm` bytes as base64, so bundling this
+package needs **no asset-loader config, no `.wasm` copy step, and no bundler externals** —
+`esbuild --bundle` to either CJS or ESM output just works, verified end-to-end by
+`scripts/wasm-smoke.mjs`. (Before this, the Node loader located its `.wasm` file
+`__dirname`-relative, which is bundle-*output*-relative once bundled: CJS output required
+the consumer to copy the file next to their bundle, and ESM output failed outright with
+`__dirname is not defined`. Both are fixed at the source.)
+
+Bundling for the browser (the `"browser"` export condition) additionally stubs out the Node
+loader via package.json's `browser` field, so a browser bundle carries the WASM payload once
+rather than twice. Verified in an actual headless Chrome process, not only under Node's
+`--conditions=browser` — see `scripts/browser-smoke.mjs`. Chrome/Chromium is the only browser
+covered; Safari is not tested and not claimed.
+
+The cost of inlining, stated rather than glossed over: the packed tarball grew from 339,098
+to 377,685 bytes (+11.4%; unpacked 741,304 -> 829,289, +11.9%) for the same 263,204-byte WASM
+binary.
+
 ## Compatibility scope
 
 This package aims for **drop-in behavioral compatibility** with `xlsx@0.18.5` on the

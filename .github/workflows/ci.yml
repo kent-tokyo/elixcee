@@ -98,6 +98,20 @@ jobs:
         working-directory: packages/xlsx
         run: npm run audit:pack
 
+      # The step above only inspects `npm pack --dry-run`'s file LIST. This one packs a
+      # real .tgz, `npm install`s it into a throwaway package under the runner's tmpdir
+      # (outside the checkout, so no parent node_modules can satisfy the import), and
+      # exercises CJS/ESM/TypeScript/browser-condition/read() entirely from inside that
+      # install — asserting the resolved paths land in the throwaway node_modules, which is
+      # what distinguishes this from every other test here (all of which reach the package
+      # by relative path into packages/xlsx/src). It also logs the packed tarball size.
+      # Needs network: `npm install` of the tarball fetches its `ssf` runtime dependency.
+      # Lives in this job rather than `wasm` because it exercises the committed artifact and
+      # benefits from running on both Node versions in the matrix.
+      - name: packages/xlsx — packed-tarball consumer smoke (real npm install from a .tgz)
+        working-directory: packages/xlsx
+        run: npm run pack:consumer
+
       - name: compat — npm ci
         working-directory: compat
         run: npm ci
@@ -160,13 +174,41 @@ jobs:
         run: npm ci
 
       # Node sync read() against the fresh nodejs-target build; the browser export
-      # condition actually resolving and running (not just resolving); a minimal esbuild
-      # bundle with XLSX.read() called from inside it; the WASM artifact's current size,
+      # condition actually resolving and running (not just resolving); TWO esbuild bundles
+      # (CJS and ESM output, as distinct steps) each calling XLSX.read() from inside the
+      # bundle with no .wasm file copied next to it; the WASM artifact's current size,
       # recorded to this job's own log (not gated against any threshold — no baseline
-      # exists yet to compare against). See wasm-smoke.mjs's own header comment for the
-      # full rationale, including one real consumer caveat found while writing it (the
-      # Node/CJS WASM loader's __dirname-relative .wasm lookup means a bundling consumer
-      # must copy the .wasm file alongside their bundle output, or externalize it).
-      - name: packages/xlsx — WASM bridge smoke test (Node read / browser condition / esbuild bundle / size)
+      # exists yet to compare against). The ESM bundle step used to be impossible: the
+      # wasm-pack-generated Node loader resolved its .wasm via __dirname, which is
+      # bundle-output-relative and absent entirely from ESM output. build.sh now runs
+      # crates/elixcee-wasm/build-node-inline.mjs, which inlines the .wasm bytes as base64
+      # into the loader (the same technique build-browser-inline.mjs already used for the
+      # browser build), so no consumer copy step is required for either format. See
+      # wasm-smoke.mjs's own header comment.
+      - name: packages/xlsx — WASM bridge smoke test (Node read / browser condition / CJS+ESM bundles / size)
         working-directory: packages/xlsx
         run: npm run wasm:smoke
+
+      # Diagnostic, deliberately not `set -e`-fatal: prints exactly what browser the runner
+      # image actually provides, so the browser step below failing to find one is
+      # immediately explainable from this job's own log rather than needing a guess about
+      # the image contents.
+      - name: report available browsers on the runner
+        run: |
+          echo "CHROME_PATH=${CHROME_PATH:-<unset>}"
+          echo "CHROME_BIN=${CHROME_BIN:-<unset>}"
+          which google-chrome google-chrome-stable chromium chromium-browser || true
+          google-chrome --version || true
+
+      # The actual-browser check. Distinct from wasm:smoke's step 2 in exactly one way that
+      # matters: step 2 runs `node --conditions=browser`, which is Node simulating the
+      # browser export condition and proves nothing about a browser; this launches a real
+      # headless Chrome process against a bundle served over real HTTP and reads the result
+      # back out of the browser's own DOM. It logs the resolved executable path and Chrome's
+      # version, so "a browser really ran" is auditable from this log rather than asserted.
+      # Uses no browser-driver dependency at all (Chrome's own --dump-dom) — see
+      # browser-smoke.mjs's header for why that was chosen over playwright-core/
+      # puppeteer-core/chrome-remote-interface. Safari is not covered and is not claimed.
+      - name: packages/xlsx — real headless Chrome smoke test
+        working-directory: packages/xlsx
+        run: npm run browser:smoke
