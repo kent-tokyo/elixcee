@@ -2,7 +2,7 @@
   "name": "@elixcee/xlsx",
   "version": "0.0.0-development",
   "private": true,
-  "description": "In-progress drop-in-compatible reimplementation of xlsx (SheetJS): all utils.* exports and XLSX.read() are implemented and differential-tested against the real package; write()/writeFile()/readFile() are not implemented yet. See README.md.",
+  "description": "In-progress drop-in-compatible reimplementation of xlsx (SheetJS): all utils.* exports, XLSX.read() and XLSX.readFile()/readFileSync() are implemented and differential-tested against the real package; write()/writeFile() are not implemented yet. See README.md.",
   "license": "MIT",
   "type": "commonjs",
   "main": "./src/index.cjs",
@@ -17,7 +17,8 @@
     }
   },
   "browser": {
-    "./src/internal/wasm/elixcee_wasm.node.cjs": false
+    "./src/internal/wasm/elixcee_wasm.node.cjs": false,
+    "fs": false
   },
   "sideEffects": false,
   "engines": {

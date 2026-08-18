@@ -144,6 +144,19 @@ export function read(
   opts?: { type?: 'base64'; cellStyles?: boolean; cellNF?: boolean; cellDates?: boolean }
 ): WorkBook;
 
+// Node-only file-path entry points. Declared with the oracle's own two-names-one-function
+// shape (`XLSX.readFile === XLSX.readFileSync`, confirmed live). The BROWSER build exports
+// both names too, but they throw `ELIXCEE_UNSUPPORTED_IN_BROWSER` — there is no filesystem
+// to read from there. Same narrow opts as `read` above, for the same reason.
+export function readFile(
+  filename: string,
+  opts?: { cellStyles?: boolean; cellNF?: boolean; cellDates?: boolean }
+): WorkBook;
+export function readFileSync(
+  filename: string,
+  opts?: { cellStyles?: boolean; cellNF?: boolean; cellDates?: boolean }
+): WorkBook;
+
 export function encode_col(col: number): string;
 export function decode_col(colstr: string): number;
 export function encode_row(row: number): string;

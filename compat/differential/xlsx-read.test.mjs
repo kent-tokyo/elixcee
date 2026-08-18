@@ -76,13 +76,29 @@ function projectWorkBook(wb) {
 // MATCH). Real array holes (a non-hidden row/col slot) are preserved as holes, not filled
 // with `undefined`/`null` — normalize.mjs distinguishes a hole from an explicit value, and
 // so does the real oracle's own output (confirmed live via `in`).
+//
+// An array in which NOTHING is hidden projects to `undefined`, not to a run of
+// `{hidden:false}` entries. Reason, found while adding the readFile fixture cases below and
+// worth stating rather than working around: on a real .xlsx carrying row-height/column-
+// width metadata (which every real producer emits), the oracle under `cellStyles:true`
+// returns a fully-populated !rows/!cols array describing heights and widths, while this
+// package returns nothing at all because no row or column is hidden. Within the ONLY field
+// these arrays are compared on, both sides say the same thing — "nothing is hidden" — so
+// collapsing that to `undefined` on both sides keeps the comparison apples-to-apples
+// instead of failing on metadata this projection already deliberately drops. It cannot mask
+// a real divergence in either direction: a hidden entry on either side keeps that side's
+// array non-empty while the other collapses to `undefined`, which still mismatches.
 function projectRowsOrCols(arr) {
   if (arr == null) return undefined;
   const out = new Array(arr.length);
+  let anyHidden = false;
   for (let i = 0; i < arr.length; i++) {
-    if (i in arr) out[i] = { hidden: !!arr[i].hidden };
+    if (i in arr) {
+      out[i] = { hidden: !!arr[i].hidden };
+      if (out[i].hidden) anyHidden = true;
+    }
   }
-  return out;
+  return anyHidden ? out : undefined;
 }
 
 function projectSheet(ws) {
@@ -93,10 +109,14 @@ function projectSheet(ws) {
       out['!ref'] = ws['!ref'];
     } else if (key === '!merges') {
       out['!merges'] = ws['!merges'].map((m) => ({ s: { r: m.s.r, c: m.s.c }, e: { r: m.e.r, c: m.e.c } }));
-    } else if (key === '!rows') {
-      out['!rows'] = projectRowsOrCols(ws['!rows']);
-    } else if (key === '!cols') {
-      out['!cols'] = projectRowsOrCols(ws['!cols']);
+    } else if (key === '!rows' || key === '!cols') {
+      // Assigned only when the projection is non-empty: `out[key] = undefined` would create
+      // an own property holding undefined, which is NOT the same as the key being absent —
+      // and absent is exactly what the other side looks like when it emits no array at all.
+      // Setting it unconditionally made a sheet where neither side reports any hidden row
+      // compare as {'!rows': undefined} vs {} and diverge on nothing.
+      const projected = projectRowsOrCols(ws[key]);
+      if (projected !== undefined) out[key] = projected;
     } else if (CELL_REF_RE.test(key)) {
       // .f/.w/.z (Milestone read-item 4/6) are safe to compare unconditionally: every
       // case that doesn't exercise them has the field `undefined` on BOTH sides (a plain
@@ -575,6 +595,113 @@ runReadCaseBytes(
   );
 }
 
+// ---- readFile / readFileSync: the same comparison, against real files on disk ----
+//
+// readFile is a thin wrapper over read() (packages/xlsx/src/index.cjs's readFileSyncImpl:
+// `read(require('fs').readFileSync(filename), opts)`), so these cases are NOT re-testing the
+// parser — every case below runs against real .xlsx FILES that already exist in this repo,
+// which is the part read()'s own byte-buffer cases can't cover: the oracle's readFile does
+// its own file-type sniffing and option handling on the way in, and this is what asserts
+// that path ends at the same WorkBook.
+//
+// Recorded under its own `api` ("readFile"), so the summary at the bottom reports it as its
+// own line rather than inflating read()'s count.
+function runReadFileCase(label, filePath, readOpts, unsupportedCaseId) {
+  const oracleVal = invokeRead((p) => XLSX.readFile(p, readOpts), filePath);
+  const elixceeVal = invokeRead((p) => elixcee.readFile(p, readOpts), filePath);
+  const verdict = classify({
+    api: 'readFile',
+    unsupportedCaseId,
+    oracleA: oracleVal,
+    elixcee: elixceeVal,
+    elixceeErrorCode: elixceeVal.code,
+  });
+  record('readFile', label, verdict);
+  return verdict;
+}
+
+// Every real .xlsx file this repo already has, fixture by fixture: the independent-writer
+// E2E fixture (shared-strings path) plus the whole generated corpus (compat/corpus/
+// workbooks/, built by its own generate-workbooks.mjs — empty, numeric, text, mixed-type and
+// negative-number workbooks).
+// with_text.xlsx's two entries carry an unsupportedCaseId: it is the fixture that exposed a
+// real reader.rs defect (unconditional whitespace trimming, ignoring xml:space="preserve")
+// — see classify.mjs's UNSUPPORTED_ALLOWLIST for the full writeup. It is deliberately kept
+// in this list, registered as a disclosed known defect, rather than quietly dropped from the
+// fixture set so the suite could stay green without saying why.
+const READ_FILE_FIXTURES = [
+  ['tests/fixtures/e2e/source.xlsx (independent writer, shared strings)', '../../tests/fixtures/e2e/source.xlsx', null],
+  ['compat/corpus/workbooks/empty.xlsx', '../corpus/workbooks/empty.xlsx', null],
+  ['compat/corpus/workbooks/numeric_grid.xlsx', '../corpus/workbooks/numeric_grid.xlsx', null],
+  ['compat/corpus/workbooks/with_text.xlsx', '../corpus/workbooks/with_text.xlsx', 'with_text.xlsx'],
+  ['compat/corpus/workbooks/with_negatives.xlsx', '../corpus/workbooks/with_negatives.xlsx', null],
+  ['compat/corpus/workbooks/mixed_types.xlsx', '../corpus/workbooks/mixed_types.xlsx', null],
+];
+for (const [label, rel, caseIdBase] of READ_FILE_FIXTURES) {
+  runReadFileCase(label, join(here, rel), undefined, caseIdBase && `${caseIdBase}:xml_space_preserve_trimmed`);
+  // cellStyles implies cellNF and gates !rows/!cols/.z on BOTH sides (see the read-item-3
+  // and read-item-6 sections above) — running each fixture through both option shapes is
+  // what makes this an opts-passthrough check and not just a happy-path one.
+  runReadFileCase(
+    `${label} [cellStyles+cellDates]`,
+    join(here, rel),
+    { cellStyles: true, cellDates: true },
+    caseIdBase && `${caseIdBase}[cellStyles+cellDates]:xml_space_preserve_trimmed`
+  );
+}
+
+// The same defect, disclosed at its real location: it lives in read() (readFile is a thin
+// wrapper), so it gets a read() case of its own rather than only appearing under the api
+// that happened to expose it. Registered under 'read' in the same allowlist.
+runReadCaseBytes(
+  'compat/corpus/workbooks/with_text.xlsx (whitespace-preserving cell — known reader.rs defect)',
+  readFileSync(join(here, '../corpus/workbooks/with_text.xlsx')),
+  'with_text.xlsx:xml_space_preserve_trimmed'
+);
+
+// A path that doesn't exist: both sides must fail the SAME way. The oracle calls Node's own
+// _fs.readFileSync, and so does this package (deliberately unwrapped — see
+// readFileSyncImpl's doc comment), so both should surface fs's native ENOENT rather than
+// one of them inventing a friendlier error. invokeRead already captures {threw, message,
+// code} for exactly this kind of comparison.
+runReadFileCase('a nonexistent path (both must throw fs\'s own ENOENT)', join(here, '../corpus/workbooks/__does_not_exist__.xlsx'));
+
+// readFile and readFileSync are the SAME function on the oracle (asserted in
+// metadata.test.mjs) — this asserts the behavioral consequence rather than the identity:
+// calling either name on a real file must produce the same WorkBook.
+{
+  const p = join(here, '../../tests/fixtures/e2e/source.xlsx');
+  assert.deepEqual(
+    normalize(projectWorkBook(elixcee.readFileSync(p))),
+    normalize(projectWorkBook(elixcee.readFile(p))),
+    'readFileSync() and readFile() must produce the same WorkBook'
+  );
+  console.log('OK  readFile: readFileSync() and readFile() agree on the same file');
+}
+
+// The browser build must NOT silently pretend to have a filesystem. Same
+// `node --conditions=browser` dispatch as the read-item-5 block above (which is what makes
+// this a real check of the shipped browser entry rather than of a hand-written stub), except
+// what's asserted here is that it THROWS, with the documented error code.
+{
+  const script =
+    "import * as X from '@elixcee/xlsx';\n" +
+    "let out = { threw: false };\n" +
+    "try { X.readFile('/tmp/whatever.xlsx'); } catch (e) { out = { threw: true, code: e.code }; }\n" +
+    "out.aliased = X.readFile === X.readFileSync;\n" +
+    'process.stdout.write(JSON.stringify(out));\n';
+  const r = JSON.parse(
+    execFileSync(process.execPath, ['--conditions=browser', '--input-type=module', '-e', script], {
+      cwd: join(here, '../../packages/xlsx'),
+      encoding: 'utf8',
+    })
+  );
+  assert.equal(r.threw, true, 'browser-entry readFile() must throw, not silently return');
+  assert.equal(r.code, 'ELIXCEE_UNSUPPORTED_IN_BROWSER', `unexpected error code from browser-entry readFile(): ${r.code}`);
+  assert.equal(r.aliased, true, 'browser entry must keep readFile === readFileSync, matching the Node entry and the oracle');
+  console.log('OK  readFile: the browser entry throws ELIXCEE_UNSUPPORTED_IN_BROWSER instead of faking a filesystem');
+}
+
 // ---- summary / exit code (matches xlsx-utils.test.mjs's convention) ----
 //
 // UNSUPPORTED/*_DIVERGENCE are acceptable outcomes here in principle (classify.mjs's
@@ -646,4 +773,14 @@ console.log('\nread() differential suite passed: every case matches on its decla
   assert.equal(0 in withHole['!rows'], true);
   assert.equal(1 in withHole['!rows'], false);
   assert.deepEqual(withHole['!rows'][2], { hidden: false });
+
+  // The all-non-hidden collapse (see projectRowsOrCols' comment): an array describing only
+  // heights/widths must disappear ENTIRELY — key absent, not present-and-undefined, since
+  // present-and-undefined vs absent is itself a divergence to normalize()/classify().
+  const heightsOnly = projectSheet({ '!rows': [{ hpt: 12.8, level: 0 }, { hpt: 12.8, level: 0 }] });
+  assert.equal('!rows' in heightsOnly, false, 'an all-non-hidden !rows must not survive projection at all');
+  // ...and one genuinely hidden entry must still keep the array, or the collapse above
+  // would be masking exactly the divergence these arrays exist to catch.
+  const oneHidden = projectSheet({ '!cols': [{ width: 5, hidden: false }, { width: 9, hidden: true }] });
+  assert.deepEqual(oneHidden['!cols'], [{ hidden: false }, { hidden: true }]);
 }

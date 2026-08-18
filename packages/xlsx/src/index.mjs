@@ -4,6 +4,8 @@
 // step or duplicated logic.
 export {
   read,
+  readFile,
+  readFileSync,
   encode_col,
   encode_row,
   encode_cell,

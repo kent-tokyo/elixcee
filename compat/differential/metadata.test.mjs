@@ -23,17 +23,18 @@ import * as elixceeEsm from '../../packages/xlsx/src/index.mjs';
 const U = XLSX.utils;
 let failures = 0;
 
-// `read` (Phase 2B) is the one export that isn't a `utils.*` member at all — the oracle's
-// own `read` lives at the top level (`XLSX.read`, confirmed live: `U.read === undefined`,
-// `Object.keys(XLSX)` lists `read` third, right after `version`/`parse_xlscfb`). Comparing
-// it against `XLSX.utils` in the loop below would always report a type mismatch for a
-// reason that has nothing to do with this package's own correctness — it's checked against
-// the right oracle surface (`XLSX`) in its own block instead, and excluded from the
-// utils-key-order check further down for the same reason.
-const READ_ONLY_KEY = 'read';
+// These exports aren't `utils.*` members at all — the oracle's own `read`/`readFile`/
+// `readFileSync` live at the TOP level (confirmed live: `U.read === undefined`, and
+// `Object.keys(XLSX)` is ["version","parse_xlscfb","parse_zip","read","readFile",
+// "readFileSync","write",...]). Comparing them against `XLSX.utils` in the loop below would
+// always report a type mismatch for a reason that has nothing to do with this package's own
+// correctness — they're checked against the right oracle surface (`XLSX`) in their own
+// block instead, and excluded from the utils-key-order check further down for the same
+// reason. Their relative order against each OTHER is checked separately, below.
+const TOP_LEVEL_KEYS = ['read', 'readFile', 'readFileSync'];
 
 for (const key of Object.keys(elixceeCjs)) {
-  if (key === READ_ONLY_KEY) continue;
+  if (TOP_LEVEL_KEYS.includes(key)) continue;
   const oracleVal = U[key];
   const elixceeVal = elixceeCjs[key];
   if (typeof oracleVal !== typeof elixceeVal) {
@@ -82,33 +83,65 @@ for (const key of Object.keys(elixceeCjs)) {
   }
 }
 
-// `read` against its real oracle counterpart (top-level `XLSX.read`, not `XLSX.utils`) —
-// see READ_ONLY_KEY's comment above for why this lives in its own block.
-{
-  const oracleRead = XLSX.read;
-  const elixceeRead = elixceeCjs.read;
+// The top-level exports against their real oracle counterparts (`XLSX.read` etc., not
+// `XLSX.utils`) — see TOP_LEVEL_KEYS' comment above for why these live in their own block.
+for (const key of TOP_LEVEL_KEYS) {
+  const oracleVal = XLSX[key];
+  const elixceeVal = elixceeCjs[key];
   const problems = [];
-  if (elixceeRead.name !== oracleRead.name) {
-    problems.push(`name: oracle=${JSON.stringify(oracleRead.name)} elixcee=${JSON.stringify(elixceeRead.name)}`);
+  if (elixceeVal.name !== oracleVal.name) {
+    problems.push(`name: oracle=${JSON.stringify(oracleVal.name)} elixcee=${JSON.stringify(elixceeVal.name)}`);
   }
-  if (elixceeRead.length !== oracleRead.length) {
-    problems.push(`length: oracle=${oracleRead.length} elixcee=${elixceeRead.length}`);
+  if (elixceeVal.length !== oracleVal.length) {
+    problems.push(`length: oracle=${oracleVal.length} elixcee=${elixceeVal.length}`);
   }
-  const oracleDesc = Object.getOwnPropertyDescriptor(XLSX, 'read');
-  const elixceeDesc = Object.getOwnPropertyDescriptor(elixceeCjs, 'read');
+  const oracleDesc = Object.getOwnPropertyDescriptor(XLSX, key);
+  const elixceeDesc = Object.getOwnPropertyDescriptor(elixceeCjs, key);
   for (const flag of ['enumerable', 'writable', 'configurable']) {
     if (oracleDesc[flag] !== elixceeDesc[flag]) {
       problems.push(`descriptor.${flag}: oracle=${oracleDesc[flag]} elixcee=${elixceeDesc[flag]}`);
     }
   }
-  if (elixceeEsm.read !== elixceeCjs.read) {
-    problems.push('CJS/ESM identity: elixceeEsm.read !== elixceeCjs.read (should be the same function)');
+  if (elixceeEsm[key] !== elixceeCjs[key]) {
+    problems.push(`CJS/ESM identity: elixceeEsm.${key} !== elixceeCjs.${key} (should be the same function)`);
   }
   if (problems.length) {
-    console.error(`FAIL  read (vs top-level XLSX.read): ${problems.join('; ')}`);
+    console.error(`FAIL  ${key} (vs top-level XLSX.${key}): ${problems.join('; ')}`);
     failures += 1;
   } else {
-    console.log('OK    read (vs top-level XLSX.read, not XLSX.utils)');
+    console.log(`OK    ${key} (vs top-level XLSX.${key}, not XLSX.utils)`);
+  }
+}
+
+// The oracle exports ONE function under both `readFile` and `readFileSync` (confirmed
+// live: `XLSX.readFile === XLSX.readFileSync`). That identity is part of the public shape —
+// a consumer can legitimately compare or swap them — so it's asserted rather than left to
+// the per-key `.name`/`.length` checks above, which two separate but identically-shaped
+// functions would also pass.
+{
+  const oracleAliased = XLSX.readFile === XLSX.readFileSync;
+  const elixceeAliased = elixceeCjs.readFile === elixceeCjs.readFileSync;
+  if (oracleAliased !== elixceeAliased) {
+    console.error(
+      `FAIL  readFile/readFileSync aliasing: oracle readFile===readFileSync is ${oracleAliased}, elixcee is ${elixceeAliased}`
+    );
+    failures += 1;
+  } else {
+    console.log(`OK    readFile === readFileSync (same function object, matching the oracle)`);
+  }
+}
+
+// Relative order among the top-level (non-utils) exports, against the oracle's own
+// Object.keys(XLSX) order — the utils-key-order check below excludes these, so without this
+// they'd have no order check at all.
+{
+  const oracleTopOrder = Object.keys(XLSX).filter((k) => TOP_LEVEL_KEYS.includes(k));
+  const elixceeTopOrder = Object.keys(elixceeCjs).filter((k) => TOP_LEVEL_KEYS.includes(k));
+  if (JSON.stringify(elixceeTopOrder) !== JSON.stringify(oracleTopOrder)) {
+    console.error(`FAIL  top-level key order: elixcee=${JSON.stringify(elixceeTopOrder)} oracle=${JSON.stringify(oracleTopOrder)}`);
+    failures += 1;
+  } else {
+    console.log(`OK    top-level key order matches the oracle's own Object.keys(XLSX) relative order`);
   }
 }
 
@@ -123,9 +156,10 @@ console.log(`\n${Object.keys(elixceeCjs).length - failures}/${Object.keys(elixce
 // oracle key is implemented.
 {
   const oracleOrder = Object.keys(U);
-  // read excluded — it isn't a utils.* member (see READ_ONLY_KEY's comment above), so it
-  // has no position in Object.keys(XLSX.utils) to compare against.
-  const elixceeOrder = Object.keys(elixceeCjs).filter((k) => k !== READ_ONLY_KEY);
+  // read/readFile/readFileSync excluded — they aren't utils.* members (see TOP_LEVEL_KEYS'
+  // comment above), so they have no position in Object.keys(XLSX.utils) to compare against.
+  // Their own relative order is checked in its own block above instead.
+  const elixceeOrder = Object.keys(elixceeCjs).filter((k) => !TOP_LEVEL_KEYS.includes(k));
   const oracleFiltered = oracleOrder.filter((k) => elixceeOrder.includes(k));
   if (JSON.stringify(elixceeOrder) !== JSON.stringify(oracleFiltered)) {
     console.error('FAIL  key order: elixcee\'s Object.keys() does not match the oracle\'s own relative order');

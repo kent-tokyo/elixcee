@@ -38,6 +38,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -172,14 +173,29 @@ step('2. bundle the browser entry with esbuild');
   });
 
   const bundleSrc = fs.readFileSync(path.join(siteDir, 'bundle.js'), 'utf8');
-  // Without these two assertions this check could "pass" while having bundled the NODE
-  // entry — the failure mode where the browser condition silently falls through and the
-  // test proves nothing about the browser build at all.
+  // Without these assertions this check could "pass" while having bundled the NODE entry —
+  // the failure mode where the browser condition silently falls through and the test proves
+  // nothing about the browser build at all.
   if (!bundleSrc.includes('initSync')) {
     throw new Error('bundle has no initSync — the browser WASM entry was not the one bundled');
   }
-  if (bundleSrc.includes('readFileSync')) {
-    throw new Error('bundle contains readFileSync — the Node WASM loader leaked into the browser bundle');
+  // The Node WASM loader's own signature line. Deliberately NOT a bare search for
+  // "readFileSync": index.cjs's readFile()/readFileSync() (Node-only, stubbed out in a
+  // browser build via package.json's `browser` field mapping "fs" to false) legitimately
+  // put that identifier in the bundle as unreachable code, so a bare search reports a leak
+  // that isn't one. This matches the loader and nothing else.
+  if (bundleSrc.includes('Buffer.from(ELIXCEE_WASM_BASE64')) {
+    throw new Error('bundle contains the Node WASM loader — the browser condition fell through');
+  }
+  // ...and the payload must appear exactly ONCE. Both loaders inline the same 263KB of
+  // base64, so a browser bundle carrying two copies means the Node loader came along for
+  // the ride even if its init line was tree-shaken.
+  const payloadCount = (bundleSrc.match(/ELIXCEE_WASM_BASE64 = /g) || []).length;
+  if (payloadCount !== 1) {
+    throw new Error(`bundle carries the WASM payload ${payloadCount} times, expected exactly 1`);
+  }
+  if (/require\(["']fs["']\)|from\s*["']fs["']/.test(bundleSrc)) {
+    throw new Error('bundle still requires "fs" — a browser build must never reach the filesystem');
   }
   console.log(`  bundle: ${fs.statSync(path.join(siteDir, 'bundle.js')).size} bytes (browser condition, esm)`);
 }
@@ -270,7 +286,13 @@ if (result.ref !== 'A1:D9') problems.push(`unexpected !ref: ${result.ref}`);
 if (result.a1 !== 'Name') problems.push(`unexpected A1 value: ${JSON.stringify(result.a1)}`);
 if (result.b2 !== 42) problems.push(`unexpected B2 value: ${JSON.stringify(result.b2)}`);
 if (result.csvHead !== 'Name,Amount,Active,Note') problems.push(`unexpected CSV header: ${result.csvHead}`);
-if (result.exportCount !== 34) problems.push(`unexpected export count: ${result.exportCount}`);
+// Compared against the Node entry's own live export count rather than a hard-coded number,
+// so adding an export doesn't require editing this file — but a browser entry that FORGETS
+// one still fails here.
+const nodeExportCount = Object.keys(createRequire(import.meta.url)(path.join(PKG_DIR, 'src', 'index.cjs'))).length;
+if (result.exportCount !== nodeExportCount) {
+  problems.push(`browser entry exported ${result.exportCount} names, Node entry exports ${nodeExportCount}`);
+}
 if (result.errors.length !== 0) problems.push(`page-observable errors: ${JSON.stringify(result.errors)}`);
 
 console.log(`  requests served: ${JSON.stringify(served)}`);

@@ -61,6 +61,29 @@ export function read(data, opts) {
   return shapeWorkBook(JSON.parse(readWorkbook(bytes)), opts);
 }
 
+// readFile/readFileSync exist here purely so the browser entry's export SET stays identical
+// to the Node entry's (checked by scripts/pack-consumer-smoke.mjs) — a missing export is a
+// different, more confusing failure for a consumer than an explicit one. They throw
+// unconditionally: there is no filesystem to read a path from in a browser, so there is no
+// honest implementation, and silently returning an empty workbook or a rejected promise
+// would both be worse than saying so. A consumer with bytes already in hand (a File/Blob
+// read via FileReader, a fetch() response) should call read() with those bytes.
+const ELIXCEE_UNSUPPORTED_IN_BROWSER = 'ELIXCEE_UNSUPPORTED_IN_BROWSER';
+
+function readFileUnsupported() {
+  const err = new Error(
+    'readFile()/readFileSync() are unsupported in the browser build of @elixcee/xlsx: a ' +
+      'browser has no filesystem to read a path from. Read the bytes yourself (FileReader, ' +
+      'fetch, drag-and-drop) and pass them to read(bytes) instead.'
+  );
+  err.code = ELIXCEE_UNSUPPORTED_IN_BROWSER;
+  throw err;
+}
+
+// Same two-names-one-function shape as the Node entry (and as the oracle itself), so the
+// `readFile === readFileSync` identity holds in the browser build too.
+export { readFileUnsupported as readFile, readFileUnsupported as readFileSync };
+
 export {
   encode_col,
   encode_row,
