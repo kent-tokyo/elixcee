@@ -22,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   state: 198 `MATCH_DOCUMENTED_SEMANTICS` + 7 `EXPECTED_ERROR` + 2 `NONDETERMINISTIC` + 1
   disclosed `KNOWN_LIMITATION` (array-out-of-bounds error message text doesn't match real
   VBA's exact wording) = 208, 0 `BUG`. See `compat/vba-semantics/README.md`.
+- **CI now runs `@elixcee/xlsx`'s own tests.** `.github/workflows/ci.yml` gained a `node-js`
+  job (Node 20/22 matrix): `packages/xlsx`'s TypeScript typecheck (with and without the DOM
+  lib present) and all four `compat/differential/` suites (`utils`/`ssf-format`/`read`/
+  `metadata`). Previously none of this ran anywhere except a developer's own machine, despite
+  every command already working — verified live before wiring each one in, not assumed from
+  this file's own previously-claimed numbers.
 
 ### Fixed
 

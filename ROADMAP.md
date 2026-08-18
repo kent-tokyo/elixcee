@@ -24,6 +24,9 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
   `compat/vba-semantics/` suite (208 cases) checks VALUE correctness against documented real
   VBA semantics, not just pass/fail (0 `BUG`, 0 `UNCLASSIFIED`, 1 disclosed
   `KNOWN_LIMITATION`) — see each directory's own README for what it measures and doesn't.
+  CI now also runs `packages/xlsx`'s TypeScript typecheck and all four `compat/differential/`
+  suites on a Node 20/22 matrix (`.github/workflows/ci.yml`'s new `node-js` job) — previously
+  none of this ran anywhere except a developer's own machine.
 - **`@elixcee/xlsx`**: all 33 `utils.*` exports differential-tested against the real
   `xlsx@0.18.5` oracle (512 MATCH + 14 disclosed intentional divergences), `SSF` number
   formatting backed by the real `ssf` engine, six real security fixes ported from oracle
@@ -91,10 +94,15 @@ recorded as exhausted: no further candidates were found by either method as of t
    with "Drop-in replacement for xlsx" without disclosing that `write*`/`readFile` are
    unimplemented — actively misleading for a release whose own premise is "read-focused,
    honestly scoped." See "npm/JS/WASM findings" below for the full investigation.
-8. **No Node/WASM/JS testing wired into CI at all.** `.github/workflows/ci.yml` runs Rust
-   workspace tests, a release build, a Python feature check, and `elixcee-types` clippy —
-   nothing Node-related. See "npm/JS/WASM findings" below for exactly what's missing vs.
-   what already works locally and just needs wiring.
+8. ~~No Node/WASM/JS testing wired into CI at all~~ — **partially fixed** (Unreleased):
+   `.github/workflows/ci.yml` gained a `node-js` job (Node 20/22 matrix) running
+   `packages/xlsx`'s TypeScript typecheck (with and without the DOM lib) and all four of
+   `compat/`'s differential suites (`utils`/`ssf-format`/`read`/`metadata`) — every command
+   verified working live before wiring it in, not assumed from CHANGELOG.md's claimed
+   numbers. Still not built at all (a separate, bigger undertaking each — see "npm/JS/WASM
+   findings" below): an `npm pack` content-audit script, a real browser-bundler smoke test
+   (no bundler is installed in this project's toolchain), a WASM binary size regression
+   check.
 9. **`@elixcee` npm scope ownership is unconfirmed** — cannot be resolved from this
    environment (`npm whoami` returns 401; no working publish credential exists locally, no
    analogous GitHub Actions secret exists yet either, unlike `CARGO_REGISTRY_TOKEN` for
@@ -109,11 +117,11 @@ full report; this is a summary)
 Investigated, not implemented or published: CI coverage, npm scope ownership, and
 `packages/xlsx` alpha-release readiness.
 
-- **What already works locally and just needs CI wiring** (verified live, not assumed):
-  `compat/differential/`'s utils (512 MATCH + 14 divergences)/SSF (1831/1831)/read
-  (19/19)/metadata (34/34) suites all still pass when actually re-run; `packages/xlsx`'s
-  TypeScript compiles cleanly both with and without the DOM lib present; CJS↔ESM export
-  identity is already asserted by `metadata.test.mjs`.
+- **Now wired into `.github/workflows/ci.yml`'s new `node-js` job** (each verified live
+  before wiring, not assumed): `compat/differential/`'s utils (512 MATCH + 14 divergences)/
+  SSF (1831/1831)/read (19/19)/metadata (34/34) suites; `packages/xlsx`'s TypeScript
+  typecheck, both with and without the DOM lib present. CJS↔ESM export identity is asserted
+  as part of the metadata suite (`metadata.test.mjs`), so it's covered too.
 - **What doesn't exist at all yet, not just unwired**: an `npm pack` content-audit script (a
   manual dry-run is clean today — 16 files, 337.4 kB, nothing missing or unwanted — but
   nothing asserts this in CI); a real browser-bundler smoke test (no bundler is installed in

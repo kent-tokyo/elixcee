@@ -54,3 +54,63 @@ jobs:
       # because it started clean and should stay that way.
       - name: cargo clippy -p elixcee-types
         run: cargo clippy -p elixcee-types --all-targets -- -D warnings
+
+  # @elixcee/xlsx (packages/xlsx) and its differential-testing harness
+  # (compat/) — previously not wired into CI at all despite every one of
+  # these commands already working locally (verified live before adding
+  # this job, not assumed from what CHANGELOG.md claims). Node 20/22: two
+  # current LTS-track versions within packages/xlsx's own declared
+  # "engines": ">=18" range, not a literally-stated support matrix (no
+  # such matrix exists elsewhere in this project — chosen here, not
+  # copied from a pre-existing policy). Neither packages/xlsx nor compat
+  # needs a Rust/WASM build step first: the WASM artifact packages/xlsx
+  # ships is committed/vendored, not built on the fly (see
+  # crates/elixcee-wasm/build.sh's own doc comment).
+  node-js:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: packages/xlsx — npm ci
+        working-directory: packages/xlsx
+        run: npm ci
+
+      - name: packages/xlsx — typecheck (with DOM lib)
+        working-directory: packages/xlsx
+        run: npm run typecheck
+
+      - name: packages/xlsx — typecheck (no DOM lib, public types only)
+        working-directory: packages/xlsx
+        run: npm run typecheck:no-dom
+
+      - name: compat — npm ci
+        working-directory: compat
+        run: npm ci
+
+      # Each of these installs the real xlsx@0.18.5 as its own oracle and
+      # compares packages/xlsx's actual output against it — see each
+      # script's own file for what "MATCH" means in that domain. All four
+      # already exit non-zero on any UNCLASSIFIED/BUG result; nothing
+      # extra needed here to make this job fail correctly.
+      - name: compat — utils.* differential (512 MATCH + 14 disclosed divergences expected)
+        working-directory: compat
+        run: npm run differential:utils
+
+      - name: compat — SSF number-format conformance (1831/1831 expected)
+        working-directory: compat
+        run: npm run differential:ssf-format
+
+      - name: compat — XLSX.read() differential (19/19 expected)
+        working-directory: compat
+        run: npm run differential:read
+
+      - name: compat — export metadata differential (34/34 expected)
+        working-directory: compat
+        run: npm run differential:metadata
