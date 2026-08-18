@@ -28,6 +28,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `metadata`). Previously none of this ran anywhere except a developer's own machine, despite
   every command already working — verified live before wiring each one in, not assumed from
   this file's own previously-claimed numbers.
+- **`packages/xlsx/scripts/audit-pack-contents.mjs`**, also wired into the new `node-js` CI
+  job — asserts what `npm pack` would actually publish (every required file present —
+  `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.md`, the four public entry points; nothing
+  forbidden — `node_modules/`, `test/`, `.git`, `tsconfig*`; nothing unexpected under
+  `src/internal/`), checked against `npm pack --dry-run --json`'s own real file list, not a
+  reimplementation of npm's inclusion rules. Didn't exist at all before — a manual dry-run
+  was clean (17 files, 338.8 kB), but nothing asserted this in CI.
 - **`packages/xlsx/README.md`** — a package-level README, previously absent (npm's registry
   page would have shown only the `description` field, which opened with an unqualified
   "Drop-in replacement for xlsx" and never disclosed `write*`/`readFile` are unimplemented).

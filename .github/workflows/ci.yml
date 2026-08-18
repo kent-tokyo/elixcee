@@ -90,6 +90,14 @@ jobs:
         working-directory: packages/xlsx
         run: npm run typecheck:no-dom
 
+      # Asserts what `npm pack` would actually publish (required files
+      # present, nothing forbidden or unexpected) — didn't exist at all
+      # before this round; a manual dry-run was clean but nothing asserted
+      # it in CI. See scripts/audit-pack-contents.mjs's own header comment.
+      - name: packages/xlsx — audit npm pack contents
+        working-directory: packages/xlsx
+        run: npm run audit:pack
+
       - name: compat — npm ci
         working-directory: compat
         run: npm ci

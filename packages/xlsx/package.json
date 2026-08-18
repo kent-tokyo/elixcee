@@ -27,7 +27,8 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "typecheck:no-dom": "tsc --noEmit -p tsconfig.no-dom.json"
+    "typecheck:no-dom": "tsc --noEmit -p tsconfig.no-dom.json",
+    "audit:pack": "node scripts/audit-pack-contents.mjs"
   },
   "devDependencies": {
     "typescript": "^5"

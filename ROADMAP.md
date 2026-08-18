@@ -101,13 +101,15 @@ recorded as exhausted: no further candidates were found by either method as of t
    "npm/JS/WASM findings" below for the full investigation.
 8. ~~No Node/WASM/JS testing wired into CI at all~~ — **partially fixed** (Unreleased):
    `.github/workflows/ci.yml` gained a `node-js` job (Node 20/22 matrix) running
-   `packages/xlsx`'s TypeScript typecheck (with and without the DOM lib) and all four of
-   `compat/`'s differential suites (`utils`/`ssf-format`/`read`/`metadata`) — every command
-   verified working live before wiring it in, not assumed from CHANGELOG.md's claimed
-   numbers. Still not built at all (a separate, bigger undertaking each — see "npm/JS/WASM
-   findings" below): an `npm pack` content-audit script, a real browser-bundler smoke test
-   (no bundler is installed in this project's toolchain), a WASM binary size regression
-   check.
+   `packages/xlsx`'s TypeScript typecheck (with and without the DOM lib), all four of
+   `compat/`'s differential suites (`utils`/`ssf-format`/`read`/`metadata`), and now also
+   `packages/xlsx/scripts/audit-pack-contents.mjs` (new this round — asserts every file
+   `npm pack --dry-run` would actually publish: required files present, nothing forbidden,
+   nothing unexpected under `src/internal/`) — every command verified working live before
+   wiring it in, not assumed from CHANGELOG.md's claimed numbers. Still not built at all (a
+   separate, bigger undertaking each — see "npm/JS/WASM findings" below): a real
+   browser-bundler smoke test (no bundler is installed in this project's toolchain), a WASM
+   binary size regression check.
 9. **`@elixcee` npm scope ownership is unconfirmed** — cannot be resolved from this
    environment (`npm whoami` returns 401; no working publish credential exists locally, no
    analogous GitHub Actions secret exists yet either, unlike `CARGO_REGISTRY_TOKEN` for
@@ -125,14 +127,17 @@ Investigated, not implemented or published: CI coverage, npm scope ownership, an
 - **Now wired into `.github/workflows/ci.yml`'s new `node-js` job** (each verified live
   before wiring, not assumed): `compat/differential/`'s utils (512 MATCH + 14 divergences)/
   SSF (1831/1831)/read (19/19)/metadata (34/34) suites; `packages/xlsx`'s TypeScript
-  typecheck, both with and without the DOM lib present. CJS↔ESM export identity is asserted
-  as part of the metadata suite (`metadata.test.mjs`), so it's covered too.
-- **What doesn't exist at all yet, not just unwired**: an `npm pack` content-audit script (a
-  manual dry-run is clean today — 16 files, 337.4 kB, nothing missing or unwanted — but
-  nothing asserts this in CI); a real browser-bundler smoke test (no bundler is installed in
-  this project's toolchain at all); a WASM binary size regression check (current baseline:
+  typecheck, both with and without the DOM lib present; a new `npm pack` content-audit
+  script (`packages/xlsx/scripts/audit-pack-contents.mjs` — required files present, nothing
+  forbidden, nothing unexpected under `src/internal/`, checked against `npm pack --dry-run
+  --json`'s own file list, currently 17 files / 338.8 kB packed). CJS↔ESM export identity is
+  asserted as part of the metadata suite (`metadata.test.mjs`), so it's covered too.
+- **Still doesn't exist at all**: a real browser-bundler smoke test (no bundler is installed
+  in this project's toolchain at all); a WASM binary size regression check (current baseline:
   `elixcee_wasm_bg.wasm` 263.0 kB, `elixcee_wasm.browser.mjs` 359.4 kB inlined-base64, no
-  threshold recorded anywhere).
+  threshold recorded anywhere) — both larger, more design-heavy undertakings than the pack
+  audit (picking a bundler is a real tool choice; a size threshold is a real policy call),
+  deliberately not attempted this round.
 - **0.2.0-alpha.1 (read+write) scope, if ever pursued**: `readFile` is near-free (pure
   WASM-bridge wiring onto the already-working `read_workbook_from_bytes`). `write`/
   `writeFile`/`writeFileSync` need a genuinely new Rust writer module — none exists for
