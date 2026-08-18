@@ -767,6 +767,16 @@ impl Parser {
         let start = self.peek_span().start;
         let stmt = if matches!(self.peek(), Tok::Ident(_)) {
             self.parse_simple_stmt_no_eol()?
+        } else if *self.peek() == Tok::Dot {
+            // A bare `.member` branch, e.g. `With Range("A1"): If x Then .Value = 1`.
+            // parse_stmt gained an equivalent Tok::Dot arm when the runtime With stack
+            // replaced the old With-body-only special case (see parse_stmt's own comment),
+            // but this single-line-If path checked only Tok::Ident and never got the same
+            // update -- so `.Value = .Value + 1` inside a single-line If's Then/Else branch
+            // silently degraded to Stmt::Unsupported (no error, but the assignment never
+            // ran). Found by manual testing while integrating the With-stack work, not by
+            // either subagent's own test suite.
+            self.parse_with_dot_stmt()?
         } else {
             while !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon)
                 && !self.is_ident("else")

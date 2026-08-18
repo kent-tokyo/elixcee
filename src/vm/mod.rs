@@ -4602,6 +4602,28 @@ mod tests {
     }
 
     #[test]
+    fn test_single_line_if_supports_with_dot_branches() {
+        // parse_stmt gained a Tok::Dot arm (parse_with_dot_stmt) when the runtime With
+        // stack replaced the old With-body-only parse-time special case, but
+        // parse_single_line_if_branch's own dispatch only checked Tok::Ident and was never
+        // updated to match -- so a bare `.member` branch inside a single-line If nested in
+        // a With body (`If cond Then .Value = x`) silently degraded to Stmt::Unsupported:
+        // no parse error, but the assignment never ran. Same bug *class* as the
+        // Range()/Cells() gap above (a single-line-If branch dispatch lagging behind
+        // block-form parse_stmt's own statement coverage), found by manual testing while
+        // integrating the With-stack work, not by either subagent's own test suite.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    With Range(\"A1\")\n",
+            "        .Value = 5\n",
+            "        If .Value > 0 Then .Value = .Value + 1\n",
+            "    End With\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(6)); // A1
+    }
+
+    #[test]
     fn test_single_line_if_assigns_variable_named_after_a_block_keyword() {
         // parse_stmt's "bare `name = ...` is always assignment" override must fire before
         // the block-construct keyword dispatch even when reached via

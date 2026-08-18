@@ -89,6 +89,99 @@ consecutive runs.
   scoped to avoid.
 - `Dim x: x = 5` now parses — the declarator's trailing-syntax tolerance loop was swallowing
   the `:` separator. Found by a new suite case, not by source audit.
+- **A bare `.member` branch inside a single-line `If` nested in a `With` body now runs.**
+  `parse_stmt` gained a `Tok::Dot` arm for the runtime With-stack work above, but
+  `parse_single_line_if_branch`'s own dispatch checked only `Tok::Ident` and was never
+  updated to match — so `If .Value > 0 Then .Value = .Value + 1` inside `With Range("A1")`
+  silently degraded to `Stmt::Unsupported` (no parse error, but the assignment never ran).
+  Same bug *class* as the pre-existing `Range()`/`Cells()`-in-single-line-`If` fix (a
+  single-line-`If` branch dispatch lagging behind block-form `parse_stmt`'s own statement
+  coverage) — found during integration by manually exercising a README code sample, not by
+  either subagent's own test suite, which is exactly the kind of interaction gap that can
+  slip between two disjoint-scope changes that never ran against each other until merged.
+
+### `@elixcee/xlsx` — real-consumer and real-browser validation
+
+Closes the gap between "the differential suites pass" and "a real npm consumer, and a real
+browser, actually works" — every prior check reached the package via a relative import into
+`packages/xlsx/src`, or (for the `"browser"` export condition) via Node simulating that
+condition, never an actual browser process.
+
+#### Added
+
+- **`XLSX.readFile()`/`readFileSync()`** — one function under both names (matching the real
+  `xlsx` package's own identity: same `.name`, `.length`, key order), wrapping the existing
+  byte-buffer `read()`. Differential-tested file-by-file against the real `xlsx@0.18.5`
+  oracle, with and without `cellStyles`/`cellDates`. Throws `ELIXCEE_UNSUPPORTED_IN_BROWSER`
+  from the browser entry point rather than faking a filesystem. `write*` remains
+  unimplemented.
+- **A packed-tarball consumer smoke test** (`packages/xlsx/scripts/pack-consumer-smoke.mjs`,
+  `npm run pack:consumer`) — runs a real `npm pack`, `npm install`s the exact `.tgz` into a
+  throwaway package under `os.tmpdir()`, and exercises `require()`, `import`, a TypeScript
+  compile, `XLSX.read()`, CJS/ESM export-set identity, and the `"browser"` export condition
+  entirely from inside that install — asserting the resolved paths land under the throwaway
+  `node_modules/@elixcee/xlsx`, not a relative path back into this repo. Every earlier check
+  in this project could have passed while the actual published tarball was broken; this one
+  can't.
+- **A real headless-browser smoke test** (`packages/xlsx/scripts/browser-smoke.mjs`,
+  `npm run browser:smoke`) — launches an actual local Chrome/Chromium process (via its own
+  `--dump-dom`, no browser-driver dependency added — evaluated and rejected
+  playwright-core/puppeteer-core/chrome-remote-interface as unnecessary weight for "load one
+  page, read one result"), serves an esbuild browser bundle over real `node:http`, and reads
+  `XLSX.read()`'s result back out of the page's own DOM: sheet names, a real cell value, an
+  exported-function count, zero page-observable console/uncaught errors, zero non-200
+  responses for any page-referenced resource. **Distinct from, and strictly more than, the
+  pre-existing `node --conditions=browser` check** (still present, in `wasm:smoke`) — that
+  one is Node simulating an export condition and proves nothing about a browser; this one is
+  a real browser. Neither is described as the other anywhere in code, CI step names, or this
+  entry. Safari is not covered and not claimed.
+- **CI**: the packed-tarball smoke joins `node-js` (both Node versions); the real-Chrome
+  smoke and a CJS *and* ESM esbuild-bundle smoke (as distinct steps) join `wasm`, along with
+  a diagnostic step that prints whatever browser the runner image actually provides, so a
+  missing-Chrome failure is self-explanatory from the job's own log rather than a guess.
+  `compat/differential/`'s own `classify.mjs`/`normalize.mjs` self-checks — existing package
+  scripts that pin the exact contents of the disclosed-divergence registries — are now
+  wired into CI too; they never ran there before.
+
+#### Fixed
+
+- **The Node/CJS WASM loader's `.wasm` lookup is no longer `__dirname`-relative.**
+  `elixcee_wasm.node.cjs` (wasm-pack's own generated code, not hand-written) located its
+  compiled WASM via a path relative to its own file location — bundle-*output*-relative once
+  a consumer bundled it, not source-relative. ESM bundle output has no `__dirname` at all (a
+  hard `ReferenceError`, not a silent failure); CJS bundle output technically had `__dirname`
+  but pointed at the wrong directory, so it only worked if the consumer manually copied
+  `elixcee_wasm_bg.wasm` next to their bundle. Fixed by inlining the compiled WASM as base64
+  directly into the Node loader too (`crates/elixcee-wasm/build-node-inline.mjs`, mirroring
+  the technique `build-browser-inline.mjs` already used for the browser build) — generated by
+  `build.sh`, never hand-patched, so a fresh rebuild reproduces the committed artifact
+  byte-for-byte. No `.wasm`-copy step is required for CJS *or* ESM bundling anymore, and
+  browser bundling — previously broken outright (`esbuild --platform=browser` failed
+  resolving `fs`) — now works too. The raw `elixcee_wasm_bg.wasm` is no longer vendored
+  separately (both loaders already carry the bytes; shipping it too would double-ship
+  263 KB), and `package.json` gained a `browser` field stubbing the Node loader out of
+  browser bundles, so a browser consumer pays for the WASM payload once, not twice.
+  Synchronous `read()` is unaffected — no `await init()` introduced anywhere.
+  **Package-size impact**, measured against 0.4.0: packed tarball 339,098 → 380,005 bytes
+  (+12.1%), unpacked 741,304 → 835,712 (+12.7%); the WASM payload itself is unchanged at
+  263 KB (only its containers, base64-inlined, grew). No hard size gate — recorded so a
+  future round can judge whether it grows *further* without basis.
+
+#### Discovered, disclosed (not fixed — outside this round's scope)
+
+- **`src/reader.rs` trims every cell's text unconditionally**
+  (`xlsx_parse_cell(text.trim(), …)`), ignoring the `xml:space="preserve"` attribute real
+  XLSX XML uses to mark significant leading/trailing whitespace — a cell whose real value is
+  `"  padded  "` reads back as `"padded"`. Confirmed live against
+  `compat/corpus/workbooks/with_text.xlsx` cell A3 (oracle: `"  padded  "`; elixcee:
+  `"padded"`). Reachable through both `read()` and `readFile()`. Registered in
+  `compat/differential/classify.mjs`'s `UNSUPPORTED_ALLOWLIST` (3 cases, one root cause) with
+  a full writeup rather than silently excluded from the fixture set — the classifier's own
+  self-check pins the exact entry count, so it can't go stale unnoticed. Fixing it means
+  honoring `xml:space` on the `<t>` element rather than trimming at the call site, and
+  re-checking the trim isn't load-bearing for the numeric/boolean paths sharing
+  `xlsx_parse_cell` — `src/reader.rs` is shared surface, not `@elixcee/xlsx`-specific, so
+  this is recorded for whoever next touches the reader, not fixed here.
 
 ## [0.4.0]
 
