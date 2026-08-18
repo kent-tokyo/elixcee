@@ -16,13 +16,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   oracle — `reference/*.mjs` are small, independently-checkable pure-JS reference
   implementations of documented real VBA semantics (banker's rounding, `Str()`'s
   leading-space quirk, `Val()`'s prefix parsing, `And`/`Or`/`Xor`/`Not`'s logical-vs-bitwise
-  split, ...), used to compute 208 generated cases' expected outcomes programmatically. Six-
+  split, ...), used to compute cases' expected outcomes programmatically. Six-
   verdict classification (`MATCH_DOCUMENTED_SEMANTICS`/`EXPECTED_ERROR`/`NONDETERMINISTIC`/
-  `KNOWN_LIMITATION`/`BUG`/`UNCLASSIFIED`); `BUG`/`UNCLASSIFIED` both gate at 0. Current
-  state: 198 `MATCH_DOCUMENTED_SEMANTICS` + 8 `EXPECTED_ERROR` + 2 `NONDETERMINISTIC` = 208,
-  0 `BUG`, 0 `UNCLASSIFIED`, 0 `KNOWN_LIMITATION` (the suite's first run found one disclosed
-  gap — array-out-of-bounds error message text — fixed in the same round; see "Fixed" below).
-  See `compat/vba-semantics/README.md`.
+  `KNOWN_LIMITATION`/`BUG`/`UNCLASSIFIED`); `BUG`/`UNCLASSIFIED` both gate at 0. Started at
+  208 cases across 12 categories; grew to **301 cases across 18** in the same round that
+  added the `+`-vs-`&` operator-coercion, comparison-operator-coercion, `Select Case`
+  matching, `With`-block-resolution, and array-bounds categories — each expected value
+  sourced from Microsoft's own VBA language reference, fetched live while writing the
+  cases, not recalled from memory. Current state: 253 `MATCH_DOCUMENTED_SEMANTICS` + 18
+  `EXPECTED_ERROR` + 2 `NONDETERMINISTIC` + 28 `KNOWN_LIMITATION` = 301, 0 `BUG`,
+  0 `UNCLASSIFIED`. All 28 `KNOWN_LIMITATION` cases are divergences found while building
+  this suite and not fixed this round (several *other* divergences found the same way
+  *were* fixed — see "Fixed" below); grouped by root cause with the full breakdown in
+  `compat/vba-semantics/README.md`.
 - **CI now runs `@elixcee/xlsx`'s own tests.** `.github/workflows/ci.yml` gained a `node-js`
   job (Node 20/22 matrix): `packages/xlsx`'s TypeScript typecheck (with and without the DOM
   lib present) and all four `compat/differential/` suites (`utils`/`ssf-format`/`read`/
@@ -130,6 +136,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `eval_vba_func` entries that accept zero arguments) rather than a general "any unrecognized
   identifier might be a function call" rule, so a genuine variable-name typo still errors the
   same way it always did (verified with a regression test).
+- `Range(...)`/`Cells(...)`/`MsgBox`/etc. weren't recognized inside a single-line `If`'s
+  Then/Else branch — only identifier-led statements were, so `If x > 0 Then Exit Sub Else
+  Range("A1").Value = 1` mis-parsed the Else branch as an array write to a variable
+  literally named "range", failing with "Cannot convert 'A1' to number". Found by
+  `compat/vba-semantics/` on exactly this shape, not by source audit. Fixed by extracting
+  the full statement dispatch (previously duplicated as a narrower subset for single-line
+  `If`) into one shared function used by both the block-form and single-line-`If` parsers.
+  That extraction briefly regressed assignments to a variable literally named after a block
+  keyword (`do = 0`, `select = 1`, ...) — caught by the existing property test before
+  shipping, fixed by re-ordering the "bare `name = ...` is always assignment" check ahead
+  of the block-construct keyword dispatch.
+- VBA's `+`/comparison operators coerced Boolean `True` to `1.0` instead of VBA's own
+  documented internal value of `-1` (`CInt(True)` is `-1` in real VBA) — `True + 5` was `6`,
+  not the documented `4`. Found via `compat/vba-semantics/`'s operator-coercion matrix,
+  fetched from Microsoft's own VBA language reference rather than recalled from memory.
+  Fixing this then silently changed `WorksheetFunction.Sum`/`Max`/`Min`/`Average`/`SumIf`/
+  `Round`/`Abs`/`Sqrt`/`Power`/`Log`/`Index` too (`WorksheetFunction.Sum(True, True)` went
+  from `2` to `-2`) — wrong, since `Application.WorksheetFunction` bridges into Excel's own
+  calculation engine and must keep using Excel's `TRUE = 1` coercion (matching a worksheet
+  formula), not VBA's own arithmetic rule. Caught in the same round by checking every other
+  caller of the shared coercion helper before considering the fix complete; `WorksheetFunction.*`
+  now has its own copy of just the Boolean arm.
+- The `=`/`<>` operators had no rule for comparing `Empty` against a number or string —
+  `0 = Empty`/`"" = Empty` both fell through to an unconditional `False`, inconsistent with
+  `<`/`>` on the exact same operand pairs (which already correctly treated `Empty` as `0`).
+  Real VBA documents `Empty` as numeric-comparing as `0` and string-comparing as `""` for
+  every comparison operator, not just some of them. Found via the same operator-coercion
+  matrix.
 
 ## [0.3.0]
 

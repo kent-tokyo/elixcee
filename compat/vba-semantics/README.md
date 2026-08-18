@@ -65,12 +65,66 @@ a real bug into a passing case by weakening what's expected.
 
 ## Current state
 
-208 cases across 12 categories (numeric conversion/rounding, negative `\`/`Mod`,
-logical/bitwise, `Str`/`CStr`/`Val`, `IsNumeric`, `TypeName`/`VarType`, `Date`/`Time`/`Now`,
-`Empty`/`Null`/error values, string boundaries, array indices, Range values, error kind).
+301 cases across 18 categories: the original 12 (numeric conversion/rounding, negative
+`\`/`Mod`, logical/bitwise, `Str`/`CStr`/`Val`, `IsNumeric`, `TypeName`/`VarType`,
+`Date`/`Time`/`Now`, `Empty`/`Null`/error values, string boundaries, array indices, Range
+values, error kind), plus six added to reach the 300+ target: division by zero, invalid
+procedure arguments, overflow, single-line-If control transfer, `Exit`
+Sub/Function/For/Do, object-Nothing access, `+`-vs-`&` operator coercion, comparison-
+operator coercion, `Select Case` matching, `With` block resolution, and array bounds.
 Not padded to hit a round number — coverage depth varies by category based on how much
 real semantic subtlety each one has (numeric rounding has the most tie-breaking/edge-case
-richness; Range value round-tripping has the least). 0 `BUG`, 0 `UNCLASSIFIED`,
-0 `KNOWN_LIMITATION` — the suite's first run found one disclosed gap (array-out-of-bounds
-error message text didn't match real VBA's exact wording, though the error *condition* was
-already correct) and it was fixed in the same round rather than left registered.
+richness; `Select Case` matching, being unambiguous control flow with no type-coercion
+question, has none of its 9 cases end up as a disclosed gap).
+
+0 `BUG`, 0 `UNCLASSIFIED`. 28 `KNOWN_LIMITATION` — every one a divergence found *by*
+building this suite (verified against Microsoft's own VBA language reference where the
+answer wasn't already common knowledge), not previously disclosed anywhere else in the
+project, and none fixed this round (a fixed divergence isn't `KNOWN_LIMITATION` by
+definition — it's `MATCH_DOCUMENTED_SEMANTICS`; several *other* divergences found while
+building this same suite, e.g. the Boolean-arithmetic and Empty-equality bugs, were fixed
+and so don't appear here — see CHANGELOG.md). Grouped by root cause rather than by count:
+
+- **No declared/runtime type-width tracking** (12): `CInt`/`CLng` silently truncate instead
+  of raising `Overflow` on out-of-range values (5); a `Left`/`Right`/`Mid`/`Chr`/`InStr`
+  call with an out-of-domain argument (negative length, zero start, out-of-range char code)
+  silently clamps instead of raising `Invalid procedure call or argument` (7).
+- **Array declaration/resize gaps** (6): `Dim arr(lo To hi)` and `Dim arr()` (empty parens,
+  for a later `ReDim`) both fail to parse; `Option Base 1` is parsed but not honored;
+  `UBound(arr, dimension)` ignores its dimension argument; `Erase` on a fixed-size array
+  doesn't reset elements to their type default; the `Array(...)` builtin isn't implemented
+  at all.
+- **No Null-propagation semantics anywhere in the VM** (3): `+`, `&` (when *both* operands
+  are Null — one-Null-side already correctly degrades to `""`), and every comparison
+  operator coerce Null to 0/`""` instead of producing Null.
+- **No object-variable unset/Nothing state** (2): a never-`Set` object variable's member
+  access silently no-ops instead of raising "Object variable ... not set"; `Set x = Nothing`
+  silently no-ops instead of actually clearing the reference.
+- **`With`-target resolution is a parse-time literal-string rewrite, not a runtime-resolved
+  stack** (2): can't target a computed expression like `Cells(r, c)`, and a bare `.member`
+  nested inside another block construct (`If`/`For`/`Do`/`Select Case`) within the body
+  isn't recognized.
+- **No per-Variant stored-type tag distinguishing "string that looks numeric" from
+  "genuine number"** (1): `+` between two Variants that both hold strings numeric-adds
+  instead of concatenating, even though real VBA's own documented rule concatenates
+  whenever *both* sides are string-typed, independent of content.
+- **A numeric Variant compared to a string Variant isn't unconditionally "less than"** (1):
+  real VBA's documented rule for `<`/`>` between a numeric-typed and string-typed Variant
+  ignores magnitude entirely; elixcee still numeric-compares when the string looks numeric.
+  Deliberately not "fixed" — the current behavior is far more useful for the overwhelmingly
+  more common real-world case (numeric-string-vs-number threshold checks), and the fix
+  would need to invert it for every caller, not just this one case.
+- **Error message text only, condition already correct** (1): a numeric Variant plus a
+  non-numeric-string Variant does correctly raise a runtime error (not a silent wrong
+  value), but with elixcee's own coercion-failure wording instead of real VBA's "Type
+  mismatch". Not fixed this round: the message comes from a single helper shared by ~54
+  call sites across the VM, and renaming it without auditing every other caller's own
+  correct wording risks introducing a wrong message elsewhere.
+
+Two more parser gaps were found alongside this work but are *not* in this suite (each is a
+"does it parse at all" question, closer to `compat/corpus/`'s own scope than a value-
+correctness one): the `:` multi-statement-per-line separator doesn't parse at all
+(`a = 1: b = 2` fails), and the two `With`-target gaps above are confirmed only for the
+specific shapes tested (`Cells(...)` as a target, one level of `If` nesting) — not
+exhaustively characterized across every possible target expression or nesting depth. See
+`ROADMAP.md`/`CHANGELOG.md` for the full disclosure.
