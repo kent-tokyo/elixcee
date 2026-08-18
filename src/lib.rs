@@ -73,7 +73,12 @@ fn variant_to_py(py: Python<'_>, v: &Variant) -> Py<PyAny> {
         }
         Variant::Error(e) => PyExcelError { code: e.as_str().to_string() }
             .into_pyobject(py).unwrap().into_any().unbind(),
-        Variant::Empty      => py.None(),
+        // VBA's `Null` crosses into Python as `None`, exactly as `Empty`
+        // already does — neither has a Python value, and giving Null its own
+        // Python representation would be a bindings-contract change. The
+        // Empty-vs-Null distinction is observable through the VBA language
+        // (`IsNull`, `TypeName`, `VarType`), not across this boundary.
+        Variant::Empty | Variant::Null => py.None(),
         Variant::Array(a)   => {
             let list = pyo3::types::PyList::new(py, a.iter().map(|x| variant_to_py(py, x))).unwrap();
             list.into_any().unbind()

@@ -77,11 +77,16 @@ consecutive runs.
   as well as a plain value, so `c.Value` reads that cell. It previously fell through to the
   UDT path and silently yielded `Empty`. Found by `compat/corpus/` reacting to the
   `Dim c As Range` change above, not by source audit.
-- **A non-numeric string operand of an arithmetic operator raises `Type mismatch`**, real
-  VBA's documented wording. Applied narrowly, via a new `arith_to_f64` wrapper used only by
-  `eval_binop`'s arithmetic arms — the shared `to_f64` helper and its ~53 other call sites,
-  each with its own correct wording for its own failure, are untouched. That blast radius
-  was the exact reason this stayed disclosed rather than fixed when it was first found.
+- **A non-numeric string operand of `+`/`-`/`*`/`/`/`^` raises `Type mismatch`**, real
+  VBA's documented wording ("One expression is a numeric data type and the other is a
+  String | A `Type mismatch` error occurs"). Applied narrowly, via a new `arith_to_f64`
+  wrapper used only by `eval_binop`'s `Add|Sub|Mul|Div|Pow` arm — the shared `to_f64`
+  helper and its ~53 other call sites, each with its own correct wording for its own
+  failure, are untouched. That blast radius was the exact reason this stayed disclosed
+  rather than fixed when it was first found. **Not** extended to `\`/`Mod`, which go
+  through `to_i64_rounded` and keep the previous wording; the rule cited above is from the
+  `+` operator page, and widening it further would re-enter the blast radius this fix was
+  scoped to avoid.
 - `Dim x: x = 5` now parses — the declarator's trailing-syntax tolerance loop was swallowing
   the `:` separator. Found by a new suite case, not by source audit.
 
