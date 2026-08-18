@@ -1567,7 +1567,7 @@
       "id": "udt_field_assignment_without_a_dim_still_works",
       "category": "object_nothing_access",
       "verdict": "MATCH_DOCUMENTED_SEMANTICS",
-      "reason": "Guard against over-reaching: only a name registered as a declared *object* variable may raise error 91. A name that is not an object variable at all keeps its pre-existing record behavior, so ordinary UDT-style field writes are unaffected."
+      "reason": "A `Dim p As <user-defined Type>` declares a value-typed record, not an object reference: `p.x = 3` assigns a field with plain `=`, no Set, and no live-reference requirement. Guard against over-reaching — only a name declared as an *object* variable may raise error 91, so ordinary UDT field writes must be untouched."
     },
     {
       "id": "plus_variant_string_plus_variant_number",
@@ -1883,13 +1883,13 @@
       "id": "with_udt_record_target_still_works",
       "category": "with_block_resolution",
       "verdict": "MATCH_DOCUMENTED_SEMANTICS",
-      "reason": "Regression guard for the other bare-identifier target kind: a name that is not an object variable is a record, and .field must still assign to it — the same runtime dispatch, different namespace."
+      "reason": "A With target may be a value-typed record as well as an object reference, and `.x = 4` inside the body is shorthand for `p.x = 4`. Regression guard for the other bare-identifier target kind: the same runtime dispatch, resolved against the variable namespace rather than the object one."
     },
     {
       "id": "with_udt_record_target_nested_field_still_works",
       "category": "with_block_resolution",
       "verdict": "MATCH_DOCUMENTED_SEMANTICS",
-      "reason": "The chained-field form of the case above (.a.b, not just .a), confirming the record path handles multi-segment member paths as it did before."
+      "reason": "The chained-field form of the case above: a UDT whose field is itself a UDT, so `.a.b = 6` inside the With body is shorthand for `p.a.b = 6`. Confirms the record path still handles multi-segment member paths."
     },
     {
       "id": "with_dot_value_read_in_a_nested_if_condition",
@@ -2103,7 +2103,7 @@
       "id": "null_arithmetic_result_is_not_zero",
       "category": "null_propagation",
       "verdict": "MATCH_DOCUMENTED_SEMANTICS",
-      "reason": "Second, independent confirmation that n + 5 is genuinely Null rather than a 0 that merely happens to be falsy: TypeName/IsNull, not truthiness, is what distinguishes them."
+      "reason": "Chains two documented rules to distinguish Null from a 0 that merely looks falsy: n + 5 is Null, so `= 0` is Null (comparison rule), and a Null condition is treated as False (If rule) — the Else branch runs. An implementation that coerced Null to 0 would take the Then branch instead."
     },
     {
       "id": "typename_of_a_null_arithmetic_result_is_null",
@@ -2271,7 +2271,7 @@
       "id": "colon_after_msgbox_with_colon_in_message",
       "category": "colon_statement_separator",
       "verdict": "MATCH_DOCUMENTED_SEMANTICS",
-      "reason": "Baseline companion to colon_inside_string_literal_is_not_a_separator: the same colon-bearing string literal as a MsgBox argument on its own line, confirming the literal is not itself the thing under test."
+      "reason": "Baseline companion to colon_msgbox_then_statement_same_line: the same colon-bearing string literal, but with the following statement on its own line, confirming the literal is not itself the thing under test."
     },
     {
       "id": "colon_msgbox_then_statement_same_line",

@@ -660,11 +660,11 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     '  Dim x As Long\n  x = 5\n  x = x + 1\n  Range("A1").Value = x',
     { value: 6 },
     'Scalar and object variables have genuinely different assignment semantics in VBA (`x = 5` vs `Set r = ...`), and they live in separate namespaces here. A Dim As Long must never acquire object-variable state -- if it did, `x = x + 1` would start raising error 91.');
-  addCase('udt_field_assignment_without_a_dim_still_works', CAT,
-    'A `.field = value` write on a name that is not an object variable still auto-creates a record',
-    '  p.x = 3\n  Range("A1").Value = p.x',
+  addCaseWithSource('udt_field_assignment_without_a_dim_still_works', CAT,
+    'A `.field = value` write on a declared UDT variable is unaffected by object tracking',
+    'Type TPoint\n  x As Integer\nEnd Type\nSub Scenario()\n  Dim p As TPoint\n  p.x = 3\n  Range("A1").Value = p.x\nEnd Sub\n',
     { value: 3 },
-    'Guard against over-reaching: only a name registered as a declared *object* variable may raise error 91. A name that is not an object variable at all keeps its pre-existing record behavior, so ordinary UDT-style field writes are unaffected.');
+    'A `Dim p As <user-defined Type>` declares a value-typed record, not an object reference: `p.x = 3` assigns a field with plain `=`, no Set, and no live-reference requirement. Guard against over-reaching — only a name declared as an *object* variable may raise error 91, so ordinary UDT field writes must be untouched.');
 }
 
 // ── operator_coercion ────────────────────────────────────────────────────────
@@ -962,16 +962,16 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     '  On Error Resume Next\n  With Range("A1")\n    .Value = 1 / 0\n  End With\n  On Error GoTo 0\n  With Range("B1")\n    .Value = 7\n  End With',
     { value: 7, address: 'B1' },
     'The error path is the one most likely to skip a naive pop: if the target leaked, the following With\'s bare .Value would resolve against A1 instead of B1.');
-  addCase('with_udt_record_target_still_works', CAT,
-    'A With block over a UDT variable still sets its fields',
-    '  p.x = 0\n  With p\n    .x = 4\n  End With\n  Range("A1").Value = p.x',
+  addCaseWithSource('with_udt_record_target_still_works', CAT,
+    'A With block over a declared UDT variable still sets its fields',
+    'Type TPoint\n  x As Integer\nEnd Type\nSub Scenario()\n  Dim p As TPoint\n  With p\n    .x = 4\n  End With\n  Range("A1").Value = p.x\nEnd Sub\n',
     { value: 4 },
-    'Regression guard for the other bare-identifier target kind: a name that is not an object variable is a record, and .field must still assign to it — the same runtime dispatch, different namespace.');
-  addCase('with_udt_record_target_nested_field_still_works', CAT,
-    'A With block over a UDT variable still sets a nested field path',
-    '  With p\n    .a.b = 6\n  End With\n  Range("A1").Value = p.a.b',
+    'A With target may be a value-typed record as well as an object reference, and `.x = 4` inside the body is shorthand for `p.x = 4`. Regression guard for the other bare-identifier target kind: the same runtime dispatch, resolved against the variable namespace rather than the object one.');
+  addCaseWithSource('with_udt_record_target_nested_field_still_works', CAT,
+    'A With block over a declared UDT variable still sets a nested field path',
+    'Type TInner\n  b As Integer\nEnd Type\nType TOuter\n  a As TInner\nEnd Type\nSub Scenario()\n  Dim p As TOuter\n  With p\n    .a.b = 6\n  End With\n  Range("A1").Value = p.a.b\nEnd Sub\n',
     { value: 6 },
-    'The chained-field form of the case above (.a.b, not just .a), confirming the record path handles multi-segment member paths as it did before.');
+    'The chained-field form of the case above: a UDT whose field is itself a UDT, so `.a.b = 6` inside the With body is shorthand for `p.a.b = 6`. Confirms the record path still handles multi-segment member paths.');
   addCase('with_dot_value_read_in_a_nested_if_condition', CAT,
     'A bare .Value read inside a nested If condition resolves against the With target',
     '  Range("A1").Value = 5\n  With Range("A1")\n    If .Value = 5 Then\n      Range("B1").Value = 1\n    Else\n      Range("B1").Value = 2\n    End If\n  End With',
@@ -1138,10 +1138,10 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     { value: true },
     'The sharpest case for "propagate before coercing": an implementation that coerced Null to 0 would raise Division by zero here instead of returning Null.');
   addCase('null_arithmetic_result_is_not_zero', CAT,
-    'A Null arithmetic result is Null, not the number 0',
-    '  Dim n\n  n = Null\n  Range("A1").Value = (n + 5 = 0)\n  Range("A1").Value = IsNull(n + 5)',
-    { value: true },
-    'Second, independent confirmation that n + 5 is genuinely Null rather than a 0 that merely happens to be falsy: TypeName/IsNull, not truthiness, is what distinguishes them.');
+    'A Null arithmetic result does not compare equal to 0',
+    '  Dim n\n  n = Null\n  If n + 5 = 0 Then\n    Range("A1").Value = 1\n  Else\n    Range("A1").Value = 2\n  End If',
+    { value: 2 },
+    'Chains two documented rules to distinguish Null from a 0 that merely looks falsy: n + 5 is Null, so `= 0` is Null (comparison rule), and a Null condition is treated as False (If rule) — the Else branch runs. An implementation that coerced Null to 0 would take the Then branch instead.');
   addCase('typename_of_a_null_arithmetic_result_is_null', CAT,
     'TypeName(Null + 5) is "Null"',
     '  Dim n\n  n = Null\n  Range("A1").Value = TypeName(n + 5)',
@@ -1276,10 +1276,10 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     { value: '10:30' },
     'A `:` inside a string literal is literal text, not a statement separator -- the string must survive intact AND the statement after the real separator must still run. This is the case a pre-tokenize `:`-to-newline rewrite corrupts.');
   addCase('colon_after_msgbox_with_colon_in_message', CAT,
-    'MsgBox "x:y": Exit-adjacent statement on the same line',
+    'A colon-bearing MsgBox argument on its own line (baseline)',
     '  MsgBox "10:30"\n  Range("A1").Value = 1',
     { value: 1 },
-    'Baseline companion to colon_inside_string_literal_is_not_a_separator: the same colon-bearing string literal as a MsgBox argument on its own line, confirming the literal is not itself the thing under test.');
+    'Baseline companion to colon_msgbox_then_statement_same_line: the same colon-bearing string literal, but with the following statement on its own line, confirming the literal is not itself the thing under test.');
   addCase('colon_msgbox_then_statement_same_line', CAT,
     'MsgBox "10:30": Range write on the same line',
     '  MsgBox "10:30": Range("A1").Value = 1',

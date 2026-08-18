@@ -1787,8 +1787,8 @@
   {
     "id": "udt_field_assignment_without_a_dim_still_works",
     "category": "object_nothing_access",
-    "description": "A `.field = value` write on a name that is not an object variable still auto-creates a record",
-    "vbaSource": "Sub Scenario()\n  p.x = 3\n  Range(\"A1\").Value = p.x\nEnd Sub\n",
+    "description": "A `.field = value` write on a declared UDT variable is unaffected by object tracking",
+    "vbaSource": "Type TPoint\n  x As Integer\nEnd Type\nSub Scenario()\n  Dim p As TPoint\n  p.x = 3\n  Range(\"A1\").Value = p.x\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
@@ -2151,15 +2151,15 @@
   {
     "id": "with_udt_record_target_still_works",
     "category": "with_block_resolution",
-    "description": "A With block over a UDT variable still sets its fields",
-    "vbaSource": "Sub Scenario()\n  p.x = 0\n  With p\n    .x = 4\n  End With\n  Range(\"A1\").Value = p.x\nEnd Sub\n",
+    "description": "A With block over a declared UDT variable still sets its fields",
+    "vbaSource": "Type TPoint\n  x As Integer\nEnd Type\nSub Scenario()\n  Dim p As TPoint\n  With p\n    .x = 4\n  End With\n  Range(\"A1\").Value = p.x\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
     "id": "with_udt_record_target_nested_field_still_works",
     "category": "with_block_resolution",
-    "description": "A With block over a UDT variable still sets a nested field path",
-    "vbaSource": "Sub Scenario()\n  With p\n    .a.b = 6\n  End With\n  Range(\"A1\").Value = p.a.b\nEnd Sub\n",
+    "description": "A With block over a declared UDT variable still sets a nested field path",
+    "vbaSource": "Type TInner\n  b As Integer\nEnd Type\nType TOuter\n  a As TInner\nEnd Type\nSub Scenario()\n  Dim p As TOuter\n  With p\n    .a.b = 6\n  End With\n  Range(\"A1\").Value = p.a.b\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
@@ -2396,8 +2396,8 @@
   {
     "id": "null_arithmetic_result_is_not_zero",
     "category": "null_propagation",
-    "description": "A Null arithmetic result is Null, not the number 0",
-    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = (n + 5 = 0)\n  Range(\"A1\").Value = IsNull(n + 5)\nEnd Sub\n",
+    "description": "A Null arithmetic result does not compare equal to 0",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  If n + 5 = 0 Then\n    Range(\"A1\").Value = 1\n  Else\n    Range(\"A1\").Value = 2\n  End If\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
@@ -2592,7 +2592,7 @@
   {
     "id": "colon_after_msgbox_with_colon_in_message",
     "category": "colon_statement_separator",
-    "description": "MsgBox \"x:y\": Exit-adjacent statement on the same line",
+    "description": "A colon-bearing MsgBox argument on its own line (baseline)",
     "vbaSource": "Sub Scenario()\n  MsgBox \"10:30\"\n  Range(\"A1\").Value = 1\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
