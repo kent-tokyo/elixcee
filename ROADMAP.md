@@ -101,10 +101,18 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
     `" 459"`), a genuine behavior difference from `CStr(459)` == `"459"`, not an alias.
     Found in the same systematic pass as item 11. Now its own arm, scoped to numeric inputs.
 
-This systematic `eval_vba_func` audit (items 10-12) has now covered every function grouped
-or reused in a way that risked one masking another's real behavior; no further candidates
-found by that specific method as of this pass. A fresh audit is still worth doing if this
-file's own scope ever expands (new functions added) or before a next 90+ push.
+This systematic `eval_vba_func` audit (items 10-12) covered every function grouped or
+reused in a way that risked one masking another's real behavior; no further candidates
+were found by that specific method. A fresh audit is still worth doing if this file's own
+scope ever expands (new functions added) or before a next 90+ push.
+
+13. ~~`Val()` required its entire argument to parse as a number~~ — **fixed** (Unreleased):
+    `Val("123abc")` was `0`, not real VBA's `123`, which parses a leading numeric prefix
+    and stops at the first character that doesn't fit. Found while designing the value-
+    correctness suite below (item 14) — the same bug class as items 11/12, found by a
+    different route (writing a reference implementation for `Val()` while authoring test
+    cases, rather than a source-code audit pass). Scoped to the core grammar; real VBA's
+    documented embedded-whitespace-stripping inside the numeric prefix isn't attempted.
 
 ## Next candidates, roughly by leverage
 

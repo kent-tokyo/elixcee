@@ -2567,12 +2567,17 @@ impl Vm {
                 Ok(Variant::Str(s))
             }
             "val" => {
+                // Real VBA's Val() parses a leading numeric prefix and
+                // stops at the first character that doesn't fit, returning
+                // 0 only if there's no valid numeric prefix at all —
+                // Val("123abc") is 123, not 0. A strict whole-string parse
+                // (what this used to do) makes any trailing non-numeric
+                // character silently zero out the entire value.
                 let s = match vals.first().ok_or("Val requires 1 argument")? {
-                    Variant::Str(s) => s.trim().to_string(),
+                    Variant::Str(s) => s.clone(),
                     v => v.to_string(),
                 };
-                let f = s.parse::<f64>().unwrap_or(0.0);
-                Ok(as_int_if_whole(f))
+                Ok(as_int_if_whole(parse_vba_val_prefix(&s)))
             }
             "len" => {
                 let s = match vals.first().ok_or("Len requires 1 argument")? {
@@ -3399,6 +3404,44 @@ fn as_int_if_whole(f: f64) -> Variant {
     } else {
         Variant::Float(f)
     }
+}
+
+/// Parses `Val()`'s leading numeric prefix: optional leading whitespace,
+/// optional sign, digits, optional `.digits` — stopping at (not erroring
+/// on) the first character that doesn't fit, same as real VBA. Returns 0.0
+/// if no valid numeric prefix exists at all. Scoped to this core grammar;
+/// real VBA's documented embedded-whitespace-stripping inside the numeric
+/// prefix (`Val("1 2 3")` == 123) isn't attempted — no evidence it's
+/// needed, and this project doesn't guess at rarely-exercised VBA quirks.
+fn parse_vba_val_prefix(s: &str) -> f64 {
+    let trimmed = s.trim_start();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        i += 1;
+    }
+    let mut end = i;
+    let mut seen_digit = false;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+        seen_digit = true;
+        end = i;
+    }
+    if i < bytes.len() && bytes[i] == b'.' {
+        let after_dot = i + 1;
+        let mut j = after_dot;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > after_dot {
+            end = j;
+            seen_digit = true;
+        }
+    }
+    if !seen_digit {
+        return 0.0;
+    }
+    trimmed[..end].parse::<f64>().unwrap_or(0.0)
 }
 
 /// Whole days since the Unix epoch, for `Date`/`Now` — same
@@ -4399,6 +4442,34 @@ mod tests {
         assert_eq!(vm.variables["d"], Variant::Boolean(false));
         assert_eq!(vm.variables["e"], Variant::Boolean(false));
         assert_eq!(vm.variables["f"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn test_vba_val_parses_leading_numeric_prefix() {
+        // Real VBA's Val() parses a leading numeric prefix and stops at
+        // the first character that doesn't fit -- Val("123abc") is 123,
+        // not 0. Used to require the entire string to parse as f64, so
+        // any trailing non-numeric character silently zeroed the result.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    a = Val(\"123abc\")\n",
+            "    b = Val(\"  42.5xyz\")\n",
+            "    c = Val(\"abc\")\n",
+            "    d = Val(\"\")\n",
+            "    e = Val(\"-5.5xyz\")\n",
+            "    f = Val(\".5\")\n",
+            "    g = Val(\"5.\")\n",
+            "    h = Val(\"5\")\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["a"], Variant::Integer(123));
+        assert_eq!(vm.variables["b"], Variant::Float(42.5));
+        assert_eq!(vm.variables["c"], Variant::Integer(0));
+        assert_eq!(vm.variables["d"], Variant::Integer(0));
+        assert_eq!(vm.variables["e"], Variant::Float(-5.5));
+        assert_eq!(vm.variables["f"], Variant::Float(0.5));
+        assert_eq!(vm.variables["g"], Variant::Integer(5));
+        assert_eq!(vm.variables["h"], Variant::Integer(5));
     }
 
     // ── Application properties ────────────────────────────────────────────────

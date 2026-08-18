@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `Val()` required its argument to parse as a number in its *entirety* — `Val("123abc")`
+  was `0`, not real VBA's `123`. Real VBA's `Val()` parses a leading numeric prefix and
+  stops at the first character that doesn't fit, only returning `0` when there's no valid
+  numeric prefix at all. Found while designing the new `compat/vba-semantics/` value-
+  correctness test suite — the same "never independently verified against documented
+  semantics" bug class
+  as `IsNumeric`. Scoped to the core grammar (optional sign, digits, one decimal point);
+  real VBA's documented embedded-whitespace-stripping inside the numeric prefix
+  (`Val("1 2 3")` == `123`) isn't attempted — no evidence it's needed.
 - `Str()` was grouped with `CStr()` and shared its implementation — but real VBA's `Str()`
   reserves a leading space for the sign position on a non-negative number (`Str(459)` is
   `" 459"`, not `"459"`), a real, documented behavior difference from `CStr(459)` == `"459"`,
