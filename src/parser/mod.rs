@@ -464,9 +464,61 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Option<Stmt>, String> {
         // The tok at this point is not a Newline (caller skips those)
+        match self.peek() {
+            Tok::Eof | Tok::Newline => return Ok(None),
+            Tok::Ident(_) => {}
+            _ => return Err(format!("unexpected token starting statement: {:?}", self.peek())),
+        }
+
+        // A bare `name = ...` is always a plain assignment, even when `name`
+        // collides with a block-construct keyword below (e.g. `do = 0`,
+        // `select = 1`) — no VBA statement keyword's grammar puts `=`
+        // immediately after itself, so this check must run before any
+        // keyword dispatch, block-construct or not (moving the block-
+        // construct checks ahead of this by mistake, during the refactor
+        // that added `parse_simple_stmt_no_eol`, broke exactly this case —
+        // caught by `prop_vba_assignment_parses` before it shipped).
+        if *self.peek_at(1) == Tok::Eq {
+            let s = self.parse_ident_stmt()?;
+            self.eat_eol()?;
+            return Ok(Some(s));
+        }
+
+        // Block constructs self-manage their own terminator (End X / Next /
+        // Loop / Wend, each already followed by `skip_nl()`) — they don't
+        // go through `parse_simple_stmt_no_eol`/`eat_eol()` at all, and
+        // (being blocks, not single statements) don't belong inside a
+        // single-line `If`'s Then/Else branch either.
+        if self.is_ident("do")     { return Ok(Some(self.parse_do_loop()?)); }
+        if self.is_ident("select") { return Ok(Some(self.parse_select_case()?)); }
+        if self.is_ident("with")   { return Ok(Some(self.parse_with()?)); }
+        if self.is_ident("for") && self.is_ident_at(1, "each") { return Ok(Some(self.parse_for_each()?)); }
+        if self.is_ident("for")    { return Ok(Some(self.parse_for()?)); }
+        if self.is_ident("if")     { return Ok(Some(self.parse_if()?)); }
+        if self.is_ident("while")  { return Ok(Some(self.parse_while_wend()?)); }
+
+        let s = self.parse_simple_stmt_no_eol()?;
+        self.eat_eol()?;
+        Ok(Some(s))
+    }
+
+    /// Parses one "simple" statement — every statement `parse_stmt` handles
+    /// except the block constructs above (Do/Select/With/For/If/While,
+    /// which self-manage their own terminator and don't make sense inside
+    /// a single-line `If`'s Then/Else branch anyway) — WITHOUT consuming
+    /// the trailing newline/terminator. Shared by `parse_stmt` (which calls
+    /// `eat_eol()` right after) and `parse_single_line_if_branch` (which
+    /// checks for `Else`/newline itself instead) — extracted specifically
+    /// so a single-line `If`'s branches get the *same* statement coverage
+    /// block-form VBA already has. Before this, `parse_single_line_if_branch`
+    /// only recognized identifier-led statements via `parse_ident_stmt`, so
+    /// `If cond Then Range("A1").Value = 1` mis-parsed as an array write to
+    /// a variable literally named "range" (`parse_ident_stmt`'s own
+    /// `name(args) = value` branch) instead of a Range statement — found by
+    /// `compat/vba-semantics/` on this exact case, not by source audit.
+    fn parse_simple_stmt_no_eol(&mut self) -> Result<Stmt, String> {
         let first = match self.peek() {
             Tok::Ident(s) => s.clone(),
-            Tok::Eof | Tok::Newline => return Ok(None),
             _ => return Err(format!("unexpected token starting statement: {:?}", self.peek())),
         };
 
@@ -478,53 +530,40 @@ impl Parser {
         // rather than needing a per-keyword lookahead guard (the `"on" if
         // ...`-style fix below only disambiguates `On Error` specifically).
         if *self.peek_at(1) == Tok::Eq {
-            let s = self.parse_ident_stmt()?;
-            self.eat_eol()?;
-            return Ok(Some(s));
+            return self.parse_ident_stmt();
         }
 
         match first.as_str() {
-            "do"      => Ok(Some(self.parse_do_loop()?)),
-            "select"  => Ok(Some(self.parse_select_case()?)),
-            "with"    => Ok(Some(self.parse_with()?)),
-            "for" if self.is_ident_at(1, "each") => Ok(Some(self.parse_for_each()?)),
-            "for"     => Ok(Some(self.parse_for()?)),
-            "if"      => Ok(Some(self.parse_if()?)),
-            "while"   => Ok(Some(self.parse_while_wend()?)),
-            "exit"    => { let s = self.parse_exit()?; self.eat_eol()?; Ok(Some(s)) }
-            "on" if self.is_ident_at(1, "error") => { let s = self.parse_on_error()?; self.eat_eol()?; Ok(Some(s)) }
+            "exit"    => self.parse_exit(),
+            "on" if self.is_ident_at(1, "error") => self.parse_on_error(),
             "goto"    => {
                 self.advance();
                 let label = self.consume_ident()?;
-                self.eat_eol()?;
-                Ok(Some(Stmt::GoTo(label)))
+                Ok(Stmt::GoTo(label))
             }
             "resume"  => {
                 self.advance();
                 let next = if self.is_ident("next") { self.advance(); true } else { false };
-                self.eat_eol()?;
-                Ok(Some(Stmt::Resume { next }))
+                Ok(Stmt::Resume { next })
             }
-            "set"     => { let s = self.parse_set()?; self.eat_eol()?; Ok(Some(s)) }
-            "dim"     => { let s = self.parse_dim()?; self.eat_eol()?; Ok(Some(s)) }
-            "redim"   => { let s = self.parse_redim()?; self.eat_eol()?; Ok(Some(s)) }
-            "const"   => { let s = self.parse_const()?; self.eat_eol()?; Ok(Some(s)) }
-            "msgbox"  => { let s = self.parse_msgbox()?; self.eat_eol()?; Ok(Some(s)) }
-            "call"    => { let s = self.parse_call_stmt()?; self.eat_eol()?; Ok(Some(s)) }
-            "range"   => { let s = self.parse_range_stmt()?; self.eat_eol()?; Ok(Some(s)) }
-            "cells"   => { let s = self.parse_cell_write_stmt()?; self.eat_eol()?; Ok(Some(s)) }
-            "application" => { let s = self.parse_application_stmt()?; self.eat_eol()?; Ok(Some(s)) }
-            "worksheetfunction" => { let s = self.parse_wsf_call_stmt(None)?; self.eat_eol()?; Ok(Some(s)) }
-            "worksheets" | "sheets" => { let s = self.parse_sheets_stmt()?; self.eat_eol()?; Ok(Some(s)) }
-            "workbooks" => { let s = self.parse_workbook_qualified_stmt()?; self.eat_eol()?; Ok(Some(s)) }
+            "set"     => self.parse_set(),
+            "dim"     => self.parse_dim(),
+            "redim"   => self.parse_redim(),
+            "const"   => self.parse_const(),
+            "msgbox"  => self.parse_msgbox(),
+            "call"    => self.parse_call_stmt(),
+            "range"   => self.parse_range_stmt(),
+            "cells"   => self.parse_cell_write_stmt(),
+            "application" => self.parse_application_stmt(),
+            "worksheetfunction" => self.parse_wsf_call_stmt(None),
+            "worksheets" | "sheets" => self.parse_sheets_stmt(),
+            "workbooks" => self.parse_workbook_qualified_stmt(),
             // `ActiveSheet.Range(...)`/`.Cells(...)`/`.Delete`/... (Milestone
             // B7c item 6) — same suffix grammar as `Worksheets(...)`, just
             // rooted at `Expr::ActiveSheetRef` instead of a parenthesized key.
             "activesheet" => {
                 self.advance();
-                let s = self.parse_sheet_property_write(Expr::ActiveSheetRef)?;
-                self.eat_eol()?;
-                Ok(Some(s))
+                self.parse_sheet_property_write(Expr::ActiveSheetRef)
             }
             // `ThisWorkbook.Worksheets(...)` / `ActiveWorkbook.Worksheets(...)`
             // (Milestone B7c item 6) — elixcee only ever has one workbook
@@ -536,29 +575,28 @@ impl Parser {
             {
                 self.advance(); // 'thisworkbook' | 'activeworkbook'
                 self.expect_tok(Tok::Dot)?;
-                let s = self.parse_sheets_stmt()?;
-                self.eat_eol()?;
-                Ok(Some(s))
+                self.parse_sheets_stmt()
             }
             // Access/scope modifiers before Dim/Const inside a sub
             "public" | "private" | "static" | "friend" => {
                 self.advance(); // consume modifier
                 if self.is_ident("dim") {
-                    let s = self.parse_dim()?; self.eat_eol()?; Ok(Some(s))
+                    self.parse_dim()
                 } else if self.is_ident("const") {
-                    let s = self.parse_const()?; self.eat_eol()?; Ok(Some(s))
+                    self.parse_const()
                 } else {
-                    self.skip_to_eol(); Ok(Some(Stmt::Dim))
+                    while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                    Ok(Stmt::Dim)
                 }
             }
             // Debug.Print / Debug.Assert → no-op
             "debug" => {
-                self.skip_to_eol();
-                Ok(Some(Stmt::Unsupported {
+                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                Ok(Stmt::Unsupported {
                     reason: "Debug.Print/Debug.Assert has no effect (no-op)".to_string(),
-                }))
+                })
             }
-            _ => { let s = self.parse_ident_stmt()?; self.eat_eol()?; Ok(Some(s)) }
+            _ => self.parse_ident_stmt(),
         }
     }
 
@@ -651,30 +689,24 @@ impl Parser {
         Ok(Stmt::If { condition, then_body, else_body })
     }
 
-    /// One inline statement for a single-line `If`/`Else` branch. Only
-    /// identifier-led statements (assignment, sub call, array/field write —
-    /// whatever `parse_ident_stmt` covers) are recognized, plus `Exit
-    /// For|Do|Sub|Function` and `GoTo <label>` handled explicitly (see
-    /// below — routing them through `parse_ident_stmt` instead would
-    /// silently no-op a control-flow transfer, not just skip an unmodeled
-    /// feature). This project's own 581-scenario VBA corpus never uses
-    /// anything else here (surveyed directly, not assumed — see
-    /// ROADMAP.md). Anything still unrecognized degrades to
-    /// `Stmt::Unsupported` rather than a hard parse error, same precedent
-    /// as `parse_set`'s unmodeled-target fallback and — importantly — the
-    /// exact same fallback a bare unparenthesized sub call already hits in
-    /// ordinary block-form VBA (`parse_ident_stmt`'s own "bare ident —
-    /// noop" case): this isn't a new risk single-line `If` introduces, just
-    /// the existing one reused.
+    /// One inline statement for a single-line `If`/`Else` branch — reuses
+    /// `parse_simple_stmt_no_eol`, the exact same dispatch block-form VBA's
+    /// `parse_stmt` uses for everything except the block constructs (which
+    /// don't make sense on a single line anyway), so a single-line `If`'s
+    /// branches get full coverage: assignment, `Exit`/`GoTo`, `Set`/`Dim`,
+    /// `Range`/`Cells`/`Application`/`Worksheets`/... — not just the
+    /// identifier-led subset this used to be limited to. (That subset used
+    /// to be this function's entire coverage, which silently mis-parsed
+    /// `If cond Then Range("A1").Value = 1` as an array write to a variable
+    /// literally named "range" — found by `compat/vba-semantics/`, not by
+    /// source audit.) Anything still unrecognized (a token that isn't even
+    /// an identifier) degrades to `Stmt::Unsupported` rather than a hard
+    /// parse error, same precedent as `parse_set`'s unmodeled-target
+    /// fallback.
     fn parse_single_line_if_branch(&mut self) -> Result<SpannedStmt, String> {
         let start = self.peek_span().start;
-        let stmt = if self.is_ident("exit") {
-            self.parse_exit()?
-        } else if self.is_ident("goto") {
-            self.advance();
-            Stmt::GoTo(self.consume_ident()?)
-        } else if matches!(self.peek(), Tok::Ident(_)) {
-            self.parse_ident_stmt()?
+        let stmt = if matches!(self.peek(), Tok::Ident(_)) {
+            self.parse_simple_stmt_no_eol()?
         } else {
             while !matches!(self.peek(), Tok::Newline | Tok::Eof) && !self.is_ident("else") {
                 self.advance();

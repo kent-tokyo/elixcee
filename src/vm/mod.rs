@@ -4126,6 +4126,29 @@ mod tests {
     }
 
     #[test]
+    fn test_single_line_if_supports_range_cells_and_msgbox_branches() {
+        // Before parse_single_line_if_branch was refactored to share
+        // parse_simple_stmt_no_eol with block-form parse_stmt, only
+        // identifier-led statements were recognized inline -- `Range(...)`/
+        // `Cells(...)`/`MsgBox`/etc. are their own dedicated keyword arms in
+        // block-form VBA, not covered by parse_ident_stmt's generic
+        // name(args)/name(args)=value dispatch. `Range("A1").Value = 1`
+        // specifically mis-parsed as an array write to a variable literally
+        // named "range" with index "A1", which then failed trying to
+        // convert the string "A1" to a number -- found by
+        // compat/vba-semantics/ on exactly this shape, not by source audit.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    x = -1\n",
+            "    If x > 0 Then Exit Sub Else Range(\"A1\").Value = 1\n",
+            "    If x < 0 Then Cells(1, 2).Value = 42\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1)); // A1
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(42)); // B1
+    }
+
+    #[test]
     fn test_single_line_if_goto_actually_jumps() {
         let vm = run(concat!(
             "Sub MySub()\n",
