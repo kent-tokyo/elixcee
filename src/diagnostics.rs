@@ -204,6 +204,12 @@ fn classify_runtime_error(msg: &str) -> (&'static str, &'static str) {
     if msg.starts_with("MsgBox: ") {
         return ("E1004", "msgbox_blocked");
     }
+    // Real VBA's error 91, raised by the VM through the single
+    // `vm::OBJECT_NOT_SET` constant — an exact match, not a prefix, because
+    // that constant is the whole message and nothing else produces it.
+    if msg == crate::vm::OBJECT_NOT_SET {
+        return ("E1007", "object_variable_not_set");
+    }
     ("E1099", "runtime_error")
 }
 

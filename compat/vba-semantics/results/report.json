@@ -1,10 +1,10 @@
 {
-  "total": 320,
+  "total": 330,
   "counts": {
-    "MATCH_DOCUMENTED_SEMANTICS": 272,
-    "EXPECTED_ERROR": 18,
+    "MATCH_DOCUMENTED_SEMANTICS": 281,
+    "EXPECTED_ERROR": 21,
     "NONDETERMINISTIC": 2,
-    "KNOWN_LIMITATION": 28,
+    "KNOWN_LIMITATION": 26,
     "BUG": 0,
     "UNCLASSIFIED": 0
   },
@@ -1500,18 +1500,74 @@
     {
       "id": "unset_range_variable_member_write_noop",
       "category": "object_nothing_access",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee silently no-ops instead of raising the error (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed. Same root cause as set_nothing_does_not_clear_reference below: elixcee has no concept of an unset/Nothing object-variable state that member access can check against.",
-      "documented": "real VBA: error \"Object variable or With block variable not set\"",
-      "actual": "ran without error"
+      "verdict": "EXPECTED_ERROR",
+      "reason": "Real VBA raises this error for any member access through an object variable that was never Set — a Dim As Range/Object alone only declares the variable, it does not assign a live reference. (Fixed this round: elixcee used to silently no-op here.)"
     },
     {
       "id": "set_nothing_does_not_clear_reference",
       "category": "object_nothing_access",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee's Set r = Nothing silently no-ops (Nothing isn't recognized as a valid Set target), so r still refers to its previous Range(\"A1\") assignment -- confirmed live: this scenario succeeds and writes 5 to A1 instead of erroring. Found while building this suite.",
-      "documented": "real VBA: error \"Object variable or With block variable not set\"",
-      "actual": "ran without error"
+      "verdict": "EXPECTED_ERROR",
+      "reason": "Real VBA: after Set r = Nothing, r no longer refers to Range(\"A1\") -- writing through it raises this error, same as the never-Set case above. (Fixed this round: elixcee's Set r = Nothing used to silently no-op, leaving the previous reference live.)"
+    },
+    {
+      "id": "unset_range_variable_member_read_errors",
+      "category": "object_nothing_access",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "Error 91 is raised by *any* member access through an object variable holding no reference, not only by a write -- the read path must check the same state as the write path."
+    },
+    {
+      "id": "unset_range_variable_is_nothing_is_true",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A Dim As Range declaration creates the variable but assigns no reference, so it holds the null object reference -- `r Is Nothing` is True until a Set gives it one."
+    },
+    {
+      "id": "set_range_variable_is_not_nothing",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Once Set assigns a live Range reference, `r Is Nothing` is False -- the complement of unset_range_variable_is_nothing_is_true, proving the state actually changes rather than being a constant."
+    },
+    {
+      "id": "set_nothing_makes_is_nothing_true_again",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Set r = Nothing assigns the null object reference, returning the variable to exactly the state a never-Set declaration leaves it in -- real VBA cannot distinguish the two either."
+    },
+    {
+      "id": "set_nothing_does_not_clear_an_alias",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Set copies the *reference* into r2's own variable slot; clearing r afterwards rebinds only r. Real VBA has no way for one variable's assignment to reach into another's -- r2 still refers to the same Range(\"B1\") object."
+    },
+    {
+      "id": "alias_still_reads_through_after_original_cleared",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The stronger form of set_nothing_does_not_clear_an_alias: not only is r2 not Nothing, it still resolves to the same cell -- a member access through it returns that cell's value rather than raising error 91."
+    },
+    {
+      "id": "alias_still_writes_through_after_original_cleared",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Third independent confirmation of the same alias rule, on the write path: r2 must still be a live reference to Range(\"A1\") after r was cleared."
+    },
+    {
+      "id": "set_from_an_unset_variable_stays_nothing",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Assigning from a variable that holds the null object reference is legal VBA and simply copies that null reference -- it is not itself an error, and r2 ends up Nothing."
+    },
+    {
+      "id": "scalar_variable_assignment_is_unaffected_by_object_tracking",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Scalar and object variables have genuinely different assignment semantics in VBA (`x = 5` vs `Set r = ...`), and they live in separate namespaces here. A Dim As Long must never acquire object-variable state -- if it did, `x = x + 1` would start raising error 91."
+    },
+    {
+      "id": "udt_field_assignment_without_a_dim_still_works",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Guard against over-reaching: only a name registered as a declared *object* variable may raise error 91. A name that is not an object variable at all keeps its pre-existing record behavior, so ordinary UDT-style field writes are unaffected."
     },
     {
       "id": "plus_variant_string_plus_variant_number",

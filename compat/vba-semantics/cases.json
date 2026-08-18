@@ -1717,8 +1717,78 @@
   {
     "id": "set_nothing_does_not_clear_reference",
     "category": "object_nothing_access",
-    "description": "Set r = Nothing does not actually clear the reference",
+    "description": "Set r = Nothing actually clears the reference",
     "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Set r = Range(\"A1\")\n  Set r = Nothing\n  r.Value = 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "unset_range_variable_member_read_errors",
+    "category": "object_nothing_access",
+    "description": "Reading through a never-Set Range variable also raises error 91",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  x = r.Value\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "unset_range_variable_is_nothing_is_true",
+    "category": "object_nothing_access",
+    "description": "A declared-but-never-Set Range variable Is Nothing",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Range(\"A1\").Value = (r Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "set_range_variable_is_not_nothing",
+    "category": "object_nothing_access",
+    "description": "A Set object variable is not Nothing",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Set r = Range(\"A1\")\n  Range(\"A1\").Value = (r Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "set_nothing_makes_is_nothing_true_again",
+    "category": "object_nothing_access",
+    "description": "Set r = Nothing makes Is Nothing True again",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Set r = Range(\"B1\")\n  Set r = Nothing\n  Range(\"A1\").Value = (r Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "set_nothing_does_not_clear_an_alias",
+    "category": "object_nothing_access",
+    "description": "Set r = Nothing does not affect a variable previously assigned from r",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Dim r2 As Range\n  Set r = Range(\"B1\")\n  Set r2 = r\n  Set r = Nothing\n  Range(\"A1\").Value = (r2 Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "alias_still_reads_through_after_original_cleared",
+    "category": "object_nothing_access",
+    "description": "An alias still reads its object after the original was Set to Nothing",
+    "vbaSource": "Sub Scenario()\n  Range(\"B1\").Value = 42\n  Dim r As Range\n  Dim r2 As Range\n  Set r = Range(\"B1\")\n  Set r2 = r\n  Set r = Nothing\n  Range(\"A1\").Value = r2.Value\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "alias_still_writes_through_after_original_cleared",
+    "category": "object_nothing_access",
+    "description": "An alias still writes through after the original was Set to Nothing",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Dim r2 As Range\n  Set r = Range(\"A1\")\n  Set r2 = r\n  Set r = Nothing\n  r2.Value = 7\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "set_from_an_unset_variable_stays_nothing",
+    "category": "object_nothing_access",
+    "description": "Set r2 = r where r is unset leaves r2 Nothing too",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Dim r2 As Range\n  Set r2 = r\n  Range(\"A1\").Value = (r2 Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "scalar_variable_assignment_is_unaffected_by_object_tracking",
+    "category": "object_nothing_access",
+    "description": "A plain (non-object) variable still assigns with = and is untouched by Nothing tracking",
+    "vbaSource": "Sub Scenario()\n  Dim x As Long\n  x = 5\n  x = x + 1\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "udt_field_assignment_without_a_dim_still_works",
+    "category": "object_nothing_access",
+    "description": "A `.field = value` write on a name that is not an object variable still auto-creates a record",
+    "vbaSource": "Sub Scenario()\n  p.x = 3\n  Range(\"A1\").Value = p.x\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {

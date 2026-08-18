@@ -351,7 +351,23 @@ pub enum ObjectRef {
     /// (`wb.Worksheets(...)`/`.Sheets(...)` resolve through it) instead of
     /// the pre-Phase-2C silent no-op.
     Workbook,
+    /// The null object reference: an object variable that exists but holds
+    /// no live object. Two ways in — `Dim r As Range` (declared, never
+    /// `Set`) and an explicit `Set r = Nothing` — and real VBA can't tell
+    /// them apart either (`r Is Nothing` is `True` for both). Distinct from
+    /// *absence* from `object_variables`, which means "not an object
+    /// variable at all" (an ordinary scalar/UDT name, or an undeclared one)
+    /// and must keep its pre-existing non-object behavior: making a missing
+    /// key mean Nothing would turn every `p.field = 1` on an
+    /// undeclared-but-legal UDT into a runtime error.
+    Nothing,
 }
+
+/// Real VBA's error 91 text, raised for any member access through an object
+/// variable that holds no live reference. One constant rather than the
+/// literal repeated per call site, so the wording can't drift between the
+/// read path, the write path and the `.Copy`/sheet-qualifier paths.
+pub const OBJECT_NOT_SET: &str = "Object variable or With block variable not set";
 
 /// Narrows an `ObjectRef` to its `Range` payload, or a descriptive error —
 /// `Union`/`.Areas(n)`/`.SpecialCells(...)` only make sense on a Range
@@ -368,6 +384,7 @@ fn expect_range_ref(obj: ObjectRef, context: &str) -> Result<RangeRef, String> {
         ObjectRef::Workbook => {
             Err(format!("{}: expected a Range object, got a Workbook reference", context))
         }
+        ObjectRef::Nothing => Err(OBJECT_NOT_SET.to_string()),
     }
 }
 
@@ -619,6 +636,23 @@ impl Vm {
         }
     }
 
+    /// Rejects a member access through an object variable that holds no live
+    /// reference (`Dim r As Range` with no `Set`, or an explicit `Set r =
+    /// Nothing`) with real VBA's own error-91 wording.
+    ///
+    /// Deliberately checks only for a registered `ObjectRef::Nothing`, never
+    /// for *absence* from `object_variables`: a name that isn't an object
+    /// variable at all is an ordinary scalar/UDT name, and `p.field = 1` on
+    /// one of those must keep its pre-existing behavior (auto-create the
+    /// record), not start erroring. That is the whole difference between
+    /// "declared object variable, unset" and "not an object variable".
+    fn require_live_object(&self, var: &str) -> Result<(), String> {
+        if matches!(self.object_variables.get(var), Some(ObjectRef::Nothing)) {
+            return Err(OBJECT_NOT_SET.to_string());
+        }
+        Ok(())
+    }
+
     /// Resolves a sheet-identifying `Expr` — a string name, a 1-based
     /// numeric index, or a `Workbooks(...).Worksheets(...)` qualifier — to
     /// `(key, display)`: the lowercase key used to index `self.sheets`, and
@@ -660,6 +694,7 @@ impl Vm {
                 Some(ObjectRef::Range(_)) => {
                     Err(format!("'{}' is a Range object, not a Worksheet", name))
                 }
+                Some(ObjectRef::Nothing) => Err(OBJECT_NOT_SET.to_string()),
                 None => Err(format!("'{}' is Nothing — Set was never called", name)),
             };
         }
@@ -1711,6 +1746,23 @@ impl Vm {
                         self.check_deadline()?;
                         let v = self.get_cell(r, c);
                         self.variables.insert(var.clone(), v);
+                        // `For Each c In Range(...)` binds `c` to a real
+                        // single-cell Range *object*, not just the cell's
+                        // value — so `c.Value` reads that cell (it used to
+                        // fall through to the UDT path and silently yield
+                        // Empty) and a `Dim c As Range` loop variable stops
+                        // reading as the never-Set Nothing its declaration
+                        // registered. The plain value stays in `variables`
+                        // too, so a bare `c` in an arithmetic context keeps
+                        // working exactly as before (VBA's own default-
+                        // property behavior).
+                        self.object_variables.insert(
+                            var.clone(),
+                            ObjectRef::Range(RangeRef::single(
+                                self.active_sheet.clone(),
+                                Rect { start_row: r, start_col: c, end_row: r, end_col: c },
+                            )),
+                        );
                         for s in body {
                             self.exec_stmt(s)?;
                             if matches!(self.exit_flag, Some(ExitKind::For)) { self.exit_flag = None; break 'fe_outer; }
@@ -1928,6 +1980,7 @@ impl Vm {
                 }
             }
             Stmt::RangeObjectCopy { var, dst } => {
+                self.require_live_object(var)?;
                 let obj = self.object_variables.get(var).cloned()
                     .ok_or_else(|| format!("'{}' is Nothing — Set was never called", var))?;
                 let r = expect_range_ref(obj, "Copy")?;
@@ -1957,6 +2010,18 @@ impl Vm {
                         }
                         "thisworkbook" | "activeworkbook" => {
                             self.object_variables.insert(var.clone(), ObjectRef::Workbook);
+                            return Ok(());
+                        }
+                        // `Set r = Nothing` clears ONLY this variable's own
+                        // reference. Any variable previously assigned *from*
+                        // it (`Set r2 = r`) keeps pointing at the real object
+                        // — `ObjectRef` is copied by value into each
+                        // variable's own slot, so there is no shared cell to
+                        // clear. Matched here by name, ahead of the generic
+                        // "not a live object variable" no-op below, which is
+                        // where this used to land (silently doing nothing).
+                        "nothing" => {
+                            self.object_variables.insert(var.clone(), ObjectRef::Nothing);
                             return Ok(());
                         }
                         _ => {}
@@ -2160,8 +2225,19 @@ impl Vm {
                 if let Some(fields) = self.type_defs.get(type_name).cloned() {
                     let record = make_record_default(&fields, &self.type_defs);
                     self.variables.insert(var.clone(), record);
+                } else if matches!(type_name.as_str(), "range" | "worksheet" | "workbook") {
+                    // `Dim r As Range` declares an *object* variable holding
+                    // no reference yet — real VBA's `r Is Nothing` is True
+                    // here, and any member access through it raises error 91
+                    // until a `Set` gives it one. Registering it (rather than
+                    // the previous silent no-op) is what makes both of those
+                    // observable. Guarded on there being no user-defined
+                    // `Type` of the same name, so a `Type Range ... End Type`
+                    // module still wins — VBA's own name resolution prefers
+                    // the user type too.
+                    self.object_variables.entry(var.clone()).or_insert(ObjectRef::Nothing);
                 }
-                // Unknown type name → no-op (built-in type)
+                // Any other unknown type name → no-op (built-in type)
             }
             Stmt::DimArrayRecord { name, sizes, type_name } => {
                 let upper = to_f64(&self.eval_expr(&sizes[0])?)? as usize;
@@ -2216,6 +2292,7 @@ impl Vm {
                 // only ever populated by `Set`, so this can't misfire
                 // against a genuine `Type`-based record that happens to
                 // have a field literally named "value"/"formula".
+                self.require_live_object(var)?;
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
                     if field == "value" || field == "formula" {
                         let v = self.eval_expr(value)?;
@@ -2445,11 +2522,26 @@ impl Vm {
                 };
                 Ok(Variant::Integer(result as i64))
             }
+            Expr::IsNothing(name) => {
+                // True for a declared-but-unset object variable and for one
+                // explicitly `Set` to Nothing — real VBA can't tell those
+                // apart either. A name absent from `object_variables`
+                // entirely is reported as Nothing too: in real VBA a
+                // non-object operand here is a compile-time type error, and
+                // "no live object reference" is the closest true answer
+                // elixcee can give without inventing a type error the rest
+                // of the VM has no way to raise.
+                Ok(Variant::Boolean(!matches!(
+                    self.object_variables.get(name),
+                    Some(ObjectRef::Range(_)) | Some(ObjectRef::Worksheet(_)) | Some(ObjectRef::Workbook)
+                )))
+            }
             Expr::RecordGet { var, field } => {
                 // `x = <var>.Value` where `var` is a `Set`-assigned object
                 // variable (Milestone B7c) — see `Stmt::RecordSet`'s
                 // matching write-side comment for why this is safe to
                 // disambiguate purely by which namespace holds `var`.
+                self.require_live_object(var)?;
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
                     return if field == "value" {
                         self.read_range_ref_value(&r)
@@ -2465,6 +2557,7 @@ impl Vm {
             Expr::RecordGetNested { var, fields } => {
                 // `x = <var>.Areas.Count` (Milestone B7c item 3) — same
                 // object-variable disambiguation as above.
+                self.require_live_object(var)?;
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
                     return if fields.len() == 2 && fields[0] == "areas" && fields[1] == "count" {
                         Ok(Variant::Integer(r.areas.len() as i64))
@@ -6914,5 +7007,101 @@ mod tests {
             "Sub MySub()\n    Sheets(\"Data\").Cells(1, 1).Value = 42\n    Set wb = ActiveWorkbook\n    x = wb.Sheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n",
         );
         assert_eq!(vm.variables["x"], Variant::Integer(42));
+    }
+
+    // ── ObjectRef::Nothing — unset / cleared object variables ───────────────
+
+    fn run_err(code: &str) -> String {
+        let prog = parser::parse(code).unwrap();
+        Vm::new().run_sub(&prog, "mysub").unwrap_err()
+    }
+
+    #[test]
+    fn dim_as_range_registers_an_unset_object_variable() {
+        let vm = run("Sub MySub()\n    Dim r As Range\nEnd Sub\n");
+        assert_eq!(vm.object_variables.get("r"), Some(&ObjectRef::Nothing));
+    }
+
+    #[test]
+    fn member_write_through_a_never_set_object_variable_raises_error_91() {
+        assert_eq!(
+            run_err("Sub MySub()\n    Dim r As Range\n    r.Value = 5\nEnd Sub\n"),
+            OBJECT_NOT_SET
+        );
+    }
+
+    #[test]
+    fn member_read_through_a_never_set_object_variable_raises_error_91() {
+        assert_eq!(
+            run_err("Sub MySub()\n    Dim r As Range\n    x = r.Value\nEnd Sub\n"),
+            OBJECT_NOT_SET
+        );
+    }
+
+    #[test]
+    fn set_nothing_clears_the_reference() {
+        assert_eq!(
+            run_err(
+                "Sub MySub()\n    Dim r As Range\n    Set r = Range(\"A1\")\n    \
+                 Set r = Nothing\n    r.Value = 5\nEnd Sub\n"
+            ),
+            OBJECT_NOT_SET
+        );
+    }
+
+    #[test]
+    fn set_nothing_clears_only_that_variable_not_an_alias() {
+        // The alias case: `Set r2 = r` copies the reference into r2's own
+        // slot, so clearing r afterwards must leave r2 fully live.
+        let vm = run(
+            "Sub MySub()\n    Range(\"B1\").Value = 42\n    Dim r As Range\n    \
+             Dim r2 As Range\n    Set r = Range(\"B1\")\n    Set r2 = r\n    \
+             Set r = Nothing\n    x = r2.Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.object_variables.get("r"), Some(&ObjectRef::Nothing));
+        assert!(matches!(vm.object_variables.get("r2"), Some(ObjectRef::Range(_))));
+        assert_eq!(vm.variables["x"], Variant::Integer(42));
+    }
+
+    #[test]
+    fn is_nothing_reflects_each_variables_own_state() {
+        let vm = run(
+            "Sub MySub()\n    Dim r As Range\n    Dim r2 As Range\n    \
+             a = (r Is Nothing)\n    Set r = Range(\"A1\")\n    b = (r Is Nothing)\n    \
+             Set r2 = r\n    Set r = Nothing\n    c = (r Is Nothing)\n    \
+             d = (r2 Is Nothing)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Boolean(false));
+        assert_eq!(vm.variables["c"], Variant::Boolean(true));
+        assert_eq!(vm.variables["d"], Variant::Boolean(false));
+    }
+
+    #[test]
+    fn a_scalar_variable_never_acquires_object_state() {
+        // Scalar (`x = 5`) and object (`Set r = ...`) assignment are
+        // genuinely different in VBA and live in different namespaces —
+        // Nothing-tracking must not leak into the scalar path.
+        let vm = run("Sub MySub()\n    Dim x As Long\n    x = 5\n    x = x + 1\nEnd Sub\n");
+        assert_eq!(vm.variables["x"], Variant::Integer(6));
+        assert!(!vm.object_variables.contains_key("x"));
+    }
+
+    #[test]
+    fn a_non_object_name_still_auto_creates_a_record_on_field_write() {
+        // Only a *registered* object variable may raise error 91. A name
+        // that isn't one at all keeps its pre-existing record behavior.
+        let vm = run("Sub MySub()\n    p.x = 3\n    y = p.x\nEnd Sub\n");
+        assert_eq!(vm.variables["y"], Variant::Integer(3));
+    }
+
+    #[test]
+    fn for_each_binds_the_loop_variable_as_a_live_single_cell_range() {
+        let vm = run(
+            "Sub MySub()\n    Range(\"A1\").Value = 4\n    Range(\"A2\").Value = 6\n    \
+             Dim c As Range\n    t = 0\n    For Each c In Range(\"A1:A2\")\n        \
+             t = t + c.Value\n    Next c\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["t"], Variant::Integer(10));
     }
 }

@@ -815,7 +815,10 @@ fn walk_expr(
         | Expr::ActiveSheetRef
         | Expr::ObjectVarSheet(_)
         | Expr::RecordGet { .. }
-        | Expr::RecordGetNested { .. } => {}
+        | Expr::RecordGetNested { .. }
+        // `<var> Is Nothing` holds only a variable name, no sub-expression
+        // and no callable — nothing here for the undefined-Sub/Function walk.
+        | Expr::IsNothing(_) => {}
     }
 }
 

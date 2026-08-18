@@ -83,6 +83,13 @@ pub enum Expr {
     /// a parse error, same as `ObjectRef::Range`'s existing "'x' is
     /// Nothing" precedent.
     ObjectVarSheet(String),
+    /// `<var> Is Nothing` — VBA's object-identity test against the null
+    /// object reference. Holds the lowercase variable name; resolved against
+    /// `Vm::object_variables` at *runtime* (the parser has no variable-type
+    /// tracking — same situation `Expr::ObjectVarSheet` already accepts).
+    /// Only the `Is Nothing` shape is modeled: a general `a Is b` object-
+    /// identity comparison is still unparsed, exactly as before.
+    IsNothing(String),
     RecordGet       { var: String, field: String },           // p.x
     RecordGetNested { var: String, fields: Vec<String> },    // p.a.b.c
     ArrayRecordGet  { name: String, indices: Vec<Expr>, field: String }, // arr(i).f

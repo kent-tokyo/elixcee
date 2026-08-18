@@ -597,24 +597,74 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
 
 // ── object_nothing_access ────────────────────────────────────────────────────
 // Real VBA: accessing a member of an unset (Nothing) object variable raises "Object
-// variable or With block variable not set" (error 91). elixcee's actual behavior is a
-// real, previously-undisclosed gap. (A third natural case here, `r Is Nothing`, needs the
-// `Is` operator, which doesn't parse in elixcee at all -- a categorically different,
-// parser-level gap already tracked in ROADMAP.md; not forced into this suite's per-value
-// schema, which assumes the scenario at least parses.)
+// variable or With block variable not set" (error 91). The first two cases below were
+// disclosed KNOWN_LIMITATIONs when this category was written; both are FIXED now (the VM
+// grew a real ObjectRef::Nothing state, `Dim r As Range` registers it, `Set r = Nothing`
+// assigns it, and every member-access path checks it -- see src/vm/mod.rs's
+// `require_live_object`), so their knownLimitation annotations are gone rather than
+// weakened. The `Is` operator now parses for the `Is Nothing` shape specifically, which
+// is what makes the state-observing cases below expressible at all.
 {
   const CAT = 'object_nothing_access';
   addCase('unset_range_variable_member_write_noop', CAT, 'Writing through a never-Set Range variable',
     '  Dim r As Range\n  r.Value = 5',
     { error: 'Object variable or With block variable not set' },
-    'Real VBA raises this error for any member access through an object variable that was never Set — a Dim As Range/Object alone only declares the variable, it does not assign a live reference.',
-    'elixcee silently no-ops instead of raising the error (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed. Same root cause as set_nothing_does_not_clear_reference below: elixcee has no concept of an unset/Nothing object-variable state that member access can check against.');
+    'Real VBA raises this error for any member access through an object variable that was never Set — a Dim As Range/Object alone only declares the variable, it does not assign a live reference. (Fixed this round: elixcee used to silently no-op here.)');
   addCase('set_nothing_does_not_clear_reference', CAT,
-    'Set r = Nothing does not actually clear the reference',
+    'Set r = Nothing actually clears the reference',
     '  Dim r As Range\n  Set r = Range("A1")\n  Set r = Nothing\n  r.Value = 5',
     { error: 'Object variable or With block variable not set' },
-    'Real VBA: after Set r = Nothing, r no longer refers to Range("A1") -- writing through it raises this error, same as the never-Set case above.',
-    'elixcee\'s Set r = Nothing silently no-ops (Nothing isn\'t recognized as a valid Set target), so r still refers to its previous Range("A1") assignment -- confirmed live: this scenario succeeds and writes 5 to A1 instead of erroring. Found while building this suite.');
+    'Real VBA: after Set r = Nothing, r no longer refers to Range("A1") -- writing through it raises this error, same as the never-Set case above. (Fixed this round: elixcee\'s Set r = Nothing used to silently no-op, leaving the previous reference live.)');
+  addCase('unset_range_variable_member_read_errors', CAT,
+    'Reading through a never-Set Range variable also raises error 91',
+    '  Dim r As Range\n  x = r.Value\n  Range("A1").Value = x',
+    { error: 'Object variable or With block variable not set' },
+    'Error 91 is raised by *any* member access through an object variable holding no reference, not only by a write -- the read path must check the same state as the write path.');
+  addCase('unset_range_variable_is_nothing_is_true', CAT,
+    'A declared-but-never-Set Range variable Is Nothing',
+    '  Dim r As Range\n  Range("A1").Value = (r Is Nothing)',
+    { value: true },
+    'A Dim As Range declaration creates the variable but assigns no reference, so it holds the null object reference -- `r Is Nothing` is True until a Set gives it one.');
+  addCase('set_range_variable_is_not_nothing', CAT,
+    'A Set object variable is not Nothing',
+    '  Dim r As Range\n  Set r = Range("A1")\n  Range("A1").Value = (r Is Nothing)',
+    { value: false },
+    'Once Set assigns a live Range reference, `r Is Nothing` is False -- the complement of unset_range_variable_is_nothing_is_true, proving the state actually changes rather than being a constant.');
+  addCase('set_nothing_makes_is_nothing_true_again', CAT,
+    'Set r = Nothing makes Is Nothing True again',
+    '  Dim r As Range\n  Set r = Range("B1")\n  Set r = Nothing\n  Range("A1").Value = (r Is Nothing)',
+    { value: true },
+    'Set r = Nothing assigns the null object reference, returning the variable to exactly the state a never-Set declaration leaves it in -- real VBA cannot distinguish the two either.');
+  addCase('set_nothing_does_not_clear_an_alias', CAT,
+    'Set r = Nothing does not affect a variable previously assigned from r',
+    '  Dim r As Range\n  Dim r2 As Range\n  Set r = Range("B1")\n  Set r2 = r\n  Set r = Nothing\n  Range("A1").Value = (r2 Is Nothing)',
+    { value: false },
+    'Set copies the *reference* into r2\'s own variable slot; clearing r afterwards rebinds only r. Real VBA has no way for one variable\'s assignment to reach into another\'s -- r2 still refers to the same Range("B1") object.');
+  addCase('alias_still_reads_through_after_original_cleared', CAT,
+    'An alias still reads its object after the original was Set to Nothing',
+    '  Range("B1").Value = 42\n  Dim r As Range\n  Dim r2 As Range\n  Set r = Range("B1")\n  Set r2 = r\n  Set r = Nothing\n  Range("A1").Value = r2.Value',
+    { value: 42 },
+    'The stronger form of set_nothing_does_not_clear_an_alias: not only is r2 not Nothing, it still resolves to the same cell -- a member access through it returns that cell\'s value rather than raising error 91.');
+  addCase('alias_still_writes_through_after_original_cleared', CAT,
+    'An alias still writes through after the original was Set to Nothing',
+    '  Dim r As Range\n  Dim r2 As Range\n  Set r = Range("A1")\n  Set r2 = r\n  Set r = Nothing\n  r2.Value = 7',
+    { value: 7 },
+    'Third independent confirmation of the same alias rule, on the write path: r2 must still be a live reference to Range("A1") after r was cleared.');
+  addCase('set_from_an_unset_variable_stays_nothing', CAT,
+    'Set r2 = r where r is unset leaves r2 Nothing too',
+    '  Dim r As Range\n  Dim r2 As Range\n  Set r2 = r\n  Range("A1").Value = (r2 Is Nothing)',
+    { value: true },
+    'Assigning from a variable that holds the null object reference is legal VBA and simply copies that null reference -- it is not itself an error, and r2 ends up Nothing.');
+  addCase('scalar_variable_assignment_is_unaffected_by_object_tracking', CAT,
+    'A plain (non-object) variable still assigns with = and is untouched by Nothing tracking',
+    '  Dim x As Long\n  x = 5\n  x = x + 1\n  Range("A1").Value = x',
+    { value: 6 },
+    'Scalar and object variables have genuinely different assignment semantics in VBA (`x = 5` vs `Set r = ...`), and they live in separate namespaces here. A Dim As Long must never acquire object-variable state -- if it did, `x = x + 1` would start raising error 91.');
+  addCase('udt_field_assignment_without_a_dim_still_works', CAT,
+    'A `.field = value` write on a name that is not an object variable still auto-creates a record',
+    '  p.x = 3\n  Range("A1").Value = p.x',
+    { value: 3 },
+    'Guard against over-reaching: only a name registered as a declared *object* variable may raise error 91. A name that is not an object variable at all keeps its pre-existing record behavior, so ordinary UDT-style field writes are unaffected.');
 }
 
 // ── operator_coercion ────────────────────────────────────────────────────────

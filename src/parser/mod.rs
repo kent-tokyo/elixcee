@@ -1993,6 +1993,21 @@ impl Parser {
 
     fn parse_comparison(&mut self) -> Result<Expr, String> {
         let mut lhs = self.parse_concat()?;
+        // `<var> Is Nothing` — an object-identity comparison, at the same
+        // precedence tier as the value comparisons below (Microsoft's own
+        // comparison-operators reference lists `result = object1 Is object2`
+        // alongside them). Only the `Is Nothing` right-hand side is modeled;
+        // a general `a Is b` is left unparsed rather than guessed at, and
+        // `Case Is > 5` never reaches here (parse_case_match consumes its own
+        // `Is` before ever calling parse_expr).
+        if self.is_ident("is") && self.is_ident_at(1, "nothing")
+            && let Expr::Var(name) = &lhs
+        {
+            let name = name.clone();
+            self.advance(); // 'is'
+            self.advance(); // 'nothing'
+            lhs = Expr::IsNothing(name);
+        }
         loop {
             let op = match self.peek() {
                 Tok::Eq    => VbaBinOp::Eq,
