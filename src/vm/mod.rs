@@ -3359,7 +3359,12 @@ fn to_f64(v: &Variant) -> Result<f64, String> {
     match v {
         Variant::Integer(n) => Ok(*n as f64),
         Variant::Float(f)   => Ok(*f),
-        Variant::Boolean(b) => Ok(if *b { 1.0 } else { 0.0 }),
+        // VBA represents True as -1 internally (CInt(True) = -1), unlike Excel worksheet
+        // formulas where TRUE arithmetic-coerces to 1 -- see formula::eval's separate
+        // to_float, which is correct as 1.0 for that different language. Found via the
+        // vba-semantics suite's operator-coercion matrix: True + 5 was returning 6 instead
+        // of VBA's documented 4.
+        Variant::Boolean(b) => Ok(if *b { -1.0 } else { 0.0 }),
         Variant::Date(s)    => Ok(*s as f64),
         Variant::Error(e)   => Err(e.to_string()),
         Variant::Empty      => Ok(0.0),
@@ -3395,6 +3400,13 @@ fn vba_eq(a: &Variant, b: &Variant) -> bool {
         (Variant::Str(x),     Variant::Str(y))     => x.to_uppercase() == y.to_uppercase(),
         (Variant::Boolean(x), Variant::Boolean(y)) => x == y,
         (Variant::Empty,      Variant::Empty)       => true,
+        // Documented VBA comparison rules: Empty numeric-compares as 0, string-compares as
+        // "" -- vba_cmp (used for </>) already applies this via to_f64's Empty=>0.0 arm, but
+        // vba_eq's old catch-all fell through to `false` for e.g. `0 = Empty`, an internal
+        // inconsistency between = and < on the same operand pair. Found via the
+        // vba-semantics suite's comparison-coercion matrix.
+        (Variant::Empty, Variant::Str(s)) | (Variant::Str(s), Variant::Empty) => s.is_empty(),
+        (Variant::Empty, other) | (other, Variant::Empty) => to_f64(other).map(|f| f == 0.0).unwrap_or(false),
         (Variant::Error(_),   _) | (_, Variant::Error(_)) => false,
         _ => false,
     }
@@ -4165,6 +4177,43 @@ mod tests {
             "End Sub\n",
         ));
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(5)); // A1
+    }
+
+    #[test]
+    fn test_boolean_true_is_negative_one_in_arithmetic() {
+        // VBA represents True as -1 internally (CInt(True) = -1), distinct from Excel
+        // worksheet formula semantics (TRUE = 1 in a =TRUE+1 cell formula, unrelated code
+        // path in formula::eval, intentionally left untouched). Found via the
+        // vba-semantics suite's operator-coercion matrix: to_f64 previously coerced
+        // Variant::Boolean(true) to 1.0, giving True + 5 = 6 instead of VBA's documented 4.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Range(\"A1\").Value = True + 5\n",
+            "    Range(\"A2\").Value = CInt(True)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(-1));
+    }
+
+    #[test]
+    fn test_empty_equals_zero_and_empty_string() {
+        // Documented VBA equality rule: Empty numeric-compares as 0, string-compares as ""
+        // -- vba_cmp (used for </>) already applied this via to_f64's Empty=>0.0 arm, but
+        // vba_eq (used for =/<>) fell through to its catch-all `false` for e.g. `0 = Empty`,
+        // an inconsistency between = and < on the exact same operand pair. Found via the
+        // vba-semantics suite's comparison-coercion matrix.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Dim r1, r2, r3\n",
+            "    Range(\"A1\").Value = (0 = r1)\n",
+            "    Range(\"A2\").Value = (r2 = \"\")\n",
+            "    Range(\"A3\").Value = (1 = r3)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.get_cell(1, 1), Variant::Boolean(true));
+        assert_eq!(vm.get_cell(2, 1), Variant::Boolean(true));
+        assert_eq!(vm.get_cell(3, 1), Variant::Boolean(false));
     }
 
     #[test]
