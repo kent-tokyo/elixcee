@@ -1,0 +1,1458 @@
+[
+  {
+    "id": "int_3.1",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(3.1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(3.1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_3.1",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(3.1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(3.1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_3.1",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(3.1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(3.1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_3.9",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_3.9",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_3.9",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_-3.1",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(-3.1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(-3.1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_-3.1",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(-3.1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(-3.1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_-3.1",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(-3.1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(-3.1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_-3.9",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(-3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(-3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_-3.9",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(-3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(-3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_-3.9",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(-3.9)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(-3.9)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_0",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(0)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_0",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(0)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_0",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(0)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_-0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(-0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(-0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_-0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(-0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(-0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_-0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(-0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(-0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_7",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_7",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_7",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_-7",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(-7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(-7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_-7",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(-7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(-7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_-7",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(-7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(-7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_100.99",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(100.99)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(100.99)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_100.99",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(100.99)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(100.99)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_100.99",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(100.99)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(100.99)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "int_-100.99",
+    "category": "numeric_conversion_rounding",
+    "description": "Int(-100.99)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Int(-100.99)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "fix_-100.99",
+    "category": "numeric_conversion_rounding",
+    "description": "Fix(-100.99)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Fix(-100.99)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "sgn_-100.99",
+    "category": "numeric_conversion_rounding",
+    "description": "Sgn(-100.99)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Sgn(-100.99)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(0.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_1.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(1.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(1.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_2.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(2.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(2.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_3.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(3.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(3.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_4.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(4.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(4.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_-0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(-0.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(-0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_-1.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(-1.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(-1.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_-2.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(-2.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(-2.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_-3.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(-3.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(-3.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_tie_-4.5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(-4.5) — exact .5 tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(-4.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_3.14159",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(3.14159) — not a tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(3.14159)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_2.71828",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(2.71828) — not a tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(2.71828)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_-1.23456",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(-1.23456) — not a tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(-1.23456)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_0.001",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(0.001) — not a tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(0.001)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_-0.001",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(-0.001) — not a tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(-0.001)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_9.99999",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(9.99999) — not a tie",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(9.99999)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_digits_0.125_2",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(0.125, 2)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(0.125, 2)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_digits_3.14159_2",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(3.14159, 2)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(3.14159, 2)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_digits_3.14159_4",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(3.14159, 4)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(3.14159, 4)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_neg_digits_1234.5678_-1",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(1234.5678, -1) — negative digit count",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(1234.5678, -1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_digits_1234.5678_0",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(1234.5678, 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(1234.5678, 0)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CInt(0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CLng(0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_1.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CInt(1.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(1.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_1.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CLng(1.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(1.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_2.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CInt(2.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(2.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_2.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CLng(2.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(2.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_-0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CInt(-0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(-0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_-0.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CLng(-0.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(-0.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_-1.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CInt(-1.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(-1.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_-1.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CLng(-1.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(-1.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_-2.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CInt(-2.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(-2.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_-2.5",
+    "category": "numeric_conversion_rounding",
+    "description": "CLng(-2.5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(-2.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_3.7",
+    "category": "numeric_conversion_rounding",
+    "description": "CInt(3.7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(3.7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_3.7",
+    "category": "numeric_conversion_rounding",
+    "description": "CLng(3.7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(3.7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_-3.7",
+    "category": "numeric_conversion_rounding",
+    "description": "CInt(-3.7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(-3.7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_-3.7",
+    "category": "numeric_conversion_rounding",
+    "description": "CLng(-3.7)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(-3.7)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_vs_wsf_round_2_5",
+    "category": "numeric_conversion_rounding",
+    "description": "Round(2.5) — VBA's own Round()",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Round(2.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "round_vs_wsf_round_2_5_wsf",
+    "category": "numeric_conversion_rounding",
+    "description": "WorksheetFunction.Round(2.5) — same tied input",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Application.WorksheetFunction.Round(2.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_7_2",
+    "category": "negative_intdiv_mod",
+    "description": "7 \\ 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 \\ 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_7_2",
+    "category": "negative_intdiv_mod",
+    "description": "7 Mod 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 Mod 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_-7_2",
+    "category": "negative_intdiv_mod",
+    "description": "-7 \\ 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 \\ 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_-7_2",
+    "category": "negative_intdiv_mod",
+    "description": "-7 Mod 2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 Mod 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_7_-2",
+    "category": "negative_intdiv_mod",
+    "description": "7 \\ -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 \\ -2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_7_-2",
+    "category": "negative_intdiv_mod",
+    "description": "7 Mod -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 7 Mod -2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_-7_-2",
+    "category": "negative_intdiv_mod",
+    "description": "-7 \\ -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 \\ -2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_-7_-2",
+    "category": "negative_intdiv_mod",
+    "description": "-7 Mod -2",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -7 Mod -2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_5_3",
+    "category": "negative_intdiv_mod",
+    "description": "5 \\ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 \\ 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_5_3",
+    "category": "negative_intdiv_mod",
+    "description": "5 Mod 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 Mod 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_-5_3",
+    "category": "negative_intdiv_mod",
+    "description": "-5 \\ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -5 \\ 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_-5_3",
+    "category": "negative_intdiv_mod",
+    "description": "-5 Mod 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -5 Mod 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_10_4",
+    "category": "negative_intdiv_mod",
+    "description": "10 \\ 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 10 \\ 4\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_10_4",
+    "category": "negative_intdiv_mod",
+    "description": "10 Mod 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 10 Mod 4\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_-10_4",
+    "category": "negative_intdiv_mod",
+    "description": "-10 \\ 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -10 \\ 4\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_-10_4",
+    "category": "negative_intdiv_mod",
+    "description": "-10 Mod 4",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -10 Mod 4\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_1_3",
+    "category": "negative_intdiv_mod",
+    "description": "1 \\ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 \\ 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_1_3",
+    "category": "negative_intdiv_mod",
+    "description": "1 Mod 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1 Mod 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_-1_3",
+    "category": "negative_intdiv_mod",
+    "description": "-1 \\ 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 \\ 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mod_-1_3",
+    "category": "negative_intdiv_mod",
+    "description": "-1 Mod 3",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 Mod 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_frac_5_0.5",
+    "category": "negative_intdiv_mod",
+    "description": "5 \\ 0.5 — operand rounds before dividing",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 \\ 0.5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_frac_0.1_0.2",
+    "category": "negative_intdiv_mod",
+    "description": "0.1 \\ 0.2 — operand rounds before dividing",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0.1 \\ 0.2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_frac_3_0.4",
+    "category": "negative_intdiv_mod",
+    "description": "3 \\ 0.4 — operand rounds before dividing",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3 \\ 0.4\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "intdiv_frac_-3_0.4",
+    "category": "negative_intdiv_mod",
+    "description": "-3 \\ 0.4 — operand rounds before dividing",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -3 \\ 0.4\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "and_bool_true_true",
+    "category": "logical_bitwise",
+    "description": "true And true (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (true And true)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "or_bool_true_true",
+    "category": "logical_bitwise",
+    "description": "true Or true (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (true Or true)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_bool_true_true",
+    "category": "logical_bitwise",
+    "description": "true Xor true (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (true Xor true)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "and_bool_true_false",
+    "category": "logical_bitwise",
+    "description": "true And false (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (true And false)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "or_bool_true_false",
+    "category": "logical_bitwise",
+    "description": "true Or false (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (true Or false)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_bool_true_false",
+    "category": "logical_bitwise",
+    "description": "true Xor false (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (true Xor false)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "and_bool_false_true",
+    "category": "logical_bitwise",
+    "description": "false And true (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (false And true)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "or_bool_false_true",
+    "category": "logical_bitwise",
+    "description": "false Or true (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (false Or true)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_bool_false_true",
+    "category": "logical_bitwise",
+    "description": "false Xor true (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (false Xor true)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "and_bool_false_false",
+    "category": "logical_bitwise",
+    "description": "false And false (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (false And false)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "or_bool_false_false",
+    "category": "logical_bitwise",
+    "description": "false Or false (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (false Or false)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_bool_false_false",
+    "category": "logical_bitwise",
+    "description": "false Xor false (both Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (false Xor false)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "and_int_5_3",
+    "category": "logical_bitwise",
+    "description": "5 And 3 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 And 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "or_int_5_3",
+    "category": "logical_bitwise",
+    "description": "5 Or 3 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 Or 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_int_5_3",
+    "category": "logical_bitwise",
+    "description": "5 Xor 3 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 Xor 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "and_int_-5_3",
+    "category": "logical_bitwise",
+    "description": "-5 And 3 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -5 And 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "or_int_-5_3",
+    "category": "logical_bitwise",
+    "description": "-5 Or 3 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -5 Or 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_int_-5_3",
+    "category": "logical_bitwise",
+    "description": "-5 Xor 3 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -5 Xor 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "and_int_12_10",
+    "category": "logical_bitwise",
+    "description": "12 And 10 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 And 10\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "or_int_12_10",
+    "category": "logical_bitwise",
+    "description": "12 Or 10 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 Or 10\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_int_12_10",
+    "category": "logical_bitwise",
+    "description": "12 Xor 10 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 12 Xor 10\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "and_int_0_5",
+    "category": "logical_bitwise",
+    "description": "0 And 5 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 And 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "or_int_0_5",
+    "category": "logical_bitwise",
+    "description": "0 Or 5 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 Or 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_int_0_5",
+    "category": "logical_bitwise",
+    "description": "0 Xor 5 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 Xor 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "and_int_-1_0",
+    "category": "logical_bitwise",
+    "description": "-1 And 0 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 And 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "or_int_-1_0",
+    "category": "logical_bitwise",
+    "description": "-1 Or 0 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 Or 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_int_-1_0",
+    "category": "logical_bitwise",
+    "description": "-1 Xor 0 (both Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -1 Xor 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_int_5",
+    "category": "logical_bitwise",
+    "description": "Not 5 (Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_int_-6",
+    "category": "logical_bitwise",
+    "description": "Not -6 (Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not -6\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_int_0",
+    "category": "logical_bitwise",
+    "description": "Not 0 (Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_int_-1",
+    "category": "logical_bitwise",
+    "description": "Not -1 (Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not -1\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_int_100",
+    "category": "logical_bitwise",
+    "description": "Not 100 (Integer)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not 100\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_bool_true",
+    "category": "logical_bitwise",
+    "description": "Not true (Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not true\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_bool_false",
+    "category": "logical_bitwise",
+    "description": "Not false (Boolean)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not false\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_and_precedence",
+    "category": "logical_bitwise",
+    "description": "Not 5 And 3 — operator precedence",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Not 5 And 3\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "str_459",
+    "category": "str_cstr_val",
+    "description": "Str(459)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Str(459) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cstr_459",
+    "category": "str_cstr_val",
+    "description": "CStr(459)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & CStr(459) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "str_0",
+    "category": "str_cstr_val",
+    "description": "Str(0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Str(0) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cstr_0",
+    "category": "str_cstr_val",
+    "description": "CStr(0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & CStr(0) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "str_1",
+    "category": "str_cstr_val",
+    "description": "Str(1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Str(1) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cstr_1",
+    "category": "str_cstr_val",
+    "description": "CStr(1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & CStr(1) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "str_1000000",
+    "category": "str_cstr_val",
+    "description": "Str(1000000)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Str(1000000) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cstr_1000000",
+    "category": "str_cstr_val",
+    "description": "CStr(1000000)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & CStr(1000000) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "str_-459",
+    "category": "str_cstr_val",
+    "description": "Str(-459)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Str(-459) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cstr_-459",
+    "category": "str_cstr_val",
+    "description": "CStr(-459)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & CStr(-459) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "str_-1",
+    "category": "str_cstr_val",
+    "description": "Str(-1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Str(-1) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cstr_-1",
+    "category": "str_cstr_val",
+    "description": "CStr(-1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & CStr(-1) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_123abc",
+    "category": "str_cstr_val",
+    "description": "Val(\"123abc\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\"123abc\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_lead_ws_42dot5xyz",
+    "category": "str_cstr_val",
+    "description": "Val(\"  42.5xyz\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\"  42.5xyz\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_abc",
+    "category": "str_cstr_val",
+    "description": "Val(\"abc\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\"abc\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_empty",
+    "category": "str_cstr_val",
+    "description": "Val(\"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\"\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_neg5dot5xyz",
+    "category": "str_cstr_val",
+    "description": "Val(\"-5.5xyz\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\"-5.5xyz\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_dot5",
+    "category": "str_cstr_val",
+    "description": "Val(\".5\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\".5\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_5dot",
+    "category": "str_cstr_val",
+    "description": "Val(\"5.\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\"5.\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_5",
+    "category": "str_cstr_val",
+    "description": "Val(\"5\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\"5\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_pos5",
+    "category": "str_cstr_val",
+    "description": "Val(\"+5\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\"+5\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "val_0abc",
+    "category": "str_cstr_val",
+    "description": "Val(\"0abc\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Val(\"0abc\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_str_123",
+    "category": "isnumeric",
+    "description": "IsNumeric(\"123\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(\"123\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_str_12dot5",
+    "category": "isnumeric",
+    "description": "IsNumeric(\"12.5\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(\"12.5\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_str_lead_ws_42ws",
+    "category": "isnumeric",
+    "description": "IsNumeric(\" 42 \")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(\" 42 \")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_str_abc",
+    "category": "isnumeric",
+    "description": "IsNumeric(\"abc\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(\"abc\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_str_12abc",
+    "category": "isnumeric",
+    "description": "IsNumeric(\"12abc\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(\"12abc\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_str_empty",
+    "category": "isnumeric",
+    "description": "IsNumeric(\"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(\"\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_str_neg5",
+    "category": "isnumeric",
+    "description": "IsNumeric(\"-5\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(\"-5\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_str_1e10",
+    "category": "isnumeric",
+    "description": "IsNumeric(\"1e10\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(\"1e10\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_str_3dot14dot15",
+    "category": "isnumeric",
+    "description": "IsNumeric(\"3.14.15\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(\"3.14.15\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_num_123",
+    "category": "isnumeric",
+    "description": "IsNumeric(123)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(123)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_num_-5",
+    "category": "isnumeric",
+    "description": "IsNumeric(-5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(-5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_num_0",
+    "category": "isnumeric",
+    "description": "IsNumeric(0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(0)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_num_3.14",
+    "category": "isnumeric",
+    "description": "IsNumeric(3.14)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = IsNumeric(3.14)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "typename_Integer_literal",
+    "category": "typename_vartype",
+    "description": "TypeName(5) — Integer literal",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = TypeName(5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "vartype_Integer_literal",
+    "category": "typename_vartype",
+    "description": "VarType(5) — Integer literal",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "typename_Float_literal",
+    "category": "typename_vartype",
+    "description": "TypeName(5.5) — Float literal",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = TypeName(5.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "vartype_Float_literal",
+    "category": "typename_vartype",
+    "description": "VarType(5.5) — Float literal",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(5.5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "typename_String_literal",
+    "category": "typename_vartype",
+    "description": "TypeName(\"hi\") — String literal",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = TypeName(\"hi\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "vartype_String_literal",
+    "category": "typename_vartype",
+    "description": "VarType(\"hi\") — String literal",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(\"hi\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "typename_Boolean_literal",
+    "category": "typename_vartype",
+    "description": "TypeName(True) — Boolean literal",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = TypeName(True)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "vartype_Boolean_literal",
+    "category": "typename_vartype",
+    "description": "VarType(True) — Boolean literal",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = VarType(True)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "typename_date",
+    "category": "typename_vartype",
+    "description": "TypeName(Date()) — Date() returns a real Date value",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = TypeName(Date())\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "date_matches_today",
+    "category": "date_time_now",
+    "description": "Date() matches today's real date",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Date()\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "date_bare_no_parens_typename",
+    "category": "date_time_now",
+    "description": "TypeName(Date) — bare, no parens",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = TypeName(Date)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "time_no_error",
+    "category": "date_time_now",
+    "description": "Time() runs without erroring",
+    "vbaSource": "Sub Scenario()\n  x = Time()\n  Range(\"A1\").Value = \"ran\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "time_value_nondeterministic",
+    "category": "date_time_now",
+    "description": "Time() itself — value not asserted",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Time()\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "now_value_nondeterministic",
+    "category": "date_time_now",
+    "description": "Now() itself — value not asserted",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Now()\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isempty_uninitialized",
+    "category": "empty_null_error",
+    "description": "IsEmpty on an uninitialized variable",
+    "vbaSource": "Sub Scenario()\n  Dim x\n  Range(\"A1\").Value = IsEmpty(x)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isempty_after_assignment",
+    "category": "empty_null_error",
+    "description": "IsEmpty after assignment",
+    "vbaSource": "Sub Scenario()\n  Dim x\n  x = 5\n  Range(\"A1\").Value = IsEmpty(x)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "empty_numeric_coercion",
+    "category": "empty_null_error",
+    "description": "Empty coerces to 0 in a numeric context",
+    "vbaSource": "Sub Scenario()\n  Dim x\n  Range(\"A1\").Value = x + 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnumeric_empty",
+    "category": "empty_null_error",
+    "description": "IsNumeric(Empty) is True",
+    "vbaSource": "Sub Scenario()\n  Dim x\n  Range(\"A1\").Value = IsNumeric(x)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "division_by_zero_message",
+    "category": "empty_null_error",
+    "description": "Division by zero error message",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "array_oob_message",
+    "category": "empty_null_error",
+    "description": "Array out-of-bounds error message",
+    "vbaSource": "Sub Scenario()\n  Dim arr(3)\n  Range(\"A1\").Value = arr(10)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "left_zero_len",
+    "category": "string_boundaries",
+    "description": "Left(\"hello\", 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Left(\"hello\", 0) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "left_over_len",
+    "category": "string_boundaries",
+    "description": "Left(\"hi\", 10) — length exceeds string",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Left(\"hi\", 10) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "right_zero_len",
+    "category": "string_boundaries",
+    "description": "Right(\"hello\", 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Right(\"hello\", 0) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "right_over_len",
+    "category": "string_boundaries",
+    "description": "Right(\"hi\", 10)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Right(\"hi\", 10) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mid_past_end",
+    "category": "string_boundaries",
+    "description": "Mid(\"hi\", 10)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"[\" & Mid(\"hi\", 10) & \"]\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mid_no_length",
+    "category": "string_boundaries",
+    "description": "Mid(\"hello\", 2)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Mid(\"hello\", 2)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "len_empty_string",
+    "category": "string_boundaries",
+    "description": "Len(\"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(\"\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "instr_not_found",
+    "category": "string_boundaries",
+    "description": "InStr(\"hello\", \"z\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = InStr(\"hello\", \"z\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "instr_empty_needle",
+    "category": "string_boundaries",
+    "description": "InStr(\"hello\", \"\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = InStr(\"hello\", \"\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ucase_lcase_mixed",
+    "category": "string_boundaries",
+    "description": "UCase/LCase on mixed-case text",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = UCase(\"Hello\") & LCase(\"WORLD\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ubound_basic",
+    "category": "array_indices",
+    "description": "UBound of Dim arr(3)",
+    "vbaSource": "Sub Scenario()\n  Dim arr(3)\n  Range(\"A1\").Value = UBound(arr)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "lbound_basic",
+    "category": "array_indices",
+    "description": "LBound of Dim arr(3)",
+    "vbaSource": "Sub Scenario()\n  Dim arr(3)\n  Range(\"A1\").Value = LBound(arr)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isarray_true",
+    "category": "array_indices",
+    "description": "IsArray on a real array",
+    "vbaSource": "Sub Scenario()\n  Dim arr(3)\n  Range(\"A1\").Value = IsArray(arr)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isarray_false_scalar",
+    "category": "array_indices",
+    "description": "IsArray on a scalar",
+    "vbaSource": "Sub Scenario()\n  x = 42\n  Range(\"A1\").Value = IsArray(x)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "redim_preserve_grows_elem0",
+    "category": "array_indices",
+    "description": "ReDim Preserve keeps arr(0)",
+    "vbaSource": "Sub Scenario()\n  Dim arr(2)\n  arr(0) = 10\n  arr(1) = 20\n  ReDim Preserve arr(4)\n  Range(\"A1\").Value = arr(0)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "redim_preserve_grows_elem1",
+    "category": "array_indices",
+    "description": "ReDim Preserve keeps arr(1)",
+    "vbaSource": "Sub Scenario()\n  Dim arr(2)\n  arr(0) = 10\n  arr(1) = 20\n  ReDim Preserve arr(4)\n  Range(\"A1\").Value = arr(1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "range_write_read_integer",
+    "category": "range_values",
+    "description": "Write then read an Integer via Range",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 42\n  Range(\"A2\").Value = Range(\"A1\").Value\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "range_write_read_string",
+    "category": "range_values",
+    "description": "Write then read a String via Range",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = \"hello\"\n  Range(\"A2\").Value = Range(\"A1\").Value\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "range_write_read_boolean",
+    "category": "range_values",
+    "description": "Write then read a Boolean via Range",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = True\n  Range(\"A2\").Value = Range(\"A1\").Value\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "range_write_read_float",
+    "category": "range_values",
+    "description": "Write then read a Float via Range",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3.14\n  Range(\"A2\").Value = Range(\"A1\").Value\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cells_write_read",
+    "category": "range_values",
+    "description": "Write via Range, read via Cells",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 99\n  Range(\"B1\").Value = Cells(1, 1).Value\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "undefined_variable_error",
+    "category": "error_kind",
+    "description": "Reading an undefined variable",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = someUndefinedVariableXyz\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  }
+]

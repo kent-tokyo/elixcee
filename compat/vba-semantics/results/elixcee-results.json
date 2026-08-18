@@ -1,0 +1,3363 @@
+[
+  {
+    "id": "int_3.1",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.209,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_3.1",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_3.1",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_3.9",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_3.9",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_3.9",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_-3.1",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_-3.1",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_-3.1",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_-3.9",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_-3.9",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_-3.9",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_0",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_0",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_0",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_-0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_-0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_-0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 7
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 7
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_-7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -7
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_-7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -7
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_-7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_100.99",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 100
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_100.99",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 100
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_100.99",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "int_-100.99",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -101
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "fix_-100.99",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -100
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "sgn_-100.99",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_1.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_2.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_3.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_4.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_-0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_-1.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_-2.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_-3.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_tie_-4.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_3.14159",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_2.71828",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_-1.23456",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_0.001",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_-0.001",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.021,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_9.99999",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 10
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_digits_0.125_2",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0.12
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_digits_3.14159_2",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3.14
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_digits_3.14159_4",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3.1416
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_neg_digits_1234.5678_-1",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1099",
+      "kind": "runtime_error",
+      "message": "Invalid procedure call or argument",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-JX57wW/round_neg_digits_1234.5678_-1.vba",
+        "line": 2,
+        "column": 3
+      }
+    },
+    "messages": []
+  },
+  {
+    "id": "round_digits_1234.5678_0",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1235
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cint_0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "clng_0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cint_1.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "clng_1.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cint_2.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "clng_2.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cint_-0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "clng_-0.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cint_-1.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "clng_-1.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cint_-2.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "clng_-2.5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cint_3.7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "clng_3.7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cint_-3.7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "clng_-3.7",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_vs_wsf_round_2_5",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "round_vs_wsf_round_2_5_wsf",
+    "category": "numeric_conversion_rounding",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_7_2",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_7_2",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_-7_2",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.019,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_-7_2",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_7_-2",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_7_-2",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_-7_-2",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_-7_-2",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_5_3",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_5_3",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_-5_3",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.043,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_-5_3",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_10_4",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_10_4",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_-10_4",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_-10_4",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_1_3",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_1_3",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_-1_3",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mod_-1_3",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "intdiv_frac_5_0.5",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1099",
+      "kind": "runtime_error",
+      "message": "Division by zero",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-JX57wW/intdiv_frac_5_0.5.vba",
+        "line": 2,
+        "column": 3
+      }
+    },
+    "messages": []
+  },
+  {
+    "id": "intdiv_frac_0.1_0.2",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1099",
+      "kind": "runtime_error",
+      "message": "Division by zero",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-JX57wW/intdiv_frac_0.1_0.2.vba",
+        "line": 2,
+        "column": 3
+      }
+    },
+    "messages": []
+  },
+  {
+    "id": "intdiv_frac_3_0.4",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1099",
+      "kind": "runtime_error",
+      "message": "Division by zero",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-JX57wW/intdiv_frac_3_0.4.vba",
+        "line": 2,
+        "column": 3
+      }
+    },
+    "messages": []
+  },
+  {
+    "id": "intdiv_frac_-3_0.4",
+    "category": "negative_intdiv_mod",
+    "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1099",
+      "kind": "runtime_error",
+      "message": "Division by zero",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-JX57wW/intdiv_frac_-3_0.4.vba",
+        "line": 2,
+        "column": 3
+      }
+    },
+    "messages": []
+  },
+  {
+    "id": "and_bool_true_true",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "or_bool_true_true",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_bool_true_true",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "and_bool_true_false",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "or_bool_true_false",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_bool_true_false",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "and_bool_false_true",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "or_bool_false_true",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_bool_false_true",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "and_bool_false_false",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "or_bool_false_false",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_bool_false_false",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "and_int_5_3",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "or_int_5_3",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 7
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_int_5_3",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 6
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "and_int_-5_3",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "or_int_-5_3",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_int_-5_3",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -8
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "and_int_12_10",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 8
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "or_int_12_10",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.018,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 14
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_int_12_10",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 6
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "and_int_0_5",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "or_int_0_5",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_int_0_5",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "and_int_-1_0",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "or_int_-1_0",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_int_-1_0",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "not_int_5",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -6
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "not_int_-6",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "not_int_0",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "not_int_-1",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "not_int_100",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -101
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "not_bool_true",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "not_bool_false",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "not_and_precedence",
+    "category": "logical_bitwise",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "str_459",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.022,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[ 459]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cstr_459",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.018,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[459]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "str_0",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[ 0]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cstr_0",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[0]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "str_1",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[ 1]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cstr_1",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[1]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "str_1000000",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[ 1000000]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cstr_1000000",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[1000000]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "str_-459",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[-459]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cstr_-459",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.019,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[-459]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "str_-1",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.021,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[-1]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cstr_-1",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[-1]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_123abc",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 123
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_lead_ws_42dot5xyz",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 42.5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_abc",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_empty",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_neg5dot5xyz",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": -5.5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_dot5",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0.5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_5dot",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_5",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_pos5",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "val_0abc",
+    "category": "str_cstr_val",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_str_123",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_str_12dot5",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_str_lead_ws_42ws",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_str_abc",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_str_12abc",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_str_empty",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_str_neg5",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_str_1e10",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_str_3dot14dot15",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_num_123",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_num_-5",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_num_0",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_num_3.14",
+    "category": "isnumeric",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.021,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "typename_Integer_literal",
+    "category": "typename_vartype",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "Long"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "vartype_Integer_literal",
+    "category": "typename_vartype",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "typename_Float_literal",
+    "category": "typename_vartype",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "Double"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "vartype_Float_literal",
+    "category": "typename_vartype",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "typename_String_literal",
+    "category": "typename_vartype",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "String"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "vartype_String_literal",
+    "category": "typename_vartype",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 8
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "typename_Boolean_literal",
+    "category": "typename_vartype",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "Boolean"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "vartype_Boolean_literal",
+    "category": "typename_vartype",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 11
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "typename_date",
+    "category": "typename_vartype",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "Date"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "date_matches_today",
+    "category": "date_time_now",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "2026-08-18"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "date_bare_no_parens_typename",
+    "category": "date_time_now",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "Date"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "time_no_error",
+    "category": "date_time_now",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "ran"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "time_value_nondeterministic",
+    "category": "date_time_now",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0.4184375
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "now_value_nondeterministic",
+    "category": "date_time_now",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 46252.4184375
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isempty_uninitialized",
+    "category": "empty_null_error",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isempty_after_assignment",
+    "category": "empty_null_error",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "empty_numeric_coercion",
+    "category": "empty_null_error",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnumeric_empty",
+    "category": "empty_null_error",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "division_by_zero_message",
+    "category": "empty_null_error",
+    "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1099",
+      "kind": "runtime_error",
+      "message": "Division by zero",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-JX57wW/division_by_zero_message.vba",
+        "line": 2,
+        "column": 3
+      }
+    },
+    "messages": []
+  },
+  {
+    "id": "array_oob_message",
+    "category": "empty_null_error",
+    "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1099",
+      "kind": "runtime_error",
+      "message": "Array 'arr': index 10 out of bounds (len=4)",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-JX57wW/array_oob_message.vba",
+        "line": 3,
+        "column": 3
+      }
+    },
+    "messages": []
+  },
+  {
+    "id": "left_zero_len",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "left_over_len",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[hi]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "right_zero_len",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "right_over_len",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[hi]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mid_past_end",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "[]"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "mid_no_length",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "ello"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "len_empty_string",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "instr_not_found",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.019,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "instr_empty_needle",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "ucase_lcase_mixed",
+    "category": "string_boundaries",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "HELLOworld"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "ubound_basic",
+    "category": "array_indices",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "lbound_basic",
+    "category": "array_indices",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isarray_true",
+    "category": "array_indices",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isarray_false_scalar",
+    "category": "array_indices",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "redim_preserve_grows_elem0",
+    "category": "array_indices",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 10
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "redim_preserve_grows_elem1",
+    "category": "array_indices",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.019,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 20
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "range_write_read_integer",
+    "category": "range_values",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 42
+      },
+      {
+        "sheet": "sheet1",
+        "address": "A2",
+        "value": 42
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "range_write_read_string",
+    "category": "range_values",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "hello"
+      },
+      {
+        "sheet": "sheet1",
+        "address": "A2",
+        "value": "hello"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "range_write_read_boolean",
+    "category": "range_values",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      },
+      {
+        "sheet": "sheet1",
+        "address": "A2",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "range_write_read_float",
+    "category": "range_values",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3.14
+      },
+      {
+        "sheet": "sheet1",
+        "address": "A2",
+        "value": 3.14
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "cells_write_read",
+    "category": "range_values",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 99
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 99
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "undefined_variable_error",
+    "category": "error_kind",
+    "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1001",
+      "kind": "undefined_variable",
+      "message": "Undefined variable: 'someundefinedvariablexyz'",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-JX57wW/undefined_variable_error.vba",
+        "line": 2,
+        "column": 3
+      }
+    },
+    "messages": []
+  }
+]

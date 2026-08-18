@@ -1,0 +1,1239 @@
+{
+  "int_3.1": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_3.1": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_3.1": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_3.9": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_3.9": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_3.9": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_-3.1": {
+    "kind": "value",
+    "address": "A1",
+    "value": -4,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_-3.1": {
+    "kind": "value",
+    "address": "A1",
+    "value": -3,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_-3.1": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_-3.9": {
+    "kind": "value",
+    "address": "A1",
+    "value": -4,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_-3.9": {
+    "kind": "value",
+    "address": "A1",
+    "value": -3,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_-3.9": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_-0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_-0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_-0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_7": {
+    "kind": "value",
+    "address": "A1",
+    "value": 7,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_7": {
+    "kind": "value",
+    "address": "A1",
+    "value": 7,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_7": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_-7": {
+    "kind": "value",
+    "address": "A1",
+    "value": -7,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_-7": {
+    "kind": "value",
+    "address": "A1",
+    "value": -7,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_-7": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_100.99": {
+    "kind": "value",
+    "address": "A1",
+    "value": 100,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_100.99": {
+    "kind": "value",
+    "address": "A1",
+    "value": 100,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_100.99": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "int_-100.99": {
+    "kind": "value",
+    "address": "A1",
+    "value": -101,
+    "reason": "Int() floors toward negative infinity."
+  },
+  "fix_-100.99": {
+    "kind": "value",
+    "address": "A1",
+    "value": -100,
+    "reason": "Fix() truncates toward zero, unlike Int()."
+  },
+  "sgn_-100.99": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Sgn() returns -1/0/1."
+  },
+  "round_tie_0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_tie_1.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_tie_2.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_tie_3.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 4,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_tie_4.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 4,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_tie_-0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_tie_-1.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_tie_-2.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_tie_-3.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -4,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_tie_-4.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -4,
+    "reason": "Round() uses banker's rounding (round-half-to-even) on an exact tie, not away-from-zero."
+  },
+  "round_3.14159": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Round() with no tie: nearest integer, both rounding modes agree."
+  },
+  "round_2.71828": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Round() with no tie: nearest integer, both rounding modes agree."
+  },
+  "round_-1.23456": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Round() with no tie: nearest integer, both rounding modes agree."
+  },
+  "round_0.001": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Round() with no tie: nearest integer, both rounding modes agree."
+  },
+  "round_-0.001": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Round() with no tie: nearest integer, both rounding modes agree."
+  },
+  "round_9.99999": {
+    "kind": "value",
+    "address": "A1",
+    "value": 10,
+    "reason": "Round() with no tie: nearest integer, both rounding modes agree."
+  },
+  "round_digits_0.125_2": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0.12,
+    "reason": "Round() to 2 decimal digit(s), banker's rounding."
+  },
+  "round_digits_3.14159_2": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3.14,
+    "reason": "Round() to 2 decimal digit(s), banker's rounding."
+  },
+  "round_digits_3.14159_4": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3.1416,
+    "reason": "Round() to 4 decimal digit(s), banker's rounding."
+  },
+  "round_neg_digits_1234.5678_-1": {
+    "kind": "error",
+    "errorMessage": "Invalid procedure call or argument",
+    "reason": "Real VBA's Round() errors on a negative digit count (unlike WorksheetFunction.Round/Excel's ROUND(), which both accept it)."
+  },
+  "round_digits_1234.5678_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1235,
+    "reason": "Round() to 0 decimal digit(s), banker's rounding."
+  },
+  "cint_0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "CInt() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "clng_0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "CLng() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "cint_1.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "CInt() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "clng_1.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "CLng() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "cint_2.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "CInt() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "clng_2.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "CLng() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "cint_-0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "CInt() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "clng_-0.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "CLng() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "cint_-1.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "CInt() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "clng_-1.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "CLng() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "cint_-2.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "CInt() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "clng_-2.5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "CLng() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "cint_3.7": {
+    "kind": "value",
+    "address": "A1",
+    "value": 4,
+    "reason": "CInt() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "clng_3.7": {
+    "kind": "value",
+    "address": "A1",
+    "value": 4,
+    "reason": "CLng() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "cint_-3.7": {
+    "kind": "value",
+    "address": "A1",
+    "value": -4,
+    "reason": "CInt() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "clng_-3.7": {
+    "kind": "value",
+    "address": "A1",
+    "value": -4,
+    "reason": "CLng() uses banker's rounding, same as Round(), not away-from-zero."
+  },
+  "round_vs_wsf_round_2_5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Round() banker-rounds 2.5 to 2."
+  },
+  "round_vs_wsf_round_2_5_wsf": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "WorksheetFunction.Round()/Excel's ROUND() rounds half-away-from-zero: 2.5 -> 3, unlike VBA's own Round()."
+  },
+  "intdiv_7_2": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_7_2": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_-7_2": {
+    "kind": "value",
+    "address": "A1",
+    "value": -3,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_-7_2": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_7_-2": {
+    "kind": "value",
+    "address": "A1",
+    "value": -3,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_7_-2": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_-7_-2": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_-7_-2": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_-5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_-5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_10_4": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_10_4": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_-10_4": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_-10_4": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_1_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_1_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_-1_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Integer division of the rounded operands, truncated toward zero."
+  },
+  "mod_-1_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Mod takes the sign of the dividend, on the rounded operands."
+  },
+  "intdiv_frac_5_0.5": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "\\\\ rounds each operand to a whole number first (banker's rounding) before dividing; 0.5 rounds to 0."
+  },
+  "intdiv_frac_0.1_0.2": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "\\\\ rounds each operand to a whole number first (banker's rounding) before dividing; 0.2 rounds to 0."
+  },
+  "intdiv_frac_3_0.4": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "\\\\ rounds each operand to a whole number first (banker's rounding) before dividing; 0.4 rounds to 0."
+  },
+  "intdiv_frac_-3_0.4": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "\\\\ rounds each operand to a whole number first (banker's rounding) before dividing; 0.4 rounds to 0."
+  },
+  "and_bool_true_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "And on two genuine Booleans is logical, not bitwise."
+  },
+  "or_bool_true_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Or on two genuine Booleans is logical, not bitwise."
+  },
+  "xor_bool_true_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "Xor on two genuine Booleans is logical, not bitwise."
+  },
+  "and_bool_true_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "And on two genuine Booleans is logical, not bitwise."
+  },
+  "or_bool_true_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Or on two genuine Booleans is logical, not bitwise."
+  },
+  "xor_bool_true_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Xor on two genuine Booleans is logical, not bitwise."
+  },
+  "and_bool_false_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "And on two genuine Booleans is logical, not bitwise."
+  },
+  "or_bool_false_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Or on two genuine Booleans is logical, not bitwise."
+  },
+  "xor_bool_false_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Xor on two genuine Booleans is logical, not bitwise."
+  },
+  "and_bool_false_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "And on two genuine Booleans is logical, not bitwise."
+  },
+  "or_bool_false_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "Or on two genuine Booleans is logical, not bitwise."
+  },
+  "xor_bool_false_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "Xor on two genuine Booleans is logical, not bitwise."
+  },
+  "and_int_5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "And on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "or_int_5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": 7,
+    "reason": "Or on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "xor_int_5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "Xor on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "and_int_-5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "And on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "or_int_-5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": -5,
+    "reason": "Or on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "xor_int_-5_3": {
+    "kind": "value",
+    "address": "A1",
+    "value": -8,
+    "reason": "Xor on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "and_int_12_10": {
+    "kind": "value",
+    "address": "A1",
+    "value": 8,
+    "reason": "And on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "or_int_12_10": {
+    "kind": "value",
+    "address": "A1",
+    "value": 14,
+    "reason": "Or on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "xor_int_12_10": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "Xor on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "and_int_0_5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "And on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "or_int_0_5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Or on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "xor_int_0_5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Xor on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "and_int_-1_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "And on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "or_int_-1_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Or on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "xor_int_-1_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Xor on non-Boolean operands is real bitwise math (banker-rounded to int first)."
+  },
+  "not_int_5": {
+    "kind": "value",
+    "address": "A1",
+    "value": -6,
+    "reason": "Not on a non-Boolean is a real bitwise complement, not truthy coercion."
+  },
+  "not_int_-6": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Not on a non-Boolean is a real bitwise complement, not truthy coercion."
+  },
+  "not_int_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Not on a non-Boolean is a real bitwise complement, not truthy coercion."
+  },
+  "not_int_-1": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Not on a non-Boolean is a real bitwise complement, not truthy coercion."
+  },
+  "not_int_100": {
+    "kind": "value",
+    "address": "A1",
+    "value": -101,
+    "reason": "Not on a non-Boolean is a real bitwise complement, not truthy coercion."
+  },
+  "not_bool_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "Not on a genuine Boolean is logical negation."
+  },
+  "not_bool_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Not on a genuine Boolean is logical negation."
+  },
+  "not_and_precedence": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Not binds tighter than And: (Not 5) And 3, both bitwise since neither operand is a genuine Boolean."
+  },
+  "str_459": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[ 459]",
+    "reason": "Str() reserves a leading space for the sign position on a non-negative number."
+  },
+  "cstr_459": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[459]",
+    "reason": "CStr() has no leading-space reservation, unlike Str()."
+  },
+  "str_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[ 0]",
+    "reason": "Str() reserves a leading space for the sign position on a non-negative number."
+  },
+  "cstr_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[0]",
+    "reason": "CStr() has no leading-space reservation, unlike Str()."
+  },
+  "str_1": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[ 1]",
+    "reason": "Str() reserves a leading space for the sign position on a non-negative number."
+  },
+  "cstr_1": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[1]",
+    "reason": "CStr() has no leading-space reservation, unlike Str()."
+  },
+  "str_1000000": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[ 1000000]",
+    "reason": "Str() reserves a leading space for the sign position on a non-negative number."
+  },
+  "cstr_1000000": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[1000000]",
+    "reason": "CStr() has no leading-space reservation, unlike Str()."
+  },
+  "str_-459": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[-459]",
+    "reason": "Str() reserves a leading space for the sign position on a non-negative number."
+  },
+  "cstr_-459": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[-459]",
+    "reason": "CStr() has no leading-space reservation, unlike Str()."
+  },
+  "str_-1": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[-1]",
+    "reason": "Str() reserves a leading space for the sign position on a non-negative number."
+  },
+  "cstr_-1": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[-1]",
+    "reason": "CStr() has no leading-space reservation, unlike Str()."
+  },
+  "val_123abc": {
+    "kind": "value",
+    "address": "A1",
+    "value": 123,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "val_lead_ws_42dot5xyz": {
+    "kind": "value",
+    "address": "A1",
+    "value": 42.5,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "val_abc": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "val_empty": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "val_neg5dot5xyz": {
+    "kind": "value",
+    "address": "A1",
+    "value": -5.5,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "val_dot5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0.5,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "val_5dot": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "val_5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "val_pos5": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "val_0abc": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Val() parses a leading numeric prefix, stopping at the first non-fitting character."
+  },
+  "isnumeric_str_123": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNumeric() on a string: true iff it parses as a plain number after trimming."
+  },
+  "isnumeric_str_12dot5": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNumeric() on a string: true iff it parses as a plain number after trimming."
+  },
+  "isnumeric_str_lead_ws_42ws": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNumeric() on a string: true iff it parses as a plain number after trimming."
+  },
+  "isnumeric_str_abc": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "IsNumeric() on a string: true iff it parses as a plain number after trimming."
+  },
+  "isnumeric_str_12abc": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "IsNumeric() on a string: true iff it parses as a plain number after trimming."
+  },
+  "isnumeric_str_empty": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "IsNumeric() on a string: true iff it parses as a plain number after trimming."
+  },
+  "isnumeric_str_neg5": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNumeric() on a string: true iff it parses as a plain number after trimming."
+  },
+  "isnumeric_str_1e10": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNumeric() on a string: true iff it parses as a plain number after trimming."
+  },
+  "isnumeric_str_3dot14dot15": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "IsNumeric() on a string: true iff it parses as a plain number after trimming."
+  },
+  "isnumeric_num_123": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNumeric() on an already-numeric value is always true."
+  },
+  "isnumeric_num_-5": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNumeric() on an already-numeric value is always true."
+  },
+  "isnumeric_num_0": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNumeric() on an already-numeric value is always true."
+  },
+  "isnumeric_num_3.14": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNumeric() on an already-numeric value is always true."
+  },
+  "typename_Integer_literal": {
+    "kind": "value",
+    "address": "A1",
+    "value": "Long",
+    "reason": "TypeName() of a Integer literal is \"Long\"."
+  },
+  "vartype_Integer_literal": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "VarType() of a Integer literal is 3 (vbLong)."
+  },
+  "typename_Float_literal": {
+    "kind": "value",
+    "address": "A1",
+    "value": "Double",
+    "reason": "TypeName() of a Float literal is \"Double\"."
+  },
+  "vartype_Float_literal": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "VarType() of a Float literal is 5 (vbDouble)."
+  },
+  "typename_String_literal": {
+    "kind": "value",
+    "address": "A1",
+    "value": "String",
+    "reason": "TypeName() of a String literal is \"String\"."
+  },
+  "vartype_String_literal": {
+    "kind": "value",
+    "address": "A1",
+    "value": 8,
+    "reason": "VarType() of a String literal is 8 (vbString)."
+  },
+  "typename_Boolean_literal": {
+    "kind": "value",
+    "address": "A1",
+    "value": "Boolean",
+    "reason": "TypeName() of a Boolean literal is \"Boolean\"."
+  },
+  "vartype_Boolean_literal": {
+    "kind": "value",
+    "address": "A1",
+    "value": 11,
+    "reason": "VarType() of a Boolean literal is 11 (vbBoolean)."
+  },
+  "typename_date": {
+    "kind": "value",
+    "address": "A1",
+    "value": "Date",
+    "reason": "Date() returns a genuine Date-typed value (whole-day Excel serial)."
+  },
+  "date_matches_today": {
+    "kind": "computed",
+    "address": "A1",
+    "computedBy": "todayDateString",
+    "reason": "Date() returns today's date; --json renders a Date value as its \"YYYY-MM-DD\" display string, not the raw Excel-serial number."
+  },
+  "date_bare_no_parens_typename": {
+    "kind": "value",
+    "address": "A1",
+    "value": "Date",
+    "reason": "Real VBA allows omitting () on this zero-arg function."
+  },
+  "time_no_error": {
+    "kind": "value",
+    "address": "A1",
+    "value": "ran",
+    "reason": "Time()'s own value is sub-second-volatile and asserted separately as NONDETERMINISTIC below; this only confirms the call itself succeeds."
+  },
+  "time_value_nondeterministic": {
+    "kind": "nondeterministic",
+    "reason": "Time()'s value changes every call; only confirmed to run without erroring, per compat/corpus's own precedent for Timer()."
+  },
+  "now_value_nondeterministic": {
+    "kind": "nondeterministic",
+    "reason": "Now()'s value changes every call; only confirmed to run without erroring."
+  },
+  "isempty_uninitialized": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "An uninitialized Variant is Empty."
+  },
+  "isempty_after_assignment": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "A variable is no longer Empty once assigned."
+  },
+  "empty_numeric_coercion": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Empty + 5 == 5: Empty coerces to 0 numerically."
+  },
+  "isnumeric_empty": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Empty coerces to 0 in a numeric context, so IsNumeric(Empty) is True."
+  },
+  "division_by_zero_message": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "A literal division by zero raises this exact runtime error."
+  },
+  "array_oob_message": {
+    "kind": "error",
+    "errorMessage": "Subscript out of range",
+    "reason": "Real VBA's documented runtime error for an out-of-bounds array index is \"Subscript out of range\" (error 9).",
+    "knownLimitation": "elixcee raises a runtime error for this (correct control flow), but with its own diagnostic message (\"Array 'arr': index N out of bounds (len=N)\") rather than real VBA's exact wording — found while building this suite, not previously disclosed. Message-text fidelity here is lower-value than the many gaps already tracked in ROADMAP.md, so registered rather than fixed in this pass."
+  },
+  "left_zero_len": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[]",
+    "reason": "Left() with length 0 returns an empty string."
+  },
+  "left_over_len": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[hi]",
+    "reason": "Left() with a length longer than the string just returns the whole string."
+  },
+  "right_zero_len": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[]",
+    "reason": "Right() with length 0 returns an empty string."
+  },
+  "right_over_len": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[hi]",
+    "reason": "Right() with a length longer than the string just returns the whole string."
+  },
+  "mid_past_end": {
+    "kind": "value",
+    "address": "A1",
+    "value": "[]",
+    "reason": "Mid() starting past the end of the string returns an empty string."
+  },
+  "mid_no_length": {
+    "kind": "value",
+    "address": "A1",
+    "value": "ello",
+    "reason": "Mid() with no length argument returns everything from the start position onward."
+  },
+  "len_empty_string": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Len() of an empty string is 0."
+  },
+  "instr_not_found": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "InStr() returns 0 when the substring is not found."
+  },
+  "instr_empty_needle": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "InStr() with an empty search string returns the start position (1 by default)."
+  },
+  "ucase_lcase_mixed": {
+    "kind": "value",
+    "address": "A1",
+    "value": "HELLOworld",
+    "reason": "UCase()/LCase() convert the whole string."
+  },
+  "ubound_basic": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Dim arr(3) creates a 0-to-3 array (4 elements); UBound is 3."
+  },
+  "lbound_basic": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "elixcee arrays are always 0-based; LBound is always 0."
+  },
+  "isarray_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsArray() is true for an array variable."
+  },
+  "isarray_false_scalar": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "IsArray() is false for a non-array value."
+  },
+  "redim_preserve_grows_elem0": {
+    "kind": "value",
+    "address": "A1",
+    "value": 10,
+    "reason": "ReDim Preserve keeps existing element values when growing an array."
+  },
+  "redim_preserve_grows_elem1": {
+    "kind": "value",
+    "address": "A1",
+    "value": 20,
+    "reason": "ReDim Preserve keeps existing element values when growing an array."
+  },
+  "range_write_read_integer": {
+    "kind": "value",
+    "address": "A2",
+    "value": 42,
+    "reason": "A written Integer round-trips through Range unchanged."
+  },
+  "range_write_read_string": {
+    "kind": "value",
+    "address": "A2",
+    "value": "hello",
+    "reason": "A written String round-trips through Range unchanged."
+  },
+  "range_write_read_boolean": {
+    "kind": "value",
+    "address": "A2",
+    "value": true,
+    "reason": "A written Boolean round-trips through Range unchanged."
+  },
+  "range_write_read_float": {
+    "kind": "value",
+    "address": "A2",
+    "value": 3.14,
+    "reason": "A written Float round-trips through Range unchanged."
+  },
+  "cells_write_read": {
+    "kind": "value",
+    "address": "B1",
+    "value": 99,
+    "reason": "Cells(1,1) and Range(\"A1\") address the same cell."
+  },
+  "undefined_variable_error": {
+    "kind": "error",
+    "errorMessage": "Undefined variable: 'someundefinedvariablexyz'",
+    "reason": "VBA identifiers are case-insensitive; the error message reports the lowercased name."
+  }
+}
