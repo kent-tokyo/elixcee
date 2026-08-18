@@ -596,10 +596,11 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
 // schema, which assumes the scenario at least parses.)
 {
   const CAT = 'object_nothing_access';
-  addNoCellWrittenCase('unset_range_variable_member_write_noop', CAT,
-    'Writing through a never-Set Range variable',
+  addCase('unset_range_variable_member_write_noop', CAT, 'Writing through a never-Set Range variable',
     '  Dim r As Range\n  r.Value = 5',
-    'Real VBA raises "Object variable or With block variable not set" here. elixcee instead silently no-ops (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed.');
+    { error: 'Object variable or With block variable not set' },
+    'Real VBA raises this error for any member access through an object variable that was never Set — a Dim As Range/Object alone only declares the variable, it does not assign a live reference.',
+    'elixcee silently no-ops instead of raising the error (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed. Same root cause as set_nothing_does_not_clear_reference below: elixcee has no concept of an unset/Nothing object-variable state that member access can check against.');
   addCase('set_nothing_does_not_clear_reference', CAT,
     'Set r = Nothing does not actually clear the reference',
     '  Dim r As Range\n  Set r = Range("A1")\n  Set r = Nothing\n  r.Value = 5',

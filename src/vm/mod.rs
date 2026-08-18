@@ -4149,6 +4149,25 @@ mod tests {
     }
 
     #[test]
+    fn test_single_line_if_assigns_variable_named_after_a_block_keyword() {
+        // parse_stmt's "bare `name = ...` is always assignment" override must fire before
+        // the block-construct keyword dispatch even when reached via
+        // parse_single_line_if_branch -> parse_simple_stmt_no_eol, not just via block-form
+        // parse_stmt directly (the shape prop_vba_assignment_parses covers). `do`/`select`/
+        // etc. as a variable name is unusual, but the single-line-If path shares the same
+        // dispatch table, so a fix that only covers one caller and not the other would be
+        // incomplete.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    x = 1\n",
+            "    If x > 0 Then do = 5\n",
+            "    Range(\"A1\").Value = do\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(5)); // A1
+    }
+
+    #[test]
     fn test_single_line_if_goto_actually_jumps() {
         let vm = run(concat!(
             "Sub MySub()\n",

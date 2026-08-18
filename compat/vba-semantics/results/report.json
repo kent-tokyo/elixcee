@@ -1,10 +1,10 @@
 {
   "total": 246,
   "counts": {
-    "MATCH_DOCUMENTED_SEMANTICS": 213,
+    "MATCH_DOCUMENTED_SEMANTICS": 212,
     "EXPECTED_ERROR": 18,
     "NONDETERMINISTIC": 2,
-    "KNOWN_LIMITATION": 13,
+    "KNOWN_LIMITATION": 14,
     "BUG": 0,
     "UNCLASSIFIED": 0
   },
@@ -1500,8 +1500,10 @@
     {
       "id": "unset_range_variable_member_write_noop",
       "category": "object_nothing_access",
-      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
-      "reason": "Real VBA raises \"Object variable or With block variable not set\" here. elixcee instead silently no-ops (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed."
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee silently no-ops instead of raising the error (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed. Same root cause as set_nothing_does_not_clear_reference below: elixcee has no concept of an unset/Nothing object-variable state that member access can check against.",
+      "documented": "real VBA: error \"Object variable or With block variable not set\"",
+      "actual": "ran without error"
     },
     {
       "id": "set_nothing_does_not_clear_reference",
