@@ -5,7 +5,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.017,
     "cells": [
       {
         "sheet": "sheet1",
@@ -21,7 +21,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -37,7 +37,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -53,7 +53,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -69,7 +69,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.041,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -85,7 +85,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -101,7 +101,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -117,7 +117,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -133,7 +133,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -149,7 +149,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -165,7 +165,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -181,7 +181,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.038,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -197,7 +197,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -213,7 +213,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.035,
+    "duration_ms": 0.018,
     "cells": [
       {
         "sheet": "sheet1",
@@ -229,7 +229,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -245,7 +245,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.04,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -261,7 +261,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.038,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -277,7 +277,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -293,7 +293,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -309,7 +309,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -325,7 +325,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.035,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -341,7 +341,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -357,7 +357,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -373,7 +373,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -389,7 +389,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.039,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -405,7 +405,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -421,7 +421,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -437,7 +437,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -453,7 +453,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -469,7 +469,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.035,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -485,7 +485,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -501,7 +501,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -517,7 +517,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -533,7 +533,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -549,7 +549,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -565,7 +565,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -581,7 +581,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -597,7 +597,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -613,7 +613,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -629,7 +629,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -645,7 +645,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -661,7 +661,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -677,7 +677,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.048,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -693,7 +693,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -709,7 +709,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -725,7 +725,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -741,7 +741,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.022,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -757,7 +757,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.033,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -773,7 +773,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -789,7 +789,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -805,7 +805,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -821,7 +821,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -841,7 +841,7 @@
       "kind": "runtime_error",
       "message": "Invalid procedure call or argument",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/round_neg_digits_1234.5678_-1.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/round_neg_digits_1234.5678_-1.vba",
         "line": 2,
         "column": 3
       }
@@ -854,7 +854,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -870,7 +870,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -886,7 +886,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -902,7 +902,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -918,7 +918,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -934,7 +934,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -950,7 +950,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -966,7 +966,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -982,7 +982,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -998,7 +998,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.035,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1014,7 +1014,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1030,7 +1030,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1046,7 +1046,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1062,7 +1062,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.056,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1078,7 +1078,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1094,7 +1094,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1110,7 +1110,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1126,7 +1126,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1142,7 +1142,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1158,7 +1158,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1174,7 +1174,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1190,7 +1190,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1206,7 +1206,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1222,7 +1222,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1238,7 +1238,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1254,7 +1254,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1270,7 +1270,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1286,7 +1286,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.021,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1302,7 +1302,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1318,7 +1318,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.03,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1334,7 +1334,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1350,7 +1350,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.021,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1366,7 +1366,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.022,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1382,7 +1382,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.033,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1398,7 +1398,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1414,7 +1414,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.021,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1430,7 +1430,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.022,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1446,7 +1446,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1462,7 +1462,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1482,7 +1482,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/intdiv_frac_5_0.5.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/intdiv_frac_5_0.5.vba",
         "line": 2,
         "column": 3
       }
@@ -1499,7 +1499,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/intdiv_frac_0.1_0.2.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/intdiv_frac_0.1_0.2.vba",
         "line": 2,
         "column": 3
       }
@@ -1516,7 +1516,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/intdiv_frac_3_0.4.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/intdiv_frac_3_0.4.vba",
         "line": 2,
         "column": 3
       }
@@ -1533,7 +1533,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/intdiv_frac_-3_0.4.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/intdiv_frac_-3_0.4.vba",
         "line": 2,
         "column": 3
       }
@@ -1546,7 +1546,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1562,7 +1562,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1578,7 +1578,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1594,7 +1594,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1610,7 +1610,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1626,7 +1626,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1642,7 +1642,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1658,7 +1658,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1674,7 +1674,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1690,7 +1690,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1706,7 +1706,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1722,7 +1722,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1738,7 +1738,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1754,7 +1754,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.042,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1770,7 +1770,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1786,7 +1786,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1802,7 +1802,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1818,7 +1818,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1834,7 +1834,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.03,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1850,7 +1850,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1866,7 +1866,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1882,7 +1882,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.022,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1898,7 +1898,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.022,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1914,7 +1914,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1930,7 +1930,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1946,7 +1946,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1962,7 +1962,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1978,7 +1978,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.021,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -1994,7 +1994,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2010,7 +2010,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2026,7 +2026,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2042,7 +2042,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.02,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2058,7 +2058,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.02,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2074,7 +2074,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2090,7 +2090,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2106,7 +2106,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.019,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2122,7 +2122,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.018,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2138,7 +2138,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2154,7 +2154,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.04,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2170,7 +2170,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.017,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2186,7 +2186,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2202,7 +2202,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2218,7 +2218,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.03,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2234,7 +2234,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.074,
+    "duration_ms": 0.016,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2250,7 +2250,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2266,7 +2266,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.018,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2282,7 +2282,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2298,7 +2298,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2314,7 +2314,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.04,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2330,7 +2330,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2346,7 +2346,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2362,7 +2362,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2378,7 +2378,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2394,7 +2394,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.039,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2410,7 +2410,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.03,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2426,7 +2426,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2442,7 +2442,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2458,7 +2458,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2474,7 +2474,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.127,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2490,7 +2490,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2506,7 +2506,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2522,7 +2522,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2538,7 +2538,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2554,7 +2554,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.037,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2570,7 +2570,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.033,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2586,7 +2586,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2602,7 +2602,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2618,7 +2618,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.033,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2634,7 +2634,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.03,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2650,7 +2650,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2666,7 +2666,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2682,7 +2682,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2698,7 +2698,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2714,7 +2714,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2730,7 +2730,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2746,7 +2746,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2762,7 +2762,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2778,7 +2778,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2794,7 +2794,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.03,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2810,7 +2810,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.022,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2826,7 +2826,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2842,7 +2842,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2858,12 +2858,12 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
         "address": "A1",
-        "value": 0.49570601851851853
+        "value": 0.5582986111111111
       }
     ],
     "messages": []
@@ -2874,12 +2874,12 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
         "address": "A1",
-        "value": 46252.49570601852
+        "value": 46252.55829861111
       }
     ],
     "messages": []
@@ -2890,7 +2890,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2906,7 +2906,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2922,7 +2922,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2938,7 +2938,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.033,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -2958,7 +2958,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/division_by_zero_message.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/division_by_zero_message.vba",
         "line": 2,
         "column": 3
       }
@@ -2975,7 +2975,7 @@
       "kind": "runtime_error",
       "message": "Subscript out of range",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/array_oob_message.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/array_oob_message.vba",
         "line": 3,
         "column": 3
       }
@@ -2988,7 +2988,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.016,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3004,7 +3004,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3020,7 +3020,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3036,7 +3036,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.037,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3052,7 +3052,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3068,7 +3068,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3084,7 +3084,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3100,7 +3100,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.02,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3116,7 +3116,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3132,7 +3132,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.019,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3148,7 +3148,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3164,7 +3164,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3180,7 +3180,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3196,7 +3196,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.051,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3212,7 +3212,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3228,7 +3228,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3244,7 +3244,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3265,7 +3265,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3286,7 +3286,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3307,7 +3307,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.009,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3328,7 +3328,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3353,7 +3353,7 @@
       "kind": "undefined_variable",
       "message": "Undefined variable: 'someundefinedvariablexyz'",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/undefined_variable_error.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/undefined_variable_error.vba",
         "line": 2,
         "column": 3
       }
@@ -3370,7 +3370,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_5_0.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_5_0.vba",
         "line": 2,
         "column": 3
       }
@@ -3387,7 +3387,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_neg5_0.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_neg5_0.vba",
         "line": 2,
         "column": 3
       }
@@ -3404,7 +3404,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_0_0.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_0_0.vba",
         "line": 2,
         "column": 3
       }
@@ -3421,7 +3421,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_3dot5_0.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_3dot5_0.vba",
         "line": 2,
         "column": 3
       }
@@ -3438,7 +3438,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_neg3dot5_0.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_neg3dot5_0.vba",
         "line": 2,
         "column": 3
       }
@@ -3455,7 +3455,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_1000000_0.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_1000000_0.vba",
         "line": 2,
         "column": 3
       }
@@ -3472,7 +3472,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_0dot001_0.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_0dot001_0.vba",
         "line": 2,
         "column": 3
       }
@@ -3489,7 +3489,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_x5wsposws3x_0.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_x5wsposws3x_0.vba",
         "line": 2,
         "column": 3
       }
@@ -3506,7 +3506,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_int_typed_var.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_int_typed_var.vba",
         "line": 4,
         "column": 3
       }
@@ -3523,7 +3523,7 @@
       "kind": "runtime_error",
       "message": "Division by zero",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/divzero_float_typed_var.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/divzero_float_typed_var.vba",
         "line": 4,
         "column": 3
       }
@@ -3536,7 +3536,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.033,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3552,7 +3552,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3568,7 +3568,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.016,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3584,7 +3584,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3600,7 +3600,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.035,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3616,7 +3616,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.065,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3632,7 +3632,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3648,7 +3648,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3664,7 +3664,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3680,7 +3680,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3696,7 +3696,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.033,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3712,7 +3712,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3728,7 +3728,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3744,7 +3744,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.03,
+    "duration_ms": 0.011,
     "cells": [],
     "messages": []
   },
@@ -3754,7 +3754,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.038,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3770,7 +3770,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.01,
     "cells": [],
     "messages": []
   },
@@ -3780,7 +3780,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3796,7 +3796,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.021,
+    "duration_ms": 0.008,
     "cells": [],
     "messages": []
   },
@@ -3806,7 +3806,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3822,7 +3822,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.035,
+    "duration_ms": 0.017,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3838,7 +3838,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3854,7 +3854,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.046,
+    "duration_ms": 0.017,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3870,7 +3870,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.019,
+    "duration_ms": 0.007,
     "cells": [],
     "messages": []
   },
@@ -3880,7 +3880,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3896,7 +3896,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.035,
+    "duration_ms": 0.012,
     "cells": [],
     "messages": []
   },
@@ -3906,7 +3906,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3920,24 +3920,198 @@
     "id": "unset_range_variable_member_write_noop",
     "category": "object_nothing_access",
     "schema_version": 1,
-    "ok": true,
-    "entrypoint": "Scenario",
-    "duration_ms": 0.024,
-    "cells": [],
+    "ok": false,
+    "error": {
+      "code": "E1007",
+      "kind": "object_variable_not_set",
+      "message": "Object variable or With block variable not set",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/unset_range_variable_member_write_noop.vba",
+        "line": 3,
+        "column": 3
+      }
+    },
     "messages": []
   },
   {
     "id": "set_nothing_does_not_clear_reference",
     "category": "object_nothing_access",
     "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1007",
+      "kind": "object_variable_not_set",
+      "message": "Object variable or With block variable not set",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/set_nothing_does_not_clear_reference.vba",
+        "line": 5,
+        "column": 3
+      }
+    },
+    "messages": []
+  },
+  {
+    "id": "unset_range_variable_member_read_errors",
+    "category": "object_nothing_access",
+    "schema_version": 1,
+    "ok": false,
+    "error": {
+      "code": "E1007",
+      "kind": "object_variable_not_set",
+      "message": "Object variable or With block variable not set",
+      "location": {
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/unset_range_variable_member_read_errors.vba",
+        "line": 3,
+        "column": 3
+      }
+    },
+    "messages": []
+  },
+  {
+    "id": "unset_range_variable_is_nothing_is_true",
+    "category": "object_nothing_access",
+    "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
         "address": "A1",
-        "value": 5
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "set_range_variable_is_not_nothing",
+    "category": "object_nothing_access",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "set_nothing_makes_is_nothing_true_again",
+    "category": "object_nothing_access",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.018,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "set_nothing_does_not_clear_an_alias",
+    "category": "object_nothing_access",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "alias_still_reads_through_after_original_cleared",
+    "category": "object_nothing_access",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 42
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 42
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "alias_still_writes_through_after_original_cleared",
+    "category": "object_nothing_access",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 7
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "set_from_an_unset_variable_stays_nothing",
+    "category": "object_nothing_access",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.01,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "scalar_variable_assignment_is_unaffected_by_object_tracking",
+    "category": "object_nothing_access",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 6
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "udt_field_assignment_without_a_dim_still_works",
+    "category": "object_nothing_access",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
       }
     ],
     "messages": []
@@ -3948,7 +4122,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3964,7 +4138,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.038,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3980,7 +4154,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.033,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -3996,7 +4170,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.016,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4012,7 +4186,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4028,7 +4202,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4044,7 +4218,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.034,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4060,12 +4234,12 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
         "address": "A1",
-        "value": false
+        "value": true
       }
     ],
     "messages": []
@@ -4076,12 +4250,12 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.03,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
         "address": "A1",
-        "value": false
+        "value": true
       }
     ],
     "messages": []
@@ -4092,7 +4266,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4108,7 +4282,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4124,7 +4298,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4142,9 +4316,9 @@
     "error": {
       "code": "E1099",
       "kind": "runtime_error",
-      "message": "Cannot convert 'abc' to number",
+      "message": "Type mismatch",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/plus_nonnumeric_string_and_number_errors.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/plus_nonnumeric_string_and_number_errors.vba",
         "line": 5,
         "column": 3
       }
@@ -4157,7 +4331,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.017,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4173,7 +4347,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4189,7 +4363,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4205,7 +4379,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4221,7 +4395,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4237,7 +4411,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4253,12 +4427,12 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.03,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
         "address": "A1",
-        "value": false
+        "value": true
       }
     ],
     "messages": []
@@ -4269,7 +4443,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4285,7 +4459,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4301,7 +4475,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.04,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4317,7 +4491,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4333,7 +4507,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.015,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4349,7 +4523,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4365,7 +4539,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.009,
     "cells": [],
     "messages": []
   },
@@ -4375,7 +4549,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4391,7 +4565,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4407,7 +4581,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.01,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4423,7 +4597,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.032,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4439,7 +4613,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.025,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4455,7 +4629,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.026,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4476,7 +4650,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.023,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4497,7 +4671,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.024,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4511,34 +4685,343 @@
     "id": "with_computed_cells_target_unsupported",
     "category": "with_block_resolution",
     "schema_version": 1,
-    "ok": false,
-    "error": {
-      "code": "E2001",
-      "kind": "parse_error",
-      "message": "expected newline, got LParen",
-      "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/with_computed_cells_target_unsupported.vba",
-        "line": 2,
-        "column": 13
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "C1",
+        "value": 42
       }
-    },
+    ],
     "messages": []
   },
   {
     "id": "with_dot_member_inside_nested_if_unsupported",
     "category": "with_block_resolution",
     "schema_version": 1,
-    "ok": false,
-    "error": {
-      "code": "E2001",
-      "kind": "parse_error",
-      "message": "unexpected token starting statement: Dot",
-      "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/with_dot_member_inside_nested_if_unsupported.vba",
-        "line": 4,
-        "column": 7
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 7
       }
-    },
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_computed_cells_target_from_variables",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "B2",
+        "value": 9
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_target_is_evaluated_once_on_entry",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.01,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_target_evaluated_once_leaves_the_retargeted_cell_untouched",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [],
+    "messages": []
+  },
+  {
+    "id": "with_dot_member_inside_a_for_loop",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 6
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_dot_member_inside_a_do_loop",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.018,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_dot_member_inside_a_select_case",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.01,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 8
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_dot_member_two_block_constructs_deep",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_object_variable_target_resolves_at_runtime",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "C3",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_worksheet_object_variable_qualifies_cells",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      },
+      {
+        "sheet": "sheet1",
+        "address": "A2",
+        "value": 2
+      },
+      {
+        "sheet": "sheet1",
+        "address": "A3",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_nested_object_variable_and_literal_targets_mix",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.02,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 11
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_three_levels_of_nesting_restore_correctly",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 11
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 22
+      },
+      {
+        "sheet": "sheet1",
+        "address": "C1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_middle_level_restored_after_innermost_exits",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.016,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 22
+      },
+      {
+        "sheet": "sheet1",
+        "address": "C1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_stack_does_not_leak_past_an_exit_for",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 6
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_stack_does_not_leak_past_a_handled_error",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 7
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_udt_record_target_still_works",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 4
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_udt_record_target_nested_field_still_works",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 6
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "with_dot_value_read_in_a_nested_if_condition",
+    "category": "with_block_resolution",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 1
+      }
+    ],
     "messages": []
   },
   {
@@ -4547,7 +5030,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4563,7 +5046,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4579,7 +5062,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.019,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4595,7 +5078,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.055,
+    "duration_ms": 0.016,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4611,7 +5094,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4627,7 +5110,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4643,7 +5126,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.027,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4659,7 +5142,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.035,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4675,7 +5158,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4691,7 +5174,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4707,7 +5190,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.031,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4723,7 +5206,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.012,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4743,7 +5226,7 @@
       "kind": "parse_error",
       "message": "expected RParen, got Ident(\"to\")",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/dim_array_explicit_lower_bound_unsupported.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/dim_array_explicit_lower_bound_unsupported.vba",
         "line": 2,
         "column": 13
       }
@@ -4756,7 +5239,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.036,
+    "duration_ms": 0.016,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4772,7 +5255,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.029,
+    "duration_ms": 0.013,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4788,7 +5271,7 @@
     "schema_version": 1,
     "ok": true,
     "entrypoint": "Scenario",
-    "duration_ms": 0.028,
+    "duration_ms": 0.014,
     "cells": [
       {
         "sheet": "sheet1",
@@ -4808,7 +5291,7 @@
       "kind": "parse_error",
       "message": "unexpected token in expression: RParen",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/dim_array_empty_parens_dynamic_declaration_unsupported.vba",
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/dim_array_empty_parens_dynamic_declaration_unsupported.vba",
         "line": 2,
         "column": 11
       }
@@ -4819,17 +5302,944 @@
     "id": "array_builtin_function_unsupported",
     "category": "array_bounds",
     "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 20
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "array_builtin_first_and_last_elements",
+    "category": "array_bounds",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 42
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnull_of_null_is_true",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isnull_of_empty_is_false",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isempty_of_null_is_false",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "isempty_of_empty_is_true",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "typename_of_null_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "Null"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "vartype_of_null_is_vbnull",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "vartype_of_empty_is_vbempty",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 0
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "null_plus_number_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "number_plus_null_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "null_minus_number_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "null_times_number_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "null_divided_by_number_is_null_not_a_division_error",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "number_divided_by_null_is_null_not_division_by_zero",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "null_arithmetic_result_is_not_zero",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "typename_of_a_null_arithmetic_result_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "Null"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "empty_plus_number_is_still_the_number_not_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "ampersand_null_on_the_left_is_empty_string",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.018,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "abc"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "ampersand_null_on_the_right_is_empty_string",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "abc"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "ampersand_both_null_is_null_via_typename",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "Null"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "compare_lt_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "compare_le_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "compare_gt_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "compare_ge_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "compare_eq_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "compare_ne_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "compare_with_null_left_operand_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "null_equals_null_is_null_not_true",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "ordinary_comparison_still_returns_a_boolean",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.014,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "false_and_null_is_false_not_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": false
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "true_and_null_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "true_or_null_is_true_not_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "false_or_null_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "xor_with_a_null_operand_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "not_null_is_null",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.017,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": true
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "if_null_condition_is_treated_as_false",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.01,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "if_null_comparison_condition_is_treated_as_false",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.01,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "do_while_null_condition_never_enters_the_loop",
+    "category": "null_propagation",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.01,
+    "cells": [],
+    "messages": []
+  },
+  {
+    "id": "null_passed_to_a_numeric_function_raises_invalid_use_of_null",
+    "category": "null_propagation",
+    "schema_version": 1,
     "ok": false,
     "error": {
-      "code": "E1002",
-      "kind": "undefined_sub_or_function",
-      "message": "Unknown VBA function: 'array'",
+      "code": "E1099",
+      "kind": "runtime_error",
+      "message": "Invalid use of Null",
       "location": {
-        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-8YCsZv/array_builtin_function_unsupported.vba",
-        "line": 3,
+        "file": "/var/folders/_h/f8_99c4s0vn6f7lb4p3tq6km0000gn/T/elixcee-semantics-XiGbdU/null_passed_to_a_numeric_function_raises_invalid_use_of_null.vba",
+        "line": 4,
         "column": 3
       }
     },
+    "messages": []
+  },
+  {
+    "id": "colon_two_statements_one_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_three_statements_one_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 6
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_inside_string_literal_is_not_a_separator",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.01,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": "10:30"
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_after_msgbox_with_colon_in_message",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": [
+      "10:30"
+    ]
+  },
+  {
+    "id": "colon_msgbox_then_statement_same_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      }
+    ],
+    "messages": [
+      "10:30"
+    ]
+  },
+  {
+    "id": "colon_label_then_statement_same_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.01,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 7
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_label_line_still_a_valid_jump_target",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.009,
+    "cells": [],
+    "messages": []
+  },
+  {
+    "id": "colon_single_line_if_then_first_statement",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_single_line_if_then_second_statement",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_single_line_if_false_skips_the_whole_then_list",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.009,
+    "cells": [],
+    "messages": []
+  },
+  {
+    "id": "colon_single_line_if_else_takes_rest_of_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 2
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_single_line_if_true_skips_the_whole_else_list",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [],
+    "messages": []
+  },
+  {
+    "id": "colon_exit_sub_after_a_statement_on_the_same_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.01,
+    "cells": [],
+    "messages": []
+  },
+  {
+    "id": "colon_inside_for_loop_body_on_the_header_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 6
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_inside_do_loop_on_one_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.013,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_inside_with_block_on_one_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.012,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_run_of_empty_statements",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 3
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_dim_then_assignment_same_line",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.011,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 5
+      }
+    ],
+    "messages": []
+  },
+  {
+    "id": "colon_named_argument_is_not_a_separator",
+    "category": "colon_statement_separator",
+    "schema_version": 1,
+    "ok": true,
+    "entrypoint": "Scenario",
+    "duration_ms": 0.015,
+    "cells": [
+      {
+        "sheet": "sheet1",
+        "address": "A1",
+        "value": 1
+      },
+      {
+        "sheet": "sheet1",
+        "address": "B1",
+        "value": 1
+      },
+      {
+        "sheet": "sheet1",
+        "address": "C1",
+        "value": 1
+      }
+    ],
     "messages": []
   }
 ]

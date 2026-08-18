@@ -1717,8 +1717,78 @@
   {
     "id": "set_nothing_does_not_clear_reference",
     "category": "object_nothing_access",
-    "description": "Set r = Nothing does not actually clear the reference",
+    "description": "Set r = Nothing actually clears the reference",
     "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Set r = Range(\"A1\")\n  Set r = Nothing\n  r.Value = 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "unset_range_variable_member_read_errors",
+    "category": "object_nothing_access",
+    "description": "Reading through a never-Set Range variable also raises error 91",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  x = r.Value\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "unset_range_variable_is_nothing_is_true",
+    "category": "object_nothing_access",
+    "description": "A declared-but-never-Set Range variable Is Nothing",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Range(\"A1\").Value = (r Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "set_range_variable_is_not_nothing",
+    "category": "object_nothing_access",
+    "description": "A Set object variable is not Nothing",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Set r = Range(\"A1\")\n  Range(\"A1\").Value = (r Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "set_nothing_makes_is_nothing_true_again",
+    "category": "object_nothing_access",
+    "description": "Set r = Nothing makes Is Nothing True again",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Set r = Range(\"B1\")\n  Set r = Nothing\n  Range(\"A1\").Value = (r Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "set_nothing_does_not_clear_an_alias",
+    "category": "object_nothing_access",
+    "description": "Set r = Nothing does not affect a variable previously assigned from r",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Dim r2 As Range\n  Set r = Range(\"B1\")\n  Set r2 = r\n  Set r = Nothing\n  Range(\"A1\").Value = (r2 Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "alias_still_reads_through_after_original_cleared",
+    "category": "object_nothing_access",
+    "description": "An alias still reads its object after the original was Set to Nothing",
+    "vbaSource": "Sub Scenario()\n  Range(\"B1\").Value = 42\n  Dim r As Range\n  Dim r2 As Range\n  Set r = Range(\"B1\")\n  Set r2 = r\n  Set r = Nothing\n  Range(\"A1\").Value = r2.Value\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "alias_still_writes_through_after_original_cleared",
+    "category": "object_nothing_access",
+    "description": "An alias still writes through after the original was Set to Nothing",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Dim r2 As Range\n  Set r = Range(\"A1\")\n  Set r2 = r\n  Set r = Nothing\n  r2.Value = 7\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "set_from_an_unset_variable_stays_nothing",
+    "category": "object_nothing_access",
+    "description": "Set r2 = r where r is unset leaves r2 Nothing too",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Dim r2 As Range\n  Set r2 = r\n  Range(\"A1\").Value = (r2 Is Nothing)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "scalar_variable_assignment_is_unaffected_by_object_tracking",
+    "category": "object_nothing_access",
+    "description": "A plain (non-object) variable still assigns with = and is untouched by Nothing tracking",
+    "vbaSource": "Sub Scenario()\n  Dim x As Long\n  x = 5\n  x = x + 1\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "udt_field_assignment_without_a_dim_still_works",
+    "category": "object_nothing_access",
+    "description": "A `.field = value` write on a declared UDT variable is unaffected by object tracking",
+    "vbaSource": "Type TPoint\n  x As Integer\nEnd Type\nSub Scenario()\n  Dim p As TPoint\n  p.x = 3\n  Range(\"A1\").Value = p.x\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
@@ -1969,15 +2039,134 @@
   {
     "id": "with_computed_cells_target_unsupported",
     "category": "with_block_resolution",
-    "description": "With Cells(row, col) as a target does not parse",
+    "description": "With Cells(row, col) works as a target",
     "vbaSource": "Sub Scenario()\n  With Cells(1, 3)\n    .Value = 42\n  End With\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
     "id": "with_dot_member_inside_nested_if_unsupported",
     "category": "with_block_resolution",
-    "description": "A bare .member inside an If block nested in a With body does not parse",
+    "description": "A bare .member inside an If block nested in a With body resolves normally",
     "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    If .Value = 0 Then\n      .Value = 7\n    End If\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_computed_cells_target_from_variables",
+    "category": "with_block_resolution",
+    "description": "With Cells(r, c) where both indices are variables",
+    "vbaSource": "Sub Scenario()\n  r = 2\n  c = 2\n  With Cells(r, c)\n    .Value = 9\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_target_is_evaluated_once_on_entry",
+    "category": "with_block_resolution",
+    "description": "The With target is evaluated once on entry, not per .member access",
+    "vbaSource": "Sub Scenario()\n  i = 1\n  With Cells(i, 1)\n    i = 5\n    .Value = 3\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_target_evaluated_once_leaves_the_retargeted_cell_untouched",
+    "category": "with_block_resolution",
+    "description": "Reassigning a target variable inside a With body does not move the target",
+    "vbaSource": "Sub Scenario()\n  i = 1\n  With Cells(i, 5)\n    i = 5\n    .Value = 3\n  End With\n  Range(\"E1\").Clear\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_member_inside_a_for_loop",
+    "category": "with_block_resolution",
+    "description": "A bare .member inside a For loop nested in a With body",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    For i = 1 To 3\n      .Value = .Value + i\n    Next i\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_member_inside_a_do_loop",
+    "category": "with_block_resolution",
+    "description": "A bare .member inside a Do loop nested in a With body, in both the condition and the body",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    Do While .Value < 3\n      .Value = .Value + 1\n    Loop\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_member_inside_a_select_case",
+    "category": "with_block_resolution",
+    "description": "A bare .member inside a Select Case nested in a With body",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    Select Case 2\n      Case 2\n        .Value = 8\n    End Select\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_member_two_block_constructs_deep",
+    "category": "with_block_resolution",
+    "description": "A bare .member two block constructs deep inside a With body",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    For i = 1 To 2\n      If i = 2 Then\n        .Value = 4\n      End If\n    Next i\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_object_variable_target_resolves_at_runtime",
+    "category": "with_block_resolution",
+    "description": "With <object variable> resolves against the variable's current reference",
+    "vbaSource": "Sub Scenario()\n  Dim rng As Range\n  Set rng = Range(\"C3\")\n  With rng\n    .Value = 5\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_worksheet_object_variable_qualifies_cells",
+    "category": "with_block_resolution",
+    "description": "With <worksheet variable> makes .Cells(...) target that worksheet",
+    "vbaSource": "Sub Scenario()\n  Dim ws\n  Set ws = ActiveSheet\n  With ws\n    For i = 1 To 3\n      .Cells(i, 1).Value = i\n    Next i\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_nested_object_variable_and_literal_targets_mix",
+    "category": "with_block_resolution",
+    "description": "A literal-target With nested inside an object-variable-target With restores correctly",
+    "vbaSource": "Sub Scenario()\n  Dim rng As Range\n  Set rng = Range(\"A1\")\n  With rng\n    .Value = 1\n    With Range(\"B1\")\n      .Value = 2\n    End With\n    .Value = .Value + 10\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_three_levels_of_nesting_restore_correctly",
+    "category": "with_block_resolution",
+    "description": "Three levels of nested With restore each outer target in turn",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    .Value = 1\n    With Range(\"B1\")\n      .Value = 2\n      With Range(\"C1\")\n        .Value = 3\n      End With\n      .Value = .Value + 20\n    End With\n    .Value = .Value + 10\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_middle_level_restored_after_innermost_exits",
+    "category": "with_block_resolution",
+    "description": "The middle level of three nested With blocks is restored too",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    .Value = 1\n    With Range(\"B1\")\n      .Value = 2\n      With Range(\"C1\")\n        .Value = 3\n      End With\n      .Value = .Value + 20\n    End With\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_stack_does_not_leak_past_an_exit_for",
+    "category": "with_block_resolution",
+    "description": "An Exit For inside a With body does not leave the target on the stack",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    For i = 1 To 3\n      Exit For\n    Next i\n    .Value = 5\n  End With\n  With Range(\"B1\")\n    .Value = 6\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_stack_does_not_leak_past_a_handled_error",
+    "category": "with_block_resolution",
+    "description": "A With body left via an error handler does not leak its target",
+    "vbaSource": "Sub Scenario()\n  On Error Resume Next\n  With Range(\"A1\")\n    .Value = 1 / 0\n  End With\n  On Error GoTo 0\n  With Range(\"B1\")\n    .Value = 7\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_udt_record_target_still_works",
+    "category": "with_block_resolution",
+    "description": "A With block over a declared UDT variable still sets its fields",
+    "vbaSource": "Type TPoint\n  x As Integer\nEnd Type\nSub Scenario()\n  Dim p As TPoint\n  With p\n    .x = 4\n  End With\n  Range(\"A1\").Value = p.x\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_udt_record_target_nested_field_still_works",
+    "category": "with_block_resolution",
+    "description": "A With block over a declared UDT variable still sets a nested field path",
+    "vbaSource": "Type TInner\n  b As Integer\nEnd Type\nType TOuter\n  a As TInner\nEnd Type\nSub Scenario()\n  Dim p As TOuter\n  With p\n    .a.b = 6\n  End With\n  Range(\"A1\").Value = p.a.b\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_value_read_in_a_nested_if_condition",
+    "category": "with_block_resolution",
+    "description": "A bare .Value read inside a nested If condition resolves against the With target",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5\n  With Range(\"A1\")\n    If .Value = 5 Then\n      Range(\"B1\").Value = 1\n    Else\n      Range(\"B1\").Value = 2\n    End If\n  End With\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
@@ -2102,8 +2291,414 @@
   {
     "id": "array_builtin_function_unsupported",
     "category": "array_bounds",
-    "description": "The Array(...) builtin function is not implemented",
+    "description": "The Array(...) builtin function builds a zero-based array",
     "vbaSource": "Sub Scenario()\n  Dim arr\n  arr = Array(10, 20, 30)\n  Range(\"A1\").Value = arr(1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "array_builtin_first_and_last_elements",
+    "category": "array_bounds",
+    "description": "Array(...) indexes from 0 through UBound",
+    "vbaSource": "Sub Scenario()\n  Dim arr\n  arr = Array(10, 20, 30)\n  Range(\"A1\").Value = arr(0) + arr(2) + UBound(arr)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnull_of_null_is_true",
+    "category": "null_propagation",
+    "description": "IsNull(Null) is True",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isnull_of_empty_is_false",
+    "category": "null_propagation",
+    "description": "IsNull(Empty) is False",
+    "vbaSource": "Sub Scenario()\n  Dim e\n  Range(\"A1\").Value = IsNull(e)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isempty_of_null_is_false",
+    "category": "null_propagation",
+    "description": "IsEmpty(Null) is False",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsEmpty(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "isempty_of_empty_is_true",
+    "category": "null_propagation",
+    "description": "IsEmpty(Empty) is True",
+    "vbaSource": "Sub Scenario()\n  Dim e\n  Range(\"A1\").Value = IsEmpty(e)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "typename_of_null_is_null",
+    "category": "null_propagation",
+    "description": "TypeName(Null) is \"Null\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = TypeName(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "vartype_of_null_is_vbnull",
+    "category": "null_propagation",
+    "description": "VarType(Null) is 1 (vbNull)",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = VarType(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "vartype_of_empty_is_vbempty",
+    "category": "null_propagation",
+    "description": "VarType(Empty) is 0 (vbEmpty)",
+    "vbaSource": "Sub Scenario()\n  Dim e\n  Range(\"A1\").Value = VarType(e)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_plus_number_is_null",
+    "category": "null_propagation",
+    "description": "Null + number is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n + 5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "number_plus_null_is_null",
+    "category": "null_propagation",
+    "description": "number + Null is Null (right-hand side)",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 + n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_minus_number_is_null",
+    "category": "null_propagation",
+    "description": "Null - number is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n - 1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_times_number_is_null",
+    "category": "null_propagation",
+    "description": "Null * number is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n * 3)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_divided_by_number_is_null_not_a_division_error",
+    "category": "null_propagation",
+    "description": "Null / number is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n / 2)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "number_divided_by_null_is_null_not_division_by_zero",
+    "category": "null_propagation",
+    "description": "number / Null is Null, not a Division by zero error",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 / n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_arithmetic_result_is_not_zero",
+    "category": "null_propagation",
+    "description": "A Null arithmetic result does not compare equal to 0",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  If n + 5 = 0 Then\n    Range(\"A1\").Value = 1\n  Else\n    Range(\"A1\").Value = 2\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "typename_of_a_null_arithmetic_result_is_null",
+    "category": "null_propagation",
+    "description": "TypeName(Null + 5) is \"Null\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = TypeName(n + 5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "empty_plus_number_is_still_the_number_not_null",
+    "category": "null_propagation",
+    "description": "Empty + number returns the number unchanged (Empty does NOT propagate)",
+    "vbaSource": "Sub Scenario()\n  Dim e\n  Range(\"A1\").Value = e + 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ampersand_null_on_the_left_is_empty_string",
+    "category": "null_propagation",
+    "description": "Null & string treats the Null as \"\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = n & \"abc\"\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ampersand_null_on_the_right_is_empty_string",
+    "category": "null_propagation",
+    "description": "string & Null treats the Null as \"\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = \"abc\" & n\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ampersand_both_null_is_null_via_typename",
+    "category": "null_propagation",
+    "description": "TypeName(Null & Null) is \"Null\"",
+    "vbaSource": "Sub Scenario()\n  Dim n1, n2\n  n1 = Null\n  n2 = Null\n  Range(\"A1\").Value = TypeName(n1 & n2)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_lt_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 < Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 < n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_le_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 <= Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 <= n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_gt_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 > Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 > n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_ge_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 >= Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 >= n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_eq_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 = Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 = n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_ne_with_null_right_operand_is_null",
+    "category": "null_propagation",
+    "description": "5 <> Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(5 <> n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "compare_with_null_left_operand_is_null",
+    "category": "null_propagation",
+    "description": "Null < 5 is Null (left-hand side)",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(n < 5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_equals_null_is_null_not_true",
+    "category": "null_propagation",
+    "description": "Null = Null is Null, not True",
+    "vbaSource": "Sub Scenario()\n  Dim n1, n2\n  n1 = Null\n  n2 = Null\n  Range(\"A1\").Value = IsNull(n1 = n2)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "ordinary_comparison_still_returns_a_boolean",
+    "category": "null_propagation",
+    "description": "A comparison with no Null operand still returns a plain Boolean",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (3 < 5)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "false_and_null_is_false_not_null",
+    "category": "null_propagation",
+    "description": "False And Null is False",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = (False And n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "true_and_null_is_null",
+    "category": "null_propagation",
+    "description": "True And Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(True And n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "true_or_null_is_true_not_null",
+    "category": "null_propagation",
+    "description": "True Or Null is True",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = (True Or n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "false_or_null_is_null",
+    "category": "null_propagation",
+    "description": "False Or Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(False Or n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "xor_with_a_null_operand_is_null",
+    "category": "null_propagation",
+    "description": "True Xor Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(True Xor n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "not_null_is_null",
+    "category": "null_propagation",
+    "description": "Not Null is Null",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = IsNull(Not n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "if_null_condition_is_treated_as_false",
+    "category": "null_propagation",
+    "description": "If Null Then takes the Else branch (Null condition is treated as False)",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  If n Then\n    Range(\"A1\").Value = 1\n  Else\n    Range(\"A1\").Value = 2\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "if_null_comparison_condition_is_treated_as_false",
+    "category": "null_propagation",
+    "description": "A comparison that evaluates to Null is also treated as False by If",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  If 5 > n Then\n    Range(\"A1\").Value = 1\n  Else\n    Range(\"A1\").Value = 2\n  End If\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "do_while_null_condition_never_enters_the_loop",
+    "category": "null_propagation",
+    "description": "A Do While loop with a Null condition never runs its body",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Do While n\n    Range(\"A1\").Value = 99\n  Loop\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "null_passed_to_a_numeric_function_raises_invalid_use_of_null",
+    "category": "null_propagation",
+    "description": "Abs(Null) raises \"Invalid use of Null\"",
+    "vbaSource": "Sub Scenario()\n  Dim n\n  n = Null\n  Range(\"A1\").Value = Abs(n)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_two_statements_one_line",
+    "category": "colon_statement_separator",
+    "description": "Two assignments separated by a colon on one line",
+    "vbaSource": "Sub Scenario()\n  a = 1: b = 2\n  Range(\"A1\").Value = a + b\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_three_statements_one_line",
+    "category": "colon_statement_separator",
+    "description": "Three assignments separated by colons on one line",
+    "vbaSource": "Sub Scenario()\n  a = 1: b = 2: c = 3\n  Range(\"A1\").Value = a + b + c\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_inside_string_literal_is_not_a_separator",
+    "category": "colon_statement_separator",
+    "description": "A colon inside a string literal does not split the statement",
+    "vbaSource": "Sub Scenario()\n  s = \"10:30\": Range(\"A1\").Value = s\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_after_msgbox_with_colon_in_message",
+    "category": "colon_statement_separator",
+    "description": "A colon-bearing MsgBox argument on its own line (baseline)",
+    "vbaSource": "Sub Scenario()\n  MsgBox \"10:30\"\n  Range(\"A1\").Value = 1\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_msgbox_then_statement_same_line",
+    "category": "colon_statement_separator",
+    "description": "MsgBox \"10:30\": Range write on the same line",
+    "vbaSource": "Sub Scenario()\n  MsgBox \"10:30\": Range(\"A1\").Value = 1\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_label_then_statement_same_line",
+    "category": "colon_statement_separator",
+    "description": "label: statement — a label and a statement on one line",
+    "vbaSource": "Sub Scenario()\n  GoTo Skip\n  Range(\"B1\").Value = 99\nSkip: Range(\"A1\").Value = 7\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_label_line_still_a_valid_jump_target",
+    "category": "colon_statement_separator",
+    "description": "A label with a statement after it on the same line is still jumped over correctly",
+    "vbaSource": "Sub Scenario()\n  GoTo Skip\n  Range(\"A1\").Value = 99\nSkip:\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_then_first_statement",
+    "category": "colon_statement_separator",
+    "description": "Single-line If Then with a colon-separated statement list — first statement runs",
+    "vbaSource": "Sub Scenario()\n  x = 5\n  If x > 0 Then Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_then_second_statement",
+    "category": "colon_statement_separator",
+    "description": "Single-line If Then with a colon-separated statement list — second statement also runs",
+    "vbaSource": "Sub Scenario()\n  x = 5\n  If x > 0 Then Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_false_skips_the_whole_then_list",
+    "category": "colon_statement_separator",
+    "description": "A false single-line If skips every colon-separated statement in its Then list",
+    "vbaSource": "Sub Scenario()\n  x = -5\n  If x > 0 Then Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_else_takes_rest_of_line",
+    "category": "colon_statement_separator",
+    "description": "Single-line If ... Else with a colon-separated Else list",
+    "vbaSource": "Sub Scenario()\n  x = -5\n  If x > 0 Then Range(\"C1\").Value = 9 Else Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_single_line_if_true_skips_the_whole_else_list",
+    "category": "colon_statement_separator",
+    "description": "A true single-line If skips every colon-separated statement in its Else list",
+    "vbaSource": "Sub Scenario()\n  x = 5\n  If x > 0 Then Exit Sub Else Range(\"A1\").Value = 1: Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_exit_sub_after_a_statement_on_the_same_line",
+    "category": "colon_statement_separator",
+    "description": "Exit Sub as the second colon-separated statement really exits",
+    "vbaSource": "Sub Scenario()\n  x = 1: Exit Sub\n  Range(\"A1\").Value = 99\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_inside_for_loop_body_on_the_header_line",
+    "category": "colon_statement_separator",
+    "description": "For header, body and Next all on one colon-separated line",
+    "vbaSource": "Sub Scenario()\n  total = 0\n  For i = 1 To 3: total = total + i: Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_inside_do_loop_on_one_line",
+    "category": "colon_statement_separator",
+    "description": "Do While header, body and Loop all on one colon-separated line",
+    "vbaSource": "Sub Scenario()\n  i = 0\n  Do While i < 3: i = i + 1: Loop\n  Range(\"A1\").Value = i\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_inside_with_block_on_one_line",
+    "category": "colon_statement_separator",
+    "description": "With header, body and End With all on one colon-separated line",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\"): .Value = 5: End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_run_of_empty_statements",
+    "category": "colon_statement_separator",
+    "description": "A run of consecutive colons is an empty statement, not an error",
+    "vbaSource": "Sub Scenario()\n  a = 1:: b = 2\n  Range(\"A1\").Value = a + b\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_dim_then_assignment_same_line",
+    "category": "colon_statement_separator",
+    "description": "Dim and an assignment separated by a colon",
+    "vbaSource": "Sub Scenario()\n  Dim x: x = 5\n  Range(\"A1\").Value = x\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "colon_named_argument_is_not_a_separator",
+    "category": "colon_statement_separator",
+    "description": "A `:=` named argument is not a statement separator",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1\n  Range(\"A1\").Copy Destination:=Range(\"B1\")\n  Range(\"C1\").Value = Range(\"B1\").Value\nEnd Sub\n",
     "entrypoint": "Scenario"
   }
 ]

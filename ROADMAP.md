@@ -142,34 +142,37 @@ recorded as exhausted: no further candidates were found by either method as of t
    elixcee`, or the npmjs.com web UI). (Corrects a stale, dangling citation this file
    previously had, pointing at a CHANGELOG.md "Phase 0 scope-ownership note" that doesn't
    actually exist in CHANGELOG.md's text — found and fixed this round.)
-10. **28 `compat/vba-semantics/` `KNOWN_LIMITATION` cases** (Unreleased — suite grew from
-    208 to 301 cases; full per-case list and root-cause grouping in
+10. **19 `compat/vba-semantics/` `KNOWN_LIMITATION` cases** (Unreleased — suite grew from
+    208 to 301 to **386** cases; full per-case list and root-cause grouping in
     `compat/vba-semantics/README.md`'s "Current state" section, raw detail in
-    `compat/vba-semantics/results/report.json`), none fixed this round. By root cause:
+    `compat/vba-semantics/results/report.json`). Down from 28: **nine were genuinely fixed
+    this round** (see CHANGELOG.md) — the three Null-propagation ones, the two
+    object-variable unset/Nothing ones, the two `With`-target ones, the `Type mismatch`
+    error-message one, and the missing `Array()` builtin. The remaining 19, by root cause:
     no declared/runtime type-width tracking (12 — `CInt`/`CLng` overflow, `Left`/`Right`/
-    `Mid`/`Chr`/`InStr` out-of-domain arguments); array declaration/resize gaps (6 —
+    `Mid`/`Chr`/`InStr` out-of-domain arguments); array declaration/resize gaps (5 —
     `Dim arr(lo To hi)`/`Dim arr()` don't parse, `Option Base 1` ignored, `UBound`'s
-    dimension argument ignored, `Erase` doesn't reset elements, `Array()` unimplemented); no
-    Null-propagation semantics in the VM (3 — `+`/`&`-both-Null/comparisons all coerce Null
-    to 0 or `""` instead of producing Null); no object-variable unset/Nothing state (2 — a
-    never-`Set` variable's member access silently no-ops, `Set x = Nothing` doesn't clear
-    the reference); `With`-target resolution is parse-time-textual, not a runtime stack (2 —
-    can't target `Cells(...)`, can't reach a `.member` nested inside another block
-    construct); no per-Variant stored-type tag (1 — `+` between two string-typed Variants
-    numeric-adds instead of concatenating per VBA's own documented rule); a numeric-vs-
-    string Variant comparison isn't unconditionally "numeric side is less" per VBA's
-    documented rule (1 — deliberately not fixed, would invert the far more common
-    numeric-string-vs-number magnitude comparison for every caller); one shared numeric-
-    coercion helper's error message text doesn't match VBA's "Type mismatch" wording, though
-    the error condition itself is already correct (1 — not fixed, the helper has ~54 call
-    sites and a blind rename risks wrong wording elsewhere).
-11. **Two parser gaps found alongside the vba-semantics work, not in that suite** (each is a
-    "does it parse at all" question, not a value-correctness one): the `:` multi-statement-
-    per-line separator doesn't parse at all (`a = 1: b = 2` fails with "expected newline, got
-    Colon") — real VBA allows an arbitrary number of statements per line separated by `:`;
-    and the two `With`-target gaps above (item 10) are confirmed only for the specific shapes
-    tested (`Cells(...)` as a target, one level of `If` nesting), not exhaustively
-    characterized across every possible target expression or nesting construct.
+    dimension argument ignored, `Erase` doesn't reset elements); no per-Variant stored-type
+    tag (1 — `+` between two string-typed Variants numeric-adds instead of concatenating per
+    VBA's own documented rule); a numeric-vs-string Variant comparison isn't unconditionally
+    "numeric side is less" per VBA's documented rule (1 — deliberately not fixed, would
+    invert the far more common numeric-string-vs-number magnitude comparison for every
+    caller).
+11. **`Range.Range(...)`/`Range.Cells(...)` are not relative to the base range.** Inside a
+    `With <range>` body (and through a `Set`-assigned Range variable), a `.Range("A1")`/
+    `.Cells(r, c)` qualifier resolves as an independent, absolute reference on the active
+    sheet. Real VBA resolves both relative to the base range's upper-left corner. Pre-
+    existing behavior, pinned by `with_range_nested_range_reference_still_works`;
+    deliberately left unchanged by the runtime-With-stack work (which was about *where* a
+    `.member` can appear and *when* the target is evaluated, not about re-anchoring this
+    qualifier). Not covered by `compat/vba-semantics/` — the test shapes there all happen to
+    make relative and absolute agree.
+12. **The `:` statement separator's interaction with unparsed lines.** `:` is now a real
+    statement separator everywhere (see CHANGELOG.md), but a line elixcee skips wholesale as
+    an unrecognized *block header* (`skip_to_eol` — a `With <unmodeled>` header, an `Option`
+    line) still swallows the rest of that physical line, colons included. Statement-level
+    skipping (`skip_to_stmt_end`) correctly stops at a `:`. No known real-world macro hits
+    the difference; recorded so a future reader doesn't rediscover it as a surprise.
 
 ## npm/JS/WASM findings (from a dedicated investigation this round — see git history for the
 full report; this is a summary)

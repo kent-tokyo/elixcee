@@ -84,7 +84,13 @@ pub fn variant_to_json(v: &Variant) -> String {
         }
         Variant::Date(s) => json_string(&crate::vm::serial_to_display(*s)),
         Variant::Error(e) => json_string(e.as_str()),
-        Variant::Empty => "null".into(),
+        // VBA's `Null` serializes as JSON null, same as `Empty` — neither
+        // has a representable cell value, and adding a new `--json` shape
+        // for one of them would be a contract change (see
+        // docs/agent-contract.md). The Empty-vs-Null distinction is a
+        // VBA-language one, observable via `IsNull`/`TypeName`, not a
+        // wire-format one.
+        Variant::Empty | Variant::Null => "null".into(),
         Variant::Array(_) => json_string("[array]"),
         Variant::Record(_) => json_string("[record]"),
     }
@@ -203,6 +209,12 @@ fn classify_runtime_error(msg: &str) -> (&'static str, &'static str) {
     }
     if msg.starts_with("MsgBox: ") {
         return ("E1004", "msgbox_blocked");
+    }
+    // Real VBA's error 91, raised by the VM through the single
+    // `vm::OBJECT_NOT_SET` constant — an exact match, not a prefix, because
+    // that constant is the whole message and nothing else produces it.
+    if msg == crate::vm::OBJECT_NOT_SET {
+        return ("E1007", "object_variable_not_set");
     }
     ("E1099", "runtime_error")
 }

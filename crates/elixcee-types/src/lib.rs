@@ -43,6 +43,14 @@ pub enum Variant {
     Date(i64),           // Excel serial date — displays as "YYYY-MM-DD"
     Error(ExcelError),   // Excel error value (#DIV/0!, #N/A, …)
     Empty,
+    /// VBA's `Null` — "no valid data" (as from a database NULL), a
+    /// genuinely different concept from `Empty` (an uninitialized Variant).
+    /// `IsNull(Null)` is True and `IsEmpty(Null)` is False, and vice versa;
+    /// arithmetic and comparison propagate Null where they treat Empty as
+    /// 0/"". Kept as its own variant precisely so those rules are
+    /// expressible — folding it into `Empty` is what made every documented
+    /// Null-propagation rule unimplementable before.
+    Null,
     Array(Vec<Variant>),                  // 0-indexed 1D array
     Record(std::collections::HashMap<String, Variant>), // UDT instance (p.x, p.y, …)
 }
@@ -62,6 +70,11 @@ impl std::fmt::Display for Variant {
             Variant::Date(s)    => write!(f, "{}", serial_to_display(*s)),
             Variant::Error(e)   => write!(f, "{}", e),
             Variant::Empty      => write!(f, ""),
+            // Matches what real VBA's own `Debug.Print Null` prints. Never
+            // reached by `&` concatenation, which applies the documented
+            // Null rules (both-Null -> Null, one-Null -> "") before ever
+            // formatting an operand.
+            Variant::Null       => write!(f, "Null"),
             Variant::Array(a)   => write!(f, "[{}]", a.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")),
             Variant::Record(m)  => {
                 let mut pairs: Vec<String> = m.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();

@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use crate::diagnostics::{SourceLocation, json_string, locate};
-use crate::parser::{self, CaseMatch, Expr, Program, SourceSpan, SpannedStmt, Stmt};
+use crate::parser::{self, CaseMatch, Expr, Program, SourceSpan, SpannedStmt, Stmt, WithMember, WithTarget};
 use crate::vm;
 
 /// One static-analysis finding. `severity` "error" means the file can't (or
@@ -244,7 +244,17 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::ArrayWrite { name, .. } => {
                 names.insert(name.clone());
             }
-            Stmt::With { body } => collect_declared_names(body, names),
+            Stmt::With { target, body } => {
+                // A bare-identifier With target names a variable (a UDT
+                // record, or a Set-assigned object) — it must stay a
+                // "declared name", exactly as the old `WithRecord` arm did,
+                // or `check` starts reporting it as undefined.
+                if let WithTarget::Var(var) = target {
+                    names.insert(var.clone());
+                }
+                collect_declared_names(body, names);
+            }
+            Stmt::WithDot { .. } => {}
             Stmt::MsgBox { .. } => {}
             Stmt::RecordSet { var, .. } => {
                 names.insert(var.clone());
@@ -271,10 +281,6 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             }
             Stmt::ArrayRecordSet { name, .. } => {
                 names.insert(name.clone());
-            }
-            Stmt::WithRecord { var, body } => {
-                names.insert(var.clone());
-                collect_declared_names(body, names);
             }
             Stmt::Unsupported { .. } => {}
         }
@@ -352,8 +358,7 @@ fn walk_body(
             | Stmt::For { body, .. }
             | Stmt::ForEach { body, .. }
             | Stmt::DoLoop { body, .. }
-            | Stmt::With { body }
-            | Stmt::WithRecord { body, .. } => walk_body(
+            | Stmt::With { body, .. } => walk_body(
                 body,
                 prog,
                 local_names,
@@ -548,7 +553,21 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             }
             out.push(value);
         }
-        Stmt::With { .. } => {}
+        Stmt::With { target, .. } => {
+            // A `With Cells(r, c)` target's index expressions are real
+            // expressions and must be walked like any other.
+            if let WithTarget::Cells(row, col) = target {
+                out.push(row);
+                out.push(col);
+            }
+        }
+        Stmt::WithDot { member, value } => {
+            if let WithMember::Cells { row, col, .. } = member {
+                out.push(row);
+                out.push(col);
+            }
+            out.push(value);
+        }
         Stmt::MsgBox { message } => out.push(message),
         Stmt::RecordSet { value, .. } => out.push(value),
         Stmt::DimRecord { .. } => {}
@@ -569,7 +588,6 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             }
             out.push(value);
         }
-        Stmt::WithRecord { .. } => {}
         Stmt::Unsupported { .. } => {}
     }
 }
@@ -815,7 +833,12 @@ fn walk_expr(
         | Expr::ActiveSheetRef
         | Expr::ObjectVarSheet(_)
         | Expr::RecordGet { .. }
-        | Expr::RecordGetNested { .. } => {}
+        | Expr::RecordGetNested { .. }
+        // `<var> Is Nothing` holds only a variable name, and a bare
+        // `.member` read holds only field names — no sub-expression and no
+        // callable in either, so nothing for the undefined-Sub/Function walk.
+        | Expr::IsNothing(_)
+        | Expr::WithDot(_) => {}
     }
 }
 
@@ -1303,8 +1326,12 @@ mod tests {
             Some("Main"),
         );
         assert_eq!(codes(&diags), vec!["I1002"]);
+        // The message names the member, not `p.field`: the With target is no
+        // longer substituted into the body at parse time (it's resolved at
+        // runtime), so the parser genuinely doesn't know the variable's name
+        // here. The diagnostic still points at the same statement.
         assert!(
-            diags[0].message.contains("p.field"),
+            diags[0].message.contains(".field"),
             "{:?}",
             diags[0].message
         );

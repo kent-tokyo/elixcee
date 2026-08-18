@@ -1434,14 +1434,71 @@
   "unset_range_variable_member_write_noop": {
     "kind": "error",
     "errorMessage": "Object variable or With block variable not set",
-    "reason": "Real VBA raises this error for any member access through an object variable that was never Set — a Dim As Range/Object alone only declares the variable, it does not assign a live reference.",
-    "knownLimitation": "elixcee silently no-ops instead of raising the error (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed. Same root cause as set_nothing_does_not_clear_reference below: elixcee has no concept of an unset/Nothing object-variable state that member access can check against."
+    "reason": "Real VBA raises this error for any member access through an object variable that was never Set — a Dim As Range/Object alone only declares the variable, it does not assign a live reference. (Fixed this round: elixcee used to silently no-op here.)"
   },
   "set_nothing_does_not_clear_reference": {
     "kind": "error",
     "errorMessage": "Object variable or With block variable not set",
-    "reason": "Real VBA: after Set r = Nothing, r no longer refers to Range(\"A1\") -- writing through it raises this error, same as the never-Set case above.",
-    "knownLimitation": "elixcee's Set r = Nothing silently no-ops (Nothing isn't recognized as a valid Set target), so r still refers to its previous Range(\"A1\") assignment -- confirmed live: this scenario succeeds and writes 5 to A1 instead of erroring. Found while building this suite."
+    "reason": "Real VBA: after Set r = Nothing, r no longer refers to Range(\"A1\") -- writing through it raises this error, same as the never-Set case above. (Fixed this round: elixcee's Set r = Nothing used to silently no-op, leaving the previous reference live.)"
+  },
+  "unset_range_variable_member_read_errors": {
+    "kind": "error",
+    "errorMessage": "Object variable or With block variable not set",
+    "reason": "Error 91 is raised by *any* member access through an object variable holding no reference, not only by a write -- the read path must check the same state as the write path."
+  },
+  "unset_range_variable_is_nothing_is_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "A Dim As Range declaration creates the variable but assigns no reference, so it holds the null object reference -- `r Is Nothing` is True until a Set gives it one."
+  },
+  "set_range_variable_is_not_nothing": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "Once Set assigns a live Range reference, `r Is Nothing` is False -- the complement of unset_range_variable_is_nothing_is_true, proving the state actually changes rather than being a constant."
+  },
+  "set_nothing_makes_is_nothing_true_again": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Set r = Nothing assigns the null object reference, returning the variable to exactly the state a never-Set declaration leaves it in -- real VBA cannot distinguish the two either."
+  },
+  "set_nothing_does_not_clear_an_alias": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "Set copies the *reference* into r2's own variable slot; clearing r afterwards rebinds only r. Real VBA has no way for one variable's assignment to reach into another's -- r2 still refers to the same Range(\"B1\") object."
+  },
+  "alias_still_reads_through_after_original_cleared": {
+    "kind": "value",
+    "address": "A1",
+    "value": 42,
+    "reason": "The stronger form of set_nothing_does_not_clear_an_alias: not only is r2 not Nothing, it still resolves to the same cell -- a member access through it returns that cell's value rather than raising error 91."
+  },
+  "alias_still_writes_through_after_original_cleared": {
+    "kind": "value",
+    "address": "A1",
+    "value": 7,
+    "reason": "Third independent confirmation of the same alias rule, on the write path: r2 must still be a live reference to Range(\"A1\") after r was cleared."
+  },
+  "set_from_an_unset_variable_stays_nothing": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Assigning from a variable that holds the null object reference is legal VBA and simply copies that null reference -- it is not itself an error, and r2 ends up Nothing."
+  },
+  "scalar_variable_assignment_is_unaffected_by_object_tracking": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "Scalar and object variables have genuinely different assignment semantics in VBA (`x = 5` vs `Set r = ...`), and they live in separate namespaces here. A Dim As Long must never acquire object-variable state -- if it did, `x = x + 1` would start raising error 91."
+  },
+  "udt_field_assignment_without_a_dim_still_works": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "A `Dim p As <user-defined Type>` declares a value-typed record, not an object reference: `p.x = 3` assigns a field with plain `=`, no Set, and no live-reference requirement. Guard against over-reaching — only a name declared as an *object* variable may raise error 91, so ordinary UDT field writes must be untouched."
   },
   "plus_variant_string_plus_variant_number": {
     "kind": "value",
@@ -1490,15 +1547,13 @@
     "kind": "value",
     "address": "A1",
     "value": true,
-    "reason": "Documented (ampersand operator): \"If both expressions are Null, result is Null.\" Distinct from the only-one-Null case, which treats the Null side as \"\". Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value.",
-    "knownLimitation": "elixcee's & always converts each operand to a string first (Null becomes \"\"), so both-Null gives \"\" (IsNull => False) instead of propagating Null (IsNull => True) -- found while building this suite from Microsoft's own documented distinction, not previously disclosed."
+    "reason": "Documented (ampersand operator): \"If both expressions are Null, result is Null.\" Distinct from the only-one-Null case, which treats the Null side as \"\". Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value. (Fixed this round: elixcee used to stringify both operands to \"\" first, giving IsNull => False.)"
   },
   "plus_null_propagates_null": {
     "kind": "value",
     "address": "A1",
     "value": true,
-    "reason": "Documented (+ operator): \"If one or both expressions are Null, result is Null\" -- unlike + with Empty (which returns the other operand unchanged) or & with one Null (which treats it as \"\"). Asserted via IsNull() for the same JSON-representability reason as the & case above.",
-    "knownLimitation": "elixcee's + treats Null the same as Empty (coerces to 0 numerically) instead of propagating Null, so r + 5 gives 5 (IsNull => False) instead of Null (IsNull => True) -- found while building this suite, not previously disclosed."
+    "reason": "Documented (+ operator): \"If one or both expressions are Null, result is Null\" -- unlike + with Empty (which returns the other operand unchanged) or & with one Null (which treats it as \"\"). Asserted via IsNull() for the same JSON-representability reason as the & case above. (Fixed this round: elixcee used to treat Null exactly like Empty and coerce it to 0.)"
   },
   "plus_boolean_true_uses_negative_one": {
     "kind": "value",
@@ -1521,8 +1576,7 @@
   "plus_nonnumeric_string_and_number_errors": {
     "kind": "error",
     "errorMessage": "Type mismatch",
-    "reason": "Adding a numeric Variant to a string Variant that cannot itself convert to a number raises a Type mismatch error in real VBA -- well-established, unambiguous VBA behavior.",
-    "knownLimitation": "elixcee does correctly raise a runtime error here (not silently coerce), but with message \"Cannot convert 'abc' to number\" instead of VBA's \"Type mismatch\". Not fixed this round: the message comes from to_f64, a single shared numeric-coercion helper with ~54 call sites across the VM (arithmetic, comparisons, loop bounds, array indexing, etc.), and renaming its message without auditing every call site's own correct real-VBA wording risks introducing a wrong message elsewhere -- unlike the narrowly-scoped array-out-of-bounds message fix earlier this round. Found while building this suite."
+    "reason": "Documented (+ operator): \"One expression is a numeric data type and the other is a String -> A Type mismatch error occurs.\" (Fixed this round, and narrowly: the wording is applied by a new arith_to_f64 wrapper used only by eval_binop's arithmetic arms, NOT by changing the shared to_f64 helper -- its ~53 other call sites, each with its own correct real-VBA wording for its own failure, are untouched. That shared-helper blast radius was the exact reason this stayed disclosed rather than fixed when the category was first written.)"
   },
   "compare_variant_string_and_number_worked_example": {
     "kind": "value",
@@ -1565,8 +1619,7 @@
     "kind": "value",
     "address": "A1",
     "value": true,
-    "reason": "Documented (comparison operators table): every comparison operator lists \"Null if expression1 or expression2 = Null\" as a third, separate outcome alongside True/False. Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value, same convention as the Null cases in operator_coercion.",
-    "knownLimitation": "elixcee's comparison operators never produce Null -- Null numeric-coerces to 0 via to_f64 (same root cause as operator_coercion's plus_null_propagates_null/ampersand_both_null_propagates_null: no VM-wide concept of a Null result value distinct from Empty/0), so 5 < r is evaluated as 5 < 0 = False instead of Null. Found while building this suite, not previously disclosed."
+    "reason": "Documented (comparison operators table): every comparison operator lists \"Null if expression1 or expression2 = Null\" as a third, separate outcome alongside True/False. Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value, same convention as the Null cases in operator_coercion. (Fixed this round: Null used to numeric-coerce to 0, making 5 < r evaluate as 5 < 0 = False.)"
   },
   "compare_two_variant_strings_lexical_not_numeric": {
     "kind": "value",
@@ -1660,15 +1713,113 @@
     "kind": "value",
     "address": "C1",
     "value": 42,
-    "reason": "Real VBA supports any object expression as a With target, including Cells(r, c) -- this line is valid VBA that writes 42 to C1.",
-    "knownLimitation": "elixcee's With Range(\"...\") target is a parse-time literal string, not a general expression -- parse_with only recognizes a Range(\"literal\") or Sheets/Worksheets(\"name\") call shape, or a bare identifier (UDT target). Cells(1, 3) falls into none of those and fails to parse entirely (actual: parse_error \"expected newline, got LParen\"), rather than merely producing a wrong value. Found while building this suite, not previously disclosed."
+    "reason": "Real VBA supports any object expression as a With target, including Cells(r, c) -- this line is valid VBA that writes 42 to C1. (Fixed this round: the target used to have to be a parse-time literal string, so this failed to parse at all.)"
   },
   "with_dot_member_inside_nested_if_unsupported": {
     "kind": "value",
     "address": "A1",
     "value": 7,
-    "reason": "Real VBA resolves .Value against the enclosing With target no matter how deeply it is nested inside other block constructs in the body -- this line is valid VBA that writes 7 to A1 (a fresh cell reads as 0).",
-    "knownLimitation": "elixcee's bare-.member rewrite only fires in parse_with_body's own direct statement loop (which special-cases a leading Dot token before delegating to parse_stmt) -- once execution descends into a nested block's own body (parse_if/parse_for/parse_do_loop/parse_select_case, each parsed via ordinary parse_stmt), a leading Dot is simply unrecognized (actual: parse_error \"unexpected token starting statement: Dot\"), rather than merely producing a wrong value. Same root cause as with_computed_cells_target_unsupported above: With-target resolution is parse-time-textual, not a runtime-resolved stack. Found while building this suite, not previously disclosed."
+    "reason": "Real VBA resolves .Value against the enclosing With target no matter how deeply it is nested inside other block constructs in the body -- this line is valid VBA that writes 7 to A1 (a fresh cell reads as 0). (Fixed this round: a bare .member is now an ordinary statement/expression form resolved against a runtime With stack, so it parses wherever a statement or expression can appear.)"
+  },
+  "with_computed_cells_target_from_variables": {
+    "kind": "value",
+    "address": "B2",
+    "value": 9,
+    "reason": "The target is genuinely computed — neither index is a literal — so it can only work if the target expression is evaluated at runtime rather than recognized as a literal at parse time."
+  },
+  "with_target_is_evaluated_once_on_entry": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Real VBA evaluates the object expression once, when the block is entered, and holds that reference for the whole block. Reassigning i inside the body must not retarget the block: the write lands on A1 (i was 1 at entry), not A5."
+  },
+  "with_target_evaluated_once_leaves_the_retargeted_cell_untouched": {
+    "kind": "no_cells",
+    "reason": "The complement of with_target_is_evaluated_once_on_entry, asserted by absence: after clearing the cell the entry-time target (E1) resolved to, no cell remains — so nothing was ever written to the re-evaluated target E5."
+  },
+  "with_dot_member_inside_a_for_loop": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "The With target must resolve from inside a nested loop body, and must stay the same target across iterations: 0+1+2+3 = 6."
+  },
+  "with_dot_member_inside_a_do_loop": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "A second nested block construct, and one where the bare .member appears in the loop *condition* as well as the body — the condition is an expression, not a statement, so it exercises the expression side of the same resolution."
+  },
+  "with_dot_member_inside_a_select_case": {
+    "kind": "value",
+    "address": "A1",
+    "value": 8,
+    "reason": "The third and fourth nested block constructs (Select Case, and its Case body) — completes the If/For/Do/Select Case set, none of which the old parse-time rewrite could reach."
+  },
+  "with_dot_member_two_block_constructs_deep": {
+    "kind": "value",
+    "address": "A1",
+    "value": 4,
+    "reason": "Nesting depth is not special-cased anywhere: resolution walks to the innermost active With target regardless of how many block constructs sit between it and the .member."
+  },
+  "with_object_variable_target_resolves_at_runtime": {
+    "kind": "value",
+    "address": "C3",
+    "value": 5,
+    "reason": "A bare identifier as a With target can name a Set-assigned Range object; the parser cannot know that, so it must be resolved at runtime against the object-variable namespace."
+  },
+  "with_worksheet_object_variable_qualifies_cells": {
+    "kind": "value",
+    "address": "A3",
+    "value": 3,
+    "reason": "A Worksheet-typed With target qualifies .Cells(r, c) to that worksheet's own cells. Combines a runtime-resolved target with a nested loop, which is the shape most real macros use."
+  },
+  "with_nested_object_variable_and_literal_targets_mix": {
+    "kind": "value",
+    "address": "A1",
+    "value": 11,
+    "reason": "Push/pop must be uniform across target kinds: an inner literal-Range With inside an outer object-variable With must restore the outer target on exit, exactly as two literal targets do."
+  },
+  "with_three_levels_of_nesting_restore_correctly": {
+    "kind": "value",
+    "address": "A1",
+    "value": 11,
+    "reason": "A stack, not a single saved slot: after the innermost block exits, the middle target must be active again, and after that one exits, the outer. A1 ends at 1+10 = 11."
+  },
+  "with_middle_level_restored_after_innermost_exits": {
+    "kind": "value",
+    "address": "B1",
+    "value": 22,
+    "reason": "The companion assertion to with_three_levels_of_nesting_restore_correctly, on the middle target: B1 ends at 2+20 = 22, proving the restore is per-level and not just \"back to the outermost\"."
+  },
+  "with_stack_does_not_leak_past_an_exit_for": {
+    "kind": "value",
+    "address": "B1",
+    "value": 6,
+    "reason": "Early control transfer out of a nested construct must not disturb the enclosing With target, and the following With block must resolve against its own target — a leaked stack entry would send this write to A1."
+  },
+  "with_stack_does_not_leak_past_a_handled_error": {
+    "kind": "value",
+    "address": "B1",
+    "value": 7,
+    "reason": "The error path is the one most likely to skip a naive pop: if the target leaked, the following With's bare .Value would resolve against A1 instead of B1."
+  },
+  "with_udt_record_target_still_works": {
+    "kind": "value",
+    "address": "A1",
+    "value": 4,
+    "reason": "A With target may be a value-typed record as well as an object reference, and `.x = 4` inside the body is shorthand for `p.x = 4`. Regression guard for the other bare-identifier target kind: the same runtime dispatch, resolved against the variable namespace rather than the object one."
+  },
+  "with_udt_record_target_nested_field_still_works": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "The chained-field form of the case above: a UDT whose field is itself a UDT, so `.a.b = 6` inside the With body is shorthand for `p.a.b = 6`. Confirms the record path still handles multi-segment member paths."
+  },
+  "with_dot_value_read_in_a_nested_if_condition": {
+    "kind": "value",
+    "address": "B1",
+    "value": 1,
+    "reason": "The read side at nesting depth: the If condition is evaluated as an expression inside the With body, so a bare .Value there must resolve against the target rather than failing to parse."
   },
   "dim_array_default_lower_bound_is_zero": {
     "kind": "value",
@@ -1781,7 +1932,343 @@
     "kind": "value",
     "address": "A1",
     "value": 20,
-    "reason": "Real VBA's Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element).",
-    "knownLimitation": "elixcee has no Array() builtin at all (actual: undefined_sub_or_function \"Unknown VBA function: 'array'\") -- the only way to build an array is a Dim/ReDim declaration plus individual element assignments. Found while building this suite, not previously disclosed."
+    "reason": "Real VBA's Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element). (Fixed this round: elixcee had no Array() builtin at all, so the only way to build an array was a Dim/ReDim declaration plus individual element assignments.)"
+  },
+  "array_builtin_first_and_last_elements": {
+    "kind": "value",
+    "address": "A1",
+    "value": 42,
+    "reason": "Confirms the zero-based bound independently of the middle-element case: arr(0)=10, arr(2)=30, and UBound is 2 for three elements — 10+30+2 = 42."
+  },
+  "isnull_of_null_is_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "IsNull() reports whether a Variant holds the Null value."
+  },
+  "isnull_of_empty_is_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "Null and Empty are different VBA values: an uninitialized Variant is Empty, and Empty is not Null. IsNull() must distinguish them, not answer for \"has no useful value\"."
+  },
+  "isempty_of_null_is_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "The mirror image of isnull_of_empty_is_false: a Variant explicitly assigned Null is no longer uninitialized, so IsEmpty() is False. Together the two cases pin that neither predicate answers for the other value."
+  },
+  "isempty_of_empty_is_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "The unchanged baseline of the pair above — splitting IsNull from IsEmpty must not break the ordinary uninitialized-variable answer."
+  },
+  "typename_of_null_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": "Null",
+    "reason": "TypeName() names the Variant's own subtype: a Null-valued Variant reports \"Null\", not \"Empty\"."
+  },
+  "vartype_of_null_is_vbnull": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "vbNull is 1 and vbEmpty is 0 — two distinct documented VarType constants, which is itself evidence the language treats them as different values."
+  },
+  "vartype_of_empty_is_vbempty": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "The complement of vartype_of_null_is_vbnull, confirming the split did not simply relabel Empty."
+  },
+  "null_plus_number_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (+ operator): \"If one or both expressions are Null expressions, result is Null.\""
+  },
+  "number_plus_null_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "The rule is \"one or both expressions\", so it must fire from either side — a left-operand-only check would pass the sibling case and fail this one."
+  },
+  "null_minus_number_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (minus operator): \"If one or both expressions are Null expressions, result is Null.\""
+  },
+  "null_times_number_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "The multiplication operator carries the same documented sentence as + and -, so a third arithmetic operator confirms the rule is applied per-operator-class rather than hard-coded for +."
+  },
+  "null_divided_by_number_is_null_not_a_division_error": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Null propagation is decided before the operands are coerced to numbers, so division never sees a 0-coerced Null. A Null-coercing implementation would instead compute 0 / 2 = 0."
+  },
+  "number_divided_by_null_is_null_not_division_by_zero": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "The sharpest case for \"propagate before coercing\": an implementation that coerced Null to 0 would raise Division by zero here instead of returning Null."
+  },
+  "null_arithmetic_result_is_not_zero": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Chains two documented rules to distinguish Null from a 0 that merely looks falsy: n + 5 is Null, so `= 0` is Null (comparison rule), and a Null condition is treated as False (If rule) — the Else branch runs. An implementation that coerced Null to 0 would take the Then branch instead."
+  },
+  "typename_of_a_null_arithmetic_result_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": "Null",
+    "reason": "Asserts the propagated *value*'s own type rather than a predicate over it — a Null-coercing implementation would report \"Long\" here."
+  },
+  "empty_plus_number_is_still_the_number_not_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Documented (+ operator): \"if only one expression is Empty, the other expression is returned unchanged as result.\" The load-bearing contrast case: adding Null propagation must not accidentally make Empty propagate too."
+  },
+  "ampersand_null_on_the_left_is_empty_string": {
+    "kind": "value",
+    "address": "A1",
+    "value": "abc",
+    "reason": "Documented (ampersand operator): \"if only one expression is Null, that expression is treated as a zero-length string (\"\") when concatenated with the other expression.\""
+  },
+  "ampersand_null_on_the_right_is_empty_string": {
+    "kind": "value",
+    "address": "A1",
+    "value": "abc",
+    "reason": "Same documented rule from the other side — the one-Null exception is symmetric, and must not render as the text \"Null\"."
+  },
+  "ampersand_both_null_is_null_via_typename": {
+    "kind": "value",
+    "address": "A1",
+    "value": "Null",
+    "reason": "Documented (ampersand operator): \"If both expressions are Null, result is Null.\" Asserted via TypeName rather than IsNull for independence from the IsNull cases above — & is the single operator where one Null does not propagate but two do."
+  },
+  "compare_lt_with_null_right_operand_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (comparison operators table): the < row lists \"Null if expression1 or expression2 = Null\" as a third outcome alongside True and False. Each of the six operators is checked separately because the table states the rule per-operator."
+  },
+  "compare_le_with_null_right_operand_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (comparison operators table): the <= row lists \"Null if expression1 or expression2 = Null\" as a third outcome alongside True and False. Each of the six operators is checked separately because the table states the rule per-operator."
+  },
+  "compare_gt_with_null_right_operand_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (comparison operators table): the > row lists \"Null if expression1 or expression2 = Null\" as a third outcome alongside True and False. Each of the six operators is checked separately because the table states the rule per-operator."
+  },
+  "compare_ge_with_null_right_operand_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (comparison operators table): the >= row lists \"Null if expression1 or expression2 = Null\" as a third outcome alongside True and False. Each of the six operators is checked separately because the table states the rule per-operator."
+  },
+  "compare_eq_with_null_right_operand_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (comparison operators table): the = row lists \"Null if expression1 or expression2 = Null\" as a third outcome alongside True and False. Each of the six operators is checked separately because the table states the rule per-operator."
+  },
+  "compare_ne_with_null_right_operand_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (comparison operators table): the <> row lists \"Null if expression1 or expression2 = Null\" as a third outcome alongside True and False. Each of the six operators is checked separately because the table states the rule per-operator."
+  },
+  "compare_with_null_left_operand_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "\"expression1 or expression2 = Null\" — either side triggers it, so the left-operand position needs its own case."
+  },
+  "null_equals_null_is_null_not_true": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "The most counter-intuitive row of the table, and the one an ordinary equality implementation gets wrong: two Nulls are not \"equal\", because there is no data to compare — the result is Null again."
+  },
+  "ordinary_comparison_still_returns_a_boolean": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Regression guard: adding a third possible comparison outcome must not disturb the ordinary two-valued case."
+  },
+  "false_and_null_is_false_not_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "Documented (And operator truth table): the \"False / Null / False\" row. Null does NOT uniformly propagate through And — the answer is already determined without knowing the missing operand. This is the case a blanket \"any Null makes Null\" rule gets wrong."
+  },
+  "true_and_null_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (And operator truth table): the \"True / Null / Null\" row — here the missing operand genuinely decides the answer, so the result is Null."
+  },
+  "true_or_null_is_true_not_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (Or operator truth table): the \"True / Null / True\" row — the Or mirror of False And Null."
+  },
+  "false_or_null_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (Or operator truth table): the \"False / Null / Null\" row. Together with true_or_null_is_true_not_null this pins both halves of Or's three-valued behavior."
+  },
+  "xor_with_a_null_operand_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (Xor operator): \"However, if either expression is Null, result is also Null.\" Unlike And/Or, Xor propagates unconditionally — one operand can never determine an exclusive-or."
+  },
+  "not_null_is_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (Not operator truth table): the third row, \"Null -> Null\"."
+  },
+  "if_null_condition_is_treated_as_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Documented explicitly on the If...Then...Else statement page: \"If condition is Null, condition is treated as False.\" Not an error, and not True — verified from the reference precisely because this is the one place VBA gives Null a Boolean reading."
+  },
+  "if_null_comparison_condition_is_treated_as_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "The realistic form of the rule: the Null does not appear literally in the condition, it arrives as the *result* of a comparison against a Null operand. Combines the comparison rule and the If rule in one scenario."
+  },
+  "do_while_null_condition_never_enters_the_loop": {
+    "kind": "no_cells",
+    "reason": "A Null condition being treated as False must apply to loop conditions too, not just If — the body must never execute, so no cell is written at all."
+  },
+  "null_passed_to_a_numeric_function_raises_invalid_use_of_null": {
+    "kind": "error",
+    "errorMessage": "Invalid use of Null",
+    "reason": "Where Null cannot propagate — a function argument that must genuinely be a number — real VBA raises run-time error 94, \"Invalid use of Null\". Unlike Empty, which is documented to behave as 0 in a numeric context, Null has no numeric value at all."
+  },
+  "colon_two_statements_one_line": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Both statements on the colon-separated line must execute, in order -- exactly the form Microsoft's own comparison-operators example uses (`Var1 = \"5\": Var2 = 4`). 1 + 2 = 3 proves neither was dropped."
+  },
+  "colon_three_statements_one_line": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "The separator chains: a line is a list of statements, not a pair. 1 + 2 + 3 = 6 proves the third statement ran too, not just the first two."
+  },
+  "colon_inside_string_literal_is_not_a_separator": {
+    "kind": "value",
+    "address": "A1",
+    "value": "10:30",
+    "reason": "A `:` inside a string literal is literal text, not a statement separator -- the string must survive intact AND the statement after the real separator must still run. This is the case a pre-tokenize `:`-to-newline rewrite corrupts."
+  },
+  "colon_after_msgbox_with_colon_in_message": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Baseline companion to colon_msgbox_then_statement_same_line: the same colon-bearing string literal, but with the following statement on its own line, confirming the literal is not itself the thing under test."
+  },
+  "colon_msgbox_then_statement_same_line": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "The colon after a MsgBox whose argument itself contains a colon must separate the two statements at the *real* separator only -- the Range write runs, and the message text is unaffected."
+  },
+  "colon_label_then_statement_same_line": {
+    "kind": "value",
+    "address": "A1",
+    "value": 7,
+    "reason": "`Skip:` is a line-label declaration whose own trailing colon is part of the label syntax, not a separator between two statements -- but a statement may still follow it on the same line, and must execute when the label is jumped to."
+  },
+  "colon_label_line_still_a_valid_jump_target": {
+    "kind": "no_cells",
+    "reason": "The GoTo must skip the guarded write entirely; nothing is written. Confirms treating `label:` as a label (rather than as an empty statement plus a separator) did not break the label as a jump target."
+  },
+  "colon_single_line_if_then_first_statement": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Documented (If...Then...Else statement): `statements` is \"One or more statements separated by colons; executed if condition is True\". The first of the two runs when the condition is True."
+  },
+  "colon_single_line_if_then_second_statement": {
+    "kind": "value",
+    "address": "B1",
+    "value": 2,
+    "reason": "Same documented rule, asserted on the second statement of the Then list -- Microsoft's own worked example is `If A > 10 Then A = A + 1 : B = B + A : C = C + B`, where every colon-separated statement is gated by the one condition."
+  },
+  "colon_single_line_if_false_skips_the_whole_then_list": {
+    "kind": "no_cells",
+    "reason": "The colon-separated statements belong to the Then branch, so a False condition must skip ALL of them -- if the second one leaked out into the enclosing statement list it would run unconditionally and write B1."
+  },
+  "colon_single_line_if_else_takes_rest_of_line": {
+    "kind": "value",
+    "address": "B1",
+    "value": 2,
+    "reason": "A single-line If ends only at end-of-line, and `elsestatements` is documented as \"One or more statements\" -- so everything after `Else` on the line, including past a colon, belongs to the Else branch and runs together when the condition is False."
+  },
+  "colon_single_line_if_true_skips_the_whole_else_list": {
+    "kind": "no_cells",
+    "reason": "The true branch exits the Sub, so neither Else-list statement may run -- the complement of colon_single_line_if_else_takes_rest_of_line, proving the second Else statement is genuinely gated by the condition rather than being an unconditional trailing statement."
+  },
+  "colon_exit_sub_after_a_statement_on_the_same_line": {
+    "kind": "no_cells",
+    "reason": "A control-transfer statement in the second colon position must transfer control for real -- the guarded write on the following line must never run, so no cell appears at all."
+  },
+  "colon_inside_for_loop_body_on_the_header_line": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "The colon terminates a block-construct header and each body statement just as a newline does: 1 + 2 + 3 = 6 proves the loop ran its body three times rather than being mis-parsed into a single flat statement list."
+  },
+  "colon_inside_do_loop_on_one_line": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "A second, independent block construct (Do...Loop rather than For...Next) confirming the separator terminates block headers and bodies generally, not just in the one construct."
+  },
+  "colon_inside_with_block_on_one_line": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "The separator must work inside a With body too, where a leading `.member` statement -- not an identifier -- follows the colon."
+  },
+  "colon_run_of_empty_statements": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Consecutive separators delimit an empty statement, which does nothing -- both real statements must still run. Guards against an off-by-one in separator consumption."
+  },
+  "colon_dim_then_assignment_same_line": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "A declaration and an assignment on one colon-separated line -- the shape most commonly written by hand in real VBA modules."
+  },
+  "colon_named_argument_is_not_a_separator": {
+    "kind": "value",
+    "address": "C1",
+    "value": 1,
+    "reason": "VBA's named-argument syntax `Name:=value` contains a colon that is part of the `:=` token, not a statement separator -- the Copy must still receive its Destination, proving the separator logic did not split the argument off."
   }
 }

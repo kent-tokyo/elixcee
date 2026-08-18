@@ -119,6 +119,7 @@ that does.
 | `E1002` | `undefined_sub_or_function` | runtime | Entrypoint macro name doesn't exist, or the macro called an unknown Sub/Function |
 | `E1003` | `sheet_not_found` | runtime | Reserved for a `Sheets("X")` reference failing *during* macro execution — still not reachable via `run`/`check`'s plain `--json` contract, since `Sheets("X")` auto-creates on write / reads `Empty` on miss unless `Vm::strict_resolution` is on, which only the `diagnose` subcommand sets (see below — it uses its own richer contract, not this error code) |
 | `E1004` | `msgbox_blocked` | runtime | A `MsgBox` fired while the VM was configured to treat MsgBox as an error (Python API only; not reachable from the CLI today) |
+| `E1007` | `object_variable_not_set` | runtime | A member access (`.Value`, `.Copy`, `.Range(...)`, …) through an object variable holding no live reference — `Dim r As Range` with no `Set`, or after an explicit `Set r = Nothing`. Also covers the *With-block* half of the same condition: a bare `.member` reference with no enclosing `With` block, or a `With` block whose target is an unset object variable. Real VBA's error 91; the message is always exactly `Object variable or With block variable not set` |
 | `E1099` | `runtime_error` | runtime | Any other runtime failure not covered above |
 | `E2001` | `parse_error` | parse | The VBA source failed to parse |
 | `E3001` | `io_error` | io | Reading the VBA file, reading `--file`, or writing `--output` failed |

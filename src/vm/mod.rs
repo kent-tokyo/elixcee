@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::formula;
-use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, XlDir, XlEndProp};
+use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp};
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{self, SheetCell, WorkbookSheet};
 
@@ -351,6 +351,49 @@ pub enum ObjectRef {
     /// (`wb.Worksheets(...)`/`.Sheets(...)` resolve through it) instead of
     /// the pre-Phase-2C silent no-op.
     Workbook,
+    /// The null object reference: an object variable that exists but holds
+    /// no live object. Two ways in — `Dim r As Range` (declared, never
+    /// `Set`) and an explicit `Set r = Nothing` — and real VBA can't tell
+    /// them apart either (`r Is Nothing` is `True` for both). Distinct from
+    /// *absence* from `object_variables`, which means "not an object
+    /// variable at all" (an ordinary scalar/UDT name, or an undeclared one)
+    /// and must keep its pre-existing non-object behavior: making a missing
+    /// key mean Nothing would turn every `p.field = 1` on an
+    /// undeclared-but-legal UDT into a runtime error.
+    Nothing,
+}
+
+/// Real VBA's error 91 text, raised for any member access through an object
+/// variable that holds no live reference. One constant rather than the
+/// literal repeated per call site, so the wording can't drift between the
+/// read path, the write path and the `.Copy`/sheet-qualifier paths.
+pub const OBJECT_NOT_SET: &str = "Object variable or With block variable not set";
+
+/// One entry on the VM's runtime `With` stack: the *already-evaluated*
+/// target of an active `With` block. Pushed on entry, popped on exit
+/// (including on an early `Exit Sub`/`Exit For` or a runtime error), so
+/// nesting works and an outer target is restored exactly.
+///
+/// This is what replaced the parser's old textual With rewrite. The target
+/// expression is evaluated once, here, when the block is entered — not
+/// re-evaluated per `.member` access, and not substituted into the body's
+/// statements at parse time.
+#[derive(Debug, Clone, PartialEq)]
+enum WithValue {
+    /// `With Range("A1")`, `With Cells(r, c)`, or a `Set`-assigned Range
+    /// object variable.
+    Range(RangeRef),
+    /// `With Worksheets("X")`, or a `Set`-assigned Worksheet object
+    /// variable. Holds the lowercase sheet key.
+    Sheet(String),
+    /// `With p` where `p` is a UDT record — `.field` resolves against
+    /// `Vm::variables`, not `object_variables`.
+    Record(String),
+    /// A target elixcee doesn't model (`With Application`, an unset object
+    /// variable, an unrecognized header). The body still runs; every bare
+    /// `.member` inside it is a no-op, matching the pre-existing behavior
+    /// for an unrecognized `With` header.
+    Unmodeled,
 }
 
 /// Narrows an `ObjectRef` to its `Range` payload, or a descriptive error —
@@ -368,6 +411,7 @@ fn expect_range_ref(obj: ObjectRef, context: &str) -> Result<RangeRef, String> {
         ObjectRef::Workbook => {
             Err(format!("{}: expected a Range object, got a Workbook reference", context))
         }
+        ObjectRef::Nothing => Err(OBJECT_NOT_SET.to_string()),
     }
 }
 
@@ -471,6 +515,13 @@ pub struct Vm {
     /// variable is a write to the shared cell store, immediately visible
     /// through the other. No `Rc<RefCell<_>>` indirection needed.
     object_variables: HashMap<String, ObjectRef>,
+    /// Runtime `With` stack — the already-evaluated target of each active
+    /// `With` block, innermost last. Pushed on block entry, popped on exit
+    /// (including on `Exit Sub`/`Exit For` and on a runtime error, so it
+    /// can't leak into whatever runs next), which is what makes nesting
+    /// restore the outer target exactly. Every bare `.member` statement or
+    /// expression resolves against `last()`, wherever in the AST it sits.
+    with_stack: Vec<WithValue>,
 }
 
 impl Vm {
@@ -507,6 +558,7 @@ impl Vm {
             merged_ranges: HashMap::new(),
             sheet_visibility: HashMap::new(),
             object_variables: HashMap::new(),
+            with_stack: Vec::new(),
         }
     }
 
@@ -619,6 +671,168 @@ impl Vm {
         }
     }
 
+    // ── Runtime With stack (see `WithValue`) ────────────────────────────────
+
+    /// Evaluates a `With` block's target once, on block entry.
+    fn eval_with_target(&mut self, target: &WithTarget) -> Result<WithValue, String> {
+        Ok(match target {
+            WithTarget::Object(obj) => match self.eval_object_expr(obj)? {
+                ObjectRef::Range(r) => WithValue::Range(r),
+                ObjectRef::Worksheet(key) => WithValue::Sheet(key),
+                ObjectRef::Workbook | ObjectRef::Nothing => WithValue::Unmodeled,
+            },
+            WithTarget::Cells(row, col) => {
+                let r = to_cell_index(self.eval_expr(row)?, "row")?;
+                let c = to_cell_index(self.eval_expr(col)?, "col")?;
+                WithValue::Range(RangeRef::single(
+                    self.active_sheet.clone(),
+                    Rect { start_row: r, start_col: c, end_row: r, end_col: c },
+                ))
+            }
+            // A bare identifier: the parser can't know its type, so decide
+            // here. An object variable wins over a same-named record, the
+            // same precedence `Stmt::RecordSet`/`Expr::RecordGet` already
+            // use. A name that is neither is left Unmodeled (a no-op body)
+            // rather than erroring — the pre-existing behavior for a
+            // `With <unknown>` target.
+            WithTarget::Var(name) => match self.object_variables.get(name) {
+                Some(ObjectRef::Range(r)) => WithValue::Range(r.clone()),
+                Some(ObjectRef::Worksheet(key)) => WithValue::Sheet(key.clone()),
+                Some(ObjectRef::Nothing) => return Err(OBJECT_NOT_SET.to_string()),
+                Some(ObjectRef::Workbook) => WithValue::Unmodeled,
+                None => WithValue::Record(name.clone()),
+            },
+            WithTarget::Unmodeled => WithValue::Unmodeled,
+        })
+    }
+
+    /// Runs a `With` body with `value` pushed as the innermost target.
+    ///
+    /// The pop happens on *every* exit path — normal completion, an early
+    /// `Exit Sub`/`Exit For`, and a runtime error (which is why the error is
+    /// held and returned after popping rather than propagated with `?`).
+    /// Leaking an entry here would silently mis-resolve whatever `.member`
+    /// ran next, which is exactly the kind of bug a stack invites.
+    fn run_with_body(&mut self, value: WithValue, body: &[SpannedStmt]) -> Result<(), String> {
+        self.with_stack.push(value);
+        let mut result = Ok(());
+        for s in body {
+            result = self.exec_stmt(s);
+            if result.is_err() || self.exit_flag.is_some() { break; }
+        }
+        self.with_stack.pop();
+        result
+    }
+
+    /// The innermost active `With` target, or the error real VBA's own
+    /// error-91 text describes ("… or With block variable not set") when a
+    /// bare `.member` appears with no enclosing `With` at all. Before the
+    /// runtime stack existed this was a *parse* error; it stays an error,
+    /// just a runtime one, since a bare `.member` can now appear anywhere a
+    /// statement or expression can.
+    fn current_with(&self) -> Result<WithValue, String> {
+        self.with_stack.last().cloned().ok_or_else(|| OBJECT_NOT_SET.to_string())
+    }
+
+    /// Resolves a `.Cells(r, c)` / `.Range("addr")` qualifier inside a With
+    /// body to the `(sheet_key, row, col)` it addresses.
+    ///
+    /// For a Worksheet target these are that sheet's own cells — the fix
+    /// for `With ws` + `.Cells(i, 1)`, which used to silently write to the
+    /// *active* sheet instead. For a Range target they keep their
+    /// pre-existing meaning (an independent reference on the active sheet,
+    /// pinned by `with_range_nested_range_reference_still_works`); real
+    /// VBA's `Range.Range`/`Range.Cells` are relative to the base range's
+    /// top-left, which elixcee does not model — see this project's
+    /// disclosure list.
+    fn resolve_with_qualified_cell(
+        &mut self,
+        member: &WithMember,
+    ) -> Result<Option<(String, u32, u32)>, String> {
+        let sheet = match self.current_with()? {
+            WithValue::Sheet(key) => key,
+            // Every non-Worksheet target keeps the pre-existing behavior: a
+            // `.Cells(...)`/`.Range(...)` qualifier inside a With body was
+            // always an independent, absolute reference on the active sheet
+            // (that's what the parse-time rewrite emitted for it, whatever
+            // the target was). Notably that includes `With Sheet1`, where
+            // `Sheet1` is a worksheet *code name* elixcee doesn't model —
+            // the active sheet is the closest available reading.
+            WithValue::Range(_) | WithValue::Record(_) | WithValue::Unmodeled => {
+                self.active_sheet.clone()
+            }
+        };
+        Ok(match member {
+            WithMember::Cells { row, col, .. } => {
+                let r = to_cell_index(self.eval_expr(row)?, "row")?;
+                let c = to_cell_index(self.eval_expr(col)?, "col")?;
+                Some((sheet, r, c))
+            }
+            WithMember::Range { addr, .. } => {
+                let ((r, c), _) = parse_range_addr(addr)
+                    .ok_or_else(|| format!("Invalid range address '{}'", addr))?;
+                Some((sheet, r, c))
+            }
+            WithMember::Fields(_) => None,
+        })
+    }
+
+    /// `.member = value` inside a With body.
+    fn write_with_member(&mut self, member: &WithMember, v: Variant) -> Result<(), String> {
+        if !matches!(member, WithMember::Fields(_)) {
+            let is_formula = matches!(member,
+                WithMember::Cells { fields, .. } | WithMember::Range { fields, .. }
+                    if fields.last().map(String::as_str) == Some("formula"));
+            if let Some((sheet, r, c)) = self.resolve_with_qualified_cell(member)? {
+                let target = RangeRef::single(
+                    sheet,
+                    Rect { start_row: r, start_col: c, end_row: r, end_col: c },
+                );
+                self.write_range_ref_value(&target, is_formula, &v)?;
+            }
+            return Ok(());
+        }
+        let WithMember::Fields(fields) = member else { unreachable!("guarded above") };
+        match self.current_with()? {
+            WithValue::Range(r) => {
+                let f = fields.first().map(String::as_str).unwrap_or("");
+                if f == "value" || f == "formula" {
+                    self.write_range_ref_value(&r, f == "formula", &v)?;
+                }
+                // Any other property write on a Range is a harmless no-op,
+                // same leniency `Stmt::RecordSet`'s object-variable path has.
+            }
+            // A worksheet property write (`.Name = "x"`, …) isn't modeled.
+            WithValue::Sheet(_) | WithValue::Unmodeled => {}
+            WithValue::Record(var) => {
+                // `.a = 1` / `.a.b = 1` on a UDT target — the same
+                // `nested_set` path `Stmt::RecordSetNested` uses, which also
+                // covers the single-field case.
+                let target = self.variables.entry(var)
+                    .or_insert_with(|| Variant::Record(HashMap::new()));
+                nested_set(target, fields, v);
+            }
+        }
+        Ok(())
+    }
+
+    /// Rejects a member access through an object variable that holds no live
+    /// reference (`Dim r As Range` with no `Set`, or an explicit `Set r =
+    /// Nothing`) with real VBA's own error-91 wording.
+    ///
+    /// Deliberately checks only for a registered `ObjectRef::Nothing`, never
+    /// for *absence* from `object_variables`: a name that isn't an object
+    /// variable at all is an ordinary scalar/UDT name, and `p.field = 1` on
+    /// one of those must keep its pre-existing behavior (auto-create the
+    /// record), not start erroring. That is the whole difference between
+    /// "declared object variable, unset" and "not an object variable".
+    fn require_live_object(&self, var: &str) -> Result<(), String> {
+        if matches!(self.object_variables.get(var), Some(ObjectRef::Nothing)) {
+            return Err(OBJECT_NOT_SET.to_string());
+        }
+        Ok(())
+    }
+
     /// Resolves a sheet-identifying `Expr` — a string name, a 1-based
     /// numeric index, or a `Workbooks(...).Worksheets(...)` qualifier — to
     /// `(key, display)`: the lowercase key used to index `self.sheets`, and
@@ -660,6 +874,7 @@ impl Vm {
                 Some(ObjectRef::Range(_)) => {
                     Err(format!("'{}' is a Range object, not a Worksheet", name))
                 }
+                Some(ObjectRef::Nothing) => Err(OBJECT_NOT_SET.to_string()),
                 None => Err(format!("'{}' is Nothing — Set was never called", name)),
             };
         }
@@ -1711,6 +1926,23 @@ impl Vm {
                         self.check_deadline()?;
                         let v = self.get_cell(r, c);
                         self.variables.insert(var.clone(), v);
+                        // `For Each c In Range(...)` binds `c` to a real
+                        // single-cell Range *object*, not just the cell's
+                        // value — so `c.Value` reads that cell (it used to
+                        // fall through to the UDT path and silently yield
+                        // Empty) and a `Dim c As Range` loop variable stops
+                        // reading as the never-Set Nothing its declaration
+                        // registered. The plain value stays in `variables`
+                        // too, so a bare `c` in an arithmetic context keeps
+                        // working exactly as before (VBA's own default-
+                        // property behavior).
+                        self.object_variables.insert(
+                            var.clone(),
+                            ObjectRef::Range(RangeRef::single(
+                                self.active_sheet.clone(),
+                                Rect { start_row: r, start_col: c, end_row: r, end_col: c },
+                            )),
+                        );
                         for s in body {
                             self.exec_stmt(s)?;
                             if matches!(self.exit_flag, Some(ExitKind::For)) { self.exit_flag = None; break 'fe_outer; }
@@ -1928,6 +2160,7 @@ impl Vm {
                 }
             }
             Stmt::RangeObjectCopy { var, dst } => {
+                self.require_live_object(var)?;
                 let obj = self.object_variables.get(var).cloned()
                     .ok_or_else(|| format!("'{}' is Nothing — Set was never called", var))?;
                 let r = expect_range_ref(obj, "Copy")?;
@@ -1957,6 +2190,18 @@ impl Vm {
                         }
                         "thisworkbook" | "activeworkbook" => {
                             self.object_variables.insert(var.clone(), ObjectRef::Workbook);
+                            return Ok(());
+                        }
+                        // `Set r = Nothing` clears ONLY this variable's own
+                        // reference. Any variable previously assigned *from*
+                        // it (`Set r2 = r`) keeps pointing at the real object
+                        // — `ObjectRef` is copied by value into each
+                        // variable's own slot, so there is no shared cell to
+                        // clear. Matched here by name, ahead of the generic
+                        // "not a live object variable" no-op below, which is
+                        // where this used to land (silently doing nothing).
+                        "nothing" => {
+                            self.object_variables.insert(var.clone(), ObjectRef::Nothing);
                             return Ok(());
                         }
                         _ => {}
@@ -2058,14 +2303,20 @@ impl Vm {
                 self.check_strict_sheet_exists(sheet_name, &sheet_name.to_lowercase())?;
                 let prev = self.active_sheet.clone();
                 if !self.strict_resolution { self.ensure_sheet(sheet_name); }
-                self.active_sheet = sheet_name.to_lowercase();
+                let key = sheet_name.to_lowercase();
+                self.active_sheet = key.clone();
                 self.cell_index_dirty = true;
-                for s in body.clone() {
-                    self.exec_stmt(&s)?;
-                    if self.exit_flag.is_some() { break; }
-                }
+                // Pushes onto the runtime With stack *as well as* swapping
+                // the active sheet: the swap is what makes an ordinary
+                // `Range(...)`/`Cells(...)` statement in the body land on
+                // this sheet, the stack entry is what makes a bare
+                // `.member` resolve against it (bare `.member` is no longer
+                // rewritten at parse time, so without this push it would
+                // find an empty stack).
+                let result = self.run_with_body(WithValue::Sheet(key), body);
                 self.active_sheet = prev;
                 self.cell_index_dirty = true;
+                result?;
             }
             Stmt::SheetsAdd => {
                 let new_name = format!("sheet{}", self.sheets.len() + 1);
@@ -2144,8 +2395,15 @@ impl Vm {
                     arr[idx] = v;
                 }
             }
-            Stmt::With { body } => {
-                for s in body { self.exec_stmt(s)?; if self.exit_flag.is_some() { return Ok(()); } }
+            Stmt::With { target, body } => {
+                // Resolve the target ONCE, here, on block entry — not per
+                // `.member` access and not at parse time.
+                let value = self.eval_with_target(target)?;
+                self.run_with_body(value, body)?;
+            }
+            Stmt::WithDot { member, value } => {
+                let v = self.eval_expr(value)?;
+                self.write_with_member(member, v)?;
             }
             Stmt::MsgBox { message } => {
                 let msg = self.eval_expr(message)?;
@@ -2160,8 +2418,19 @@ impl Vm {
                 if let Some(fields) = self.type_defs.get(type_name).cloned() {
                     let record = make_record_default(&fields, &self.type_defs);
                     self.variables.insert(var.clone(), record);
+                } else if matches!(type_name.as_str(), "range" | "worksheet" | "workbook") {
+                    // `Dim r As Range` declares an *object* variable holding
+                    // no reference yet — real VBA's `r Is Nothing` is True
+                    // here, and any member access through it raises error 91
+                    // until a `Set` gives it one. Registering it (rather than
+                    // the previous silent no-op) is what makes both of those
+                    // observable. Guarded on there being no user-defined
+                    // `Type` of the same name, so a `Type Range ... End Type`
+                    // module still wins — VBA's own name resolution prefers
+                    // the user type too.
+                    self.object_variables.entry(var.clone()).or_insert(ObjectRef::Nothing);
                 }
-                // Unknown type name → no-op (built-in type)
+                // Any other unknown type name → no-op (built-in type)
             }
             Stmt::DimArrayRecord { name, sizes, type_name } => {
                 let upper = to_f64(&self.eval_expr(&sizes[0])?)? as usize;
@@ -2202,10 +2471,6 @@ impl Vm {
                     }
                 }
             }
-            Stmt::WithRecord { body, .. } => {
-                // Parser already substituted the variable name into each statement.
-                for s in body { self.exec_stmt(s)?; if self.exit_flag.is_some() { return Ok(()); } }
-            }
             Stmt::RecordSet { var, field, value } => {
                 // `<var>.Value = ...` / `<var>.Formula = ...` where `var`
                 // is a `Set`-assigned object variable (Milestone B7c) —
@@ -2216,6 +2481,7 @@ impl Vm {
                 // only ever populated by `Set`, so this can't misfire
                 // against a genuine `Type`-based record that happens to
                 // have a field literally named "value"/"formula".
+                self.require_live_object(var)?;
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
                     if field == "value" || field == "formula" {
                         let v = self.eval_expr(value)?;
@@ -2282,7 +2548,15 @@ impl Vm {
                     "vbcancel" => Variant::Integer(2),
                     "vbyes"    => Variant::Integer(6),
                     "vbno"     => Variant::Integer(7),
-                    "empty" | "null" | "nothing" => return Ok(Variant::Empty),
+                    // `Null` is its own value, not Empty: "no valid data"
+                    // versus "uninitialized". Folding the two together (as
+                    // this line used to) made every documented Null rule
+                    // unobservable. `Nothing` stays Empty — it's the null
+                    // *object* reference, and object state lives in
+                    // `object_variables`, not in a `Variant` (see
+                    // `Expr::IsNothing`).
+                    "null" => return Ok(Variant::Null),
+                    "empty" | "nothing" => return Ok(Variant::Empty),
                     // Real VBA allows omitting `()` on these three zero-arg
                     // functions (`Date`, not just `Date()`) — every other
                     // `eval_vba_func` entry needs at least one argument, so
@@ -2297,6 +2571,9 @@ impl Vm {
             Expr::UnaryMinus(inner) => match self.eval_expr(inner)? {
                 Variant::Integer(n) => Ok(Variant::Integer(-n)),
                 Variant::Float(f)   => Ok(Variant::Float(-f)),
+                // Same documented rule as binary `-`: "If one or both
+                // expressions are Null expressions, result is Null."
+                Variant::Null       => Ok(Variant::Null),
                 other => Err(format!("Unary minus on non-numeric: {}", other)),
             },
             Expr::UnaryNot(inner) => {
@@ -2308,6 +2585,9 @@ impl Vm {
                 let v = self.eval_expr(inner)?;
                 match v {
                     Variant::Boolean(b) => Ok(Variant::Boolean(!b)),
+                    // Documented on the Not operator page: `Not Null` is
+                    // Null — the third row of its own truth table.
+                    Variant::Null => Ok(Variant::Null),
                     other => Ok(Variant::Integer(!to_i64_bitwise(&other)?)),
                 }
             }
@@ -2445,11 +2725,52 @@ impl Vm {
                 };
                 Ok(Variant::Integer(result as i64))
             }
+            // A bare `.member` read — e.g. the right-hand side of
+            // `.Value = .Value + 1`. Resolved against the innermost active
+            // With target, at whatever depth in the AST it appears.
+            Expr::WithDot(fields) => match self.current_with()? {
+                WithValue::Range(r) => {
+                    if fields.first().map(String::as_str) == Some("value") {
+                        self.read_range_ref_value(&r)
+                    } else {
+                        Ok(Variant::Empty)
+                    }
+                }
+                WithValue::Record(var) => {
+                    let mut cur = self.variables.get(&var).cloned().unwrap_or(Variant::Empty);
+                    for f in fields {
+                        cur = match cur {
+                            Variant::Record(m) => m.get(f).cloned().unwrap_or(Variant::Empty),
+                            _ => Variant::Empty,
+                        };
+                    }
+                    Ok(cur)
+                }
+                // Worksheet/unmodeled property reads aren't modeled — the
+                // same `Empty` an unmodeled `<var>.<field>` read already
+                // gives, rather than a new error condition.
+                WithValue::Sheet(_) | WithValue::Unmodeled => Ok(Variant::Empty),
+            },
+            Expr::IsNothing(name) => {
+                // True for a declared-but-unset object variable and for one
+                // explicitly `Set` to Nothing — real VBA can't tell those
+                // apart either. A name absent from `object_variables`
+                // entirely is reported as Nothing too: in real VBA a
+                // non-object operand here is a compile-time type error, and
+                // "no live object reference" is the closest true answer
+                // elixcee can give without inventing a type error the rest
+                // of the VM has no way to raise.
+                Ok(Variant::Boolean(!matches!(
+                    self.object_variables.get(name),
+                    Some(ObjectRef::Range(_)) | Some(ObjectRef::Worksheet(_)) | Some(ObjectRef::Workbook)
+                )))
+            }
             Expr::RecordGet { var, field } => {
                 // `x = <var>.Value` where `var` is a `Set`-assigned object
                 // variable (Milestone B7c) — see `Stmt::RecordSet`'s
                 // matching write-side comment for why this is safe to
                 // disambiguate purely by which namespace holds `var`.
+                self.require_live_object(var)?;
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
                     return if field == "value" {
                         self.read_range_ref_value(&r)
@@ -2465,6 +2786,7 @@ impl Vm {
             Expr::RecordGetNested { var, fields } => {
                 // `x = <var>.Areas.Count` (Milestone B7c item 3) — same
                 // object-variable disambiguation as above.
+                self.require_live_object(var)?;
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
                     return if fields.len() == 2 && fields[0] == "areas" && fields[1] == "count" {
                         Ok(Variant::Integer(r.areas.len() as i64))
@@ -2649,9 +2971,12 @@ impl Vm {
                 let f = to_f64(vals.first().ok_or("Sqr requires 1 argument")?)?;
                 Ok(Variant::Float(f.sqrt()))
             }
-            "isnull" | "isempty" => {
-                Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Empty) | None)))
-            }
+            // Genuinely different questions, so no longer one shared arm:
+            // IsNull asks "is this the Null value", IsEmpty asks "is this an
+            // uninitialized Variant". IsNull(Empty) and IsEmpty(Null) are
+            // both False in real VBA.
+            "isnull"  => Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Null)))),
+            "isempty" => Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Empty) | None))),
             "isnumeric" => {
                 // Real VBA's IsNumeric also accepts a string that parses as
                 // a number (`IsNumeric("123")` is True) and Empty (an
@@ -2764,6 +3089,7 @@ impl Vm {
                     Variant::Error(_)   => "Error",
                     Variant::Array(_)   => "Variant()",
                     Variant::Empty      => "Empty",
+                    Variant::Null       => "Null",
                     Variant::Record(_)  => "Object",
                 };
                 Ok(Variant::Str(name.into()))
@@ -2771,6 +3097,7 @@ impl Vm {
             "vartype" => {
                 let n: i64 = match vals.first().ok_or("VarType requires 1 argument")? {
                     Variant::Empty      => 0,
+                    Variant::Null       => 1,  // vbNull
                     Variant::Integer(_) => 3,  // vbLong
                     Variant::Float(_)   => 5,  // vbDouble
                     Variant::Str(_)     => 8,  // vbString
@@ -2783,6 +3110,11 @@ impl Vm {
                 Ok(Variant::Integer(n))
             }
             // ── Array functions ──────────────────────────────────────────────
+            // `Array(a, b, c)` builds a zero-based Variant array from its
+            // arguments — exactly `Variant::Array`'s own shape (elixcee's
+            // arrays are 0-indexed), so this needs no conversion. `Array()`
+            // with no arguments is a legal empty array.
+            "array" => Ok(Variant::Array(vals.to_vec())),
             "split" => {
                 if vals.is_empty() { return Err("Split requires at least 1 argument".into()); }
                 let s = vba_to_str(&vals[0]);
@@ -3141,7 +3473,10 @@ fn vba_to_str(v: &Variant) -> String {
         Variant::Boolean(b) => if *b { "True".into() } else { "False".into() },
         Variant::Date(s)    => serial_to_display(*s),
         Variant::Error(e)   => e.as_str().to_string(),
-        Variant::Empty      => String::new(),
+        // "Any expression that is Empty is also treated as a zero-length
+        // string"; a lone Null concatenates the same way (the both-Null
+        // case is decided earlier, in `null_rule`).
+        Variant::Empty | Variant::Null => String::new(),
         Variant::Array(a)   => a.iter().map(vba_to_str).collect::<Vec<_>>().join(", "),
         Variant::Record(_)  => "[Record]".into(),
     }
@@ -3368,6 +3703,12 @@ fn to_f64(v: &Variant) -> Result<f64, String> {
         Variant::Date(s)    => Ok(*s as f64),
         Variant::Error(e)   => Err(e.to_string()),
         Variant::Empty      => Ok(0.0),
+        // Real VBA error 94. Unlike Empty (documented as 0 in a numeric
+        // context), Null has no numeric value at all. Every documented
+        // Null-propagating operator short-circuits before reaching here, so
+        // this only fires where a Null genuinely can't propagate (e.g. a
+        // function argument that must be a number).
+        Variant::Null       => Err("Invalid use of Null".into()),
         Variant::Str(s)     => s.parse::<f64>().map_err(|_| format!("Cannot convert '{}' to number", s)),
         Variant::Array(_)   => Err("Cannot convert array to number".into()),
         Variant::Record(_)  => Err("Cannot convert record to number".into()),
@@ -3396,6 +3737,10 @@ fn is_truthy(v: &Variant) -> bool {
         Variant::Date(_)    => true,
         Variant::Error(_)   => false,
         Variant::Empty      => false,
+        // Documented on the If...Then...Else statement page: "If condition
+        // is Null, condition is treated as False." Not an error — this is
+        // the one place VBA gives Null a Boolean reading.
+        Variant::Null       => false,
         Variant::Array(a)   => !a.is_empty(),
         Variant::Record(_)  => true,
     }
@@ -3539,11 +3884,87 @@ fn to_i64_bitwise(v: &Variant) -> Result<i64, String> {
     }
 }
 
+/// Applies every documented Null rule for `op` before the ordinary
+/// coercion path ever sees the operands, returning `Some(result)` when Null
+/// decides the answer. All sourced from Microsoft's own VBA language
+/// reference, fetched live rather than recalled:
+///
+/// - `+`/`-` (and the rest of arithmetic): "If one or both expressions are
+///   Null expressions, result is Null."
+/// - `&`: "If both expressions are Null, result is Null. However, if only
+///   one expression is Null, that expression is treated as a zero-length
+///   string." — the one operator where a single Null does *not* propagate.
+/// - comparison operators: each of `<`, `<=`, `>`, `>=`, `=`, `<>` lists
+///   "Null if expression1 or expression2 = Null" as a third outcome
+///   alongside True/False.
+/// - `And`/`Or`/`Xor`/`Not`: three-valued truth tables in which Null does
+///   *not* uniformly propagate — `False And Null` is False and
+///   `True Or Null` is True, because those two answers are already
+///   determined without knowing the missing operand.
+///
+/// Returning `Option` rather than short-circuiting inside `eval_binop`'s own
+/// arms keeps each rule stated once, next to its citation, instead of spread
+/// across seven operator branches.
+fn null_rule(op: &VbaBinOp, l: &Variant, r: &Variant) -> Option<Variant> {
+    let l_null = matches!(l, Variant::Null);
+    let r_null = matches!(r, Variant::Null);
+    if !l_null && !r_null { return None; }
+    match op {
+        VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div
+        | VbaBinOp::Pow | VbaBinOp::IntDiv | VbaBinOp::Mod
+        | VbaBinOp::Eq | VbaBinOp::Ne | VbaBinOp::Lt | VbaBinOp::Le
+        | VbaBinOp::Gt | VbaBinOp::Ge => Some(Variant::Null),
+        // Only both-Null concatenates to Null; a single Null is "".
+        VbaBinOp::Concat => {
+            if l_null && r_null { Some(Variant::Null) } else { None }
+        }
+        // `False And Null` -> False; `Null And False` -> False; everything
+        // else involving Null -> Null.
+        VbaBinOp::And => {
+            if matches!(l, Variant::Boolean(false)) || matches!(r, Variant::Boolean(false)) {
+                Some(Variant::Boolean(false))
+            } else {
+                Some(Variant::Null)
+            }
+        }
+        // `True Or Null` -> True; `Null Or True` -> True; everything else
+        // involving Null -> Null.
+        VbaBinOp::Or => {
+            if matches!(l, Variant::Boolean(true)) || matches!(r, Variant::Boolean(true)) {
+                Some(Variant::Boolean(true))
+            } else {
+                Some(Variant::Null)
+            }
+        }
+        // "However, if either expression is Null, result is also Null."
+        VbaBinOp::Xor => Some(Variant::Null),
+    }
+}
+
+/// `to_f64` for an *arithmetic operator's* operand: a string that can't
+/// convert to a number gets real VBA's own wording for that situation
+/// ("One expression is a numeric data type and the other is a String |
+/// A `Type mismatch` error occurs" — the + operator reference), instead of
+/// `to_f64`'s internal coercion-failure text.
+///
+/// Deliberately a wrapper rather than a change to `to_f64` itself: that
+/// helper has ~54 call sites across the VM (loop bounds, array indices,
+/// function arguments, …), each with its own correct real-VBA wording for
+/// its own failure, and only the arithmetic operators are documented to say
+/// "Type mismatch" here. Every other `to_f64` message is untouched.
+fn arith_to_f64(v: &Variant) -> Result<f64, String> {
+    match v {
+        Variant::Str(s) if s.parse::<f64>().is_err() => Err("Type mismatch".into()),
+        other => to_f64(other),
+    }
+}
+
 fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> {
+    if let Some(v) = null_rule(op, &l, &r) { return Ok(v); }
     match op {
         VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div | VbaBinOp::Pow => {
-            let lf = to_f64(&l)?;
-            let rf = to_f64(&r)?;
+            let lf = arith_to_f64(&l)?;
+            let rf = arith_to_f64(&r)?;
             let result = match op {
                 VbaBinOp::Add => lf + rf,
                 VbaBinOp::Sub => lf - rf,
@@ -3595,7 +4016,14 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
                 Ok(Variant::Integer(result))
             }
         }
-        VbaBinOp::Concat => Ok(Variant::Str(format!("{}{}", l, r))),
+        VbaBinOp::Concat => {
+            // A single Null operand is documented to concatenate as a
+            // zero-length string, exactly like Empty (the both-Null case
+            // already returned Null in `null_rule`).
+            let l = if matches!(l, Variant::Null) { Variant::Empty } else { l };
+            let r = if matches!(r, Variant::Null) { Variant::Empty } else { r };
+            Ok(Variant::Str(format!("{}{}", l, r)))
+        }
         VbaBinOp::Eq  => Ok(Variant::Boolean(vba_eq(&l, &r))),
         VbaBinOp::Ne  => Ok(Variant::Boolean(!vba_eq(&l, &r))),
         VbaBinOp::Lt  => Ok(Variant::Boolean(vba_cmp(&l, &r)? == std::cmp::Ordering::Less)),
@@ -4483,9 +4911,14 @@ mod tests {
     // ── Empty / Null / Nothing ────────────────────────────────────────────────
 
     #[test] fn test_empty_literal() {
+        // `Null` is no longer folded into `Empty` — they are genuinely
+        // different VBA values (see `Variant::Null`), which is what makes
+        // every documented Null-propagation rule expressible. `Nothing`
+        // stays Empty: it's the null *object* reference, tracked in
+        // `object_variables`, not a `Variant`.
         let vm = run("Sub MySub()\n    a = Empty\n    b = Null\n    c = Nothing\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Empty);
-        assert_eq!(vm.variables["b"], Variant::Empty);
+        assert_eq!(vm.variables["b"], Variant::Null);
         assert_eq!(vm.variables["c"], Variant::Empty);
     }
 
@@ -6914,5 +7347,335 @@ mod tests {
             "Sub MySub()\n    Sheets(\"Data\").Cells(1, 1).Value = 42\n    Set wb = ActiveWorkbook\n    x = wb.Sheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n",
         );
         assert_eq!(vm.variables["x"], Variant::Integer(42));
+    }
+
+    // ── ObjectRef::Nothing — unset / cleared object variables ───────────────
+
+    fn run_err(code: &str) -> String {
+        let prog = parser::parse(code).unwrap();
+        Vm::new().run_sub(&prog, "mysub").unwrap_err()
+    }
+
+    #[test]
+    fn dim_as_range_registers_an_unset_object_variable() {
+        let vm = run("Sub MySub()\n    Dim r As Range\nEnd Sub\n");
+        assert_eq!(vm.object_variables.get("r"), Some(&ObjectRef::Nothing));
+    }
+
+    #[test]
+    fn member_write_through_a_never_set_object_variable_raises_error_91() {
+        assert_eq!(
+            run_err("Sub MySub()\n    Dim r As Range\n    r.Value = 5\nEnd Sub\n"),
+            OBJECT_NOT_SET
+        );
+    }
+
+    #[test]
+    fn member_read_through_a_never_set_object_variable_raises_error_91() {
+        assert_eq!(
+            run_err("Sub MySub()\n    Dim r As Range\n    x = r.Value\nEnd Sub\n"),
+            OBJECT_NOT_SET
+        );
+    }
+
+    #[test]
+    fn set_nothing_clears_the_reference() {
+        assert_eq!(
+            run_err(
+                "Sub MySub()\n    Dim r As Range\n    Set r = Range(\"A1\")\n    \
+                 Set r = Nothing\n    r.Value = 5\nEnd Sub\n"
+            ),
+            OBJECT_NOT_SET
+        );
+    }
+
+    #[test]
+    fn set_nothing_clears_only_that_variable_not_an_alias() {
+        // The alias case: `Set r2 = r` copies the reference into r2's own
+        // slot, so clearing r afterwards must leave r2 fully live.
+        let vm = run(
+            "Sub MySub()\n    Range(\"B1\").Value = 42\n    Dim r As Range\n    \
+             Dim r2 As Range\n    Set r = Range(\"B1\")\n    Set r2 = r\n    \
+             Set r = Nothing\n    x = r2.Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.object_variables.get("r"), Some(&ObjectRef::Nothing));
+        assert!(matches!(vm.object_variables.get("r2"), Some(ObjectRef::Range(_))));
+        assert_eq!(vm.variables["x"], Variant::Integer(42));
+    }
+
+    #[test]
+    fn is_nothing_reflects_each_variables_own_state() {
+        let vm = run(
+            "Sub MySub()\n    Dim r As Range\n    Dim r2 As Range\n    \
+             a = (r Is Nothing)\n    Set r = Range(\"A1\")\n    b = (r Is Nothing)\n    \
+             Set r2 = r\n    Set r = Nothing\n    c = (r Is Nothing)\n    \
+             d = (r2 Is Nothing)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Boolean(false));
+        assert_eq!(vm.variables["c"], Variant::Boolean(true));
+        assert_eq!(vm.variables["d"], Variant::Boolean(false));
+    }
+
+    #[test]
+    fn a_scalar_variable_never_acquires_object_state() {
+        // Scalar (`x = 5`) and object (`Set r = ...`) assignment are
+        // genuinely different in VBA and live in different namespaces —
+        // Nothing-tracking must not leak into the scalar path.
+        let vm = run("Sub MySub()\n    Dim x As Long\n    x = 5\n    x = x + 1\nEnd Sub\n");
+        assert_eq!(vm.variables["x"], Variant::Integer(6));
+        assert!(!vm.object_variables.contains_key("x"));
+    }
+
+    #[test]
+    fn a_non_object_name_still_auto_creates_a_record_on_field_write() {
+        // Only a *registered* object variable may raise error 91. A name
+        // that isn't one at all keeps its pre-existing record behavior.
+        let vm = run("Sub MySub()\n    p.x = 3\n    y = p.x\nEnd Sub\n");
+        assert_eq!(vm.variables["y"], Variant::Integer(3));
+    }
+
+    // ── Runtime With stack ──────────────────────────────────────────────────
+    // With-target resolution is a runtime mechanism now, not a parse-time
+    // textual rewrite. These pin the properties only a real runtime stack
+    // has: a computed target, resolution at arbitrary AST depth, evaluate-
+    // once-on-entry, and push/pop discipline that survives early exits.
+
+    #[test]
+    fn with_computed_cells_target_resolves_at_runtime() {
+        let vm = run(
+            "Sub MySub()\n    r = 2\n    c = 3\n    With Cells(r, c)\n        .Value = 42\n    \
+             End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(42));
+    }
+
+    #[test]
+    fn with_target_is_evaluated_once_on_block_entry() {
+        // Reassigning the index variable inside the body must not retarget
+        // the block — the object expression is evaluated once, on entry.
+        let vm = run(
+            "Sub MySub()\n    i = 1\n    With Cells(i, 1)\n        i = 5\n        .Value = 3\n    \
+             End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(5, 1), Variant::Empty);
+    }
+
+    #[test]
+    fn bare_dot_member_resolves_inside_nested_block_constructs() {
+        let vm = run(
+            "Sub MySub()\n    With Range(\"A1\")\n        For i = 1 To 2\n            \
+             If i = 2 Then\n                .Value = 4\n            End If\n        Next i\n    \
+             End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
+    }
+
+    #[test]
+    fn with_object_variable_target_resolves_against_its_reference() {
+        let vm = run(
+            "Sub MySub()\n    Dim rng As Range\n    Set rng = Range(\"C3\")\n    With rng\n        \
+             .Value = 5\n    End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(5));
+    }
+
+    #[test]
+    fn with_worksheet_variable_target_qualifies_cells_to_that_sheet() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Data\").Range(\"A1\").Value = 0\n    \
+             Set ws = ActiveSheet\n    Sheets(\"Data\").Select\n    With ws\n        \
+             .Cells(1, 1).Value = 42\n    End With\nEnd Sub\n",
+        );
+        // `ws` captured Sheet1 (the active sheet at Set time), so the write
+        // lands there regardless of anything else.
+        assert_eq!(vm.get_sheet_cells("sheet1").and_then(|s| s.get(&(1, 1))).map(|c| c.value.clone()),
+                   Some(Variant::Integer(42)));
+    }
+
+    #[test]
+    fn three_levels_of_nested_with_restore_each_outer_target() {
+        let vm = run(
+            "Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n        \
+             With Range(\"B1\")\n            .Value = 2\n            With Range(\"C1\")\n                \
+             .Value = 3\n            End With\n            .Value = .Value + 20\n        End With\n        \
+             .Value = .Value + 10\n    End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(11));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(22));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(3));
+    }
+
+    #[test]
+    fn the_with_stack_is_empty_again_after_a_block_completes() {
+        let vm = run("Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n    End With\nEnd Sub\n");
+        assert!(vm.with_stack.is_empty());
+    }
+
+    #[test]
+    fn the_with_stack_does_not_leak_after_an_exit_sub_inside_a_with_body() {
+        // The pop must happen on the early-exit path too — a leaked entry
+        // would silently mis-resolve whatever `.member` ran next.
+        let vm = run(
+            "Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n        Exit Sub\n    \
+             End With\nEnd Sub\n",
+        );
+        assert!(vm.with_stack.is_empty());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+    }
+
+    #[test]
+    fn the_with_stack_does_not_leak_after_a_runtime_error_inside_a_with_body() {
+        let prog = parser::parse(
+            "Sub MySub()\n    With Range(\"A1\")\n        .Value = 1 / 0\n    End With\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        assert!(vm.run_sub(&prog, "mysub").is_err());
+        assert!(vm.with_stack.is_empty());
+    }
+
+    #[test]
+    fn a_bare_dot_member_with_no_enclosing_with_block_is_a_runtime_error() {
+        // It used to be a *parse* error; a bare `.member` is now a general
+        // statement form, so the "no target" case moves to runtime rather
+        // than disappearing.
+        assert_eq!(
+            run_err("Sub MySub()\n    .Value = 1\nEnd Sub\n"),
+            OBJECT_NOT_SET
+        );
+    }
+
+    #[test]
+    fn a_with_block_over_an_unset_object_variable_raises_error_91() {
+        assert_eq!(
+            run_err("Sub MySub()\n    Dim r As Range\n    With r\n        .Value = 1\n    End With\nEnd Sub\n"),
+            OBJECT_NOT_SET
+        );
+    }
+
+    // ── Variant::Null — VBA's "no valid data" value ─────────────────────────
+    // Every expectation below is the documented rule from Microsoft's own VBA
+    // language reference (the +, -, &, comparison, And/Or/Xor/Not operator
+    // pages and the If...Then...Else statement page), not elixcee's prior
+    // behavior — which folded Null into Empty and so got all of them wrong.
+
+    #[test]
+    fn null_is_distinct_from_empty() {
+        let vm = run(
+            "Sub MySub()\n    Dim e\n    n = Null\n    a = IsNull(n)\n    b = IsEmpty(n)\n    \
+             c = IsNull(e)\n    d = IsEmpty(e)\n    t = TypeName(n)\n    v = VarType(n)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Boolean(false));
+        assert_eq!(vm.variables["c"], Variant::Boolean(false));
+        assert_eq!(vm.variables["d"], Variant::Boolean(true));
+        assert_eq!(vm.variables["t"], Variant::Str("Null".into()));
+        assert_eq!(vm.variables["v"], Variant::Integer(1)); // vbNull
+    }
+
+    #[test]
+    fn arithmetic_propagates_null_from_either_side() {
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    a = n + 5\n    b = 5 + n\n    c = n - 1\n    \
+             d = n * 3\n    e = 2 + 3\nEnd Sub\n",
+        );
+        for k in ["a", "b", "c", "d"] {
+            assert_eq!(vm.variables[k], Variant::Null, "{} should be Null", k);
+        }
+        // Ordinary arithmetic is untouched.
+        assert_eq!(vm.variables["e"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn concat_propagates_null_only_when_both_sides_are_null() {
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    a = n & \"x\"\n    b = \"x\" & n\n    \
+             c = n & n\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Str("x".into()));
+        assert_eq!(vm.variables["b"], Variant::Str("x".into()));
+        assert_eq!(vm.variables["c"], Variant::Null);
+    }
+
+    #[test]
+    fn every_comparison_operator_propagates_null() {
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    a = (5 < n)\n    b = (5 <= n)\n    c = (5 > n)\n    \
+             d = (5 >= n)\n    e = (5 = n)\n    f = (5 <> n)\n    g = (n = n)\n    \
+             h = (3 < 5)\nEnd Sub\n",
+        );
+        for k in ["a", "b", "c", "d", "e", "f", "g"] {
+            assert_eq!(vm.variables[k], Variant::Null, "{} should be Null", k);
+        }
+        // Ordinary comparison is untouched.
+        assert_eq!(vm.variables["h"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn logical_operators_follow_the_documented_three_valued_tables() {
+        // The two rows where Null does NOT propagate — the answer is already
+        // determined without the missing operand.
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    a = (False And n)\n    b = (True And n)\n    \
+             c = (True Or n)\n    d = (False Or n)\n    e = (True Xor n)\n    \
+             f = (Not n)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Boolean(false));
+        assert_eq!(vm.variables["b"], Variant::Null);
+        assert_eq!(vm.variables["c"], Variant::Boolean(true));
+        assert_eq!(vm.variables["d"], Variant::Null);
+        assert_eq!(vm.variables["e"], Variant::Null);
+        assert_eq!(vm.variables["f"], Variant::Null);
+    }
+
+    #[test]
+    fn a_null_condition_is_treated_as_false_not_an_error() {
+        // Documented on the If...Then...Else page: "If condition is Null,
+        // condition is treated as False."
+        let vm = run(
+            "Sub MySub()\n    n = Null\n    taken = 0\n    If n Then\n        taken = 1\n    \
+             Else\n        taken = 2\n    End If\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["taken"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn a_null_reaching_a_genuinely_numeric_context_raises_error_94() {
+        assert_eq!(
+            run_err("Sub MySub()\n    n = Null\n    x = Abs(n)\nEnd Sub\n"),
+            "Invalid use of Null"
+        );
+    }
+
+    #[test]
+    fn a_non_numeric_string_operand_of_an_arithmetic_operator_is_a_type_mismatch() {
+        // Documented on the + operator page: "One expression is a numeric
+        // data type and the other is a String | A `Type mismatch` error
+        // occurs." Scoped to the arithmetic operators — `to_f64`'s own
+        // message, and its ~53 other call sites, are unchanged.
+        assert_eq!(
+            run_err("Sub MySub()\n    Dim v1, v2\n    v1 = \"abc\"\n    v2 = 3\n    x = v1 + v2\nEnd Sub\n"),
+            "Type mismatch"
+        );
+    }
+
+    #[test]
+    fn a_numeric_looking_string_still_adds_rather_than_type_mismatching() {
+        // The complement of the test above: `arith_to_f64` must only fire on
+        // a string that genuinely can't convert.
+        let vm = run("Sub MySub()\n    Dim v1, v2\n    v1 = \"34\"\n    v2 = 6\n    x = v1 + v2\nEnd Sub\n");
+        assert_eq!(vm.variables["x"], Variant::Integer(40));
+    }
+
+    #[test]
+    fn for_each_binds_the_loop_variable_as_a_live_single_cell_range() {
+        let vm = run(
+            "Sub MySub()\n    Range(\"A1\").Value = 4\n    Range(\"A2\").Value = 6\n    \
+             Dim c As Range\n    t = 0\n    For Each c In Range(\"A1:A2\")\n        \
+             t = t + c.Value\n    Next c\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["t"], Variant::Integer(10));
     }
 }

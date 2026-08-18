@@ -597,24 +597,74 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
 
 // ── object_nothing_access ────────────────────────────────────────────────────
 // Real VBA: accessing a member of an unset (Nothing) object variable raises "Object
-// variable or With block variable not set" (error 91). elixcee's actual behavior is a
-// real, previously-undisclosed gap. (A third natural case here, `r Is Nothing`, needs the
-// `Is` operator, which doesn't parse in elixcee at all -- a categorically different,
-// parser-level gap already tracked in ROADMAP.md; not forced into this suite's per-value
-// schema, which assumes the scenario at least parses.)
+// variable or With block variable not set" (error 91). The first two cases below were
+// disclosed KNOWN_LIMITATIONs when this category was written; both are FIXED now (the VM
+// grew a real ObjectRef::Nothing state, `Dim r As Range` registers it, `Set r = Nothing`
+// assigns it, and every member-access path checks it -- see src/vm/mod.rs's
+// `require_live_object`), so their knownLimitation annotations are gone rather than
+// weakened. The `Is` operator now parses for the `Is Nothing` shape specifically, which
+// is what makes the state-observing cases below expressible at all.
 {
   const CAT = 'object_nothing_access';
   addCase('unset_range_variable_member_write_noop', CAT, 'Writing through a never-Set Range variable',
     '  Dim r As Range\n  r.Value = 5',
     { error: 'Object variable or With block variable not set' },
-    'Real VBA raises this error for any member access through an object variable that was never Set — a Dim As Range/Object alone only declares the variable, it does not assign a live reference.',
-    'elixcee silently no-ops instead of raising the error (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed. Same root cause as set_nothing_does_not_clear_reference below: elixcee has no concept of an unset/Nothing object-variable state that member access can check against.');
+    'Real VBA raises this error for any member access through an object variable that was never Set — a Dim As Range/Object alone only declares the variable, it does not assign a live reference. (Fixed this round: elixcee used to silently no-op here.)');
   addCase('set_nothing_does_not_clear_reference', CAT,
-    'Set r = Nothing does not actually clear the reference',
+    'Set r = Nothing actually clears the reference',
     '  Dim r As Range\n  Set r = Range("A1")\n  Set r = Nothing\n  r.Value = 5',
     { error: 'Object variable or With block variable not set' },
-    'Real VBA: after Set r = Nothing, r no longer refers to Range("A1") -- writing through it raises this error, same as the never-Set case above.',
-    'elixcee\'s Set r = Nothing silently no-ops (Nothing isn\'t recognized as a valid Set target), so r still refers to its previous Range("A1") assignment -- confirmed live: this scenario succeeds and writes 5 to A1 instead of erroring. Found while building this suite.');
+    'Real VBA: after Set r = Nothing, r no longer refers to Range("A1") -- writing through it raises this error, same as the never-Set case above. (Fixed this round: elixcee\'s Set r = Nothing used to silently no-op, leaving the previous reference live.)');
+  addCase('unset_range_variable_member_read_errors', CAT,
+    'Reading through a never-Set Range variable also raises error 91',
+    '  Dim r As Range\n  x = r.Value\n  Range("A1").Value = x',
+    { error: 'Object variable or With block variable not set' },
+    'Error 91 is raised by *any* member access through an object variable holding no reference, not only by a write -- the read path must check the same state as the write path.');
+  addCase('unset_range_variable_is_nothing_is_true', CAT,
+    'A declared-but-never-Set Range variable Is Nothing',
+    '  Dim r As Range\n  Range("A1").Value = (r Is Nothing)',
+    { value: true },
+    'A Dim As Range declaration creates the variable but assigns no reference, so it holds the null object reference -- `r Is Nothing` is True until a Set gives it one.');
+  addCase('set_range_variable_is_not_nothing', CAT,
+    'A Set object variable is not Nothing',
+    '  Dim r As Range\n  Set r = Range("A1")\n  Range("A1").Value = (r Is Nothing)',
+    { value: false },
+    'Once Set assigns a live Range reference, `r Is Nothing` is False -- the complement of unset_range_variable_is_nothing_is_true, proving the state actually changes rather than being a constant.');
+  addCase('set_nothing_makes_is_nothing_true_again', CAT,
+    'Set r = Nothing makes Is Nothing True again',
+    '  Dim r As Range\n  Set r = Range("B1")\n  Set r = Nothing\n  Range("A1").Value = (r Is Nothing)',
+    { value: true },
+    'Set r = Nothing assigns the null object reference, returning the variable to exactly the state a never-Set declaration leaves it in -- real VBA cannot distinguish the two either.');
+  addCase('set_nothing_does_not_clear_an_alias', CAT,
+    'Set r = Nothing does not affect a variable previously assigned from r',
+    '  Dim r As Range\n  Dim r2 As Range\n  Set r = Range("B1")\n  Set r2 = r\n  Set r = Nothing\n  Range("A1").Value = (r2 Is Nothing)',
+    { value: false },
+    'Set copies the *reference* into r2\'s own variable slot; clearing r afterwards rebinds only r. Real VBA has no way for one variable\'s assignment to reach into another\'s -- r2 still refers to the same Range("B1") object.');
+  addCase('alias_still_reads_through_after_original_cleared', CAT,
+    'An alias still reads its object after the original was Set to Nothing',
+    '  Range("B1").Value = 42\n  Dim r As Range\n  Dim r2 As Range\n  Set r = Range("B1")\n  Set r2 = r\n  Set r = Nothing\n  Range("A1").Value = r2.Value',
+    { value: 42 },
+    'The stronger form of set_nothing_does_not_clear_an_alias: not only is r2 not Nothing, it still resolves to the same cell -- a member access through it returns that cell\'s value rather than raising error 91.');
+  addCase('alias_still_writes_through_after_original_cleared', CAT,
+    'An alias still writes through after the original was Set to Nothing',
+    '  Dim r As Range\n  Dim r2 As Range\n  Set r = Range("A1")\n  Set r2 = r\n  Set r = Nothing\n  r2.Value = 7',
+    { value: 7 },
+    'Third independent confirmation of the same alias rule, on the write path: r2 must still be a live reference to Range("A1") after r was cleared.');
+  addCase('set_from_an_unset_variable_stays_nothing', CAT,
+    'Set r2 = r where r is unset leaves r2 Nothing too',
+    '  Dim r As Range\n  Dim r2 As Range\n  Set r2 = r\n  Range("A1").Value = (r2 Is Nothing)',
+    { value: true },
+    'Assigning from a variable that holds the null object reference is legal VBA and simply copies that null reference -- it is not itself an error, and r2 ends up Nothing.');
+  addCase('scalar_variable_assignment_is_unaffected_by_object_tracking', CAT,
+    'A plain (non-object) variable still assigns with = and is untouched by Nothing tracking',
+    '  Dim x As Long\n  x = 5\n  x = x + 1\n  Range("A1").Value = x',
+    { value: 6 },
+    'Scalar and object variables have genuinely different assignment semantics in VBA (`x = 5` vs `Set r = ...`), and they live in separate namespaces here. A Dim As Long must never acquire object-variable state -- if it did, `x = x + 1` would start raising error 91.');
+  addCaseWithSource('udt_field_assignment_without_a_dim_still_works', CAT,
+    'A `.field = value` write on a declared UDT variable is unaffected by object tracking',
+    'Type TPoint\n  x As Integer\nEnd Type\nSub Scenario()\n  Dim p As TPoint\n  p.x = 3\n  Range("A1").Value = p.x\nEnd Sub\n',
+    { value: 3 },
+    'A `Dim p As <user-defined Type>` declares a value-typed record, not an object reference: `p.x = 3` assigns a field with plain `=`, no Set, and no live-reference requirement. Guard against over-reaching — only a name declared as an *object* variable may raise error 91, so ordinary UDT field writes must be untouched.');
 }
 
 // ── operator_coercion ────────────────────────────────────────────────────────
@@ -670,14 +720,12 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     '& with both operands Null produces Null (unlike the one-Null case)',
     '  Dim r1, r2\n  r1 = Null\n  r2 = Null\n  Range("A1").Value = IsNull(r1 & r2)',
     { value: true },
-    'Documented (ampersand operator): "If both expressions are Null, result is Null." Distinct from the only-one-Null case, which treats the Null side as "". Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value.',
-    'elixcee\'s & always converts each operand to a string first (Null becomes ""), so both-Null gives "" (IsNull => False) instead of propagating Null (IsNull => True) -- found while building this suite from Microsoft\'s own documented distinction, not previously disclosed.');
+    'Documented (ampersand operator): "If both expressions are Null, result is Null." Distinct from the only-one-Null case, which treats the Null side as "". Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value. (Fixed this round: elixcee used to stringify both operands to "" first, giving IsNull => False.)');
   addCase('plus_null_propagates_null', CAT,
     '+ with a Null operand always produces Null',
     '  Dim r\n  r = Null\n  Range("A1").Value = IsNull(r + 5)',
     { value: true },
-    'Documented (+ operator): "If one or both expressions are Null, result is Null" -- unlike + with Empty (which returns the other operand unchanged) or & with one Null (which treats it as ""). Asserted via IsNull() for the same JSON-representability reason as the & case above.',
-    'elixcee\'s + treats Null the same as Empty (coerces to 0 numerically) instead of propagating Null, so r + 5 gives 5 (IsNull => False) instead of Null (IsNull => True) -- found while building this suite, not previously disclosed.');
+    'Documented (+ operator): "If one or both expressions are Null, result is Null" -- unlike + with Empty (which returns the other operand unchanged) or & with one Null (which treats it as ""). Asserted via IsNull() for the same JSON-representability reason as the & case above. (Fixed this round: elixcee used to treat Null exactly like Empty and coerce it to 0.)');
   addCase('plus_boolean_true_uses_negative_one', CAT,
     'True + a number arithmetic-coerces True as -1, not 1',
     '  Range("A1").Value = True + 5',
@@ -697,8 +745,7 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     '+ between a non-numeric-string Variant and a numeric Variant raises Type mismatch',
     '  Dim Var1, Var2\n  Var1 = "abc"\n  Var2 = 3\n  Range("A1").Value = Var1 + Var2',
     { error: 'Type mismatch' },
-    'Adding a numeric Variant to a string Variant that cannot itself convert to a number raises a Type mismatch error in real VBA -- well-established, unambiguous VBA behavior.',
-    'elixcee does correctly raise a runtime error here (not silently coerce), but with message "Cannot convert \'abc\' to number" instead of VBA\'s "Type mismatch". Not fixed this round: the message comes from to_f64, a single shared numeric-coercion helper with ~54 call sites across the VM (arithmetic, comparisons, loop bounds, array indexing, etc.), and renaming its message without auditing every call site\'s own correct real-VBA wording risks introducing a wrong message elsewhere -- unlike the narrowly-scoped array-out-of-bounds message fix earlier this round. Found while building this suite.');
+    'Documented (+ operator): "One expression is a numeric data type and the other is a String -> A Type mismatch error occurs." (Fixed this round, and narrowly: the wording is applied by a new arith_to_f64 wrapper used only by eval_binop\'s arithmetic arms, NOT by changing the shared to_f64 helper -- its ~53 other call sites, each with its own correct real-VBA wording for its own failure, are untouched. That shared-helper blast radius was the exact reason this stayed disclosed rather than fixed when the category was first written.)');
 }
 
 // ── comparison_coercion ──────────────────────────────────────────────────────
@@ -748,8 +795,7 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     'Any comparison with a Null operand produces Null, not True or False',
     '  Dim r\n  r = Null\n  Range("A1").Value = IsNull(5 < r)',
     { value: true },
-    'Documented (comparison operators table): every comparison operator lists "Null if expression1 or expression2 = Null" as a third, separate outcome alongside True/False. Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value, same convention as the Null cases in operator_coercion.',
-    'elixcee\'s comparison operators never produce Null -- Null numeric-coerces to 0 via to_f64 (same root cause as operator_coercion\'s plus_null_propagates_null/ampersand_both_null_propagates_null: no VM-wide concept of a Null result value distinct from Empty/0), so 5 < r is evaluated as 5 < 0 = False instead of Null. Found while building this suite, not previously disclosed.');
+    'Documented (comparison operators table): every comparison operator lists "Null if expression1 or expression2 = Null" as a third, separate outcome alongside True/False. Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value, same convention as the Null cases in operator_coercion. (Fixed this round: Null used to numeric-coerce to 0, making 5 < r evaluate as 5 < 0 = False.)');
   addCase('compare_two_variant_strings_lexical_not_numeric', CAT,
     'Two string Variants compare lexically even when both look numeric',
     '  Dim Var1, Var2\n  Var1 = "10"\n  Var2 = "9"\n  Range("A1").Value = (Var1 < Var2)',
@@ -831,16 +877,106 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
   addCaseWithSource('with_sub_call_does_not_disturb_target', CAT, 'Calling another Sub from inside a With body does not change the With target',
     'Sub Helper()\n  Range("C1").Value = 100\nEnd Sub\nSub Scenario()\n  With Range("A1")\n    .Value = 1\n    Helper\n    .Value = .Value + 1\n  End With\nEnd Sub\n',
     { value: 2 }, 'A Sub call is not itself a block construct that redefines the enclosing With target -- .Value after the Helper call must still mean Range("A1").Value.');
-  addCase('with_computed_cells_target_unsupported', CAT, 'With Cells(row, col) as a target does not parse',
+  addCase('with_computed_cells_target_unsupported', CAT, 'With Cells(row, col) works as a target',
     '  With Cells(1, 3)\n    .Value = 42\n  End With',
     { value: 42, address: 'C1' },
-    'Real VBA supports any object expression as a With target, including Cells(r, c) -- this line is valid VBA that writes 42 to C1.',
-    'elixcee\'s With Range("...") target is a parse-time literal string, not a general expression -- parse_with only recognizes a Range("literal") or Sheets/Worksheets("name") call shape, or a bare identifier (UDT target). Cells(1, 3) falls into none of those and fails to parse entirely (actual: parse_error "expected newline, got LParen"), rather than merely producing a wrong value. Found while building this suite, not previously disclosed.');
-  addCase('with_dot_member_inside_nested_if_unsupported', CAT, 'A bare .member inside an If block nested in a With body does not parse',
+    'Real VBA supports any object expression as a With target, including Cells(r, c) -- this line is valid VBA that writes 42 to C1. (Fixed this round: the target used to have to be a parse-time literal string, so this failed to parse at all.)');
+  addCase('with_dot_member_inside_nested_if_unsupported', CAT, 'A bare .member inside an If block nested in a With body resolves normally',
     '  With Range("A1")\n    If .Value = 0 Then\n      .Value = 7\n    End If\n  End With',
     { value: 7 },
-    'Real VBA resolves .Value against the enclosing With target no matter how deeply it is nested inside other block constructs in the body -- this line is valid VBA that writes 7 to A1 (a fresh cell reads as 0).',
-    'elixcee\'s bare-.member rewrite only fires in parse_with_body\'s own direct statement loop (which special-cases a leading Dot token before delegating to parse_stmt) -- once execution descends into a nested block\'s own body (parse_if/parse_for/parse_do_loop/parse_select_case, each parsed via ordinary parse_stmt), a leading Dot is simply unrecognized (actual: parse_error "unexpected token starting statement: Dot"), rather than merely producing a wrong value. Same root cause as with_computed_cells_target_unsupported above: With-target resolution is parse-time-textual, not a runtime-resolved stack. Found while building this suite, not previously disclosed.');
+    'Real VBA resolves .Value against the enclosing With target no matter how deeply it is nested inside other block constructs in the body -- this line is valid VBA that writes 7 to A1 (a fresh cell reads as 0). (Fixed this round: a bare .member is now an ordinary statement/expression form resolved against a runtime With stack, so it parses wherever a statement or expression can appear.)');
+
+  // ── Runtime With stack (Milestone A4) ──────────────────────────────────────
+  // With-target resolution is now a real runtime mechanism: the target expression is
+  // evaluated ONCE on block entry and pushed onto a stack in the VM, which every bare
+  // .member consults wherever it appears in the AST. These cases exercise the three
+  // properties that distinguishes that from the previous parse-time textual rewrite:
+  // a computed (non-literal) target, .member at arbitrary nesting depth, and correct
+  // push/pop discipline around nesting and early exits.
+  addCase('with_computed_cells_target_from_variables', CAT,
+    'With Cells(r, c) where both indices are variables',
+    '  r = 2\n  c = 2\n  With Cells(r, c)\n    .Value = 9\n  End With',
+    { value: 9, address: 'B2' },
+    'The target is genuinely computed — neither index is a literal — so it can only work if the target expression is evaluated at runtime rather than recognized as a literal at parse time.');
+  addCase('with_target_is_evaluated_once_on_entry', CAT,
+    'The With target is evaluated once on entry, not per .member access',
+    '  i = 1\n  With Cells(i, 1)\n    i = 5\n    .Value = 3\n  End With',
+    { value: 3 },
+    'Real VBA evaluates the object expression once, when the block is entered, and holds that reference for the whole block. Reassigning i inside the body must not retarget the block: the write lands on A1 (i was 1 at entry), not A5.');
+  addNoCellWrittenCase('with_target_evaluated_once_leaves_the_retargeted_cell_untouched', CAT,
+    'Reassigning a target variable inside a With body does not move the target',
+    '  i = 1\n  With Cells(i, 5)\n    i = 5\n    .Value = 3\n  End With\n  Range("E1").Clear',
+    'The complement of with_target_is_evaluated_once_on_entry, asserted by absence: after clearing the cell the entry-time target (E1) resolved to, no cell remains — so nothing was ever written to the re-evaluated target E5.');
+  addCase('with_dot_member_inside_a_for_loop', CAT,
+    'A bare .member inside a For loop nested in a With body',
+    '  With Range("A1")\n    For i = 1 To 3\n      .Value = .Value + i\n    Next i\n  End With',
+    { value: 6 },
+    'The With target must resolve from inside a nested loop body, and must stay the same target across iterations: 0+1+2+3 = 6.');
+  addCase('with_dot_member_inside_a_do_loop', CAT,
+    'A bare .member inside a Do loop nested in a With body, in both the condition and the body',
+    '  With Range("A1")\n    Do While .Value < 3\n      .Value = .Value + 1\n    Loop\n  End With',
+    { value: 3 },
+    'A second nested block construct, and one where the bare .member appears in the loop *condition* as well as the body — the condition is an expression, not a statement, so it exercises the expression side of the same resolution.');
+  addCase('with_dot_member_inside_a_select_case', CAT,
+    'A bare .member inside a Select Case nested in a With body',
+    '  With Range("A1")\n    Select Case 2\n      Case 2\n        .Value = 8\n    End Select\n  End With',
+    { value: 8 },
+    'The third and fourth nested block constructs (Select Case, and its Case body) — completes the If/For/Do/Select Case set, none of which the old parse-time rewrite could reach.');
+  addCase('with_dot_member_two_block_constructs_deep', CAT,
+    'A bare .member two block constructs deep inside a With body',
+    '  With Range("A1")\n    For i = 1 To 2\n      If i = 2 Then\n        .Value = 4\n      End If\n    Next i\n  End With',
+    { value: 4 },
+    'Nesting depth is not special-cased anywhere: resolution walks to the innermost active With target regardless of how many block constructs sit between it and the .member.');
+  addCase('with_object_variable_target_resolves_at_runtime', CAT,
+    'With <object variable> resolves against the variable\'s current reference',
+    '  Dim rng As Range\n  Set rng = Range("C3")\n  With rng\n    .Value = 5\n  End With',
+    { value: 5, address: 'C3' },
+    'A bare identifier as a With target can name a Set-assigned Range object; the parser cannot know that, so it must be resolved at runtime against the object-variable namespace.');
+  addCase('with_worksheet_object_variable_qualifies_cells', CAT,
+    'With <worksheet variable> makes .Cells(...) target that worksheet',
+    '  Dim ws\n  Set ws = ActiveSheet\n  With ws\n    For i = 1 To 3\n      .Cells(i, 1).Value = i\n    Next i\n  End With',
+    { value: 3, address: 'A3' },
+    'A Worksheet-typed With target qualifies .Cells(r, c) to that worksheet\'s own cells. Combines a runtime-resolved target with a nested loop, which is the shape most real macros use.');
+  addCase('with_nested_object_variable_and_literal_targets_mix', CAT,
+    'A literal-target With nested inside an object-variable-target With restores correctly',
+    '  Dim rng As Range\n  Set rng = Range("A1")\n  With rng\n    .Value = 1\n    With Range("B1")\n      .Value = 2\n    End With\n    .Value = .Value + 10\n  End With',
+    { value: 11 },
+    'Push/pop must be uniform across target kinds: an inner literal-Range With inside an outer object-variable With must restore the outer target on exit, exactly as two literal targets do.');
+  addCase('with_three_levels_of_nesting_restore_correctly', CAT,
+    'Three levels of nested With restore each outer target in turn',
+    '  With Range("A1")\n    .Value = 1\n    With Range("B1")\n      .Value = 2\n      With Range("C1")\n        .Value = 3\n      End With\n      .Value = .Value + 20\n    End With\n    .Value = .Value + 10\n  End With',
+    { value: 11 },
+    'A stack, not a single saved slot: after the innermost block exits, the middle target must be active again, and after that one exits, the outer. A1 ends at 1+10 = 11.');
+  addCase('with_middle_level_restored_after_innermost_exits', CAT,
+    'The middle level of three nested With blocks is restored too',
+    '  With Range("A1")\n    .Value = 1\n    With Range("B1")\n      .Value = 2\n      With Range("C1")\n        .Value = 3\n      End With\n      .Value = .Value + 20\n    End With\n  End With',
+    { value: 22, address: 'B1' },
+    'The companion assertion to with_three_levels_of_nesting_restore_correctly, on the middle target: B1 ends at 2+20 = 22, proving the restore is per-level and not just "back to the outermost".');
+  addCase('with_stack_does_not_leak_past_an_exit_for', CAT,
+    'An Exit For inside a With body does not leave the target on the stack',
+    '  With Range("A1")\n    For i = 1 To 3\n      Exit For\n    Next i\n    .Value = 5\n  End With\n  With Range("B1")\n    .Value = 6\n  End With',
+    { value: 6, address: 'B1' },
+    'Early control transfer out of a nested construct must not disturb the enclosing With target, and the following With block must resolve against its own target — a leaked stack entry would send this write to A1.');
+  addCase('with_stack_does_not_leak_past_a_handled_error', CAT,
+    'A With body left via an error handler does not leak its target',
+    '  On Error Resume Next\n  With Range("A1")\n    .Value = 1 / 0\n  End With\n  On Error GoTo 0\n  With Range("B1")\n    .Value = 7\n  End With',
+    { value: 7, address: 'B1' },
+    'The error path is the one most likely to skip a naive pop: if the target leaked, the following With\'s bare .Value would resolve against A1 instead of B1.');
+  addCaseWithSource('with_udt_record_target_still_works', CAT,
+    'A With block over a declared UDT variable still sets its fields',
+    'Type TPoint\n  x As Integer\nEnd Type\nSub Scenario()\n  Dim p As TPoint\n  With p\n    .x = 4\n  End With\n  Range("A1").Value = p.x\nEnd Sub\n',
+    { value: 4 },
+    'A With target may be a value-typed record as well as an object reference, and `.x = 4` inside the body is shorthand for `p.x = 4`. Regression guard for the other bare-identifier target kind: the same runtime dispatch, resolved against the variable namespace rather than the object one.');
+  addCaseWithSource('with_udt_record_target_nested_field_still_works', CAT,
+    'A With block over a declared UDT variable still sets a nested field path',
+    'Type TInner\n  b As Integer\nEnd Type\nType TOuter\n  a As TInner\nEnd Type\nSub Scenario()\n  Dim p As TOuter\n  With p\n    .a.b = 6\n  End With\n  Range("A1").Value = p.a.b\nEnd Sub\n',
+    { value: 6 },
+    'The chained-field form of the case above: a UDT whose field is itself a UDT, so `.a.b = 6` inside the With body is shorthand for `p.a.b = 6`. Confirms the record path still handles multi-segment member paths.');
+  addCase('with_dot_value_read_in_a_nested_if_condition', CAT,
+    'A bare .Value read inside a nested If condition resolves against the With target',
+    '  Range("A1").Value = 5\n  With Range("A1")\n    If .Value = 5 Then\n      Range("B1").Value = 1\n    Else\n      Range("B1").Value = 2\n    End If\n  End With',
+    { value: 1, address: 'B1' },
+    'The read side at nesting depth: the If condition is evaluated as an expression inside the With body, so a bare .Value there must resolve against the target rather than failing to parse.');
 }
 
 // ── array_bounds ─────────────────────────────────────────────────────────────
@@ -915,11 +1051,304 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     { value: 5 },
     'Real VBA supports declaring a dynamic array with empty parentheses and sizing it later via ReDim -- Dim arr() followed by ReDim arr(5) is valid VBA that gives UBound(arr) = 5.',
     'elixcee\'s array-declarator parser requires at least one dimension-size expression inside the parens -- Dim arr() fails to parse entirely (actual: parse_error "unexpected token in expression: RParen"). Only the ReDim-without-a-prior-sized-Dim spelling works around this. Found while building this suite, not previously disclosed.');
-  addCase('array_builtin_function_unsupported', CAT, 'The Array(...) builtin function is not implemented',
+  addCase('array_builtin_function_unsupported', CAT, 'The Array(...) builtin function builds a zero-based array',
     '  Dim arr\n  arr = Array(10, 20, 30)\n  Range("A1").Value = arr(1)',
     { value: 20 },
-    'Real VBA\'s Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element).',
-    'elixcee has no Array() builtin at all (actual: undefined_sub_or_function "Unknown VBA function: \'array\'") -- the only way to build an array is a Dim/ReDim declaration plus individual element assignments. Found while building this suite, not previously disclosed.');
+    'Real VBA\'s Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element). (Fixed this round: elixcee had no Array() builtin at all, so the only way to build an array was a Dim/ReDim declaration plus individual element assignments.)');
+  addCase('array_builtin_first_and_last_elements', CAT, 'Array(...) indexes from 0 through UBound',
+    '  Dim arr\n  arr = Array(10, 20, 30)\n  Range("A1").Value = arr(0) + arr(2) + UBound(arr)',
+    { value: 42 },
+    'Confirms the zero-based bound independently of the middle-element case: arr(0)=10, arr(2)=30, and UBound is 2 for three elements — 10+30+2 = 42.');
+}
+
+// ── null_propagation ─────────────────────────────────────────────────────────
+// VBA's Null ("no valid data", as from a database NULL) is a genuinely different value
+// from Empty (an uninitialized Variant), and every operator has its own documented rule
+// for it. All of them were fetched live from Microsoft's VBA language reference while
+// building this category, not recalled: the + operator page ("If one or both expressions
+// are Null expressions, result is Null"), the minus operator page (same sentence), the
+// ampersand operator page ("If both expressions are Null, result is Null. However, if only
+// one expression is Null, that expression is treated as a zero-length string"), the
+// comparison-operators table ("Null if expression1 or expression2 = Null" for all six),
+// the And/Or/Xor/Not pages' three-valued truth tables, and the If...Then...Else statement
+// page ("If condition is Null, condition is treated as False").
+//
+// Null is asserted through IsNull()/TypeName()/VarType() rather than by writing it to a
+// cell -- the convention operator_coercion's own Null cases already established, since a
+// Null cell value is not a well-formed --json cell value.
+//
+// Deliberately NOT covered: Select Case with a Null test expression. The Select Case
+// reference documents only that testexpression is "matched" against each expressionlist,
+// and says nothing about Null; deriving an answer from that would be a guess, and this
+// suite does not encode guesses. Left uncovered rather than covered wrongly.
+{
+  const CAT = 'null_propagation';
+  // ── Null is not Empty ──────────────────────────────────────────────────────
+  addCase('isnull_of_null_is_true', CAT, 'IsNull(Null) is True',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n)',
+    { value: true }, 'IsNull() reports whether a Variant holds the Null value.');
+  addCase('isnull_of_empty_is_false', CAT, 'IsNull(Empty) is False',
+    '  Dim e\n  Range("A1").Value = IsNull(e)',
+    { value: false },
+    'Null and Empty are different VBA values: an uninitialized Variant is Empty, and Empty is not Null. IsNull() must distinguish them, not answer for "has no useful value".');
+  addCase('isempty_of_null_is_false', CAT, 'IsEmpty(Null) is False',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsEmpty(n)',
+    { value: false },
+    'The mirror image of isnull_of_empty_is_false: a Variant explicitly assigned Null is no longer uninitialized, so IsEmpty() is False. Together the two cases pin that neither predicate answers for the other value.');
+  addCase('isempty_of_empty_is_true', CAT, 'IsEmpty(Empty) is True',
+    '  Dim e\n  Range("A1").Value = IsEmpty(e)',
+    { value: true },
+    'The unchanged baseline of the pair above — splitting IsNull from IsEmpty must not break the ordinary uninitialized-variable answer.');
+  addCase('typename_of_null_is_null', CAT, 'TypeName(Null) is "Null"',
+    '  Dim n\n  n = Null\n  Range("A1").Value = TypeName(n)',
+    { value: 'Null' },
+    'TypeName() names the Variant\'s own subtype: a Null-valued Variant reports "Null", not "Empty".');
+  addCase('vartype_of_null_is_vbnull', CAT, 'VarType(Null) is 1 (vbNull)',
+    '  Dim n\n  n = Null\n  Range("A1").Value = VarType(n)',
+    { value: 1 },
+    'vbNull is 1 and vbEmpty is 0 — two distinct documented VarType constants, which is itself evidence the language treats them as different values.');
+  addCase('vartype_of_empty_is_vbempty', CAT, 'VarType(Empty) is 0 (vbEmpty)',
+    '  Dim e\n  Range("A1").Value = VarType(e)',
+    { value: 0 },
+    'The complement of vartype_of_null_is_vbnull, confirming the split did not simply relabel Empty.');
+
+  // ── Arithmetic propagates Null from either side ────────────────────────────
+  addCase('null_plus_number_is_null', CAT, 'Null + number is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n + 5)',
+    { value: true }, 'Documented (+ operator): "If one or both expressions are Null expressions, result is Null."');
+  addCase('number_plus_null_is_null', CAT, 'number + Null is Null (right-hand side)',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(5 + n)',
+    { value: true },
+    'The rule is "one or both expressions", so it must fire from either side — a left-operand-only check would pass the sibling case and fail this one.');
+  addCase('null_minus_number_is_null', CAT, 'Null - number is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n - 1)',
+    { value: true }, 'Documented (minus operator): "If one or both expressions are Null expressions, result is Null."');
+  addCase('null_times_number_is_null', CAT, 'Null * number is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n * 3)',
+    { value: true },
+    'The multiplication operator carries the same documented sentence as + and -, so a third arithmetic operator confirms the rule is applied per-operator-class rather than hard-coded for +.');
+  addCase('null_divided_by_number_is_null_not_a_division_error', CAT,
+    'Null / number is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n / 2)',
+    { value: true },
+    'Null propagation is decided before the operands are coerced to numbers, so division never sees a 0-coerced Null. A Null-coercing implementation would instead compute 0 / 2 = 0.');
+  addCase('number_divided_by_null_is_null_not_division_by_zero', CAT,
+    'number / Null is Null, not a Division by zero error',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(5 / n)',
+    { value: true },
+    'The sharpest case for "propagate before coercing": an implementation that coerced Null to 0 would raise Division by zero here instead of returning Null.');
+  addCase('null_arithmetic_result_is_not_zero', CAT,
+    'A Null arithmetic result does not compare equal to 0',
+    '  Dim n\n  n = Null\n  If n + 5 = 0 Then\n    Range("A1").Value = 1\n  Else\n    Range("A1").Value = 2\n  End If',
+    { value: 2 },
+    'Chains two documented rules to distinguish Null from a 0 that merely looks falsy: n + 5 is Null, so `= 0` is Null (comparison rule), and a Null condition is treated as False (If rule) — the Else branch runs. An implementation that coerced Null to 0 would take the Then branch instead.');
+  addCase('typename_of_a_null_arithmetic_result_is_null', CAT,
+    'TypeName(Null + 5) is "Null"',
+    '  Dim n\n  n = Null\n  Range("A1").Value = TypeName(n + 5)',
+    { value: 'Null' },
+    'Asserts the propagated *value*\'s own type rather than a predicate over it — a Null-coercing implementation would report "Long" here.');
+  addCase('empty_plus_number_is_still_the_number_not_null', CAT,
+    'Empty + number returns the number unchanged (Empty does NOT propagate)',
+    '  Dim e\n  Range("A1").Value = e + 5',
+    { value: 5 },
+    'Documented (+ operator): "if only one expression is Empty, the other expression is returned unchanged as result." The load-bearing contrast case: adding Null propagation must not accidentally make Empty propagate too.');
+
+  // ── & concatenation: only both-Null propagates ─────────────────────────────
+  addCase('ampersand_null_on_the_left_is_empty_string', CAT,
+    'Null & string treats the Null as ""',
+    '  Dim n\n  n = Null\n  Range("A1").Value = n & "abc"',
+    { value: 'abc' },
+    'Documented (ampersand operator): "if only one expression is Null, that expression is treated as a zero-length string ("") when concatenated with the other expression."');
+  addCase('ampersand_null_on_the_right_is_empty_string', CAT,
+    'string & Null treats the Null as ""',
+    '  Dim n\n  n = Null\n  Range("A1").Value = "abc" & n',
+    { value: 'abc' },
+    'Same documented rule from the other side — the one-Null exception is symmetric, and must not render as the text "Null".');
+  addCase('ampersand_both_null_is_null_via_typename', CAT,
+    'TypeName(Null & Null) is "Null"',
+    '  Dim n1, n2\n  n1 = Null\n  n2 = Null\n  Range("A1").Value = TypeName(n1 & n2)',
+    { value: 'Null' },
+    'Documented (ampersand operator): "If both expressions are Null, result is Null." Asserted via TypeName rather than IsNull for independence from the IsNull cases above — & is the single operator where one Null does not propagate but two do.');
+
+  // ── Comparison operators: every one propagates ─────────────────────────────
+  for (const [op, id] of [['<', 'lt'], ['<=', 'le'], ['>', 'gt'], ['>=', 'ge'], ['=', 'eq'], ['<>', 'ne']]) {
+    addCase(`compare_${id}_with_null_right_operand_is_null`, CAT,
+      `5 ${op} Null is Null`,
+      `  Dim n\n  n = Null\n  Range("A1").Value = IsNull(5 ${op} n)`,
+      { value: true },
+      `Documented (comparison operators table): the ${op} row lists "Null if expression1 or expression2 = Null" as a third outcome alongside True and False. Each of the six operators is checked separately because the table states the rule per-operator.`);
+  }
+  addCase('compare_with_null_left_operand_is_null', CAT,
+    'Null < 5 is Null (left-hand side)',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(n < 5)',
+    { value: true },
+    '"expression1 or expression2 = Null" — either side triggers it, so the left-operand position needs its own case.');
+  addCase('null_equals_null_is_null_not_true', CAT,
+    'Null = Null is Null, not True',
+    '  Dim n1, n2\n  n1 = Null\n  n2 = Null\n  Range("A1").Value = IsNull(n1 = n2)',
+    { value: true },
+    'The most counter-intuitive row of the table, and the one an ordinary equality implementation gets wrong: two Nulls are not "equal", because there is no data to compare — the result is Null again.');
+  addCase('ordinary_comparison_still_returns_a_boolean', CAT,
+    'A comparison with no Null operand still returns a plain Boolean',
+    '  Range("A1").Value = (3 < 5)',
+    { value: true },
+    'Regression guard: adding a third possible comparison outcome must not disturb the ordinary two-valued case.');
+
+  // ── Logical operators: documented three-valued tables ──────────────────────
+  addCase('false_and_null_is_false_not_null', CAT, 'False And Null is False',
+    '  Dim n\n  n = Null\n  Range("A1").Value = (False And n)',
+    { value: false },
+    'Documented (And operator truth table): the "False / Null / False" row. Null does NOT uniformly propagate through And — the answer is already determined without knowing the missing operand. This is the case a blanket "any Null makes Null" rule gets wrong.');
+  addCase('true_and_null_is_null', CAT, 'True And Null is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(True And n)',
+    { value: true },
+    'Documented (And operator truth table): the "True / Null / Null" row — here the missing operand genuinely decides the answer, so the result is Null.');
+  addCase('true_or_null_is_true_not_null', CAT, 'True Or Null is True',
+    '  Dim n\n  n = Null\n  Range("A1").Value = (True Or n)',
+    { value: true },
+    'Documented (Or operator truth table): the "True / Null / True" row — the Or mirror of False And Null.');
+  addCase('false_or_null_is_null', CAT, 'False Or Null is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(False Or n)',
+    { value: true },
+    'Documented (Or operator truth table): the "False / Null / Null" row. Together with true_or_null_is_true_not_null this pins both halves of Or\'s three-valued behavior.');
+  addCase('xor_with_a_null_operand_is_null', CAT, 'True Xor Null is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(True Xor n)',
+    { value: true },
+    'Documented (Xor operator): "However, if either expression is Null, result is also Null." Unlike And/Or, Xor propagates unconditionally — one operand can never determine an exclusive-or.');
+  addCase('not_null_is_null', CAT, 'Not Null is Null',
+    '  Dim n\n  n = Null\n  Range("A1").Value = IsNull(Not n)',
+    { value: true },
+    'Documented (Not operator truth table): the third row, "Null -> Null".');
+
+  // ── Null as a condition ────────────────────────────────────────────────────
+  addCase('if_null_condition_is_treated_as_false', CAT,
+    'If Null Then takes the Else branch (Null condition is treated as False)',
+    '  Dim n\n  n = Null\n  If n Then\n    Range("A1").Value = 1\n  Else\n    Range("A1").Value = 2\n  End If',
+    { value: 2 },
+    'Documented explicitly on the If...Then...Else statement page: "If condition is Null, condition is treated as False." Not an error, and not True — verified from the reference precisely because this is the one place VBA gives Null a Boolean reading.');
+  addCase('if_null_comparison_condition_is_treated_as_false', CAT,
+    'A comparison that evaluates to Null is also treated as False by If',
+    '  Dim n\n  n = Null\n  If 5 > n Then\n    Range("A1").Value = 1\n  Else\n    Range("A1").Value = 2\n  End If',
+    { value: 2 },
+    'The realistic form of the rule: the Null does not appear literally in the condition, it arrives as the *result* of a comparison against a Null operand. Combines the comparison rule and the If rule in one scenario.');
+  addNoCellWrittenCase('do_while_null_condition_never_enters_the_loop', CAT,
+    'A Do While loop with a Null condition never runs its body',
+    '  Dim n\n  n = Null\n  Do While n\n    Range("A1").Value = 99\n  Loop',
+    'A Null condition being treated as False must apply to loop conditions too, not just If — the body must never execute, so no cell is written at all.');
+
+  // ── Null in a genuinely numeric context ────────────────────────────────────
+  addCase('null_passed_to_a_numeric_function_raises_invalid_use_of_null', CAT,
+    'Abs(Null) raises "Invalid use of Null"',
+    '  Dim n\n  n = Null\n  Range("A1").Value = Abs(n)',
+    { error: 'Invalid use of Null' },
+    'Where Null cannot propagate — a function argument that must genuinely be a number — real VBA raises run-time error 94, "Invalid use of Null". Unlike Empty, which is documented to behave as 0 in a numeric context, Null has no numeric value at all.');
+}
+
+// ── colon_statement_separator ────────────────────────────────────────────────
+// Real VBA's `:` multi-statement-per-line separator. Two independent Microsoft
+// citations underpin this whole category, both fetched live from the VBA language
+// reference while building it rather than recalled: (a) the If...Then...Else statement
+// page documents a single-line If's `statements` part as "One or more statements
+// separated by colons; executed if condition is True", with the worked example
+// `If A > 10 Then A = A + 1 : B = B + A : C = C + B`; (b) the comparison-operators page's
+// own example code uses the separator outside any If at all --
+// `Var1 = "5": Var2 = 4    ' Initialize variables.` -- confirming it's a general
+// statement separator, not an If-only affordance.
+// The three cases that a naive "replace `:` with a newline before tokenizing"
+// implementation would silently get wrong are pinned deliberately: a `:` inside a string
+// literal, a `label:` declaration (one statement, not two), and a single-line If's own
+// Then/Else clause boundary (where the colon extends the *branch*, not the enclosing
+// statement list). Every case below was verified live against elixcee before being
+// encoded, same as every other category here.
+{
+  const CAT = 'colon_statement_separator';
+  addCase('colon_two_statements_one_line', CAT, 'Two assignments separated by a colon on one line',
+    '  a = 1: b = 2\n  Range("A1").Value = a + b',
+    { value: 3 },
+    'Both statements on the colon-separated line must execute, in order -- exactly the form Microsoft\'s own comparison-operators example uses (`Var1 = "5": Var2 = 4`). 1 + 2 = 3 proves neither was dropped.');
+  addCase('colon_three_statements_one_line', CAT, 'Three assignments separated by colons on one line',
+    '  a = 1: b = 2: c = 3\n  Range("A1").Value = a + b + c',
+    { value: 6 },
+    'The separator chains: a line is a list of statements, not a pair. 1 + 2 + 3 = 6 proves the third statement ran too, not just the first two.');
+  addCase('colon_inside_string_literal_is_not_a_separator', CAT,
+    'A colon inside a string literal does not split the statement',
+    '  s = "10:30": Range("A1").Value = s',
+    { value: '10:30' },
+    'A `:` inside a string literal is literal text, not a statement separator -- the string must survive intact AND the statement after the real separator must still run. This is the case a pre-tokenize `:`-to-newline rewrite corrupts.');
+  addCase('colon_after_msgbox_with_colon_in_message', CAT,
+    'A colon-bearing MsgBox argument on its own line (baseline)',
+    '  MsgBox "10:30"\n  Range("A1").Value = 1',
+    { value: 1 },
+    'Baseline companion to colon_msgbox_then_statement_same_line: the same colon-bearing string literal, but with the following statement on its own line, confirming the literal is not itself the thing under test.');
+  addCase('colon_msgbox_then_statement_same_line', CAT,
+    'MsgBox "10:30": Range write on the same line',
+    '  MsgBox "10:30": Range("A1").Value = 1',
+    { value: 1 },
+    'The colon after a MsgBox whose argument itself contains a colon must separate the two statements at the *real* separator only -- the Range write runs, and the message text is unaffected.');
+  addCase('colon_label_then_statement_same_line', CAT,
+    'label: statement — a label and a statement on one line',
+    '  GoTo Skip\n  Range("B1").Value = 99\nSkip: Range("A1").Value = 7',
+    { value: 7 },
+    '`Skip:` is a line-label declaration whose own trailing colon is part of the label syntax, not a separator between two statements -- but a statement may still follow it on the same line, and must execute when the label is jumped to.');
+  addNoCellWrittenCase('colon_label_line_still_a_valid_jump_target', CAT,
+    'A label with a statement after it on the same line is still jumped over correctly',
+    '  GoTo Skip\n  Range("A1").Value = 99\nSkip:',
+    'The GoTo must skip the guarded write entirely; nothing is written. Confirms treating `label:` as a label (rather than as an empty statement plus a separator) did not break the label as a jump target.');
+  addCase('colon_single_line_if_then_first_statement', CAT,
+    'Single-line If Then with a colon-separated statement list — first statement runs',
+    '  x = 5\n  If x > 0 Then Range("A1").Value = 1: Range("B1").Value = 2',
+    { value: 1 },
+    'Documented (If...Then...Else statement): `statements` is "One or more statements separated by colons; executed if condition is True". The first of the two runs when the condition is True.');
+  addCase('colon_single_line_if_then_second_statement', CAT,
+    'Single-line If Then with a colon-separated statement list — second statement also runs',
+    '  x = 5\n  If x > 0 Then Range("A1").Value = 1: Range("B1").Value = 2',
+    { value: 2, address: 'B1' },
+    'Same documented rule, asserted on the second statement of the Then list -- Microsoft\'s own worked example is `If A > 10 Then A = A + 1 : B = B + A : C = C + B`, where every colon-separated statement is gated by the one condition.');
+  addNoCellWrittenCase('colon_single_line_if_false_skips_the_whole_then_list', CAT,
+    'A false single-line If skips every colon-separated statement in its Then list',
+    '  x = -5\n  If x > 0 Then Range("A1").Value = 1: Range("B1").Value = 2',
+    'The colon-separated statements belong to the Then branch, so a False condition must skip ALL of them -- if the second one leaked out into the enclosing statement list it would run unconditionally and write B1.');
+  addCase('colon_single_line_if_else_takes_rest_of_line', CAT,
+    'Single-line If ... Else with a colon-separated Else list',
+    '  x = -5\n  If x > 0 Then Range("C1").Value = 9 Else Range("A1").Value = 1: Range("B1").Value = 2',
+    { value: 2, address: 'B1' },
+    'A single-line If ends only at end-of-line, and `elsestatements` is documented as "One or more statements" -- so everything after `Else` on the line, including past a colon, belongs to the Else branch and runs together when the condition is False.');
+  addNoCellWrittenCase('colon_single_line_if_true_skips_the_whole_else_list', CAT,
+    'A true single-line If skips every colon-separated statement in its Else list',
+    '  x = 5\n  If x > 0 Then Exit Sub Else Range("A1").Value = 1: Range("B1").Value = 2',
+    'The true branch exits the Sub, so neither Else-list statement may run -- the complement of colon_single_line_if_else_takes_rest_of_line, proving the second Else statement is genuinely gated by the condition rather than being an unconditional trailing statement.');
+  addNoCellWrittenCase('colon_exit_sub_after_a_statement_on_the_same_line', CAT,
+    'Exit Sub as the second colon-separated statement really exits',
+    '  x = 1: Exit Sub\n  Range("A1").Value = 99',
+    'A control-transfer statement in the second colon position must transfer control for real -- the guarded write on the following line must never run, so no cell appears at all.');
+  addCase('colon_inside_for_loop_body_on_the_header_line', CAT,
+    'For header, body and Next all on one colon-separated line',
+    '  total = 0\n  For i = 1 To 3: total = total + i: Next i\n  Range("A1").Value = total',
+    { value: 6 },
+    'The colon terminates a block-construct header and each body statement just as a newline does: 1 + 2 + 3 = 6 proves the loop ran its body three times rather than being mis-parsed into a single flat statement list.');
+  addCase('colon_inside_do_loop_on_one_line', CAT,
+    'Do While header, body and Loop all on one colon-separated line',
+    '  i = 0\n  Do While i < 3: i = i + 1: Loop\n  Range("A1").Value = i',
+    { value: 3 },
+    'A second, independent block construct (Do...Loop rather than For...Next) confirming the separator terminates block headers and bodies generally, not just in the one construct.');
+  addCase('colon_inside_with_block_on_one_line', CAT,
+    'With header, body and End With all on one colon-separated line',
+    '  With Range("A1"): .Value = 5: End With',
+    { value: 5 },
+    'The separator must work inside a With body too, where a leading `.member` statement -- not an identifier -- follows the colon.');
+  addCase('colon_run_of_empty_statements', CAT, 'A run of consecutive colons is an empty statement, not an error',
+    '  a = 1:: b = 2\n  Range("A1").Value = a + b',
+    { value: 3 },
+    'Consecutive separators delimit an empty statement, which does nothing -- both real statements must still run. Guards against an off-by-one in separator consumption.');
+  addCase('colon_dim_then_assignment_same_line', CAT, 'Dim and an assignment separated by a colon',
+    '  Dim x: x = 5\n  Range("A1").Value = x',
+    { value: 5 },
+    'A declaration and an assignment on one colon-separated line -- the shape most commonly written by hand in real VBA modules.');
+  addCase('colon_named_argument_is_not_a_separator', CAT,
+    'A `:=` named argument is not a statement separator',
+    '  Range("A1").Value = 1\n  Range("A1").Copy Destination:=Range("B1")\n  Range("C1").Value = Range("B1").Value',
+    { value: 1, address: 'C1' },
+    'VBA\'s named-argument syntax `Name:=value` contains a colon that is part of the `:=` token, not a statement separator -- the Copy must still receive its Destination, proving the separator logic did not split the argument off.');
 }
 
 // ── write output ─────────────────────────────────────────────────────────────

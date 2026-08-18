@@ -83,6 +83,17 @@ pub enum Expr {
     /// a parse error, same as `ObjectRef::Range`'s existing "'x' is
     /// Nothing" precedent.
     ObjectVarSheet(String),
+    /// `<var> Is Nothing` — VBA's object-identity test against the null
+    /// object reference. Holds the lowercase variable name; resolved against
+    /// `Vm::object_variables` at *runtime* (the parser has no variable-type
+    /// tracking — same situation `Expr::ObjectVarSheet` already accepts).
+    /// Only the `Is Nothing` shape is modeled: a general `a Is b` object-
+    /// identity comparison is still unparsed, exactly as before.
+    IsNothing(String),
+    /// A bare `.member` *read* inside a `With` body, e.g. the right-hand
+    /// side of `.Value = .Value + 1`. Same runtime resolution as
+    /// `Stmt::WithDot`, and likewise valid at any nesting depth.
+    WithDot(Vec<String>),
     RecordGet       { var: String, field: String },           // p.x
     RecordGetNested { var: String, fields: Vec<String> },    // p.a.b.c
     ArrayRecordGet  { name: String, indices: Vec<Expr>, field: String }, // arr(i).f
@@ -140,6 +151,45 @@ pub enum ObjectExpr {
     /// is recognized; every other `SpecialCells` type is unmodeled and
     /// falls back to `Stmt::Unsupported` at parse time.
     SpecialCellsVisible(Box<ObjectExpr>),
+}
+
+/// What a `With` block targets, kept unevaluated so the VM can resolve it
+/// **once, at runtime, when the block is entered** — not as the parse-time
+/// literal-string rewrite this used to be. That rewrite is why a computed
+/// target (`With Cells(r, c)`) couldn't be expressed at all, and why a bare
+/// `.member` nested inside another block construct in the body didn't parse.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WithTarget {
+    /// `With Range("A1")`, `With Union(...)`, … — anything `ObjectExpr`
+    /// already models. Evaluated by `Vm::eval_object_expr` on block entry.
+    Object(ObjectExpr),
+    /// `With Cells(r, c)` — a computed single-cell target. Both index
+    /// expressions are evaluated exactly once, on block entry.
+    Cells(Expr, Expr),
+    /// `With <identifier>` — resolved at runtime, since the parser has no
+    /// variable-type tracking: the name may hold a `Set`-assigned Range or
+    /// Worksheet reference (`Vm::object_variables`) or a UDT record
+    /// (`Vm::variables`). Same runtime-resolution precedent as
+    /// `Expr::ObjectVarSheet`.
+    Var(String),
+    /// `With Application` and any other target elixcee doesn't model — the
+    /// body still runs, and a bare `.member` inside it is a no-op, matching
+    /// the previous behavior for an unrecognized `With` header.
+    Unmodeled,
+}
+
+/// The member path of a statement that begins with a bare `.` — resolved
+/// against the innermost active `With` target at runtime, wherever in the
+/// AST it appears (including inside an `If`/`For`/`Do`/`Select Case` nested
+/// in the With body).
+#[derive(Debug, Clone, PartialEq)]
+pub enum WithMember {
+    /// `.Value` / `.Formula` / `.a.b.c`
+    Fields(Vec<String>),
+    /// `.Cells(r, c).Value`
+    Cells { row: Box<Expr>, col: Box<Expr>, fields: Vec<String> },
+    /// `.Range("A1").Value`
+    Range { addr: String, fields: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,7 +298,18 @@ pub enum Stmt {
     DimArray { name: String, sizes: Vec<Expr> },
     ReDim { name: String, sizes: Vec<Expr>, preserve: bool },
     ArrayWrite { name: String, indices: Vec<Expr>, value: Expr },
-    With { body: Vec<SpannedStmt> },
+    /// `With <target> ... End With`. `target` is resolved once at runtime on
+    /// block entry and pushed onto the VM's With stack; every bare-`.member`
+    /// statement/expression in `body` (at any nesting depth) resolves
+    /// against the innermost entry. Replaces the old `WithRecord` variant
+    /// too — a bare-identifier target is `WithTarget::Var`, disambiguated at
+    /// runtime rather than at parse time.
+    With { target: WithTarget, body: Vec<SpannedStmt> },
+    /// A statement beginning with a bare `.` inside a `With` body, e.g.
+    /// `.Value = 1` / `.Cells(i, 1).Value = i` / `.a.b = 2`. Valid wherever
+    /// a statement is; resolving it against the innermost active With target
+    /// is the VM's job, not the parser's.
+    WithDot { member: WithMember, value: Expr },
     MsgBox { message: Expr },
     RecordSet { var: String, field: String, value: Expr }, // p.x = val
     DimRecord      { var: String, type_name: String },      // Dim p As PersonType
@@ -260,7 +321,6 @@ pub enum Stmt {
     DimMulti(Vec<Stmt>),
     RecordSetNested { var: String, fields: Vec<String>, value: Expr },    // p.a.b = val
     ArrayRecordSet  { name: String, indices: Vec<Expr>, field: String, value: Expr }, // arr(i).f=v
-    WithRecord      { var: String, body: Vec<SpannedStmt> },      // With p ... End With
     /// A no-op the parser inserted because the construct on this line isn't
     /// recognized/implemented (as opposed to `Dim`, which is intentionally
     /// a no-op by design). Executes as a true no-op in the VM, same as

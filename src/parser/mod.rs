@@ -148,20 +148,16 @@ struct Parser {
     /// Parallel to `tokens`: (start, end) char-offset span of each token.
     spans: Vec<(u32, u32)>,
     pos: usize,
-    /// Variable name currently targeted by `With p` (None outside a With block).
-    with_target: Option<String>,
-    /// Range address currently targeted by `With Range("addr")` (None
-    /// outside such a block) — lets a bare `.Value`/`.Formula` inside the
-    /// body (no explicit `.Range(...)`/`.Cells(...)` prefix) resolve
-    /// against this address, the same way `with_target` lets a bare
-    /// `.Field` resolve against a UDT variable. Shadowed/restored the same
-    /// way `with_target` is, so nested With blocks of either kind work.
-    with_range_target: Option<String>,
+    // No With-target state lives here any more. `With` targets used to be
+    // resolved by a parse-time textual rewrite (a literal `Range("...")`
+    // address or a bare UDT variable name substituted into every statement
+    // of the body); they are now resolved once at runtime against the VM's
+    // own With stack — see `ast::WithTarget` / `ast::WithMember`.
 }
 
 impl Parser {
     fn new(tokens: Vec<Tok>, spans: Vec<(u32, u32)>) -> Self {
-        Parser { tokens, spans, pos: 0, with_target: None, with_range_target: None }
+        Parser { tokens, spans, pos: 0 }
     }
 
     fn peek(&self) -> &Tok {
@@ -228,18 +224,51 @@ impl Parser {
         while *self.peek() == Tok::Newline { self.advance(); }
     }
 
-    fn eat_eol(&mut self) -> Result<(), String> {
+    /// Consumes whatever ends the statement just parsed: a newline, EOF, or
+    /// a `:` statement separator (real VBA's multi-statement-per-line form,
+    /// `a = 1: b = 2`). A `:` is consumed but *no* newline is — the caller's
+    /// own statement loop simply parses the next statement from the same
+    /// line, so each one keeps its own `SourceSpan` exactly the way
+    /// newline-separated statements already do. `:` reaches here as its own
+    /// `Tok::Colon` (the tokenizer never produces one from inside a string
+    /// literal, and `:=` is a separate `Tok::ColonEq`), so this can't
+    /// misfire on `MsgBox "10:30"` or a `Destination:=` named argument. A
+    /// label's own trailing `:` is also consumed here — `parse_ident_stmt`
+    /// deliberately leaves it in place so `label1: a = 1` works.
+    fn eat_stmt_end(&mut self) -> Result<(), String> {
         match self.peek() {
             Tok::Newline => { self.advance(); Ok(()) }
             Tok::Eof     => Ok(()),
+            Tok::Colon   => {
+                // `a = 1:: b = 2` — an empty statement between two colons is
+                // legal VBA and means nothing; collapse a run of them.
+                while *self.peek() == Tok::Colon { self.advance(); }
+                Ok(())
+            }
             t => Err(format!("expected newline, got {:?}", t)),
         }
     }
 
-    // Consume to end of line (inclusive of the newline token)
+    // Consume to end of line (inclusive of the newline token). Deliberately
+    // does NOT stop at a `:` — its callers skip a whole *line* (a block
+    // header, an `Option` declaration), not one statement.
     fn skip_to_eol(&mut self) {
-        while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
-        if *self.peek() == Tok::Newline { self.advance(); }
+        loop {
+            match self.peek() {
+                Tok::Newline => { self.advance(); return; }
+                Tok::Eof => return,
+                _ => { self.advance(); }
+            }
+        }
+    }
+
+    /// Consume up to (not including) whatever ends the current statement —
+    /// newline, EOF, or a `:` separator. The `skip_to_eol` sibling for the
+    /// "this line isn't recognized, skip it" paths that run *inside*
+    /// `parse_simple_stmt_no_eol`, so an unrecognized statement doesn't
+    /// swallow the colon-separated statements after it on the same line.
+    fn skip_to_stmt_end(&mut self) {
+        while !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
     }
 
     fn is_end_kw(&self, kw: &str) -> bool {
@@ -386,7 +415,7 @@ impl Parser {
     fn parse_type_def(&mut self) -> Result<TypeDef, String> {
         self.expect_ident("type")?;
         let name = self.consume_ident()?.to_lowercase();
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let mut fields = vec![];
         loop {
             self.skip_nl();
@@ -415,7 +444,7 @@ impl Parser {
         self.expect_tok(Tok::LParen)?;
         let params = self.parse_params()?;
         self.expect_tok(Tok::RParen)?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_end_kw("sub"))?;
         self.consume_end_kw("sub")?;
         self.skip_nl();
@@ -431,14 +460,14 @@ impl Parser {
         // Optional return-type annotation: `Function f(...) As Integer`.
         // Not enforced anywhere (elixcee is dynamically typed at runtime,
         // same as every parameter's own `As <Type>` — see `parse_params`),
-        // just consumed so it doesn't trip `eat_eol()` below. Previously
+        // just consumed so it doesn't trip `eat_stmt_end()` below. Previously
         // unhandled entirely: `Function f(x As Integer) As Integer` failed
         // with "expected newline, got Ident(\"as\")" right here.
         if self.is_ident("as") {
             self.advance();
             self.consume_ident()?;
         }
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_end_kw("function"))?;
         self.consume_end_kw("function")?;
         self.skip_nl();
@@ -467,6 +496,16 @@ impl Parser {
         match self.peek() {
             Tok::Eof | Tok::Newline => return Ok(None),
             Tok::Ident(_) => {}
+            // A bare `.member` statement inside a With body. Handled here,
+            // in the general statement dispatch, so it is valid wherever a
+            // statement is — including inside an `If`/`For`/`Do`/`Select
+            // Case` nested in the body, which the old With-body-only
+            // special case never reached.
+            Tok::Dot => {
+                let s = self.parse_with_dot_stmt()?;
+                self.eat_stmt_end()?;
+                return Ok(Some(s));
+            }
             _ => return Err(format!("unexpected token starting statement: {:?}", self.peek())),
         }
 
@@ -480,13 +519,13 @@ impl Parser {
         // caught by `prop_vba_assignment_parses` before it shipped).
         if *self.peek_at(1) == Tok::Eq {
             let s = self.parse_ident_stmt()?;
-            self.eat_eol()?;
+            self.eat_stmt_end()?;
             return Ok(Some(s));
         }
 
         // Block constructs self-manage their own terminator (End X / Next /
         // Loop / Wend, each already followed by `skip_nl()`) — they don't
-        // go through `parse_simple_stmt_no_eol`/`eat_eol()` at all, and
+        // go through `parse_simple_stmt_no_eol`/`eat_stmt_end()` at all, and
         // (being blocks, not single statements) don't belong inside a
         // single-line `If`'s Then/Else branch either.
         if self.is_ident("do")     { return Ok(Some(self.parse_do_loop()?)); }
@@ -498,7 +537,7 @@ impl Parser {
         if self.is_ident("while")  { return Ok(Some(self.parse_while_wend()?)); }
 
         let s = self.parse_simple_stmt_no_eol()?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         Ok(Some(s))
     }
 
@@ -507,7 +546,7 @@ impl Parser {
     /// which self-manage their own terminator and don't make sense inside
     /// a single-line `If`'s Then/Else branch anyway) — WITHOUT consuming
     /// the trailing newline/terminator. Shared by `parse_stmt` (which calls
-    /// `eat_eol()` right after) and `parse_single_line_if_branch` (which
+    /// `eat_stmt_end()` right after) and `parse_single_line_if_branch` (which
     /// checks for `Else`/newline itself instead) — extracted specifically
     /// so a single-line `If`'s branches get the *same* statement coverage
     /// block-form VBA already has. Before this, `parse_single_line_if_branch`
@@ -585,13 +624,13 @@ impl Parser {
                 } else if self.is_ident("const") {
                     self.parse_const()
                 } else {
-                    while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                    self.skip_to_stmt_end();
                     Ok(Stmt::Dim)
                 }
             }
             // Debug.Print / Debug.Assert → no-op
             "debug" => {
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: "Debug.Print/Debug.Assert has no effect (no-op)".to_string(),
                 })
@@ -613,7 +652,7 @@ impl Parser {
             self.advance();
             Some(self.parse_expr()?)
         } else { None };
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("next"))?;
         self.expect_ident("next")?;
         if matches!(self.peek(), Tok::Ident(_)) { self.advance(); } // optional loop var
@@ -627,7 +666,7 @@ impl Parser {
         let var = self.consume_ident()?;
         self.expect_ident("in")?;
         let range_addr = self.parse_for_each_source()?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("next"))?;
         self.expect_ident("next")?;
         if matches!(self.peek(), Tok::Ident(_)) { self.advance(); }
@@ -652,10 +691,13 @@ impl Parser {
         self.expect_ident("if")?;
         let condition = self.parse_expr()?;
         self.expect_ident("then")?;
-        if !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+        // `Tok::Colon` counts as end-of-header, not the start of a
+        // single-line branch: `If x Then:` ... `End If` is the block form
+        // with an empty statement after `Then`, not a one-liner.
+        if !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon) {
             return self.parse_single_line_if(condition);
         }
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let then_body = self.parse_stmts(|p| {
             p.is_elseif() || p.is_ident("else") || p.is_end_kw("if")
         })?;
@@ -663,7 +705,7 @@ impl Parser {
             self.parse_elseif_chain()?
         } else if self.is_ident("else") {
             self.advance(); // "else"
-            self.eat_eol()?;
+            self.eat_stmt_end()?;
             self.parse_stmts(|p| p.is_end_kw("if"))?
         } else {
             vec![]
@@ -678,15 +720,33 @@ impl Parser {
     /// `ElseIf`. Entered once `parse_if` sees a non-newline token right
     /// after `Then`.
     fn parse_single_line_if(&mut self, condition: Expr) -> Result<Stmt, String> {
-        let then_body = vec![self.parse_single_line_if_branch()?];
+        let then_body = self.parse_single_line_if_branch_list()?;
         let else_body = if self.is_ident("else") {
             self.advance();
-            vec![self.parse_single_line_if_branch()?]
+            self.parse_single_line_if_branch_list()?
         } else {
             vec![]
         };
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         Ok(Stmt::If { condition, then_body, else_body })
+    }
+
+    /// One single-line-`If` branch: a `:`-separated *list* of statements, not
+    /// just one. Microsoft's own If...Then...Else reference documents
+    /// `statements` as "One or more statements separated by colons; executed
+    /// if condition is True", with the worked example
+    /// `If A > 10 Then A = A + 1 : B = B + A : C = C + B`. The same applies
+    /// to `elsestatements` after `Else` — a single-line `If` ends only at
+    /// end-of-line, so `If x Then a = 1 Else b = 2: c = 3` puts *both*
+    /// `b = 2` and `c = 3` in the Else branch.
+    fn parse_single_line_if_branch_list(&mut self) -> Result<Vec<SpannedStmt>, String> {
+        let mut out = vec![self.parse_single_line_if_branch()?];
+        while *self.peek() == Tok::Colon {
+            while *self.peek() == Tok::Colon { self.advance(); }
+            if matches!(self.peek(), Tok::Newline | Tok::Eof) || self.is_ident("else") { break; }
+            out.push(self.parse_single_line_if_branch()?);
+        }
+        Ok(out)
     }
 
     /// One inline statement for a single-line `If`/`Else` branch — reuses
@@ -708,7 +768,9 @@ impl Parser {
         let stmt = if matches!(self.peek(), Tok::Ident(_)) {
             self.parse_simple_stmt_no_eol()?
         } else {
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) && !self.is_ident("else") {
+            while !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon)
+                && !self.is_ident("else")
+            {
                 self.advance();
             }
             Stmt::Unsupported {
@@ -725,7 +787,7 @@ impl Parser {
         self.consume_elseif();
         let condition = self.parse_expr()?;
         self.expect_ident("then")?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let then_body = self.parse_stmts(|p| {
             p.is_elseif() || p.is_ident("else") || p.is_end_kw("if")
         })?;
@@ -733,7 +795,7 @@ impl Parser {
             self.parse_elseif_chain()?
         } else if self.is_ident("else") {
             self.advance();
-            self.eat_eol()?;
+            self.eat_stmt_end()?;
             self.parse_stmts(|p| p.is_end_kw("if"))?
         } else {
             vec![]
@@ -748,7 +810,7 @@ impl Parser {
         let pre_cond = if self.is_ident("while") || self.is_ident("until") {
             Some(self.parse_do_cond()?)
         } else { None };
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("loop"))?;
         self.expect_ident("loop")?;
         let post_cond = if self.is_ident("while") || self.is_ident("until") {
@@ -768,7 +830,7 @@ impl Parser {
     fn parse_while_wend(&mut self) -> Result<Stmt, String> {
         self.expect_ident("while")?;
         let condition = self.parse_expr()?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("wend"))?;
         self.expect_ident("wend")?;
         self.skip_nl();
@@ -783,7 +845,7 @@ impl Parser {
         self.expect_ident("select")?;
         self.expect_ident("case")?;
         let expr = self.parse_expr()?;
-        self.eat_eol()?;
+        self.eat_stmt_end()?;
         self.skip_nl();
         let mut cases = vec![];
         let mut else_body = vec![];
@@ -795,11 +857,11 @@ impl Parser {
             self.advance(); // "case"
             if self.is_ident("else") {
                 self.advance(); // "else"
-                self.eat_eol()?;
+                self.eat_stmt_end()?;
                 else_body = self.parse_stmts(|p| p.is_ident("case") || p.is_end_kw("select"))?;
             } else {
                 let matches = self.parse_case_match_list()?;
-                self.eat_eol()?;
+                self.eat_stmt_end()?;
                 let body = self.parse_stmts(|p| p.is_ident("case") || p.is_end_kw("select"))?;
                 cases.push((matches, body));
             }
@@ -851,6 +913,18 @@ impl Parser {
         Ok(op)
     }
 
+    /// `With <target> ... End With`. The target is captured as an
+    /// unevaluated `WithTarget` and resolved **once at runtime**, on block
+    /// entry — this used to be a parse-time rewrite that substituted a
+    /// literal `Range("...")` address or a bare UDT variable name into every
+    /// statement of the body, which is why a computed target (`With
+    /// Cells(r, c)`) couldn't be expressed at all.
+    ///
+    /// `With Sheets("name")`/`Worksheets("name")` keeps its own
+    /// `Stmt::WithSheet` variant: that path was already runtime-resolved
+    /// (the VM swaps `active_sheet` around the body), and it also pushes the
+    /// sheet onto the runtime With stack so bare `.member` statements
+    /// resolve against it.
     fn parse_with(&mut self) -> Result<Stmt, String> {
         self.expect_ident("with")?;
 
@@ -861,53 +935,53 @@ impl Parser {
                 self.advance();
                 let name = self.consume_str()?.to_lowercase();
                 self.expect_tok(Tok::RParen)?;
-                self.eat_eol()?;
+                self.eat_stmt_end()?;
                 let body = self.parse_with_body()?;
                 self.consume_end_kw("with")?;
                 self.skip_nl();
                 return Ok(Stmt::WithSheet { sheet_name: name, body });
-            } else {
-                self.skip_to_eol();
             }
+            self.skip_to_eol();
             let body = self.parse_with_body()?;
             self.consume_end_kw("with")?;
             self.skip_nl();
-            return Ok(Stmt::With { body });
+            return Ok(Stmt::With { target: WithTarget::Unmodeled, body });
         }
 
-        // ── Range("addr") — literal address on the active sheet ──────────────
-        // Same literal-only scope as the `Sheets("name")` branch above (no
-        // general expression target); a bare `.Value`/`.Formula` inside the
-        // body resolves against this address via `with_range_target`, the
-        // Range-target twin of `with_target` (UDT fields).
-        if self.is_ident("range") {
-            self.advance();
-            self.expect_tok(Tok::LParen)?;
-            let addr = self.consume_str()?;
+        // ── Cells(row, col) — a computed single-cell target ──────────────────
+        if self.is_ident("cells") && *self.peek_at(1) == Tok::LParen {
+            self.advance(); // 'cells'
+            self.advance(); // '('
+            let row = self.parse_expr()?;
+            self.expect_tok(Tok::Comma)?;
+            let col = self.parse_expr()?;
             self.expect_tok(Tok::RParen)?;
-            self.eat_eol()?;
-            let prev_with_target = self.with_target.take();
-            let prev_range_target = self.with_range_target.replace(addr);
-            let body = self.parse_with_body()?;
-            self.with_target = prev_with_target;
-            self.with_range_target = prev_range_target;
-            self.consume_end_kw("with")?;
-            self.skip_nl();
-            return Ok(Stmt::With { body });
+            return self.finish_with(WithTarget::Cells(row, col));
         }
 
-        // ── With <variable> — UDT target ─────────────────────────────────────
-        if let Tok::Ident(_) = self.peek().clone() {
-            let var = self.consume_ident()?.to_lowercase();
-            self.eat_eol()?;
-            let prev = self.with_target.replace(var.clone());
-            let prev_range_target = self.with_range_target.take();
+        // ── Any object expression: Range("addr"), Union(...), <var>.Areas(n) ──
+        if self.is_ident("range") || self.is_ident("union") {
+            if let Some(obj) = self.parse_object_expr()? {
+                return self.finish_with(WithTarget::Object(obj));
+            }
+            // Unrecognized shape — fall through to the no-op body below,
+            // same leniency `parse_set` gives an unmodeled object target.
+            self.skip_to_eol();
             let body = self.parse_with_body()?;
-            self.with_target = prev;
-            self.with_range_target = prev_range_target;
             self.consume_end_kw("with")?;
             self.skip_nl();
-            return Ok(Stmt::WithRecord { var, body });
+            return Ok(Stmt::With { target: WithTarget::Unmodeled, body });
+        }
+
+        // ── With <identifier> ────────────────────────────────────────────────
+        // A Set-assigned Range/Worksheet object variable OR a UDT variable.
+        // The parser can't tell which; the VM resolves it (see
+        // `WithTarget::Var`). A trailing `.something` (e.g.
+        // `With ws.Range("A1:B2")`) isn't modeled — skip to the no-op body
+        // rather than mis-parsing it as a bare variable target.
+        if matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek_at(1), Tok::Newline | Tok::Eof | Tok::Colon) {
+            let var = self.consume_ident()?.to_lowercase();
+            return self.finish_with(WithTarget::Var(var));
         }
 
         // ── Generic / Application etc. — no-op body ───────────────────────────
@@ -915,121 +989,102 @@ impl Parser {
         let body = self.parse_with_body()?;
         self.consume_end_kw("with")?;
         self.skip_nl();
-        Ok(Stmt::With { body })
+        Ok(Stmt::With { target: WithTarget::Unmodeled, body })
     }
 
+    /// Shared tail of every recognized `With` target: eat the header's
+    /// terminator, parse the body, consume `End With`.
+    fn finish_with(&mut self, target: WithTarget) -> Result<Stmt, String> {
+        self.eat_stmt_end()?;
+        let body = self.parse_with_body()?;
+        self.consume_end_kw("with")?;
+        self.skip_nl();
+        Ok(Stmt::With { target, body })
+    }
+
+    /// A With body is an ordinary statement list — `parse_stmt` recognizes a
+    /// leading `.` on its own now, so nothing here special-cases it and a
+    /// bare `.member` works at any nesting depth inside the body.
     fn parse_with_body(&mut self) -> Result<Vec<SpannedStmt>, String> {
-        let mut stmts = vec![];
-        loop {
-            self.skip_nl();
-            if self.is_end_kw("with") || *self.peek() == Tok::Eof { break; }
-            let start = self.peek_span().start;
-            let stmt = if *self.peek() == Tok::Dot {
-                // with_cell_write, with_range_write, or with_dot_stmt
-                self.parse_with_dot_stmt()?
-            } else {
-                self.parse_stmt()?
-            };
-            if let Some(stmt) = stmt {
-                let end = self.peek_span().start;
-                stmts.push(SpannedStmt { stmt, span: SourceSpan { start, end } });
-            }
-        }
-        Ok(stmts)
+        self.parse_stmts(|p| p.is_end_kw("with"))
     }
 
-    fn parse_with_dot_stmt(&mut self) -> Result<Option<Stmt>, String> {
+    /// One statement beginning with a bare `.` — `.Value = 1`,
+    /// `.Cells(r, c).Value = v`, `.Range("A1").Formula = f`, `.a.b = 2`, or
+    /// a read-only `.Method` with no assignment (a no-op). Reached from
+    /// `parse_stmt`, so it is valid wherever a statement is, including
+    /// inside an `If`/`For`/`Do`/`Select Case` nested in a With body — the
+    /// gap the old parse-time rewrite had.
+    fn parse_with_dot_stmt(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume '.'
-        match self.peek().clone() {
-            Tok::Ident(ref s) => {
-                let s = s.clone();
-                // ── With Range("addr") target: bare .Value/.Formula = val ─────
-                if let Some(addr) = self.with_range_target.clone()
-                    && (s == "value" || s == "formula") {
-                        self.advance(); // consume 'value'/'formula'
-                        let is_formula = s == "formula";
-                        self.expect_tok(Tok::Eq)?;
-                        let value = self.parse_expr()?;
-                        self.eat_eol()?;
-                        return Ok(Some(Stmt::RangeWrite { addr, is_formula, value }));
-                    }
-                // ── UDT With target: .Field = val  /  .A.B = val ──────────────
-                if let Some(var) = self.with_target.clone()
-                    && s != "range" && s != "cells" {
-                        let field = self.consume_ident()?.to_lowercase();
-                        let mut fields = vec![field];
-                        // Collect chained fields: .A.B.C
-                        while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
-                            self.advance(); // consume '.'
-                            fields.push(self.consume_ident()?.to_lowercase());
-                        }
-                        if *self.peek() == Tok::Eq {
-                            self.advance();
-                            let value = self.parse_expr()?;
-                            self.eat_eol()?;
-                            return if fields.len() == 1 {
-                                Ok(Some(Stmt::RecordSet { var, field: fields.remove(0), value }))
-                            } else {
-                                Ok(Some(Stmt::RecordSetNested { var, fields, value }))
-                            };
-                        }
-                        // No '=' → read without assignment has no effect
-                        self.skip_to_eol();
-                        return Ok(Some(Stmt::Unsupported {
-                            reason: format!(
-                                "'{}.{}' read without assignment has no effect",
-                                var,
-                                fields.join(".")
-                            ),
-                        }));
-                    }
-                match s.as_str() {
-                    "range" => {
-                        // .Range("addr").Value/Formula = expr
-                        self.advance();
-                        self.expect_tok(Tok::LParen)?;
-                        let addr = self.consume_str()?;
-                        self.expect_tok(Tok::RParen)?;
-                        self.expect_tok(Tok::Dot)?;
-                        let prop = self.consume_ident()?;
-                        let is_formula = prop == "formula";
-                        self.expect_tok(Tok::Eq)?;
-                        let value = self.parse_expr()?;
-                        self.eat_eol()?;
-                        Ok(Some(Stmt::RangeWrite { addr, is_formula, value }))
-                    }
-                    "cells" => {
-                        // .Cells(r, c).Value = expr
-                        self.advance();
-                        self.expect_tok(Tok::LParen)?;
-                        let row = self.parse_expr()?;
-                        self.expect_tok(Tok::Comma)?;
-                        let col = self.parse_expr()?;
-                        self.expect_tok(Tok::RParen)?;
-                        self.expect_tok(Tok::Dot)?;
-                        self.expect_ident("value")?;
-                        self.expect_tok(Tok::Eq)?;
-                        let value = self.parse_expr()?;
-                        self.eat_eol()?;
-                        Ok(Some(Stmt::CellWrite { row, col, value }))
-                    }
-                    _ => {
-                        // with_dot_stmt: unrecognized property/method
-                        self.skip_to_eol();
-                        Ok(Some(Stmt::Unsupported {
-                            reason: format!("With-block '.{}' is not implemented", s),
-                        }))
-                    }
-                }
-            }
+        let head = match self.peek() {
+            Tok::Ident(s) => s.clone(),
             _ => {
-                self.skip_to_eol();
-                Ok(Some(Stmt::Unsupported {
+                self.skip_to_stmt_end();
+                return Ok(Stmt::Unsupported {
                     reason: "With-block dotted statement is not recognized and was skipped"
                         .to_string(),
-                }))
+                });
             }
+        };
+
+        // `.Cells(r, c)...` / `.Range("addr")...` — a qualified member of the
+        // With target, not a field of it. Guarded on an immediate `(` so a
+        // genuine UDT field literally named "cells"/"range" still parses as
+        // a field (the same caution `parse_ident_stmt` already takes).
+        if (head == "cells" || head == "range") && *self.peek_at(1) == Tok::LParen {
+            self.advance(); // head
+            self.advance(); // '('
+            let member = if head == "cells" {
+                let row = self.parse_expr()?;
+                self.expect_tok(Tok::Comma)?;
+                let col = self.parse_expr()?;
+                self.expect_tok(Tok::RParen)?;
+                let fields = self.parse_dot_field_chain()?;
+                WithMember::Cells { row: Box::new(row), col: Box::new(col), fields }
+            } else {
+                let addr = self.consume_str()?;
+                self.expect_tok(Tok::RParen)?;
+                let fields = self.parse_dot_field_chain()?;
+                WithMember::Range { addr, fields }
+            };
+            return self.finish_with_dot(member, &head);
         }
+
+        let mut fields = vec![self.consume_ident()?.to_lowercase()];
+        while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
+            self.advance(); // '.'
+            fields.push(self.consume_ident()?.to_lowercase());
+        }
+        let described = fields.join(".");
+        self.finish_with_dot(WithMember::Fields(fields), &described)
+    }
+
+    /// Zero or more `.field` segments after a `.Cells(...)`/`.Range(...)`
+    /// qualifier — `.Cells(1, 1).Value` yields `["value"]`.
+    fn parse_dot_field_chain(&mut self) -> Result<Vec<String>, String> {
+        let mut fields = vec![];
+        while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
+            self.advance(); // '.'
+            fields.push(self.consume_ident()?.to_lowercase());
+        }
+        Ok(fields)
+    }
+
+    /// Requires the `= <expr>` that turns a bare `.member` into a statement.
+    /// Without one it's a property/method *read*, which has no effect —
+    /// degraded to `Stmt::Unsupported` rather than a parse error, the same
+    /// no-op-on-unmodeled-construct precedent used everywhere else here.
+    fn finish_with_dot(&mut self, member: WithMember, described: &str) -> Result<Stmt, String> {
+        if *self.peek() == Tok::Eq {
+            self.advance();
+            let value = self.parse_expr()?;
+            return Ok(Stmt::WithDot { member, value });
+        }
+        self.skip_to_stmt_end();
+        Ok(Stmt::Unsupported {
+            reason: format!("With-block '.{}' read without assignment has no effect", described),
+        })
     }
 
     fn parse_exit(&mut self) -> Result<Stmt, String> {
@@ -1094,7 +1149,7 @@ impl Parser {
     /// One `Dim`/`Public`/`Private`/`Static` declarator: `name [(sizes)] [As
     /// TypeName]`. Consumes exactly the declarator's own tokens — trailing
     /// `, nextDecl` is left for the caller's comma loop, and the terminating
-    /// newline is left for the statement dispatcher's `eat_eol()`.
+    /// newline is left for the statement dispatcher's `eat_stmt_end()`.
     fn parse_dim_declarator(&mut self) -> Result<Stmt, String> {
         // dim_array_decl: ident (
         if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::LParen {
@@ -1129,17 +1184,17 @@ impl Parser {
             // per-declarator syntax this grammar doesn't model (e.g. `As
             // String * 10`'s fixed-length-string suffix) up to the next
             // declarator-separating comma, so it reaches the outer comma
-            // loop instead of hard-failing at `eat_eol()` — the
+            // loop instead of hard-failing at `eat_stmt_end()` — the
             // single-declarator form had this same tolerance (bounded by
             // EOL instead of comma) before the comma loop existed.
-            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof) { self.advance(); }
+            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
             Ok(Stmt::DimBare { var })
         } else {
             // Not even an identifier here (malformed `Dim`) — same
             // permissive no-op the pre-comma-loop parser gave any
             // unparseable `Dim` line, just bounded by comma now so a
             // trailing `, nextDecl` still reaches the outer loop.
-            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof) { self.advance(); }
+            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
             Ok(Stmt::Dim)
         }
     }
@@ -1162,10 +1217,10 @@ impl Parser {
             None => {
                 // NOT `skip_to_eol()` — that also consumes the trailing
                 // newline, and `parse_stmt`'s "set" dispatch arm already
-                // calls `eat_eol()` after this returns (same double-
+                // calls `eat_stmt_end()` after this returns (same double-
                 // consumption pitfall `parse_ident_stmt`'s "bare ident"
                 // no-op branch avoids the same way).
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: format!(
                         "'Set {} = ...' targets an unmodeled object expression and was skipped",
@@ -1443,13 +1498,11 @@ impl Parser {
                     }),
                     _ => {
                         // Leave the trailing newline for the caller's own
-                        // `eat_eol()` (the "range" dispatch arm) — unlike
+                        // `eat_stmt_end()` (the "range" dispatch arm) — unlike
                         // `skip_to_eol()`, which would consume it too and
                         // cause a spurious "expected newline" error when
                         // this is the last statement before End Sub.
-                        while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                            self.advance();
-                        }
+                        self.skip_to_stmt_end();
                         Ok(Stmt::Unsupported {
                             reason: format!("EntireRow/EntireColumn.{} is not implemented", method),
                         })
@@ -1467,7 +1520,7 @@ impl Parser {
             }
             _ => {
                 // range_noop_stmt
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: format!("Range property/method '{}' is not implemented", prop),
                 })
@@ -1645,9 +1698,7 @@ impl Parser {
                 })
             }
             _ => {
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                    self.advance();
-                }
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: format!("Sheets(...).{} is not implemented", method),
                 })
@@ -1663,17 +1714,13 @@ impl Parser {
             self.advance(); // dot
             let method = self.consume_ident()?;
             if method == "add" {
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                    self.advance();
-                }
+                self.skip_to_stmt_end();
                 return Ok(Stmt::SheetsAdd);
             }
-            // Leave the trailing newline for the caller's own `eat_eol()`
+            // Leave the trailing newline for the caller's own `eat_stmt_end()`
             // (the "worksheets"/"sheets" dispatch arm) — see the identical
             // note on the EntireRow/EntireColumn fallback above.
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                self.advance();
-            }
+            self.skip_to_stmt_end();
             return Ok(Stmt::Unsupported {
                 reason: format!("Sheets.{} is not implemented", method),
             });
@@ -1696,9 +1743,7 @@ impl Parser {
         self.expect_tok(Tok::RParen)?;
         self.expect_tok(Tok::Dot)?;
         if !(self.is_ident("worksheets") || self.is_ident("sheets")) {
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                self.advance();
-            }
+            self.skip_to_stmt_end();
             return Ok(Stmt::Unsupported {
                 reason:
                     "Workbooks(...) is only supported followed by .Worksheets(...)/.Sheets(...)"
@@ -1719,9 +1764,11 @@ impl Parser {
     // ident-starting: assignment, array_write, call_stmt (without Call keyword)
     fn parse_ident_stmt(&mut self) -> Result<Stmt, String> {
         let name = self.consume_ident()?;
-        // Label: "ErrHandler:"
+        // Label: "ErrHandler:". The `:` is deliberately NOT consumed here —
+        // `eat_stmt_end` takes it as the statement terminator, which is what
+        // makes real VBA's `label1: a = 1` (a label and a statement on one
+        // line) parse as two statements rather than a parse error.
         if *self.peek() == Tok::Colon {
-            self.advance();
             return Ok(Stmt::Label(name));
         }
         if *self.peek() == Tok::LParen {
@@ -1751,11 +1798,9 @@ impl Parser {
                     Ok(Stmt::ArrayRecordSet { name, indices: args, field, value })
                 } else {
                     // Leave the trailing newline for the caller's own
-                    // `eat_eol()` (the ident-statement dispatch fallback) —
+                    // `eat_stmt_end()` (the ident-statement dispatch fallback) —
                     // see the identical note on the EntireRow fallback above.
-                    while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                        self.advance();
-                    }
+                    self.skip_to_stmt_end();
                     Ok(Stmt::Unsupported {
                         reason: format!(
                             "'{}(...).{}' read without assignment has no effect",
@@ -1850,10 +1895,8 @@ impl Parser {
             } else {
                 // p.Method / property access without assignment — skip to
                 // EOL (noop). Leave the trailing newline for the caller's
-                // own `eat_eol()` — see the identical note above.
-                while !matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                    self.advance();
-                }
+                // own `eat_stmt_end()` — see the identical note above.
+                self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: format!(
                         "'{}.{}' read without assignment has no effect",
@@ -1864,7 +1907,7 @@ impl Parser {
             }
         } else {
             // Bare ident — noop
-            while !matches!(self.peek(), Tok::Newline | Tok::Eof) { self.advance(); }
+            self.skip_to_stmt_end();
             Ok(Stmt::Unsupported {
                 reason: format!(
                     "'{}' as a bare statement (no Call keyword or parentheses) is not supported and was skipped",
@@ -1949,6 +1992,21 @@ impl Parser {
 
     fn parse_comparison(&mut self) -> Result<Expr, String> {
         let mut lhs = self.parse_concat()?;
+        // `<var> Is Nothing` — an object-identity comparison, at the same
+        // precedence tier as the value comparisons below (Microsoft's own
+        // comparison-operators reference lists `result = object1 Is object2`
+        // alongside them). Only the `Is Nothing` right-hand side is modeled;
+        // a general `a Is b` is left unparsed rather than guessed at, and
+        // `Case Is > 5` never reaches here (parse_case_match consumes its own
+        // `Is` before ever calling parse_expr).
+        if self.is_ident("is") && self.is_ident_at(1, "nothing")
+            && let Expr::Var(name) = &lhs
+        {
+            let name = name.clone();
+            self.advance(); // 'is'
+            self.advance(); // 'nothing'
+            lhs = Expr::IsNothing(name);
+        }
         loop {
             let op = match self.peek() {
                 Tok::Eq    => VbaBinOp::Eq,
@@ -2120,31 +2178,18 @@ impl Parser {
                     _ => self.parse_ident_expr(),
                 }
             }
-            // ── bare `.Value` inside a `With Range("addr")` block ─────────────
-            Tok::Dot if self.with_range_target.is_some() && self.is_ident_at(1, "value") => {
-                let addr = self.with_range_target.clone().expect("checked by guard above");
-                self.advance(); // consume '.'
-                self.advance(); // consume 'value'
-                Ok(Expr::RangeRead { addr })
-            }
-            // ── `.Field` inside a `With p` block ──────────────────────────────
+            // ── A bare `.member` read inside a With body ──────────────────────
+            // e.g. the right-hand side of `.Value = .Value + 1`. Resolved
+            // against the innermost active With target at runtime, so this
+            // needs no parser state and works at any nesting depth.
             Tok::Dot => {
-                if let Some(var) = self.with_target.clone() {
+                self.advance(); // consume '.'
+                let mut fields = vec![self.consume_ident()?.to_lowercase()];
+                while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
                     self.advance(); // consume '.'
-                    let field = self.consume_ident()?.to_lowercase();
-                    let mut fields = vec![field];
-                    while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
-                        self.advance(); // consume '.'
-                        fields.push(self.consume_ident()?.to_lowercase());
-                    }
-                    if fields.len() == 1 {
-                        Ok(Expr::RecordGet { var, field: fields.remove(0) })
-                    } else {
-                        Ok(Expr::RecordGetNested { var, fields })
-                    }
-                } else {
-                    Err("Unexpected '.' outside With block".into())
+                    fields.push(self.consume_ident()?.to_lowercase());
                 }
+                Ok(Expr::WithDot(fields))
             }
             t => Err(format!("unexpected token in expression: {:?}", t)),
         }
@@ -2688,7 +2733,7 @@ mod tests {
     #[test] fn test_dim_fixed_length_string_trailing_syntax_is_tolerated() {
         // `As String * 10`'s fixed-length suffix isn't modeled by
         // `parse_dim_declarator`, but it must still be tolerated (consumed,
-        // not left for `eat_eol()` to choke on) the same way a
+        // not left for `eat_stmt_end()` to choke on) the same way a
         // single-declarator `Dim` always tolerated unmodeled trailing
         // syntax on its own line, before the comma loop existed.
         let body = parse_body("Sub MySub()\n    Dim s As String * 10\n    s = \"hi\"\nEnd Sub\n");
@@ -2706,12 +2751,12 @@ mod tests {
     }
     #[test] fn test_with_block() {
         let body = parse_body("Sub MySub()\n    With Sheet1\n        .Cells(1, 1).Value = 99\n    End With\nEnd Sub\n");
-        // `With Sheet1` is now parsed as WithRecord (plain identifier target).
-        // Both WithRecord and With execute their body identically at runtime.
+        // `With Sheet1` is a bare-identifier target — `WithTarget::Var`,
+        // resolved at runtime (it may name a Set-assigned object variable
+        // or a UDT record; the parser can't tell).
         let body_len = match &body[0] {
-            Stmt::WithRecord { body, .. } => body.len(),
-            Stmt::With { body }           => body.len(),
-            _ => panic!("expected With or WithRecord"),
+            Stmt::With { target: WithTarget::Var(v), body } if v == "sheet1" => body.len(),
+            other => panic!("expected With {{ target: Var(\"sheet1\") }}, got {:?}", other),
         };
         assert_eq!(body_len, 1);
     }
@@ -2719,13 +2764,13 @@ mod tests {
     #[test] fn test_with_udt_field_read_without_assignment_is_unsupported() {
         let body = parse_body("Sub MySub()\n    With p\n        .Field\n    End With\nEnd Sub\n");
         let inner = match &body[0] {
-            Stmt::WithRecord { body, .. } => body,
-            other => panic!("expected WithRecord, got {:?}", other),
+            Stmt::With { body, .. } => body,
+            other => panic!("expected With, got {:?}", other),
         };
         assert_eq!(
             inner[0].stmt,
             Stmt::Unsupported {
-                reason: "'p.field' read without assignment has no effect".to_string()
+                reason: "With-block '.field' read without assignment has no effect".to_string()
             }
         );
     }
@@ -2741,7 +2786,7 @@ mod tests {
         assert_eq!(
             inner[0].stmt,
             Stmt::Unsupported {
-                reason: "With-block '.foo' is not implemented".to_string()
+                reason: "With-block '.foo' read without assignment has no effect".to_string()
             }
         );
     }
@@ -2750,8 +2795,8 @@ mod tests {
         // `.42` tokenizes as Dot, Int(42) — a non-identifier after the dot.
         let body = parse_body("Sub MySub()\n    With p\n        .42\n    End With\nEnd Sub\n");
         let inner = match &body[0] {
-            Stmt::WithRecord { body, .. } => body,
-            other => panic!("expected WithRecord, got {:?}", other),
+            Stmt::With { body, .. } => body,
+            other => panic!("expected With, got {:?}", other),
         };
         assert_eq!(
             inner[0].stmt,
@@ -3364,5 +3409,109 @@ mod tests {
             body,
             vec![Stmt::RecordSet { var: "p".into(), field: "sheets".into(), value: Expr::Integer(5) }]
         );
+    }
+
+    // ── `:` statement separator ──────────────────────────────────────────
+    // Real VBA's multi-statement-per-line form. Handled in the parser (the
+    // tokenizer's own `Tok::Colon`), never as a pre-tokenize string rewrite
+    // of `:` to a newline — which would corrupt `MsgBox "10:30"`, break the
+    // `label:` declaration form, and mangle a single-line `If`'s own
+    // Then/Else boundary. Each of those three is pinned below.
+
+    #[test] fn colon_separates_two_statements_on_one_line() {
+        let body = parse_body("Sub MySub()\n    a = 1: b = 2\nEnd Sub\n");
+        assert_eq!(body, vec![
+            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
+            Stmt::Assignment { var: "b".into(), value: Expr::Integer(2) },
+        ]);
+    }
+
+    #[test] fn colon_separates_three_statements_on_one_line() {
+        let body = parse_body("Sub MySub()\n    a = 1: b = 2: c = 3\nEnd Sub\n");
+        assert_eq!(body.len(), 3);
+        assert_eq!(body[2], Stmt::Assignment { var: "c".into(), value: Expr::Integer(3) });
+    }
+
+    #[test] fn colon_inside_a_string_literal_is_not_a_separator() {
+        // The load-bearing case against a naive `:`→newline pre-rewrite.
+        let body = parse_body("Sub MySub()\n    MsgBox \"10:30\": a = 1\nEnd Sub\n");
+        assert_eq!(body, vec![
+            Stmt::MsgBox { message: Expr::Str("10:30".into()) },
+            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
+        ]);
+    }
+
+    #[test] fn label_followed_by_a_statement_on_the_same_line() {
+        let body = parse_body("Sub MySub()\n    label1: a = 1\nEnd Sub\n");
+        assert_eq!(body, vec![
+            Stmt::Label("label1".into()),
+            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
+        ]);
+    }
+
+    #[test] fn a_bare_label_on_its_own_line_still_parses_as_just_a_label() {
+        let body = parse_body("Sub MySub()\n    errh:\n    a = 1\nEnd Sub\n");
+        assert_eq!(body, vec![
+            Stmt::Label("errh".into()),
+            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
+        ]);
+    }
+
+    #[test] fn single_line_if_then_takes_a_colon_separated_statement_list() {
+        // Microsoft's own worked example shape: every colon-separated
+        // statement after `Then` belongs to the Then branch.
+        let body = parse_body("Sub MySub()\n    If x > 10 Then a = 1: b = 2: c = 3\nEnd Sub\n");
+        match &body[0] {
+            Stmt::If { then_body, else_body, .. } => {
+                assert_eq!(then_body.len(), 3);
+                assert!(else_body.is_empty());
+            }
+            other => panic!("expected If, got {:?}", other),
+        }
+    }
+
+    #[test] fn single_line_if_else_takes_everything_after_else_on_the_line() {
+        let body = parse_body("Sub MySub()\n    If x Then a = 1 Else b = 2: c = 3\nEnd Sub\n");
+        match &body[0] {
+            Stmt::If { then_body, else_body, .. } => {
+                assert_eq!(then_body.len(), 1);
+                assert_eq!(else_body.len(), 2);
+            }
+            other => panic!("expected If, got {:?}", other),
+        }
+    }
+
+    #[test] fn colon_separated_statements_keep_their_own_distinct_spans() {
+        // Not collapsed into one span: an error on the second statement must
+        // point at the second statement, exactly as a newline-separated one
+        // would (`SourceSpan` accuracy is what `--json`'s `location` reports).
+        let sub = parse("Sub MySub()\n    a = 1: b = 2\nEnd Sub\n").unwrap()
+            .subs.into_iter().next().unwrap();
+        assert_ne!(sub.body[0].span.start, sub.body[1].span.start);
+        // `b` starts after `a = 1: ` on the same line.
+        assert!(sub.body[1].span.start > sub.body[0].span.start);
+    }
+
+    #[test] fn colon_terminates_a_block_construct_header_and_body() {
+        let body = parse_body("Sub MySub()\n    For i = 1 To 3: a = i: Next i\nEnd Sub\n");
+        match &body[0] {
+            Stmt::For { body, .. } => assert_eq!(body.len(), 1),
+            other => panic!("expected For, got {:?}", other),
+        }
+    }
+
+    #[test] fn trailing_colon_after_then_still_parses_as_a_block_if() {
+        let body = parse_body("Sub MySub()\n    If x Then:\n    a = 1\n    End If\nEnd Sub\n");
+        match &body[0] {
+            Stmt::If { then_body, .. } => assert_eq!(then_body.len(), 1),
+            other => panic!("expected block If, got {:?}", other),
+        }
+    }
+
+    #[test] fn named_argument_colon_equals_is_not_a_statement_separator() {
+        // `:=` tokenizes as `Tok::ColonEq`, never `Tok::Colon`.
+        let body = parse_body(
+            "Sub MySub()\n    Range(\"A1\").Copy Destination:=Range(\"B1\")\nEnd Sub\n");
+        assert_eq!(body.len(), 1);
     }
 }

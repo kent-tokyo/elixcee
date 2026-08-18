@@ -713,7 +713,10 @@ fn format_variant(v: &Variant) -> String {
         Variant::Boolean(b) => if *b { "TRUE".into() } else { "FALSE".into() },
         Variant::Date(s)    => serial_to_display(*s),
         Variant::Error(e)   => e.as_str().to_string(),
-        Variant::Empty      => String::new(),
+        // Null has no representable cell text, same as Empty — the
+        // Empty-vs-Null distinction is a VBA-language one (`IsNull`,
+        // `TypeName`), not a CSV/table-output one.
+        Variant::Empty | Variant::Null => String::new(),
         Variant::Array(_)   => "[array]".into(),
         Variant::Record(_)  => "[record]".into(),
     }
@@ -723,7 +726,7 @@ fn format_variant(v: &Variant) -> String {
 /// same selection the plain-text TSV output uses.
 fn cells_to_json(vm: &Vm) -> String {
     let mut cells: Vec<_> = vm.cells().iter()
-        .filter(|(_, c)| !matches!(c.value, Variant::Empty))
+        .filter(|(_, c)| !matches!(c.value, Variant::Empty | Variant::Null))
         .collect();
     cells.sort_by_key(|&(&(r, c), _)| (r, c));
 
@@ -872,7 +875,7 @@ fn main() {
 
     // Print non-empty cells sorted by (row, col)
     let mut cells: Vec<_> = vm.cells().iter()
-        .filter(|(_, c)| !matches!(c.value, Variant::Empty))
+        .filter(|(_, c)| !matches!(c.value, Variant::Empty | Variant::Null))
         .collect();
     cells.sort_by_key(|&(&(r, c), _)| (r, c));
 
