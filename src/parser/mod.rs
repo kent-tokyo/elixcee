@@ -1101,7 +1101,7 @@ impl Parser {
             // single-declarator form had this same tolerance (bounded by
             // EOL instead of comma) before the comma loop existed.
             while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof) { self.advance(); }
-            Ok(Stmt::Dim)
+            Ok(Stmt::DimBare { var })
         } else {
             // Not even an identifier here (malformed `Dim`) — same
             // permissive no-op the pre-comma-loop parser gave any
@@ -2617,11 +2617,17 @@ mod tests {
     }
     #[test] fn test_dim_is_noop() {
         let body = parse_body("Sub MySub()\n    Dim x As Integer\n    x = 42\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::Dim);
+        assert_eq!(body[0], Stmt::DimBare { var: "x".to_string() });
     }
     #[test] fn test_dim_multi_declarator_all_builtin() {
         let body = parse_body("Sub MySub()\n    Dim a As Integer, b As String\n    a = 1\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::DimMulti(vec![Stmt::Dim, Stmt::Dim]));
+        assert_eq!(
+            body[0],
+            Stmt::DimMulti(vec![
+                Stmt::DimBare { var: "a".to_string() },
+                Stmt::DimBare { var: "b".to_string() },
+            ])
+        );
     }
     #[test] fn test_dim_multi_declarator_mixed_record_type() {
         // The exact shape called out in CHANGELOG.md's Known limitations as
@@ -2631,7 +2637,7 @@ mod tests {
         assert_eq!(
             body[0],
             Stmt::DimMulti(vec![
-                Stmt::Dim,
+                Stmt::DimBare { var: "a".to_string() },
                 Stmt::DimRecord { var: "b".to_string(), type_name: "mytype".to_string() },
             ])
         );
@@ -2641,7 +2647,7 @@ mod tests {
         assert_eq!(
             body[0],
             Stmt::DimMulti(vec![
-                Stmt::Dim,
+                Stmt::DimBare { var: "a".to_string() },
                 Stmt::DimArray { name: "b".to_string(), sizes: vec![Expr::Integer(3)] },
                 Stmt::DimRecord { var: "c".to_string(), type_name: "mytype".to_string() },
             ])
@@ -2654,11 +2660,17 @@ mod tests {
         // single-declarator `Dim` always tolerated unmodeled trailing
         // syntax on its own line, before the comma loop existed.
         let body = parse_body("Sub MySub()\n    Dim s As String * 10\n    s = \"hi\"\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::Dim);
+        assert_eq!(body[0], Stmt::DimBare { var: "s".to_string() });
     }
     #[test] fn test_dim_fixed_length_string_mixed_with_comma_declarator() {
         let body = parse_body("Sub MySub()\n    Dim s As String * 10, i As Integer\n    i = 1\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::DimMulti(vec![Stmt::Dim, Stmt::Dim]));
+        assert_eq!(
+            body[0],
+            Stmt::DimMulti(vec![
+                Stmt::DimBare { var: "s".to_string() },
+                Stmt::DimBare { var: "i".to_string() },
+            ])
+        );
     }
     #[test] fn test_with_block() {
         let body = parse_body("Sub MySub()\n    With Sheet1\n        .Cells(1, 1).Value = 99\n    End With\nEnd Sub\n");

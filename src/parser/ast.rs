@@ -233,7 +233,18 @@ pub enum Stmt {
     GoTo(String),                      // GoTo <label>
     Resume { next: bool },             // Resume (false) / Resume Next (true)
     CallSub { name: String, args: Vec<Expr> },
+    /// A truly no-op `Dim`-shaped statement: reached only when no variable
+    /// name was actually available to record (a modifier — `Static`/
+    /// `Friend` — followed by neither `Dim` nor `Const`, or a malformed
+    /// `Dim` line with no identifier at all). Never introduces a name. A
+    /// genuine `Dim x [As BuiltinType]` is `DimBare` instead, below.
     Dim,
+    /// `Dim x` or `Dim x As <builtin type>` — a real declaration: `x` now
+    /// exists as `Empty` until assigned, matching real VBA (`IsEmpty(x)`
+    /// is `True` right after this runs, not an "undefined variable" error
+    /// — this variant is what makes that possible; the old bare `Dim`
+    /// never recorded the name at all).
+    DimBare { var: String },
     DimArray { name: String, sizes: Vec<Expr> },
     ReDim { name: String, sizes: Vec<Expr>, preserve: bool },
     ArrayWrite { name: String, indices: Vec<Expr>, value: Expr },

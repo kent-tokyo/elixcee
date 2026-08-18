@@ -232,6 +232,9 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::Resume { .. } => {}
             Stmt::CallSub { .. } => {}
             Stmt::Dim => {}
+            Stmt::DimBare { var } => {
+                names.insert(var.clone());
+            }
             Stmt::DimArray { name, .. } => {
                 names.insert(name.clone());
             }
@@ -255,7 +258,7 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::DimMulti(decls) => {
                 for d in decls {
                     match d {
-                        Stmt::DimRecord { var, .. } => { names.insert(var.clone()); }
+                        Stmt::DimRecord { var, .. } | Stmt::DimBare { var } => { names.insert(var.clone()); }
                         Stmt::DimArray { name, .. } | Stmt::DimArrayRecord { name, .. } => {
                             names.insert(name.clone());
                         }
@@ -528,6 +531,7 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             }
         }
         Stmt::Dim => {}
+        Stmt::DimBare { .. } => {}
         Stmt::DimArray { sizes, .. } => {
             for s in sizes {
                 out.push(s);

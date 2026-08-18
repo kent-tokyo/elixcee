@@ -2093,6 +2093,18 @@ impl Vm {
                 }
             }
             Stmt::Dim => {}
+            Stmt::DimBare { var } => {
+                // Registers the name as a real, Empty-valued variable —
+                // `IsEmpty(x)` must be True right after `Dim x` runs, not
+                // "Undefined variable" (the old bare `Stmt::Dim` never
+                // recorded the name at all). `entry(...).or_insert(...)`
+                // rather than an unconditional `insert`: if this statement
+                // somehow re-executes (e.g. inside a loop body — unusual
+                // VBA style, but not illegal), it must not reset an
+                // already-assigned value back to Empty, matching real
+                // VBA's own Dim-is-a-declaration-not-a-reset semantics.
+                self.variables.entry(var.clone()).or_insert(Variant::Empty);
+            }
             Stmt::DimMulti(decls) => {
                 for s in decls { self.exec_stmt_inner(s)?; }
             }
@@ -5419,6 +5431,64 @@ mod tests {
         assert_eq!(vm.take_messages(), vec!["once".to_string()]);
         // A second drain with no new MsgBox calls must come back empty.
         assert!(vm.take_messages().is_empty());
+    }
+
+    // ── Dim registers a real Empty-valued variable ──────────────────────────
+
+    #[test]
+    fn test_dim_without_type_registers_an_empty_variable() {
+        // Dim x used to be a complete no-op — the variable name was never
+        // recorded at all, so IsEmpty(x)/x + 5 hit "Undefined variable"
+        // instead of real VBA's Empty. Found by compat/vba-semantics/, a
+        // new value-correctness suite, on its very first run.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Dim x\n",
+            "    a = IsEmpty(x)\n",
+            "    b = x + 5\n",
+            "    x = 10\n",
+            "    c = IsEmpty(x)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Integer(5));
+        assert_eq!(vm.variables["c"], Variant::Boolean(false));
+    }
+
+    #[test]
+    fn test_dim_as_builtin_type_also_registers_an_empty_variable() {
+        let vm = run("Sub MySub()\n    Dim x As Integer\n    a = IsEmpty(x)\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn test_dim_multi_declarator_registers_every_bare_name() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Dim x As Integer, y\n",
+            "    a = IsEmpty(x)\n",
+            "    b = IsEmpty(y)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["a"], Variant::Boolean(true));
+        assert_eq!(vm.variables["b"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn test_dim_does_not_reset_an_already_assigned_variable_if_rerun() {
+        // Dim is a declaration, not a runtime reset -- if the statement
+        // somehow re-executes (a loop containing a Dim, unusual but legal
+        // VBA), an already-assigned value must survive.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    For i = 1 To 2\n",
+            "        Dim x\n",
+            "        If i = 1 Then x = 42\n",
+            "    Next i\n",
+            "    a = x\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["a"], Variant::Integer(42));
     }
 
     // ── Stmt::Unsupported executes as a true no-op ──────────────────────────
