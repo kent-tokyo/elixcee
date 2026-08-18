@@ -1442,5 +1442,346 @@
     "errorMessage": "Object variable or With block variable not set",
     "reason": "Real VBA: after Set r = Nothing, r no longer refers to Range(\"A1\") -- writing through it raises this error, same as the never-Set case above.",
     "knownLimitation": "elixcee's Set r = Nothing silently no-ops (Nothing isn't recognized as a valid Set target), so r still refers to its previous Range(\"A1\") assignment -- confirmed live: this scenario succeeds and writes 5 to A1 instead of erroring. Found while building this suite."
+  },
+  "plus_variant_string_plus_variant_number": {
+    "kind": "value",
+    "address": "A1",
+    "value": 40,
+    "reason": "Per the + operator's documented Variant rules: \"One Variant expression is numeric and the other is a string -> Add.\" Matches Microsoft's own worked example exactly."
+  },
+  "plus_both_variant_strings_concatenates": {
+    "kind": "value",
+    "address": "A1",
+    "value": "346",
+    "reason": "Per the + operator's documented Variant rules: \"Both Variant expressions are strings -> Concatenate\" -- real VBA returns the *string* \"346\" here, not the number 40, precisely because + checks the operands' stored type before their content. Matches Microsoft's own worked example exactly.",
+    "knownLimitation": "elixcee has no per-Variant stored-type tag distinguishing \"declared Variant, currently holding a numeric-looking string\" from \"declared Variant, currently holding a genuine number\" -- its + operator always numeric-parses both operands when they look numeric, giving the number 40 instead of real VBA's string \"346\". Same class of gap as the CInt/CLng overflow limitations: no declared/runtime type-tag tracking beyond the Variant enum's own value shape. Found while building this suite via Microsoft's own documented example, not previously disclosed."
+  },
+  "ampersand_mixed_types_always_concatenates": {
+    "kind": "value",
+    "address": "A1",
+    "value": "346",
+    "reason": "The & operator always converts both operands to string and concatenates -- it never numeric-adds, regardless of whether the operands look numeric. This is the documented reason to prefer & over + for concatenation: no ambiguity."
+  },
+  "plus_empty_and_number_returns_number_unchanged": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Documented: \"if only one expression is Empty, the other expression is returned unchanged as result.\" r is Dim'd but never assigned, so it holds Empty."
+  },
+  "plus_empty_and_empty_is_integer_zero": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Documented: \"If both expressions are Empty, result is an Integer.\" Empty numerically behaves as 0, so 0 + 0 = 0."
+  },
+  "ampersand_empty_treated_as_zero_length_string": {
+    "kind": "value",
+    "address": "A1",
+    "value": "hi",
+    "reason": "Documented (ampersand operator): \"Any expression that is Empty is also treated as a zero-length string.\""
+  },
+  "ampersand_null_and_string_treats_null_as_empty_string": {
+    "kind": "value",
+    "address": "A1",
+    "value": "x",
+    "reason": "Documented (ampersand operator): \"if only one expression is Null, that expression is treated as a zero-length string (\"\") when concatenated with the other expression.\""
+  },
+  "ampersand_both_null_propagates_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (ampersand operator): \"If both expressions are Null, result is Null.\" Distinct from the only-one-Null case, which treats the Null side as \"\". Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value.",
+    "knownLimitation": "elixcee's & always converts each operand to a string first (Null becomes \"\"), so both-Null gives \"\" (IsNull => False) instead of propagating Null (IsNull => True) -- found while building this suite from Microsoft's own documented distinction, not previously disclosed."
+  },
+  "plus_null_propagates_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (+ operator): \"If one or both expressions are Null, result is Null\" -- unlike + with Empty (which returns the other operand unchanged) or & with one Null (which treats it as \"\"). Asserted via IsNull() for the same JSON-representability reason as the & case above.",
+    "knownLimitation": "elixcee's + treats Null the same as Empty (coerces to 0 numerically) instead of propagating Null, so r + 5 gives 5 (IsNull => False) instead of Null (IsNull => True) -- found while building this suite, not previously disclosed."
+  },
+  "plus_boolean_true_uses_negative_one": {
+    "kind": "value",
+    "address": "A1",
+    "value": 4,
+    "reason": "VBA represents Boolean True as -1 internally (CInt(True) = -1) -- + is documented to Add when both operands are numeric data types, and Boolean is explicitly listed as numeric. Fixed live this round: previously elixcee's to_f64 coerced True to 1.0, giving 6 instead of 4 (see src/vm/mod.rs)."
+  },
+  "plus_two_booleans_negative_two": {
+    "kind": "value",
+    "address": "A1",
+    "value": -2,
+    "reason": "Direct consequence of True = -1 internally: -1 + -1 = -2. A second, independent confirmation of the same fixed coercion path as plus_boolean_true_uses_negative_one."
+  },
+  "cint_of_true_is_negative_one": {
+    "kind": "value",
+    "address": "A1",
+    "value": -1,
+    "reason": "Same documented fact (True internally is -1) verified through an explicit conversion function rather than an arithmetic operator, confirming the fix applies uniformly to to_f64's callers."
+  },
+  "plus_nonnumeric_string_and_number_errors": {
+    "kind": "error",
+    "errorMessage": "Type mismatch",
+    "reason": "Adding a numeric Variant to a string Variant that cannot itself convert to a number raises a Type mismatch error in real VBA -- well-established, unambiguous VBA behavior.",
+    "knownLimitation": "elixcee does correctly raise a runtime error here (not silently coerce), but with message \"Cannot convert 'abc' to number\" instead of VBA's \"Type mismatch\". Not fixed this round: the message comes from to_f64, a single shared numeric-coercion helper with ~54 call sites across the VM (arithmetic, comparisons, loop bounds, array indexing, etc.), and renaming its message without auditing every call site's own correct real-VBA wording risks introducing a wrong message elsewhere -- unlike the narrowly-scoped array-out-of-bounds message fix earlier this round. Found while building this suite."
+  },
+  "compare_variant_string_and_number_worked_example": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Matches Microsoft's own worked example exactly: Var1=\"5\", Var2=4, Var1>Var2 is True (numeric comparison, since Var2 is numeric and Var1 can be converted to a number)."
+  },
+  "compare_variant_numeric_always_less_than_string_variant": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented: \"One Variant expression is numeric and the other is a string -> The numeric expression is less than the string expression\" -- unconditionally, not by comparing 100 to 5 numerically. A genuinely surprising, well-documented quirk distinct from the case above (where the numeric side successfully being a number-that-can-be-derived-from-a-string still triggers ordinary numeric comparison per a different rule row).",
+    "knownLimitation": "elixcee's vba_cmp always attempts a numeric comparison first when both operands parse as numbers (via to_f64), giving false (100 < 5 is false) instead of true. Deliberately not fixed: vba_cmp is also used for Select Case value/range matching, where numeric-string-vs-number magnitude comparison is the overwhelmingly more common and more useful real-world behavior -- inverting it to match this pedantic edge case would break far more than it fixes. Found while building this suite via Microsoft's own documented rule, not previously disclosed."
+  },
+  "compare_empty_and_number_uses_zero": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Matches Microsoft's own worked example: Var1=5, Var2=Empty, Var1>Var2 is True (numeric comparison using 0 for Empty)."
+  },
+  "compare_empty_equals_zero": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Matches Microsoft's own worked example: Var1=0, Var2=Empty, Var1=Var2 is True. Fixed live this round -- see the vba_eq fix in operator_coercion's notes."
+  },
+  "compare_empty_equals_empty_string": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented: \"One expression is Empty and the other is a String -> Perform a string comparison, using a zero-length string (\"\") as the Empty expression\" -- so Empty = \"\" is True. A second, independent confirmation of the same vba_eq fix via its string-coercion arm rather than its numeric one."
+  },
+  "compare_both_empty_are_equal": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented: \"Both Variant expressions are Empty -> The expressions are equal.\""
+  },
+  "compare_null_operand_propagates_null": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented (comparison operators table): every comparison operator lists \"Null if expression1 or expression2 = Null\" as a third, separate outcome alongside True/False. Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value, same convention as the Null cases in operator_coercion.",
+    "knownLimitation": "elixcee's comparison operators never produce Null -- Null numeric-coerces to 0 via to_f64 (same root cause as operator_coercion's plus_null_propagates_null/ampersand_both_null_propagates_null: no VM-wide concept of a Null result value distinct from Empty/0), so 5 < r is evaluated as 5 < 0 = False instead of Null. Found while building this suite, not previously disclosed."
+  },
+  "compare_two_variant_strings_lexical_not_numeric": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented: \"Both Variant expressions are strings -> Perform a string comparison.\" Lexically, \"10\" < \"9\" (the character '1' sorts before '9'), even though 10 > 9 numerically -- the classic string-vs-numeric-compare gotcha, and correctly implemented in elixcee already (vba_cmp only attempts numeric comparison when at least one side isn't a string)."
+  },
+  "compare_boolean_true_less_than_false": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Direct consequence of True's documented internal value of -1: -1 < 0 is True. A second, independent confirmation (via vba_cmp -> to_f64 this time, rather than direct arithmetic) that the Boolean-coercion fix in operator_coercion applies uniformly across to_f64's callers."
+  },
+  "select_case_comma_list_matches": {
+    "kind": "value",
+    "address": "A1",
+    "value": "mid",
+    "reason": "7 is listed explicitly in \"Case 6, 7, 8\", independent of the To-range and Is-comparison Cases above and below it."
+  },
+  "select_case_to_range_matches": {
+    "kind": "value",
+    "address": "A1",
+    "value": "low",
+    "reason": "3 falls within the inclusive range 1 To 5."
+  },
+  "select_case_is_comparison_matches": {
+    "kind": "value",
+    "address": "A1",
+    "value": "high",
+    "reason": "20 > 8, so the Is clause matches; it is checked in the order written, ahead of the range Case below it."
+  },
+  "select_case_no_match_no_else_falls_through": {
+    "kind": "value",
+    "address": "A2",
+    "value": "after",
+    "reason": "Select Case with no matching Case and no Case Else is not an error -- execution simply continues after End Select, and A1 is never written."
+  },
+  "select_case_no_match_writes_nothing": {
+    "kind": "no_cells",
+    "reason": "Companion to select_case_no_match_no_else_falls_through, isolating the \"guarded write never happens\" half of the same scenario as its own no_cells assertion."
+  },
+  "select_case_first_match_wins": {
+    "kind": "value",
+    "address": "A1",
+    "value": "first",
+    "reason": "x=3 matches both Case clauses, but Select Case evaluates Cases in written order and stops at the first match -- \"second\" must never be written."
+  },
+  "select_case_reversed_range_never_matches": {
+    "kind": "value",
+    "address": "A1",
+    "value": "else",
+    "reason": "VBA's Case ... To ... requires the first bound to be the lower one; \"5 To 1\" is not an error, it is simply a range containing no values, so Case Else runs instead."
+  },
+  "select_case_mixed_list_and_range_in_one_case": {
+    "kind": "value",
+    "address": "A1",
+    "value": "mixed",
+    "reason": "\"Case 1, 10 To 20\" matches if x is 1 OR within 10 To 20 -- 15 satisfies the range half."
+  },
+  "select_case_string_matching": {
+    "kind": "value",
+    "address": "A1",
+    "value": "fruit1",
+    "reason": "Select Case dispatches via the same equality semantics as the = operator (case-insensitive string match, VBA's default Option Compare Binary notwithstanding for ASCII letters -- both operands are already same-case here so this case does not probe that separately)."
+  },
+  "with_range_resolves_bare_dot_value": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "The most basic documented With usage: .Value inside the body is shorthand for Range(\"A1\").Value."
+  },
+  "with_nested_restores_outer_target_on_exit": {
+    "kind": "value",
+    "address": "A1",
+    "value": 11,
+    "reason": "After the inner With Range(\"B1\")...End With completes, a bare .Value in the outer body must resolve against A1 again, not B1 -- confirms proper target save/restore around nested With blocks."
+  },
+  "with_dot_value_usable_in_an_expression": {
+    "kind": "value",
+    "address": "B1",
+    "value": 6,
+    "reason": "Confirms .Value resolves correctly when read as part of a larger expression (.Value * 2), not only when it is the entire right-hand side or a standalone assignment target."
+  },
+  "with_sub_call_does_not_disturb_target": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "A Sub call is not itself a block construct that redefines the enclosing With target -- .Value after the Helper call must still mean Range(\"A1\").Value."
+  },
+  "with_computed_cells_target_unsupported": {
+    "kind": "value",
+    "address": "C1",
+    "value": 42,
+    "reason": "Real VBA supports any object expression as a With target, including Cells(r, c) -- this line is valid VBA that writes 42 to C1.",
+    "knownLimitation": "elixcee's With Range(\"...\") target is a parse-time literal string, not a general expression -- parse_with only recognizes a Range(\"literal\") or Sheets/Worksheets(\"name\") call shape, or a bare identifier (UDT target). Cells(1, 3) falls into none of those and fails to parse entirely (actual: parse_error \"expected newline, got LParen\"), rather than merely producing a wrong value. Found while building this suite, not previously disclosed."
+  },
+  "with_dot_member_inside_nested_if_unsupported": {
+    "kind": "value",
+    "address": "A1",
+    "value": 7,
+    "reason": "Real VBA resolves .Value against the enclosing With target no matter how deeply it is nested inside other block constructs in the body -- this line is valid VBA that writes 7 to A1 (a fresh cell reads as 0).",
+    "knownLimitation": "elixcee's bare-.member rewrite only fires in parse_with_body's own direct statement loop (which special-cases a leading Dot token before delegating to parse_stmt) -- once execution descends into a nested block's own body (parse_if/parse_for/parse_do_loop/parse_select_case, each parsed via ordinary parse_stmt), a leading Dot is simply unrecognized (actual: parse_error \"unexpected token starting statement: Dot\"), rather than merely producing a wrong value. Same root cause as with_computed_cells_target_unsupported above: With-target resolution is parse-time-textual, not a runtime-resolved stack. Found while building this suite, not previously disclosed."
+  },
+  "dim_array_default_lower_bound_is_zero": {
+    "kind": "value",
+    "address": "A1",
+    "value": 0,
+    "reason": "Documented default: absent an Option Base 1 statement, array lower bounds default to 0."
+  },
+  "dim_array_upper_bound_matches_declared_size": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Dim arr(5) declares indices 0 through 5 inclusive (6 elements) -- UBound is the literal size given, not size-minus-one."
+  },
+  "redim_preserve_keeps_first_element": {
+    "kind": "value",
+    "address": "A1",
+    "value": 10,
+    "reason": "Preserve keeps element 0 unchanged through the resize."
+  },
+  "redim_preserve_keeps_last_original_element": {
+    "kind": "value",
+    "address": "A1",
+    "value": 40,
+    "reason": "Companion to redim_preserve_keeps_first_element, checking the last pre-resize element (index 3) instead of the first."
+  },
+  "redim_preserve_grows_upper_bound": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "After ReDim Preserve arr(5), UBound must report the new size (5), not the original (3)."
+  },
+  "redim_without_preserve_clears_elements": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Without Preserve, ReDim discards all prior contents -- element 0, previously 10, is Empty again after the resize."
+  },
+  "erase_fixed_array_preserves_bounds": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "Documented: Erase on a fixed-size (statically declared) array resets element values but does not deallocate or resize it -- UBound stays 3."
+  },
+  "is_array_true_for_declared_array": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Basic IsArray usage on an actual array."
+  },
+  "is_array_false_for_scalar": {
+    "kind": "value",
+    "address": "A1",
+    "value": false,
+    "reason": "Companion to is_array_true_for_declared_array, confirming IsArray does not just always return True."
+  },
+  "two_dimensional_array_write_and_read_round_trips": {
+    "kind": "value",
+    "address": "A1",
+    "value": 77,
+    "reason": "Basic round-trip correctness check for two-dimensional array storage, independent of the UBound(arr, dimension) gap disclosed below."
+  },
+  "lbound_and_ubound_combined_boolean_check": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "A second, independent confirmation of default array bounds (0 To 3) via a differently-sized declaration than dim_array_default_lower_bound_is_zero/dim_array_upper_bound_matches_declared_size (which use arr(5))."
+  },
+  "write_past_upper_bound_does_not_corrupt_in_bounds_data": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Regardless of exactly how the out-of-bounds write at index 4 is handled, the previously-written in-bounds element at index 3 must remain intact."
+  },
+  "dim_array_explicit_lower_bound_unsupported": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Real VBA supports an explicit lower bound in a Dim/ReDim size clause -- Dim arr(2 To 8) declares indices 2 through 8 inclusive, so LBound(arr) is 2.",
+    "knownLimitation": "elixcee's array-declarator parser only accepts a single upper-bound expression per dimension (Dim arr(5)), not a lo To hi pair -- Dim arr(2 To 8) fails to parse entirely (actual: parse_error \"expected RParen, got Ident(\\\"to\\\")\"). Found while building this suite, not previously disclosed."
+  },
+  "option_base_one_not_respected": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "Documented: an Option Base 1 statement at module level changes the default lower bound (for Dim declarations that don't give an explicit lower bound) from 0 to 1.",
+    "knownLimitation": "elixcee parses Option Base without erroring but does not appear to feed it into array-bound calculation -- LBound(arr) is still 0 after Option Base 1. Found while building this suite, not previously disclosed."
+  },
+  "ubound_second_dimension_argument_ignored": {
+    "kind": "value",
+    "address": "A1",
+    "value": 2,
+    "reason": "Documented: UBound's optional second argument selects which dimension to report the bound for -- Dim arr(3, 2) declares dimension 1 as 0 To 3 and dimension 2 as 0 To 2, so UBound(arr, 2) is 2.",
+    "knownLimitation": "elixcee's UBound(arr, 2) returns 3 (dimension 1's bound) instead of 2 -- the dimension argument does not appear to be used to select which stored bound to report, even though the array's own storage genuinely is two-dimensional (see two_dimensional_array_write_and_read_round_trips, which confirms independent read/write addressing already works). Found while building this suite, not previously disclosed."
+  },
+  "erase_fixed_variant_array_does_not_reset_to_empty": {
+    "kind": "value",
+    "address": "A1",
+    "value": true,
+    "reason": "Documented: Erase on a fixed-size array resets each element to its type's default -- for an (implicitly Variant) array, that default is Empty, so IsEmpty(arr(0)) is True immediately after Erase.",
+    "knownLimitation": "elixcee's Erase does not appear to reset element values on a fixed-size array -- IsEmpty(arr(0)) is False after Erase (element 0 still holds its previously-assigned 5). Found while building this suite, not previously disclosed."
+  },
+  "dim_array_empty_parens_dynamic_declaration_unsupported": {
+    "kind": "value",
+    "address": "A1",
+    "value": 5,
+    "reason": "Real VBA supports declaring a dynamic array with empty parentheses and sizing it later via ReDim -- Dim arr() followed by ReDim arr(5) is valid VBA that gives UBound(arr) = 5.",
+    "knownLimitation": "elixcee's array-declarator parser requires at least one dimension-size expression inside the parens -- Dim arr() fails to parse entirely (actual: parse_error \"unexpected token in expression: RParen\"). Only the ReDim-without-a-prior-sized-Dim spelling works around this. Found while building this suite, not previously disclosed."
+  },
+  "array_builtin_function_unsupported": {
+    "kind": "value",
+    "address": "A1",
+    "value": 20,
+    "reason": "Real VBA's Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element).",
+    "knownLimitation": "elixcee has no Array() builtin at all (actual: undefined_sub_or_function \"Unknown VBA function: 'array'\") -- the only way to build an array is a Dim/ReDim declaration plus individual element assignments. Found while building this suite, not previously disclosed."
   }
 }

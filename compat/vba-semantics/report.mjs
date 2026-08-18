@@ -142,7 +142,7 @@ export function classify(cases, expectedResults, elixceeResults, computedFns) {
         const failMsg = `expected value ${JSON.stringify(expected.value)}, but the scenario errored: ${result.error?.message}`;
         records.push(
           expected.knownLimitation
-            ? { id: c.id, category: c.category, verdict: 'KNOWN_LIMITATION', reason: expected.knownLimitation, actual: failMsg }
+            ? { id: c.id, category: c.category, verdict: 'KNOWN_LIMITATION', reason: expected.knownLimitation, documented: `real VBA: ${JSON.stringify(expected.value)}`, actual: failMsg }
             : { id: c.id, category: c.category, verdict: 'BUG', reason: failMsg },
         );
         continue;

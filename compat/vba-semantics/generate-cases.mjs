@@ -609,6 +609,311 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     'elixcee\'s Set r = Nothing silently no-ops (Nothing isn\'t recognized as a valid Set target), so r still refers to its previous Range("A1") assignment -- confirmed live: this scenario succeeds and writes 5 to A1 instead of erroring. Found while building this suite.');
 }
 
+// ── operator_coercion ────────────────────────────────────────────────────────
+// The + vs & type-coercion rules, sourced directly from Microsoft's own VBA language
+// reference (learn.microsoft.com/.../plus-operator and .../ampersand-operator, fetched
+// live while building this category, not recalled from memory) rather than folklore.
+// Every case verified live against elixcee before being encoded. Found (and, where a
+// narrow well-understood fix, corrected rather than just disclosed) one real bug this way:
+// VBA represents Boolean True as -1 internally (CInt(True) = -1), but elixcee's VBA-side
+// numeric coercion (src/vm/mod.rs's to_f64) was treating it as 1 -- a one-line, unambiguous
+// constant fix, distinct from Excel *worksheet formula* semantics (where TRUE genuinely is
+// 1 in arithmetic; src/formula/eval.rs's own separate to_float is correct as-is and was not
+// touched).
+{
+  const CAT = 'operator_coercion';
+  addCase('plus_variant_string_plus_variant_number', CAT,
+    'Variant holding a numeric string + Variant holding a number adds numerically',
+    '  Dim Var1, Var2\n  Var1 = "34"\n  Var2 = 6\n  Range("A1").Value = Var1 + Var2',
+    { value: 40 },
+    'Per the + operator\'s documented Variant rules: "One Variant expression is numeric and the other is a string -> Add." Matches Microsoft\'s own worked example exactly.');
+  addCase('plus_both_variant_strings_concatenates', CAT,
+    'Two Variants that both hold strings concatenate with +, even if both look numeric',
+    '  Dim Var1, Var2\n  Var1 = "34"\n  Var2 = "6"\n  Range("A1").Value = Var1 + Var2',
+    { value: '346' },
+    'Per the + operator\'s documented Variant rules: "Both Variant expressions are strings -> Concatenate" -- real VBA returns the *string* "346" here, not the number 40, precisely because + checks the operands\' stored type before their content. Matches Microsoft\'s own worked example exactly.',
+    'elixcee has no per-Variant stored-type tag distinguishing "declared Variant, currently holding a numeric-looking string" from "declared Variant, currently holding a genuine number" -- its + operator always numeric-parses both operands when they look numeric, giving the number 40 instead of real VBA\'s string "346". Same class of gap as the CInt/CLng overflow limitations: no declared/runtime type-tag tracking beyond the Variant enum\'s own value shape. Found while building this suite via Microsoft\'s own documented example, not previously disclosed.');
+  addCase('ampersand_mixed_types_always_concatenates', CAT,
+    '& always concatenates regardless of operand type, unlike +',
+    '  Dim Var1, Var2\n  Var1 = "34"\n  Var2 = 6\n  Range("A1").Value = Var1 & Var2',
+    { value: '346' },
+    'The & operator always converts both operands to string and concatenates -- it never numeric-adds, regardless of whether the operands look numeric. This is the documented reason to prefer & over + for concatenation: no ambiguity.');
+  addCase('plus_empty_and_number_returns_number_unchanged', CAT,
+    'Empty + a number returns that number unchanged',
+    '  Dim r\n  x = r + 5\n  Range("A1").Value = x',
+    { value: 5 },
+    'Documented: "if only one expression is Empty, the other expression is returned unchanged as result." r is Dim\'d but never assigned, so it holds Empty.');
+  addCase('plus_empty_and_empty_is_integer_zero', CAT,
+    'Empty + Empty is 0 (Integer)',
+    '  Dim r1, r2\n  x = r1 + r2\n  Range("A1").Value = x',
+    { value: 0 },
+    'Documented: "If both expressions are Empty, result is an Integer." Empty numerically behaves as 0, so 0 + 0 = 0.');
+  addCase('ampersand_empty_treated_as_zero_length_string', CAT,
+    'Empty & a string treats Empty as a zero-length string',
+    '  Dim r\n  x = r & "hi"\n  Range("A1").Value = x',
+    { value: 'hi' },
+    'Documented (ampersand operator): "Any expression that is Empty is also treated as a zero-length string."');
+  addCase('ampersand_null_and_string_treats_null_as_empty_string', CAT,
+    '& with one Null operand treats Null as a zero-length string',
+    '  Dim r\n  r = Null\n  Range("A1").Value = r & "x"',
+    { value: 'x' },
+    'Documented (ampersand operator): "if only one expression is Null, that expression is treated as a zero-length string ("") when concatenated with the other expression."');
+  addCase('ampersand_both_null_propagates_null', CAT,
+    '& with both operands Null produces Null (unlike the one-Null case)',
+    '  Dim r1, r2\n  r1 = Null\n  r2 = Null\n  Range("A1").Value = IsNull(r1 & r2)',
+    { value: true },
+    'Documented (ampersand operator): "If both expressions are Null, result is Null." Distinct from the only-one-Null case, which treats the Null side as "". Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value.',
+    'elixcee\'s & always converts each operand to a string first (Null becomes ""), so both-Null gives "" (IsNull => False) instead of propagating Null (IsNull => True) -- found while building this suite from Microsoft\'s own documented distinction, not previously disclosed.');
+  addCase('plus_null_propagates_null', CAT,
+    '+ with a Null operand always produces Null',
+    '  Dim r\n  r = Null\n  Range("A1").Value = IsNull(r + 5)',
+    { value: true },
+    'Documented (+ operator): "If one or both expressions are Null, result is Null" -- unlike + with Empty (which returns the other operand unchanged) or & with one Null (which treats it as ""). Asserted via IsNull() for the same JSON-representability reason as the & case above.',
+    'elixcee\'s + treats Null the same as Empty (coerces to 0 numerically) instead of propagating Null, so r + 5 gives 5 (IsNull => False) instead of Null (IsNull => True) -- found while building this suite, not previously disclosed.');
+  addCase('plus_boolean_true_uses_negative_one', CAT,
+    'True + a number arithmetic-coerces True as -1, not 1',
+    '  Range("A1").Value = True + 5',
+    { value: 4 },
+    'VBA represents Boolean True as -1 internally (CInt(True) = -1) -- + is documented to Add when both operands are numeric data types, and Boolean is explicitly listed as numeric. Fixed live this round: previously elixcee\'s to_f64 coerced True to 1.0, giving 6 instead of 4 (see src/vm/mod.rs).');
+  addCase('plus_two_booleans_negative_two', CAT,
+    'True + True is -2, matching the -1-per-True rule',
+    '  Range("A1").Value = True + True',
+    { value: -2 },
+    'Direct consequence of True = -1 internally: -1 + -1 = -2. A second, independent confirmation of the same fixed coercion path as plus_boolean_true_uses_negative_one.');
+  addCase('cint_of_true_is_negative_one', CAT,
+    'CInt(True) is -1, not 1',
+    '  Range("A1").Value = CInt(True)',
+    { value: -1 },
+    'Same documented fact (True internally is -1) verified through an explicit conversion function rather than an arithmetic operator, confirming the fix applies uniformly to to_f64\'s callers.');
+  addCase('plus_nonnumeric_string_and_number_errors', CAT,
+    '+ between a non-numeric-string Variant and a numeric Variant raises Type mismatch',
+    '  Dim Var1, Var2\n  Var1 = "abc"\n  Var2 = 3\n  Range("A1").Value = Var1 + Var2',
+    { error: 'Type mismatch' },
+    'Adding a numeric Variant to a string Variant that cannot itself convert to a number raises a Type mismatch error in real VBA -- well-established, unambiguous VBA behavior.',
+    'elixcee does correctly raise a runtime error here (not silently coerce), but with message "Cannot convert \'abc\' to number" instead of VBA\'s "Type mismatch". Not fixed this round: the message comes from to_f64, a single shared numeric-coercion helper with ~54 call sites across the VM (arithmetic, comparisons, loop bounds, array indexing, etc.), and renaming its message without auditing every call site\'s own correct real-VBA wording risks introducing a wrong message elsewhere -- unlike the narrowly-scoped array-out-of-bounds message fix earlier this round. Found while building this suite.');
+}
+
+// ── comparison_coercion ──────────────────────────────────────────────────────
+// Comparison-operator (</>/<=/>=/=/<>) type-coercion rules, sourced from Microsoft's own
+// VBA language reference (.../comparison-operators, fetched live) rather than folklore.
+// Every case verified live before being encoded. Found and fixed one real, narrowly-scoped
+// bug this way (vba_eq's missing Empty arm, see operator_coercion above); found one
+// deliberately-not-fixed divergence (see compare_variant_numeric_always_less_than_string_variant
+// below) where the documented rule is a rarely-hit pedantic edge case and "fixing" it would
+// invert vba_cmp's much more commonly relied-on numeric-string-vs-number magnitude
+// comparison (used by ordinary Select Case / threshold-check code) for every caller, not
+// just this one -- a worse trade than leaving it disclosed.
+{
+  const CAT = 'comparison_coercion';
+  addCase('compare_variant_string_and_number_worked_example', CAT,
+    'Variant numeric string is numeric-compared against a Variant number',
+    '  Dim Var1, Var2\n  Var1 = "5"\n  Var2 = 4\n  Range("A1").Value = (Var1 > Var2)',
+    { value: true },
+    'Matches Microsoft\'s own worked example exactly: Var1="5", Var2=4, Var1>Var2 is True (numeric comparison, since Var2 is numeric and Var1 can be converted to a number).');
+  addCase('compare_variant_numeric_always_less_than_string_variant', CAT,
+    'A numeric Variant is documented as always less than a string Variant, regardless of value',
+    '  Dim Var1, Var2\n  Var1 = 100\n  Var2 = "5"\n  Range("A1").Value = (Var1 < Var2)',
+    { value: true },
+    'Documented: "One Variant expression is numeric and the other is a string -> The numeric expression is less than the string expression" -- unconditionally, not by comparing 100 to 5 numerically. A genuinely surprising, well-documented quirk distinct from the case above (where the numeric side successfully being a number-that-can-be-derived-from-a-string still triggers ordinary numeric comparison per a different rule row).',
+    'elixcee\'s vba_cmp always attempts a numeric comparison first when both operands parse as numbers (via to_f64), giving false (100 < 5 is false) instead of true. Deliberately not fixed: vba_cmp is also used for Select Case value/range matching, where numeric-string-vs-number magnitude comparison is the overwhelmingly more common and more useful real-world behavior -- inverting it to match this pedantic edge case would break far more than it fixes. Found while building this suite via Microsoft\'s own documented rule, not previously disclosed.');
+  addCase('compare_empty_and_number_uses_zero', CAT,
+    'Empty numeric-compares as 0 against a number',
+    '  Dim Var1, Var2\n  Var1 = 5\n  Var2 = Empty\n  Range("A1").Value = (Var1 > Var2)',
+    { value: true },
+    'Matches Microsoft\'s own worked example: Var1=5, Var2=Empty, Var1>Var2 is True (numeric comparison using 0 for Empty).');
+  addCase('compare_empty_equals_zero', CAT,
+    'Empty equals the number 0',
+    '  Dim Var1, Var2\n  Var1 = 0\n  Var2 = Empty\n  Range("A1").Value = (Var1 = Var2)',
+    { value: true },
+    'Matches Microsoft\'s own worked example: Var1=0, Var2=Empty, Var1=Var2 is True. Fixed live this round -- see the vba_eq fix in operator_coercion\'s notes.');
+  addCase('compare_empty_equals_empty_string', CAT,
+    'Empty equals the zero-length string',
+    '  Dim r\n  Range("A1").Value = (r = "")',
+    { value: true },
+    'Documented: "One expression is Empty and the other is a String -> Perform a string comparison, using a zero-length string ("") as the Empty expression" -- so Empty = "" is True. A second, independent confirmation of the same vba_eq fix via its string-coercion arm rather than its numeric one.');
+  addCase('compare_both_empty_are_equal', CAT,
+    'Two never-assigned variables (both Empty) are equal',
+    '  Dim r1, r2\n  Range("A1").Value = (r1 = r2)',
+    { value: true },
+    'Documented: "Both Variant expressions are Empty -> The expressions are equal."');
+  addCase('compare_null_operand_propagates_null', CAT,
+    'Any comparison with a Null operand produces Null, not True or False',
+    '  Dim r\n  r = Null\n  Range("A1").Value = IsNull(5 < r)',
+    { value: true },
+    'Documented (comparison operators table): every comparison operator lists "Null if expression1 or expression2 = Null" as a third, separate outcome alongside True/False. Asserted via IsNull() since a Null cell value is not itself a well-formed --json cell value, same convention as the Null cases in operator_coercion.',
+    'elixcee\'s comparison operators never produce Null -- Null numeric-coerces to 0 via to_f64 (same root cause as operator_coercion\'s plus_null_propagates_null/ampersand_both_null_propagates_null: no VM-wide concept of a Null result value distinct from Empty/0), so 5 < r is evaluated as 5 < 0 = False instead of Null. Found while building this suite, not previously disclosed.');
+  addCase('compare_two_variant_strings_lexical_not_numeric', CAT,
+    'Two string Variants compare lexically even when both look numeric',
+    '  Dim Var1, Var2\n  Var1 = "10"\n  Var2 = "9"\n  Range("A1").Value = (Var1 < Var2)',
+    { value: true },
+    'Documented: "Both Variant expressions are strings -> Perform a string comparison." Lexically, "10" < "9" (the character \'1\' sorts before \'9\'), even though 10 > 9 numerically -- the classic string-vs-numeric-compare gotcha, and correctly implemented in elixcee already (vba_cmp only attempts numeric comparison when at least one side isn\'t a string).');
+  addCase('compare_boolean_true_less_than_false', CAT,
+    'True < False is True, since True is -1 and False is 0',
+    '  Range("A1").Value = (True < False)',
+    { value: true },
+    'Direct consequence of True\'s documented internal value of -1: -1 < 0 is True. A second, independent confirmation (via vba_cmp -> to_f64 this time, rather than direct arithmetic) that the Boolean-coercion fix in operator_coercion applies uniformly across to_f64\'s callers.');
+}
+
+// ── select_case_matching ─────────────────────────────────────────────────────
+// Select Case's own documented matching rules: comma-separated value lists, `To` ranges
+// (including a reversed, never-matching range), `Is <comparison>` clauses, mixed
+// list+range within one Case line, string matching, no-match-no-Else fall-through, and
+// first-match-wins semantics (a later Case that would also match is never reached once an
+// earlier one already matched). All well-established, unambiguous VBA control-flow
+// semantics -- no operator-coercion ambiguity here, unlike the two categories above. All
+// confirmed live; all MATCH (no divergences found in this category).
+{
+  const CAT = 'select_case_matching';
+  addCase('select_case_comma_list_matches', CAT, 'Case with a comma-separated value list matches any listed value',
+    '  Dim x\n  x = 7\n  Select Case x\n    Case 1 To 5\n      Range("A1").Value = "low"\n    Case 6, 7, 8\n      Range("A1").Value = "mid"\n    Case Is > 8\n      Range("A1").Value = "high"\n    Case Else\n      Range("A1").Value = "none"\n  End Select',
+    { value: 'mid' }, '7 is listed explicitly in "Case 6, 7, 8", independent of the To-range and Is-comparison Cases above and below it.');
+  addCase('select_case_to_range_matches', CAT, 'Case with a To range matches any value in the inclusive range',
+    '  Dim x\n  x = 3\n  Select Case x\n    Case 1 To 5\n      Range("A1").Value = "low"\n    Case 6, 7, 8\n      Range("A1").Value = "mid"\n  End Select',
+    { value: 'low' }, '3 falls within the inclusive range 1 To 5.');
+  addCase('select_case_is_comparison_matches', CAT, 'Case Is <op> <value> matches via the given comparison',
+    '  Dim x\n  x = 20\n  Select Case x\n    Case Is > 8\n      Range("A1").Value = "high"\n    Case 1 To 5\n      Range("A1").Value = "low"\n  End Select',
+    { value: 'high' }, '20 > 8, so the Is clause matches; it is checked in the order written, ahead of the range Case below it.');
+  addCase('select_case_no_match_no_else_falls_through', CAT, 'No matching Case and no Case Else simply skips the block',
+    '  Dim x\n  x = 99\n  Select Case x\n    Case 1 To 5\n      Range("A1").Value = "low"\n  End Select\n  Range("A2").Value = "after"',
+    { value: 'after', address: 'A2' }, 'Select Case with no matching Case and no Case Else is not an error -- execution simply continues after End Select, and A1 is never written.');
+  addNoCellWrittenCase('select_case_no_match_writes_nothing', CAT,
+    'The unmatched Case body above genuinely never runs (A1 stays unwritten)',
+    '  Dim x\n  x = 99\n  Select Case x\n    Case 1 To 5\n      Range("A1").Value = "low"\n  End Select',
+    'Companion to select_case_no_match_no_else_falls_through, isolating the "guarded write never happens" half of the same scenario as its own no_cells assertion.');
+  addCase('select_case_first_match_wins', CAT, 'The first matching Case runs; a later Case that would also match is never reached',
+    '  Dim x\n  x = 3\n  Select Case x\n    Case 1, 2, 3\n      Range("A1").Value = "first"\n    Case 3, 4, 5\n      Range("A1").Value = "second"\n  End Select',
+    { value: 'first' }, 'x=3 matches both Case clauses, but Select Case evaluates Cases in written order and stops at the first match -- "second" must never be written.');
+  addCase('select_case_reversed_range_never_matches', CAT, 'A backwards To range (high To low) matches nothing',
+    '  Dim x\n  x = 3\n  Select Case x\n    Case 5 To 1\n      Range("A1").Value = "reversed-matched"\n    Case Else\n      Range("A1").Value = "else"\n  End Select',
+    { value: 'else' }, 'VBA\'s Case ... To ... requires the first bound to be the lower one; "5 To 1" is not an error, it is simply a range containing no values, so Case Else runs instead.');
+  addCase('select_case_mixed_list_and_range_in_one_case', CAT, 'A single Case line can mix discrete values and a To range',
+    '  Dim x\n  x = 15\n  Select Case x\n    Case 1, 10 To 20\n      Range("A1").Value = "mixed"\n  End Select',
+    { value: 'mixed' }, '"Case 1, 10 To 20" matches if x is 1 OR within 10 To 20 -- 15 satisfies the range half.');
+  addCase('select_case_string_matching', CAT, 'Case matches strings the same way as the = operator',
+    '  Dim x\n  x = "banana"\n  Select Case x\n    Case "apple", "banana"\n      Range("A1").Value = "fruit1"\n    Case Else\n      Range("A1").Value = "other"\n  End Select',
+    { value: 'fruit1' }, 'Select Case dispatches via the same equality semantics as the = operator (case-insensitive string match, VBA\'s default Option Compare Binary notwithstanding for ASCII letters -- both operands are already same-case here so this case does not probe that separately).');
+}
+
+// ── with_block_resolution ────────────────────────────────────────────────────
+// With...End With's own documented semantics: bare .member resolves against the With
+// target, nested With blocks restore the outer target on exit, a Sub call inside the body
+// doesn't disturb the target, and .member works both as an assignment target and inside an
+// arbitrary expression. All confirmed live. Also surfaces two genuine, previously-
+// undisclosed structural gaps: elixcee's With-target resolution is a parse-time textual
+// rewrite keyed to either a literal Range("...") address string or a bare UDT variable name
+// (src/parser/mod.rs's parse_with/parse_with_dot_stmt, via with_range_target/with_target
+// parser-level state) rather than a runtime-resolved "current With target" stack. That one
+// root cause shows up two ways: a computed target like Cells(r, c) can't be represented as
+// the compile-time-known string the mechanism needs, and a bare .member nested inside
+// another block construct (If/For/Do/Select Case) within the body never reaches it, since
+// only parse_with_body's own direct statement loop special-cases a leading Dot token.
+// Structural, not a narrow fix -- same class of gap as the Date/Time Variant model and
+// CInt/CLng overflow limitations already disclosed elsewhere in this suite.
+{
+  const CAT = 'with_block_resolution';
+  addCase('with_range_resolves_bare_dot_value', CAT, 'A bare .Value inside With Range(...) resolves against that range',
+    '  With Range("A1")\n    .Value = 5\n  End With',
+    { value: 5 }, 'The most basic documented With usage: .Value inside the body is shorthand for Range("A1").Value.');
+  addCase('with_nested_restores_outer_target_on_exit', CAT, 'A nested With restores the outer target once its own End With runs',
+    '  With Range("A1")\n    .Value = 1\n    With Range("B1")\n      .Value = 2\n    End With\n    .Value = .Value + 10\n  End With',
+    { value: 11 }, 'After the inner With Range("B1")...End With completes, a bare .Value in the outer body must resolve against A1 again, not B1 -- confirms proper target save/restore around nested With blocks.');
+  addCase('with_dot_value_usable_in_an_expression', CAT, '.Value can appear inside an expression, not just as a bare assignment target',
+    '  With Range("A1")\n    .Value = 3\n    Range("B1").Value = .Value * 2\n  End With',
+    { value: 6, address: 'B1' }, 'Confirms .Value resolves correctly when read as part of a larger expression (.Value * 2), not only when it is the entire right-hand side or a standalone assignment target.');
+  addCaseWithSource('with_sub_call_does_not_disturb_target', CAT, 'Calling another Sub from inside a With body does not change the With target',
+    'Sub Helper()\n  Range("C1").Value = 100\nEnd Sub\nSub Scenario()\n  With Range("A1")\n    .Value = 1\n    Helper\n    .Value = .Value + 1\n  End With\nEnd Sub\n',
+    { value: 2 }, 'A Sub call is not itself a block construct that redefines the enclosing With target -- .Value after the Helper call must still mean Range("A1").Value.');
+  addCase('with_computed_cells_target_unsupported', CAT, 'With Cells(row, col) as a target does not parse',
+    '  With Cells(1, 3)\n    .Value = 42\n  End With',
+    { value: 42, address: 'C1' },
+    'Real VBA supports any object expression as a With target, including Cells(r, c) -- this line is valid VBA that writes 42 to C1.',
+    'elixcee\'s With Range("...") target is a parse-time literal string, not a general expression -- parse_with only recognizes a Range("literal") or Sheets/Worksheets("name") call shape, or a bare identifier (UDT target). Cells(1, 3) falls into none of those and fails to parse entirely (actual: parse_error "expected newline, got LParen"), rather than merely producing a wrong value. Found while building this suite, not previously disclosed.');
+  addCase('with_dot_member_inside_nested_if_unsupported', CAT, 'A bare .member inside an If block nested in a With body does not parse',
+    '  With Range("A1")\n    If .Value = 0 Then\n      .Value = 7\n    End If\n  End With',
+    { value: 7 },
+    'Real VBA resolves .Value against the enclosing With target no matter how deeply it is nested inside other block constructs in the body -- this line is valid VBA that writes 7 to A1 (a fresh cell reads as 0).',
+    'elixcee\'s bare-.member rewrite only fires in parse_with_body\'s own direct statement loop (which special-cases a leading Dot token before delegating to parse_stmt) -- once execution descends into a nested block\'s own body (parse_if/parse_for/parse_do_loop/parse_select_case, each parsed via ordinary parse_stmt), a leading Dot is simply unrecognized (actual: parse_error "unexpected token starting statement: Dot"), rather than merely producing a wrong value. Same root cause as with_computed_cells_target_unsupported above: With-target resolution is parse-time-textual, not a runtime-resolved stack. Found while building this suite, not previously disclosed.');
+}
+
+// ── array_bounds ─────────────────────────────────────────────────────────────
+// Array declaration/resize/bounds semantics: default (Option Base 0) LBound, ReDim
+// Preserve vs plain ReDim, Erase on a fixed-size array, IsArray, and multi-dimensional
+// bounds. All confirmed live. Surfaces several genuine, previously-undisclosed gaps, each
+// independent (not one shared root cause like operator_coercion/with_block_resolution):
+// `Dim arr(lo To hi)` and `Dim arr()` (dynamic, no size) both fail to parse; `Option Base 1`
+// is silently not honored; `UBound(arr, 2)` ignores its dimension argument and always
+// returns dimension 1's bound; `Erase` on a fixed Variant array doesn't reset elements to
+// Empty; the `Array(...)` builtin function is not implemented at all.
+{
+  const CAT = 'array_bounds';
+  addCase('dim_array_default_lower_bound_is_zero', CAT, 'Dim arr(5) defaults to a zero-based lower bound',
+    '  Dim arr(5)\n  Range("A1").Value = LBound(arr)',
+    { value: 0 }, 'Documented default: absent an Option Base 1 statement, array lower bounds default to 0.');
+  addCase('dim_array_upper_bound_matches_declared_size', CAT, 'Dim arr(5) sets the upper bound to the declared size',
+    '  Dim arr(5)\n  Range("A1").Value = UBound(arr)',
+    { value: 5 }, 'Dim arr(5) declares indices 0 through 5 inclusive (6 elements) -- UBound is the literal size given, not size-minus-one.');
+  addCase('redim_preserve_keeps_first_element', CAT, 'ReDim Preserve keeps existing elements at their original indices',
+    '  Dim arr(3)\n  arr(0) = 10\n  arr(1) = 20\n  arr(2) = 30\n  arr(3) = 40\n  ReDim Preserve arr(5)\n  Range("A1").Value = arr(0)',
+    { value: 10 }, 'Preserve keeps element 0 unchanged through the resize.');
+  addCase('redim_preserve_keeps_last_original_element', CAT, 'ReDim Preserve keeps every original element, not just the first',
+    '  Dim arr(3)\n  arr(0) = 10\n  arr(1) = 20\n  arr(2) = 30\n  arr(3) = 40\n  ReDim Preserve arr(5)\n  Range("A1").Value = arr(3)',
+    { value: 40 }, 'Companion to redim_preserve_keeps_first_element, checking the last pre-resize element (index 3) instead of the first.');
+  addCase('redim_preserve_grows_upper_bound', CAT, 'ReDim Preserve actually grows the array\'s bound',
+    '  Dim arr(3)\n  ReDim Preserve arr(5)\n  Range("A1").Value = UBound(arr)',
+    { value: 5 }, 'After ReDim Preserve arr(5), UBound must report the new size (5), not the original (3).');
+  addCase('redim_without_preserve_clears_elements', CAT, 'A plain ReDim (no Preserve) resets every element back to Empty',
+    '  Dim arr(3)\n  arr(0) = 10\n  arr(1) = 20\n  ReDim arr(5)\n  Range("A1").Value = IsEmpty(arr(0))',
+    { value: true }, 'Without Preserve, ReDim discards all prior contents -- element 0, previously 10, is Empty again after the resize.');
+  addCase('erase_fixed_array_preserves_bounds', CAT, 'Erase on a fixed-size array does not change its bounds',
+    '  Dim arr(3)\n  arr(0) = 5\n  Erase arr\n  Range("A1").Value = UBound(arr)',
+    { value: 3 }, 'Documented: Erase on a fixed-size (statically declared) array resets element values but does not deallocate or resize it -- UBound stays 3.');
+  addCase('is_array_true_for_declared_array', CAT, 'IsArray returns True for a declared array variable',
+    '  Dim arr(3)\n  Range("A1").Value = IsArray(arr)',
+    { value: true }, 'Basic IsArray usage on an actual array.');
+  addCase('is_array_false_for_scalar', CAT, 'IsArray returns False for an ordinary scalar variable',
+    '  Dim x\n  x = 5\n  Range("A1").Value = IsArray(x)',
+    { value: false }, 'Companion to is_array_true_for_declared_array, confirming IsArray does not just always return True.');
+  addCase('two_dimensional_array_write_and_read_round_trips', CAT, 'A 2D array element written at (row, col) reads back correctly at the same indices',
+    '  Dim arr(3, 2)\n  arr(2, 1) = 77\n  Range("A1").Value = arr(2, 1)',
+    { value: 77 }, 'Basic round-trip correctness check for two-dimensional array storage, independent of the UBound(arr, dimension) gap disclosed below.');
+  addCase('lbound_and_ubound_combined_boolean_check', CAT, 'LBound and UBound combined via And, on a differently-sized array than the other cases',
+    '  Dim arr(3)\n  Range("A1").Value = (LBound(arr) = 0) And (UBound(arr) = 3)',
+    { value: true }, 'A second, independent confirmation of default array bounds (0 To 3) via a differently-sized declaration than dim_array_default_lower_bound_is_zero/dim_array_upper_bound_matches_declared_size (which use arr(5)).');
+  addCase('write_past_upper_bound_does_not_corrupt_in_bounds_data', CAT, 'Attempting to write past the declared upper bound (with On Error Resume Next) does not corrupt existing in-bounds elements',
+    '  Dim arr(3)\n  arr(3) = 1\n  On Error Resume Next\n  arr(4) = 2\n  Range("A1").Value = (arr(3) = 1)',
+    { value: true }, 'Regardless of exactly how the out-of-bounds write at index 4 is handled, the previously-written in-bounds element at index 3 must remain intact.');
+  addCase('dim_array_explicit_lower_bound_unsupported', CAT, 'Dim arr(lo To hi) with an explicit non-zero lower bound does not parse',
+    '  Dim arr(2 To 8)\n  Range("A1").Value = LBound(arr)',
+    { value: 2 },
+    'Real VBA supports an explicit lower bound in a Dim/ReDim size clause -- Dim arr(2 To 8) declares indices 2 through 8 inclusive, so LBound(arr) is 2.',
+    'elixcee\'s array-declarator parser only accepts a single upper-bound expression per dimension (Dim arr(5)), not a lo To hi pair -- Dim arr(2 To 8) fails to parse entirely (actual: parse_error "expected RParen, got Ident(\\"to\\")"). Found while building this suite, not previously disclosed.');
+  addCase('option_base_one_not_respected', CAT, 'Option Base 1 does not change the default lower bound',
+    'Option Base 1\nSub Scenario()\n  Dim arr(5)\n  Range("A1").Value = LBound(arr)\nEnd Sub\n',
+    { value: 1 },
+    'Documented: an Option Base 1 statement at module level changes the default lower bound (for Dim declarations that don\'t give an explicit lower bound) from 0 to 1.',
+    'elixcee parses Option Base without erroring but does not appear to feed it into array-bound calculation -- LBound(arr) is still 0 after Option Base 1. Found while building this suite, not previously disclosed.');
+  addCase('ubound_second_dimension_argument_ignored', CAT, 'UBound(arr, 2) ignores its dimension argument and returns dimension 1\'s bound',
+    '  Dim arr(3, 2)\n  Range("A1").Value = UBound(arr, 2)',
+    { value: 2 },
+    'Documented: UBound\'s optional second argument selects which dimension to report the bound for -- Dim arr(3, 2) declares dimension 1 as 0 To 3 and dimension 2 as 0 To 2, so UBound(arr, 2) is 2.',
+    'elixcee\'s UBound(arr, 2) returns 3 (dimension 1\'s bound) instead of 2 -- the dimension argument does not appear to be used to select which stored bound to report, even though the array\'s own storage genuinely is two-dimensional (see two_dimensional_array_write_and_read_round_trips, which confirms independent read/write addressing already works). Found while building this suite, not previously disclosed.');
+  addCase('erase_fixed_variant_array_does_not_reset_to_empty', CAT, 'Erase on a fixed Variant array does not reset elements to Empty',
+    '  Dim arr(3)\n  arr(0) = 5\n  arr(1) = 10\n  Erase arr\n  Range("A1").Value = IsEmpty(arr(0))',
+    { value: true },
+    'Documented: Erase on a fixed-size array resets each element to its type\'s default -- for an (implicitly Variant) array, that default is Empty, so IsEmpty(arr(0)) is True immediately after Erase.',
+    'elixcee\'s Erase does not appear to reset element values on a fixed-size array -- IsEmpty(arr(0)) is False after Erase (element 0 still holds its previously-assigned 5). Found while building this suite, not previously disclosed.');
+  addCase('dim_array_empty_parens_dynamic_declaration_unsupported', CAT, 'Dim arr() (no size, for a later ReDim) does not parse',
+    '  Dim arr()\n  ReDim arr(5)\n  Range("A1").Value = UBound(arr)',
+    { value: 5 },
+    'Real VBA supports declaring a dynamic array with empty parentheses and sizing it later via ReDim -- Dim arr() followed by ReDim arr(5) is valid VBA that gives UBound(arr) = 5.',
+    'elixcee\'s array-declarator parser requires at least one dimension-size expression inside the parens -- Dim arr() fails to parse entirely (actual: parse_error "unexpected token in expression: RParen"). Only the ReDim-without-a-prior-sized-Dim spelling works around this. Found while building this suite, not previously disclosed.');
+  addCase('array_builtin_function_unsupported', CAT, 'The Array(...) builtin function is not implemented',
+    '  Dim arr\n  arr = Array(10, 20, 30)\n  Range("A1").Value = arr(1)',
+    { value: 20 },
+    'Real VBA\'s Array() builtin constructs a zero-based Variant array from its arguments -- Array(10, 20, 30) has arr(1) = 20 (the middle element).',
+    'elixcee has no Array() builtin at all (actual: undefined_sub_or_function "Unknown VBA function: \'array\'") -- the only way to build an array is a Dim/ReDim declaration plus individual element assignments. Found while building this suite, not previously disclosed.');
+}
+
 // ── write output ─────────────────────────────────────────────────────────────
 fs.writeFileSync(path.join(DIR, 'cases.json'), JSON.stringify(cases, null, 2) + '\n');
 fs.writeFileSync(path.join(DIR, 'expected-results.json'), JSON.stringify(expected, null, 2) + '\n');
