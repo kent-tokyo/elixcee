@@ -1234,5 +1234,211 @@
     "kind": "error",
     "errorMessage": "Undefined variable: 'someundefinedvariablexyz'",
     "reason": "VBA identifiers are case-insensitive; the error message reports the lowercased name."
+  },
+  "divzero_5_0": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+  },
+  "divzero_neg5_0": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+  },
+  "divzero_0_0": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+  },
+  "divzero_3dot5_0": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+  },
+  "divzero_neg3dot5_0": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+  },
+  "divzero_1000000_0": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+  },
+  "divzero_0dot001_0": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+  },
+  "divzero_x5wsposws3x_0": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+  },
+  "divzero_int_typed_var": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "Division by zero is unconditional regardless of the dividend's declared type."
+  },
+  "divzero_float_typed_var": {
+    "kind": "error",
+    "errorMessage": "Division by zero",
+    "reason": "Division by zero is unconditional regardless of the dividend's declared type."
+  },
+  "left_negative_length": {
+    "kind": "error",
+    "errorMessage": "Invalid procedure call or argument",
+    "reason": "Real VBA errors on a negative Length argument to Left().",
+    "knownLimitation": "elixcee returns \"\" instead of erroring (Left's own `.take(n)` with n computed via `as usize` from a negative float saturates to a huge value, then truncates to available chars -- i.e. it silently clamps rather than validating). Found while building this suite."
+  },
+  "right_negative_length": {
+    "kind": "error",
+    "errorMessage": "Invalid procedure call or argument",
+    "reason": "Real VBA errors on a negative Length argument to Right().",
+    "knownLimitation": "elixcee returns \"\" instead of erroring, same root cause as Left(-1) above."
+  },
+  "mid_zero_start": {
+    "kind": "error",
+    "errorMessage": "Invalid procedure call or argument",
+    "reason": "Real VBA errors on a Start argument less than 1 (Mid is 1-indexed).",
+    "knownLimitation": "elixcee returns the whole string instead of erroring (`start.saturating_sub(1)` maps 0 to the same value as 1). Found while building this suite."
+  },
+  "mid_negative_start": {
+    "kind": "error",
+    "errorMessage": "Invalid procedure call or argument",
+    "reason": "Real VBA errors on a negative Start argument to Mid().",
+    "knownLimitation": "elixcee returns the whole string instead of erroring, same root cause as Mid(0) above."
+  },
+  "chr_negative_code": {
+    "kind": "error",
+    "errorMessage": "Invalid procedure call or argument",
+    "reason": "Real VBA errors on a negative character code to Chr().",
+    "knownLimitation": "elixcee saturates the negative code to 0 (float-to-u32 cast saturates, not wraps) and returns a 1-character null-byte string instead of erroring. Asserted via Len() rather than the raw character to keep the case JSON-representable."
+  },
+  "chr_code_over_255": {
+    "kind": "error",
+    "errorMessage": "Invalid procedure call or argument",
+    "reason": "Real VBA's Chr() is documented for character codes 0-255 (use ChrW for the wider Unicode range); 256 is out of Chr()'s own valid range.",
+    "knownLimitation": "elixcee accepts any code up to u32::MAX via char::from_u32 and returns the corresponding Unicode character (U+0100) instead of erroring — confirmed via Asc(Chr(256)) round-tripping to 256. Found while building this suite."
+  },
+  "instr_zero_start": {
+    "kind": "error",
+    "errorMessage": "Invalid procedure call or argument",
+    "reason": "Real VBA's 4-argument InStr requires Start >= 1; 0 is invalid.",
+    "knownLimitation": "elixcee's `start.saturating_sub(1)` maps a Start of 0 to the same starting position as 1, silently returning 2 (the same answer InStr(1, \"hello\", \"l\") would give) instead of erroring. Found while building this suite."
+  },
+  "cint_at_boundary_ok": {
+    "kind": "value",
+    "address": "A1",
+    "value": 32767,
+    "reason": "The exact boundary of real VBA's Integer range — still valid, not an overflow case."
+  },
+  "cint_over_boundary": {
+    "kind": "error",
+    "errorMessage": "Overflow",
+    "reason": "Real VBA's Integer type tops out at 32767; CInt(32768) raises Overflow.",
+    "knownLimitation": "elixcee's Variant::Integer is an unconditional i64 with no declared-type-width tracking, so it returns 32768 instead of erroring. Found while building this suite."
+  },
+  "cint_large": {
+    "kind": "error",
+    "errorMessage": "Overflow",
+    "reason": "Real VBA Integer overflow, same reasoning as CInt(32768).",
+    "knownLimitation": "elixcee returns 40000 instead of erroring."
+  },
+  "cint_large_negative": {
+    "kind": "error",
+    "errorMessage": "Overflow",
+    "reason": "Real VBA Integer underflow (below -32768) also raises Overflow.",
+    "knownLimitation": "elixcee returns -40000 instead of erroring."
+  },
+  "clng_large": {
+    "kind": "error",
+    "errorMessage": "Overflow",
+    "reason": "Real VBA's Long type tops out at 2147483647; CLng(3000000000) raises Overflow.",
+    "knownLimitation": "elixcee returns 3000000000 instead of erroring, same root cause as the CInt cases above (no declared-type-width tracking)."
+  },
+  "clng_large_negative": {
+    "kind": "error",
+    "errorMessage": "Overflow",
+    "reason": "Real VBA Long underflow (below -2147483648) also raises Overflow.",
+    "knownLimitation": "elixcee returns -3000000000 instead of erroring."
+  },
+  "single_line_exit_sub_true_exits": {
+    "kind": "no_cells",
+    "reason": "If the condition is true, Exit Sub must leave the Sub immediately -- the guarded Range write on the next line must never execute, so no cell should appear in the output at all."
+  },
+  "single_line_exit_sub_false_continues": {
+    "kind": "value",
+    "address": "A1",
+    "value": 99,
+    "reason": "When the condition is false, execution must fall through to the guarded line normally."
+  },
+  "single_line_goto_true_jumps": {
+    "kind": "no_cells",
+    "reason": "If the condition is true, GoTo must jump past the guarded write, so nothing is ever written. (Complementary case single_line_goto_true_jumps_target_runs uses the same jump but adds a write after the label, to confirm execution resumes normally there.)"
+  },
+  "single_line_goto_true_jumps_target_runs": {
+    "kind": "value",
+    "address": "B1",
+    "value": 1,
+    "reason": "Execution resumes normally at the label after the jump."
+  },
+  "single_line_exit_sub_else_true_branch": {
+    "kind": "no_cells",
+    "reason": "The true branch takes Exit Sub, so neither the Else branch nor anything after the If should ever run."
+  },
+  "single_line_exit_sub_else_false_branch": {
+    "kind": "value",
+    "address": "A1",
+    "value": 1,
+    "reason": "The false branch takes the Else clause, which must actually run."
+  },
+  "single_line_if_inside_loop_with_exit_for": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "Single-line If correctly gates Exit For inside a loop body (1+2+3, stops before 4)."
+  },
+  "exit_for_stops_at_right_point": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "1+2+3, stops before adding 4."
+  },
+  "exit_do_stops_at_right_point": {
+    "kind": "value",
+    "address": "A1",
+    "value": 6,
+    "reason": "Same accumulation as Exit For, via Do/Loop instead."
+  },
+  "exit_sub_stops_execution": {
+    "kind": "no_cells",
+    "reason": "Exit Sub as the very first statement must prevent everything after it from running."
+  },
+  "exit_function_returns_already_set_value": {
+    "kind": "value",
+    "address": "A1",
+    "value": 99,
+    "reason": "Exit Function immediately after setting the return value must preserve that value, not fall through to the later F = 1 default. Uses a top-level Function alongside Scenario (a Function can't be nested inside a Sub in real VBA), via addCaseWithSource rather than addCase's single-Sub-body wrapper."
+  },
+  "nested_exit_for_only_exits_inner_loop": {
+    "kind": "no_cells",
+    "reason": "Exit For must only exit the innermost For (j-loop), letting the outer i-loop keep running -- count should end at exactly 3 (one increment per outer iteration, from j=1, before each inner loop's Exit For at j=2). Asserted as \"no cell written\" so a wrong count is visible as a genuine A1 value rather than silently matching by coincidence."
+  },
+  "nested_exit_for_count_value": {
+    "kind": "value",
+    "address": "A1",
+    "value": 3,
+    "reason": "One increment per outer iteration (j=1 only, before each inner Exit For at j=2) — 3 outer iterations, count=3."
+  },
+  "unset_range_variable_member_write_noop": {
+    "kind": "no_cells",
+    "reason": "Real VBA raises \"Object variable or With block variable not set\" here. elixcee instead silently no-ops (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed."
+  },
+  "set_nothing_does_not_clear_reference": {
+    "kind": "error",
+    "errorMessage": "Object variable or With block variable not set",
+    "reason": "Real VBA: after Set r = Nothing, r no longer refers to Range(\"A1\") -- writing through it raises this error, same as the never-Set case above.",
+    "knownLimitation": "elixcee's Set r = Nothing silently no-ops (Nothing isn't recognized as a valid Set target), so r still refers to its previous Range(\"A1\") assignment -- confirmed live: this scenario succeeds and writes 5 to A1 instead of erroring. Found while building this suite."
   }
 }

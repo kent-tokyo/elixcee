@@ -1454,5 +1454,271 @@
     "description": "Reading an undefined variable",
     "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = someUndefinedVariableXyz\nEnd Sub\n",
     "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_5_0",
+    "category": "division_by_zero",
+    "description": "5 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_neg5_0",
+    "category": "division_by_zero",
+    "description": "-5 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -5 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_0_0",
+    "category": "division_by_zero",
+    "description": "0 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_3dot5_0",
+    "category": "division_by_zero",
+    "description": "3.5 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 3.5 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_neg3dot5_0",
+    "category": "division_by_zero",
+    "description": "-3.5 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = -3.5 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_1000000_0",
+    "category": "division_by_zero",
+    "description": "1000000 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 1000000 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_0dot001_0",
+    "category": "division_by_zero",
+    "description": "0.001 / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 0.001 / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_x5wsposws3x_0",
+    "category": "division_by_zero",
+    "description": "(5 + 3) / 0",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = (5 + 3) / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_int_typed_var",
+    "category": "division_by_zero",
+    "description": "Integer-declared variable / 0",
+    "vbaSource": "Sub Scenario()\n  Dim x As Integer\n  x = 5\n  Range(\"A1\").Value = x / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "divzero_float_typed_var",
+    "category": "division_by_zero",
+    "description": "Double-declared variable / 0",
+    "vbaSource": "Sub Scenario()\n  Dim x As Double\n  x = 5.5\n  Range(\"A1\").Value = x / 0\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "left_negative_length",
+    "category": "invalid_procedure_argument",
+    "description": "Left(\"hello\", -1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Left(\"hello\", -1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "right_negative_length",
+    "category": "invalid_procedure_argument",
+    "description": "Right(\"hello\", -1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Right(\"hello\", -1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mid_zero_start",
+    "category": "invalid_procedure_argument",
+    "description": "Mid(\"hello\", 0)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Mid(\"hello\", 0)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "mid_negative_start",
+    "category": "invalid_procedure_argument",
+    "description": "Mid(\"hello\", -1)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Mid(\"hello\", -1)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "chr_negative_code",
+    "category": "invalid_procedure_argument",
+    "description": "Chr(-5)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Len(Chr(-5))\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "chr_code_over_255",
+    "category": "invalid_procedure_argument",
+    "description": "Chr(256)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = Asc(Chr(256))\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "instr_zero_start",
+    "category": "invalid_procedure_argument",
+    "description": "InStr(0, \"hello\", \"l\")",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = InStr(0, \"hello\", \"l\")\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_at_boundary_ok",
+    "category": "overflow",
+    "description": "CInt(32767) — the real Integer max, should NOT overflow",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(32767)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_over_boundary",
+    "category": "overflow",
+    "description": "CInt(32768) — one past the real Integer max",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(32768)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_large",
+    "category": "overflow",
+    "description": "CInt(40000)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(40000)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "cint_large_negative",
+    "category": "overflow",
+    "description": "CInt(-40000)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CInt(-40000)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_large",
+    "category": "overflow",
+    "description": "CLng(3000000000)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(3000000000)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "clng_large_negative",
+    "category": "overflow",
+    "description": "CLng(-3000000000)",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = CLng(-3000000000)\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "single_line_exit_sub_true_exits",
+    "category": "single_line_if_control_transfer",
+    "description": "If True Then Exit Sub actually exits (guarded write never runs)",
+    "vbaSource": "Sub Scenario()\n  x = 1\n  If x > 0 Then Exit Sub\n  Range(\"A1\").Value = 99\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "single_line_exit_sub_false_continues",
+    "category": "single_line_if_control_transfer",
+    "description": "If False Then Exit Sub — Sub continues normally",
+    "vbaSource": "Sub Scenario()\n  x = -1\n  If x > 0 Then Exit Sub\n  Range(\"A1\").Value = 99\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "single_line_goto_true_jumps",
+    "category": "single_line_if_control_transfer",
+    "description": "If True Then GoTo Skip actually jumps (guarded write never runs)",
+    "vbaSource": "Sub Scenario()\n  x = 1\n  If x > 0 Then GoTo Skip\n  Range(\"A1\").Value = 99\nSkip:\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "single_line_goto_true_jumps_target_runs",
+    "category": "single_line_if_control_transfer",
+    "description": "If True Then GoTo Skip — code after the label still runs",
+    "vbaSource": "Sub Scenario()\n  x = 1\n  If x > 0 Then GoTo Skip\n  Range(\"A1\").Value = 99\nSkip:\n  Range(\"B1\").Value = 1\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "single_line_exit_sub_else_true_branch",
+    "category": "single_line_if_control_transfer",
+    "description": "If True Then Exit Sub Else stmt — takes Exit, Sub ends immediately",
+    "vbaSource": "Sub Scenario()\n  x = 1\n  If x > 0 Then Exit Sub Else Range(\"A1\").Value = 1\n  Range(\"B1\").Value = 2\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "single_line_exit_sub_else_false_branch",
+    "category": "single_line_if_control_transfer",
+    "description": "If False Then Exit Sub Else stmt — takes the Else",
+    "vbaSource": "Sub Scenario()\n  x = -1\n  If x > 0 Then Exit Sub Else Range(\"A1\").Value = 1\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "single_line_if_inside_loop_with_exit_for",
+    "category": "single_line_if_control_transfer",
+    "description": "Single-line If + Exit For inside a loop",
+    "vbaSource": "Sub Scenario()\n  total = 0\n  For i = 1 To 10\n    If i > 3 Then Exit For\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "exit_for_stops_at_right_point",
+    "category": "exit_statements",
+    "description": "Exit For stops the loop at the expected count",
+    "vbaSource": "Sub Scenario()\n  total = 0\n  For i = 1 To 10\n    If i > 3 Then Exit For\n    total = total + i\n  Next i\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "exit_do_stops_at_right_point",
+    "category": "exit_statements",
+    "description": "Exit Do stops the loop at the expected count",
+    "vbaSource": "Sub Scenario()\n  total = 0\n  i = 0\n  Do\n    i = i + 1\n    If i > 3 Then Exit Do\n    total = total + i\n  Loop\n  Range(\"A1\").Value = total\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "exit_sub_stops_execution",
+    "category": "exit_statements",
+    "description": "Exit Sub stops execution immediately (guarded write never runs)",
+    "vbaSource": "Sub Scenario()\n  Exit Sub\n  Range(\"A1\").Value = 99\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "exit_function_returns_already_set_value",
+    "category": "exit_statements",
+    "description": "Exit Function returns the value already assigned",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = F(10)\nEnd Sub\n\nFunction F(x)\n  If x > 5 Then\n    F = 99\n    Exit Function\n  End If\n  F = 1\nEnd Function\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "nested_exit_for_only_exits_inner_loop",
+    "category": "exit_statements",
+    "description": "Exit For in a nested loop only exits the nearest (inner) loop",
+    "vbaSource": "Sub Scenario()\n  count = 0\n  For i = 1 To 3\n    For j = 1 To 3\n      If j = 2 Then Exit For\n      count = count + 1\n    Next j\n  Next i\n  If count <> 3 Then Range(\"A1\").Value = \"WRONG: \" & count\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "nested_exit_for_count_value",
+    "category": "exit_statements",
+    "description": "Exit For in a nested loop — the actual accumulated count",
+    "vbaSource": "Sub Scenario()\n  count = 0\n  For i = 1 To 3\n    For j = 1 To 3\n      If j = 2 Then Exit For\n      count = count + 1\n    Next j\n  Next i\n  Range(\"A1\").Value = count\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "unset_range_variable_member_write_noop",
+    "category": "object_nothing_access",
+    "description": "Writing through a never-Set Range variable",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  r.Value = 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "set_nothing_does_not_clear_reference",
+    "category": "object_nothing_access",
+    "description": "Set r = Nothing does not actually clear the reference",
+    "vbaSource": "Sub Scenario()\n  Dim r As Range\n  Set r = Range(\"A1\")\n  Set r = Nothing\n  r.Value = 5\nEnd Sub\n",
+    "entrypoint": "Scenario"
   }
 ]

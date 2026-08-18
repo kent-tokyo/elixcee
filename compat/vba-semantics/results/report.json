@@ -1,10 +1,10 @@
 {
-  "total": 208,
+  "total": 246,
   "counts": {
-    "MATCH_DOCUMENTED_SEMANTICS": 198,
-    "EXPECTED_ERROR": 8,
+    "MATCH_DOCUMENTED_SEMANTICS": 213,
+    "EXPECTED_ERROR": 18,
     "NONDETERMINISTIC": 2,
-    "KNOWN_LIMITATION": 0,
+    "KNOWN_LIMITATION": 13,
     "BUG": 0,
     "UNCLASSIFIED": 0
   },
@@ -1256,6 +1256,260 @@
       "category": "error_kind",
       "verdict": "EXPECTED_ERROR",
       "reason": "VBA identifiers are case-insensitive; the error message reports the lowercased name."
+    },
+    {
+      "id": "divzero_5_0",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+    },
+    {
+      "id": "divzero_neg5_0",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+    },
+    {
+      "id": "divzero_0_0",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+    },
+    {
+      "id": "divzero_3dot5_0",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+    },
+    {
+      "id": "divzero_neg3dot5_0",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+    },
+    {
+      "id": "divzero_1000000_0",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+    },
+    {
+      "id": "divzero_0dot001_0",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+    },
+    {
+      "id": "divzero_x5wsposws3x_0",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude."
+    },
+    {
+      "id": "divzero_int_typed_var",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "Division by zero is unconditional regardless of the dividend's declared type."
+    },
+    {
+      "id": "divzero_float_typed_var",
+      "category": "division_by_zero",
+      "verdict": "EXPECTED_ERROR",
+      "reason": "Division by zero is unconditional regardless of the dividend's declared type."
+    },
+    {
+      "id": "left_negative_length",
+      "category": "invalid_procedure_argument",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee returns \"\" instead of erroring (Left's own `.take(n)` with n computed via `as usize` from a negative float saturates to a huge value, then truncates to available chars -- i.e. it silently clamps rather than validating). Found while building this suite.",
+      "documented": "real VBA: error \"Invalid procedure call or argument\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "right_negative_length",
+      "category": "invalid_procedure_argument",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee returns \"\" instead of erroring, same root cause as Left(-1) above.",
+      "documented": "real VBA: error \"Invalid procedure call or argument\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "mid_zero_start",
+      "category": "invalid_procedure_argument",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee returns the whole string instead of erroring (`start.saturating_sub(1)` maps 0 to the same value as 1). Found while building this suite.",
+      "documented": "real VBA: error \"Invalid procedure call or argument\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "mid_negative_start",
+      "category": "invalid_procedure_argument",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee returns the whole string instead of erroring, same root cause as Mid(0) above.",
+      "documented": "real VBA: error \"Invalid procedure call or argument\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "chr_negative_code",
+      "category": "invalid_procedure_argument",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee saturates the negative code to 0 (float-to-u32 cast saturates, not wraps) and returns a 1-character null-byte string instead of erroring. Asserted via Len() rather than the raw character to keep the case JSON-representable.",
+      "documented": "real VBA: error \"Invalid procedure call or argument\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "chr_code_over_255",
+      "category": "invalid_procedure_argument",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee accepts any code up to u32::MAX via char::from_u32 and returns the corresponding Unicode character (U+0100) instead of erroring — confirmed via Asc(Chr(256)) round-tripping to 256. Found while building this suite.",
+      "documented": "real VBA: error \"Invalid procedure call or argument\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "instr_zero_start",
+      "category": "invalid_procedure_argument",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee's `start.saturating_sub(1)` maps a Start of 0 to the same starting position as 1, silently returning 2 (the same answer InStr(1, \"hello\", \"l\") would give) instead of erroring. Found while building this suite.",
+      "documented": "real VBA: error \"Invalid procedure call or argument\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "cint_at_boundary_ok",
+      "category": "overflow",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The exact boundary of real VBA's Integer range — still valid, not an overflow case."
+    },
+    {
+      "id": "cint_over_boundary",
+      "category": "overflow",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee's Variant::Integer is an unconditional i64 with no declared-type-width tracking, so it returns 32768 instead of erroring. Found while building this suite.",
+      "documented": "real VBA: error \"Overflow\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "cint_large",
+      "category": "overflow",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee returns 40000 instead of erroring.",
+      "documented": "real VBA: error \"Overflow\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "cint_large_negative",
+      "category": "overflow",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee returns -40000 instead of erroring.",
+      "documented": "real VBA: error \"Overflow\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "clng_large",
+      "category": "overflow",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee returns 3000000000 instead of erroring, same root cause as the CInt cases above (no declared-type-width tracking).",
+      "documented": "real VBA: error \"Overflow\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "clng_large_negative",
+      "category": "overflow",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee returns -3000000000 instead of erroring.",
+      "documented": "real VBA: error \"Overflow\"",
+      "actual": "ran without error"
+    },
+    {
+      "id": "single_line_exit_sub_true_exits",
+      "category": "single_line_if_control_transfer",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "If the condition is true, Exit Sub must leave the Sub immediately -- the guarded Range write on the next line must never execute, so no cell should appear in the output at all."
+    },
+    {
+      "id": "single_line_exit_sub_false_continues",
+      "category": "single_line_if_control_transfer",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "When the condition is false, execution must fall through to the guarded line normally."
+    },
+    {
+      "id": "single_line_goto_true_jumps",
+      "category": "single_line_if_control_transfer",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "If the condition is true, GoTo must jump past the guarded write, so nothing is ever written. (Complementary case single_line_goto_true_jumps_target_runs uses the same jump but adds a write after the label, to confirm execution resumes normally there.)"
+    },
+    {
+      "id": "single_line_goto_true_jumps_target_runs",
+      "category": "single_line_if_control_transfer",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Execution resumes normally at the label after the jump."
+    },
+    {
+      "id": "single_line_exit_sub_else_true_branch",
+      "category": "single_line_if_control_transfer",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The true branch takes Exit Sub, so neither the Else branch nor anything after the If should ever run."
+    },
+    {
+      "id": "single_line_exit_sub_else_false_branch",
+      "category": "single_line_if_control_transfer",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The false branch takes the Else clause, which must actually run."
+    },
+    {
+      "id": "single_line_if_inside_loop_with_exit_for",
+      "category": "single_line_if_control_transfer",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Single-line If correctly gates Exit For inside a loop body (1+2+3, stops before 4)."
+    },
+    {
+      "id": "exit_for_stops_at_right_point",
+      "category": "exit_statements",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "1+2+3, stops before adding 4."
+    },
+    {
+      "id": "exit_do_stops_at_right_point",
+      "category": "exit_statements",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Same accumulation as Exit For, via Do/Loop instead."
+    },
+    {
+      "id": "exit_sub_stops_execution",
+      "category": "exit_statements",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Exit Sub as the very first statement must prevent everything after it from running."
+    },
+    {
+      "id": "exit_function_returns_already_set_value",
+      "category": "exit_statements",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Exit Function immediately after setting the return value must preserve that value, not fall through to the later F = 1 default. Uses a top-level Function alongside Scenario (a Function can't be nested inside a Sub in real VBA), via addCaseWithSource rather than addCase's single-Sub-body wrapper."
+    },
+    {
+      "id": "nested_exit_for_only_exits_inner_loop",
+      "category": "exit_statements",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Exit For must only exit the innermost For (j-loop), letting the outer i-loop keep running -- count should end at exactly 3 (one increment per outer iteration, from j=1, before each inner loop's Exit For at j=2). Asserted as \"no cell written\" so a wrong count is visible as a genuine A1 value rather than silently matching by coincidence."
+    },
+    {
+      "id": "nested_exit_for_count_value",
+      "category": "exit_statements",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "One increment per outer iteration (j=1 only, before each inner Exit For at j=2) — 3 outer iterations, count=3."
+    },
+    {
+      "id": "unset_range_variable_member_write_noop",
+      "category": "object_nothing_access",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Real VBA raises \"Object variable or With block variable not set\" here. elixcee instead silently no-ops (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed."
+    },
+    {
+      "id": "set_nothing_does_not_clear_reference",
+      "category": "object_nothing_access",
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee's Set r = Nothing silently no-ops (Nothing isn't recognized as a valid Set target), so r still refers to its previous Range(\"A1\") assignment -- confirmed live: this scenario succeeds and writes 5 to A1 instead of erroring. Found while building this suite.",
+      "documented": "real VBA: error \"Object variable or With block variable not set\"",
+      "actual": "ran without error"
     }
   ]
 }

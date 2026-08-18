@@ -104,6 +104,39 @@ export function classify(cases, expectedResults, elixceeResults, computedFns) {
       continue;
     }
 
+    if (expected.kind === 'no_cells') {
+      // The scenario must run successfully (ok:true) and write zero cells — used for
+      // "this line must never execute" assertions (a guarded Range write behind an Exit/
+      // GoTo/loop-bound that must not be reached). --json's `cells` array only ever lists
+      // non-empty cells, so a guarded-off write simply never appears when this holds.
+      if (!result.ok) {
+        const failMsg = `expected to run successfully with no cells written, but the scenario errored: ${result.error?.message}`;
+        records.push(
+          expected.knownLimitation
+            ? { id: c.id, category: c.category, verdict: 'KNOWN_LIMITATION', reason: expected.knownLimitation, actual: failMsg }
+            : { id: c.id, category: c.category, verdict: 'BUG', reason: failMsg },
+        );
+        continue;
+      }
+      const cellCount = (result.cells || []).length;
+      if (cellCount === 0) {
+        records.push({ id: c.id, category: c.category, verdict: 'MATCH_DOCUMENTED_SEMANTICS', reason: expected.reason });
+      } else if (expected.knownLimitation) {
+        records.push({
+          id: c.id, category: c.category, verdict: 'KNOWN_LIMITATION',
+          reason: expected.knownLimitation,
+          documented: 'real VBA: no cells written',
+          actual: `${cellCount} cell(s) written: ${JSON.stringify(result.cells)}`,
+        });
+      } else {
+        records.push({
+          id: c.id, category: c.category, verdict: 'BUG',
+          reason: `expected no cells written (${expected.reason}), but got ${cellCount}: ${JSON.stringify(result.cells)}`,
+        });
+      }
+      continue;
+    }
+
     if (expected.kind === 'value' || expected.kind === 'computed') {
       if (!result.ok) {
         const failMsg = `expected value ${JSON.stringify(expected.value)}, but the scenario errored: ${result.error?.message}`;

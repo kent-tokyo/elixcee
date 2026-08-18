@@ -40,12 +40,15 @@ const expected = {};
  * report.mjs's BUG/UNCLASSIFIED-must-be-0 gate exists specifically so a real regression on
  * one of those can't hide. */
 function addCase(id, category, description, vbaBody, expectedSpec, reason, knownLimitation) {
+  addCaseWithSource(id, category, description, `Sub Scenario()\n${vbaBody}\nEnd Sub\n`, expectedSpec, reason, knownLimitation);
+}
+
+/** Same as addCase, but takes the complete VBA module source verbatim (not wrapped in a
+ * single `Sub Scenario() ... End Sub`) — for cases that need more than one top-level
+ * declaration, e.g. a Scenario Sub plus a separate Function it calls. */
+function addCaseWithSource(id, category, description, vbaSource, expectedSpec, reason, knownLimitation) {
   if (cases.some(c => c.id === id)) throw new Error(`duplicate case id: ${id}`);
-  cases.push({
-    id, category, description,
-    vbaSource: `Sub Scenario()\n${vbaBody}\nEnd Sub\n`,
-    entrypoint: 'Scenario',
-  });
+  cases.push({ id, category, description, vbaSource, entrypoint: 'Scenario' });
   let spec;
   if ('error' in expectedSpec) {
     spec = { kind: 'error', errorMessage: expectedSpec.error };
@@ -400,6 +403,209 @@ function vbaLiteral(n) {
   // failure *category* from elixcee's runtime error here, not just different wording —
   // this suite's schema (one VBA source, one runtime outcome) can't represent "should
   // have failed to compile" cleanly. Noted in ROADMAP.md rather than forced into a bad fit.
+}
+
+// ── division_by_zero ─────────────────────────────────────────────────────────
+// Broader than negative_intdiv_mod's own div-by-zero cases (which are specifically about
+// \\/Mod's operand-rounding-to-zero path) — plain `/` across operand type/sign/magnitude
+// combinations. All confirmed live to give exactly "Division by zero", matching real VBA.
+{
+  const CAT = 'division_by_zero';
+  const pairs = [
+    ['5', '0'], ['-5', '0'], ['0', '0'], ['3.5', '0'], ['-3.5', '0'],
+    ['1000000', '0'], ['0.001', '0'], ['(5 + 3)', '0'],
+  ];
+  for (const [a, b] of pairs) {
+    addCase(`divzero_${slugifyLiteral(a)}_${slugifyLiteral(b)}`, CAT, `${a} / ${b}`,
+      `  Range("A1").Value = ${a} / ${b}`,
+      { error: 'Division by zero' }, 'A literal division by zero raises this exact runtime error, regardless of operand sign/magnitude.');
+  }
+  addCase('divzero_int_typed_var', CAT, 'Integer-declared variable / 0',
+    '  Dim x As Integer\n  x = 5\n  Range("A1").Value = x / 0',
+    { error: 'Division by zero' }, 'Division by zero is unconditional regardless of the dividend\'s declared type.');
+  addCase('divzero_float_typed_var', CAT, 'Double-declared variable / 0',
+    '  Dim x As Double\n  x = 5.5\n  Range("A1").Value = x / 0',
+    { error: 'Division by zero' }, 'Division by zero is unconditional regardless of the dividend\'s declared type.');
+}
+
+// ── invalid_procedure_argument ──────────────────────────────────────────────
+// Real VBA raises "Invalid procedure call or argument" (error 5) for several of these;
+// elixcee currently accepts all of them and produces a plausible-but-wrong value instead
+// of erroring -- found while building this suite, not previously disclosed. All registered
+// as KNOWN_LIMITATION with the specific wrong-vs-right values named, not silently dropped.
+{
+  const CAT = 'invalid_procedure_argument';
+  addCase('left_negative_length', CAT, 'Left("hello", -1)',
+    '  Range("A1").Value = Left("hello", -1)',
+    { error: 'Invalid procedure call or argument' },
+    'Real VBA errors on a negative Length argument to Left().',
+    'elixcee returns "" instead of erroring (Left\'s own `.take(n)` with n computed via `as usize` from a negative float saturates to a huge value, then truncates to available chars -- i.e. it silently clamps rather than validating). Found while building this suite.');
+  addCase('right_negative_length', CAT, 'Right("hello", -1)',
+    '  Range("A1").Value = Right("hello", -1)',
+    { error: 'Invalid procedure call or argument' },
+    'Real VBA errors on a negative Length argument to Right().',
+    'elixcee returns "" instead of erroring, same root cause as Left(-1) above.');
+  addCase('mid_zero_start', CAT, 'Mid("hello", 0)',
+    '  Range("A1").Value = Mid("hello", 0)',
+    { error: 'Invalid procedure call or argument' },
+    'Real VBA errors on a Start argument less than 1 (Mid is 1-indexed).',
+    'elixcee returns the whole string instead of erroring (`start.saturating_sub(1)` maps 0 to the same value as 1). Found while building this suite.');
+  addCase('mid_negative_start', CAT, 'Mid("hello", -1)',
+    '  Range("A1").Value = Mid("hello", -1)',
+    { error: 'Invalid procedure call or argument' },
+    'Real VBA errors on a negative Start argument to Mid().',
+    'elixcee returns the whole string instead of erroring, same root cause as Mid(0) above.');
+  addCase('chr_negative_code', CAT, 'Chr(-5)',
+    '  Range("A1").Value = Len(Chr(-5))',
+    { error: 'Invalid procedure call or argument' },
+    'Real VBA errors on a negative character code to Chr().',
+    'elixcee saturates the negative code to 0 (float-to-u32 cast saturates, not wraps) and returns a 1-character null-byte string instead of erroring. Asserted via Len() rather than the raw character to keep the case JSON-representable.');
+  addCase('chr_code_over_255', CAT, 'Chr(256)',
+    '  Range("A1").Value = Asc(Chr(256))',
+    { error: 'Invalid procedure call or argument' },
+    'Real VBA\'s Chr() is documented for character codes 0-255 (use ChrW for the wider Unicode range); 256 is out of Chr()\'s own valid range.',
+    'elixcee accepts any code up to u32::MAX via char::from_u32 and returns the corresponding Unicode character (U+0100) instead of erroring — confirmed via Asc(Chr(256)) round-tripping to 256. Found while building this suite.');
+  addCase('instr_zero_start', CAT, 'InStr(0, "hello", "l")',
+    '  Range("A1").Value = InStr(0, "hello", "l")',
+    { error: 'Invalid procedure call or argument' },
+    'Real VBA\'s 4-argument InStr requires Start >= 1; 0 is invalid.',
+    'elixcee\'s `start.saturating_sub(1)` maps a Start of 0 to the same starting position as 1, silently returning 2 (the same answer InStr(1, "hello", "l") would give) instead of erroring. Found while building this suite.');
+}
+
+// ── overflow ─────────────────────────────────────────────────────────────────
+// Real VBA's Integer type is -32768..32767, Long is -2147483648..2147483647; CInt/CLng of
+// a value outside that range raises "Overflow" (error 6). elixcee's Variant::Integer is
+// backed by i64 with no declared-type-width tracking at all -- there is no notion of
+// "this value is Integer-typed vs Long-typed" once it's a Variant, so no overflow check is
+// possible without a structural type-system change (the same class of change as the
+// Date/Time ADR, not attempted here). All registered as KNOWN_LIMITATION.
+{
+  const CAT = 'overflow';
+  addCase('cint_at_boundary_ok', CAT, 'CInt(32767) — the real Integer max, should NOT overflow',
+    '  Range("A1").Value = CInt(32767)',
+    { value: 32767 }, 'The exact boundary of real VBA\'s Integer range — still valid, not an overflow case.');
+  addCase('cint_over_boundary', CAT, 'CInt(32768) — one past the real Integer max',
+    '  Range("A1").Value = CInt(32768)',
+    { error: 'Overflow' },
+    'Real VBA\'s Integer type tops out at 32767; CInt(32768) raises Overflow.',
+    'elixcee\'s Variant::Integer is an unconditional i64 with no declared-type-width tracking, so it returns 32768 instead of erroring. Found while building this suite.');
+  addCase('cint_large', CAT, 'CInt(40000)',
+    '  Range("A1").Value = CInt(40000)',
+    { error: 'Overflow' },
+    'Real VBA Integer overflow, same reasoning as CInt(32768).',
+    'elixcee returns 40000 instead of erroring.');
+  addCase('cint_large_negative', CAT, 'CInt(-40000)',
+    '  Range("A1").Value = CInt(-40000)',
+    { error: 'Overflow' },
+    'Real VBA Integer underflow (below -32768) also raises Overflow.',
+    'elixcee returns -40000 instead of erroring.');
+  addCase('clng_large', CAT, 'CLng(3000000000)',
+    '  Range("A1").Value = CLng(3000000000)',
+    { error: 'Overflow' },
+    'Real VBA\'s Long type tops out at 2147483647; CLng(3000000000) raises Overflow.',
+    'elixcee returns 3000000000 instead of erroring, same root cause as the CInt cases above (no declared-type-width tracking).');
+  addCase('clng_large_negative', CAT, 'CLng(-3000000000)',
+    '  Range("A1").Value = CLng(-3000000000)',
+    { error: 'Overflow' },
+    'Real VBA Long underflow (below -2147483648) also raises Overflow.',
+    'elixcee returns -3000000000 instead of erroring.');
+}
+
+// ── single_line_if_control_transfer ─────────────────────────────────────────
+// Confirms single-line `If cond Then stmt` actually TRANSFERS CONTROL correctly, not just
+// that it parses (which compat/corpus/ and this project's own unit tests already cover at
+// the parse level) -- exactly the class of bug the Exit/GoTo safety fix earlier this round
+// was about (routing Exit/GoTo through the generic identifier-statement parser silently
+// turned them into no-ops instead of actually transferring control). All confirmed live to
+// behave correctly; all MATCH.
+function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
+  // A dedicated case shape for "this line must NEVER run" -- represented as absence of
+  // any cell in the scenario's output (--json's `cells` array only ever lists non-empty
+  // cells, so a guarded-off Range write simply never appears), distinct from the normal
+  // {kind:'value'} shape which requires a specific address to be present. Requires the
+  // scenario to still run successfully (ok:true) with zero cells -- a parse/runtime error
+  // is a different outcome entirely and must use addCase's {error:...} shape instead.
+  if (cases.some(c => c.id === id)) throw new Error(`duplicate case id: ${id}`);
+  cases.push({ id, category, description, vbaSource: `Sub Scenario()\n${vbaBody}\nEnd Sub\n`, entrypoint: 'Scenario' });
+  expected[id] = { kind: 'no_cells', reason };
+}
+
+{
+  const CAT = 'single_line_if_control_transfer';
+  addNoCellWrittenCase('single_line_exit_sub_true_exits', CAT,
+    'If True Then Exit Sub actually exits (guarded write never runs)',
+    '  x = 1\n  If x > 0 Then Exit Sub\n  Range("A1").Value = 99',
+    'If the condition is true, Exit Sub must leave the Sub immediately -- the guarded Range write on the next line must never execute, so no cell should appear in the output at all.');
+  addCase('single_line_exit_sub_false_continues', CAT, 'If False Then Exit Sub — Sub continues normally',
+    '  x = -1\n  If x > 0 Then Exit Sub\n  Range("A1").Value = 99',
+    { value: 99 }, 'When the condition is false, execution must fall through to the guarded line normally.');
+  addNoCellWrittenCase('single_line_goto_true_jumps', CAT,
+    'If True Then GoTo Skip actually jumps (guarded write never runs)',
+    '  x = 1\n  If x > 0 Then GoTo Skip\n  Range("A1").Value = 99\nSkip:',
+    'If the condition is true, GoTo must jump past the guarded write, so nothing is ever written. (Complementary case single_line_goto_true_jumps_target_runs uses the same jump but adds a write after the label, to confirm execution resumes normally there.)');
+  addCase('single_line_goto_true_jumps_target_runs', CAT, 'If True Then GoTo Skip — code after the label still runs',
+    '  x = 1\n  If x > 0 Then GoTo Skip\n  Range("A1").Value = 99\nSkip:\n  Range("B1").Value = 1',
+    { value: 1, address: 'B1' }, 'Execution resumes normally at the label after the jump.');
+  addNoCellWrittenCase('single_line_exit_sub_else_true_branch', CAT,
+    'If True Then Exit Sub Else stmt — takes Exit, Sub ends immediately',
+    '  x = 1\n  If x > 0 Then Exit Sub Else Range("A1").Value = 1\n  Range("B1").Value = 2',
+    'The true branch takes Exit Sub, so neither the Else branch nor anything after the If should ever run.');
+  addCase('single_line_exit_sub_else_false_branch', CAT, 'If False Then Exit Sub Else stmt — takes the Else',
+    '  x = -1\n  If x > 0 Then Exit Sub Else Range("A1").Value = 1',
+    { value: 1 }, 'The false branch takes the Else clause, which must actually run.');
+  addCase('single_line_if_inside_loop_with_exit_for', CAT, 'Single-line If + Exit For inside a loop',
+    '  total = 0\n  For i = 1 To 10\n    If i > 3 Then Exit For\n    total = total + i\n  Next i\n  Range("A1").Value = total',
+    { value: 6 }, 'Single-line If correctly gates Exit For inside a loop body (1+2+3, stops before 4).');
+}
+
+// ── exit_statements ──────────────────────────────────────────────────────────
+// Exit For/Do/Sub/Function's control-transfer correctness (not just that they parse) --
+// nested-loop scoping in particular (Exit For must only exit the *nearest* enclosing loop),
+// all confirmed live. All MATCH.
+{
+  const CAT = 'exit_statements';
+  addCase('exit_for_stops_at_right_point', CAT, 'Exit For stops the loop at the expected count',
+    '  total = 0\n  For i = 1 To 10\n    If i > 3 Then Exit For\n    total = total + i\n  Next i\n  Range("A1").Value = total',
+    { value: 6 }, '1+2+3, stops before adding 4.');
+  addCase('exit_do_stops_at_right_point', CAT, 'Exit Do stops the loop at the expected count',
+    '  total = 0\n  i = 0\n  Do\n    i = i + 1\n    If i > 3 Then Exit Do\n    total = total + i\n  Loop\n  Range("A1").Value = total',
+    { value: 6 }, 'Same accumulation as Exit For, via Do/Loop instead.');
+  addNoCellWrittenCase('exit_sub_stops_execution', CAT,
+    'Exit Sub stops execution immediately (guarded write never runs)',
+    '  Exit Sub\n  Range("A1").Value = 99',
+    'Exit Sub as the very first statement must prevent everything after it from running.');
+  addCaseWithSource('exit_function_returns_already_set_value', CAT,
+    'Exit Function returns the value already assigned',
+    'Sub Scenario()\n  Range("A1").Value = F(10)\nEnd Sub\n\nFunction F(x)\n  If x > 5 Then\n    F = 99\n    Exit Function\n  End If\n  F = 1\nEnd Function\n',
+    { value: 99 }, 'Exit Function immediately after setting the return value must preserve that value, not fall through to the later F = 1 default. Uses a top-level Function alongside Scenario (a Function can\'t be nested inside a Sub in real VBA), via addCaseWithSource rather than addCase\'s single-Sub-body wrapper.');
+  addNoCellWrittenCase('nested_exit_for_only_exits_inner_loop', CAT,
+    'Exit For in a nested loop only exits the nearest (inner) loop',
+    '  count = 0\n  For i = 1 To 3\n    For j = 1 To 3\n      If j = 2 Then Exit For\n      count = count + 1\n    Next j\n  Next i\n  If count <> 3 Then Range("A1").Value = "WRONG: " & count',
+    'Exit For must only exit the innermost For (j-loop), letting the outer i-loop keep running -- count should end at exactly 3 (one increment per outer iteration, from j=1, before each inner loop\'s Exit For at j=2). Asserted as "no cell written" so a wrong count is visible as a genuine A1 value rather than silently matching by coincidence.');
+  addCase('nested_exit_for_count_value', CAT, 'Exit For in a nested loop — the actual accumulated count',
+    '  count = 0\n  For i = 1 To 3\n    For j = 1 To 3\n      If j = 2 Then Exit For\n      count = count + 1\n    Next j\n  Next i\n  Range("A1").Value = count',
+    { value: 3 }, 'One increment per outer iteration (j=1 only, before each inner Exit For at j=2) — 3 outer iterations, count=3.');
+}
+
+// ── object_nothing_access ────────────────────────────────────────────────────
+// Real VBA: accessing a member of an unset (Nothing) object variable raises "Object
+// variable or With block variable not set" (error 91). elixcee's actual behavior is a
+// real, previously-undisclosed gap. (A third natural case here, `r Is Nothing`, needs the
+// `Is` operator, which doesn't parse in elixcee at all -- a categorically different,
+// parser-level gap already tracked in ROADMAP.md; not forced into this suite's per-value
+// schema, which assumes the scenario at least parses.)
+{
+  const CAT = 'object_nothing_access';
+  addNoCellWrittenCase('unset_range_variable_member_write_noop', CAT,
+    'Writing through a never-Set Range variable',
+    '  Dim r As Range\n  r.Value = 5',
+    'Real VBA raises "Object variable or With block variable not set" here. elixcee instead silently no-ops (confirmed: the scenario runs to completion with ok:true and writes nothing at all) — found while building this suite, not previously disclosed.');
+  addCase('set_nothing_does_not_clear_reference', CAT,
+    'Set r = Nothing does not actually clear the reference',
+    '  Dim r As Range\n  Set r = Range("A1")\n  Set r = Nothing\n  r.Value = 5',
+    { error: 'Object variable or With block variable not set' },
+    'Real VBA: after Set r = Nothing, r no longer refers to Range("A1") -- writing through it raises this error, same as the never-Set case above.',
+    'elixcee\'s Set r = Nothing silently no-ops (Nothing isn\'t recognized as a valid Set target), so r still refers to its previous Range("A1") assignment -- confirmed live: this scenario succeeds and writes 5 to A1 instead of erroring. Found while building this suite.');
 }
 
 // ── write output ─────────────────────────────────────────────────────────────
