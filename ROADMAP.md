@@ -104,17 +104,37 @@ recorded as exhausted: no further candidates were found by either method as of t
    `"private": true` hard-blocks `npm publish` outright; first publish of a scoped package
    also needs `--access public` or `publishConfig.access: "public"`, neither set. See
    "npm/JS/WASM findings" below for the full investigation.
-8. ~~No Node/WASM/JS testing wired into CI at all~~ — **partially fixed** (Unreleased):
+8. ~~No Node/WASM/JS testing wired into CI at all~~ — **fixed** (Unreleased):
    `.github/workflows/ci.yml` gained a `node-js` job (Node 20/22 matrix) running
    `packages/xlsx`'s TypeScript typecheck (with and without the DOM lib), all four of
-   `compat/`'s differential suites (`utils`/`ssf-format`/`read`/`metadata`), and now also
-   `packages/xlsx/scripts/audit-pack-contents.mjs` (new this round — asserts every file
-   `npm pack --dry-run` would actually publish: required files present, nothing forbidden,
-   nothing unexpected under `src/internal/`) — every command verified working live before
-   wiring it in, not assumed from CHANGELOG.md's claimed numbers. Still not built at all (a
-   separate, bigger undertaking each — see "npm/JS/WASM findings" below): a real
-   browser-bundler smoke test (no bundler is installed in this project's toolchain), a WASM
-   binary size regression check.
+   `compat/`'s differential suites (`utils`/`ssf-format`/`read`/`metadata`), and
+   `packages/xlsx/scripts/audit-pack-contents.mjs` (asserts every file `npm pack --dry-run`
+   would actually publish: required files present, nothing forbidden, nothing unexpected
+   under `src/internal/`); and a separate `wasm` job that builds `crates/elixcee-wasm`
+   fresh (both `wasm-pack --target nodejs`/`--target web`, not just trusting the
+   already-vendored copy the `node-js` job consumes) and runs
+   `packages/xlsx/scripts/wasm-smoke.mjs` — Node sync `read()`, the `"browser"` export
+   condition actually resolving *and running* (via `node --conditions=browser`, self-
+   referencing the package by name — genuinely more than a resolution check, but this is
+   still Node simulating the condition, not a real browser; no real browser executes
+   anywhere in this project's CI, and Safari support is not claimed anywhere), a minimal
+   `esbuild` bundle with `XLSX.read()` called from inside it, and the current WASM binary
+   size logged (263,204 bytes as of this round — recorded, not gated against any
+   threshold; no prior baseline exists to compare against, and gating without one would be
+   exactly the kind of unjustified threshold this project avoids elsewhere). Every command
+   verified working live before wiring either job in, not assumed from CHANGELOG.md's
+   claimed numbers. One real consumer caveat found while writing the bundle check, not
+   previously disclosed: the Node/CJS WASM loader (`elixcee_wasm.node.cjs`, wasm-pack's own
+   generated code) locates its `.wasm` file via a `__dirname`-relative path, which is
+   bundle-output-relative once bundled — a consumer bundling this package's Node entry must
+   bundle to CJS (ESM bundle output has no `__dirname` at all — a `ReferenceError`, not a
+   silent failure) and copy `elixcee_wasm_bg.wasm` next to their bundle output, or
+   externalize the loader instead. Not fixed this round (would mean patching wasm-pack's
+   own generated boilerplate); `wasm-smoke.mjs`'s header comment has the full detail.
+   Genuinely still not built (a separate, bigger undertaking — see "npm/JS/WASM findings"
+   below): real in-browser execution in CI (would need a headless-browser runner, e.g.
+   Playwright — not added, matching "no large browser-test framework"); a WASM size
+   *regression* check (the size is recorded now, but nothing fails CI if it grows).
 9. **`@elixcee` npm scope ownership is unconfirmed** — cannot be resolved from this
    environment (`npm whoami` returns 401; no working publish credential exists locally, no
    analogous GitHub Actions secret exists yet either, unlike `CARGO_REGISTRY_TOKEN` for
@@ -157,20 +177,28 @@ full report; this is a summary)
 Investigated, not implemented or published: CI coverage, npm scope ownership, and
 `packages/xlsx` alpha-release readiness.
 
-- **Now wired into `.github/workflows/ci.yml`'s new `node-js` job** (each verified live
-  before wiring, not assumed): `compat/differential/`'s utils (512 MATCH + 14 divergences)/
+- **Now wired into `.github/workflows/ci.yml`'s `node-js` job** (each verified live before
+  wiring, not assumed): `compat/differential/`'s utils (512 MATCH + 14 divergences)/
   SSF (1831/1831)/read (19/19)/metadata (34/34) suites; `packages/xlsx`'s TypeScript
   typecheck, both with and without the DOM lib present; a new `npm pack` content-audit
   script (`packages/xlsx/scripts/audit-pack-contents.mjs` — required files present, nothing
   forbidden, nothing unexpected under `src/internal/`, checked against `npm pack --dry-run
   --json`'s own file list, currently 17 files / 338.8 kB packed). CJS↔ESM export identity is
   asserted as part of the metadata suite (`metadata.test.mjs`), so it's covered too.
-- **Still doesn't exist at all**: a real browser-bundler smoke test (no bundler is installed
-  in this project's toolchain at all); a WASM binary size regression check (current baseline:
-  `elixcee_wasm_bg.wasm` 263.0 kB, `elixcee_wasm.browser.mjs` 359.4 kB inlined-base64, no
-  threshold recorded anywhere) — both larger, more design-heavy undertakings than the pack
-  audit (picking a bundler is a real tool choice; a size threshold is a real policy call),
-  deliberately not attempted this round.
+- **Also now wired, in a separate new `wasm` job** (both `wasm-pack` targets built fresh,
+  esbuild added as `packages/xlsx`'s one new devDependency): a Node sync `read()` smoke
+  test, the `"browser"` export condition resolving *and running* under
+  `node --conditions=browser` (Node simulating the condition — no real browser executes in
+  this project's CI, no Safari claim anywhere), a minimal esbuild bundle with an in-bundle
+  `XLSX.read()` call, and the WASM binary size logged (263.2 kB as of this round, not
+  gated). See item 8 above for the full detail, including a real consumer caveat found
+  while building the bundle check (Node/CJS WASM loader's `__dirname`-relative `.wasm`
+  lookup needs the file copied alongside a bundled consumer's own output).
+- **Still doesn't exist at all**: real in-browser execution in CI (would need a headless-
+  browser runner — not added, matching "no large browser-test framework"); a WASM binary
+  size *regression* check (the size is recorded now; nothing fails CI if it grows) — a real
+  policy call (what threshold, what to do when a legitimate feature grows it), deliberately
+  not attempted this round.
 - **0.2.0-alpha.1 (read+write) scope, if ever pursued**: `readFile` is near-free (pure
   WASM-bridge wiring onto the already-working `read_workbook_from_bytes`). `write`/
   `writeFile`/`writeFileSync` need a genuinely new Rust writer module — none exists for

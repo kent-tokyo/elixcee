@@ -122,3 +122,51 @@ jobs:
       - name: compat — export metadata differential (34/34 expected)
         working-directory: compat
         run: npm run differential:metadata
+
+  # Builds crates/elixcee-wasm fresh (both wasm-pack targets), then verifies the result
+  # actually works as a consumer would use it — the node-js job above only ever exercises
+  # the already-vendored/committed copy under packages/xlsx/src/internal/wasm/, never a
+  # from-scratch wasm-pack build, so a build-breaking change there had no CI signal until
+  # this job. Separate from both `test` (no Node) and `node-js` (no Rust) since this one
+  # needs both toolchains in the same job to build-then-consume in one place.
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Pinned and installed via cargo itself (not a third-party Action) so this job's
+      # wasm-pack version is exactly what's declared here, not whatever a marketplace
+      # Action happens to resolve today.
+      - name: install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
+
+      # Builds BOTH `wasm-pack --target nodejs` and `--target web`, then vendors the
+      # result into packages/xlsx/src/internal/wasm/ — see build.sh's own header comment.
+      # A failure here means one of the two wasm-pack builds itself failed.
+      - name: build crates/elixcee-wasm (nodejs + web targets)
+        working-directory: crates/elixcee-wasm
+        run: bash build.sh
+
+      - name: packages/xlsx — npm ci
+        working-directory: packages/xlsx
+        run: npm ci
+
+      # Node sync read() against the fresh nodejs-target build; the browser export
+      # condition actually resolving and running (not just resolving); a minimal esbuild
+      # bundle with XLSX.read() called from inside it; the WASM artifact's current size,
+      # recorded to this job's own log (not gated against any threshold — no baseline
+      # exists yet to compare against). See wasm-smoke.mjs's own header comment for the
+      # full rationale, including one real consumer caveat found while writing it (the
+      # Node/CJS WASM loader's __dirname-relative .wasm lookup means a bundling consumer
+      # must copy the .wasm file alongside their bundle output, or externalize it).
+      - name: packages/xlsx — WASM bridge smoke test (Node read / browser condition / esbuild bundle / size)
+        working-directory: packages/xlsx
+        run: npm run wasm:smoke

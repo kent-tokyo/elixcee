@@ -35,6 +35,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `metadata`). Previously none of this ran anywhere except a developer's own machine, despite
   every command already working — verified live before wiring each one in, not assumed from
   this file's own previously-claimed numbers.
+- **CI also now builds and smoke-tests the WASM bridge from scratch.** A new `wasm` job runs
+  both `wasm-pack build --target nodejs` and `--target web` fresh (the `node-js` job above
+  only ever consumed the already-vendored/committed copy — a build-breaking change to
+  `crates/elixcee-wasm`/`src/reader.rs` had no CI signal until now), then runs the new
+  `packages/xlsx/scripts/wasm-smoke.mjs`: a Node synchronous `read()` call, the `"browser"`
+  export condition resolving *and actually running* (via `node --conditions=browser`,
+  self-referencing the package by name — more than a resolution check, but still Node
+  simulating the condition; no real browser executes anywhere in this project's CI, and no
+  Safari support is claimed anywhere), a minimal `esbuild` bundle with an in-bundle
+  `XLSX.read()` call, and the current WASM binary size logged (263,204 bytes as of this
+  round) — recorded, not gated against any threshold (no prior baseline exists to compare
+  against). `esbuild` is `packages/xlsx`'s one new devDependency for this (pinned to `^0.28`,
+  past the version with the known dev-server CORS advisory — irrelevant to this project's
+  usage, which only ever calls its one-shot `build()`, never `serve()`, but avoided anyway).
+  One real, previously-undisclosed consumer caveat found while writing the bundle check: the
+  Node/CJS WASM loader (`elixcee_wasm.node.cjs`, wasm-pack's own generated code, not
+  hand-written) locates its `.wasm` file via a `__dirname`-relative path, which becomes
+  bundle-output-relative once bundled — a consumer bundling this package's Node entry needs
+  to bundle to CJS (ESM output has no `__dirname` at all, a hard `ReferenceError`) and copy
+  `elixcee_wasm_bg.wasm` next to their bundle output, or externalize the loader. Not fixed
+  this round (would mean patching wasm-pack's own generated boilerplate); documented in
+  `wasm-smoke.mjs`'s header comment and `ROADMAP.md`.
 - **`packages/xlsx/scripts/audit-pack-contents.mjs`**, also wired into the new `node-js` CI
   job — asserts what `npm pack` would actually publish (every required file present —
   `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.md`, the four public entry points; nothing

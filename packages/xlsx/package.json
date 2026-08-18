@@ -28,9 +28,11 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "typecheck:no-dom": "tsc --noEmit -p tsconfig.no-dom.json",
-    "audit:pack": "node scripts/audit-pack-contents.mjs"
+    "audit:pack": "node scripts/audit-pack-contents.mjs",
+    "wasm:smoke": "node scripts/wasm-smoke.mjs"
   },
   "devDependencies": {
+    "esbuild": "^0.28",
     "typescript": "^5"
   },
   "dependencies": {
