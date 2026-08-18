@@ -8,6 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.5.0]
+
+Root `elixcee` (Rust crate + Python package) only — `elixcee-types` stays `0.1.0` (gained
+the new `Variant::Null` public enum variant, a semver-relevant addition to review before
+its own next publish, but not itself version-bumped this round), `elixcee-wasm` stays
+`0.1.0` (no source changes; its vendored build output was regenerated to pick up the VM
+changes below), and `@elixcee/xlsx` stays `0.0.0-development`/unpublished/`"private": true`
+(none touched). Built via two parallel, disjoint-scope worktree branches — VBA structural
+semantics (parser/VM: colon-statement separator, `Variant::Null` with documented
+propagation rules, real object-variable unset/`Nothing` state, a runtime `With` stack) and
+`@elixcee/xlsx` consumer/browser validation (a real packed-tarball install smoke, a real
+headless-Chrome smoke, bundle-safe WASM loading, `readFile()`) — merged after each was
+independently reverified, then integration-regression-tested together as a whole,
+surfacing and fixing one real interaction bug neither branch's own tests caught (a bare
+`.member` inside a single-line `If` nested in a `With` body). Does not claim Microsoft
+Excel validation anywhere. Full detail in `[Unreleased]`'s two sections below (VBA
+structural semantics; `@elixcee/xlsx` real-consumer and real-browser validation) and the
+single-line-`If`/`With` interaction fix that follows them.
+
+All gates green before this bump: `cargo test --workspace` (724 passing),
+`cargo build --release --workspace`, `cargo check --features python --lib`,
+`cargo clippy -p elixcee-types -- -D warnings`, a real `maturin build --release` wheel
+installed into a fresh venv with `Null`/object-`Nothing`-alias-safety/the `With` stack
+re-verified through the actual Python API post-install (not just `cargo check`); the
+`compat/vba-semantics/` suite (386 cases, 0 `BUG`/0 `UNCLASSIFIED`, 19 `KNOWN_LIMITATION`,
+down from 28, deterministic across 2 runs); the existing 581-scenario `compat/corpus/` suite
+(0 `UNEXPLAINED`/0 `MISMATCH`, unchanged); `compat/differential/`'s utils/SSF/read+readFile/
+metadata suites (all passing, read+readFile now 30 MATCH + 3 disclosed); a fresh
+`wasm-pack` rebuild of both targets verified via the real packed-tarball consumer smoke and
+a real headless-Chrome smoke (not just Node simulating the `browser` export condition).
+
 ### VBA structural semantics
 
 Four language-level gaps closed, each verified against Microsoft's own VBA language
