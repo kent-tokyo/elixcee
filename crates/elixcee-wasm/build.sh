@@ -16,12 +16,26 @@ cd "$(dirname "$0")"
 wasm-pack build --target nodejs --out-dir pkg-node --out-name elixcee_wasm
 wasm-pack build --target web --out-dir pkg-web --out-name elixcee_wasm
 node build-browser-inline.mjs
+node build-node-inline.mjs
 
+# BOTH vendored loaders now inline the compiled .wasm bytes as base64 (see
+# build-browser-inline.mjs and build-node-inline.mjs). The raw elixcee_wasm_bg.wasm is
+# therefore no longer read at runtime by anything, and is deliberately NOT vendored: it
+# would ship the same 263KB payload twice (once raw, once base64) for no consumer benefit.
+# The `rm -f` below removes it from a tree checked out before this change, so a stale copy
+# can't keep being published by accident.
+#
+# The cost of inlining, stated rather than glossed over: elixcee_wasm.node.cjs and
+# elixcee_wasm.browser.mjs are COMMITTED files that now each carry ~351KB of generated
+# base64, so every WASM rebuild churns that much repo history. Deliberately not gated by a
+# `git diff --exit-code` check in CI: wasm bytes are not reproducible across build hosts
+# (macOS/arm64 vs. CI's linux/x64), so such a gate would fail on host differences rather
+# than on a genuinely stale commit.
 dest=../../packages/xlsx/src/internal/wasm
 mkdir -p "$dest"
-cp pkg-node/elixcee_wasm.js "$dest/elixcee_wasm.node.cjs"
-cp pkg-node/elixcee_wasm_bg.wasm "$dest/elixcee_wasm_bg.wasm"
+cp pkg-node/elixcee_wasm.inline.cjs "$dest/elixcee_wasm.node.cjs"
 cp pkg-web/elixcee_wasm.inline.mjs "$dest/elixcee_wasm.browser.mjs"
+rm -f "$dest/elixcee_wasm_bg.wasm"
 
 echo "vendored WASM bridge into $dest:"
 ls -la "$dest"

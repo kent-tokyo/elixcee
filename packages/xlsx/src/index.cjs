@@ -204,6 +204,30 @@ function read(data, opts) {
   return shapeWorkBook(JSON.parse(getWasmBridge().readWorkbook(bytes)), opts);
 }
 
+// ---- readFile / readFileSync ----
+//
+// Node-only file-path entry points, a thin wrapper over read() above. ONE function exported
+// under BOTH names, because that is what the oracle does — confirmed live, not assumed:
+// `XLSX.readFile === XLSX.readFileSync` is true, and the shared function's own `.name` is
+// "readFileSync" (so `XLSX.readFile.name === 'readFileSync'`, which NAME_OVERRIDES below
+// reproduces for both keys). Defining two separate functions would break that identity.
+//
+// `require('fs')` is INSIDE the function, not at module top level, for the same reason
+// getWasmBridge() is lazy: index.browser.mjs re-exports this file's non-read functions, so
+// a top-level fs require would make merely importing the browser entry pull `fs` into a
+// browser bundle. package.json's `browser` field additionally maps "fs" to false, so a
+// bundler that DOES statically follow this require (esbuild does, even inside a function
+// body) stubs it out instead of failing to resolve it. The browser entry exports its own
+// explicitly-throwing readFile/readFileSync rather than this one — see index.browser.mjs.
+//
+// No path validation, no encoding option, no existence check: a missing or unreadable file
+// throws fs's own native ENOENT/EACCES error, exactly as the oracle's does (it calls
+// `_fs.readFileSync` the same way). Deliberately not wrapped in a friendlier error — a
+// caller matching on `err.code === 'ENOENT'` must keep working.
+function readFileSyncImpl(filename, opts) {
+  return read(require('fs').readFileSync(filename), opts);
+}
+
 // ---- workbook / sheet ----
 
 function bookNew() {
@@ -1399,6 +1423,12 @@ const NAME_OVERRIDES = {
   sheet_to_row_object_array: 'sheet_to_json',
   table_to_sheet: 'parse_dom_table',
   read: 'readSync',
+  // Both keys, same target name: the oracle exports ONE function under both `readFile` and
+  // `readFileSync`, and its `.name` is "readFileSync" for both (confirmed live). The two
+  // entries here are the same function object, so the rename loop below simply sets the
+  // same name twice.
+  readFile: 'readFileSync',
+  readFileSync: 'readFileSync',
 };
 
 // nameAs is for FUNCTION exports only — `consts` is a plain data object (no `.name`
@@ -1437,6 +1467,12 @@ const consts = { SHEET_VISIBLE: 0, SHEET_HIDDEN: 1, SHEET_VERY_HIDDEN: 2 };
 // compat/differential/metadata.test.mjs's key-order assertion.
 module.exports = {
   read,
+  // Immediately after `read`, matching the oracle's own top-level key order
+  // (`Object.keys(XLSX)` is [..., "read", "readFile", "readFileSync", "write", ...] —
+  // confirmed live). Like `read`, these are top-level oracle exports, not `utils.*`
+  // members, so metadata.test.mjs compares them against `XLSX`, not `XLSX.utils`.
+  readFile: readFileSyncImpl,
+  readFileSync: readFileSyncImpl,
   encode_col: encodeCol,
   encode_row: encodeRow,
   encode_cell: encodeCell,
