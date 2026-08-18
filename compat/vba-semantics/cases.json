@@ -2039,15 +2039,134 @@
   {
     "id": "with_computed_cells_target_unsupported",
     "category": "with_block_resolution",
-    "description": "With Cells(row, col) as a target does not parse",
+    "description": "With Cells(row, col) works as a target",
     "vbaSource": "Sub Scenario()\n  With Cells(1, 3)\n    .Value = 42\n  End With\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
     "id": "with_dot_member_inside_nested_if_unsupported",
     "category": "with_block_resolution",
-    "description": "A bare .member inside an If block nested in a With body does not parse",
+    "description": "A bare .member inside an If block nested in a With body resolves normally",
     "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    If .Value = 0 Then\n      .Value = 7\n    End If\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_computed_cells_target_from_variables",
+    "category": "with_block_resolution",
+    "description": "With Cells(r, c) where both indices are variables",
+    "vbaSource": "Sub Scenario()\n  r = 2\n  c = 2\n  With Cells(r, c)\n    .Value = 9\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_target_is_evaluated_once_on_entry",
+    "category": "with_block_resolution",
+    "description": "The With target is evaluated once on entry, not per .member access",
+    "vbaSource": "Sub Scenario()\n  i = 1\n  With Cells(i, 1)\n    i = 5\n    .Value = 3\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_target_evaluated_once_leaves_the_retargeted_cell_untouched",
+    "category": "with_block_resolution",
+    "description": "Reassigning a target variable inside a With body does not move the target",
+    "vbaSource": "Sub Scenario()\n  i = 1\n  With Cells(i, 5)\n    i = 5\n    .Value = 3\n  End With\n  Range(\"E1\").Clear\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_member_inside_a_for_loop",
+    "category": "with_block_resolution",
+    "description": "A bare .member inside a For loop nested in a With body",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    For i = 1 To 3\n      .Value = .Value + i\n    Next i\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_member_inside_a_do_loop",
+    "category": "with_block_resolution",
+    "description": "A bare .member inside a Do loop nested in a With body, in both the condition and the body",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    Do While .Value < 3\n      .Value = .Value + 1\n    Loop\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_member_inside_a_select_case",
+    "category": "with_block_resolution",
+    "description": "A bare .member inside a Select Case nested in a With body",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    Select Case 2\n      Case 2\n        .Value = 8\n    End Select\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_member_two_block_constructs_deep",
+    "category": "with_block_resolution",
+    "description": "A bare .member two block constructs deep inside a With body",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    For i = 1 To 2\n      If i = 2 Then\n        .Value = 4\n      End If\n    Next i\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_object_variable_target_resolves_at_runtime",
+    "category": "with_block_resolution",
+    "description": "With <object variable> resolves against the variable's current reference",
+    "vbaSource": "Sub Scenario()\n  Dim rng As Range\n  Set rng = Range(\"C3\")\n  With rng\n    .Value = 5\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_worksheet_object_variable_qualifies_cells",
+    "category": "with_block_resolution",
+    "description": "With <worksheet variable> makes .Cells(...) target that worksheet",
+    "vbaSource": "Sub Scenario()\n  Dim ws\n  Set ws = ActiveSheet\n  With ws\n    For i = 1 To 3\n      .Cells(i, 1).Value = i\n    Next i\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_nested_object_variable_and_literal_targets_mix",
+    "category": "with_block_resolution",
+    "description": "A literal-target With nested inside an object-variable-target With restores correctly",
+    "vbaSource": "Sub Scenario()\n  Dim rng As Range\n  Set rng = Range(\"A1\")\n  With rng\n    .Value = 1\n    With Range(\"B1\")\n      .Value = 2\n    End With\n    .Value = .Value + 10\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_three_levels_of_nesting_restore_correctly",
+    "category": "with_block_resolution",
+    "description": "Three levels of nested With restore each outer target in turn",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    .Value = 1\n    With Range(\"B1\")\n      .Value = 2\n      With Range(\"C1\")\n        .Value = 3\n      End With\n      .Value = .Value + 20\n    End With\n    .Value = .Value + 10\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_middle_level_restored_after_innermost_exits",
+    "category": "with_block_resolution",
+    "description": "The middle level of three nested With blocks is restored too",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    .Value = 1\n    With Range(\"B1\")\n      .Value = 2\n      With Range(\"C1\")\n        .Value = 3\n      End With\n      .Value = .Value + 20\n    End With\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_stack_does_not_leak_past_an_exit_for",
+    "category": "with_block_resolution",
+    "description": "An Exit For inside a With body does not leave the target on the stack",
+    "vbaSource": "Sub Scenario()\n  With Range(\"A1\")\n    For i = 1 To 3\n      Exit For\n    Next i\n    .Value = 5\n  End With\n  With Range(\"B1\")\n    .Value = 6\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_stack_does_not_leak_past_a_handled_error",
+    "category": "with_block_resolution",
+    "description": "A With body left via an error handler does not leak its target",
+    "vbaSource": "Sub Scenario()\n  On Error Resume Next\n  With Range(\"A1\")\n    .Value = 1 / 0\n  End With\n  On Error GoTo 0\n  With Range(\"B1\")\n    .Value = 7\n  End With\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_udt_record_target_still_works",
+    "category": "with_block_resolution",
+    "description": "A With block over a UDT variable still sets its fields",
+    "vbaSource": "Sub Scenario()\n  p.x = 0\n  With p\n    .x = 4\n  End With\n  Range(\"A1\").Value = p.x\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_udt_record_target_nested_field_still_works",
+    "category": "with_block_resolution",
+    "description": "A With block over a UDT variable still sets a nested field path",
+    "vbaSource": "Sub Scenario()\n  With p\n    .a.b = 6\n  End With\n  Range(\"A1\").Value = p.a.b\nEnd Sub\n",
+    "entrypoint": "Scenario"
+  },
+  {
+    "id": "with_dot_value_read_in_a_nested_if_condition",
+    "category": "with_block_resolution",
+    "description": "A bare .Value read inside a nested If condition resolves against the With target",
+    "vbaSource": "Sub Scenario()\n  Range(\"A1\").Value = 5\n  With Range(\"A1\")\n    If .Value = 5 Then\n      Range(\"B1\").Value = 1\n    Else\n      Range(\"B1\").Value = 2\n    End If\n  End With\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {

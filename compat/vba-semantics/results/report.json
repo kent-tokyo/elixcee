@@ -1,10 +1,10 @@
 {
-  "total": 368,
+  "total": 385,
   "counts": {
-    "MATCH_DOCUMENTED_SEMANTICS": 321,
+    "MATCH_DOCUMENTED_SEMANTICS": 340,
     "EXPECTED_ERROR": 23,
     "NONDETERMINISTIC": 2,
-    "KNOWN_LIMITATION": 22,
+    "KNOWN_LIMITATION": 20,
     "BUG": 0,
     "UNCLASSIFIED": 0
   },
@@ -1786,18 +1786,116 @@
     {
       "id": "with_computed_cells_target_unsupported",
       "category": "with_block_resolution",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee's With Range(\"...\") target is a parse-time literal string, not a general expression -- parse_with only recognizes a Range(\"literal\") or Sheets/Worksheets(\"name\") call shape, or a bare identifier (UDT target). Cells(1, 3) falls into none of those and fails to parse entirely (actual: parse_error \"expected newline, got LParen\"), rather than merely producing a wrong value. Found while building this suite, not previously disclosed.",
-      "documented": "real VBA: 42",
-      "actual": "expected value 42, but the scenario errored: expected newline, got LParen"
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Real VBA supports any object expression as a With target, including Cells(r, c) -- this line is valid VBA that writes 42 to C1. (Fixed this round: the target used to have to be a parse-time literal string, so this failed to parse at all.)"
     },
     {
       "id": "with_dot_member_inside_nested_if_unsupported",
       "category": "with_block_resolution",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee's bare-.member rewrite only fires in parse_with_body's own direct statement loop (which special-cases a leading Dot token before delegating to parse_stmt) -- once execution descends into a nested block's own body (parse_if/parse_for/parse_do_loop/parse_select_case, each parsed via ordinary parse_stmt), a leading Dot is simply unrecognized (actual: parse_error \"unexpected token starting statement: Dot\"), rather than merely producing a wrong value. Same root cause as with_computed_cells_target_unsupported above: With-target resolution is parse-time-textual, not a runtime-resolved stack. Found while building this suite, not previously disclosed.",
-      "documented": "real VBA: 7",
-      "actual": "expected value 7, but the scenario errored: unexpected token starting statement: Dot"
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Real VBA resolves .Value against the enclosing With target no matter how deeply it is nested inside other block constructs in the body -- this line is valid VBA that writes 7 to A1 (a fresh cell reads as 0). (Fixed this round: a bare .member is now an ordinary statement/expression form resolved against a runtime With stack, so it parses wherever a statement or expression can appear.)"
+    },
+    {
+      "id": "with_computed_cells_target_from_variables",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The target is genuinely computed — neither index is a literal — so it can only work if the target expression is evaluated at runtime rather than recognized as a literal at parse time."
+    },
+    {
+      "id": "with_target_is_evaluated_once_on_entry",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Real VBA evaluates the object expression once, when the block is entered, and holds that reference for the whole block. Reassigning i inside the body must not retarget the block: the write lands on A1 (i was 1 at entry), not A5."
+    },
+    {
+      "id": "with_target_evaluated_once_leaves_the_retargeted_cell_untouched",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The complement of with_target_is_evaluated_once_on_entry, asserted by absence: after clearing the cell the entry-time target (E1) resolved to, no cell remains — so nothing was ever written to the re-evaluated target E5."
+    },
+    {
+      "id": "with_dot_member_inside_a_for_loop",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The With target must resolve from inside a nested loop body, and must stay the same target across iterations: 0+1+2+3 = 6."
+    },
+    {
+      "id": "with_dot_member_inside_a_do_loop",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A second nested block construct, and one where the bare .member appears in the loop *condition* as well as the body — the condition is an expression, not a statement, so it exercises the expression side of the same resolution."
+    },
+    {
+      "id": "with_dot_member_inside_a_select_case",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The third and fourth nested block constructs (Select Case, and its Case body) — completes the If/For/Do/Select Case set, none of which the old parse-time rewrite could reach."
+    },
+    {
+      "id": "with_dot_member_two_block_constructs_deep",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Nesting depth is not special-cased anywhere: resolution walks to the innermost active With target regardless of how many block constructs sit between it and the .member."
+    },
+    {
+      "id": "with_object_variable_target_resolves_at_runtime",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A bare identifier as a With target can name a Set-assigned Range object; the parser cannot know that, so it must be resolved at runtime against the object-variable namespace."
+    },
+    {
+      "id": "with_worksheet_object_variable_qualifies_cells",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A Worksheet-typed With target qualifies .Cells(r, c) to that worksheet's own cells. Combines a runtime-resolved target with a nested loop, which is the shape most real macros use."
+    },
+    {
+      "id": "with_nested_object_variable_and_literal_targets_mix",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Push/pop must be uniform across target kinds: an inner literal-Range With inside an outer object-variable With must restore the outer target on exit, exactly as two literal targets do."
+    },
+    {
+      "id": "with_three_levels_of_nesting_restore_correctly",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "A stack, not a single saved slot: after the innermost block exits, the middle target must be active again, and after that one exits, the outer. A1 ends at 1+10 = 11."
+    },
+    {
+      "id": "with_middle_level_restored_after_innermost_exits",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The companion assertion to with_three_levels_of_nesting_restore_correctly, on the middle target: B1 ends at 2+20 = 22, proving the restore is per-level and not just \"back to the outermost\"."
+    },
+    {
+      "id": "with_stack_does_not_leak_past_an_exit_for",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Early control transfer out of a nested construct must not disturb the enclosing With target, and the following With block must resolve against its own target — a leaked stack entry would send this write to A1."
+    },
+    {
+      "id": "with_stack_does_not_leak_past_a_handled_error",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The error path is the one most likely to skip a naive pop: if the target leaked, the following With's bare .Value would resolve against A1 instead of B1."
+    },
+    {
+      "id": "with_udt_record_target_still_works",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Regression guard for the other bare-identifier target kind: a name that is not an object variable is a record, and .field must still assign to it — the same runtime dispatch, different namespace."
+    },
+    {
+      "id": "with_udt_record_target_nested_field_still_works",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The chained-field form of the case above (.a.b, not just .a), confirming the record path handles multi-segment member paths as it did before."
+    },
+    {
+      "id": "with_dot_value_read_in_a_nested_if_condition",
+      "category": "with_block_resolution",
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "The read side at nesting depth: the If condition is evaluated as an expression inside the With body, so a bare .Value there must resolve against the target rather than failing to parse."
     },
     {
       "id": "dim_array_default_lower_bound_is_zero",

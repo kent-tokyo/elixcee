@@ -148,20 +148,16 @@ struct Parser {
     /// Parallel to `tokens`: (start, end) char-offset span of each token.
     spans: Vec<(u32, u32)>,
     pos: usize,
-    /// Variable name currently targeted by `With p` (None outside a With block).
-    with_target: Option<String>,
-    /// Range address currently targeted by `With Range("addr")` (None
-    /// outside such a block) — lets a bare `.Value`/`.Formula` inside the
-    /// body (no explicit `.Range(...)`/`.Cells(...)` prefix) resolve
-    /// against this address, the same way `with_target` lets a bare
-    /// `.Field` resolve against a UDT variable. Shadowed/restored the same
-    /// way `with_target` is, so nested With blocks of either kind work.
-    with_range_target: Option<String>,
+    // No With-target state lives here any more. `With` targets used to be
+    // resolved by a parse-time textual rewrite (a literal `Range("...")`
+    // address or a bare UDT variable name substituted into every statement
+    // of the body); they are now resolved once at runtime against the VM's
+    // own With stack — see `ast::WithTarget` / `ast::WithMember`.
 }
 
 impl Parser {
     fn new(tokens: Vec<Tok>, spans: Vec<(u32, u32)>) -> Self {
-        Parser { tokens, spans, pos: 0, with_target: None, with_range_target: None }
+        Parser { tokens, spans, pos: 0 }
     }
 
     fn peek(&self) -> &Tok {
@@ -500,6 +496,16 @@ impl Parser {
         match self.peek() {
             Tok::Eof | Tok::Newline => return Ok(None),
             Tok::Ident(_) => {}
+            // A bare `.member` statement inside a With body. Handled here,
+            // in the general statement dispatch, so it is valid wherever a
+            // statement is — including inside an `If`/`For`/`Do`/`Select
+            // Case` nested in the body, which the old With-body-only
+            // special case never reached.
+            Tok::Dot => {
+                let s = self.parse_with_dot_stmt()?;
+                self.eat_stmt_end()?;
+                return Ok(Some(s));
+            }
             _ => return Err(format!("unexpected token starting statement: {:?}", self.peek())),
         }
 
@@ -907,6 +913,18 @@ impl Parser {
         Ok(op)
     }
 
+    /// `With <target> ... End With`. The target is captured as an
+    /// unevaluated `WithTarget` and resolved **once at runtime**, on block
+    /// entry — this used to be a parse-time rewrite that substituted a
+    /// literal `Range("...")` address or a bare UDT variable name into every
+    /// statement of the body, which is why a computed target (`With
+    /// Cells(r, c)`) couldn't be expressed at all.
+    ///
+    /// `With Sheets("name")`/`Worksheets("name")` keeps its own
+    /// `Stmt::WithSheet` variant: that path was already runtime-resolved
+    /// (the VM swaps `active_sheet` around the body), and it also pushes the
+    /// sheet onto the runtime With stack so bare `.member` statements
+    /// resolve against it.
     fn parse_with(&mut self) -> Result<Stmt, String> {
         self.expect_ident("with")?;
 
@@ -922,48 +940,48 @@ impl Parser {
                 self.consume_end_kw("with")?;
                 self.skip_nl();
                 return Ok(Stmt::WithSheet { sheet_name: name, body });
-            } else {
-                self.skip_to_eol();
             }
+            self.skip_to_eol();
             let body = self.parse_with_body()?;
             self.consume_end_kw("with")?;
             self.skip_nl();
-            return Ok(Stmt::With { body });
+            return Ok(Stmt::With { target: WithTarget::Unmodeled, body });
         }
 
-        // ── Range("addr") — literal address on the active sheet ──────────────
-        // Same literal-only scope as the `Sheets("name")` branch above (no
-        // general expression target); a bare `.Value`/`.Formula` inside the
-        // body resolves against this address via `with_range_target`, the
-        // Range-target twin of `with_target` (UDT fields).
-        if self.is_ident("range") {
-            self.advance();
-            self.expect_tok(Tok::LParen)?;
-            let addr = self.consume_str()?;
+        // ── Cells(row, col) — a computed single-cell target ──────────────────
+        if self.is_ident("cells") && *self.peek_at(1) == Tok::LParen {
+            self.advance(); // 'cells'
+            self.advance(); // '('
+            let row = self.parse_expr()?;
+            self.expect_tok(Tok::Comma)?;
+            let col = self.parse_expr()?;
             self.expect_tok(Tok::RParen)?;
-            self.eat_stmt_end()?;
-            let prev_with_target = self.with_target.take();
-            let prev_range_target = self.with_range_target.replace(addr);
-            let body = self.parse_with_body()?;
-            self.with_target = prev_with_target;
-            self.with_range_target = prev_range_target;
-            self.consume_end_kw("with")?;
-            self.skip_nl();
-            return Ok(Stmt::With { body });
+            return self.finish_with(WithTarget::Cells(row, col));
         }
 
-        // ── With <variable> — UDT target ─────────────────────────────────────
-        if let Tok::Ident(_) = self.peek().clone() {
-            let var = self.consume_ident()?.to_lowercase();
-            self.eat_stmt_end()?;
-            let prev = self.with_target.replace(var.clone());
-            let prev_range_target = self.with_range_target.take();
+        // ── Any object expression: Range("addr"), Union(...), <var>.Areas(n) ──
+        if self.is_ident("range") || self.is_ident("union") {
+            if let Some(obj) = self.parse_object_expr()? {
+                return self.finish_with(WithTarget::Object(obj));
+            }
+            // Unrecognized shape — fall through to the no-op body below,
+            // same leniency `parse_set` gives an unmodeled object target.
+            self.skip_to_eol();
             let body = self.parse_with_body()?;
-            self.with_target = prev;
-            self.with_range_target = prev_range_target;
             self.consume_end_kw("with")?;
             self.skip_nl();
-            return Ok(Stmt::WithRecord { var, body });
+            return Ok(Stmt::With { target: WithTarget::Unmodeled, body });
+        }
+
+        // ── With <identifier> ────────────────────────────────────────────────
+        // A Set-assigned Range/Worksheet object variable OR a UDT variable.
+        // The parser can't tell which; the VM resolves it (see
+        // `WithTarget::Var`). A trailing `.something` (e.g.
+        // `With ws.Range("A1:B2")`) isn't modeled — skip to the no-op body
+        // rather than mis-parsing it as a bare variable target.
+        if matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek_at(1), Tok::Newline | Tok::Eof | Tok::Colon) {
+            let var = self.consume_ident()?.to_lowercase();
+            return self.finish_with(WithTarget::Var(var));
         }
 
         // ── Generic / Application etc. — no-op body ───────────────────────────
@@ -971,121 +989,102 @@ impl Parser {
         let body = self.parse_with_body()?;
         self.consume_end_kw("with")?;
         self.skip_nl();
-        Ok(Stmt::With { body })
+        Ok(Stmt::With { target: WithTarget::Unmodeled, body })
     }
 
+    /// Shared tail of every recognized `With` target: eat the header's
+    /// terminator, parse the body, consume `End With`.
+    fn finish_with(&mut self, target: WithTarget) -> Result<Stmt, String> {
+        self.eat_stmt_end()?;
+        let body = self.parse_with_body()?;
+        self.consume_end_kw("with")?;
+        self.skip_nl();
+        Ok(Stmt::With { target, body })
+    }
+
+    /// A With body is an ordinary statement list — `parse_stmt` recognizes a
+    /// leading `.` on its own now, so nothing here special-cases it and a
+    /// bare `.member` works at any nesting depth inside the body.
     fn parse_with_body(&mut self) -> Result<Vec<SpannedStmt>, String> {
-        let mut stmts = vec![];
-        loop {
-            self.skip_nl();
-            if self.is_end_kw("with") || *self.peek() == Tok::Eof { break; }
-            let start = self.peek_span().start;
-            let stmt = if *self.peek() == Tok::Dot {
-                // with_cell_write, with_range_write, or with_dot_stmt
-                self.parse_with_dot_stmt()?
-            } else {
-                self.parse_stmt()?
-            };
-            if let Some(stmt) = stmt {
-                let end = self.peek_span().start;
-                stmts.push(SpannedStmt { stmt, span: SourceSpan { start, end } });
-            }
-        }
-        Ok(stmts)
+        self.parse_stmts(|p| p.is_end_kw("with"))
     }
 
-    fn parse_with_dot_stmt(&mut self) -> Result<Option<Stmt>, String> {
+    /// One statement beginning with a bare `.` — `.Value = 1`,
+    /// `.Cells(r, c).Value = v`, `.Range("A1").Formula = f`, `.a.b = 2`, or
+    /// a read-only `.Method` with no assignment (a no-op). Reached from
+    /// `parse_stmt`, so it is valid wherever a statement is, including
+    /// inside an `If`/`For`/`Do`/`Select Case` nested in a With body — the
+    /// gap the old parse-time rewrite had.
+    fn parse_with_dot_stmt(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume '.'
-        match self.peek().clone() {
-            Tok::Ident(ref s) => {
-                let s = s.clone();
-                // ── With Range("addr") target: bare .Value/.Formula = val ─────
-                if let Some(addr) = self.with_range_target.clone()
-                    && (s == "value" || s == "formula") {
-                        self.advance(); // consume 'value'/'formula'
-                        let is_formula = s == "formula";
-                        self.expect_tok(Tok::Eq)?;
-                        let value = self.parse_expr()?;
-                        self.eat_stmt_end()?;
-                        return Ok(Some(Stmt::RangeWrite { addr, is_formula, value }));
-                    }
-                // ── UDT With target: .Field = val  /  .A.B = val ──────────────
-                if let Some(var) = self.with_target.clone()
-                    && s != "range" && s != "cells" {
-                        let field = self.consume_ident()?.to_lowercase();
-                        let mut fields = vec![field];
-                        // Collect chained fields: .A.B.C
-                        while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
-                            self.advance(); // consume '.'
-                            fields.push(self.consume_ident()?.to_lowercase());
-                        }
-                        if *self.peek() == Tok::Eq {
-                            self.advance();
-                            let value = self.parse_expr()?;
-                            self.eat_stmt_end()?;
-                            return if fields.len() == 1 {
-                                Ok(Some(Stmt::RecordSet { var, field: fields.remove(0), value }))
-                            } else {
-                                Ok(Some(Stmt::RecordSetNested { var, fields, value }))
-                            };
-                        }
-                        // No '=' → read without assignment has no effect
-                        self.skip_to_eol();
-                        return Ok(Some(Stmt::Unsupported {
-                            reason: format!(
-                                "'{}.{}' read without assignment has no effect",
-                                var,
-                                fields.join(".")
-                            ),
-                        }));
-                    }
-                match s.as_str() {
-                    "range" => {
-                        // .Range("addr").Value/Formula = expr
-                        self.advance();
-                        self.expect_tok(Tok::LParen)?;
-                        let addr = self.consume_str()?;
-                        self.expect_tok(Tok::RParen)?;
-                        self.expect_tok(Tok::Dot)?;
-                        let prop = self.consume_ident()?;
-                        let is_formula = prop == "formula";
-                        self.expect_tok(Tok::Eq)?;
-                        let value = self.parse_expr()?;
-                        self.eat_stmt_end()?;
-                        Ok(Some(Stmt::RangeWrite { addr, is_formula, value }))
-                    }
-                    "cells" => {
-                        // .Cells(r, c).Value = expr
-                        self.advance();
-                        self.expect_tok(Tok::LParen)?;
-                        let row = self.parse_expr()?;
-                        self.expect_tok(Tok::Comma)?;
-                        let col = self.parse_expr()?;
-                        self.expect_tok(Tok::RParen)?;
-                        self.expect_tok(Tok::Dot)?;
-                        self.expect_ident("value")?;
-                        self.expect_tok(Tok::Eq)?;
-                        let value = self.parse_expr()?;
-                        self.eat_stmt_end()?;
-                        Ok(Some(Stmt::CellWrite { row, col, value }))
-                    }
-                    _ => {
-                        // with_dot_stmt: unrecognized property/method
-                        self.skip_to_eol();
-                        Ok(Some(Stmt::Unsupported {
-                            reason: format!("With-block '.{}' is not implemented", s),
-                        }))
-                    }
-                }
-            }
+        let head = match self.peek() {
+            Tok::Ident(s) => s.clone(),
             _ => {
-                self.skip_to_eol();
-                Ok(Some(Stmt::Unsupported {
+                self.skip_to_stmt_end();
+                return Ok(Stmt::Unsupported {
                     reason: "With-block dotted statement is not recognized and was skipped"
                         .to_string(),
-                }))
+                });
             }
+        };
+
+        // `.Cells(r, c)...` / `.Range("addr")...` — a qualified member of the
+        // With target, not a field of it. Guarded on an immediate `(` so a
+        // genuine UDT field literally named "cells"/"range" still parses as
+        // a field (the same caution `parse_ident_stmt` already takes).
+        if (head == "cells" || head == "range") && *self.peek_at(1) == Tok::LParen {
+            self.advance(); // head
+            self.advance(); // '('
+            let member = if head == "cells" {
+                let row = self.parse_expr()?;
+                self.expect_tok(Tok::Comma)?;
+                let col = self.parse_expr()?;
+                self.expect_tok(Tok::RParen)?;
+                let fields = self.parse_dot_field_chain()?;
+                WithMember::Cells { row: Box::new(row), col: Box::new(col), fields }
+            } else {
+                let addr = self.consume_str()?;
+                self.expect_tok(Tok::RParen)?;
+                let fields = self.parse_dot_field_chain()?;
+                WithMember::Range { addr, fields }
+            };
+            return self.finish_with_dot(member, &head);
         }
+
+        let mut fields = vec![self.consume_ident()?.to_lowercase()];
+        while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
+            self.advance(); // '.'
+            fields.push(self.consume_ident()?.to_lowercase());
+        }
+        let described = fields.join(".");
+        self.finish_with_dot(WithMember::Fields(fields), &described)
+    }
+
+    /// Zero or more `.field` segments after a `.Cells(...)`/`.Range(...)`
+    /// qualifier — `.Cells(1, 1).Value` yields `["value"]`.
+    fn parse_dot_field_chain(&mut self) -> Result<Vec<String>, String> {
+        let mut fields = vec![];
+        while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
+            self.advance(); // '.'
+            fields.push(self.consume_ident()?.to_lowercase());
+        }
+        Ok(fields)
+    }
+
+    /// Requires the `= <expr>` that turns a bare `.member` into a statement.
+    /// Without one it's a property/method *read*, which has no effect —
+    /// degraded to `Stmt::Unsupported` rather than a parse error, the same
+    /// no-op-on-unmodeled-construct precedent used everywhere else here.
+    fn finish_with_dot(&mut self, member: WithMember, described: &str) -> Result<Stmt, String> {
+        if *self.peek() == Tok::Eq {
+            self.advance();
+            let value = self.parse_expr()?;
+            return Ok(Stmt::WithDot { member, value });
+        }
+        self.skip_to_stmt_end();
+        Ok(Stmt::Unsupported {
+            reason: format!("With-block '.{}' read without assignment has no effect", described),
+        })
     }
 
     fn parse_exit(&mut self) -> Result<Stmt, String> {
@@ -2179,31 +2178,18 @@ impl Parser {
                     _ => self.parse_ident_expr(),
                 }
             }
-            // ── bare `.Value` inside a `With Range("addr")` block ─────────────
-            Tok::Dot if self.with_range_target.is_some() && self.is_ident_at(1, "value") => {
-                let addr = self.with_range_target.clone().expect("checked by guard above");
-                self.advance(); // consume '.'
-                self.advance(); // consume 'value'
-                Ok(Expr::RangeRead { addr })
-            }
-            // ── `.Field` inside a `With p` block ──────────────────────────────
+            // ── A bare `.member` read inside a With body ──────────────────────
+            // e.g. the right-hand side of `.Value = .Value + 1`. Resolved
+            // against the innermost active With target at runtime, so this
+            // needs no parser state and works at any nesting depth.
             Tok::Dot => {
-                if let Some(var) = self.with_target.clone() {
+                self.advance(); // consume '.'
+                let mut fields = vec![self.consume_ident()?.to_lowercase()];
+                while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
                     self.advance(); // consume '.'
-                    let field = self.consume_ident()?.to_lowercase();
-                    let mut fields = vec![field];
-                    while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
-                        self.advance(); // consume '.'
-                        fields.push(self.consume_ident()?.to_lowercase());
-                    }
-                    if fields.len() == 1 {
-                        Ok(Expr::RecordGet { var, field: fields.remove(0) })
-                    } else {
-                        Ok(Expr::RecordGetNested { var, fields })
-                    }
-                } else {
-                    Err("Unexpected '.' outside With block".into())
+                    fields.push(self.consume_ident()?.to_lowercase());
                 }
+                Ok(Expr::WithDot(fields))
             }
             t => Err(format!("unexpected token in expression: {:?}", t)),
         }
@@ -2765,12 +2751,12 @@ mod tests {
     }
     #[test] fn test_with_block() {
         let body = parse_body("Sub MySub()\n    With Sheet1\n        .Cells(1, 1).Value = 99\n    End With\nEnd Sub\n");
-        // `With Sheet1` is now parsed as WithRecord (plain identifier target).
-        // Both WithRecord and With execute their body identically at runtime.
+        // `With Sheet1` is a bare-identifier target — `WithTarget::Var`,
+        // resolved at runtime (it may name a Set-assigned object variable
+        // or a UDT record; the parser can't tell).
         let body_len = match &body[0] {
-            Stmt::WithRecord { body, .. } => body.len(),
-            Stmt::With { body }           => body.len(),
-            _ => panic!("expected With or WithRecord"),
+            Stmt::With { target: WithTarget::Var(v), body } if v == "sheet1" => body.len(),
+            other => panic!("expected With {{ target: Var(\"sheet1\") }}, got {:?}", other),
         };
         assert_eq!(body_len, 1);
     }
@@ -2778,13 +2764,13 @@ mod tests {
     #[test] fn test_with_udt_field_read_without_assignment_is_unsupported() {
         let body = parse_body("Sub MySub()\n    With p\n        .Field\n    End With\nEnd Sub\n");
         let inner = match &body[0] {
-            Stmt::WithRecord { body, .. } => body,
-            other => panic!("expected WithRecord, got {:?}", other),
+            Stmt::With { body, .. } => body,
+            other => panic!("expected With, got {:?}", other),
         };
         assert_eq!(
             inner[0].stmt,
             Stmt::Unsupported {
-                reason: "'p.field' read without assignment has no effect".to_string()
+                reason: "With-block '.field' read without assignment has no effect".to_string()
             }
         );
     }
@@ -2800,7 +2786,7 @@ mod tests {
         assert_eq!(
             inner[0].stmt,
             Stmt::Unsupported {
-                reason: "With-block '.foo' is not implemented".to_string()
+                reason: "With-block '.foo' read without assignment has no effect".to_string()
             }
         );
     }
@@ -2809,8 +2795,8 @@ mod tests {
         // `.42` tokenizes as Dot, Int(42) — a non-identifier after the dot.
         let body = parse_body("Sub MySub()\n    With p\n        .42\n    End With\nEnd Sub\n");
         let inner = match &body[0] {
-            Stmt::WithRecord { body, .. } => body,
-            other => panic!("expected WithRecord, got {:?}", other),
+            Stmt::With { body, .. } => body,
+            other => panic!("expected With, got {:?}", other),
         };
         assert_eq!(
             inner[0].stmt,

@@ -877,16 +877,106 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
   addCaseWithSource('with_sub_call_does_not_disturb_target', CAT, 'Calling another Sub from inside a With body does not change the With target',
     'Sub Helper()\n  Range("C1").Value = 100\nEnd Sub\nSub Scenario()\n  With Range("A1")\n    .Value = 1\n    Helper\n    .Value = .Value + 1\n  End With\nEnd Sub\n',
     { value: 2 }, 'A Sub call is not itself a block construct that redefines the enclosing With target -- .Value after the Helper call must still mean Range("A1").Value.');
-  addCase('with_computed_cells_target_unsupported', CAT, 'With Cells(row, col) as a target does not parse',
+  addCase('with_computed_cells_target_unsupported', CAT, 'With Cells(row, col) works as a target',
     '  With Cells(1, 3)\n    .Value = 42\n  End With',
     { value: 42, address: 'C1' },
-    'Real VBA supports any object expression as a With target, including Cells(r, c) -- this line is valid VBA that writes 42 to C1.',
-    'elixcee\'s With Range("...") target is a parse-time literal string, not a general expression -- parse_with only recognizes a Range("literal") or Sheets/Worksheets("name") call shape, or a bare identifier (UDT target). Cells(1, 3) falls into none of those and fails to parse entirely (actual: parse_error "expected newline, got LParen"), rather than merely producing a wrong value. Found while building this suite, not previously disclosed.');
-  addCase('with_dot_member_inside_nested_if_unsupported', CAT, 'A bare .member inside an If block nested in a With body does not parse',
+    'Real VBA supports any object expression as a With target, including Cells(r, c) -- this line is valid VBA that writes 42 to C1. (Fixed this round: the target used to have to be a parse-time literal string, so this failed to parse at all.)');
+  addCase('with_dot_member_inside_nested_if_unsupported', CAT, 'A bare .member inside an If block nested in a With body resolves normally',
     '  With Range("A1")\n    If .Value = 0 Then\n      .Value = 7\n    End If\n  End With',
     { value: 7 },
-    'Real VBA resolves .Value against the enclosing With target no matter how deeply it is nested inside other block constructs in the body -- this line is valid VBA that writes 7 to A1 (a fresh cell reads as 0).',
-    'elixcee\'s bare-.member rewrite only fires in parse_with_body\'s own direct statement loop (which special-cases a leading Dot token before delegating to parse_stmt) -- once execution descends into a nested block\'s own body (parse_if/parse_for/parse_do_loop/parse_select_case, each parsed via ordinary parse_stmt), a leading Dot is simply unrecognized (actual: parse_error "unexpected token starting statement: Dot"), rather than merely producing a wrong value. Same root cause as with_computed_cells_target_unsupported above: With-target resolution is parse-time-textual, not a runtime-resolved stack. Found while building this suite, not previously disclosed.');
+    'Real VBA resolves .Value against the enclosing With target no matter how deeply it is nested inside other block constructs in the body -- this line is valid VBA that writes 7 to A1 (a fresh cell reads as 0). (Fixed this round: a bare .member is now an ordinary statement/expression form resolved against a runtime With stack, so it parses wherever a statement or expression can appear.)');
+
+  // ── Runtime With stack (Milestone A4) ──────────────────────────────────────
+  // With-target resolution is now a real runtime mechanism: the target expression is
+  // evaluated ONCE on block entry and pushed onto a stack in the VM, which every bare
+  // .member consults wherever it appears in the AST. These cases exercise the three
+  // properties that distinguishes that from the previous parse-time textual rewrite:
+  // a computed (non-literal) target, .member at arbitrary nesting depth, and correct
+  // push/pop discipline around nesting and early exits.
+  addCase('with_computed_cells_target_from_variables', CAT,
+    'With Cells(r, c) where both indices are variables',
+    '  r = 2\n  c = 2\n  With Cells(r, c)\n    .Value = 9\n  End With',
+    { value: 9, address: 'B2' },
+    'The target is genuinely computed — neither index is a literal — so it can only work if the target expression is evaluated at runtime rather than recognized as a literal at parse time.');
+  addCase('with_target_is_evaluated_once_on_entry', CAT,
+    'The With target is evaluated once on entry, not per .member access',
+    '  i = 1\n  With Cells(i, 1)\n    i = 5\n    .Value = 3\n  End With',
+    { value: 3 },
+    'Real VBA evaluates the object expression once, when the block is entered, and holds that reference for the whole block. Reassigning i inside the body must not retarget the block: the write lands on A1 (i was 1 at entry), not A5.');
+  addNoCellWrittenCase('with_target_evaluated_once_leaves_the_retargeted_cell_untouched', CAT,
+    'Reassigning a target variable inside a With body does not move the target',
+    '  i = 1\n  With Cells(i, 5)\n    i = 5\n    .Value = 3\n  End With\n  Range("E1").Clear',
+    'The complement of with_target_is_evaluated_once_on_entry, asserted by absence: after clearing the cell the entry-time target (E1) resolved to, no cell remains — so nothing was ever written to the re-evaluated target E5.');
+  addCase('with_dot_member_inside_a_for_loop', CAT,
+    'A bare .member inside a For loop nested in a With body',
+    '  With Range("A1")\n    For i = 1 To 3\n      .Value = .Value + i\n    Next i\n  End With',
+    { value: 6 },
+    'The With target must resolve from inside a nested loop body, and must stay the same target across iterations: 0+1+2+3 = 6.');
+  addCase('with_dot_member_inside_a_do_loop', CAT,
+    'A bare .member inside a Do loop nested in a With body, in both the condition and the body',
+    '  With Range("A1")\n    Do While .Value < 3\n      .Value = .Value + 1\n    Loop\n  End With',
+    { value: 3 },
+    'A second nested block construct, and one where the bare .member appears in the loop *condition* as well as the body — the condition is an expression, not a statement, so it exercises the expression side of the same resolution.');
+  addCase('with_dot_member_inside_a_select_case', CAT,
+    'A bare .member inside a Select Case nested in a With body',
+    '  With Range("A1")\n    Select Case 2\n      Case 2\n        .Value = 8\n    End Select\n  End With',
+    { value: 8 },
+    'The third and fourth nested block constructs (Select Case, and its Case body) — completes the If/For/Do/Select Case set, none of which the old parse-time rewrite could reach.');
+  addCase('with_dot_member_two_block_constructs_deep', CAT,
+    'A bare .member two block constructs deep inside a With body',
+    '  With Range("A1")\n    For i = 1 To 2\n      If i = 2 Then\n        .Value = 4\n      End If\n    Next i\n  End With',
+    { value: 4 },
+    'Nesting depth is not special-cased anywhere: resolution walks to the innermost active With target regardless of how many block constructs sit between it and the .member.');
+  addCase('with_object_variable_target_resolves_at_runtime', CAT,
+    'With <object variable> resolves against the variable\'s current reference',
+    '  Dim rng As Range\n  Set rng = Range("C3")\n  With rng\n    .Value = 5\n  End With',
+    { value: 5, address: 'C3' },
+    'A bare identifier as a With target can name a Set-assigned Range object; the parser cannot know that, so it must be resolved at runtime against the object-variable namespace.');
+  addCase('with_worksheet_object_variable_qualifies_cells', CAT,
+    'With <worksheet variable> makes .Cells(...) target that worksheet',
+    '  Dim ws\n  Set ws = ActiveSheet\n  With ws\n    For i = 1 To 3\n      .Cells(i, 1).Value = i\n    Next i\n  End With',
+    { value: 3, address: 'A3' },
+    'A Worksheet-typed With target qualifies .Cells(r, c) to that worksheet\'s own cells. Combines a runtime-resolved target with a nested loop, which is the shape most real macros use.');
+  addCase('with_nested_object_variable_and_literal_targets_mix', CAT,
+    'A literal-target With nested inside an object-variable-target With restores correctly',
+    '  Dim rng As Range\n  Set rng = Range("A1")\n  With rng\n    .Value = 1\n    With Range("B1")\n      .Value = 2\n    End With\n    .Value = .Value + 10\n  End With',
+    { value: 11 },
+    'Push/pop must be uniform across target kinds: an inner literal-Range With inside an outer object-variable With must restore the outer target on exit, exactly as two literal targets do.');
+  addCase('with_three_levels_of_nesting_restore_correctly', CAT,
+    'Three levels of nested With restore each outer target in turn',
+    '  With Range("A1")\n    .Value = 1\n    With Range("B1")\n      .Value = 2\n      With Range("C1")\n        .Value = 3\n      End With\n      .Value = .Value + 20\n    End With\n    .Value = .Value + 10\n  End With',
+    { value: 11 },
+    'A stack, not a single saved slot: after the innermost block exits, the middle target must be active again, and after that one exits, the outer. A1 ends at 1+10 = 11.');
+  addCase('with_middle_level_restored_after_innermost_exits', CAT,
+    'The middle level of three nested With blocks is restored too',
+    '  With Range("A1")\n    .Value = 1\n    With Range("B1")\n      .Value = 2\n      With Range("C1")\n        .Value = 3\n      End With\n      .Value = .Value + 20\n    End With\n  End With',
+    { value: 22, address: 'B1' },
+    'The companion assertion to with_three_levels_of_nesting_restore_correctly, on the middle target: B1 ends at 2+20 = 22, proving the restore is per-level and not just "back to the outermost".');
+  addCase('with_stack_does_not_leak_past_an_exit_for', CAT,
+    'An Exit For inside a With body does not leave the target on the stack',
+    '  With Range("A1")\n    For i = 1 To 3\n      Exit For\n    Next i\n    .Value = 5\n  End With\n  With Range("B1")\n    .Value = 6\n  End With',
+    { value: 6, address: 'B1' },
+    'Early control transfer out of a nested construct must not disturb the enclosing With target, and the following With block must resolve against its own target — a leaked stack entry would send this write to A1.');
+  addCase('with_stack_does_not_leak_past_a_handled_error', CAT,
+    'A With body left via an error handler does not leak its target',
+    '  On Error Resume Next\n  With Range("A1")\n    .Value = 1 / 0\n  End With\n  On Error GoTo 0\n  With Range("B1")\n    .Value = 7\n  End With',
+    { value: 7, address: 'B1' },
+    'The error path is the one most likely to skip a naive pop: if the target leaked, the following With\'s bare .Value would resolve against A1 instead of B1.');
+  addCase('with_udt_record_target_still_works', CAT,
+    'A With block over a UDT variable still sets its fields',
+    '  p.x = 0\n  With p\n    .x = 4\n  End With\n  Range("A1").Value = p.x',
+    { value: 4 },
+    'Regression guard for the other bare-identifier target kind: a name that is not an object variable is a record, and .field must still assign to it — the same runtime dispatch, different namespace.');
+  addCase('with_udt_record_target_nested_field_still_works', CAT,
+    'A With block over a UDT variable still sets a nested field path',
+    '  With p\n    .a.b = 6\n  End With\n  Range("A1").Value = p.a.b',
+    { value: 6 },
+    'The chained-field form of the case above (.a.b, not just .a), confirming the record path handles multi-segment member paths as it did before.');
+  addCase('with_dot_value_read_in_a_nested_if_condition', CAT,
+    'A bare .Value read inside a nested If condition resolves against the With target',
+    '  Range("A1").Value = 5\n  With Range("A1")\n    If .Value = 5 Then\n      Range("B1").Value = 1\n    Else\n      Range("B1").Value = 2\n    End If\n  End With',
+    { value: 1, address: 'B1' },
+    'The read side at nesting depth: the If condition is evaluated as an expression inside the With body, so a bare .Value there must resolve against the target rather than failing to parse.');
 }
 
 // ── array_bounds ─────────────────────────────────────────────────────────────

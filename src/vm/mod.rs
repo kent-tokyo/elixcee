@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::formula;
-use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, XlDir, XlEndProp};
+use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp};
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{self, SheetCell, WorkbookSheet};
 
@@ -369,6 +369,33 @@ pub enum ObjectRef {
 /// read path, the write path and the `.Copy`/sheet-qualifier paths.
 pub const OBJECT_NOT_SET: &str = "Object variable or With block variable not set";
 
+/// One entry on the VM's runtime `With` stack: the *already-evaluated*
+/// target of an active `With` block. Pushed on entry, popped on exit
+/// (including on an early `Exit Sub`/`Exit For` or a runtime error), so
+/// nesting works and an outer target is restored exactly.
+///
+/// This is what replaced the parser's old textual With rewrite. The target
+/// expression is evaluated once, here, when the block is entered — not
+/// re-evaluated per `.member` access, and not substituted into the body's
+/// statements at parse time.
+#[derive(Debug, Clone, PartialEq)]
+enum WithValue {
+    /// `With Range("A1")`, `With Cells(r, c)`, or a `Set`-assigned Range
+    /// object variable.
+    Range(RangeRef),
+    /// `With Worksheets("X")`, or a `Set`-assigned Worksheet object
+    /// variable. Holds the lowercase sheet key.
+    Sheet(String),
+    /// `With p` where `p` is a UDT record — `.field` resolves against
+    /// `Vm::variables`, not `object_variables`.
+    Record(String),
+    /// A target elixcee doesn't model (`With Application`, an unset object
+    /// variable, an unrecognized header). The body still runs; every bare
+    /// `.member` inside it is a no-op, matching the pre-existing behavior
+    /// for an unrecognized `With` header.
+    Unmodeled,
+}
+
 /// Narrows an `ObjectRef` to its `Range` payload, or a descriptive error —
 /// `Union`/`.Areas(n)`/`.SpecialCells(...)` only make sense on a Range
 /// object; a `Worksheet`/`Workbook` reference reaching one of them (e.g.
@@ -488,6 +515,13 @@ pub struct Vm {
     /// variable is a write to the shared cell store, immediately visible
     /// through the other. No `Rc<RefCell<_>>` indirection needed.
     object_variables: HashMap<String, ObjectRef>,
+    /// Runtime `With` stack — the already-evaluated target of each active
+    /// `With` block, innermost last. Pushed on block entry, popped on exit
+    /// (including on `Exit Sub`/`Exit For` and on a runtime error, so it
+    /// can't leak into whatever runs next), which is what makes nesting
+    /// restore the outer target exactly. Every bare `.member` statement or
+    /// expression resolves against `last()`, wherever in the AST it sits.
+    with_stack: Vec<WithValue>,
 }
 
 impl Vm {
@@ -524,6 +558,7 @@ impl Vm {
             merged_ranges: HashMap::new(),
             sheet_visibility: HashMap::new(),
             object_variables: HashMap::new(),
+            with_stack: Vec::new(),
         }
     }
 
@@ -634,6 +669,151 @@ impl Vm {
                     .is_some_and(|n| n.to_lowercase() == name)
             }
         }
+    }
+
+    // ── Runtime With stack (see `WithValue`) ────────────────────────────────
+
+    /// Evaluates a `With` block's target once, on block entry.
+    fn eval_with_target(&mut self, target: &WithTarget) -> Result<WithValue, String> {
+        Ok(match target {
+            WithTarget::Object(obj) => match self.eval_object_expr(obj)? {
+                ObjectRef::Range(r) => WithValue::Range(r),
+                ObjectRef::Worksheet(key) => WithValue::Sheet(key),
+                ObjectRef::Workbook | ObjectRef::Nothing => WithValue::Unmodeled,
+            },
+            WithTarget::Cells(row, col) => {
+                let r = to_cell_index(self.eval_expr(row)?, "row")?;
+                let c = to_cell_index(self.eval_expr(col)?, "col")?;
+                WithValue::Range(RangeRef::single(
+                    self.active_sheet.clone(),
+                    Rect { start_row: r, start_col: c, end_row: r, end_col: c },
+                ))
+            }
+            // A bare identifier: the parser can't know its type, so decide
+            // here. An object variable wins over a same-named record, the
+            // same precedence `Stmt::RecordSet`/`Expr::RecordGet` already
+            // use. A name that is neither is left Unmodeled (a no-op body)
+            // rather than erroring — the pre-existing behavior for a
+            // `With <unknown>` target.
+            WithTarget::Var(name) => match self.object_variables.get(name) {
+                Some(ObjectRef::Range(r)) => WithValue::Range(r.clone()),
+                Some(ObjectRef::Worksheet(key)) => WithValue::Sheet(key.clone()),
+                Some(ObjectRef::Nothing) => return Err(OBJECT_NOT_SET.to_string()),
+                Some(ObjectRef::Workbook) => WithValue::Unmodeled,
+                None => WithValue::Record(name.clone()),
+            },
+            WithTarget::Unmodeled => WithValue::Unmodeled,
+        })
+    }
+
+    /// Runs a `With` body with `value` pushed as the innermost target.
+    ///
+    /// The pop happens on *every* exit path — normal completion, an early
+    /// `Exit Sub`/`Exit For`, and a runtime error (which is why the error is
+    /// held and returned after popping rather than propagated with `?`).
+    /// Leaking an entry here would silently mis-resolve whatever `.member`
+    /// ran next, which is exactly the kind of bug a stack invites.
+    fn run_with_body(&mut self, value: WithValue, body: &[SpannedStmt]) -> Result<(), String> {
+        self.with_stack.push(value);
+        let mut result = Ok(());
+        for s in body {
+            result = self.exec_stmt(s);
+            if result.is_err() || self.exit_flag.is_some() { break; }
+        }
+        self.with_stack.pop();
+        result
+    }
+
+    /// The innermost active `With` target, or the error real VBA's own
+    /// error-91 text describes ("… or With block variable not set") when a
+    /// bare `.member` appears with no enclosing `With` at all. Before the
+    /// runtime stack existed this was a *parse* error; it stays an error,
+    /// just a runtime one, since a bare `.member` can now appear anywhere a
+    /// statement or expression can.
+    fn current_with(&self) -> Result<WithValue, String> {
+        self.with_stack.last().cloned().ok_or_else(|| OBJECT_NOT_SET.to_string())
+    }
+
+    /// Resolves a `.Cells(r, c)` / `.Range("addr")` qualifier inside a With
+    /// body to the `(sheet_key, row, col)` it addresses.
+    ///
+    /// For a Worksheet target these are that sheet's own cells — the fix
+    /// for `With ws` + `.Cells(i, 1)`, which used to silently write to the
+    /// *active* sheet instead. For a Range target they keep their
+    /// pre-existing meaning (an independent reference on the active sheet,
+    /// pinned by `with_range_nested_range_reference_still_works`); real
+    /// VBA's `Range.Range`/`Range.Cells` are relative to the base range's
+    /// top-left, which elixcee does not model — see this project's
+    /// disclosure list.
+    fn resolve_with_qualified_cell(
+        &mut self,
+        member: &WithMember,
+    ) -> Result<Option<(String, u32, u32)>, String> {
+        let sheet = match self.current_with()? {
+            WithValue::Sheet(key) => key,
+            // Every non-Worksheet target keeps the pre-existing behavior: a
+            // `.Cells(...)`/`.Range(...)` qualifier inside a With body was
+            // always an independent, absolute reference on the active sheet
+            // (that's what the parse-time rewrite emitted for it, whatever
+            // the target was). Notably that includes `With Sheet1`, where
+            // `Sheet1` is a worksheet *code name* elixcee doesn't model —
+            // the active sheet is the closest available reading.
+            WithValue::Range(_) | WithValue::Record(_) | WithValue::Unmodeled => {
+                self.active_sheet.clone()
+            }
+        };
+        Ok(match member {
+            WithMember::Cells { row, col, .. } => {
+                let r = to_cell_index(self.eval_expr(row)?, "row")?;
+                let c = to_cell_index(self.eval_expr(col)?, "col")?;
+                Some((sheet, r, c))
+            }
+            WithMember::Range { addr, .. } => {
+                let ((r, c), _) = parse_range_addr(addr)
+                    .ok_or_else(|| format!("Invalid range address '{}'", addr))?;
+                Some((sheet, r, c))
+            }
+            WithMember::Fields(_) => None,
+        })
+    }
+
+    /// `.member = value` inside a With body.
+    fn write_with_member(&mut self, member: &WithMember, v: Variant) -> Result<(), String> {
+        if !matches!(member, WithMember::Fields(_)) {
+            let is_formula = matches!(member,
+                WithMember::Cells { fields, .. } | WithMember::Range { fields, .. }
+                    if fields.last().map(String::as_str) == Some("formula"));
+            if let Some((sheet, r, c)) = self.resolve_with_qualified_cell(member)? {
+                let target = RangeRef::single(
+                    sheet,
+                    Rect { start_row: r, start_col: c, end_row: r, end_col: c },
+                );
+                self.write_range_ref_value(&target, is_formula, &v)?;
+            }
+            return Ok(());
+        }
+        let WithMember::Fields(fields) = member else { unreachable!("guarded above") };
+        match self.current_with()? {
+            WithValue::Range(r) => {
+                let f = fields.first().map(String::as_str).unwrap_or("");
+                if f == "value" || f == "formula" {
+                    self.write_range_ref_value(&r, f == "formula", &v)?;
+                }
+                // Any other property write on a Range is a harmless no-op,
+                // same leniency `Stmt::RecordSet`'s object-variable path has.
+            }
+            // A worksheet property write (`.Name = "x"`, …) isn't modeled.
+            WithValue::Sheet(_) | WithValue::Unmodeled => {}
+            WithValue::Record(var) => {
+                // `.a = 1` / `.a.b = 1` on a UDT target — the same
+                // `nested_set` path `Stmt::RecordSetNested` uses, which also
+                // covers the single-field case.
+                let target = self.variables.entry(var)
+                    .or_insert_with(|| Variant::Record(HashMap::new()));
+                nested_set(target, fields, v);
+            }
+        }
+        Ok(())
     }
 
     /// Rejects a member access through an object variable that holds no live
@@ -2123,14 +2303,20 @@ impl Vm {
                 self.check_strict_sheet_exists(sheet_name, &sheet_name.to_lowercase())?;
                 let prev = self.active_sheet.clone();
                 if !self.strict_resolution { self.ensure_sheet(sheet_name); }
-                self.active_sheet = sheet_name.to_lowercase();
+                let key = sheet_name.to_lowercase();
+                self.active_sheet = key.clone();
                 self.cell_index_dirty = true;
-                for s in body.clone() {
-                    self.exec_stmt(&s)?;
-                    if self.exit_flag.is_some() { break; }
-                }
+                // Pushes onto the runtime With stack *as well as* swapping
+                // the active sheet: the swap is what makes an ordinary
+                // `Range(...)`/`Cells(...)` statement in the body land on
+                // this sheet, the stack entry is what makes a bare
+                // `.member` resolve against it (bare `.member` is no longer
+                // rewritten at parse time, so without this push it would
+                // find an empty stack).
+                let result = self.run_with_body(WithValue::Sheet(key), body);
                 self.active_sheet = prev;
                 self.cell_index_dirty = true;
+                result?;
             }
             Stmt::SheetsAdd => {
                 let new_name = format!("sheet{}", self.sheets.len() + 1);
@@ -2209,8 +2395,15 @@ impl Vm {
                     arr[idx] = v;
                 }
             }
-            Stmt::With { body } => {
-                for s in body { self.exec_stmt(s)?; if self.exit_flag.is_some() { return Ok(()); } }
+            Stmt::With { target, body } => {
+                // Resolve the target ONCE, here, on block entry — not per
+                // `.member` access and not at parse time.
+                let value = self.eval_with_target(target)?;
+                self.run_with_body(value, body)?;
+            }
+            Stmt::WithDot { member, value } => {
+                let v = self.eval_expr(value)?;
+                self.write_with_member(member, v)?;
             }
             Stmt::MsgBox { message } => {
                 let msg = self.eval_expr(message)?;
@@ -2277,10 +2470,6 @@ impl Vm {
                         }
                     }
                 }
-            }
-            Stmt::WithRecord { body, .. } => {
-                // Parser already substituted the variable name into each statement.
-                for s in body { self.exec_stmt(s)?; if self.exit_flag.is_some() { return Ok(()); } }
             }
             Stmt::RecordSet { var, field, value } => {
                 // `<var>.Value = ...` / `<var>.Formula = ...` where `var`
@@ -2536,6 +2725,32 @@ impl Vm {
                 };
                 Ok(Variant::Integer(result as i64))
             }
+            // A bare `.member` read — e.g. the right-hand side of
+            // `.Value = .Value + 1`. Resolved against the innermost active
+            // With target, at whatever depth in the AST it appears.
+            Expr::WithDot(fields) => match self.current_with()? {
+                WithValue::Range(r) => {
+                    if fields.first().map(String::as_str) == Some("value") {
+                        self.read_range_ref_value(&r)
+                    } else {
+                        Ok(Variant::Empty)
+                    }
+                }
+                WithValue::Record(var) => {
+                    let mut cur = self.variables.get(&var).cloned().unwrap_or(Variant::Empty);
+                    for f in fields {
+                        cur = match cur {
+                            Variant::Record(m) => m.get(f).cloned().unwrap_or(Variant::Empty),
+                            _ => Variant::Empty,
+                        };
+                    }
+                    Ok(cur)
+                }
+                // Worksheet/unmodeled property reads aren't modeled — the
+                // same `Empty` an unmodeled `<var>.<field>` read already
+                // gives, rather than a new error condition.
+                WithValue::Sheet(_) | WithValue::Unmodeled => Ok(Variant::Empty),
+            },
             Expr::IsNothing(name) => {
                 // True for a declared-but-unset object variable and for one
                 // explicitly `Set` to Nothing — real VBA can't tell those
@@ -7213,6 +7428,126 @@ mod tests {
         // that isn't one at all keeps its pre-existing record behavior.
         let vm = run("Sub MySub()\n    p.x = 3\n    y = p.x\nEnd Sub\n");
         assert_eq!(vm.variables["y"], Variant::Integer(3));
+    }
+
+    // ── Runtime With stack ──────────────────────────────────────────────────
+    // With-target resolution is a runtime mechanism now, not a parse-time
+    // textual rewrite. These pin the properties only a real runtime stack
+    // has: a computed target, resolution at arbitrary AST depth, evaluate-
+    // once-on-entry, and push/pop discipline that survives early exits.
+
+    #[test]
+    fn with_computed_cells_target_resolves_at_runtime() {
+        let vm = run(
+            "Sub MySub()\n    r = 2\n    c = 3\n    With Cells(r, c)\n        .Value = 42\n    \
+             End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(42));
+    }
+
+    #[test]
+    fn with_target_is_evaluated_once_on_block_entry() {
+        // Reassigning the index variable inside the body must not retarget
+        // the block — the object expression is evaluated once, on entry.
+        let vm = run(
+            "Sub MySub()\n    i = 1\n    With Cells(i, 1)\n        i = 5\n        .Value = 3\n    \
+             End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(5, 1), Variant::Empty);
+    }
+
+    #[test]
+    fn bare_dot_member_resolves_inside_nested_block_constructs() {
+        let vm = run(
+            "Sub MySub()\n    With Range(\"A1\")\n        For i = 1 To 2\n            \
+             If i = 2 Then\n                .Value = 4\n            End If\n        Next i\n    \
+             End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
+    }
+
+    #[test]
+    fn with_object_variable_target_resolves_against_its_reference() {
+        let vm = run(
+            "Sub MySub()\n    Dim rng As Range\n    Set rng = Range(\"C3\")\n    With rng\n        \
+             .Value = 5\n    End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(5));
+    }
+
+    #[test]
+    fn with_worksheet_variable_target_qualifies_cells_to_that_sheet() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Data\").Range(\"A1\").Value = 0\n    \
+             Set ws = ActiveSheet\n    Sheets(\"Data\").Select\n    With ws\n        \
+             .Cells(1, 1).Value = 42\n    End With\nEnd Sub\n",
+        );
+        // `ws` captured Sheet1 (the active sheet at Set time), so the write
+        // lands there regardless of anything else.
+        assert_eq!(vm.get_sheet_cells("sheet1").and_then(|s| s.get(&(1, 1))).map(|c| c.value.clone()),
+                   Some(Variant::Integer(42)));
+    }
+
+    #[test]
+    fn three_levels_of_nested_with_restore_each_outer_target() {
+        let vm = run(
+            "Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n        \
+             With Range(\"B1\")\n            .Value = 2\n            With Range(\"C1\")\n                \
+             .Value = 3\n            End With\n            .Value = .Value + 20\n        End With\n        \
+             .Value = .Value + 10\n    End With\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(11));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(22));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(3));
+    }
+
+    #[test]
+    fn the_with_stack_is_empty_again_after_a_block_completes() {
+        let vm = run("Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n    End With\nEnd Sub\n");
+        assert!(vm.with_stack.is_empty());
+    }
+
+    #[test]
+    fn the_with_stack_does_not_leak_after_an_exit_sub_inside_a_with_body() {
+        // The pop must happen on the early-exit path too — a leaked entry
+        // would silently mis-resolve whatever `.member` ran next.
+        let vm = run(
+            "Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n        Exit Sub\n    \
+             End With\nEnd Sub\n",
+        );
+        assert!(vm.with_stack.is_empty());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+    }
+
+    #[test]
+    fn the_with_stack_does_not_leak_after_a_runtime_error_inside_a_with_body() {
+        let prog = parser::parse(
+            "Sub MySub()\n    With Range(\"A1\")\n        .Value = 1 / 0\n    End With\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        assert!(vm.run_sub(&prog, "mysub").is_err());
+        assert!(vm.with_stack.is_empty());
+    }
+
+    #[test]
+    fn a_bare_dot_member_with_no_enclosing_with_block_is_a_runtime_error() {
+        // It used to be a *parse* error; a bare `.member` is now a general
+        // statement form, so the "no target" case moves to runtime rather
+        // than disappearing.
+        assert_eq!(
+            run_err("Sub MySub()\n    .Value = 1\nEnd Sub\n"),
+            OBJECT_NOT_SET
+        );
+    }
+
+    #[test]
+    fn a_with_block_over_an_unset_object_variable_raises_error_91() {
+        assert_eq!(
+            run_err("Sub MySub()\n    Dim r As Range\n    With r\n        .Value = 1\n    End With\nEnd Sub\n"),
+            OBJECT_NOT_SET
+        );
     }
 
     // ── Variant::Null — VBA's "no valid data" value ─────────────────────────
