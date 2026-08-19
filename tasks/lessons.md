@@ -204,3 +204,23 @@ use vm::CellContent;
 `Worksheet.Protect` に `ui_only: Option<Expr>` を追加する前は、`.Protect` の全キーワード引数（`Password:=`、`DrawingObjects:=`、`UserInterfaceOnly:=` 等）を `.PasteSpecial` の `Transpose:=` 以外のキーワードと同じ扱いで一律「評価して破棄」していた。ほとんどの引数（`Password:=` 等）はこの単純化で問題ないが、`UserInterfaceOnly:=True` だけは実 Excel の挙動そのものを反転させる——保護は手動 UI 編集だけをブロックし、マクロからの書き込みは許可し続ける。これは「保護したままマクロだけ書き込ませる」という現実の定番パターンであり、単純に破棄すると診断ツールが誤って `SHEET_PROTECTED` を報告する偽陽性になる（コミット前のアドバイザーレビューで発覚）。
 
 **教訓:** 新しいキーワード引数を「値を保持する必要がないから破棄する」と決める前に、そのキーワードが呼び出し先の**分岐そのもの**を変えないか確認する。「大抵は無視できる」という前提は引数ごとに検証すべきで、フラグ名だけで判断しない（`UserInterfaceOnly` のように名前が一見無害でも意味が強いことがある）。
+
+---
+
+## L19: 「担当範囲が非重複」は「相互作用が無い」を意味しない
+
+0.5.0スプリントで2並列subagentに`src/parser`+`src/vm`（VBA structural semantics）と`packages/xlsx`+`crates/elixcee-wasm`（consumer validation）という完全に非重複なファイル範囲を割り当てた。両者ともgit差分の重複はゼロで、それぞれ自分のテストスイートは全てpassしていた。
+
+しかし統合後、README.mdのコード例を手動実行して初めて実バグが発覚した：Subagent Aが`parse_stmt`（ブロック形式文の dispatch）に追加した新規`Tok::Dot`アーム（`With`ブロック内の`.member`文をどこにネストしても認識する機構）を、`parse_stmt`とは別に存在する`parse_single_line_if_branch`（単一行`If`の分岐専用dispatch）は反映しておらず、`With`内の単一行If＋`.member`（`If .Value > 0 Then .Value = .Value + 1`）が無言でno-op化していた。Subagent A自身のテストは全て複数行`If`/ブロック形式でしか検証しておらず、Subagent Bはこのコードパスに一切触れない。
+
+**教訓:** 「担当ファイルが被らない」ことは並列作業の安全性の必要条件であって十分条件ではない。同じコードベース内に「同種の処理を行う独立した第二の dispatch/parser/formatter」が存在する場合（本件のように、ブロック形式と単一行形式で別関数が同じ文法要素を別々に認識している設計）、一方だけを更新すると他方が静かに取り残される。マージ後は必ず、両方の変更が触れうる機能を実際に手で組み合わせて動かすE2E確認を行うこと——各branch自身のCIが緑でも、統合固有のバグは検出できない。
+
+---
+
+## L20: `cargo publish --dry-run`はローカルpathを無視し常に実registryへ依存解決する
+
+ワークスペース内の共有crate（`elixcee-types`）へpublic enumの新規variantを追加し、依存crate（`elixcee`）側の`Cargo.toml`も`version = "0.2.0"`へ追従させた。`cargo build --release --workspace`はローカルpath解決のため問題なく成功する。
+
+ところが`cargo package -p elixcee`/`cargo publish -p elixcee --dry-run`は、`--allow-dirty`/`--locked`/`--no-verify`のいずれを付けても、`elixcee-types`をローカルpathではなく実crates.ioインデックスへ問い合わせて依存解決しようとする。`elixcee-types 0.2.0`がまだ実際には公開されていない段階では「candidate versions found which didn't match: 0.1.0」で必ず失敗する。これはバグではなく、「ローカルでは動くがcrates.io上では壊れる」問題を公開前に検出するためのCargo自身の意図的な仕様。
+
+**教訓:** ワークスペース内の複数crateを段階的に公開する場合、依存される側（`elixcee-types`）を先に実際にpublishし、依存する側（`elixcee`）の`cargo publish --dry-run`による最終確認はその**後**にしか意味を成さない。「両方dry-runしてから両方publish」という順序は成立しない——依存先を公開しない限り依存元のdry-runは原理的に失敗し続ける。この制約はリリース手順の設計段階で織り込んでおくこと（本件では実際に手順を1段階分やり直す形で発覚した）。

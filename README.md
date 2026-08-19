@@ -629,3 +629,10 @@ Key gaps by category:
 | Milestone B6a | `diagnose` subcommand — missing sheet/workbook, array-out-of-bounds root causes | Done |
 | Milestone B6b | `diagnose`: Copy/Paste shape mismatch + clipboard state | Done |
 | Milestone B6c | `diagnose`: sheet protection (`Protect`/`Unprotect`) | Done |
+| Milestone B6c2 | `diagnose`: merged-cell-aware Copy/Paste diagnostics | Done |
+| Milestone B6d | `diagnose-workbook` — root-cause diagnosis across generated test cases | Done |
+| Milestone B7a | Multi-area `Range`/`Union`/`Areas` foundation for Copy/Paste diagnostics | Done |
+| Milestone B7b | Hidden row/column metadata foundation for Copy/Paste diagnostics | Done |
+| Phase 3A-1 | `compat/vba-semantics/` value-correctness suite: 208 → 301 cases (6 new categories); fixed single-line-`If` statement dispatch, `Boolean` arithmetic (`True` = -1), `WorksheetFunction` Boolean coercion, `Empty` equality | Done |
+| Phase 3A-2 | CI `wasm` job: fresh `wasm-pack` build (Node + web targets) plus a Node/browser-condition smoke test, wired into GitHub Actions | Done |
+| 0.5.0 | VBA structural semantics (`:` statement separator, `Variant::Null` with documented propagation, real object-`Nothing` state with alias safety, a runtime `With` target stack) merged with `@elixcee/xlsx` real-consumer/real-browser validation (packed-tarball install, headless-Chrome smoke, bundle-safe WASM loading, `readFile()`); `compat/vba-semantics/` 301 → 386 cases; `elixcee-types` bumped to 0.2.0 for the new public `Variant::Null` enum variant; published to crates.io, PyPI, and GitHub Releases | Done |

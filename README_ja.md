@@ -555,3 +555,10 @@ Next cell
 | Milestone B6a | `diagnose` サブコマンド — 存在しないシート/ワークブック、配列範囲外の根本原因診断 | 完了 |
 | Milestone B6b | `diagnose`: Copy/Paste 形状不一致 + クリップボード状態 | 完了 |
 | Milestone B6c | `diagnose`: シート保護（`Protect`/`Unprotect`） | 完了 |
+| Milestone B6c2 | `diagnose`: 結合セルを考慮したCopy/Paste診断 | 完了 |
+| Milestone B6d | `diagnose-workbook` — 生成ケース群にわたる根本原因診断 | 完了 |
+| Milestone B7a | Copy/Paste診断のための複数領域`Range`/`Union`/`Areas`基盤 | 完了 |
+| Milestone B7b | Copy/Paste診断のための非表示行・列メタデータ基盤 | 完了 |
+| Phase 3A-1 | `compat/vba-semantics/` 値正しさスイート: 208→301ケース（新カテゴリ6件）。単一行`If`文dispatch・`Boolean`算術（`True`=-1）・`WorksheetFunction`のBoolean係数・`Empty`等価比較の各バグを修正 | 完了 |
+| Phase 3A-2 | CI `wasm` job: `wasm-pack`実ビルド（nodejs/webターゲット）+ Node/browser条件スモークテストをGitHub Actionsへ配線 | 完了 |
+| 0.5.0 | VBA構造的意味論（`:`複数文区切り、文書化された伝播規則を持つ`Variant::Null`、alias安全な実`Nothing`状態、runtime `With`ターゲットスタック）と`@elixcee/xlsx`の実consumer/実ブラウザ検証（packed tarballインストール、実headless Chromeスモーク、bundle-safe WASMローディング、`readFile()`）を統合。`compat/vba-semantics/`は301→386ケースへ。新規publicな`Variant::Null` enum variantのため`elixcee-types`を0.2.0へbump。crates.io・PyPI・GitHub Releasesへ公開済み | 完了 |

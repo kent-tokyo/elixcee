@@ -556,3 +556,10 @@ Next cell
 | Milestone B6a | `diagnose` 子命令 — 缺失工作表/工作簿、数组越界等根因诊断 | 完成 |
 | Milestone B6b | `diagnose`：Copy/Paste 形状不匹配 + 剪贴板状态 | 完成 |
 | Milestone B6c | `diagnose`：工作表保护（`Protect`/`Unprotect`） | 完成 |
+| Milestone B6c2 | `diagnose`：考虑合并单元格的 Copy/Paste 诊断 | 完成 |
+| Milestone B6d | `diagnose-workbook` — 跨生成用例的根因诊断 | 完成 |
+| Milestone B7a | 为 Copy/Paste 诊断提供多区域 `Range`/`Union`/`Areas` 基础 | 完成 |
+| Milestone B7b | 为 Copy/Paste 诊断提供隐藏行/列元数据基础 | 完成 |
+| Phase 3A-1 | `compat/vba-semantics/` 数值正确性套件：208 → 301 个用例（新增6个类别）；修复单行 `If` 语句分发、`Boolean` 算术（`True` = -1）、`WorksheetFunction` 的 Boolean 系数、`Empty` 相等比较等缺陷 | 完成 |
+| Phase 3A-2 | CI `wasm` job：全新 `wasm-pack` 构建（nodejs/web 两个 target）+ Node/browser 条件冒烟测试，接入 GitHub Actions | 完成 |
+| 0.5.0 | 合并 VBA 结构化语义（`:` 多语句分隔符、带文档化传播规则的 `Variant::Null`、具备别名安全的真实 `Nothing` 状态、运行时 `With` 目标栈）与 `@elixcee/xlsx` 的真实消费者/真实浏览器验证（打包 tarball 安装、真实无头 Chrome 冒烟测试、bundle-safe WASM 加载、`readFile()`）。`compat/vba-semantics/` 由 301 → 386 个用例；因新增公开 `Variant::Null` enum variant，`elixcee-types` 升级至 0.2.0；已发布至 crates.io、PyPI 与 GitHub Releases | 完成 |
