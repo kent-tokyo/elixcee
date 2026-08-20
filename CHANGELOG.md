@@ -53,11 +53,27 @@ single most common real-world idiom this blocked was
   `Err.Number` surviving past `On Error GoTo 0` to be inspectable at all, and the exact
   real-VBA clearing rule around `Resume`/`On Error` re-statements wasn't independently
   confirmed, so this stays conservative rather than guessing.
-- 25 new tests (11 `src/vm/mod.rs`, 6 `src/parser/mod.rs` covering AST shape, plus the
-  `Err.Raise`-skips-`Source` case at both layers) — `cargo test --workspace` 856/856
-  (856 = 740 lib + 1 + 15 + 16 + 5 + 14 + 7 + 7 + 17 + 15 + 19, every test binary summed),
+- 16 new tests (10 `src/vm/mod.rs`, 6 `src/parser/mod.rs` covering AST shape, the
+  `Err.Raise`-skips-`Source` case at both layers, and a regression test confirming
+  `pending_raised_error` — the side channel `Err.Raise` uses to preserve its own
+  number/description across the generic error-classification path — can't leak into
+  an unrelated later error: it's consumed synchronously by the first `On Error Resume
+  Next`/`GoTo` catch on the same unwind, before any other statement can run) —
+  `cargo test --workspace` 857/857
+  (857 = 741 lib + 1 + 15 + 16 + 5 + 14 + 7 + 7 + 17 + 15 + 19, every test binary summed),
   no regressions in the 581-scenario corpus classifier or the 386-case `vba-semantics`
   suite (still 0 `BUG`/0 `UNCLASSIFIED`, same 19 `KNOWN_LIMITATION`).
+- **Known limitation found while verifying the above, not fixed here (pre-existing,
+  unrelated to `Err.Raise` specifically — reproduces with any error, e.g. `1 / 0`):**
+  `On Error GoTo <label>` set in a caller does not run its handler if the error instead
+  occurs inside a *called* Sub/Function that has no `On Error` of its own. Root cause:
+  `on_error_goto_label` is a single `Vm`-wide field with no per-call-frame scoping, so
+  the callee's own `exec_body` sees the caller's still-armed label, tries (and fails) to
+  find it among the callee's own statements, and returns a synthetic "label not found"
+  error instead of ever reaching the caller's handler. Needs a real design decision
+  (save/restore `on_error_goto_label` — and likely `on_error_resume_next` — per call
+  frame) rather than a local patch, so it's deliberately left for a dedicated fix rather
+  than folded into this feature commit.
 
 ## [0.5.0]
 

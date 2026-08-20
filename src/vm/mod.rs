@@ -4991,6 +4991,31 @@ mod tests {
     }
 
     #[test]
+    fn a_raise_caught_inside_a_called_sub_does_not_leak_its_number_into_a_later_unrelated_error() {
+        // `pending_raised_error` is a single Vm-wide slot (not scoped per
+        // call frame). This confirms it can't survive past the `Err.Raise`
+        // it belongs to: Helper's raise is caught by MySub's still-active
+        // `On Error Resume Next` (a Vm-wide flag) inside Helper's own
+        // statement dispatch, so it's consumed there — the later, unrelated
+        // division error must still report its own number (11), not 9.
+        let prog = parser::parse(concat!(
+            "Sub Helper()\n",
+            "    Err.Raise 9\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    Call Helper()\n",
+            "    x = 1 / 0\n",
+            "    n = Err.Number\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.variables["n"], Variant::Integer(11));
+    }
+
+    #[test]
     fn err_number_is_a_real_variable_named_err_is_still_a_plain_variable() {
         // `err` with no `.Number`/`.Description`/`.Clear`/`.Raise` suffix is
         // an ordinary user variable — the Err-object parsing only guards on
