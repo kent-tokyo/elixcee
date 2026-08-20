@@ -369,6 +369,65 @@ pub enum ObjectRef {
 /// read path, the write path and the `.Copy`/sheet-qualifier paths.
 pub const OBJECT_NOT_SET: &str = "Object variable or With block variable not set";
 
+/// Default `Err.Description` text for a well-known VBA error number — what
+/// real VBA fills in automatically when `Err.Raise <number>` is called
+/// without an explicit description. Only covers the numbers
+/// `classify_vba_error_number` below confidently matches; anything else
+/// gets 1004's own generic text, real VBA's own catch-all.
+fn default_description_for_vba_error_number(number: i64) -> &'static str {
+    match number {
+        5 => "Invalid procedure call or argument",
+        6 => "Overflow",
+        9 => "Subscript out of range",
+        11 => "Division by zero",
+        13 => "Type mismatch",
+        91 => OBJECT_NOT_SET,
+        94 => "Invalid use of Null",
+        _ => "Application-defined or object-defined error",
+    }
+}
+
+/// Maps one of elixcee's own internal runtime-error message strings to real
+/// VBA's `Err.Number`/`Err.Description`. The numbers below are confirmed
+/// matches against Microsoft's own long-stable, publicly documented VBA
+/// runtime error constants (unchanged since VB6 — a fact independent of
+/// this project's own lack of a live Excel/VBA oracle, see `ROADMAP.md`'s
+/// "Known gaps" #1). Every other elixcee-internal condition — undefined
+/// variable, sheet/sub/workbook not found, and so on — has no single
+/// confidently-correct real VBA number (several, like calling an undefined
+/// Sub/Function, would actually be a *compile*-time failure in real VBA,
+/// never reaching `On Error` at runtime at all — a known, disclosed
+/// divergence, not fixed here) and defaults to 1004, real VBA's own
+/// generic "Application-defined or object-defined error" — the number it
+/// commonly raises for Excel-object-related failures itself.
+fn classify_vba_error_number(msg: &str) -> (i64, String) {
+    let mapped = if msg == "Division by zero" {
+        Some(11)
+    } else if msg == "Subscript out of range" {
+        Some(9)
+    } else if msg == "Type mismatch" {
+        Some(13)
+    } else if msg == "Invalid procedure call or argument" {
+        Some(5)
+    } else if msg == "Invalid use of Null" {
+        Some(94)
+    } else if msg == OBJECT_NOT_SET {
+        Some(91)
+    } else if msg == "Integer division overflow" {
+        // elixcee's own wording (i64-based overflow, not real VBA's native
+        // 32-bit Long overflow) — the *number* still matches VBA's own
+        // Overflow (6), the description text is kept as elixcee's own
+        // rather than substituted, since it wasn't independently confirmed.
+        Some(6)
+    } else {
+        None
+    };
+    match mapped {
+        Some(number) => (number, msg.to_string()),
+        None => (1004, msg.to_string()),
+    }
+}
+
 /// One entry on the VM's runtime `With` stack: the *already-evaluated*
 /// target of an active `With` block. Pushed on entry, popped on exit
 /// (including on an early `Exit Sub`/`Exit For` or a runtime error), so
@@ -522,6 +581,25 @@ pub struct Vm {
     /// restore the outer target exactly. Every bare `.member` statement or
     /// expression resolves against `last()`, wherever in the AST it sits.
     with_stack: Vec<WithValue>,
+    /// Real VBA `Err.Number` — the runtime error number of the most recent
+    /// failure caught by `On Error Resume Next`/`On Error GoTo <label>`, or
+    /// set directly by `Err.Raise`. 0 means no error since the start of
+    /// this `run_sub` call or the last `Err.Clear`. See
+    /// `classify_vba_error_number` for which numbers are a confirmed match
+    /// against Microsoft's own long-stable, publicly documented VBA
+    /// runtime error constants versus a disclosed default (1004) for
+    /// conditions elixcee itself raises that don't map to one of those.
+    err_number: i64,
+    /// Real VBA `Err.Description`, paired with `err_number`.
+    err_description: String,
+    /// Set by `Err.Raise` immediately before it returns its `Err(String)`,
+    /// so the next `On Error Resume Next`/`On Error GoTo` catch site uses
+    /// the number/description the user actually raised instead of running
+    /// that message text back through `classify_vba_error_number` (which
+    /// would misclassify it as a generic 1004, since a raised description
+    /// is arbitrary user text, not one of elixcee's own known message
+    /// strings). Taken (cleared) by the first catch site that consumes it.
+    pending_raised_error: Option<(i64, String)>,
 }
 
 impl Vm {
@@ -559,7 +637,25 @@ impl Vm {
             sheet_visibility: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
+            err_number: 0,
+            err_description: String::new(),
+            pending_raised_error: None,
         }
+    }
+
+    /// Records a caught runtime error into `Err.Number`/`Err.Description` —
+    /// called at every point an `On Error Resume Next`/`On Error GoTo
+    /// <label>` actually catches an error (see `exec_stmt`/`exec_body`).
+    /// Uses `pending_raised_error` if `Err.Raise` set it (the number/
+    /// description the user actually specified); otherwise classifies the
+    /// plain error message via `classify_vba_error_number`.
+    fn record_error(&mut self, msg: &str) {
+        let (number, description) = self
+            .pending_raised_error
+            .take()
+            .unwrap_or_else(|| classify_vba_error_number(msg));
+        self.err_number = number;
+        self.err_description = description;
     }
 
     /// Drains the resolution-failure evidence set by the most recent failed
@@ -1722,6 +1818,9 @@ impl Vm {
         // would leak the previous run's MsgBox text into this run's result.
         self.msgbox_log.clear();
         self.last_resolution_failure = None;
+        self.err_number = 0;
+        self.err_description.clear();
+        self.pending_raised_error = None;
         // Cache user-defined functions, subs, and type definitions.
         self.user_funcs = program.funcs.iter().map(|f| (f.name.clone(), f.clone())).collect();
         self.user_subs  = program.subs.iter().map(|s| (s.name.clone(), s.clone())).collect();
@@ -1767,6 +1866,9 @@ impl Vm {
 
         self.msgbox_log.clear();
         self.last_resolution_failure = None;
+        self.err_number = 0;
+        self.err_description.clear();
+        self.pending_raised_error = None;
         self.user_funcs.clear();
         self.user_subs.clear();
         for (_, program) in modules {
@@ -1847,6 +1949,7 @@ impl Vm {
                     if !self.strict_resolution
                         && let Some(label) = self.on_error_goto_label.take()
                     {
+                        self.record_error(&e);
                         match stmts
                             .iter()
                             .position(|s| matches!(&s.stmt, Stmt::Label(l) if l == &label))
@@ -1876,7 +1979,10 @@ impl Vm {
             Ok(()) => Ok(()),
             // `On Error Resume Next` is not honored in strict-resolution
             // mode (`diagnose`) — see the field doc on `strict_resolution`.
-            Err(_) if self.on_error_resume_next && !self.strict_resolution => Ok(()),
+            Err(e) if self.on_error_resume_next && !self.strict_resolution => {
+                self.record_error(&e);
+                Ok(())
+            }
             Err(e) => Err(e),
         }
     }
@@ -2017,6 +2123,26 @@ impl Vm {
             Stmt::OnErrorGoTo(label) => {
                 self.on_error_goto_label = Some(label.clone());
                 self.on_error_resume_next = false;
+            }
+            Stmt::ErrClear => {
+                self.err_number = 0;
+                self.err_description.clear();
+            }
+            Stmt::ErrRaise { number, source, description } => {
+                let number = to_i64_rounded(&self.eval_expr(number)?)?;
+                // Evaluated for side effects/argument-correctness parity
+                // with real VBA (which evaluates every supplied argument),
+                // even though `Err.Source` isn't modeled as a readable
+                // property here — see `Stmt::ErrRaise`'s own doc.
+                if let Some(source) = source {
+                    self.eval_expr(source)?;
+                }
+                let description = match description {
+                    Some(d) => self.eval_expr(d)?.to_string(),
+                    None => default_description_for_vba_error_number(number).to_string(),
+                };
+                self.pending_raised_error = Some((number, description.clone()));
+                return Err(description);
             }
             Stmt::Label(_) => {}  // no-op during normal execution
             Stmt::GoTo(label) => {
@@ -2515,6 +2641,8 @@ impl Vm {
             Expr::Float(f)      => Ok(Variant::Float(*f)),
             Expr::Str(s)        => Ok(Variant::Str(s.clone())),
             Expr::Bool(b)       => Ok(Variant::Boolean(*b)),
+            Expr::ErrNumber      => Ok(Variant::Integer(self.err_number)),
+            Expr::ErrDescription => Ok(Variant::Str(self.err_description.clone())),
             Expr::Var(name) => {
                 if let Some(v) = self.variables.get(name) { return Ok(v.clone()); }
                 // Excel built-in constants
@@ -4751,6 +4879,124 @@ mod tests {
         assert_eq!(vm.variables["x"], Variant::Integer(1));   // set before error
         assert!(!vm.variables.contains_key("x") || vm.variables["x"] != Variant::Integer(99)); // not 99
         assert_eq!(vm.variables["handled"], Variant::Integer(1)); // handler ran
+    }
+
+    // ── Err.Number / Err.Description / Err.Clear / Err.Raise ────────────────
+
+    #[test]
+    fn err_number_is_zero_before_any_error() {
+        let vm = run("Sub MySub()\n    n = Err.Number\n    d = Err.Description\nEnd Sub\n");
+        assert_eq!(vm.variables["n"], Variant::Integer(0));
+        assert_eq!(vm.variables["d"], Variant::Str(String::new()));
+    }
+
+    #[test]
+    fn on_error_resume_next_records_a_confirmed_vba_error_number() {
+        // Division by zero is real VBA error 11 — see classify_vba_error_number.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    x = 1 / 0\n",
+            "    n = Err.Number\n",
+            "    d = Err.Description\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(11));
+        assert_eq!(vm.variables["d"], Variant::Str("Division by zero".into()));
+    }
+
+    #[test]
+    fn err_clear_resets_number_and_description() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    x = 1 / 0\n",
+            "    Err.Clear\n",
+            "    n = Err.Number\n",
+            "    d = Err.Description\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(0));
+        assert_eq!(vm.variables["d"], Variant::Str(String::new()));
+    }
+
+    #[test]
+    fn err_raise_with_only_a_number_fills_in_the_default_description() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    Err.Raise 5\n",
+            "    n = Err.Number\n",
+            "    d = Err.Description\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(5));
+        assert_eq!(vm.variables["d"], Variant::Str("Invalid procedure call or argument".into()));
+    }
+
+    #[test]
+    fn err_raise_skipped_source_does_not_get_read_as_description() {
+        // `Err.Raise Number, , Description` — the idiomatic way to skip
+        // Source. A positional-args-without-skip-support implementation
+        // would misread "custom text" as Source, not Description.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    Err.Raise 513, , \"custom text\"\n",
+            "    n = Err.Number\n",
+            "    d = Err.Description\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(513));
+        assert_eq!(vm.variables["d"], Variant::Str("custom text".into()));
+    }
+
+    #[test]
+    fn err_raise_with_explicit_source_and_description() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    Err.Raise 513, \"MySource\", \"custom text\"\n",
+            "    n = Err.Number\n",
+            "    d = Err.Description\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(513));
+        assert_eq!(vm.variables["d"], Variant::Str("custom text".into()));
+    }
+
+    #[test]
+    fn on_error_goto_handler_sees_err_number_from_the_error_that_triggered_it() {
+        let code = concat!(
+            "Sub MySub()\n",
+            "    On Error GoTo ErrH\n",
+            "    x = 1 / 0\n",
+            "    Exit Sub\n",
+            "ErrH:\n",
+            "    n = Err.Number\n",
+            "    d = Err.Description\n",
+            "End Sub\n",
+        );
+        let vm = run(code);
+        assert_eq!(vm.variables["n"], Variant::Integer(11));
+        assert_eq!(vm.variables["d"], Variant::Str("Division by zero".into()));
+    }
+
+    #[test]
+    fn err_raise_propagates_when_no_on_error_handler_is_active() {
+        let prog = parser::parse("Sub MySub()\n    Err.Raise 513, , \"boom\"\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "boom");
+    }
+
+    #[test]
+    fn err_number_is_a_real_variable_named_err_is_still_a_plain_variable() {
+        // `err` with no `.Number`/`.Description`/`.Clear`/`.Raise` suffix is
+        // an ordinary user variable — the Err-object parsing only guards on
+        // those exact member names, never a bare `err`.
+        let vm = run("Sub MySub()\n    err = 42\nEnd Sub\n");
+        assert_eq!(vm.variables["err"], Variant::Integer(42));
     }
 
     #[test]

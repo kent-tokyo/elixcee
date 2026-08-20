@@ -643,6 +643,14 @@ impl Parser {
                     reason: "Debug.Print/Debug.Assert has no effect (no-op)".to_string(),
                 })
             }
+            // `Err.Clear` / `Err.Raise ...` — guarded on the exact member
+            // name (same precedent as the `thisworkbook`/`activeworkbook`
+            // arms above), so a genuine user variable named `err` with an
+            // unrelated UDT field (`err.code = 1`) still parses as ordinary
+            // assignment/field access, untouched.
+            "err" if self.is_ident_at(2, "clear") || self.is_ident_at(2, "raise") => {
+                self.parse_err_stmt()
+            }
             _ => self.parse_ident_stmt(),
         }
     }
@@ -1136,6 +1144,43 @@ impl Parser {
         } else {
             Err(format!("unexpected On Error action: {:?}", self.peek()))
         }
+    }
+
+    /// `Err.Clear` / `Err.Raise Number[, Source][, Description]`. Real
+    /// VBA's positional slots are (Number, Source, Description, HelpFile,
+    /// HelpContext); `Source`/`Description` may each be skipped with a bare
+    /// comma (`Err.Raise 513, , "custom text"` — the idiomatic form for
+    /// "no custom Source"), so this can't just split on commas positionally
+    /// without risking reading a supplied Description as Source. Doesn't
+    /// parse HelpFile/HelpContext at all — see `Stmt::ErrRaise`'s own doc.
+    fn parse_err_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect_ident("err")?;
+        self.expect_tok(Tok::Dot)?;
+        if self.is_ident("clear") {
+            self.advance();
+            return Ok(Stmt::ErrClear);
+        }
+        self.expect_ident("raise")?;
+        let number = self.parse_expr()?;
+        let mut source = None;
+        let mut description = None;
+        if *self.peek() == Tok::Comma {
+            self.advance();
+            if *self.peek() != Tok::Comma && !self.is_stmt_end() {
+                source = Some(self.parse_expr()?);
+            }
+            if *self.peek() == Tok::Comma {
+                self.advance();
+                if !self.is_stmt_end() {
+                    description = Some(self.parse_expr()?);
+                }
+            }
+        }
+        Ok(Stmt::ErrRaise { number, source, description })
+    }
+
+    fn is_stmt_end(&self) -> bool {
+        matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon)
     }
 
     // ── Simple statements ──────────────────────────────────────────────────────
@@ -2193,6 +2238,24 @@ impl Parser {
                         self.expect_tok(Tok::Dot)?;
                         self.parse_sheet_cell_read()
                     }
+                    // `Err.Number` / `Err.Description` — guarded on the
+                    // exact member name, same precedent as the
+                    // `thisworkbook`/`activeworkbook` arm above, so a
+                    // genuine user variable named `err` with an unrelated
+                    // UDT field (`x = err.code`) still parses as ordinary
+                    // field access.
+                    "err" if self.is_ident_at(2, "number") || self.is_ident_at(2, "description") =>
+                    {
+                        self.advance();
+                        self.expect_tok(Tok::Dot)?;
+                        if self.is_ident("number") {
+                            self.advance();
+                            Ok(Expr::ErrNumber)
+                        } else {
+                            self.expect_ident("description")?;
+                            Ok(Expr::ErrDescription)
+                        }
+                    }
                     _ => self.parse_ident_expr(),
                 }
             }
@@ -3120,6 +3183,53 @@ mod tests {
     #[test] fn test_on_error_goto_zero() {
         let body = parse_body("Sub MySub()\n    On Error GoTo 0\n    a = 1\nEnd Sub\n");
         assert_eq!(body[0], Stmt::OnError { resume_next: false });
+    }
+
+    #[test] fn err_clear_parses() {
+        let body = parse_body("Sub MySub()\n    Err.Clear\nEnd Sub\n");
+        assert_eq!(body, vec![Stmt::ErrClear]);
+    }
+
+    #[test] fn err_raise_number_only_parses() {
+        let body = parse_body("Sub MySub()\n    Err.Raise 5\nEnd Sub\n");
+        assert_eq!(body, vec![Stmt::ErrRaise {
+            number: Expr::Integer(5),
+            source: None,
+            description: None,
+        }]);
+    }
+
+    #[test] fn err_raise_skips_source_with_a_bare_comma() {
+        let body = parse_body("Sub MySub()\n    Err.Raise 513, , \"custom text\"\nEnd Sub\n");
+        assert_eq!(body, vec![Stmt::ErrRaise {
+            number: Expr::Integer(513),
+            source: None,
+            description: Some(Expr::Str("custom text".into())),
+        }]);
+    }
+
+    #[test] fn err_raise_with_source_and_description_parses() {
+        let body = parse_body("Sub MySub()\n    Err.Raise 513, \"MySource\", \"custom text\"\nEnd Sub\n");
+        assert_eq!(body, vec![Stmt::ErrRaise {
+            number: Expr::Integer(513),
+            source: Some(Expr::Str("MySource".into())),
+            description: Some(Expr::Str("custom text".into())),
+        }]);
+    }
+
+    #[test] fn err_number_and_description_parse_as_expressions() {
+        let body = parse_body("Sub MySub()\n    n = Err.Number\n    d = Err.Description\nEnd Sub\n");
+        assert_eq!(body, vec![
+            Stmt::Assignment { var: "n".into(), value: Expr::ErrNumber },
+            Stmt::Assignment { var: "d".into(), value: Expr::ErrDescription },
+        ]);
+    }
+
+    #[test] fn a_bare_err_variable_is_unaffected_by_err_object_parsing() {
+        // No `.Number`/`.Description`/`.Clear`/`.Raise` suffix — an
+        // ordinary variable assignment, same as any other identifier.
+        let body = parse_body("Sub MySub()\n    err = 1\nEnd Sub\n");
+        assert_eq!(body, vec![Stmt::Assignment { var: "err".into(), value: Expr::Integer(1) }]);
     }
 
     #[test] fn test_goto_stmt() {

@@ -97,6 +97,13 @@ pub enum Expr {
     RecordGet       { var: String, field: String },           // p.x
     RecordGetNested { var: String, fields: Vec<String> },    // p.a.b.c
     ArrayRecordGet  { name: String, indices: Vec<Expr>, field: String }, // arr(i).f
+    /// `Err.Number` — real VBA's runtime error number of the most recent
+    /// error caught by `On Error Resume Next`/`On Error GoTo`, or raised by
+    /// `Err.Raise`; 0 if none since the start of this Sub/Function call or
+    /// the last `Err.Clear`. See `vm::classify_vba_error_number`.
+    ErrNumber,
+    /// `Err.Description`, paired with `ErrNumber`.
+    ErrDescription,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -279,6 +286,17 @@ pub enum Stmt {
     ExitFunction,
     OnError { resume_next: bool },     // On Error Resume Next (true) / GoTo 0 (false)
     OnErrorGoTo(String),               // On Error GoTo <label>
+    /// `Err.Clear` — resets `Err.Number` to 0 and `Err.Description` to "".
+    ErrClear,
+    /// `Err.Raise Number[, Source][, Description]` — real VBA's positional
+    /// argument order is (Number, Source, Description, HelpFile,
+    /// HelpContext); `source` is parsed (so a supplied Description in the
+    /// 3rd slot is never misread as Source) but not modeled as a readable
+    /// property — `Err.Source` doesn't exist here, matching this project's
+    /// existing choice not to model a VBA project/module naming concept
+    /// elsewhere. `HelpFile`/`HelpContext` aren't parsed at all — genuinely
+    /// unused by any realistic macro's own error-handling logic.
+    ErrRaise { number: Expr, source: Option<Expr>, description: Option<Expr> },
     Label(String),                     // <name>:  — marks a jump target
     GoTo(String),                      // GoTo <label>
     Resume { next: bool },             // Resume (false) / Resume Next (true)

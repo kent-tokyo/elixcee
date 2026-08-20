@@ -8,6 +8,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### `Err` object: `Err.Number` / `Err.Description` / `Err.Clear` / `Err.Raise`
+
+First item of the 0.6.0 phase. `On Error Resume Next`/`On Error GoTo <label>` already
+existed but had no way for the running macro to inspect *what* error was caught — the
+single most common real-world idiom this blocked was
+`On Error Resume Next : <risky op> : On Error GoTo 0 : If Err.Number <> 0 Then ...`.
+
+- **New `Err.Number`/`Err.Description` expressions**, `Err.Clear`/`Err.Raise` statements
+  (`src/parser/ast.rs`, `src/parser/mod.rs`, `src/vm/mod.rs`). Parser recognition is
+  guarded on the exact member name (`Err.Number`/`Err.Description`/`Err.Clear`/`Err.Raise`
+  specifically), matching the existing `ThisWorkbook`/`ActiveWorkbook` precedent — a
+  genuine user variable named `err` with an unrelated field (`err.code = 1`) still parses
+  as ordinary assignment/field access, unaffected (test:
+  `a_bare_err_variable_is_unaffected_by_err_object_parsing`).
+- **`Vm::err_number`/`err_description`** are set at both existing error-catch sites
+  (`On Error Resume Next`'s per-statement catch, `On Error GoTo <label>`'s jump) via a new
+  `classify_vba_error_number(msg: &str) -> (i64, String)`. Only maps a handful of
+  elixcee-internal message strings that are **confirmed exact matches against Microsoft's
+  own long-stable, publicly documented VBA runtime error constants** (unchanged since
+  VB6 — a fact independent of this project's lack of a live Excel/VBA oracle, see
+  `ROADMAP.md`'s Known gap #1): Division by zero → 11, Subscript out of range → 9, Type
+  mismatch → 13, Invalid procedure call or argument → 5, Invalid use of Null → 94, Object
+  variable or With block variable not set → 91. Everything else elixcee itself raises
+  (undefined variable, sheet/sub/workbook not found, etc.) defaults to 1004
+  ("Application-defined or object-defined error", real VBA's own generic catch-all for
+  Excel-object-related failures) — a disclosed default, not independently confirmed per
+  condition. Several of those (calling an undefined Sub/Function, in particular) would
+  actually be a *compile*-time failure in real VBA, never reaching `On Error` at runtime
+  at all — a known, disclosed divergence, not fixed here.
+- **`Err.Raise Number[, Source][, Description]`** parses real VBA's full positional-slot
+  grammar, including the idiomatic `Err.Raise 513, , "custom text"` form that skips
+  `Source` — a naive two-positional-argument implementation would misread that
+  `"custom text"` as `Source` instead of `Description`, since real VBA's slot order is
+  (Number, Source, Description, HelpFile, HelpContext), not (Number, Description).
+  `Source` is parsed (so this can't happen) but not modeled as a readable property —
+  `Err.Source` doesn't exist here, matching this project's existing choice not to model a
+  VBA project/module naming concept elsewhere. `HelpFile`/`HelpContext` aren't parsed at
+  all. Raising without an explicit `Description` fills in the real VBA description text
+  for the numbers above, or the 1004 catch-all text otherwise.
+- `Err.Number`/`Err.Description` reset to `0`/`""` at the start of each `run_sub`/
+  `run_sub_multi` call and on `Err.Clear`. Deliberately does **not** auto-clear on `On
+  Error GoTo 0`/a fresh `On Error` statement — the common idiom above relies on
+  `Err.Number` surviving past `On Error GoTo 0` to be inspectable at all, and the exact
+  real-VBA clearing rule around `Resume`/`On Error` re-statements wasn't independently
+  confirmed, so this stays conservative rather than guessing.
+- 25 new tests (11 `src/vm/mod.rs`, 6 `src/parser/mod.rs` covering AST shape, plus the
+  `Err.Raise`-skips-`Source` case at both layers) — `cargo test --workspace` 856/856
+  (856 = 740 lib + 1 + 15 + 16 + 5 + 14 + 7 + 7 + 17 + 15 + 19, every test binary summed),
+  no regressions in the 581-scenario corpus classifier or the 386-case `vba-semantics`
+  suite (still 0 `BUG`/0 `UNCLASSIFIED`, same 19 `KNOWN_LIMITATION`).
+
 ## [0.5.0]
 
 Root `elixcee` (Rust crate + Python package) **and** `elixcee-types` (`0.1.0` → `0.2.0`,

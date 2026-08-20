@@ -42,6 +42,9 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | With block (UDT) | `With p ... .Field = val ... End With` | Done |
 | On Error Resume Next | `On Error Resume Next` | Done |
 | On Error GoTo label | `On Error GoTo ErrH` | Done |
+| Err.Number / Err.Description | Read the number/description of the most recent caught error | Done |
+| Err.Clear | Reset `Err.Number` to 0 and `Err.Description` to `""` | Done |
+| Err.Raise | `Err.Raise Number[, Source][, Description]` — `Source` is parsed (so `Description` in the 3rd slot is never misread) but not modeled as a readable property | Done |
 | Function / Call | `Function Foo() ... End Function` | Done |
 | Exit For / Exit Sub | `Exit For`, `Exit Sub` | Done |
 | Array / ReDim | `Dim arr(10)`, `ReDim arr(n)` | Done |

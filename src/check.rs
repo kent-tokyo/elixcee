@@ -283,6 +283,8 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
                 names.insert(name.clone());
             }
             Stmt::Unsupported { .. } => {}
+            Stmt::ErrClear => {}
+            Stmt::ErrRaise { .. } => {}
         }
     }
 }
@@ -589,6 +591,12 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             out.push(value);
         }
         Stmt::Unsupported { .. } => {}
+        Stmt::ErrClear => {}
+        Stmt::ErrRaise { number, source, description } => {
+            out.push(number);
+            if let Some(e) = source { out.push(e); }
+            if let Some(e) = description { out.push(e); }
+        }
     }
 }
 
@@ -838,7 +846,9 @@ fn walk_expr(
         // `.member` read holds only field names — no sub-expression and no
         // callable in either, so nothing for the undefined-Sub/Function walk.
         | Expr::IsNothing(_)
-        | Expr::WithDot(_) => {}
+        | Expr::WithDot(_)
+        | Expr::ErrNumber
+        | Expr::ErrDescription => {}
     }
 }
 
