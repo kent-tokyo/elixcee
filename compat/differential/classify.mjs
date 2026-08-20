@@ -88,43 +88,20 @@ export const VERDICTS = /** @type {const} */ ([
 // empty again as of that phase, same as it was after the SSF-backend phase closed the
 // two Phase 1B-1/1B-2A-era cases mentioned above.
 //
-// One new entry, added when readFile()'s fixture-by-fixture differential (see
+// A third entry, added when readFile()'s fixture-by-fixture differential (see
 // compat/differential/xlsx-read.test.mjs) was written and immediately surfaced a real,
-// previously-undisclosed reader.rs DEFECT — registered here under the same
-// "disclosed exception until fixed" precedent as the two Phase 2B entries described above,
-// NOT as a capability gap:
-//
-//   src/reader.rs's xlsx_sheet_cells calls `xlsx_parse_cell(text.trim(), ...)` — it trims
-//   every cell's text unconditionally, ignoring the `xml:space="preserve"` attribute the
-//   XLSX format uses precisely to mark significant leading/trailing whitespace. A cell
-//   whose real value is "  padded  " therefore reads back as "padded". Confirmed live
-//   against compat/corpus/workbooks/with_text.xlsx cell A3: oracle "  padded  ", elixcee
-//   "padded". Reachable through read() and readFile() alike (readFile is a thin wrapper
-//   over read), which is why it is registered under both apis rather than only the one that
-//   happened to expose it.
-//
-// Not fixed here: src/reader.rs is outside the scope of the round that found this. Fixing
-// it means honoring xml:space on the <t> element rather than trimming at the call site, and
-// re-checking that the trim isn't load-bearing for the numeric/boolean parse paths that
-// share xlsx_parse_cell. Both entries below must be REMOVED, not left stale, the moment
-// that lands.
-const XML_SPACE_PRESERVE_DEFECT =
-  'reader.rs trims every cell\'s text (xlsx_sheet_cells: `xlsx_parse_cell(text.trim(), ...)`), ' +
-  'ignoring xml:space="preserve", so significant leading/trailing whitespace in a cell value ' +
-  'is lost — confirmed live on compat/corpus/workbooks/with_text.xlsx cell A3 ("  padded  " ' +
-  'on the oracle, "padded" here). A genuine reader defect, disclosed rather than silently ' +
-  'excluded from the fixture set; remove this entry when reader.rs honors xml:space.';
-
-export const UNSUPPORTED_ALLOWLIST = new Map([
-  ['read', new Map([['with_text.xlsx:xml_space_preserve_trimmed', XML_SPACE_PRESERVE_DEFECT]])],
-  [
-    'readFile',
-    new Map([
-      ['with_text.xlsx:xml_space_preserve_trimmed', XML_SPACE_PRESERVE_DEFECT],
-      ['with_text.xlsx[cellStyles+cellDates]:xml_space_preserve_trimmed', XML_SPACE_PRESERVE_DEFECT],
-    ]),
-  ],
-]);
+// previously-undisclosed reader.rs DEFECT (registered under the same "disclosed exception
+// until fixed" precedent as the two Phase 2B entries above, NOT as a capability gap:
+// src/reader.rs's xlsx_sheet_cells called `xlsx_parse_cell(text.trim(), ...)` — trimming
+// every cell's text unconditionally, ignoring the `xml:space="preserve"` attribute a t="str"
+// cell's own `<v>` element carries when its value has significant leading/trailing
+// whitespace; confirmed live against compat/corpus/workbooks/with_text.xlsx cell A3, whose
+// raw sheet1.xml is `<c t="str"><v xml:space="preserve">  padded  </v></c>` — oracle
+// "  padded  ", elixcee "padded") was fixed in a later round: `xlsx_sheet_cells` now reads
+// `<v>`'s own `xml:space` attribute and skips the trim when it's "preserve" (see
+// src/reader.rs's `v_preserve_space`). Both `with_text.xlsx` entries this case needed are
+// removed — the allowlist is empty again, same as after the two closures described above.
+export const UNSUPPORTED_ALLOWLIST = new Map([]);
 
 // Registered intentional SECURITY divergences, keyed either by the elixcee-side error
 // code that signals them (see docs/xlsx-security-model.md's planned ELIXCEE_* codes), or
@@ -427,36 +404,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     UNSUPPORTED_ALLOWLIST.delete('utils.__self_check_api__');
   }
 
-  // Pinned counts, deliberately: this assert is what forces anyone ADDING an allowlist
+  // Pinned count, deliberately: this assert is what forces anyone ADDING an allowlist
   // entry to state it here explicitly rather than slipping a divergence past review, and
   // what forces anyone FIXING one to remove it rather than leave it stale.
   //
-  // Currently 2 apis / 3 cases, all one defect: reader.rs trims cell text unconditionally
-  // and so loses xml:space="preserve" whitespace (see UNSUPPORTED_ALLOWLIST's own comment
-  // above for the full writeup). Registered under both 'read' (1 case) and 'readFile'
-  // (2 cases: with and without cellStyles+cellDates) because readFile is a thin wrapper
-  // over read and both reach the same defect. Delete all three when reader.rs honors
-  // xml:space.
-  //
-  // The two Phase 2B-era "read" cases (empty-string cell value,
-  // declared-<dimension>-wider-than-data) that used to be pinned here were removed when
-  // reader.rs's xlsx_sheet_cells/parse_dimension_ref fixed them — same as the earlier Phase
-  // 1B-1/1B-2A-era format_cell/sheet_add_aoa cases closing when the real SSF engine was
-  // wired in.
-  assert.equal(UNSUPPORTED_ALLOWLIST.size, 2, 'exactly two apis have registered unsupported cases: read, readFile');
-  assert.deepEqual(
-    [...UNSUPPORTED_ALLOWLIST.get('read').keys()],
-    ['with_text.xlsx:xml_space_preserve_trimmed'],
-    '"read" has exactly the one registered xml:space defect case'
-  );
-  assert.deepEqual(
-    [...UNSUPPORTED_ALLOWLIST.get('readFile').keys()],
-    [
-      'with_text.xlsx:xml_space_preserve_trimmed',
-      'with_text.xlsx[cellStyles+cellDates]:xml_space_preserve_trimmed',
-    ],
-    '"readFile" has exactly the two registered xml:space defect cases (one per opts shape)'
-  );
+  // The allowlist is empty again: the three xml:space="preserve" cases (1 under 'read', 2
+  // under 'readFile' — with and without cellStyles+cellDates) that used to be pinned here
+  // were removed once src/reader.rs's xlsx_sheet_cells started honoring `<v>`'s own
+  // xml:space attribute instead of trimming unconditionally (see UNSUPPORTED_ALLOWLIST's
+  // own comment above for the full writeup) — same pattern as the two Phase 2B-era "read"
+  // cases (empty-string cell value, declared-<dimension>-wider-than-data) and the earlier
+  // Phase 1B-1/1B-2A-era format_cell/sheet_add_aoa cases before them, both closing the same
+  // way when their underlying defect was fixed.
+  assert.equal(UNSUPPORTED_ALLOWLIST.size, 0, 'the allowlist is empty again: all registered defects are fixed');
   assert.equal(
     SECURITY_DIVERGENCE_REGISTRY.size,
     6,

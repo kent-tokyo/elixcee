@@ -600,6 +600,13 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     let mut cur_col: u32 = 0;
     let mut cur_type = String::new();
     let mut in_v = false;
+    // `<v xml:space="preserve">` marks significant leading/trailing
+    // whitespace in a t="str" cell's literal text, same as any XML element
+    // — confirmed live against compat/corpus/workbooks/with_text.xlsx's raw
+    // sheet1.xml, where cell A3 is `<c t="str"><v xml:space="preserve">
+    // padded  </v></c>`. Only `<v>`'s own attribute matters; `<c>` never
+    // carries it in that fixture.
+    let mut v_preserve_space = false;
     let mut in_f = false;
     let mut cur_formula = String::new();
     let mut in_is_t = false; // inside <is><t>
@@ -663,7 +670,10 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                             style_ids.insert((cur_row, cur_col), *fmt_id);
                         }
                     }
-                    "v" => { in_v = true; }
+                    "v" => {
+                        in_v = true;
+                        v_preserve_space = attr_get(attrs, "xml:space") == Some("preserve");
+                    }
                     "f" => {
                         // A self-closing <f/> (or a shared-formula follower cell,
                         // <f t="shared" si="N"/>, no inline text) never produces a
@@ -721,7 +731,8 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
             }
             Ev::Text(ref text) => {
                 if in_v && cur_row > 0 && cur_col > 0 {
-                    let cell = xlsx_parse_cell(text.trim(), &cur_type, shared);
+                    let raw = if v_preserve_space { text.as_str() } else { text.trim() };
+                    let cell = xlsx_parse_cell(raw, &cur_type, shared);
                     if let Some(c) = cell {
                         cells.insert((cur_row, cur_col), c);
                     }
@@ -1250,6 +1261,43 @@ mod merge_tests {
             other => panic!("expected Str(\"\") at A1, got {:?}", other.is_some()),
         }
         assert_eq!(data.cells.len(), 2);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_honors_xml_space_preserve_on_v() {
+        // Real shape confirmed live from compat/corpus/workbooks/with_text.xlsx's own raw
+        // sheet1.xml (cell A3) — see compat/differential/classify.mjs's now-removed
+        // XML_SPACE_PRESERVE_DEFECT entry for the defect this fixes. B1 (no xml:space) also
+        // confirms v_preserve_space is read fresh per-<v> rather than sticky from A1, and
+        // that the default (still-trimming) behavior is unaffected by the fix.
+        let xml = r#"<worksheet><sheetData>
+<row r="1"><c r="A1" t="str"><v xml:space="preserve">  padded  </v></c><c r="B1" t="str"><v>  not preserved  </v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &[]);
+        match data.cells.get(&(1, 1)) {
+            Some(SheetCell::Str(s)) => assert_eq!(s, "  padded  "),
+            other => panic!("expected Str(\"  padded  \") at A1, got {:?}", other.is_some()),
+        }
+        match data.cells.get(&(1, 2)) {
+            Some(SheetCell::Str(s)) => assert_eq!(s, "not preserved"),
+            other => panic!("expected Str(\"not preserved\") at B1, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_xml_space_preserve_on_a_numeric_v_still_parses_when_untrimmed() {
+        // Real Excel/SheetJS writers never emit this combination (xml:space="preserve" only
+        // ever marks up literal string text) — this just confirms the fix doesn't newly
+        // break a numeric cell that happens to carry the attribute without surrounding
+        // whitespace, since Rust's f64::parse rejects leading/trailing whitespace.
+        let xml = r#"<worksheet><sheetData>
+<row r="1"><c r="A1"><v xml:space="preserve">42</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &[]);
+        match data.cells.get(&(1, 1)) {
+            Some(SheetCell::Integer(n)) => assert_eq!(*n, 42),
+            other => panic!("expected Integer(42) at A1, got {:?}", other.is_some()),
+        }
     }
 
     #[test]

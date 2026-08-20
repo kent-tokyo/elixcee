@@ -623,40 +623,33 @@ function runReadFileCase(label, filePath, readOpts, unsupportedCaseId) {
 // Every real .xlsx file this repo already has, fixture by fixture: the independent-writer
 // E2E fixture (shared-strings path) plus the whole generated corpus (compat/corpus/
 // workbooks/, built by its own generate-workbooks.mjs — empty, numeric, text, mixed-type and
-// negative-number workbooks).
-// with_text.xlsx's two entries carry an unsupportedCaseId: it is the fixture that exposed a
-// real reader.rs defect (unconditional whitespace trimming, ignoring xml:space="preserve")
-// — see classify.mjs's UNSUPPORTED_ALLOWLIST for the full writeup. It is deliberately kept
-// in this list, registered as a disclosed known defect, rather than quietly dropped from the
-// fixture set so the suite could stay green without saying why.
+// negative-number workbooks). with_text.xlsx used to need an unsupportedCaseId here (a real
+// reader.rs defect, unconditional whitespace trimming ignoring xml:space="preserve" — see
+// classify.mjs's UNSUPPORTED_ALLOWLIST doc comment for the fix); now a plain MATCH case like
+// every other fixture.
 const READ_FILE_FIXTURES = [
-  ['tests/fixtures/e2e/source.xlsx (independent writer, shared strings)', '../../tests/fixtures/e2e/source.xlsx', null],
-  ['compat/corpus/workbooks/empty.xlsx', '../corpus/workbooks/empty.xlsx', null],
-  ['compat/corpus/workbooks/numeric_grid.xlsx', '../corpus/workbooks/numeric_grid.xlsx', null],
-  ['compat/corpus/workbooks/with_text.xlsx', '../corpus/workbooks/with_text.xlsx', 'with_text.xlsx'],
-  ['compat/corpus/workbooks/with_negatives.xlsx', '../corpus/workbooks/with_negatives.xlsx', null],
-  ['compat/corpus/workbooks/mixed_types.xlsx', '../corpus/workbooks/mixed_types.xlsx', null],
+  ['tests/fixtures/e2e/source.xlsx (independent writer, shared strings)', '../../tests/fixtures/e2e/source.xlsx'],
+  ['compat/corpus/workbooks/empty.xlsx', '../corpus/workbooks/empty.xlsx'],
+  ['compat/corpus/workbooks/numeric_grid.xlsx', '../corpus/workbooks/numeric_grid.xlsx'],
+  ['compat/corpus/workbooks/with_text.xlsx', '../corpus/workbooks/with_text.xlsx'],
+  ['compat/corpus/workbooks/with_negatives.xlsx', '../corpus/workbooks/with_negatives.xlsx'],
+  ['compat/corpus/workbooks/mixed_types.xlsx', '../corpus/workbooks/mixed_types.xlsx'],
 ];
-for (const [label, rel, caseIdBase] of READ_FILE_FIXTURES) {
-  runReadFileCase(label, join(here, rel), undefined, caseIdBase && `${caseIdBase}:xml_space_preserve_trimmed`);
+for (const [label, rel] of READ_FILE_FIXTURES) {
+  runReadFileCase(label, join(here, rel));
   // cellStyles implies cellNF and gates !rows/!cols/.z on BOTH sides (see the read-item-3
   // and read-item-6 sections above) — running each fixture through both option shapes is
   // what makes this an opts-passthrough check and not just a happy-path one.
-  runReadFileCase(
-    `${label} [cellStyles+cellDates]`,
-    join(here, rel),
-    { cellStyles: true, cellDates: true },
-    caseIdBase && `${caseIdBase}[cellStyles+cellDates]:xml_space_preserve_trimmed`
-  );
+  runReadFileCase(`${label} [cellStyles+cellDates]`, join(here, rel), { cellStyles: true, cellDates: true });
 }
 
-// The same defect, disclosed at its real location: it lives in read() (readFile is a thin
-// wrapper), so it gets a read() case of its own rather than only appearing under the api
-// that happened to expose it. Registered under 'read' in the same allowlist.
+// The same fixture's own whitespace-preserving cell, exercised at its real location: it
+// lives in read() (readFile is a thin wrapper), so it gets a read() case of its own rather
+// than only appearing under the api that happened to expose the defect it used to be
+// registered against — see classify.mjs's UNSUPPORTED_ALLOWLIST doc comment for the fix.
 runReadCaseBytes(
-  'compat/corpus/workbooks/with_text.xlsx (whitespace-preserving cell — known reader.rs defect)',
-  readFileSync(join(here, '../corpus/workbooks/with_text.xlsx')),
-  'with_text.xlsx:xml_space_preserve_trimmed'
+  'compat/corpus/workbooks/with_text.xlsx (whitespace-preserving cell — formerly a reader.rs gap, now fixed)',
+  readFileSync(join(here, '../corpus/workbooks/with_text.xlsx'))
 );
 
 // A path that doesn't exist: both sides must fail the SAME way. The oracle calls Node's own

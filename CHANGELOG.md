@@ -148,6 +148,48 @@ disclosed rather than fixed):
   as described above) — see `compat/vba-semantics/README.md`'s "Current state" for the
   full breakdown.
 
+### `src/reader.rs`'s `xml:space="preserve"` whitespace defect on `t="str"` cells
+
+`xlsx_sheet_cells`'s `<v>`-text handler called `xlsx_parse_cell(text.trim(), ...)`
+unconditionally — for a `t="str"` cell (whose literal text lives directly in `<v>`, unlike
+`t="s"` shared-string cells or inline `<is><t>` strings, neither of which this call site
+ever trims), that silently dropped significant leading/trailing whitespace whenever the
+source XML marked it with `xml:space="preserve"`. Confirmed live against
+`compat/corpus/workbooks/with_text.xlsx`'s own raw `sheet1.xml`: cell A3 is `<c t="str"><v
+xml:space="preserve">  padded  </v></c>`, read back as `"padded"` instead of `"  padded
+  "`. Disclosed since the round that found it via `compat/differential/classify.mjs`'s
+`UNSUPPORTED_ALLOWLIST` (`XML_SPACE_PRESERVE_DEFECT`, registered under both `read` and
+`readFile`); reachable through `read()`/`readFile()`/`readFileSync()` alike, since the
+latter two are thin wrappers over `read()`.
+
+Fix: `xlsx_sheet_cells` now reads `<v>`'s own `xml:space` attribute (a new `v_preserve_space`
+local, re-read fresh on every `<v>` open — no stale carry-over from a previous cell in the
+same row) and skips the trim when it's `"preserve"`, matching plain XML `xml:space`
+semantics rather than special-casing `t="str"` specifically. Real Excel/SheetJS writers
+never emit this attribute on a numeric/boolean `<v>` (whitespace is never meaningful there),
+so this doesn't change default behavior for any realistic file — a regression test confirms
+a numeric `<v xml:space="preserve">42</v>` still parses even though `f64::parse` itself
+rejects surrounding whitespace, which the fix's unconditional (not `t`-gated) skip could in
+principle have broken for a pathological input.
+
+Both `UNSUPPORTED_ALLOWLIST` entries (`with_text.xlsx:xml_space_preserve_trimmed` under
+`read` and `readFile`) are removed — the allowlist is empty again — and the now-dead
+`unsupportedCaseId` plumbing threading them through
+`compat/differential/xlsx-read.test.mjs`'s `with_text.xlsx` fixture cases is dropped too,
+matching this project's established precedent for closing a disclosed reader defect (see
+this same file's `classify.mjs` comment history). `differential:read`: 33/33 MATCH, 0
+disclosed (was 30 MATCH + 3 disclosed). Vendored WASM artifact
+(`packages/xlsx/src/internal/wasm/`) rebuilt via `crates/elixcee-wasm/build.sh` so
+`@elixcee/xlsx`'s `read()` actually carries the fix — `wasm:smoke` and
+`differential:utils`/`:ssf-format`/`:metadata` all still clean, confirming no regression
+from the rebuild itself.
+
+2 new tests in `src/reader.rs` — `cargo test --workspace` 872/872 (872 = 756 lib + 1 + 15 +
+16 + 5 + 14 + 7 + 7 + 17 + 15 + 19, every test binary summed), `cargo clippy -p
+elixcee-types --all-targets -- -D warnings` clean, `cargo build --release --workspace`
+clean. `compat/corpus/` and `compat/vba-semantics/` unaffected (verified by re-running both
+after the reader.rs change — neither exercises this XML shape).
+
 ## [0.5.0]
 
 Root `elixcee` (Rust crate + Python package) **and** `elixcee-types` (`0.1.0` → `0.2.0`,

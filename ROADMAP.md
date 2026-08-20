@@ -39,10 +39,11 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
   `xlsx@0.18.5` oracle (512 MATCH + 14 disclosed intentional divergences), `SSF` number
   formatting backed by the real `ssf` engine, six real security fixes ported from oracle
   defects. `XLSX.read()`/`readFile()`/`readFileSync()` are a working sync WASM bridge (Node
-  + browser), 30 MATCH + 3 disclosed (one root cause, `src/reader.rs`'s `xml:space`
-  handling — see CHANGELOG.md) against the oracle. `write*` remains unimplemented; npm
-  publish of `packages/xlsx` has not happened (`0.0.0-development`, currently **not
-  publishable as-is** — see "npm/JS/WASM findings" below).
+  + browser), 33/33 MATCH against the oracle — the one disclosed defect (`src/reader.rs`
+  trimming a `t="str"` cell's `xml:space="preserve"` text unconditionally) is fixed as of
+  a later round (see CHANGELOG.md). `write*` remains unimplemented; npm publish of
+  `packages/xlsx` has not happened (`0.0.0-development`, currently **not publishable
+  as-is** — see "npm/JS/WASM findings" below).
 - Published: `elixcee` 0.5.0 and `elixcee-types` 0.2.0 on crates.io (the enum-variant-
   addition semver bump `Variant::Null` required — see CHANGELOG.md's "`elixcee-types`
   0.2.0" section). **PyPI (`elixcee` 0.5.0) and the CLI GitHub Release (`bin-v0.5.0`) are
@@ -105,10 +106,10 @@ recorded as exhausted: no further candidates were found by either method as of t
    browser dispatch beyond the bundled-consumption case (its shared code still has a CJS
    `require('ssf')`; `readFile`/`readFileSync` are Node-only by nature and throw
    `ELIXCEE_UNSUPPORTED_IN_BROWSER` from the browser entry point rather than faking a
-   filesystem). No Rust writer exists at all yet, for either XLSX or ODS format. Also: all
-   three read entry points share `src/reader.rs`'s defect trimming `xml:space="preserve"`
-   whitespace (see CHANGELOG.md's `[Unreleased]`) — disclosed via
-   `compat/differential/classify.mjs`'s `UNSUPPORTED_ALLOWLIST`, not fixed.
+   filesystem). No Rust writer exists at all yet, for either XLSX or ODS format. The
+   `src/reader.rs` defect that used to trim a `t="str"` cell's `xml:space="preserve"` text
+   unconditionally (all three read entry points shared it) is fixed as of a later round —
+   see CHANGELOG.md.
 7. **`packages/xlsx` is not currently publishable, even as an alpha** — three concrete,
    verified blockers, not a vague "needs polish". One is now fixed (Unreleased):
    ~~there was no package-level `README.md`, so `npm`'s registry page would show only the
