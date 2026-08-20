@@ -223,3 +223,51 @@ jobs:
       - name: packages/xlsx — real headless Chrome smoke test
         working-directory: packages/xlsx
         run: npm run browser:smoke
+
+  # fuzz/ (4 libFuzzer targets: fuzz_formula_eval, fuzz_formula_parser, fuzz_vba_parser,
+  # fuzz_xlsx_reader) had never been run in CI, or apparently anywhere, before this job
+  # existed — fuzz/Cargo.lock had gone stale since the elixcee v0.1.2 release with no
+  # signal to catch it. The very first time these targets were actually run, one of them
+  # (fuzz_vba_parser) found a real panic within 30 seconds: an integer literal too wide
+  # for i64 crashed the tokenizer via an unguarded .unwrap() on a real, non-adversarial
+  # parse path — see CHANGELOG.md/tasks/todo.md. That result alone is the justification
+  # for wiring this in, not a hypothetical. Runs each target for a short, fixed time
+  # budget rather than to convergence, matching this job's role as a fast regression
+  # smoke check, not a fuzzing campaign — cargo fuzz run's own exit code (non-zero on any
+  # crash) is what fails this job, no extra handling needed. Deliberately doesn't persist
+  # a corpus across runs (each run starts from libFuzzer's own generated seed corpus,
+  # discarded when the job ends) — a persisted, cross-run corpus would find deeper bugs
+  # over time but means deciding where that corpus lives and how it's curated, which is a
+  # real design question left for later, not assumed here.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo-fuzz needs nightly (it passes -Z sanitizer flags to rustc, stable rejects
+      # those outright) — this action makes nightly the default toolchain for the rest of
+      # this job, unlike a bare `rustup toolchain install nightly` alongside a `stable`
+      # default, which still requires every invocation below to say `cargo +nightly`.
+      - uses: dtolnay/rust-toolchain@nightly
+
+      # Version-pinned and installed via cargo itself, matching the wasm job's own
+      # `cargo install wasm-pack --version 0.13.1 --locked` precedent — this job's
+      # cargo-fuzz version is exactly what's declared here, not whatever a marketplace
+      # Action happens to resolve today.
+      - name: install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
+
+      # 30s per target — the same budget that found the fuzz_vba_parser crash above on
+      # this job's very first real run, kept here as a fast regression smoke check
+      # (~2 minutes total for all four), not a from-scratch fuzzing campaign.
+      - name: fuzz_formula_eval (30s)
+        run: cargo fuzz run fuzz_formula_eval -- -max_total_time=30
+
+      - name: fuzz_formula_parser (30s)
+        run: cargo fuzz run fuzz_formula_parser -- -max_total_time=30
+
+      - name: fuzz_vba_parser (30s)
+        run: cargo fuzz run fuzz_vba_parser -- -max_total_time=30
+
+      - name: fuzz_xlsx_reader (30s)
+        run: cargo fuzz run fuzz_xlsx_reader -- -max_total_time=30
