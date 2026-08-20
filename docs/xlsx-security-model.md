@@ -14,7 +14,7 @@ for how this fits the overall compatibility definition.
 
 | Limit | Value | Where |
 |---|---|---|
-| Per-ZIP-entry decompressed size | 64 MB | `ZIP_ENTRY_MAX_BYTES`, `src/reader.rs:214` |
+| Per-ZIP-entry decompressed size | 64 MB | `ZIP_ENTRY_MAX_BYTES`, `src/reader.rs:347` |
 
 That is the **only** resource limit in the current reader. Explicitly absent today:
 

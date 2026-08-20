@@ -7,12 +7,12 @@ a crafted malicious input), never speculatively. See
 threat model context; this file is where the *sizing* decision for each limit is worked
 through and kept up to date as new measurements arrive.
 
-## `packages/xlsx`: `MAX_ITERATED_RANGE_CELLS` (`ELIXCEE_RANGE_TOO_LARGE`)
+## `packages/xlsx`: `MAX_RANGE_CELLS` (`ELIXCEE_RANGE_TOO_LARGE`)
 
-`sheet_to_formulae`, `sheet_to_csv`, and `sheet_to_txt` (which delegates to `sheet_to_csv`)
-all walk every `(row, col)` pair inside a worksheet's `!ref` rectangle regardless of
-sparsity. `packages/xlsx/src/internal/range-guard.cjs` rejects ranges above
-`MAX_ITERATED_RANGE_CELLS = 5,000,000` cells before iterating them.
+`sheet_to_formulae`, `sheet_to_csv`, `sheet_to_txt` (which delegates to `sheet_to_csv`),
+`sheet_to_json`, and `sheet_to_html` all walk every `(row, col)` pair inside a worksheet's
+`!ref` rectangle regardless of sparsity. `packages/xlsx/src/internal/range-guard.cjs`
+rejects ranges above `MAX_RANGE_CELLS = 5,000,000` cells before iterating them.
 
 ### Measurement (2026-08-16, one fixed pass — not repeated)
 
@@ -42,7 +42,7 @@ and RSS are in the same order of magnitude as the oracle's (same O(rows × cols)
 shape, same language), which is the basis for treating the oracle's 5M/10M numbers as a
 reliable proxy for what elixcee's own cost would be at those sizes if unguarded.
 
-### Decision: keep `MAX_ITERATED_RANGE_CELLS = 5,000,000`
+### Decision: keep `MAX_RANGE_CELLS = 5,000,000`
 
 At the threshold itself, the cost is ~2.2-2.4s and ~250MB RSS — noticeably slow for a
 single synchronous call but not a severe hang, and the point beyond which cost keeps
