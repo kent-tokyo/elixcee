@@ -8,6 +8,17 @@ implements none of the Rust-side changes described here — it only creates the
 documentation and the `compat/oracle` + `compat/differential` Node harness. Everything
 under "Decision" below is scoped work for later phases.
 
+**Partially superseded by what actually shipped** (confirmed against
+`crates/*/Cargo.toml`, not assumed): the `elixcee-types` extraction (see "Formula/VM
+circular-dependency resolution" below) did land, matching this plan. `crates/elixcee-wasm`
+also now exists and ships (real Node/browser smoke tests, wired into CI) — but it depends
+directly on the still-monolithic root `elixcee` crate, not on a new `elixcee-xlsx` crate as
+planned in "Target workspace shape" and assumed by "Consequences" below; the
+`elixcee-formula`/`elixcee-vba`/`elixcee-xlsx`/`elixcee-cli` split was never done. See
+`ROADMAP.md`'s "Current state" for what's actually implemented today; this document
+remains accurate as a record of the plan and the Phase 2B-0 WASM feasibility investigation,
+just not as a description of the crate layout that was ultimately built.
+
 ## Context
 
 elixcee today is a single Rust crate with two runtime dependencies (`zip`, and optional
@@ -412,3 +423,11 @@ a small WASM binary that doesn't drag in the VBA interpreter. Until then, the ex
 single-crate `elixcee` remains the only build target, and this initiative's Phase 0
 output is documentation plus an npm-side (Node-only) oracle/differential harness that
 touches no Rust code.
+
+**Update: this precondition was bypassed, not fulfilled.** `crates/elixcee-wasm` shipped
+(see "Status" above) depending directly on the monolithic `elixcee` crate — the
+formula/VM split described above never happened, so its WASM binary does drag in the full
+VBA interpreter rather than a slimmed-down `elixcee-xlsx`. Recorded here as a disclosed
+fact, not evaluated as good or bad — no measurement of the resulting WASM binary's size
+attributable to this specific choice was made as part of this correction; `ROADMAP.md`'s
+npm/JS/WASM findings section has the measured package-size numbers that do exist.
