@@ -103,6 +103,7 @@ project — see `ROADMAP.md`'s "Known gaps" #1.
 
 All four `differential/` suites and the classifier self-checks run in
 `.github/workflows/ci.yml`'s `node-js` job on every push (Node 20/22 matrix). `corpus` and
-`vba-semantics` are **not** currently wired into CI — both need a release build of the
-elixcee CLI binary first, which the `node-js` job doesn't do; run them locally after
-`cargo build --release` whenever touching `src/parser/`/`src/vm/`.
+`vba-semantics` run in that same workflow's `compat-vba` job (single Node 22, since both
+need a release build of the elixcee CLI binary first, which `node-js` doesn't do) — run
+them locally after `cargo build --release` whenever touching `src/parser/`/`src/vm/` for
+faster iteration than waiting on CI.

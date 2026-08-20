@@ -224,6 +224,53 @@ jobs:
         working-directory: packages/xlsx
         run: npm run browser:smoke
 
+  # compat/corpus/ (581 scenarios) and compat/vba-semantics/ (386 cases) — previously not
+  # wired into CI at all (see compat/README.md's own "CI" section, which explicitly called
+  # this out before this job existed) because both need a release build of the elixcee CLI
+  # binary first, which the `node-js` job above deliberately doesn't do. Separate job
+  # rather than folded into `node-js`, matching `wasm`'s precedent of needing both
+  # toolchains in the same place. `scenarios.json`/`expected-outcomes.json` (corpus) and
+  # `cases.json` (vba-semantics) are committed, generated-deterministically inputs — no
+  # regeneration step needed here, only for whoever edits the generator scripts themselves
+  # (see each suite's own README). Both gate scripts already set a non-zero exit code on
+  # UNEXPLAINED/MISMATCH (corpus) or BUG/UNCLASSIFIED (vba-semantics) — verified live
+  # before adding this job (corpus: 0/0 across 581; vba-semantics: 0/0 across 386, 19
+  # disclosed non-gating KNOWN_LIMITATION), nothing extra needed to make this job fail
+  # correctly.
+  compat-vba:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: cargo build --release --bin elixcee
+        run: cargo build --release --bin elixcee
+
+      - name: compat — npm ci
+        working-directory: compat
+        run: npm ci
+
+      - name: compat/corpus — run 581 scenarios against the elixcee CLI binary
+        working-directory: compat
+        run: npm run corpus:run
+
+      - name: compat/corpus — classify outcomes (0 UNEXPLAINED, 0 MISMATCH expected)
+        working-directory: compat
+        run: npm run corpus:outcomes
+
+      - name: compat/vba-semantics — run 386 cases against the elixcee CLI binary
+        working-directory: compat
+        run: npm run semantics:run
+
+      - name: compat/vba-semantics — report (0 BUG, 0 UNCLASSIFIED expected)
+        working-directory: compat
+        run: npm run semantics:report
+
   # fuzz/ (4 libFuzzer targets: fuzz_formula_eval, fuzz_formula_parser, fuzz_vba_parser,
   # fuzz_xlsx_reader) had no CI signal at all before this job existed — fuzz/Cargo.lock
   # had gone stale since the elixcee v0.1.2 release with nothing to catch it. The first

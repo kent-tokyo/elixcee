@@ -169,6 +169,14 @@ recorded as exhausted: no further candidates were found by either method as of t
    session entry and `CHANGELOG.md`). Runs each target for a fixed 30s smoke budget per
    push/PR, not a fuzzing campaign; does not persist a corpus across runs (a real design
    question — where it would live, how it'd be curated — left open, not assumed).
+
+   **Also new (0.6.0 phase): a `compat-vba` CI job**, running `compat/corpus/` (581
+   scenarios) and `compat/vba-semantics/` (386 cases) — previously runnable only locally
+   (`compat/README.md`'s own "CI" section said so explicitly) because both need a release
+   build of the elixcee CLI binary first, which `node-js` deliberately doesn't do. Verified
+   live before wiring in: `cargo build --release --bin elixcee` then both suites' gate
+   scripts, 0 UNEXPLAINED/0 MISMATCH (corpus) and 0 BUG/0 UNCLASSIFIED (vba-semantics, 19
+   disclosed non-gating `KNOWN_LIMITATION` — see item 10 below).
 9. **`@elixcee` npm scope ownership is unconfirmed** — cannot be resolved from this
    environment (`npm whoami` returns 401; no working publish credential exists locally, no
    analogous GitHub Actions secret exists yet either, unlike `CARGO_REGISTRY_TOKEN` for
