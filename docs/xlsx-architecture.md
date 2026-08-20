@@ -424,10 +424,19 @@ single-crate `elixcee` remains the only build target, and this initiative's Phas
 output is documentation plus an npm-side (Node-only) oracle/differential harness that
 touches no Rust code.
 
-**Update: this precondition was bypassed, not fulfilled.** `crates/elixcee-wasm` shipped
+**Update: this precondition was bypassed at the crate-dependency level, but checked
+empirically rather than assumed to still be a problem.** `crates/elixcee-wasm` shipped
 (see "Status" above) depending directly on the monolithic `elixcee` crate — the
-formula/VM split described above never happened, so its WASM binary does drag in the full
-VBA interpreter rather than a slimmed-down `elixcee-xlsx`. Recorded here as a disclosed
-fact, not evaluated as good or bad — no measurement of the resulting WASM binary's size
-attributable to this specific choice was made as part of this correction; `ROADMAP.md`'s
-npm/JS/WASM findings section has the measured package-size numbers that do exist.
+formula/VM split described above never happened. Whether that actually drags the VBA
+interpreter into the shipped WASM binary was checked directly against the built artifact
+(`crates/elixcee-wasm/pkg-node/elixcee_wasm_bg.wasm`, 263,277 bytes, matching
+`ROADMAP.md`'s reported unchanged 263 KB WASM payload): `strings` on it finds no
+VBA/parser-specific text (`Subscript out of range`, `Division by zero`, `Type mismatch`,
+`vbDate`, `Application.Calculation`, `MsgBox`, `End Sub`, `exec_stmt`, `parse_stmt` — all
+absent), consistent with dead-code elimination stripping the VBA interpreter since
+`elixcee-wasm/src/lib.rs` only calls `elixcee::reader::read_workbook_from_bytes`, never
+the VM/parser modules. So the crate-dependency edge is real (a future `elixcee` change
+touching only VBA code could still, in principle, force a wasm rebuild), but the originally
+feared consequence — a bloated binary carrying the full interpreter — does not appear to
+have materialized. Not a substitute for a real per-symbol size-attribution tool
+(`twiggy`, `wasm-objdump`), which was not run here.
