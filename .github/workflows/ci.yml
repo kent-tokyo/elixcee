@@ -138,9 +138,10 @@ jobs:
         working-directory: compat
         run: npm run differential:ssf-format
 
-      # read: 19 MATCH + 1 disclosed reader.rs defect (xml:space="preserve" whitespace
-      # trimming). readFile/readFileSync: 11 MATCH + 2 of that same disclosed defect.
-      - name: compat — XLSX.read()/readFile() differential (30 MATCH + 3 disclosed expected)
+      # read: 20 MATCH, readFile/readFileSync: 13 MATCH — the xml:space="preserve"
+      # reader.rs defect this suite used to disclose here (3 cases across both apis) is
+      # fixed; see CHANGELOG.md's "src/reader.rs's xml:space=preserve whitespace defect".
+      - name: compat — XLSX.read()/readFile() differential (33/33 MATCH expected)
         working-directory: compat
         run: npm run differential:read
 
@@ -234,9 +235,9 @@ jobs:
   # regeneration step needed here, only for whoever edits the generator scripts themselves
   # (see each suite's own README). Both gate scripts already set a non-zero exit code on
   # UNEXPLAINED/MISMATCH (corpus) or BUG/UNCLASSIFIED (vba-semantics) — verified live
-  # before adding this job (corpus: 0/0 across 581; vba-semantics: 0/0 across 386, 19
-  # disclosed non-gating KNOWN_LIMITATION), nothing extra needed to make this job fail
-  # correctly.
+  # before adding this job (corpus: 0/0 across 581; vba-semantics: 0/0 across 386, 16
+  # disclosed non-gating KNOWN_LIMITATION as of a later round — see CHANGELOG.md), nothing
+  # extra needed to make this job fail correctly.
   compat-vba:
     runs-on: ubuntu-latest
     steps:
