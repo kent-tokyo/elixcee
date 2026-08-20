@@ -206,7 +206,7 @@ impl PyVm {
                 .map_err(|_| PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                     "values must be formula strings"))?;
             self.inner.set_cell_formula(row, col, &formula)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         }
         Ok(())
     }
@@ -245,7 +245,7 @@ impl PyVm {
     /// Save all sheets to an .xlsx file. ``path`` should end with ``.xlsx``.
     fn save_workbook(&self, path: &str) -> PyResult<()> {
         save_workbook_impl(&self.inner, path)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e))
+            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
     }
 
     /// Return the active sheet's non-empty cells as a **pandas DataFrame**.
