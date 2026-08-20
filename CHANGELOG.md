@@ -8,6 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.6.0]
+
+Root `elixcee` (Rust crate + Python package) only — `elixcee-types` stays `0.2.0` (no
+public-surface change this round: the new array lower-bound tracking lives in a `Vm`-side
+`HashMap`, not on `Variant::Array` itself, so nothing semver-relevant moved), `elixcee-wasm`
+stays `0.1.0` (no source changes to `crates/elixcee-wasm/src`; its vendored build output was
+regenerated to pick up the `src/reader.rs` fix below), and `@elixcee/xlsx` stays
+`0.0.0-development`/unpublished/`"private": true` (none touched, though its vendored WASM
+artifact was refreshed too). Four independent items, in the order they were authorized: real
+VBA `Err` object semantics; `compat/vba-semantics`'s 386-case suite and `compat/corpus`'s
+581-scenario suite wired into a new `compat-vba` CI job (previously local-only); four of five
+disclosed array-declaration/bounds gaps fixed, the fifth (`UBound`'s dimension argument,
+needing real multi-dimensional array storage) deliberately deferred with its own disclosure
+corrected after its registry entry turned out to make a false claim; and `src/reader.rs`'s
+`xml:space="preserve"` whitespace-trimming defect on `t="str"` cells, fixed
+(`compat/differential:read` 30 MATCH + 3 disclosed → 33/33 MATCH). Full detail in the four
+sections below. Plus one bug found during this round's own pre-release verification, not part
+of the four authorized items: the Python `elixcee.load_workbook()` binding panicked with
+`"active sheet must exist"` on any sheet named the way Excel itself defaults to naming one
+(`"Sheet1"`, capital S) — a hand-rolled duplicate of the CLI's sheet-population loop had never
+picked up a mixed-case-sheet-name fix the CLI path got back in July. Fixed by routing through
+the same already-tested helper the CLI uses instead of maintaining a second copy. Pre-existing
+since that July commit, unrelated to any 0.6.0-phase work. `cargo test --workspace` 872/872,
+`compat/vba-semantics` 386 cases (0 `BUG`/0 `UNCLASSIFIED`, 16 `KNOWN_LIMITATION` — down from
+19), `compat/corpus` 581 scenarios (0 `UNEXPLAINED`/0 `MISMATCH`) all green as of this bump;
+every real GitHub Actions job (including the new `compat-vba` job's first real run) green on
+`master` before this bump.
+
 ### `Err` object: `Err.Number` / `Err.Description` / `Err.Clear` / `Err.Raise`
 
 First item of the 0.6.0 phase. `On Error Resume Next`/`On Error GoTo <label>` already
