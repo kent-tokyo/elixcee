@@ -30,7 +30,7 @@ cell serialization, the formula engine, and the WASM bridge
   `elixcee_types` crate (`src/lib.rs:16`, `pub use elixcee_types as types;`) — `Variant`
   and its date-serial math live in that separately-versioned, already-published crate,
   not locally.
-- `serial_to_ymd` (`crates/elixcee-types/src/lib.rs:97`) already correctly reproduces
+- `serial_to_ymd` (`crates/elixcee-types/src/lib.rs:110`) already correctly reproduces
   Excel's own serial-60 leap-year bug (serials 60 and 61 both decode to 1900-03-01,
   matching Excel's fictitious "1900-02-29" quirk) — confirmed via that function's own
   existing, passing tests. This is solved and reusable regardless of which option below
@@ -47,7 +47,7 @@ cell serialization, the formula engine, and the WASM bridge
   `compat/vba-semantics/`, whose own first draft assumed the latter and had to be corrected).
 - Arithmetic/comparison already routes `Variant::Date` through the same generic `to_f64`
   numeric-coercion path every other numeric type uses (`Variant::Date(s) => Ok(*s as f64)`,
-  `src/vm/mod.rs:3357`) — this is centralized, not scattered, so it's low-risk and
+  `src/vm/mod.rs:3703`) — this is centralized, not scattered, so it's low-risk and
   low-effort under any of the three options.
 
 ## Options considered
