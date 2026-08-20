@@ -47,7 +47,9 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | Err.Raise | `Err.Raise Number[, Source][, Description]` — `Source` is parsed (so `Description` in the 3rd slot is never misread) but not modeled as a readable property | Done |
 | Function / Call | `Function Foo() ... End Function` | Done |
 | Exit For / Exit Sub | `Exit For`, `Exit Sub` | Done |
-| Array / ReDim | `Dim arr(10)`, `ReDim arr(n)` | Done |
+| Array / ReDim | `Dim arr(10)`, `Dim arr(2 To 8)`, `Dim arr()` (dynamic, sized later via `ReDim`), `ReDim arr(n)` | Done |
+| Erase | `Erase arr` — resets a fixed-size array's elements to `Empty` in place; comma-separated `Erase a, b` isn't parsed | Done |
+| Option Base | `Option Base 1` — sets the default array lower bound (for declarators without an explicit `lo To hi`) | Done |
 | Multi-declarator Dim | `Dim a As Integer, b As Range` | Done |
 | Const | `Const PI = 3.14` | Done |
 | Type ... End Type | User-defined types (UDT) | Done |

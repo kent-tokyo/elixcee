@@ -75,6 +75,79 @@ single most common real-world idiom this blocked was
   frame) rather than a local patch, so it's deliberately left for a dedicated fix rather
   than folded into this feature commit.
 
+### Array declaration/bounds gaps: `Dim arr(lo To hi)`, `Option Base 1`, `Dim arr()`, `Erase`
+
+Fixes four of the five `array_bounds` `KNOWN_LIMITATION` cases in `compat/vba-semantics/`
+(19 → 16 — see that suite's own CHANGELOG-adjacent note below for the fifth, newly
+disclosed rather than fixed):
+
+- **`Dim arr(2 To 8)`** — an explicit non-zero lower bound — now parses (`ArrayDim { lower:
+  Option<Expr>, upper: Expr }` replaces a bare `Expr` per dimension in `DimArray`/`ReDim`'s
+  AST) and is honored: `LBound(arr)` is `2`, and `arr(2)`/`arr(8)` address the real first/
+  last elements. `Option Base 1` — previously parsed and silently discarded at module level
+  — now sets the default lower bound for declarators that don't give an explicit `lo To hi`
+  (`Program.option_base`, read by `Dim`/`ReDim` at execution time). Storage stays a flat
+  `Vec<Variant>` (`elixcee-types`' public `Variant::Array` is untouched — no semver bump):
+  the lower bound is tracked separately, per array *variable name*, in a new `Vm`-side
+  `array_lower_bounds` map (`LBound`/`UBound`/`ArrayWrite`/array-subscript reads all resolve
+  arrays by name already, so this needed no public-surface change). An array value with no
+  name to key on — `Split()`/`Array()`'s return, or any array-valued expression not bound to
+  a `Dim`'d variable — defaults to lower bound 0, unchanged from before.
+- **`Dim arr()`** (empty parens, a dynamic array sized later by `ReDim`) now parses — the
+  declarator's dimension list is simply empty — and creates an unsized placeholder array
+  ReDim can then legally resize, matching the one documented use this suite tests (`Dim
+  arr()` immediately followed by `ReDim arr(5)`). elixcee doesn't model the stricter real-
+  VBA behavior of raising "Subscript out of range" if `UBound`/an element is accessed
+  *before* the first `ReDim` — not exercised by any case, not attempted.
+- **`Erase arr`** — verified (checked the pre-change `parse_ident_stmt`, not inferred from
+  the old registry entry's "IsEmpty is still False" description) to have had no `Erase`
+  statement dispatch at all: `erase` wasn't a recognized keyword, so `erase arr` fell all
+  the way through to the generic "bare identifier statement" fallback and became a
+  `Stmt::Unsupported` no-op. Is now a real `Stmt::Erase { name }`: resets every element of a
+  fixed-size array back to `Empty` in place, leaving its bounds untouched (matching real
+  VBA's documented behavior for a statically-declared array). Real VBA's comma-separated
+  `Erase a, b` form isn't parsed — no case needs it.
+- `array_oob_error`'s `ArrayIndexOutOfBounds` diagnostic evidence used to hardcode
+  `lower: 0` unconditionally; now reports the array's actual lower bound and the VBA-facing
+  index that was attempted (not an internal, bound-shifted one), for the two call sites that
+  now track a real bound. The two UDT-array call sites (`DimArrayRecord`/`ArrayRecordSet`/
+  `ArrayRecordGet` — `Dim arr(10) As MyType`) are unaffected and still report `lower: 0`,
+  matching their existing (unchanged) always-0-based behavior.
+- **Found while verifying the above, and separately disclosed (not fixed — see below):**
+  the fifth `array_bounds` `KNOWN_LIMITATION` case's own description ("UBound(arr, 2)
+  ignores its dimension argument ... even though the array's own storage genuinely is
+  two-dimensional") turned out to be **factually wrong**. elixcee's array storage is
+  genuinely 1-D: `Dim arr(3, 2)` only ever allocates dimension 1's 4 elements (dimension
+  2's size is parsed and discarded), and every array write/read (`Stmt::ArrayWrite`, the
+  `Expr::FuncCall` array-subscript read path) indexes using only the first index
+  expression — a second or later index is silently ignored on *both* sides, so `arr(2,
+  0) = 111` followed by `arr(2, 1) = 222` overwrites the same element (confirmed live:
+  both `arr(2,0)` and `arr(2,1)` then read back `222`). The suite's own
+  `two_dimensional_array_write_and_read_round_trips` case had been cited as evidence 2-D
+  addressing worked — it passed only because its single write and single read happened to
+  use the *same* second index on both sides, a coincidental round-trip that never exercised
+  the collision. Renamed to `two_dimensional_array_second_index_is_silently_dropped`,
+  reshaped to actually discriminate (write two elements differing only in the second
+  index, confirm the first wasn't clobbered — it currently is), and registered as a new,
+  previously-undisclosed `KNOWN_LIMITATION`. `ubound_second_dimension_argument_ignored`'s
+  own `knownLimitation` text is corrected to stop citing the now-corrected sibling case as
+  proof of working 2-D storage. Fixing this for real needs shape metadata and stride
+  arithmetic in both the write and read paths — comparable in scope to this project's other
+  deferred Variant-surface work (see the Date/Time note elsewhere in this file) — and was
+  deliberately not attempted alongside the smaller, independent lower-bound-tracking fixes
+  above.
+- 13 net new tests (8 `src/vm/mod.rs`; `src/parser/mod.rs` net +5 — 6 added, replacing the
+  now-stale `test_option_base_ignored` with two narrower tests that assert the captured
+  value instead of just "didn't break parsing") — `cargo test --workspace`
+  870/870 (870 = 754 lib + 1 + 15 + 16 + 5 + 14 + 7 + 7 + 17 + 15 + 19, every test binary
+  summed), `cargo clippy -p elixcee-types --all-targets -- -D warnings` clean, `cargo build
+  --release --workspace` clean, `cargo check --features python --lib` clean (only the
+  pre-existing, disclosed pyclass deprecation warning). `compat/corpus/` unaffected (581
+  scenarios, 0 `UNEXPLAINED`/0 `MISMATCH`). `compat/vba-semantics/`: 386 cases, 0 `BUG`/
+  0 `UNCLASSIFIED`, 16 `KNOWN_LIMITATION` (down from 19: four fixed, one newly disclosed
+  as described above) — see `compat/vba-semantics/README.md`'s "Current state" for the
+  full breakdown.
+
 ## [0.5.0]
 
 Root `elixcee` (Rust crate + Python package) **and** `elixcee-types` (`0.1.0` → `0.2.0`,

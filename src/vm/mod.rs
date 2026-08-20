@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::formula;
-use crate::parser::ast::{CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp};
+use crate::parser::ast::{ArrayDim, CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp};
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{self, SheetCell, WorkbookSheet};
 
@@ -600,6 +600,20 @@ pub struct Vm {
     /// is arbitrary user text, not one of elixcee's own known message
     /// strings). Taken (cleared) by the first catch site that consumes it.
     pending_raised_error: Option<(i64, String)>,
+    /// Per-variable array lower bound, set by `Dim`/`ReDim` (see
+    /// `eval_array_dim0`) and read by `LBound`/`UBound`/`ArrayWrite`/array
+    /// subscript reads. Absent (defaults to 0) for arrays that never went
+    /// through a `Dim`/`ReDim` with a tracked bound — `Split()`/`Array()`
+    /// results, UDT arrays (`DimArrayRecord`), and any array value that
+    /// doesn't flow through a named variable at all.
+    array_lower_bounds: HashMap<String, i64>,
+    /// The current module's `Option Base` value (real VBA: 0 or 1),
+    /// default 0. Set from `Program::option_base` at the start of
+    /// `run_sub`/`run_sub_multi` — see `eval_array_dim0`. `run_sub_multi`
+    /// takes the first module that sets one rather than modeling true
+    /// per-module `Option Base` scoping (this codebase's execution model
+    /// is already a single flat `Vm` across all loaded modules).
+    option_base: i64,
 }
 
 impl Vm {
@@ -640,6 +654,8 @@ impl Vm {
             err_number: 0,
             err_description: String::new(),
             pending_raised_error: None,
+            array_lower_bounds: HashMap::new(),
+            option_base: 0,
         }
     }
 
@@ -1030,16 +1046,17 @@ impl Vm {
     /// message string every array-access site has always returned — a pure
     /// addition (the error was already unconditionally hard, in every
     /// mode, before Milestone B6a), so existing callers/tests see byte-
-    /// identical output. `lower` is always 0 and `upper` is `len - 1`
-    /// (elixcee's arrays are always 0-based — see the module-level note on
-    /// `Dim arr(1 To N)` not being tracked): this is elixcee's true bound,
-    /// not a fabricated VBA-style `1 To N`.
-    fn array_oob_error(&mut self, name: &str, idx: usize, len: usize) -> String {
+    /// identical output. `vba_idx`/`lower` are the VBA-facing values (the
+    /// index actually written in source, and the array's real lower bound
+    /// — 0 for the UDT-array call sites, which don't track an explicit
+    /// bound), so `lower`/`upper` here are elixcee's true bounds, not a
+    /// fabricated always-0-based guess.
+    fn array_oob_error(&mut self, name: &str, vba_idx: i64, lower: i64, len: usize) -> String {
         self.last_resolution_failure = Some(ResolutionFailureKind::ArrayIndexOutOfBounds {
             name: name.to_string(),
-            index: idx as i64,
-            lower: 0,
-            upper: len as i64 - 1,
+            index: vba_idx,
+            lower,
+            upper: lower + len as i64 - 1,
         });
         // Real VBA's runtime error 9 message, verbatim — no array
         // name/index/length embellishment, matching this codebase's own
@@ -1051,6 +1068,37 @@ impl Vm {
         // parsing this string — see docs/agent-contract.md's own note that
         // `message` is free text, not a stable/matchable field.
         "Subscript out of range".to_string()
+    }
+
+    /// Evaluates a `Dim`/`ReDim` array declarator's first dimension into
+    /// `(lower_bound, element_count)`. An explicit `lo To hi` supplies its
+    /// own lower bound; a bare upper-bound expression defaults to
+    /// `Option Base`'s value. Only dimension 0 is used — elixcee's array
+    /// storage is genuinely 1-D (see `ROADMAP.md`'s known-gaps entry on
+    /// `UBound`'s dimension argument), so a second `Dim arr(3, 2)`-style
+    /// dimension's bounds are parsed but not stored.
+    fn eval_array_dim0(&mut self, dim: &ArrayDim) -> Result<(i64, usize), String> {
+        let lower = match &dim.lower {
+            Some(e) => to_f64(&self.eval_expr(e)?)? as i64,
+            None => self.option_base,
+        };
+        let upper = to_f64(&self.eval_expr(&dim.upper)?)? as i64;
+        let len = (upper - lower + 1).max(0) as usize;
+        Ok((lower, len))
+    }
+
+    /// Looks up a tracked array lower bound from an `Expr` that named the
+    /// array (`LBound`/`UBound`'s own argument) — only a bare `Expr::Var`
+    /// can name a tracked variable; anything else (an array-valued
+    /// function's return value, `Array(...)`'s result used inline, …) has
+    /// no name to key `array_lower_bounds` on, so it defaults to 0 —
+    /// unchanged from this codebase's existing (pre-this-change) behavior
+    /// for `Split()`/`Array()` results, which this doesn't touch.
+    fn array_lower_bound_of(&self, expr: Option<&Expr>) -> i64 {
+        match expr {
+            Some(Expr::Var(n)) => self.array_lower_bounds.get(n).copied().unwrap_or(0),
+            _ => 0,
+        }
     }
 
     /// If `strict_resolution` is on and `key` doesn't name an existing
@@ -1821,6 +1869,8 @@ impl Vm {
         self.err_number = 0;
         self.err_description.clear();
         self.pending_raised_error = None;
+        self.array_lower_bounds.clear();
+        self.option_base = program.option_base;
         // Cache user-defined functions, subs, and type definitions.
         self.user_funcs = program.funcs.iter().map(|f| (f.name.clone(), f.clone())).collect();
         self.user_subs  = program.subs.iter().map(|s| (s.name.clone(), s.clone())).collect();
@@ -1869,6 +1919,13 @@ impl Vm {
         self.err_number = 0;
         self.err_description.clear();
         self.pending_raised_error = None;
+        self.array_lower_bounds.clear();
+        // Real VBA scopes `Option Base` per module; this codebase's `Vm`
+        // is a single flat namespace across every loaded module (same
+        // simplification `user_funcs`/`user_subs`/`type_defs` already
+        // make), so this takes the first module that declares one rather
+        // than modeling true per-module scoping.
+        self.option_base = modules.iter().map(|(_, p)| p.option_base).find(|&b| b != 0).unwrap_or(0);
         self.user_funcs.clear();
         self.user_subs.clear();
         for (_, program) in modules {
@@ -2493,32 +2550,46 @@ impl Vm {
             }
             Stmt::Unsupported { .. } => {}
             Stmt::DimArray { name, sizes } => {
-                let upper = to_f64(&self.eval_expr(&sizes[0])?)? as usize;
-                self.variables.insert(name.clone(), Variant::Array(vec![Variant::Empty; upper + 1]));
+                if sizes.is_empty() {
+                    // `Dim arr()` — dynamic array, unsized until a later
+                    // `ReDim`. No lower bound is known yet either.
+                    self.variables.insert(name.clone(), Variant::Array(vec![]));
+                } else {
+                    let (lower, len) = self.eval_array_dim0(&sizes[0])?;
+                    self.array_lower_bounds.insert(name.clone(), lower);
+                    self.variables.insert(name.clone(), Variant::Array(vec![Variant::Empty; len]));
+                }
             }
             Stmt::ReDim { name, sizes, preserve } => {
-                let upper = to_f64(&self.eval_expr(&sizes[0])?)? as usize;
-                let new_size = upper + 1;
+                let (lower, new_size) = self.eval_array_dim0(&sizes[0])?;
                 let new_arr = if *preserve {
                     if let Some(Variant::Array(old)) = self.variables.get(name).cloned() {
                         let mut a = old; a.resize(new_size, Variant::Empty); a
                     } else { vec![Variant::Empty; new_size] }
                 } else { vec![Variant::Empty; new_size] };
+                self.array_lower_bounds.insert(name.clone(), lower);
                 self.variables.insert(name.clone(), Variant::Array(new_arr));
+            }
+            Stmt::Erase { name } => {
+                if let Some(Variant::Array(arr)) = self.variables.get_mut(name) {
+                    for v in arr.iter_mut() { *v = Variant::Empty; }
+                }
             }
             Stmt::ArrayWrite { name, indices, value } => {
                 let v = self.eval_expr(value)?;
-                let idx = to_f64(&self.eval_expr(&indices[0])?)? as usize;
+                let vba_idx = to_f64(&self.eval_expr(&indices[0])?)? as i64;
+                let lower = self.array_lower_bounds.get(name).copied().unwrap_or(0);
+                let internal = vba_idx - lower;
                 let oob_len = match self.variables.get(name) {
-                    Some(Variant::Array(arr)) if idx >= arr.len() => Some(arr.len()),
+                    Some(Variant::Array(arr)) if internal < 0 || internal as usize >= arr.len() => Some(arr.len()),
                     Some(Variant::Array(_)) => None,
                     _ => return Err(format!("'{}' is not an array", name)),
                 };
                 if let Some(len) = oob_len {
-                    return Err(self.array_oob_error(name, idx, len));
+                    return Err(self.array_oob_error(name, vba_idx, lower, len));
                 }
                 if let Some(Variant::Array(arr)) = self.variables.get_mut(name) {
-                    arr[idx] = v;
+                    arr[internal as usize] = v;
                 }
             }
             Stmt::With { target, body } => {
@@ -2582,7 +2653,9 @@ impl Vm {
                     _ => return Err(format!("'{}' is not an array", name)),
                 };
                 if let Some(len) = oob_len {
-                    return Err(self.array_oob_error(name, idx, len));
+                    // DimArrayRecord/ArrayRecordSet don't track a lower
+                    // bound (see `eval_array_dim0`'s doc) — always 0.
+                    return Err(self.array_oob_error(name, idx as i64, 0, len));
                 }
                 if let Some(Variant::Array(arr)) = self.variables.get_mut(name) {
                     match &mut arr[idx] {
@@ -2737,14 +2810,19 @@ impl Vm {
                 }
                 // Array subscript access: arr(i)
                 if matches!(self.variables.get(name.as_str()), Some(Variant::Array(_))) {
-                    let idx = to_f64(&self.eval_expr(args.first().ok_or_else(|| format!("Array '{}' requires index", name))?)?)? as usize;
+                    let vba_idx = to_f64(&self.eval_expr(args.first().ok_or_else(|| format!("Array '{}' requires index", name))?)?)? as i64;
+                    let lower = self.array_lower_bounds.get(name.as_str()).copied().unwrap_or(0);
+                    let internal = vba_idx - lower;
                     let (found, len) = match self.variables.get(name.as_str()) {
-                        Some(Variant::Array(arr)) => (arr.get(idx).cloned(), arr.len()),
+                        Some(Variant::Array(arr)) => {
+                            let v = if internal >= 0 { arr.get(internal as usize).cloned() } else { None };
+                            (v, arr.len())
+                        }
                         _ => return Err(format!("'{}' is not an array", name)),
                     };
                     return match found {
                         Some(v) => Ok(v),
-                        None => Err(self.array_oob_error(name, idx, len)),
+                        None => Err(self.array_oob_error(name, vba_idx, lower, len)),
                     };
                 }
                 self.eval_vba_func(name, args)
@@ -2940,7 +3018,7 @@ impl Vm {
                 match found {
                     Some(Variant::Record(m)) => Ok(m.get(field).cloned().unwrap_or(Variant::Empty)),
                     Some(other) => Ok(other),
-                    None => Err(self.array_oob_error(name, idx, len)),
+                    None => Err(self.array_oob_error(name, idx as i64, 0, len)),
                 }
             }
         }
@@ -3259,15 +3337,24 @@ impl Vm {
                 let delim = if vals.len() >= 2 { vba_to_str(&vals[1]) } else { " ".to_string() };
                 Ok(Variant::Str(parts.join(&delim)))
             }
+            // The optional second argument (which dimension to report) is
+            // accepted but not used to select a different stored bound —
+            // elixcee's array storage is genuinely 1-D (see
+            // `eval_array_dim0`'s doc comment and ROADMAP.md's known-gaps
+            // entry on this), so both arms always answer for dimension 1
+            // regardless of what's asked for.
             "ubound" => {
                 match vals.first().ok_or("UBound requires 1 argument")? {
-                    Variant::Array(a) => Ok(Variant::Integer(a.len() as i64 - 1)),
+                    Variant::Array(a) => {
+                        let lo = self.array_lower_bound_of(args.first());
+                        Ok(Variant::Integer(lo + a.len() as i64 - 1))
+                    }
                     _ => Err("UBound: argument is not an array".into()),
                 }
             }
             "lbound" => {
                 match vals.first().ok_or("LBound requires 1 argument")? {
-                    Variant::Array(_) => Ok(Variant::Integer(0)),
+                    Variant::Array(_) => Ok(Variant::Integer(self.array_lower_bound_of(args.first()))),
                     _ => Err("LBound: argument is not an array".into()),
                 }
             }
@@ -5273,6 +5360,54 @@ mod tests {
         let vm = run("Sub MySub()\n    Dim arr(9)\n    u = UBound(arr)\n    l = LBound(arr)\nEnd Sub\n");
         assert_eq!(vm.variables["u"], Variant::Integer(9));
         assert_eq!(vm.variables["l"], Variant::Integer(0));
+    }
+
+    #[test] fn dim_array_explicit_lower_bound_is_honored() {
+        let vm = run("Sub MySub()\n    Dim arr(2 To 8)\n    l = LBound(arr)\n    u = UBound(arr)\nEnd Sub\n");
+        assert_eq!(vm.variables["l"], Variant::Integer(2));
+        assert_eq!(vm.variables["u"], Variant::Integer(8));
+    }
+
+    #[test] fn dim_array_explicit_lower_bound_indices_read_and_write_at_their_real_positions() {
+        let vm = run("Sub MySub()\n    Dim arr(2 To 4)\n    arr(2) = 10\n    arr(4) = 30\n    a = arr(2)\n    b = arr(4)\nEnd Sub\n");
+        assert_eq!(vm.variables["a"], Variant::Integer(10));
+        assert_eq!(vm.variables["b"], Variant::Integer(30));
+    }
+
+    #[test] fn dim_array_index_below_an_explicit_lower_bound_is_out_of_range() {
+        let prog = parser::parse("Sub MySub()\n    Dim arr(2 To 4)\n    arr(1) = 1\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+    }
+
+    #[test] fn option_base_one_shifts_the_default_lower_bound() {
+        let vm = run("Option Base 1\nSub MySub()\n    Dim arr(5)\n    l = LBound(arr)\n    u = UBound(arr)\nEnd Sub\n");
+        assert_eq!(vm.variables["l"], Variant::Integer(1));
+        assert_eq!(vm.variables["u"], Variant::Integer(5));
+    }
+
+    #[test] fn option_base_one_does_not_override_an_explicit_lower_bound() {
+        let vm = run("Option Base 1\nSub MySub()\n    Dim arr(0 To 5)\n    l = LBound(arr)\nEnd Sub\n");
+        assert_eq!(vm.variables["l"], Variant::Integer(0));
+    }
+
+    #[test] fn dim_array_empty_parens_declares_a_dynamic_array_sizable_by_redim() {
+        let vm = run("Sub MySub()\n    Dim arr()\n    ReDim arr(5)\n    arr(3) = 99\n    u = UBound(arr)\n    v = arr(3)\nEnd Sub\n");
+        assert_eq!(vm.variables["u"], Variant::Integer(5));
+        assert_eq!(vm.variables["v"], Variant::Integer(99));
+    }
+
+    #[test] fn erase_on_a_fixed_array_resets_elements_to_empty_but_keeps_its_bounds() {
+        let vm = run("Sub MySub()\n    Dim arr(3)\n    arr(0) = 5\n    arr(1) = 10\n    Erase arr\n    e = IsEmpty(arr(0))\n    u = UBound(arr)\nEnd Sub\n");
+        assert_eq!(vm.variables["e"], Variant::Boolean(true));
+        assert_eq!(vm.variables["u"], Variant::Integer(3));
+    }
+
+    #[test] fn erase_on_an_explicit_lower_bound_array_preserves_that_bound_too() {
+        let vm = run("Sub MySub()\n    Dim arr(2 To 4)\n    arr(2) = 5\n    Erase arr\n    l = LBound(arr)\n    e = IsEmpty(arr(2))\nEnd Sub\n");
+        assert_eq!(vm.variables["l"], Variant::Integer(2));
+        assert_eq!(vm.variables["e"], Variant::Boolean(true));
     }
 
     #[test] fn test_split_join() {

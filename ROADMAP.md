@@ -29,7 +29,7 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
   for all 581 corpus scenarios by exact scenario ID (0 `UNEXPLAINED`, 0 `MISMATCH`); the
   `compat/vba-semantics/` suite (**386 cases**, up from 208 at 0.3.0) checks VALUE
   correctness against documented real VBA semantics, not just pass/fail (0 `BUG`,
-  0 `UNCLASSIFIED`, 19 `KNOWN_LIMITATION` — see item 10 below for the full breakdown) — see
+  0 `UNCLASSIFIED`, 16 `KNOWN_LIMITATION` — see item 10 below for the full breakdown) — see
   each directory's own README for what it measures and doesn't. CI runs `packages/xlsx`'s
   TypeScript typecheck, all four `compat/differential/` suites plus their own self-checks,
   a real packed-npm-tarball consumer smoke, and a `wasm` job that builds
@@ -184,22 +184,32 @@ recorded as exhausted: no further candidates were found by either method as of t
    elixcee`, or the npmjs.com web UI). (Corrects a stale, dangling citation this file
    previously had, pointing at a CHANGELOG.md "Phase 0 scope-ownership note" that doesn't
    actually exist in CHANGELOG.md's text — found and fixed this round.)
-10. **19 `compat/vba-semantics/` `KNOWN_LIMITATION` cases** (Unreleased — suite grew from
+10. **16 `compat/vba-semantics/` `KNOWN_LIMITATION` cases** (Unreleased — suite grew from
     208 to 301 to **386** cases; full per-case list and root-cause grouping in
     `compat/vba-semantics/README.md`'s "Current state" section, raw detail in
-    `compat/vba-semantics/results/report.json`). Down from 28: **nine were genuinely fixed
-    this round** (see CHANGELOG.md) — the three Null-propagation ones, the two
-    object-variable unset/Nothing ones, the two `With`-target ones, the `Type mismatch`
-    error-message one, and the missing `Array()` builtin. The remaining 19, by root cause:
-    no declared/runtime type-width tracking (12 — `CInt`/`CLng` overflow, `Left`/`Right`/
-    `Mid`/`Chr`/`InStr` out-of-domain arguments); array declaration/resize gaps (5 —
-    `Dim arr(lo To hi)`/`Dim arr()` don't parse, `Option Base 1` ignored, `UBound`'s
-    dimension argument ignored, `Erase` doesn't reset elements); no per-Variant stored-type
-    tag (1 — `+` between two string-typed Variants numeric-adds instead of concatenating per
-    VBA's own documented rule); a numeric-vs-string Variant comparison isn't unconditionally
-    "numeric side is less" per VBA's documented rule (1 — deliberately not fixed, would
-    invert the far more common numeric-string-vs-number magnitude comparison for every
-    caller).
+    `compat/vba-semantics/results/report.json`). Down from 28: nine were genuinely fixed in
+    the structural-semantics round — the three Null-propagation ones, the two object-variable
+    unset/Nothing ones, the two `With`-target ones, the `Type mismatch` error-message one,
+    and the missing `Array()` builtin — and **four more in the 0.6.0 array-bounds round**
+    (see CHANGELOG.md): `Dim arr(lo To hi)`, `Dim arr()` (empty parens), `Option Base 1`, and
+    `Erase` on a fixed-size array, all fixed by adding a per-variable array lower-bound side
+    table to the VM. That same round also newly *disclosed* one: writing to two array
+    elements sharing dimension 1's index but differing in dimension 2 silently collides on
+    the same element, because elixcee's array storage is genuinely 1-D — a previous,
+    differently-shaped test case had passed by coincidence and was miscited as evidence 2-D
+    storage worked (`two_dimensional_array_second_index_is_silently_dropped`). The remaining
+    16, by root cause: no declared/runtime type-width tracking (12 — `CInt`/`CLng` overflow,
+    `Left`/`Right`/`Mid`/`Chr`/`InStr` out-of-domain arguments); array storage is 1-D only,
+    not truly multi-dimensional (2 — `Dim arr(3, 2)` only allocates dimension 1's elements
+    and every array write/read uses only the first index expression, so `UBound(arr,
+    dimension)` can't honor its dimension argument and a second/later index silently
+    collides with the first; needs real shape metadata and stride arithmetic, deliberately
+    deferred as comparable in scope to this project's other deferred Variant-surface work);
+    no per-Variant stored-type tag (1 — `+` between two string-typed Variants numeric-adds
+    instead of concatenating per VBA's own documented rule); a numeric-vs-string Variant
+    comparison isn't unconditionally "numeric side is less" per VBA's documented rule (1 —
+    deliberately not fixed, would invert the far more common numeric-string-vs-number
+    magnitude comparison for every caller).
 11. **`Range.Range(...)`/`Range.Cells(...)` are not relative to the base range.** Inside a
     `With <range>` body (and through a `Set`-assigned Range variable), a `.Range("A1")`/
     `.Cells(r, c)` qualifier resolves as an independent, absolute reference on the active

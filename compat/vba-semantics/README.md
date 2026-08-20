@@ -79,22 +79,33 @@ real semantic subtlety each one has (numeric rounding has the most tie-breaking/
 richness; `Select Case` matching, being unambiguous control flow with no type-coercion
 question, has none of its 9 cases end up as a disclosed gap).
 
-0 `BUG`, 0 `UNCLASSIFIED`. **19 `KNOWN_LIMITATION`, down from 28** — nine were genuinely
-fixed in the structural-semantics round (a fixed divergence isn't `KNOWN_LIMITATION` by
-definition — it becomes `MATCH_DOCUMENTED_SEMANTICS`/`EXPECTED_ERROR`, and its
-`knownLimitation` annotation is *removed*, not weakened): the three Null-propagation ones,
-the two object-variable unset/Nothing ones, the two `With`-target ones, the `Type mismatch`
-error-message one, and the missing `Array()` builtin. See CHANGELOG.md for what each fix
-actually changed. The remaining 19, grouped by root cause rather than by count:
+0 `BUG`, 0 `UNCLASSIFIED`. **16 `KNOWN_LIMITATION`, down from 28** — thirteen were genuinely
+fixed across two rounds (a fixed divergence isn't `KNOWN_LIMITATION` by definition — it
+becomes `MATCH_DOCUMENTED_SEMANTICS`/`EXPECTED_ERROR`, and its `knownLimitation` annotation
+is *removed*, not weakened): the three Null-propagation ones, the two object-variable
+unset/Nothing ones, the two `With`-target ones, the `Type mismatch` error-message one, and
+the missing `Array()` builtin (structural-semantics round); `Dim arr(lo To hi)`, `Dim arr()`
+(empty parens), `Option Base 1`, and `Erase` on a fixed-size array (a later round, adding
+array lower-bound tracking). See CHANGELOG.md for what each fix actually changed. One
+divergence was newly disclosed in that same later round, not fixed: writing to two array
+elements that share dimension 1's index but differ in dimension 2 silently collides on the
+same underlying element (`two_dimensional_array_second_index_is_silently_dropped` —
+elixcee's array storage is genuinely 1-D; a previous, differently-shaped version of this
+case passed by coincidence and had been miscited as evidence 2-D storage worked). The
+remaining 16, grouped by root cause rather than by count:
 
 - **No declared/runtime type-width tracking** (12): `CInt`/`CLng` silently truncate instead
   of raising `Overflow` on out-of-range values (5); a `Left`/`Right`/`Mid`/`Chr`/`InStr`
   call with an out-of-domain argument (negative length, zero start, out-of-range char code)
   silently clamps instead of raising `Invalid procedure call or argument` (7).
-- **Array declaration/resize gaps** (5): `Dim arr(lo To hi)` and `Dim arr()` (empty parens,
-  for a later `ReDim`) both fail to parse; `Option Base 1` is parsed but not honored;
-  `UBound(arr, dimension)` ignores its dimension argument; `Erase` on a fixed-size array
-  doesn't reset elements to their type default.
+- **Array storage is 1-D only, not truly multi-dimensional** (2): `Dim arr(3, 2)` allocates
+  only dimension 1's elements, silently discarding dimension 2's size; every array
+  write/read indexes using only the first index expression, so a second (or later) index
+  is dropped rather than addressing a distinct element, and `UBound(arr, dimension)` can't
+  honor its dimension argument since there's nothing per-dimension to report. Needs real
+  shape metadata and stride arithmetic — deliberately deferred as comparable in scope to
+  this project's other deferred Variant-surface work, not attempted alongside the smaller,
+  independent lower-bound-tracking fixes in the same round.
 - **No per-Variant stored-type tag distinguishing "string that looks numeric" from
   "genuine number"** (1): `+` between two Variants that both hold strings numeric-adds
   instead of concatenating, even though real VBA's own documented rule concatenates

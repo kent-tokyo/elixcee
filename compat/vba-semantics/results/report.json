@@ -1,10 +1,10 @@
 {
   "total": 386,
   "counts": {
-    "MATCH_DOCUMENTED_SEMANTICS": 342,
+    "MATCH_DOCUMENTED_SEMANTICS": 345,
     "EXPECTED_ERROR": 23,
     "NONDETERMINISTIC": 2,
-    "KNOWN_LIMITATION": 19,
+    "KNOWN_LIMITATION": 16,
     "BUG": 0,
     "UNCLASSIFIED": 0
   },
@@ -1952,10 +1952,12 @@
       "reason": "Companion to is_array_true_for_declared_array, confirming IsArray does not just always return True."
     },
     {
-      "id": "two_dimensional_array_write_and_read_round_trips",
+      "id": "two_dimensional_array_second_index_is_silently_dropped",
       "category": "array_bounds",
-      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
-      "reason": "Basic round-trip correctness check for two-dimensional array storage, independent of the UBound(arr, dimension) gap disclosed below."
+      "verdict": "KNOWN_LIMITATION",
+      "reason": "elixcee's array storage is genuinely 1-D -- a Dim arr(3, 2) declarator allocates only dimension 1's 4 elements and silently discards dimension 2's size, and every array write/read (Stmt::ArrayWrite, the Expr::FuncCall array-subscript path) indexes using only the first index expression, ignoring any further ones. arr(2, 0) and arr(2, 1) therefore both resolve to the same underlying element (index 2): the second write clobbers the first, so this reads back 222, not 111. A previous version of this case (differently named and shaped, written before this was diagnosed) wrote and read back with the *same* second index on both sides, which passed by accident and was cited as evidence 2D storage worked -- it didn't exercise the collision at all. See ubound_second_dimension_argument_ignored, which cites this case. Found while building this suite, not previously disclosed.",
+      "documented": "real VBA: 111",
+      "actual": "222"
     },
     {
       "id": "lbound_and_ubound_combined_boolean_check",
@@ -1972,42 +1974,34 @@
     {
       "id": "dim_array_explicit_lower_bound_unsupported",
       "category": "array_bounds",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee's array-declarator parser only accepts a single upper-bound expression per dimension (Dim arr(5)), not a lo To hi pair -- Dim arr(2 To 8) fails to parse entirely (actual: parse_error \"expected RParen, got Ident(\\\"to\\\")\"). Found while building this suite, not previously disclosed.",
-      "documented": "real VBA: 2",
-      "actual": "expected value 2, but the scenario errored: expected RParen, got Ident(\"to\")"
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Real VBA supports an explicit lower bound in a Dim/ReDim size clause -- Dim arr(2 To 8) declares indices 2 through 8 inclusive, so LBound(arr) is 2. (Fixed this round: elixcee's array-declarator parser used to only accept a single upper-bound expression per dimension -- Dim arr(2 To 8) failed to parse entirely.)"
     },
     {
       "id": "option_base_one_not_respected",
       "category": "array_bounds",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee parses Option Base without erroring but does not appear to feed it into array-bound calculation -- LBound(arr) is still 0 after Option Base 1. Found while building this suite, not previously disclosed.",
-      "documented": "real VBA: 1",
-      "actual": "0"
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Documented: an Option Base 1 statement at module level changes the default lower bound (for Dim declarations that don't give an explicit lower bound) from 0 to 1. (Fixed this round: elixcee used to parse Option Base without erroring but never fed it into array-bound calculation -- LBound(arr) stayed 0 regardless.)"
     },
     {
       "id": "ubound_second_dimension_argument_ignored",
       "category": "array_bounds",
       "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee's UBound(arr, 2) returns 3 (dimension 1's bound) instead of 2 -- the dimension argument does not appear to be used to select which stored bound to report, even though the array's own storage genuinely is two-dimensional (see two_dimensional_array_write_and_read_round_trips, which confirms independent read/write addressing already works). Found while building this suite, not previously disclosed.",
+      "reason": "elixcee's array storage is genuinely 1-D, not 2-D as this entry previously (incorrectly) claimed -- UBound(arr, 2) returns 3 (dimension 1's bound) because the dimension argument isn't used to select a different stored bound at all, and Dim arr(3, 2) itself only ever allocates dimension 1's 4 elements; dimension 2's size (2) is parsed and discarded. See two_dimensional_array_second_index_is_silently_dropped, which demonstrates the storage gap directly (arr(2,0) and arr(2,1) collide on the same element) -- the previous version of this entry cited a since-corrected sibling case that appeared to confirm real 2D addressing but actually passed only because its write and read used the same second index. Full multi-dimensional array support (shape metadata, stride arithmetic in both array writes and reads) is comparable in scope to this project's other deferred Variant-surface work and was deliberately not attempted this round -- found while building this suite, not previously disclosed.",
       "documented": "real VBA: 2",
       "actual": "3"
     },
     {
       "id": "erase_fixed_variant_array_does_not_reset_to_empty",
       "category": "array_bounds",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee's Erase does not appear to reset element values on a fixed-size array -- IsEmpty(arr(0)) is False after Erase (element 0 still holds its previously-assigned 5). Found while building this suite, not previously disclosed.",
-      "documented": "real VBA: true",
-      "actual": "false"
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Documented: Erase on a fixed-size array resets each element to its type's default -- for an (implicitly Variant) array, that default is Empty, so IsEmpty(arr(0)) is True immediately after Erase. (Fixed this round: elixcee had no Erase statement at all -- it fell through as an unrecognized/unsupported no-op, so IsEmpty(arr(0)) stayed False.)"
     },
     {
       "id": "dim_array_empty_parens_dynamic_declaration_unsupported",
       "category": "array_bounds",
-      "verdict": "KNOWN_LIMITATION",
-      "reason": "elixcee's array-declarator parser requires at least one dimension-size expression inside the parens -- Dim arr() fails to parse entirely (actual: parse_error \"unexpected token in expression: RParen\"). Only the ReDim-without-a-prior-sized-Dim spelling works around this. Found while building this suite, not previously disclosed.",
-      "documented": "real VBA: 5",
-      "actual": "expected value 5, but the scenario errored: unexpected token in expression: RParen"
+      "verdict": "MATCH_DOCUMENTED_SEMANTICS",
+      "reason": "Real VBA supports declaring a dynamic array with empty parentheses and sizing it later via ReDim -- Dim arr() followed by ReDim arr(5) is valid VBA that gives UBound(arr) = 5. (Fixed this round: elixcee's array-declarator parser used to require at least one dimension-size expression inside the parens -- Dim arr() failed to parse entirely; only the ReDim-without-a-prior-sized-Dim spelling worked around it.)"
     },
     {
       "id": "array_builtin_function_unsupported",

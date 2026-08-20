@@ -327,9 +327,21 @@ impl Parser {
         let mut type_defs = vec![];
         let mut module_diagnostics: Vec<(String, SourceSpan)> = vec![];
         let mut module_name: Option<String> = None;
+        let mut option_base: i64 = 0;
         while *self.peek() != Tok::Eof {
-            // Module-level Option declarations → no-op
+            // Module-level Option declarations → no-op, except `Option
+            // Base <n>` (real VBA only allows a bare 0 or 1 literal here),
+            // which sets the default lower bound for array declarators
+            // that don't give an explicit `lo To hi`.
             if self.is_ident("option") {
+                if self.is_ident_at(1, "base") {
+                    self.advance(); // option
+                    self.advance(); // base
+                    if let Tok::Int(n) = self.peek().clone() {
+                        self.advance();
+                        option_base = n;
+                    }
+                }
                 self.skip_to_eol();
                 continue;
             }
@@ -416,6 +428,7 @@ impl Parser {
             type_defs,
             module_diagnostics,
             module_name,
+            option_base,
         })
     }
 
@@ -596,6 +609,7 @@ impl Parser {
             "set"     => self.parse_set(),
             "dim"     => self.parse_dim(),
             "redim"   => self.parse_redim(),
+            "erase"   => self.parse_erase(),
             "const"   => self.parse_const(),
             "msgbox"  => self.parse_msgbox(),
             "call"    => self.parse_call_stmt(),
@@ -1218,17 +1232,26 @@ impl Parser {
         if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::LParen {
             let name = self.consume_ident()?;
             self.advance(); // (
-            let mut sizes = vec![self.parse_expr()?];
-            while *self.peek() == Tok::Comma {
-                self.advance();
-                sizes.push(self.parse_expr()?);
+            // `Dim arr()` — empty parens, a dynamic array sized later by
+            // `ReDim` — has no dimensions to parse at all.
+            let mut sizes = Vec::new();
+            if *self.peek() != Tok::RParen {
+                sizes.push(self.parse_array_dim()?);
+                while *self.peek() == Tok::Comma {
+                    self.advance();
+                    sizes.push(self.parse_array_dim()?);
+                }
             }
             self.expect_tok(Tok::RParen)?;
             if self.is_ident("as") {
                 self.advance();
                 let type_name = self.consume_ident()?.to_lowercase();
                 if !Self::is_vba_builtin_type(&type_name) {
-                    return Ok(Stmt::DimArrayRecord { name, sizes, type_name });
+                    // DimArrayRecord doesn't track a lower bound (no case
+                    // needs it) — only the upper-bound expression carries
+                    // over, same as before this method gained `lo To hi`.
+                    let upper_only = sizes.into_iter().map(|d| d.upper).collect();
+                    return Ok(Stmt::DimArrayRecord { name, sizes: upper_only, type_name });
                 }
             }
             Ok(Stmt::DimArray { name, sizes })
@@ -1259,6 +1282,19 @@ impl Parser {
             // trailing `, nextDecl` still reaches the outer loop.
             while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
             Ok(Stmt::Dim)
+        }
+    }
+
+    /// One dimension inside a `Dim`/`ReDim` size list: a bare upper-bound
+    /// expression (`5`), or an explicit `lo To hi` pair (`2 To 8`).
+    fn parse_array_dim(&mut self) -> Result<ArrayDim, String> {
+        let first = self.parse_expr()?;
+        if self.is_ident("to") {
+            self.advance();
+            let upper = self.parse_expr()?;
+            Ok(ArrayDim { lower: Some(first), upper })
+        } else {
+            Ok(ArrayDim { lower: None, upper: first })
         }
     }
 
@@ -1381,15 +1417,23 @@ impl Parser {
         Ok(Some(cur))
     }
 
+    /// `Erase <name>` — real VBA's comma-separated `Erase a, b` form isn't
+    /// parsed (no case needs it).
+    fn parse_erase(&mut self) -> Result<Stmt, String> {
+        self.expect_ident("erase")?;
+        let name = self.consume_ident()?;
+        Ok(Stmt::Erase { name })
+    }
+
     fn parse_redim(&mut self) -> Result<Stmt, String> {
         self.expect_ident("redim")?;
         let preserve = if self.is_ident("preserve") { self.advance(); true } else { false };
         let name = self.consume_ident()?;
         self.expect_tok(Tok::LParen)?;
-        let mut sizes = vec![self.parse_expr()?];
+        let mut sizes = vec![self.parse_array_dim()?];
         while *self.peek() == Tok::Comma {
             self.advance();
-            sizes.push(self.parse_expr()?);
+            sizes.push(self.parse_array_dim()?);
         }
         self.expect_tok(Tok::RParen)?;
         if self.is_ident("as") { self.advance(); self.consume_ident()?; }
@@ -2806,10 +2850,43 @@ mod tests {
             body[0],
             Stmt::DimMulti(vec![
                 Stmt::DimBare { var: "a".to_string() },
-                Stmt::DimArray { name: "b".to_string(), sizes: vec![Expr::Integer(3)] },
+                Stmt::DimArray { name: "b".to_string(), sizes: vec![ArrayDim { lower: None, upper: Expr::Integer(3) }] },
                 Stmt::DimRecord { var: "c".to_string(), type_name: "mytype".to_string() },
             ])
         );
+    }
+
+    #[test] fn dim_array_explicit_lo_to_hi_parses() {
+        let body = parse_body("Sub MySub()\n    Dim arr(2 To 8)\n    a = 1\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::DimArray {
+                name: "arr".to_string(),
+                sizes: vec![ArrayDim { lower: Some(Expr::Integer(2)), upper: Expr::Integer(8) }],
+            }
+        );
+    }
+
+    #[test] fn dim_array_empty_parens_parses_as_a_zero_dimension_declarator() {
+        let body = parse_body("Sub MySub()\n    Dim arr()\n    a = 1\nEnd Sub\n");
+        assert_eq!(body[0], Stmt::DimArray { name: "arr".to_string(), sizes: vec![] });
+    }
+
+    #[test] fn redim_explicit_lo_to_hi_parses() {
+        let body = parse_body("Sub MySub()\n    ReDim arr(2 To 8)\n    a = 1\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::ReDim {
+                name: "arr".to_string(),
+                sizes: vec![ArrayDim { lower: Some(Expr::Integer(2)), upper: Expr::Integer(8) }],
+                preserve: false,
+            }
+        );
+    }
+
+    #[test] fn erase_parses_as_its_own_statement() {
+        let body = parse_body("Sub MySub()\n    Erase arr\n    a = 1\nEnd Sub\n");
+        assert_eq!(body[0], Stmt::Erase { name: "arr".to_string() });
     }
     #[test] fn test_dim_fixed_length_string_trailing_syntax_is_tolerated() {
         // `As String * 10`'s fixed-length suffix isn't modeled by
@@ -2944,9 +3021,15 @@ mod tests {
         assert_eq!(prog.subs[0].name, "mysub");
     }
 
-    #[test] fn test_option_base_ignored() {
+    #[test] fn test_option_base_is_captured_and_does_not_disrupt_parsing() {
         let prog = parse("Option Base 1\nOption Explicit\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs.len(), 1);
+        assert_eq!(prog.option_base, 1);
+    }
+
+    #[test] fn test_option_base_defaults_to_zero_when_absent() {
+        let prog = parse("Sub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+        assert_eq!(prog.option_base, 0);
     }
 
     #[test] fn test_public_sub() {

@@ -244,6 +244,7 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::ArrayWrite { name, .. } => {
                 names.insert(name.clone());
             }
+            Stmt::Erase { .. } => {}
             Stmt::With { target, body } => {
                 // A bare-identifier With target names a variable (a UDT
                 // record, or a Set-assigned object) — it must stay a
@@ -540,15 +541,18 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         Stmt::Dim => {}
         Stmt::DimBare { .. } => {}
         Stmt::DimArray { sizes, .. } => {
-            for s in sizes {
-                out.push(s);
+            for d in sizes {
+                out.push(&d.upper);
+                if let Some(lo) = &d.lower { out.push(lo); }
             }
         }
         Stmt::ReDim { sizes, .. } => {
-            for s in sizes {
-                out.push(s);
+            for d in sizes {
+                out.push(&d.upper);
+                if let Some(lo) = &d.lower { out.push(lo); }
             }
         }
+        Stmt::Erase { .. } => {}
         Stmt::ArrayWrite { indices, value, .. } => {
             for i in indices {
                 out.push(i);

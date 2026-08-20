@@ -206,6 +206,16 @@ pub enum CaseMatch {
     IsOp(VbaBinOp, Expr),
 }
 
+/// One dimension of a `Dim`/`ReDim` array declarator: either a bare upper-
+/// bound expression (`Dim arr(5)` — the lower bound is `None`, resolved at
+/// Dim-time against `Option Base`/the caller's default) or an explicit `lo
+/// To hi` pair (`Dim arr(2 To 8)`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayDim {
+    pub lower: Option<Expr>,
+    pub upper: Expr,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Assignment { var: String, value: Expr },
@@ -313,9 +323,16 @@ pub enum Stmt {
     /// — this variant is what makes that possible; the old bare `Dim`
     /// never recorded the name at all).
     DimBare { var: String },
-    DimArray { name: String, sizes: Vec<Expr> },
-    ReDim { name: String, sizes: Vec<Expr>, preserve: bool },
+    DimArray { name: String, sizes: Vec<ArrayDim> },
+    ReDim { name: String, sizes: Vec<ArrayDim>, preserve: bool },
     ArrayWrite { name: String, indices: Vec<Expr>, value: Expr },
+    /// `Erase <name>` on a fixed-size array resets every element back to
+    /// its default (`Empty`, since every array here is Variant-typed) in
+    /// place — bounds/lower-bound are untouched, unlike `ReDim` without
+    /// `Preserve`, which also reallocates. Real VBA's comma-separated
+    /// `Erase a, b` form and the "deallocates a dynamic array entirely"
+    /// behavior (vs. a fixed one) aren't modeled — no case needs either.
+    Erase { name: String },
     /// `With <target> ... End With`. `target` is resolved once at runtime on
     /// block entry and pushed onto the VM's With stack; every bare-`.member`
     /// statement/expression in `body` (at any nesting depth) resolves
@@ -384,4 +401,9 @@ pub struct Program {
     /// "..."` if present (as real VBA does). `None` if the module has no
     /// such line — callers fall back to a file-stem-derived name.
     pub module_name: Option<String>,
+    /// The module-level `Option Base` value (0 or 1 in real VBA), default
+    /// 0 if the module has no such statement. Used as the default lower
+    /// bound for `Dim`/`ReDim` array declarators that don't give an
+    /// explicit `lo To hi`.
+    pub option_base: i64,
 }

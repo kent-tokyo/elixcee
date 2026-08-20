@@ -2233,10 +2233,10 @@
     "entrypoint": "Scenario"
   },
   {
-    "id": "two_dimensional_array_write_and_read_round_trips",
+    "id": "two_dimensional_array_second_index_is_silently_dropped",
     "category": "array_bounds",
-    "description": "A 2D array element written at (row, col) reads back correctly at the same indices",
-    "vbaSource": "Sub Scenario()\n  Dim arr(3, 2)\n  arr(2, 1) = 77\n  Range(\"A1\").Value = arr(2, 1)\nEnd Sub\n",
+    "description": "Writing two elements that share dimension-1's index but differ in dimension 2 must not collide",
+    "vbaSource": "Sub Scenario()\n  Dim arr(3, 2)\n  arr(2, 0) = 111\n  arr(2, 1) = 222\n  Range(\"A1\").Value = arr(2, 0)\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
@@ -2256,14 +2256,14 @@
   {
     "id": "dim_array_explicit_lower_bound_unsupported",
     "category": "array_bounds",
-    "description": "Dim arr(lo To hi) with an explicit non-zero lower bound does not parse",
+    "description": "Dim arr(lo To hi) with an explicit non-zero lower bound",
     "vbaSource": "Sub Scenario()\n  Dim arr(2 To 8)\n  Range(\"A1\").Value = LBound(arr)\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
     "id": "option_base_one_not_respected",
     "category": "array_bounds",
-    "description": "Option Base 1 does not change the default lower bound",
+    "description": "Option Base 1 changes the default lower bound",
     "vbaSource": "Option Base 1\nSub Scenario()\n  Dim arr(5)\n  Range(\"A1\").Value = LBound(arr)\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
@@ -2277,14 +2277,14 @@
   {
     "id": "erase_fixed_variant_array_does_not_reset_to_empty",
     "category": "array_bounds",
-    "description": "Erase on a fixed Variant array does not reset elements to Empty",
+    "description": "Erase on a fixed Variant array resets elements to Empty",
     "vbaSource": "Sub Scenario()\n  Dim arr(3)\n  arr(0) = 5\n  arr(1) = 10\n  Erase arr\n  Range(\"A1\").Value = IsEmpty(arr(0))\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
   {
     "id": "dim_array_empty_parens_dynamic_declaration_unsupported",
     "category": "array_bounds",
-    "description": "Dim arr() (no size, for a later ReDim) does not parse",
+    "description": "Dim arr() (no size, for a later ReDim)",
     "vbaSource": "Sub Scenario()\n  Dim arr()\n  ReDim arr(5)\n  Range(\"A1\").Value = UBound(arr)\nEnd Sub\n",
     "entrypoint": "Scenario"
   },
