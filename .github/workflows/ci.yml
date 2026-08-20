@@ -225,9 +225,9 @@ jobs:
         run: npm run browser:smoke
 
   # fuzz/ (4 libFuzzer targets: fuzz_formula_eval, fuzz_formula_parser, fuzz_vba_parser,
-  # fuzz_xlsx_reader) had never been run in CI, or apparently anywhere, before this job
-  # existed — fuzz/Cargo.lock had gone stale since the elixcee v0.1.2 release with no
-  # signal to catch it. The very first time these targets were actually run, one of them
+  # fuzz_xlsx_reader) had no CI signal at all before this job existed — fuzz/Cargo.lock
+  # had gone stale since the elixcee v0.1.2 release with nothing to catch it. The first
+  # time these targets were run this session, one of them
   # (fuzz_vba_parser) found a real panic within 30 seconds: an integer literal too wide
   # for i64 crashed the tokenizer via an unguarded .unwrap() on a real, non-adversarial
   # parse path — see CHANGELOG.md/tasks/todo.md. That result alone is the justification

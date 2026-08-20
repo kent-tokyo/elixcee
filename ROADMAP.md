@@ -161,6 +161,14 @@ recorded as exhausted: no further candidates were found by either method as of t
    Still genuinely not built: a WASM size *regression* check (the size is recorded now, but
    nothing fails CI if it grows — a real policy call on what threshold and what to do when a
    legitimate feature grows it, deliberately not attempted).
+
+   **Also new: a `fuzz` CI job**, wired in after `fuzz/`'s 4 libFuzzer targets — which had
+   no CI signal at all, and whose `fuzz/Cargo.lock` had silently gone stale since elixcee
+   v0.1.2 — were actually run for the first time and immediately found a real crash (an
+   i64-overflow panic in the VBA tokenizer, fixed; see `tasks/todo.md`'s `2026-08-20`
+   session entry and `CHANGELOG.md`). Runs each target for a fixed 30s smoke budget per
+   push/PR, not a fuzzing campaign; does not persist a corpus across runs (a real design
+   question — where it would live, how it'd be curated — left open, not assumed).
 9. **`@elixcee` npm scope ownership is unconfirmed** — cannot be resolved from this
    environment (`npm whoami` returns 401; no working publish credential exists locally, no
    analogous GitHub Actions secret exists yet either, unlike `CARGO_REGISTRY_TOKEN` for
