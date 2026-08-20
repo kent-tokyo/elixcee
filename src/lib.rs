@@ -351,31 +351,13 @@ fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<P
 
     let mut vm = Vm::new();
     vm.error_on_msgbox = on_msgbox == "error";
+    vm.populate_from_sheets(sheets);
 
-    for sheet_data in &sheets {
-        let key = sheet_data.name.clone();
-        vm.ensure_sheet(&key);
-        let prev = vm.active_sheet.clone();
-        vm.active_sheet = key;
-        for (&(row, col), cell) in &sheet_data.cells {
-            let value = match cell {
-                reader::SheetCell::Integer(n) => Variant::Integer(*n),
-                reader::SheetCell::Float(f)   => Variant::Float(*f),
-                reader::SheetCell::Str(s)     => Variant::Str(s.clone()),
-                reader::SheetCell::Bool(b)    => Variant::Boolean(*b),
-            };
-            vm.cells_mut().insert((row, col), CellContent { formula: None, value });
-        }
-        vm.active_sheet = prev;
+    if let Some(s) = sheet {
+        vm.set_active_sheet(&s.to_lowercase()).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
+        })?;
     }
-
-    let active = match sheet {
-        Some(s) => s.to_lowercase(),
-        None    => sheets[0].name.clone(),
-    };
-    vm.set_active_sheet(&active).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
-    })?;
 
     Ok(PyVm { inner: vm })
 }

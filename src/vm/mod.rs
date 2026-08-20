@@ -1784,7 +1784,7 @@ impl Vm {
     /// mixed-case-sheet-name fix (see below) is unit-testable without going
     /// through a real file, since `save_workbook`-built fixtures always
     /// lowercase sheet names and would never exercise it.
-    fn populate_from_sheets(&mut self, sheets: Vec<WorkbookSheet>) -> Vec<String> {
+    pub(crate) fn populate_from_sheets(&mut self, sheets: Vec<WorkbookSheet>) -> Vec<String> {
         let mut names = Vec::with_capacity(sheets.len());
         for sheet_data in &sheets {
             self.ensure_sheet(&sheet_data.name);
