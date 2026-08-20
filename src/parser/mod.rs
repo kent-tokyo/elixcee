@@ -109,7 +109,16 @@ fn tokenize(input: &str) -> (Vec<Tok>, Vec<(u32, u32)>) {
                     toks.push(Tok::Float(s.parse().unwrap()));
                 } else {
                     let s: String = chars[start..pos].iter().collect();
-                    toks.push(Tok::Int(s.parse().unwrap()));
+                    // A literal wider than i64 (real VBA's own Integer/Long are far
+                    // narrower, so this can only happen on pathological input) — fall
+                    // back to Float, mirroring what VBA itself does for a numeric
+                    // literal too large for an integer type: it becomes a Double.
+                    // f64::parse on an all-digit string never errors, so this can't
+                    // panic the way the previous unconditional Int unwrap() did.
+                    match s.parse::<i64>() {
+                        Ok(n) => toks.push(Tok::Int(n)),
+                        Err(_) => toks.push(Tok::Float(s.parse().unwrap())),
+                    }
                 }
             }
             c if c.is_ascii_alphabetic() => {
@@ -3523,5 +3532,18 @@ mod tests {
         let body = parse_body(
             "Sub MySub()\n    Range(\"A1\").Copy Destination:=Range(\"B1\")\nEnd Sub\n");
         assert_eq!(body.len(), 1);
+    }
+
+    #[test] fn integer_literal_wider_than_i64_falls_back_to_float_instead_of_panicking() {
+        // Found by fuzz_vba_parser: a decimal literal too large for i64 used to
+        // panic in tokenize() via `s.parse().unwrap()` on a `PosOverflow` error —
+        // a crash on ordinary (if unusual) source text, not just adversarial
+        // bytes. Mirrors real VBA's own behavior for a literal too wide for an
+        // integer type: it becomes a Double.
+        let body = parse_body("Sub MySub()\n    a = 99999999999999999999\nEnd Sub\n");
+        assert_eq!(body, vec![Stmt::Assignment {
+            var: "a".into(),
+            value: Expr::Float(99999999999999999999.0),
+        }]);
     }
 }

@@ -6,6 +6,8 @@ memo.txt
 # Added by cargo
 /target
 fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
 
 # Python
 .venv/
