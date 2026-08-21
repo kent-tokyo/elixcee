@@ -85,6 +85,35 @@ The cost of inlining, stated rather than glossed over: the packed tarball grew f
 to 380,005 bytes (+12.1%; unpacked 741,304 -> 835,712, +12.7%) for the same 263,204-byte WASM
 binary.
 
+**`write`/`readFile`/`readFileSync` are a different story** — they reach a lazy
+`require('zlib')`/`require('fs')` at call time (not at import time, so a caller who only
+uses `read()` never pays for it). That's fine in Node directly and in an esbuild **CJS**
+bundle, but an esbuild **ESM** bundle can never synchronously `require()` anything reached
+through CJS-origin code, regardless of how that `require()` is phrased or whether its
+target is marked `--external` — confirmed live, not assumed: it throws `Dynamic require of
+"..." is not supported` the moment `write()`/`readFile()`/`readFileSync()` is actually
+*called*, not merely imported. This is an inherent esbuild ESM-output limitation, not
+something fixable from inside this package (see `src/internal/zip-writer.cjs`'s doc
+comment for what was tried). **If you bundle a Node application with esbuild in
+`--format=esm` and it calls `write`/`readFile`/`readFileSync`, mark this package
+`external`** (`--external:@elixcee/xlsx` or `--packages=external`) and let Node's own
+loader resolve it — verified end-to-end, both directions, by `scripts/wasm-smoke.mjs`'s
+step 6. CJS-format bundles need no such treatment either way.
+
+**`write` in the browser build is a different, narrower story, and it's already fixed
+rather than merely documented as a limitation.** Two real bugs were found (not assumed) by
+actually bundling the browser entry with esbuild `--platform=browser` and running the
+result in a real Chrome tab, and both are resolved at the source: a `require('zlib')`
+reachable anywhere in the bundle's module graph made esbuild refuse to even produce a
+`platform: 'browser'` bundle at all ("Could not resolve zlib"), and a `Buffer` reference —
+which bundles fine but doesn't exist in a real browser, unlike Node — threw
+`ReferenceError: Buffer is not defined` at run time. The browser build now has its own
+`write()`, built on a `Buffer`-free ZIP writer (`Uint8Array`/`DataView`/`TextEncoder`
+throughout) that never touches `zlib` at all — every entry is written STORED
+(uncompressed) instead of DEFLATEd, valid OOXML but larger than the Node build's output
+for the same workbook. Verified in the same real headless-Chrome process
+`scripts/browser-smoke.mjs` already uses for `read()`.
+
 ## Compatibility scope
 
 This package aims for **drop-in behavioral compatibility** with `xlsx@0.18.5` on the
