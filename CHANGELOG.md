@@ -8,6 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+Root `elixcee` and `elixcee-types` only — proposed `elixcee` 0.7.0 / `elixcee-types` 0.3.0,
+neither yet applied to any file (`crates/elixcee-types/Cargo.toml`'s own `version` and the
+root `Cargo.toml`'s `elixcee-types = { ..., version = "0.2.0" }` dependency pin both still say
+0.2.0 — the latter isn't checked by `scripts/check-versions.sh`, which only compares
+`Cargo.toml` against `pyproject.toml`, so it needs a manual edit at bump time). `elixcee-wasm`'s
+packaged output (vendored into `@elixcee/xlsx`) was refreshed to reflect these changes even
+though its own source is untouched — see the "refresh packaged artifacts" entry below. Three
+independent Rust-side items: real multi-dimensional VBA arrays; call-frame-scoped `On Error`
+with `Err.Source`/`Err.HelpFile`/`Err.HelpContext`/full 5-argument `Err.Raise`; and moving
+undefined-procedure calls, argument-count mismatches, and undefined `GoTo` labels to a
+compile-time, `On Error`-uncatchable check — plus, found as necessary groundwork for the third
+item, a pre-existing parameter-parsing bug affecting any macro using
+`ByVal`/`ByRef`/`Optional`/`ParamArray`. `cargo test --workspace` 952/952 (up from 872 at `HEAD`
+before this round — 80 new tests: 826 lib + 82 integration + 25 `elixcee-types` + 19
+`elixcee-wasm`), `cargo build --release --workspace` clean, `compat/vba-semantics` 386 cases (0
+`BUG`/0 `UNCLASSIFIED`, `KNOWN_LIMITATION` 14 — down from 16), `compat/corpus` 581 scenarios (0
+`UNEXPLAINED`/0 `MISMATCH`). `RuntimeErrorKind`/a typed `RuntimeError` struct (this round's own
+lower-priority item, referenced by the 0.6.0 entry below as "not fixed here") is still not
+started. `@elixcee/xlsx` (a separate, independently-versioned package — see its own entries
+below) got `write()`/`writeFile()`/`writeFileSync()` in this round, prepared as
+`0.1.0-alpha.1` but not published — `packages/xlsx/package.json`'s `version`/`private`/
+`publishConfig` fields are unchanged from `0.0.0-development`/`private:true`/no
+`publishConfig` in this round; only its `description` was updated to match the new scope.
+
 ### Real multi-dimensional VBA arrays
 
 Previously, `Dim arr(3, 2)` allocated storage as if it were 1-D (dimension 1's element count

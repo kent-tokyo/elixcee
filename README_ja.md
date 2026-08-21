@@ -373,9 +373,11 @@ End Function
 
 **既知の制限**: 複数領域の貼り付けは、両側が複数領域で`Areas.Count`と各領域の形状が一致する場合のみ実行され、それ以外の組み合わせは引き続き診断のみです（上記参照）。
 
-### XLSX.read()/readFile() — `@elixcee/xlsx`（npm、開発中）
+### XLSX.read()/write() — `@elixcee/xlsx`（npm、公開準備済み・未公開）
 
-同期的でWebAssembly版の`XLSX.read(bytes)`——`await init()`不要——が、開発中のnpmパッケージ`@elixcee/xlsx`（未公開。互換性の取り組みと同期ブリッジの設計は [docs/xlsx-architecture.md](docs/xlsx-architecture.md) を参照）に実装されており、`readFile()`/`readFileSync()`（Node専用。ブラウザ向けエントリポイントは偽のファイルシステムを装う代わりに例外を送出）も加わりました。シート名、`!ref`、`!merges`、`!rows`/`!cols`（非表示行・列）、セルごとの`{t, v, f, w, z}`（値・数式テキスト・書式済み表示文字列・日付型セル、実際の`styles.xml`/数値書式解析による）を返します。実物の`xlsx@0.18.5`パッケージに対する差分テストで、30 MATCH + 開示済み3ケース（根本原因は1つ——`src/reader.rs`が現在`xml:space="preserve"`の有意な空白をトリムしてしまう。詳細はCHANGELOG.md参照）。Node（CJS/ESM）とブラウザの両方で動作します（`"browser"` export conditionが、インライン化されたバイト列と`initSync`によるWASM artifactへ配線済み)——この配線は、Nodeが当該export conditionをシミュレートするだけでなく、実際のヘッドレスChromeプロセスが実物のbundleを読み込み、ページ自身のDOMから`XLSX.read()`の結果を取得することでも検証済みです（Safariは非対応・未検証）。ブラウザ向けエントリポイントは依然としてバンドル利用を前提としています（共有コードにCJSの`require('ssf')`が含まれるため）——ビルド不要の`<script type="module">`でそのまま使える形ではありません——が、実物のnpm tarballインストール（このリポジトリへの相対importではなく）とCJS/ESMバンドルはいずれも、手動でのアセットコピー不要でそのまま動作するようになりました。
+同期的でWebAssembly版の`XLSX.read(bytes)`——`await init()`不要——がnpmパッケージ`@elixcee/xlsx`（互換性の取り組みと同期ブリッジの設計は [docs/xlsx-architecture.md](docs/xlsx-architecture.md) を参照）に実装されており、`readFile()`/`readFileSync()`（Node専用。ブラウザ向けエントリポイントは偽のファイルシステムを装う代わりに例外を送出）も加わりました。シート名、`!ref`、`!merges`、`!rows`/`!cols`（非表示行・列）、セルごとの`{t, v, f, w, z}`（値・数式テキスト・書式済み表示文字列・日付型セル、実際の`styles.xml`/数値書式解析による）を返します。実物の`xlsx@0.18.5`パッケージに対する差分テストで、33/33 MATCH・開示ゼロ（以前の版で記載していた`src/reader.rs`の`xml:space="preserve"`トリム欠陥は修正済み。詳細はCHANGELOG.md参照）。Node（CJS/ESM）とブラウザの両方で動作します（`"browser"` export conditionが、インライン化されたバイト列と`initSync`によるWASM artifactへ配線済み)——この配線は、Nodeが当該export conditionをシミュレートするだけでなく、実際のヘッドレスChromeプロセスが実物のbundleを読み込み、ページ自身のDOMから`XLSX.read()`の結果を取得することでも検証済みです（Safariは非対応・未検証）。ブラウザ向けエントリポイントは依然としてバンドル利用を前提としています（共有コードにCJSの`require('ssf')`が含まれるため）——ビルド不要の`<script type="module">`でそのまま使える形ではありません——が、実物のnpm tarballインストール（このリポジトリへの相対importではなく）とCJS/ESMバンドルはいずれも、手動でのアセットコピー不要でそのまま動作するようになりました。
+
+`XLSX.write(wb, opts)`/`writeFile()`/`writeFileSync()`——純粋なJS/XML/ZIP生成のみでRust側の書き込み実装は不要——も実装済みです（`bookType: "xlsx"`のみ）。実物のoracleに対して双方向で差分テスト済み：36 MATCH + 開示済み1ケース（`bookType: "ods"`は未実装）。`package.json`のdescriptionは更新済みですが、`version`（`0.0.0-development`のまま）・`private`（`true`のまま）・`publishConfig`（未設定のまま）は意図的に無変更です——**`npm publish`はまだ一度も実行していません**。この環境からは`@elixcee` npm scopeの所有権も確認できません（詳細はROADMAP.mdの「Known gaps」参照）。
 
 ### ソースからビルド
 

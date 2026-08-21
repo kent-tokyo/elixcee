@@ -428,26 +428,34 @@ single-line `If cond Then stmt [Else stmt]` are all supported.
 matching `Areas.Count` and per-area shapes — every other combination stays diagnose-only
 (see above).
 
-### XLSX.read()/readFile() — `@elixcee/xlsx` (npm, in development)
+### XLSX.read()/write() — `@elixcee/xlsx` (npm, prepared but not yet published)
 
 A synchronous, WebAssembly-backed `XLSX.read(bytes)` — no `await init()` required — is
-implemented in the in-development `@elixcee/xlsx` npm package (not yet published; see
+implemented in the `@elixcee/xlsx` npm package (see
 [docs/xlsx-architecture.md](docs/xlsx-architecture.md) for the compatibility initiative
 and the sync-bridge design), along with `readFile()`/`readFileSync()` (Node-only; the
 browser entry point throws rather than faking a filesystem). They return sheet names,
 `!ref`, `!merges`, `!rows`/`!cols` (hidden rows/columns), and per-cell `{t, v, f, w, z}` —
 values, formula text, formatted display strings, and date-typed cells, resolved via real
 `styles.xml`/number-format parsing. Differential-tested against the real `xlsx@0.18.5`
-package: 30 MATCH + 3 disclosed cases (one root cause — `src/reader.rs` currently trims
-significant `xml:space="preserve"` whitespace; see CHANGELOG.md). Works in Node (CJS/ESM)
-and the browser: a `"browser"` export condition routes to the inlined-bytes/`initSync`
-WASM artifact, verified not just by Node simulating that export condition but by an actual
+package: 33/33 MATCH, 0 disclosed (the `src/reader.rs` `xml:space="preserve"` trimming
+defect noted in earlier rounds is fixed; see CHANGELOG.md). Works in Node (CJS/ESM) and the
+browser: a `"browser"` export condition routes to the inlined-bytes/`initSync` WASM
+artifact, verified not just by Node simulating that export condition but by an actual
 headless Chrome process loading a real bundle and reading `XLSX.read()`'s result back out
 of the page's own DOM (no Safari claim). The browser entry point still assumes bundled
 consumption — its shared code has a CJS `require('ssf')`, so it's not literal no-build
 `<script type="module">` usage — but a real packed-npm-tarball install (not a relative
 import into this repo) and CJS/ESM bundling both round-trip cleanly with no manual asset
 copy step required anymore.
+
+`XLSX.write(wb, opts)`/`writeFile()`/`writeFileSync()` — pure JS/XML/ZIP generation, no
+Rust writer needed — are implemented too (`bookType: "xlsx"` only), differential-tested
+both directions against the real oracle: 36 MATCH + 1 disclosed (`bookType: "ods"`, not
+implemented). `package.json`'s `description` was updated to match, but its `version`
+(`0.0.0-development`), `private` (`true`), and `publishConfig` (unset) were deliberately
+left untouched — no `npm publish` has actually run, and `@elixcee` scope ownership on
+npm is unconfirmed from this environment either way (see ROADMAP.md's "Known gaps").
 
 ### Build from source
 

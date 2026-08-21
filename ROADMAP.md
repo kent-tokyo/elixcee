@@ -5,8 +5,12 @@ shipped, see `CHANGELOG.md` — this file only restates completed work when need
 what's left. Historical phase-by-phase implementation notes (Japanese) live in
 `tasks/todo.md`.
 
-## Current state (0.4.0 released; unreleased work since — VBA structural semantics +
-`@elixcee/xlsx` consumer/browser validation — not yet version-bumped)
+## Current state (0.6.0 released; unreleased work since — real multi-dimensional VBA
+arrays, call-frame-scoped `On Error`/full `Err` object, compile-time undefined-call/
+argument-count/label checks, and `@elixcee/xlsx` `write()`/`writeFile()`/`writeFileSync()`
+— all committed locally (7 commits, `07b4def`..`f9cc239`), but not yet version-bumped,
+pushed, tagged, or published; see CHANGELOG.md's `[Unreleased]` and `tasks/todo.md`'s
+"Phase C"/"`@elixcee/xlsx` 0.1.0-alpha.1 準備" sections for the full detail)
 
 - **VBA object model**: `Range`/`Set`/`Union`/`Areas`/`SpecialCells`, matching-shape
   multi-area Copy/Paste, `ActiveSheet`/`ThisWorkbook`/`ActiveWorkbook`, a **runtime** `With`
@@ -17,20 +21,31 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
   separator, typed `Function` params/return, `Mod`/`\`/`^`/`And`/`Or`/`Xor`/`Not` at real VBA
   precedence (real bitwise semantics on non-Boolean operands), comma-separated
   multi-declarator `Dim`, single-line `If cond Then stmt [Else stmt]`. `Dim x` registers a
-  real `Empty`-valued variable. See CHANGELOG.md's `[Unreleased]` "VBA structural semantics"
-  section for the full detail on the four newest additions.
+  real `Empty`-valued variable. Since 0.6.0, committed locally (not yet released): **real multi-dimensional
+  arrays** (`Variant::VbaArray`, per-dimension bounds and row-major storage — `Dim arr(3,2)`
+  no longer aliases `arr(1,1)`/`arr(1,2)`, `UBound(arr, dimension)` honors its argument for
+  real, `ReDim Preserve` enforces VBA's actual last-dimension-only rule) and
+  **call-frame-scoped `On Error`** (`Err.Source`/`Err.HelpFile`/`Err.HelpContext`, full
+  5-argument `Err.Raise`; fixes the previously-disclosed bug where `On Error GoTo <label>`
+  never fired for an error inside a handler-less callee).
 - **Built-in functions**: `Fix`/`Sgn`/`Round`(banker's rounding, rejects negative digits)/
   `CBool`/`CInt`/`CLng`(also banker's rounding)/`IsNumeric`(numeric strings)/`Str`(leading-
   space quirk, distinct from `CStr`)/`Val`(leading-numeric-prefix parsing)/`Date`/`Time`/
   `Now` (real values, callable with or without parens)/`Array(...)`.
+- **Static checking**: `elixcee check` and `Vm::run_sub`/`run_sub_multi`'s own pre-flight
+  pass now also catch undefined-procedure calls, argument-count mismatches (`E1008`), and
+  undefined `GoTo`/`On Error GoTo` labels (`E1009`) — whole-project scope, uncatchable by
+  `On Error` (committed locally, not yet released).
 - **Test infrastructure**: two committed, oracle-independent classifiers, distinct from the
   existing LibreOffice/Excel oracle-comparison axis (`compat/corpus/classify.mjs`):
   `compat/corpus/classify-elixcee-outcomes.mjs` explains elixcee's own pass/fail outcome
   for all 581 corpus scenarios by exact scenario ID (0 `UNEXPLAINED`, 0 `MISMATCH`); the
   `compat/vba-semantics/` suite (**386 cases**, up from 208 at 0.3.0) checks VALUE
   correctness against documented real VBA semantics, not just pass/fail (0 `BUG`,
-  0 `UNCLASSIFIED`, 16 `KNOWN_LIMITATION` — see item 10 below for the full breakdown) — see
-  each directory's own README for what it measures and doesn't. CI runs `packages/xlsx`'s
+  0 `UNCLASSIFIED`, **14** `KNOWN_LIMITATION` as of the (committed locally, not yet
+  released) multi-dimensional-array work — down from 16 — see item 10 below for the full
+  breakdown) — see each
+  directory's own README for what it measures and doesn't. CI runs `packages/xlsx`'s
   TypeScript typecheck, all four `compat/differential/` suites plus their own self-checks,
   a real packed-npm-tarball consumer smoke, and a `wasm` job that builds
   `crates/elixcee-wasm` fresh and runs both a Node/browser-condition smoke and a **real
@@ -41,16 +56,24 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
   defects. `XLSX.read()`/`readFile()`/`readFileSync()` are a working sync WASM bridge (Node
   + browser), 33/33 MATCH against the oracle — the one disclosed defect (`src/reader.rs`
   trimming a `t="str"` cell's `xml:space="preserve"` text unconditionally) is fixed as of
-  a later round (see CHANGELOG.md). `write*` remains unimplemented; npm publish of
-  `packages/xlsx` has not happened (`0.0.0-development`, currently **not publishable
-  as-is** — see "npm/JS/WASM findings" below).
-- Published: `elixcee` 0.5.0 and `elixcee-types` 0.2.0 on crates.io (the enum-variant-
-  addition semver bump `Variant::Null` required — see CHANGELOG.md's "`elixcee-types`
-  0.2.0" section). **PyPI (`elixcee` 0.5.0) and the CLI GitHub Release (`bin-v0.5.0`) are
-  not yet done as of this note** — crates.io publish and PyPI/CLI release are separate,
-  independently-approved steps in this project's process; PyPI still serves `elixcee`
-  0.4.0, the CLI GitHub Release still serves `bin-v0.3.0` (0.4.0's CLI binaries were never
-  released at all — a pre-existing gap, not caused by this round, not yet resolved).
+  a later round (see CHANGELOG.md). **`write()`/`writeFile()`/`writeFileSync()` now exist
+  too** (`bookType: "xlsx"` only, committed locally — pure JS/XML/ZIP generation, no Rust
+  writer needed; see item 6 below), 36 MATCH + 1 disclosed (`bookType: "ods"`) in
+  `compat/differential/xlsx-write.test.mjs`. `package.json`'s `description` was updated to
+  match, but **`version`/`private`/`publishConfig` were deliberately left untouched**
+  (still `0.0.0-development`/`private: true`/no `publishConfig` — a version bump, and the
+  `private: false` + `publishConfig.access: "public"` a first publish needs, were both
+  explicitly out of scope for this round) — **npm publish has not happened** (confirmed
+  live: `registry.npmjs.org/@elixcee/xlsx` 404s), correctly blocked by `private: true`
+  alone even before considering unconfirmed `@elixcee` scope ownership (item 9 below).
+- Published: `elixcee` **0.6.0** on both crates.io and PyPI, `elixcee-types` 0.2.0 on
+  crates.io (the enum-variant-addition semver bump `Variant::Null` required — see
+  CHANGELOG.md's "`elixcee-types` 0.2.0" section) — all confirmed live via each registry's
+  own API, not assumed from local files. The CLI GitHub Release is at `bin-v0.5.0`
+  (confirmed via `gh release list`) — **0.6.0's CLI binaries have not been released**, a
+  gap that has shrunk (0.4.0's binaries were never released at all; 0.5.0's were) but not
+  closed. crates.io/PyPI publish and the CLI GitHub Release remain separate,
+  independently-approved steps in this project's process.
 - Not re-scored in this file (see CHANGELOG.md history for how the project's own scoring
   framework has been applied each round) — not claimed as validated against Microsoft Excel
   itself anywhere, because the VBA-vs-Excel axis has never been exercised (see "Known gaps"
@@ -102,27 +125,40 @@ recorded as exhausted: no further candidates were found by either method as of t
    completed, not yet implemented — see `docs/date-time-runtime-model-adr.md` and "Date/Time
    runtime model" below.
 6. **`XLSX.read()`/`readFile()`/`readFileSync()`** cover cell values/formulas/dates/
-   dimension/hidden rows-cols/formatting display strings, but not `write*`, or non-Node
-   browser dispatch beyond the bundled-consumption case (its shared code still has a CJS
+   dimension/hidden rows-cols/formatting display strings; non-Node browser dispatch beyond
+   the bundled-consumption case is unchanged (its shared code still has a CJS
    `require('ssf')`; `readFile`/`readFileSync` are Node-only by nature and throw
    `ELIXCEE_UNSUPPORTED_IN_BROWSER` from the browser entry point rather than faking a
-   filesystem). No Rust writer exists at all yet, for either XLSX or ODS format. The
-   `src/reader.rs` defect that used to trim a `t="str"` cell's `xml:space="preserve"` text
-   unconditionally (all three read entry points shared it) is fixed as of a later round —
-   see CHANGELOG.md.
+   filesystem). The `src/reader.rs` defect that used to trim a `t="str"` cell's
+   `xml:space="preserve"` text unconditionally (all three read entry points shared it) is
+   fixed as of a later round — see CHANGELOG.md. ~~No Rust writer exists at all yet, for
+   either XLSX or ODS format~~ — **`write()`/`writeFile()`/`writeFileSync()` exist now**
+   (a later, committed-locally round — see CHANGELOG.md's `[Unreleased]` and
+   `tasks/todo.md`'s "`@elixcee/xlsx` 0.1.0-alpha.1 準備" section), `bookType: "xlsx"`
+   only, no ODS. Turned out not to need a Rust writer at all — pure JS/XML/ZIP generation,
+   verified against `src/reader.rs`'s own parsing so "own write -> own read" is a
+   meaningful round trip. This makes the "npm/JS/WASM findings" section's speculation below
+   ("write/writeFile/writeFileSync need a genuinely new Rust writer module... whether the
+   `zip` crate... supports writing under wasm32") moot for the actually-chosen approach —
+   left in place below as a record of what was considered, not corrected in place.
 7. **`packages/xlsx` is not currently publishable, even as an alpha** — three concrete,
-   verified blockers, not a vague "needs polish". One is now fixed (Unreleased):
-   ~~there was no package-level `README.md`, so `npm`'s registry page would show only the
-   `description` field, which opened with "Drop-in replacement for xlsx" without disclosing
-   that `write*`/`readFile` are unimplemented~~ — `packages/xlsx/README.md` now exists
-   (confirmed via `npm pack --dry-run` that it's actually included in the tarball, npm
-   includes it automatically regardless of the `files` array), stating current scope
-   honestly, and `description` no longer opens with an unqualified "drop-in replacement"
-   claim. **Two blockers remain, both deliberately left alone — they're a real "should this
-   become publishable" policy stance, not a mechanical fix**: `package.json`'s
-   `"private": true` hard-blocks `npm publish` outright; first publish of a scoped package
-   also needs `--access public` or `publishConfig.access: "public"`, neither set. See
-   "npm/JS/WASM findings" below for the full investigation.
+   verified blockers, not a vague "needs polish". One is now fixed, two remain, by
+   deliberate choice this round: ~~there was no package-level `README.md`, so `npm`'s
+   registry page would show only the `description` field, which opened with "Drop-in
+   replacement for xlsx" without disclosing that `write*`/`readFile` are unimplemented~~ —
+   **fixed**: `packages/xlsx/README.md` now exists (confirmed via `npm pack --dry-run`
+   that it's actually included in the tarball, npm includes it automatically regardless of
+   the `files` array), stating current scope honestly, and `description` no longer opens
+   with an unqualified "drop-in replacement" claim. **`package.json`'s `"private": true`
+   still hard-blocks `npm publish` outright, and `publishConfig.access: "public"` (a
+   scoped package's first publish needs it, or `--access public` at publish time) is still
+   unset** — both were left exactly as committed this round on purpose, per this session's
+   own stop-condition discipline (no version bump/publish-prep metadata change without
+   explicit approval); flipping them is a one-line-each, separate, still-pending decision.
+   **No actual `npm publish` has been run** — correctly blocked by `private: true` alone,
+   before even considering gap #9 below (`@elixcee` scope ownership is unconfirmed and
+   unresolvable from this environment). See "npm/JS/WASM findings" below for the full
+   investigation.
 8. ~~No Node/WASM/JS testing wired into CI at all~~ — **fixed**, including real-browser
    coverage as of the structural-semantics/consumer-validation round (Unreleased):
    `.github/workflows/ci.yml`'s `node-js` job (Node 20/22 matrix) runs `packages/xlsx`'s
@@ -185,28 +221,23 @@ recorded as exhausted: no further candidates were found by either method as of t
    elixcee`, or the npmjs.com web UI). (Corrects a stale, dangling citation this file
    previously had, pointing at a CHANGELOG.md "Phase 0 scope-ownership note" that doesn't
    actually exist in CHANGELOG.md's text — found and fixed this round.)
-10. **16 `compat/vba-semantics/` `KNOWN_LIMITATION` cases** (Unreleased — suite grew from
+10. **14 `compat/vba-semantics/` `KNOWN_LIMITATION` cases** (Unreleased — suite grew from
     208 to 301 to **386** cases; full per-case list and root-cause grouping in
     `compat/vba-semantics/README.md`'s "Current state" section, raw detail in
     `compat/vba-semantics/results/report.json`). Down from 28: nine were genuinely fixed in
     the structural-semantics round — the three Null-propagation ones, the two object-variable
     unset/Nothing ones, the two `With`-target ones, the `Type mismatch` error-message one,
-    and the missing `Array()` builtin — and **four more in the 0.6.0 array-bounds round**
+    and the missing `Array()` builtin — **four more in the 0.6.0 array-bounds round**
     (see CHANGELOG.md): `Dim arr(lo To hi)`, `Dim arr()` (empty parens), `Option Base 1`, and
     `Erase` on a fixed-size array, all fixed by adding a per-variable array lower-bound side
-    table to the VM. That same round also newly *disclosed* one: writing to two array
-    elements sharing dimension 1's index but differing in dimension 2 silently collides on
-    the same element, because elixcee's array storage is genuinely 1-D — a previous,
-    differently-shaped test case had passed by coincidence and was miscited as evidence 2-D
-    storage worked (`two_dimensional_array_second_index_is_silently_dropped`). The remaining
-    16, by root cause: no declared/runtime type-width tracking (12 — `CInt`/`CLng` overflow,
-    `Left`/`Right`/`Mid`/`Chr`/`InStr` out-of-domain arguments); array storage is 1-D only,
-    not truly multi-dimensional (2 — `Dim arr(3, 2)` only allocates dimension 1's elements
-    and every array write/read uses only the first index expression, so `UBound(arr,
-    dimension)` can't honor its dimension argument and a second/later index silently
-    collides with the first; needs real shape metadata and stride arithmetic, deliberately
-    deferred as comparable in scope to this project's other deferred Variant-surface work);
-    no per-Variant stored-type tag (1 — `+` between two string-typed Variants numeric-adds
+    table to the VM — and **the last two, real multi-dimensional array support, in a later
+    round**: `Variant::VbaArray` (a distinct type from the existing `Variant::Array`, which
+    stays exactly what it was for Range-value reads/formula-array results/record arrays) now
+    carries real per-dimension bounds and row-major element storage, so `Dim arr(3, 2)`,
+    `arr(2,0)`/`arr(2,1)` no longer collide, and `UBound(arr, dimension)` honors its argument
+    for real. The remaining 14, by root cause: no declared/runtime type-width tracking (12 —
+    `CInt`/`CLng` overflow, `Left`/`Right`/`Mid`/`Chr`/`InStr` out-of-domain arguments); no
+    per-Variant stored-type tag (1 — `+` between two string-typed Variants numeric-adds
     instead of concatenating per VBA's own documented rule); a numeric-vs-string Variant
     comparison isn't unconditionally "numeric side is less" per VBA's documented rule (1 —
     deliberately not fixed, would invert the far more common numeric-string-vs-number
