@@ -9,7 +9,10 @@ use crate::reader::{self, SheetCell, WorkbookSheet};
 /// address helpers below are physically defined in `elixcee-types` (Phase
 /// 2A) — re-exported here so every existing `vm::X` / `crate::vm::X`
 /// reference across the codebase keeps resolving unchanged.
-pub use crate::types::{CellContent, ExcelError, Variant, parse_cell_addr, parse_range_addr, serial_to_display};
+pub use crate::types::{
+    ArrayBound, CellContent, ExcelError, MAX_ARRAY_ELEMENTS, Variant, VbaArray,
+    parse_cell_addr, parse_range_addr, serial_to_display,
+};
 
 /// Evidence for a resolution failure (Milestone B6a's `diagnose`
 /// subcommand) — the requested key, what was actually available, and (for
@@ -600,16 +603,9 @@ pub struct Vm {
     /// is arbitrary user text, not one of elixcee's own known message
     /// strings). Taken (cleared) by the first catch site that consumes it.
     pending_raised_error: Option<(i64, String)>,
-    /// Per-variable array lower bound, set by `Dim`/`ReDim` (see
-    /// `eval_array_dim0`) and read by `LBound`/`UBound`/`ArrayWrite`/array
-    /// subscript reads. Absent (defaults to 0) for arrays that never went
-    /// through a `Dim`/`ReDim` with a tracked bound — `Split()`/`Array()`
-    /// results, UDT arrays (`DimArrayRecord`), and any array value that
-    /// doesn't flow through a named variable at all.
-    array_lower_bounds: HashMap<String, i64>,
     /// The current module's `Option Base` value (real VBA: 0 or 1),
     /// default 0. Set from `Program::option_base` at the start of
-    /// `run_sub`/`run_sub_multi` — see `eval_array_dim0`. `run_sub_multi`
+    /// `run_sub`/`run_sub_multi` — see `eval_array_bounds`. `run_sub_multi`
     /// takes the first module that sets one rather than modeling true
     /// per-module `Option Base` scoping (this codebase's execution model
     /// is already a single flat `Vm` across all loaded modules).
@@ -654,7 +650,6 @@ impl Vm {
             err_number: 0,
             err_description: String::new(),
             pending_raised_error: None,
-            array_lower_bounds: HashMap::new(),
             option_base: 0,
         }
     }
@@ -1070,35 +1065,64 @@ impl Vm {
         "Subscript out of range".to_string()
     }
 
-    /// Evaluates a `Dim`/`ReDim` array declarator's first dimension into
-    /// `(lower_bound, element_count)`. An explicit `lo To hi` supplies its
-    /// own lower bound; a bare upper-bound expression defaults to
-    /// `Option Base`'s value. Only dimension 0 is used — elixcee's array
-    /// storage is genuinely 1-D (see `ROADMAP.md`'s known-gaps entry on
-    /// `UBound`'s dimension argument), so a second `Dim arr(3, 2)`-style
-    /// dimension's bounds are parsed but not stored.
-    fn eval_array_dim0(&mut self, dim: &ArrayDim) -> Result<(i64, usize), String> {
-        let lower = match &dim.lower {
-            Some(e) => to_f64(&self.eval_expr(e)?)? as i64,
-            None => self.option_base,
-        };
-        let upper = to_f64(&self.eval_expr(&dim.upper)?)? as i64;
-        let len = (upper - lower + 1).max(0) as usize;
-        Ok((lower, len))
+    /// Same idea as `array_oob_error`, for a real (possibly multi-dim)
+    /// `VbaArray` subscript failure: records evidence for the first
+    /// dimension whose index is actually out of range, and returns
+    /// "Subscript out of range" either way. A wrong subscript *count*
+    /// (`arr(1)` on a 2-D array) has no single out-of-range dimension to
+    /// report — `ArrayIndexOutOfBounds` evidence has no shape for that
+    /// failure mode — so evidence is explicitly cleared for that case
+    /// rather than left at whatever an earlier, unrelated operation set;
+    /// the returned message is still correct, just without extra evidence.
+    fn vba_array_oob_error_for(&mut self, name: &str, indices: &[i64], bounds: &[ArrayBound]) -> String {
+        if indices.len() == bounds.len() {
+            for (&sub, bound) in indices.iter().zip(bounds.iter()) {
+                if sub < bound.lower || sub > bound.upper {
+                    return self.array_oob_error(name, sub, bound.lower, bound.len() as usize);
+                }
+            }
+        }
+        self.last_resolution_failure = None;
+        "Subscript out of range".to_string()
     }
 
-    /// Looks up a tracked array lower bound from an `Expr` that named the
-    /// array (`LBound`/`UBound`'s own argument) — only a bare `Expr::Var`
-    /// can name a tracked variable; anything else (an array-valued
-    /// function's return value, `Array(...)`'s result used inline, …) has
-    /// no name to key `array_lower_bounds` on, so it defaults to 0 —
-    /// unchanged from this codebase's existing (pre-this-change) behavior
-    /// for `Split()`/`Array()` results, which this doesn't touch.
-    fn array_lower_bound_of(&self, expr: Option<&Expr>) -> i64 {
-        match expr {
-            Some(Expr::Var(n)) => self.array_lower_bounds.get(n).copied().unwrap_or(0),
-            _ => 0,
-        }
+    /// Evaluates every dimension of a `Dim`/`ReDim` array declarator into
+    /// real per-dimension bounds. Each dimension's explicit `lo To hi`
+    /// supplies its own lower bound; a bare upper-bound expression defaults
+    /// to `Option Base`'s value, independently per dimension (real VBA:
+    /// `Option Base 1` followed by `Dim arr(3, 2)` means both dimensions
+    /// start at 1, not just the first).
+    fn eval_array_bounds(&mut self, dims: &[ArrayDim]) -> Result<Vec<ArrayBound>, String> {
+        dims.iter()
+            .map(|dim| {
+                let lower = match &dim.lower {
+                    Some(e) => to_f64(&self.eval_expr(e)?)? as i64,
+                    None => self.option_base,
+                };
+                let upper = to_f64(&self.eval_expr(&dim.upper)?)? as i64;
+                Ok(ArrayBound { lower, upper })
+            })
+            .collect()
+    }
+
+    /// Evaluates `arr(i, j, ...)`-style subscript `Expr`s into the `i64`
+    /// indices `VbaArray::get`/`set`/`linear_index` take.
+    fn eval_array_indices(&mut self, indices: &[Expr]) -> Result<Vec<i64>, String> {
+        indices.iter().map(|e| Ok(to_f64(&self.eval_expr(e)?)? as i64)).collect()
+    }
+
+    /// Evaluates `LBound`/`UBound`'s optional second (dimension) argument —
+    /// 1 if omitted, matching real VBA's own default. Negative results clamp
+    /// to 0 rather than erroring here — `VbaArray::lbound`/`ubound` already
+    /// reject `dimension == 0` with the same "Subscript out of range" a
+    /// too-large dimension gets, so there's no second error shape to keep
+    /// consistent with.
+    fn array_func_dimension(&mut self, expr: Option<&Expr>) -> Result<usize, String> {
+        let n = match expr {
+            Some(e) => to_f64(&self.eval_expr(e)?)? as i64,
+            None => 1,
+        };
+        Ok(n.max(0) as usize)
     }
 
     /// If `strict_resolution` is on and `key` doesn't name an existing
@@ -1869,7 +1893,6 @@ impl Vm {
         self.err_number = 0;
         self.err_description.clear();
         self.pending_raised_error = None;
-        self.array_lower_bounds.clear();
         self.option_base = program.option_base;
         // Cache user-defined functions, subs, and type definitions.
         self.user_funcs = program.funcs.iter().map(|f| (f.name.clone(), f.clone())).collect();
@@ -1919,7 +1942,6 @@ impl Vm {
         self.err_number = 0;
         self.err_description.clear();
         self.pending_raised_error = None;
-        self.array_lower_bounds.clear();
         // Real VBA scopes `Option Base` per module; this codebase's `Vm`
         // is a single flat namespace across every loaded module (same
         // simplification `user_funcs`/`user_subs`/`type_defs` already
@@ -2552,44 +2574,50 @@ impl Vm {
             Stmt::DimArray { name, sizes } => {
                 if sizes.is_empty() {
                     // `Dim arr()` — dynamic array, unsized until a later
-                    // `ReDim`. No lower bound is known yet either.
-                    self.variables.insert(name.clone(), Variant::Array(vec![]));
+                    // `ReDim`. Rank-0 rather than rank-1-empty: it doesn't
+                    // yet have a shape at all, so any subscript access on it
+                    // (rank always mismatches) correctly errors with
+                    // "Subscript out of range", same as real VBA.
+                    self.variables.insert(name.clone(), Variant::VbaArray(VbaArray { bounds: vec![], elements: vec![] }));
                 } else {
-                    let (lower, len) = self.eval_array_dim0(&sizes[0])?;
-                    self.array_lower_bounds.insert(name.clone(), lower);
-                    self.variables.insert(name.clone(), Variant::Array(vec![Variant::Empty; len]));
+                    let bounds = self.eval_array_bounds(sizes)?;
+                    let arr = VbaArray::new_zeroed(bounds)?;
+                    self.variables.insert(name.clone(), Variant::VbaArray(arr));
                 }
             }
             Stmt::ReDim { name, sizes, preserve } => {
-                let (lower, new_size) = self.eval_array_dim0(&sizes[0])?;
+                let bounds = self.eval_array_bounds(sizes)?;
                 let new_arr = if *preserve {
-                    if let Some(Variant::Array(old)) = self.variables.get(name).cloned() {
-                        let mut a = old; a.resize(new_size, Variant::Empty); a
-                    } else { vec![Variant::Empty; new_size] }
-                } else { vec![Variant::Empty; new_size] };
-                self.array_lower_bounds.insert(name.clone(), lower);
-                self.variables.insert(name.clone(), Variant::Array(new_arr));
+                    match self.variables.get(name) {
+                        Some(Variant::VbaArray(old)) if old.rank() == bounds.len() => {
+                            redim_preserve(old, &bounds)?
+                        }
+                        _ => VbaArray::new_zeroed(bounds)?,
+                    }
+                } else {
+                    VbaArray::new_zeroed(bounds)?
+                };
+                self.variables.insert(name.clone(), Variant::VbaArray(new_arr));
             }
             Stmt::Erase { name } => {
-                if let Some(Variant::Array(arr)) = self.variables.get_mut(name) {
-                    for v in arr.iter_mut() { *v = Variant::Empty; }
+                if let Some(Variant::VbaArray(arr)) = self.variables.get_mut(name) {
+                    for v in arr.elements.iter_mut() { *v = Variant::Empty; }
                 }
             }
             Stmt::ArrayWrite { name, indices, value } => {
                 let v = self.eval_expr(value)?;
-                let vba_idx = to_f64(&self.eval_expr(&indices[0])?)? as i64;
-                let lower = self.array_lower_bounds.get(name).copied().unwrap_or(0);
-                let internal = vba_idx - lower;
-                let oob_len = match self.variables.get(name) {
-                    Some(Variant::Array(arr)) if internal < 0 || internal as usize >= arr.len() => Some(arr.len()),
-                    Some(Variant::Array(_)) => None,
+                let idx = self.eval_array_indices(indices)?;
+                let bounds = match self.variables.get(name) {
+                    Some(Variant::VbaArray(arr)) => arr.bounds.clone(),
                     _ => return Err(format!("'{}' is not an array", name)),
                 };
-                if let Some(len) = oob_len {
-                    return Err(self.array_oob_error(name, vba_idx, lower, len));
-                }
-                if let Some(Variant::Array(arr)) = self.variables.get_mut(name) {
-                    arr[internal as usize] = v;
+                match VbaArray::linear_index_for(&bounds, &idx) {
+                    Ok(i) => {
+                        if let Some(Variant::VbaArray(arr)) = self.variables.get_mut(name) {
+                            arr.elements[i] = v;
+                        }
+                    }
+                    Err(_) => return Err(self.vba_array_oob_error_for(name, &idx, &bounds)),
                 }
             }
             Stmt::With { target, body } => {
@@ -2808,10 +2836,13 @@ impl Vm {
                     let arg_vals: Vec<Variant> = args.iter().map(|a| self.eval_expr(a)).collect::<Result<_, _>>()?;
                     return self.call_func_def(&func, &arg_vals);
                 }
-                // Array subscript access: arr(i)
+                // Array subscript access on a plain (Range-value-read /
+                // formula-array-result / record-array) `Variant::Array` —
+                // always 0-based, unchanged from before this round (a real
+                // `Dim`-declared array is `Variant::VbaArray`, below).
                 if matches!(self.variables.get(name.as_str()), Some(Variant::Array(_))) {
                     let vba_idx = to_f64(&self.eval_expr(args.first().ok_or_else(|| format!("Array '{}' requires index", name))?)?)? as i64;
-                    let lower = self.array_lower_bounds.get(name.as_str()).copied().unwrap_or(0);
+                    let lower = 0;
                     let internal = vba_idx - lower;
                     let (found, len) = match self.variables.get(name.as_str()) {
                         Some(Variant::Array(arr)) => {
@@ -2823,6 +2854,22 @@ impl Vm {
                     return match found {
                         Some(v) => Ok(v),
                         None => Err(self.array_oob_error(name, vba_idx, lower, len)),
+                    };
+                }
+                // Array subscript access on a real (possibly multi-dim)
+                // VBA-declared array: arr(i, j, ...).
+                if matches!(self.variables.get(name.as_str()), Some(Variant::VbaArray(_))) {
+                    let idx = self.eval_array_indices(args)?;
+                    let bounds = match self.variables.get(name.as_str()) {
+                        Some(Variant::VbaArray(arr)) => arr.bounds.clone(),
+                        _ => return Err(format!("'{}' is not an array", name)),
+                    };
+                    return match VbaArray::linear_index_for(&bounds, &idx) {
+                        Ok(i) => match self.variables.get(name.as_str()) {
+                            Some(Variant::VbaArray(arr)) => Ok(arr.elements[i].clone()),
+                            _ => Err(format!("'{}' is not an array", name)),
+                        },
+                        Err(_) => Err(self.vba_array_oob_error_for(name, &idx, &bounds)),
                     };
                 }
                 self.eval_vba_func(name, args)
@@ -3293,7 +3340,7 @@ impl Vm {
                     Variant::Boolean(_) => "Boolean",
                     Variant::Date(_)    => "Date",
                     Variant::Error(_)   => "Error",
-                    Variant::Array(_)   => "Variant()",
+                    Variant::Array(_) | Variant::VbaArray(_) => "Variant()",
                     Variant::Empty      => "Empty",
                     Variant::Null       => "Null",
                     Variant::Record(_)  => "Object",
@@ -3309,57 +3356,61 @@ impl Vm {
                     Variant::Str(_)     => 8,  // vbString
                     Variant::Boolean(_) => 11, // vbBoolean
                     Variant::Date(_)    => 7,  // vbDate
-                    Variant::Array(_)   => 8204, // vbArray + vbVariant
+                    Variant::Array(_) | Variant::VbaArray(_) => 8204, // vbArray + vbVariant
                     Variant::Error(_)   => 10, // vbError
                     Variant::Record(_)  => 0,  // vbEmpty as fallback
                 };
                 Ok(Variant::Integer(n))
             }
             // ── Array functions ──────────────────────────────────────────────
-            // `Array(a, b, c)` builds a zero-based Variant array from its
-            // arguments — exactly `Variant::Array`'s own shape (elixcee's
-            // arrays are 0-indexed), so this needs no conversion. `Array()`
-            // with no arguments is a legal empty array.
-            "array" => Ok(Variant::Array(vals.to_vec())),
+            // `Array(a, b, c)` builds a zero-based, rank-1 VbaArray from its
+            // arguments. `Array()` with no arguments is a legal empty array.
+            "array" => Ok(Variant::VbaArray(VbaArray::from_vec(vals.to_vec()))),
             "split" => {
                 if vals.is_empty() { return Err("Split requires at least 1 argument".into()); }
                 let s = vba_to_str(&vals[0]);
                 let delim = if vals.len() >= 2 { vba_to_str(&vals[1]) } else { " ".to_string() };
                 let parts = s.split(delim.as_str()).map(|p| Variant::Str(p.to_string())).collect();
-                Ok(Variant::Array(parts))
+                Ok(Variant::VbaArray(VbaArray::from_vec(parts)))
             }
             "join" => {
                 if vals.is_empty() { return Err("Join requires at least 1 argument".into()); }
                 let parts = match &vals[0] {
                     Variant::Array(a) => a.iter().map(vba_to_str).collect::<Vec<_>>(),
+                    Variant::VbaArray(a) => a.elements.iter().map(vba_to_str).collect::<Vec<_>>(),
                     v                 => vec![vba_to_str(v)],
                 };
                 let delim = if vals.len() >= 2 { vba_to_str(&vals[1]) } else { " ".to_string() };
                 Ok(Variant::Str(parts.join(&delim)))
             }
-            // The optional second argument (which dimension to report) is
-            // accepted but not used to select a different stored bound —
-            // elixcee's array storage is genuinely 1-D (see
-            // `eval_array_dim0`'s doc comment and ROADMAP.md's known-gaps
-            // entry on this), so both arms always answer for dimension 1
-            // regardless of what's asked for.
             "ubound" => {
                 match vals.first().ok_or("UBound requires 1 argument")? {
-                    Variant::Array(a) => {
-                        let lo = self.array_lower_bound_of(args.first());
-                        Ok(Variant::Integer(lo + a.len() as i64 - 1))
+                    // Not a VBA `Dim`-declared array (a Range-value read, a
+                    // formula-array result, a record array, …) — always
+                    // 0-based and always answers for its one and only
+                    // dimension, ignoring the optional dimension argument,
+                    // unchanged from before this round (this type has no
+                    // per-dimension bounds to consult in the first place).
+                    Variant::Array(a) => Ok(Variant::Integer(a.len() as i64 - 1)),
+                    Variant::VbaArray(a) => {
+                        let dim = self.array_func_dimension(args.get(1))?;
+                        a.ubound(dim).map(Variant::Integer)
                     }
                     _ => Err("UBound: argument is not an array".into()),
                 }
             }
             "lbound" => {
                 match vals.first().ok_or("LBound requires 1 argument")? {
-                    Variant::Array(_) => Ok(Variant::Integer(self.array_lower_bound_of(args.first()))),
+                    Variant::Array(_) => Ok(Variant::Integer(0)),
+                    Variant::VbaArray(a) => {
+                        let dim = self.array_func_dimension(args.get(1))?;
+                        a.lbound(dim).map(Variant::Integer)
+                    }
                     _ => Err("LBound: argument is not an array".into()),
                 }
             }
             "isarray" => {
-                Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Array(_)))))
+                Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Array(_) | Variant::VbaArray(_)))))
             }
             // ── Range object (used as WSF arg) ───────────────────────────────
             "range" => {
@@ -3680,6 +3731,53 @@ fn topo_sort_formulas(
     Ok(order)
 }
 
+/// `ReDim Preserve arr(...)` on an array of the same rank as `new_bounds`.
+/// Real VBA only allows the *last* dimension's *upper* bound to change under
+/// `Preserve`; every other dimension (and the last one's lower bound) keeps
+/// its existing value exactly, or there's no well-defined way to keep an
+/// existing element at the same subscript it had before — that case is
+/// Error 9, same family as every other array-shape mismatch this module
+/// reports (not independently confirmed against a live Excel, but
+/// internally consistent with this codebase's own established convention
+/// for array-shape errors).
+fn redim_preserve(old: &VbaArray, new_bounds: &[ArrayBound]) -> Result<VbaArray, String> {
+    if new_bounds.is_empty() {
+        // No real dimension to preserve into — surfaces the same
+        // "at least one dimension" error `new_zeroed` itself would.
+        return VbaArray::new_zeroed(new_bounds.to_vec());
+    }
+    let last = new_bounds.len() - 1;
+    if old.bounds[last].lower != new_bounds[last].lower {
+        return Err("Subscript out of range".to_string());
+    }
+    if old.bounds[..last] != new_bounds[..last] {
+        return Err("Subscript out of range".to_string());
+    }
+    let mut new_arr = VbaArray::new_zeroed(new_bounds.to_vec())?;
+    // Walk every index in `old`'s own shape (an odometer: the last
+    // dimension advances fastest) and copy each element to the same
+    // subscript in `new_arr`, if that subscript still exists there.
+    let mut idx: Vec<i64> = old.bounds.iter().map(|b| b.lower).collect();
+    if old.elements.is_empty() {
+        return Ok(new_arr);
+    }
+    loop {
+        if let (Ok(old_i), Ok(new_i)) =
+            (old.linear_index(&idx), new_arr.linear_index(&idx))
+        {
+            new_arr.elements[new_i] = old.elements[old_i].clone();
+        }
+        let mut d = idx.len();
+        loop {
+            if d == 0 { return Ok(new_arr); }
+            d -= 1;
+            idx[d] += 1;
+            if idx[d] <= old.bounds[d].upper { break; }
+            idx[d] = old.bounds[d].lower;
+        }
+    }
+}
+
 fn vba_to_str(v: &Variant) -> String {
     match v {
         Variant::Str(s)     => s.clone(),
@@ -3693,6 +3791,7 @@ fn vba_to_str(v: &Variant) -> String {
         // case is decided earlier, in `null_rule`).
         Variant::Empty | Variant::Null => String::new(),
         Variant::Array(a)   => a.iter().map(vba_to_str).collect::<Vec<_>>().join(", "),
+        Variant::VbaArray(a) => a.elements.iter().map(vba_to_str).collect::<Vec<_>>().join(", "),
         Variant::Record(_)  => "[Record]".into(),
     }
 }
@@ -3717,6 +3816,7 @@ fn flat_nums(vals: &[Variant]) -> Vec<f64> {
     for v in vals {
         match v {
             Variant::Array(a) => out.extend(a.iter().filter_map(|x| to_f64_excel(x).ok())),
+            Variant::VbaArray(a) => out.extend(a.elements.iter().filter_map(|x| to_f64_excel(x).ok())),
             _ => { if let Ok(f) = to_f64_excel(v) { out.push(f); } }
         }
     }
@@ -3726,6 +3826,7 @@ fn flat_nums(vals: &[Variant]) -> Vec<f64> {
 fn flat_all(vals: &[Variant]) -> Vec<Variant> {
     vals.iter().flat_map(|v| match v {
         Variant::Array(a) => a.clone(),
+        Variant::VbaArray(a) => a.elements.clone(),
         other             => vec![other.clone()],
     }).collect()
 }
@@ -3925,7 +4026,7 @@ fn to_f64(v: &Variant) -> Result<f64, String> {
         // function argument that must be a number).
         Variant::Null       => Err("Invalid use of Null".into()),
         Variant::Str(s)     => s.parse::<f64>().map_err(|_| format!("Cannot convert '{}' to number", s)),
-        Variant::Array(_)   => Err("Cannot convert array to number".into()),
+        Variant::Array(_) | Variant::VbaArray(_) => Err("Cannot convert array to number".into()),
         Variant::Record(_)  => Err("Cannot convert record to number".into()),
     }
 }
@@ -3957,6 +4058,7 @@ fn is_truthy(v: &Variant) -> bool {
         // the one place VBA gives Null a Boolean reading.
         Variant::Null       => false,
         Variant::Array(a)   => !a.is_empty(),
+        Variant::VbaArray(a) => !a.elements.is_empty(),
         Variant::Record(_)  => true,
     }
 }
@@ -5420,6 +5522,239 @@ mod tests {
         let vm = run("Sub MySub()\n    Dim arr(3)\n    a = IsArray(arr)\n    b = IsArray(42)\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Boolean(true));
         assert_eq!(vm.variables["b"], Variant::Boolean(false));
+    }
+
+    // ── Multi-dimensional VBA arrays ────────────────────────────────────
+
+    #[test]
+    fn two_dimensional_array_second_index_selects_a_genuinely_distinct_element() {
+        // The bug this phase fixes: elixcee's array storage used to be
+        // genuinely 1-D, so `arr(2,0)` and `arr(2,1)` silently collapsed
+        // onto the same internal slot.
+        let vm = run(
+            "Sub MySub()\n    Dim arr(3, 2)\n    arr(2, 0) = 111\n    arr(2, 1) = 222\n\
+             a = arr(2, 0)\n    b = arr(2, 1)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(111));
+        assert_eq!(vm.variables["b"], Variant::Integer(222));
+    }
+
+    #[test]
+    fn lbound_ubound_report_each_dimension_of_a_two_dimensional_array_independently() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(1 To 3, -2 To 2)\n\
+             a = LBound(arr, 1)\n    b = UBound(arr, 1)\n\
+             c = LBound(arr, 2)\n    d = UBound(arr, 2)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Integer(3));
+        assert_eq!(vm.variables["c"], Variant::Integer(-2));
+        assert_eq!(vm.variables["d"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn ubound_dimension_zero_is_subscript_out_of_range() {
+        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    u = UBound(arr, 0)\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+    }
+
+    #[test]
+    fn ubound_of_a_dimension_beyond_the_arrays_rank_is_subscript_out_of_range() {
+        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    u = UBound(arr, 3)\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+    }
+
+    #[test]
+    fn too_few_subscripts_on_a_two_dimensional_array_is_not_silently_accepted() {
+        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    a = arr(1)\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+    }
+
+    #[test]
+    fn too_many_subscripts_on_a_two_dimensional_array_is_not_silently_accepted() {
+        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    a = arr(1, 1, 1)\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+    }
+
+    #[test]
+    fn array_out_of_bounds_evidence_on_a_two_dimensional_array_reports_the_failing_dimensions_own_bounds() {
+        // Regression for a zip/enumerate mixup: the evidence must name
+        // dimension 2's bounds (0..2), not dimension 1's (0..3), since
+        // dimension 2's index (-1) is the one that's actually out of range.
+        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    arr(0, -1) = 1\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+        match vm.take_resolution_failure() {
+            Some(ResolutionFailureKind::ArrayIndexOutOfBounds { name, index, lower, upper }) => {
+                assert_eq!(name, "arr");
+                assert_eq!(index, -1);
+                assert_eq!(lower, 0);
+                assert_eq!(upper, 2);
+            }
+            other => panic!("expected ArrayIndexOutOfBounds, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_index_on_either_dimension_of_a_two_dimensional_array_errors() {
+        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    arr(4, 0) = 1\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+
+        let prog2 = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    arr(0, -1) = 1\nEnd Sub\n").unwrap();
+        let mut vm2 = Vm::new();
+        let err2 = vm2.run_sub(&prog2, "mysub").unwrap_err();
+        assert_eq!(err2, "Subscript out of range");
+    }
+
+    #[test]
+    fn option_base_one_shifts_every_dimensions_default_lower_bound() {
+        let vm = run(
+            "Option Base 1\nSub MySub()\n    Dim arr(3, 2)\n\
+             a = LBound(arr, 1)\n    b = LBound(arr, 2)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn three_dimensional_array_reads_and_writes_at_their_real_positions() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(1, 1, 1)\n    arr(0, 0, 0) = 1\n    arr(1, 1, 1) = 8\n\
+             a = arr(0, 0, 0)\n    b = arr(1, 1, 1)\n    c = arr(0, 1, 0)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Integer(8));
+        // Never written — real VBA's default Empty, not a collision with
+        // one of the two writes above.
+        assert_eq!(vm.variables["c"], Variant::Empty);
+    }
+
+    #[test]
+    fn redim_preserve_on_a_two_dimensional_array_keeps_every_element_at_its_own_subscript() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(1, 1)\n    arr(0, 0) = 1\n    arr(0, 1) = 2\n\
+             arr(1, 0) = 3\n    arr(1, 1) = 4\n    ReDim Preserve arr(1, 3)\n\
+             a = arr(0, 0)\n    b = arr(1, 1)\n    c = arr(1, 3)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Integer(4));
+        assert_eq!(vm.variables["c"], Variant::Empty);
+    }
+
+    #[test]
+    fn redim_preserve_changing_a_non_last_dimension_of_a_two_dimensional_array_errors() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Dim arr(1, 1)\n    ReDim Preserve arr(3, 1)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+    }
+
+    #[test]
+    fn redim_preserve_changing_the_last_dimensions_lower_bound_errors_even_at_rank_1() {
+        // Real VBA's `Preserve` only grows/shrinks the last dimension's
+        // *upper* bound — its lower bound (and every other dimension's
+        // bounds entirely) must stay exactly what they were, or an
+        // existing element has no well-defined subscript to land at.
+        let prog = parser::parse(
+            "Sub MySub()\n    Dim arr(0 To 5)\n    ReDim Preserve arr(2 To 8)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+    }
+
+    #[test]
+    fn erase_on_a_two_dimensional_array_resets_elements_but_keeps_every_dimensions_bounds() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(1 To 2, 1 To 2)\n    arr(1, 1) = 9\n    Erase arr\n\
+             e = IsEmpty(arr(1, 1))\n    l1 = LBound(arr, 1)\n    l2 = LBound(arr, 2)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["e"], Variant::Boolean(true));
+        assert_eq!(vm.variables["l1"], Variant::Integer(1));
+        assert_eq!(vm.variables["l2"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn a_dynamic_array_before_its_first_redim_errors_on_any_subscript_access() {
+        let prog = parser::parse("Sub MySub()\n    Dim arr()\n    a = arr(0)\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Subscript out of range");
+    }
+
+    #[test]
+    fn an_absurdly_huge_two_dimensional_dim_is_rejected_as_out_of_memory_not_a_hang_or_crash() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Dim arr(2000000000, 2000000000)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Out of memory");
+    }
+
+    #[test]
+    fn a_dimension_product_that_overflows_i64_is_also_rejected_as_out_of_memory() {
+        let prog = parser::parse(&format!(
+            "Sub MySub()\n    Dim arr({}, {})\nEnd Sub\n",
+            i64::MAX / 2,
+            i64::MAX / 2
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Out of memory");
+    }
+
+    #[test]
+    fn array_function_and_split_still_produce_a_plain_one_dimensional_zero_based_array() {
+        // Regression: `Array()`/`Split()` migrated to `Variant::VbaArray`
+        // alongside real `Dim` arrays — this pins their externally
+        // observable shape (0-based, rank 1) stays exactly what it was.
+        let vm = run(
+            "Sub MySub()\n    a = Array(10, 20, 30)\n    l = LBound(a)\n    u = UBound(a)\n\
+             v = a(1)\n    s = Split(\"x,y\", \",\")\n    su = UBound(s)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["l"], Variant::Integer(0));
+        assert_eq!(vm.variables["u"], Variant::Integer(2));
+        assert_eq!(vm.variables["v"], Variant::Integer(20));
+        assert_eq!(vm.variables["su"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn a_two_dimensional_array_assigned_to_another_variable_keeps_its_shape() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(1, 1)\n    arr(1, 1) = 42\n    other = arr\n\
+             v = other(1, 1)\n    u = UBound(other, 2)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["v"], Variant::Integer(42));
+        assert_eq!(vm.variables["u"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn a_two_dimensional_array_passed_to_a_function_and_returned_keeps_its_shape() {
+        let vm = run(
+            "Function Echo(a)\n    Echo = a\nEnd Function\n\
+             Sub MySub()\n    Dim arr(1, 1)\n    arr(0, 1) = 7\n    r = Echo(arr)\n\
+             v = r(0, 1)\n    u2 = UBound(r, 2)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["v"], Variant::Integer(7));
+        assert_eq!(vm.variables["u2"], Variant::Integer(1));
     }
 
     #[test]

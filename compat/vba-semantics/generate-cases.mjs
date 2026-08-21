@@ -986,14 +986,11 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
 // independent (not one shared root cause like operator_coercion/with_block_resolution):
 // `Dim arr(lo To hi)` and `Dim arr()` (dynamic, no size) both failed to parse; `Option Base
 // 1` was silently not honored; `Erase` on a fixed Variant array didn't reset elements to
-// Empty; the `Array(...)` builtin function wasn't implemented at all. Four of those (all but
-// `Array(...)`, fixed separately) are fixed as of a later round -- see each case's own
-// "Fixed this round" note. Still open, and a genuinely different kind of gap: elixcee's
-// array storage is 1-D only, so `UBound(arr, 2)`'s dimension argument can't be honored and
-// any second-or-later index in a write/read silently collides with the first (see
-// ubound_second_dimension_argument_ignored / two_dimensional_array_second_index_is_silently_dropped) --
-// this needs real shape metadata and stride arithmetic, deliberately deferred as comparable
-// in scope to this project's other deferred Variant-surface work.
+// Empty; the `Array(...)` builtin function wasn't implemented at all; and elixcee's array
+// storage was genuinely 1-D, so `UBound(arr, 2)`'s dimension argument couldn't be honored
+// and any second-or-later index in a write/read silently collided with the first (see
+// ubound_second_dimension_argument_ignored / two_dimensional_array_second_index_is_silently_dropped).
+// All of those are fixed as of a later round -- see each case's own "Fixed this round" note.
 {
   const CAT = 'array_bounds';
   addCase('dim_array_default_lower_bound_is_zero', CAT, 'Dim arr(5) defaults to a zero-based lower bound',
@@ -1026,8 +1023,7 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
   addCase('two_dimensional_array_second_index_is_silently_dropped', CAT, 'Writing two elements that share dimension-1\'s index but differ in dimension 2 must not collide',
     '  Dim arr(3, 2)\n  arr(2, 0) = 111\n  arr(2, 1) = 222\n  Range("A1").Value = arr(2, 0)',
     { value: 111 },
-    'Documented: Dim arr(3, 2) declares a genuine two-dimensional array -- arr(2, 0) and arr(2, 1) are distinct elements, so writing 222 to the second must not change the first (still 111).',
-    'elixcee\'s array storage is genuinely 1-D -- a Dim arr(3, 2) declarator allocates only dimension 1\'s 4 elements and silently discards dimension 2\'s size, and every array write/read (Stmt::ArrayWrite, the Expr::FuncCall array-subscript path) indexes using only the first index expression, ignoring any further ones. arr(2, 0) and arr(2, 1) therefore both resolve to the same underlying element (index 2): the second write clobbers the first, so this reads back 222, not 111. A previous version of this case (differently named and shaped, written before this was diagnosed) wrote and read back with the *same* second index on both sides, which passed by accident and was cited as evidence 2D storage worked -- it didn\'t exercise the collision at all. See ubound_second_dimension_argument_ignored, which cites this case. Found while building this suite, not previously disclosed.');
+    'Documented: Dim arr(3, 2) declares a genuine two-dimensional array -- arr(2, 0) and arr(2, 1) are distinct elements, so writing 222 to the second must not change the first (still 111). (Fixed this round: elixcee\'s array storage used to be genuinely 1-D -- a Dim arr(3, 2) declarator allocated only dimension 1\'s 4 elements and silently discarded dimension 2\'s size, so arr(2, 0) and arr(2, 1) both resolved to the same underlying element and the second write clobbered the first. Now backed by real per-dimension bounds and row-major storage, so distinct subscripts are genuinely distinct elements.)');
   addCase('lbound_and_ubound_combined_boolean_check', CAT, 'LBound and UBound combined via And, on a differently-sized array than the other cases',
     '  Dim arr(3)\n  Range("A1").Value = (LBound(arr) = 0) And (UBound(arr) = 3)',
     { value: true }, 'A second, independent confirmation of default array bounds (0 To 3) via a differently-sized declaration than dim_array_default_lower_bound_is_zero/dim_array_upper_bound_matches_declared_size (which use arr(5)).');
@@ -1042,11 +1038,10 @@ function addNoCellWrittenCase(id, category, description, vbaBody, reason) {
     'Option Base 1\nSub Scenario()\n  Dim arr(5)\n  Range("A1").Value = LBound(arr)\nEnd Sub\n',
     { value: 1 },
     'Documented: an Option Base 1 statement at module level changes the default lower bound (for Dim declarations that don\'t give an explicit lower bound) from 0 to 1. (Fixed this round: elixcee used to parse Option Base without erroring but never fed it into array-bound calculation -- LBound(arr) stayed 0 regardless.)');
-  addCase('ubound_second_dimension_argument_ignored', CAT, 'UBound(arr, 2) ignores its dimension argument and returns dimension 1\'s bound',
+  addCase('ubound_second_dimension_argument_ignored', CAT, 'UBound(arr, 2) reports dimension 2\'s own bound, not dimension 1\'s',
     '  Dim arr(3, 2)\n  Range("A1").Value = UBound(arr, 2)',
     { value: 2 },
-    'Documented: UBound\'s optional second argument selects which dimension to report the bound for -- Dim arr(3, 2) declares dimension 1 as 0 To 3 and dimension 2 as 0 To 2, so UBound(arr, 2) is 2.',
-    'elixcee\'s array storage is genuinely 1-D, not 2-D as this entry previously (incorrectly) claimed -- UBound(arr, 2) returns 3 (dimension 1\'s bound) because the dimension argument isn\'t used to select a different stored bound at all, and Dim arr(3, 2) itself only ever allocates dimension 1\'s 4 elements; dimension 2\'s size (2) is parsed and discarded. See two_dimensional_array_second_index_is_silently_dropped, which demonstrates the storage gap directly (arr(2,0) and arr(2,1) collide on the same element) -- the previous version of this entry cited a since-corrected sibling case that appeared to confirm real 2D addressing but actually passed only because its write and read used the same second index. Full multi-dimensional array support (shape metadata, stride arithmetic in both array writes and reads) is comparable in scope to this project\'s other deferred Variant-surface work and was deliberately not attempted this round -- found while building this suite, not previously disclosed.');
+    'Documented: UBound\'s optional second argument selects which dimension to report the bound for -- Dim arr(3, 2) declares dimension 1 as 0 To 3 and dimension 2 as 0 To 2, so UBound(arr, 2) is 2. (Fixed this round: elixcee\'s array storage used to be genuinely 1-D, so UBound(arr, 2) returned dimension 1\'s bound (3) regardless of what dimension was asked for -- Dim arr(3, 2) itself only ever allocated dimension 1\'s 4 elements, silently discarding dimension 2\'s size entirely. Now backed by real per-dimension bounds, so each dimension\'s LBound/UBound is independently correct -- see two_dimensional_array_second_index_is_silently_dropped for the storage-side fix this depends on.)');
   addCase('erase_fixed_variant_array_does_not_reset_to_empty', CAT, 'Erase on a fixed Variant array resets elements to Empty',
     '  Dim arr(3)\n  arr(0) = 5\n  arr(1) = 10\n  Erase arr\n  Range("A1").Value = IsEmpty(arr(0))',
     { value: true },

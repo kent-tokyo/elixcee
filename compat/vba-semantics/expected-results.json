@@ -1879,8 +1879,7 @@
     "kind": "value",
     "address": "A1",
     "value": 111,
-    "reason": "Documented: Dim arr(3, 2) declares a genuine two-dimensional array -- arr(2, 0) and arr(2, 1) are distinct elements, so writing 222 to the second must not change the first (still 111).",
-    "knownLimitation": "elixcee's array storage is genuinely 1-D -- a Dim arr(3, 2) declarator allocates only dimension 1's 4 elements and silently discards dimension 2's size, and every array write/read (Stmt::ArrayWrite, the Expr::FuncCall array-subscript path) indexes using only the first index expression, ignoring any further ones. arr(2, 0) and arr(2, 1) therefore both resolve to the same underlying element (index 2): the second write clobbers the first, so this reads back 222, not 111. A previous version of this case (differently named and shaped, written before this was diagnosed) wrote and read back with the *same* second index on both sides, which passed by accident and was cited as evidence 2D storage worked -- it didn't exercise the collision at all. See ubound_second_dimension_argument_ignored, which cites this case. Found while building this suite, not previously disclosed."
+    "reason": "Documented: Dim arr(3, 2) declares a genuine two-dimensional array -- arr(2, 0) and arr(2, 1) are distinct elements, so writing 222 to the second must not change the first (still 111). (Fixed this round: elixcee's array storage used to be genuinely 1-D -- a Dim arr(3, 2) declarator allocated only dimension 1's 4 elements and silently discarded dimension 2's size, so arr(2, 0) and arr(2, 1) both resolved to the same underlying element and the second write clobbered the first. Now backed by real per-dimension bounds and row-major storage, so distinct subscripts are genuinely distinct elements.)"
   },
   "lbound_and_ubound_combined_boolean_check": {
     "kind": "value",
@@ -1910,8 +1909,7 @@
     "kind": "value",
     "address": "A1",
     "value": 2,
-    "reason": "Documented: UBound's optional second argument selects which dimension to report the bound for -- Dim arr(3, 2) declares dimension 1 as 0 To 3 and dimension 2 as 0 To 2, so UBound(arr, 2) is 2.",
-    "knownLimitation": "elixcee's array storage is genuinely 1-D, not 2-D as this entry previously (incorrectly) claimed -- UBound(arr, 2) returns 3 (dimension 1's bound) because the dimension argument isn't used to select a different stored bound at all, and Dim arr(3, 2) itself only ever allocates dimension 1's 4 elements; dimension 2's size (2) is parsed and discarded. See two_dimensional_array_second_index_is_silently_dropped, which demonstrates the storage gap directly (arr(2,0) and arr(2,1) collide on the same element) -- the previous version of this entry cited a since-corrected sibling case that appeared to confirm real 2D addressing but actually passed only because its write and read used the same second index. Full multi-dimensional array support (shape metadata, stride arithmetic in both array writes and reads) is comparable in scope to this project's other deferred Variant-surface work and was deliberately not attempted this round -- found while building this suite, not previously disclosed."
+    "reason": "Documented: UBound's optional second argument selects which dimension to report the bound for -- Dim arr(3, 2) declares dimension 1 as 0 To 3 and dimension 2 as 0 To 2, so UBound(arr, 2) is 2. (Fixed this round: elixcee's array storage used to be genuinely 1-D, so UBound(arr, 2) returned dimension 1's bound (3) regardless of what dimension was asked for -- Dim arr(3, 2) itself only ever allocated dimension 1's 4 elements, silently discarding dimension 2's size entirely. Now backed by real per-dimension bounds, so each dimension's LBound/UBound is independently correct -- see two_dimensional_array_second_index_is_silently_dropped for the storage-side fix this depends on.)"
   },
   "erase_fixed_variant_array_does_not_reset_to_empty": {
     "kind": "value",

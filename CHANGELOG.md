@@ -8,6 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Real multi-dimensional VBA arrays
+
+Previously, `Dim arr(3, 2)` allocated storage as if it were 1-D (dimension 1's element count
+only), so `arr(1, 1)` and `arr(1, 2)` silently aliased the same storage slot and
+`UBound(arr, 2)` returned dimension 1's bound regardless of which dimension was actually asked
+for — disclosed as `KNOWN_LIMITATION` in `compat/vba-semantics` (`two_dimensional_array_second_index_is_silently_dropped`,
+`ubound_second_dimension_argument_ignored`), now fixed and reclassified.
+
+- **New `elixcee_types::VbaArray`/`ArrayBound`** (`crates/elixcee-types/src/lib.rs`) — flat,
+  row-major storage (`idx = idx * bound.len() + (sub - bound.lower)`, first dimension varies
+  slowest) with real per-dimension bounds, replacing 1-D-only storage for every `Dim`-declared
+  array. New `Variant::VbaArray(VbaArray)` enum variant — additive, `Variant::Array(Vec<Variant>)`
+  itself unchanged (still used for Range-value multi-cell reads, `formula::eval`'s array-formula
+  results, and `DimArrayRecord`/`ArrayRecordSet` storage, none of which have per-dimension bounds
+  to track). Element count is overflow-checked (`checked_mul`) and capped at 10,000,000 elements,
+  surfacing real VBA's own "Out of memory" wording rather than a Rust-side allocation panic.
+- **`LBound`/`UBound`** now honor the dimension argument per-dimension; `Option Base` applies
+  independently to every dimension; `Erase` resets elements while preserving all dimensions'
+  bounds; **`ReDim Preserve`** is correctly restricted to real VBA's own rule — only the *last*
+  dimension's *upper* bound may change, every other dimension (and the last one's own lower
+  bound) must stay identical or it's Error 9 (`redim_preserve` in `src/vm/mod.rs`, found and
+  fixed its own bug during this round: an earlier version of the check missed that the last
+  dimension's *lower* bound is equally protected, not just the non-last dimensions).
+- Shape preserved through variable assignment, function-argument passing, and function-return
+  values; `Array()`/`Split()` migrated to `VbaArray` while keeping their externally-observable
+  0-based rank-1 shape unchanged.
+- **PyO3 bindings** (`src/lib.rs`): new `vba_array_to_py` recursively reshapes flat `VbaArray`
+  storage into nested Python lists matching the array's real dimensional shape — verified against
+  a real `maturin`-built wheel, not just `cargo test`.
+- `crates/elixcee-wasm` needed no changes — grep-confirmed it references none of `vm::`/
+  `Variant::`/`VbaArray` directly, and it already compiled clean.
+
 ## [0.6.0]
 
 Root `elixcee` (Rust crate + Python package) only — `elixcee-types` stays `0.2.0` (no

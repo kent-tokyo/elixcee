@@ -92,6 +92,7 @@ pub fn variant_to_json(v: &Variant) -> String {
         // wire-format one.
         Variant::Empty | Variant::Null => "null".into(),
         Variant::Array(_) => json_string("[array]"),
+        Variant::VbaArray(_) => json_string("[array]"),
         Variant::Record(_) => json_string("[record]"),
     }
 }

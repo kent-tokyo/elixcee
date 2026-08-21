@@ -717,7 +717,7 @@ fn format_variant(v: &Variant) -> String {
         // Empty-vs-Null distinction is a VBA-language one (`IsNull`,
         // `TypeName`), not a CSV/table-output one.
         Variant::Empty | Variant::Null => String::new(),
-        Variant::Array(_)   => "[array]".into(),
+        Variant::Array(_) | Variant::VbaArray(_) => "[array]".into(),
         Variant::Record(_)  => "[record]".into(),
     }
 }

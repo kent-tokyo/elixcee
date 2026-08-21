@@ -235,7 +235,7 @@ jobs:
   # regeneration step needed here, only for whoever edits the generator scripts themselves
   # (see each suite's own README). Both gate scripts already set a non-zero exit code on
   # UNEXPLAINED/MISMATCH (corpus) or BUG/UNCLASSIFIED (vba-semantics) — verified live
-  # before adding this job (corpus: 0/0 across 581; vba-semantics: 0/0 across 386, 16
+  # before adding this job (corpus: 0/0 across 581; vba-semantics: 0/0 across 386, 14
   # disclosed non-gating KNOWN_LIMITATION as of a later round — see CHANGELOG.md), nothing
   # extra needed to make this job fail correctly.
   compat-vba:

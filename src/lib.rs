@@ -83,6 +83,7 @@ fn variant_to_py(py: Python<'_>, v: &Variant) -> Py<PyAny> {
             let list = pyo3::types::PyList::new(py, a.iter().map(|x| variant_to_py(py, x))).unwrap();
             list.into_any().unbind()
         }
+        Variant::VbaArray(a) => vba_array_to_py(py, a, &mut Vec::new()),
         Variant::Record(m) => {
             let dict = pyo3::types::PyDict::new(py);
             for (k, v) in m {
@@ -91,6 +92,28 @@ fn variant_to_py(py: Python<'_>, v: &Variant) -> Py<PyAny> {
             dict.into_any().unbind()
         }
     }
+}
+
+/// Reshapes a `VbaArray` into nested Python lists matching its real shape —
+/// `Dim arr(1 To 2, 1 To 3)` crosses into Python as a 2-element list of
+/// 3-element lists, not one flat 6-element list. `prefix` accumulates the
+/// index down each recursion level; empty on the initial call.
+#[cfg(feature = "python")]
+fn vba_array_to_py(py: Python<'_>, arr: &vm::VbaArray, prefix: &mut Vec<i64>) -> Py<PyAny> {
+    if prefix.len() == arr.bounds.len() {
+        let v = arr.get(prefix).expect("prefix built from arr's own bounds");
+        return variant_to_py(py, v);
+    }
+    let bound = arr.bounds[prefix.len()];
+    let mut items = Vec::new();
+    let mut i = bound.lower;
+    while i <= bound.upper {
+        prefix.push(i);
+        items.push(vba_array_to_py(py, arr, prefix));
+        prefix.pop();
+        i += 1;
+    }
+    pyo3::types::PyList::new(py, items).unwrap().into_any().unbind()
 }
 
 #[cfg(feature = "python")]
@@ -589,7 +612,7 @@ fn xlsx_cell_xml(cell_ref: &str, v: &Variant, str_index: &std::collections::Hash
         Variant::Boolean(b) => Some(format!(
             "<c r=\"{}\" t=\"b\"><v>{}</v></c>", cell_ref, if *b { 1 } else { 0 }
         )),
-        Variant::Empty | Variant::Null | Variant::Array(_) | Variant::Record(_) => None,
+        Variant::Empty | Variant::Null | Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => None,
     }
 }
 
@@ -734,7 +757,7 @@ fn ods_cell_xml(v: &Variant) -> String {
             r#"<table:table-cell office:value-type="string"><text:p>{}</text:p></table:table-cell>"#,
             xml_escape(e.as_str())
         ),
-        Variant::Empty | Variant::Null | Variant::Array(_) | Variant::Record(_) => "<table:table-cell/>".to_string(),
+        Variant::Empty | Variant::Null | Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => "<table:table-cell/>".to_string(),
     }
 }
 

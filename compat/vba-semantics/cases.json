@@ -2270,7 +2270,7 @@
   {
     "id": "ubound_second_dimension_argument_ignored",
     "category": "array_bounds",
-    "description": "UBound(arr, 2) ignores its dimension argument and returns dimension 1's bound",
+    "description": "UBound(arr, 2) reports dimension 2's own bound, not dimension 1's",
     "vbaSource": "Sub Scenario()\n  Dim arr(3, 2)\n  Range(\"A1\").Value = UBound(arr, 2)\nEnd Sub\n",
     "entrypoint": "Scenario"
   },

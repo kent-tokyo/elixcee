@@ -115,7 +115,7 @@ fn to_float(v: &Variant) -> Result<f64, String> {
         Variant::Null       => Ok(0.0),
         Variant::Str(s)     => s.parse::<f64>()
             .map_err(|_| format!("Cannot convert '{}' to a number", s)),
-        Variant::Array(_)   => Err("Cannot convert array to number".into()),
+        Variant::Array(_) | Variant::VbaArray(_) => Err("Cannot convert array to number".into()),
         Variant::Record(_)  => Err("Cannot convert record to number".into()),
     }
 }
@@ -130,6 +130,7 @@ fn to_str(v: &Variant) -> String {
         Variant::Error(e)   => e.as_str().to_string(),
         Variant::Empty | Variant::Null => String::new(),
         Variant::Array(a)   => a.iter().map(to_str).collect::<Vec<_>>().join(", "),
+        Variant::VbaArray(a) => a.elements.iter().map(to_str).collect::<Vec<_>>().join(", "),
         Variant::Record(_)  => "[Record]".into(),
     }
 }
@@ -144,6 +145,7 @@ fn is_truthy(v: &Variant) -> bool {
         Variant::Error(_)   => false,
         Variant::Empty | Variant::Null => false,
         Variant::Array(a)   => !a.is_empty(),
+        Variant::VbaArray(a) => !a.elements.is_empty(),
         Variant::Record(_)  => true,
     }
 }
@@ -2281,7 +2283,7 @@ fn func_type_fn(args: &[FormulaExpr], cells: &HashMap<(u32, u32), CellContent>) 
         Variant::Str(_)     => 2,
         Variant::Boolean(_) => 4,
         Variant::Error(_)   => 16,
-        Variant::Array(_)   => 64,
+        Variant::Array(_) | Variant::VbaArray(_) => 64,
         Variant::Record(_)  => 64,
     };
     Ok(Variant::Integer(code))

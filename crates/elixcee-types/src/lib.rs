@@ -51,8 +51,138 @@ pub enum Variant {
     /// expressible — folding it into `Empty` is what made every documented
     /// Null-propagation rule unimplementable before.
     Null,
-    Array(Vec<Variant>),                  // 0-indexed 1D array
+    /// 0-indexed, always-1D — spreadsheet Range-value multi-cell reads
+    /// (`Range("A1:B3").Value`), `formula::eval`'s array-formula/SUMPRODUCT/
+    /// array-constant results, and `DimArrayRecord`/`ArrayRecordSet`'s
+    /// record-array storage. None of these are VBA `Dim`-declared arrays —
+    /// see `VbaArray` below for those.
+    Array(Vec<Variant>),
+    /// A real (possibly multi-dimensional) VBA array: `Dim arr(3, 2)`,
+    /// `Dim arr(1 To 3, -2 To 2)`, `ReDim`, `Array(...)`, `Split(...)`.
+    /// Deliberately a separate variant from `Array` above rather than a
+    /// wholesale replacement — `Array`'s other three callers (Range-value
+    /// reads, formula-engine array results, record arrays) aren't VBA
+    /// `Dim`-declared arrays and have no per-dimension bounds to track.
+    VbaArray(VbaArray),
     Record(std::collections::HashMap<String, Variant>), // UDT instance (p.x, p.y, …)
+}
+
+/// The bounds of one dimension of a VBA-declared array: an explicit `lo To
+/// hi`, or the implicit `Option Base .. To <upper>` form collapsed to the
+/// same shape. `upper < lower` is legal VBA (as when `Option Base 1` meets a
+/// bare `Dim arr(0)`) and just means zero elements along that dimension.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArrayBound {
+    pub lower: i64,
+    pub upper: i64,
+}
+
+impl ArrayBound {
+    pub fn len(&self) -> i64 {
+        (self.upper - self.lower + 1).max(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+// ponytail: fixed ceiling rather than a configurable one — raise if a real
+// macro ever legitimately needs more; this exists to fail fast (as "Out of
+// memory", VBA's own Error 7) on a fuzzer-shaped `Dim arr(2000000000,
+// 2000000000)` instead of trying to allocate it.
+pub const MAX_ARRAY_ELEMENTS: usize = 10_000_000;
+
+/// A real, possibly multi-dimensional VBA array. `elements` is stored flat,
+/// row-major (the first dimension varies slowest) — an implementation
+/// detail invisible to VBA code, since every access goes through
+/// `linear_index`/`get`/`set`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VbaArray {
+    pub bounds: Vec<ArrayBound>,
+    pub elements: Vec<Variant>,
+}
+
+impl VbaArray {
+    /// Builds a zero-filled (`Variant::Empty`) array with the given
+    /// per-dimension bounds. `Err("Out of memory")` (VBA's real Error 7) if
+    /// the element-count product overflows or exceeds `MAX_ARRAY_ELEMENTS`.
+    pub fn new_zeroed(bounds: Vec<ArrayBound>) -> Result<Self, String> {
+        if bounds.is_empty() {
+            return Err("array must have at least one dimension".to_string());
+        }
+        let mut total: i64 = 1;
+        for b in &bounds {
+            total = total
+                .checked_mul(b.len())
+                .filter(|&t| t >= 0 && (t as u64) <= MAX_ARRAY_ELEMENTS as u64)
+                .ok_or_else(|| "Out of memory".to_string())?;
+        }
+        Ok(VbaArray { bounds, elements: vec![Variant::Empty; total as usize] })
+    }
+
+    /// A 1-D, 0-based array built directly from already-computed elements —
+    /// `Array(...)`/`Split(...)`'s shape.
+    pub fn from_vec(elements: Vec<Variant>) -> Self {
+        let upper = elements.len() as i64 - 1;
+        VbaArray { bounds: vec![ArrayBound { lower: 0, upper }], elements }
+    }
+
+    pub fn rank(&self) -> usize {
+        self.bounds.len()
+    }
+
+    /// `dimension` is 1-based, matching VBA's own `LBound(arr, n)`.
+    pub fn lbound(&self, dimension: usize) -> Result<i64, String> {
+        self.bound(dimension).map(|b| b.lower)
+    }
+
+    /// `dimension` is 1-based, matching VBA's own `UBound(arr, n)`.
+    pub fn ubound(&self, dimension: usize) -> Result<i64, String> {
+        self.bound(dimension).map(|b| b.upper)
+    }
+
+    fn bound(&self, dimension: usize) -> Result<&ArrayBound, String> {
+        if dimension == 0 || dimension > self.bounds.len() {
+            return Err("Subscript out of range".to_string());
+        }
+        Ok(&self.bounds[dimension - 1])
+    }
+
+    /// The flat index for `indices` (one per dimension, in `arr(i, j, ...)`
+    /// order). `Err("Subscript out of range")` if the count doesn't match
+    /// `rank()`, or any index falls outside its dimension's bounds — VBA's
+    /// real Error 9 either way.
+    pub fn linear_index(&self, indices: &[i64]) -> Result<usize, String> {
+        Self::linear_index_for(&self.bounds, indices)
+    }
+
+    /// Same computation as `linear_index`, taking `bounds` directly rather
+    /// than a whole `VbaArray` — lets a caller bounds-check a write against
+    /// a cheap `Vec<ArrayBound>` clone instead of cloning `elements` too.
+    pub fn linear_index_for(bounds: &[ArrayBound], indices: &[i64]) -> Result<usize, String> {
+        if indices.len() != bounds.len() {
+            return Err("Subscript out of range".to_string());
+        }
+        let mut idx: i64 = 0;
+        for (&sub, bound) in indices.iter().zip(bounds.iter()) {
+            if sub < bound.lower || sub > bound.upper {
+                return Err("Subscript out of range".to_string());
+            }
+            idx = idx * bound.len() + (sub - bound.lower);
+        }
+        Ok(idx as usize)
+    }
+
+    pub fn get(&self, indices: &[i64]) -> Result<&Variant, String> {
+        self.linear_index(indices).map(|i| &self.elements[i])
+    }
+
+    pub fn set(&mut self, indices: &[i64], value: Variant) -> Result<(), String> {
+        let i = self.linear_index(indices)?;
+        self.elements[i] = value;
+        Ok(())
+    }
 }
 
 pub fn serial_to_display(s: i64) -> String {
@@ -76,6 +206,7 @@ impl std::fmt::Display for Variant {
             // formatting an operand.
             Variant::Null       => write!(f, "Null"),
             Variant::Array(a)   => write!(f, "[{}]", a.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")),
+            Variant::VbaArray(a) => write!(f, "[{}]", a.elements.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")),
             Variant::Record(m)  => {
                 let mut pairs: Vec<String> = m.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
                 pairs.sort();
@@ -206,6 +337,95 @@ mod tests {
         m.insert("b".to_string(), Variant::Integer(2));
         m.insert("a".to_string(), Variant::Integer(1));
         assert_eq!(Variant::Record(m).to_string(), "{a: 1, b: 2}");
+    }
+
+    // ── VbaArray ─────────────────────────────────────────────────────────
+
+    fn dim2(lo0: i64, hi0: i64, lo1: i64, hi1: i64) -> VbaArray {
+        VbaArray::new_zeroed(vec![
+            ArrayBound { lower: lo0, upper: hi0 },
+            ArrayBound { lower: lo1, upper: hi1 },
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn two_distinct_second_dimension_indices_write_distinct_elements() {
+        let mut a = dim2(0, 3, 0, 2);
+        a.set(&[2, 0], Variant::Integer(111)).unwrap();
+        a.set(&[2, 1], Variant::Integer(222)).unwrap();
+        assert_eq!(*a.get(&[2, 0]).unwrap(), Variant::Integer(111));
+        assert_eq!(*a.get(&[2, 1]).unwrap(), Variant::Integer(222));
+    }
+
+    #[test]
+    fn lbound_ubound_report_each_dimension_independently() {
+        let a = dim2(1, 3, -2, 2);
+        assert_eq!(a.lbound(1), Ok(1));
+        assert_eq!(a.ubound(1), Ok(3));
+        assert_eq!(a.lbound(2), Ok(-2));
+        assert_eq!(a.ubound(2), Ok(2));
+    }
+
+    #[test]
+    fn dimension_zero_is_subscript_out_of_range() {
+        let a = dim2(0, 3, 0, 2);
+        assert_eq!(a.ubound(0), Err("Subscript out of range".to_string()));
+        assert_eq!(a.lbound(0), Err("Subscript out of range".to_string()));
+    }
+
+    #[test]
+    fn a_dimension_beyond_rank_is_subscript_out_of_range() {
+        let a = dim2(0, 3, 0, 2);
+        assert_eq!(a.ubound(3), Err("Subscript out of range".to_string()));
+    }
+
+    #[test]
+    fn too_few_or_too_many_subscripts_are_rejected_not_silently_accepted() {
+        let a = dim2(0, 3, 0, 2);
+        assert!(a.get(&[1]).is_err());
+        assert!(a.get(&[1, 1, 1]).is_err());
+    }
+
+    #[test]
+    fn an_index_outside_its_dimensions_bounds_is_subscript_out_of_range() {
+        let a = dim2(0, 3, 0, 2);
+        assert_eq!(a.get(&[4, 0]), Err("Subscript out of range".to_string()));
+        assert_eq!(a.get(&[0, -1]), Err("Subscript out of range".to_string()));
+    }
+
+    #[test]
+    fn element_count_overflow_is_rejected_as_out_of_memory() {
+        let huge = vec![
+            ArrayBound { lower: 0, upper: i64::MAX / 2 },
+            ArrayBound { lower: 0, upper: i64::MAX / 2 },
+        ];
+        assert_eq!(VbaArray::new_zeroed(huge), Err("Out of memory".to_string()));
+    }
+
+    #[test]
+    fn a_practically_huge_but_non_overflowing_array_hits_the_element_cap() {
+        let too_big = vec![ArrayBound { lower: 0, upper: (MAX_ARRAY_ELEMENTS as i64) + 1 }];
+        assert_eq!(VbaArray::new_zeroed(too_big), Err("Out of memory".to_string()));
+    }
+
+    #[test]
+    fn from_vec_is_1d_zero_based_matching_array_and_splits_shape() {
+        let a = VbaArray::from_vec(vec![Variant::Integer(1), Variant::Integer(2), Variant::Integer(3)]);
+        assert_eq!(a.rank(), 1);
+        assert_eq!(a.lbound(1), Ok(0));
+        assert_eq!(a.ubound(1), Ok(2));
+        assert_eq!(*a.get(&[0]).unwrap(), Variant::Integer(1));
+        assert_eq!(*a.get(&[2]).unwrap(), Variant::Integer(3));
+    }
+
+    #[test]
+    fn an_inverted_bound_is_a_legal_zero_length_dimension() {
+        // `Option Base 1` meeting a bare `Dim arr(0)` — real VBA allows this
+        // and treats it as a zero-length dimension, not an error.
+        let a = VbaArray::new_zeroed(vec![ArrayBound { lower: 1, upper: 0 }]).unwrap();
+        assert_eq!(a.elements.len(), 0);
+        assert!(a.get(&[1]).is_err());
     }
 
     // ── CellContent ──────────────────────────────────────────────────────
