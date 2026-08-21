@@ -40,6 +40,32 @@ for — disclosed as `KNOWN_LIMITATION` in `compat/vba-semantics` (`two_dimensio
 - `crates/elixcee-wasm` needed no changes — grep-confirmed it references none of `vm::`/
   `Variant::`/`VbaArray` directly, and it already compiled clean.
 
+### Call-frame-scoped `On Error`
+
+Previously, `On Error Resume Next`/`On Error GoTo <label>` state was a single `Vm`-wide flag —
+a callee's own body could see and mistakenly try to resolve a caller's still-active `GoTo`
+label, and (found and fixed as part of the same rework) a callee's remaining statements kept
+running under a caller's `On Error Resume Next` even after the callee itself failed, since the
+catch fired inside the callee's own `exec_stmt`, not at the call site.
+
+- **New `Vm::call_stack: Vec<CallFrame>`**, each frame holding its own `ErrorMode` (`Disabled`/
+  `ResumeNext`/`GoTo(String)`), replacing the old `on_error_resume_next: bool`/
+  `on_error_goto_label: Option<String>` fields. Pushed/popped around every `call_sub_def`/
+  `call_func_def` invocation, so a callee always starts with `Disabled` regardless of the
+  caller's own mode — matching real VBA (error handling doesn't inherit into a callee). A
+  `GoTo` handler is consumed (reset to `Disabled`) the moment it fires, matching real VBA: a
+  second failure while already inside a handler propagates to the caller rather than
+  re-entering the same handler.
+- **Deliberate behavior change**: under the old flag, a caller's `On Error Resume Next` catching
+  an error from inside a called Sub let that Sub's *remaining* statements keep running (the
+  catch happened inside the callee's own body). Now the error propagates out of the callee
+  entirely and is caught at the `Call` statement in the caller's own frame — the callee's
+  remaining statements do not run. This is the correct real-VBA behavior, but a macro that
+  depended on the old leniency will observe the difference.
+- Incidental fix: `run_sub`/`run_sub_multi` never reset the old `on_error_resume_next`/
+  `on_error_goto_label` fields between runs on a reused `Vm` (the Python bindings' own usage
+  pattern) — `call_stack.clear()` at the start of each run closes that.
+
 ## [0.6.0]
 
 Root `elixcee` (Rust crate + Python package) only — `elixcee-types` stays `0.2.0` (no

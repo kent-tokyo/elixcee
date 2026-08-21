@@ -14,6 +14,31 @@ pub use crate::types::{
     parse_cell_addr, parse_range_addr, serial_to_display,
 };
 
+/// A procedure's own `On Error` state — real VBA scopes this per Sub/
+/// Function, not globally, which is exactly what `Vm::call_stack` models by
+/// giving each `CallFrame` its own `ErrorMode`. Consumed (reset to
+/// `Disabled`) the moment a `GoTo` handler actually fires, matching real
+/// VBA: a second failure while already inside the handler (without the
+/// handler itself running a fresh `On Error`) propagates to the caller
+/// instead of re-entering the same handler.
+#[derive(Debug, Clone, PartialEq)]
+enum ErrorMode {
+    Disabled,
+    ResumeNext,
+    GoTo(String),
+}
+
+/// One entry in `Vm::call_stack` — the currently-executing procedure's name
+/// (for future diagnostics; not yet surfaced anywhere, so genuinely unread —
+/// confirmed by removing the `allow` and rebuilding, which reintroduces the
+/// dead-code warning) and its own `ErrorMode`.
+#[derive(Debug, Clone)]
+struct CallFrame {
+    #[allow(dead_code)]
+    procedure_name: String,
+    error_mode: ErrorMode,
+}
+
 /// Evidence for a resolution failure (Milestone B6a's `diagnose`
 /// subcommand) — the requested key, what was actually available, and (for
 /// name lookups) the closest match by edit distance, if any.
@@ -500,11 +525,17 @@ pub struct Vm {
     /// "Sub not found" failure happens before this is ever set).
     current_span: Option<SourceSpan>,
     pub exit_flag: Option<ExitKind>,
-    pub on_error_resume_next: bool,
-    /// Label to jump to when an error occurs (On Error GoTo <label>).
-    pub on_error_goto_label: Option<String>,
     /// Pending unconditional jump target (GoTo <label>).
     pending_goto: Option<String>,
+    /// One frame per currently-executing Sub/Function call, innermost last —
+    /// pushed/popped around every `call_sub_def`/`call_func_def` invocation
+    /// (including the entrypoint's own call, so this is never empty while a
+    /// statement is executing). Each frame's own `error_mode` is what makes
+    /// `On Error GoTo`/`Resume Next` a per-procedure scope instead of a
+    /// single VM-wide flag a callee could see and mistakenly resolve its
+    /// label against — see `exec_body`'s doc comment for the bug this
+    /// replaced.
+    call_stack: Vec<CallFrame>,
     user_funcs: HashMap<String, FuncDef>,
     user_subs:  HashMap<String, SubDef>,
     /// Workbook-level named ranges: lowercase name → address string (e.g. "A1:B5").
@@ -626,9 +657,8 @@ impl Vm {
             msgbox_log: Vec::new(),
             current_span: None,
             exit_flag: None,
-            on_error_resume_next: false,
-            on_error_goto_label: None,
             pending_goto: None,
+            call_stack: Vec::new(),
             user_funcs: HashMap::new(),
             user_subs:  HashMap::new(),
             named_ranges: HashMap::new(),
@@ -1893,6 +1923,11 @@ impl Vm {
         self.err_number = 0;
         self.err_description.clear();
         self.pending_raised_error = None;
+        // A Vm reused across multiple run_sub calls must not carry the
+        // previous run's call frames (or their On Error state) into this
+        // one — call_sub_def pushes the entrypoint's own frame below, so
+        // this only needs to be empty, not seeded.
+        self.call_stack.clear();
         self.option_base = program.option_base;
         // Cache user-defined functions, subs, and type definitions.
         self.user_funcs = program.funcs.iter().map(|f| (f.name.clone(), f.clone())).collect();
@@ -1942,6 +1977,7 @@ impl Vm {
         self.err_number = 0;
         self.err_description.clear();
         self.pending_raised_error = None;
+        self.call_stack.clear();
         // Real VBA scopes `Option Base` per module; this codebase's `Vm`
         // is a single flat namespace across every loaded module (same
         // simplification `user_funcs`/`user_subs`/`type_defs` already
@@ -1972,7 +2008,16 @@ impl Vm {
             (p.clone(), old)
         }).collect();
         let body = sub.body.clone();
-        self.exec_body(&body, |f| matches!(f, ExitKind::Sub))?;
+        // A fresh frame per call — real VBA's `On Error` scope is the
+        // procedure, not the call site, so this callee starts with no
+        // active handler regardless of what the caller's own frame has set
+        // (see `exec_body`'s doc comment). Popped before propagating any
+        // error, so the caller's own frame is what a failure that escapes
+        // this call is actually checked against.
+        self.call_stack.push(CallFrame { procedure_name: sub.name.clone(), error_mode: ErrorMode::Disabled });
+        let result = self.exec_body(&body, |f| matches!(f, ExitKind::Sub));
+        self.call_stack.pop();
+        result?;
         for (p, old) in saved {
             match old { Some(v) => { self.variables.insert(p, v); } None => { self.variables.remove(&p); } }
         }
@@ -1988,7 +2033,10 @@ impl Vm {
         let ret_name = func.name.clone();
         let old_ret = self.variables.remove(&ret_name);
         let body = func.body.clone();
-        self.exec_body(&body, |f| matches!(f, ExitKind::Function | ExitKind::Sub))?;
+        self.call_stack.push(CallFrame { procedure_name: func.name.clone(), error_mode: ErrorMode::Disabled });
+        let result = self.exec_body(&body, |f| matches!(f, ExitKind::Function | ExitKind::Sub));
+        self.call_stack.pop();
+        result?;
         let ret_val = self.variables.remove(&ret_name).unwrap_or(Variant::Empty);
         for (p, old) in saved {
             match old { Some(v) => { self.variables.insert(p, v); } None => { self.variables.remove(&p); } }
@@ -2024,10 +2072,15 @@ impl Vm {
                     // On Error GoTo: jump to handler label — skipped in
                     // strict-resolution mode (`diagnose`) so the first
                     // failure always propagates instead of being redirected
-                    // to a handler that would mask it.
+                    // to a handler that would mask it. Reads/consumes only
+                    // the *current* frame's mode (the procedure whose body
+                    // this `stmts` slice belongs to) — a callee's own frame
+                    // never sees or resolves labels that only exist in a
+                    // caller's body; see `call_sub_def`/`call_func_def`.
                     if !self.strict_resolution
-                        && let Some(label) = self.on_error_goto_label.take()
+                        && let Some(ErrorMode::GoTo(label)) = self.current_error_mode()
                     {
+                        self.set_current_error_mode(ErrorMode::Disabled);
                         self.record_error(&e);
                         match stmts
                             .iter()
@@ -2050,6 +2103,21 @@ impl Vm {
         Ok(())
     }
 
+    /// The innermost (currently-executing) call frame's `ErrorMode` — the
+    /// procedure this statement is actually running inside, not any
+    /// caller's. `None` only if called with an empty `call_stack`, which
+    /// shouldn't happen while any statement is executing (`call_sub_def`/
+    /// `call_func_def` always push a frame first).
+    fn current_error_mode(&self) -> Option<ErrorMode> {
+        self.call_stack.last().map(|f| f.error_mode.clone())
+    }
+
+    fn set_current_error_mode(&mut self, mode: ErrorMode) {
+        if let Some(frame) = self.call_stack.last_mut() {
+            frame.error_mode = mode;
+        }
+    }
+
     fn exec_stmt(&mut self, spanned: &SpannedStmt) -> Result<(), String> {
         if self.exit_flag.is_some() { return Ok(()); }
         self.current_span = Some(spanned.span);
@@ -2058,7 +2126,9 @@ impl Vm {
             Ok(()) => Ok(()),
             // `On Error Resume Next` is not honored in strict-resolution
             // mode (`diagnose`) — see the field doc on `strict_resolution`.
-            Err(e) if self.on_error_resume_next && !self.strict_resolution => {
+            Err(e) if !self.strict_resolution
+                && matches!(self.current_error_mode(), Some(ErrorMode::ResumeNext)) =>
+            {
                 self.record_error(&e);
                 Ok(())
             }
@@ -2196,12 +2266,12 @@ impl Vm {
             Stmt::ExitSub      => self.exit_flag = Some(ExitKind::Sub),
             Stmt::ExitFunction => self.exit_flag = Some(ExitKind::Function),
             Stmt::OnError { resume_next } => {
-                self.on_error_resume_next = *resume_next;
-                self.on_error_goto_label = None;
+                // `On Error Resume Next` (true) / `On Error GoTo 0` (false)
+                // — both scoped to the current frame only.
+                self.set_current_error_mode(if *resume_next { ErrorMode::ResumeNext } else { ErrorMode::Disabled });
             }
             Stmt::OnErrorGoTo(label) => {
-                self.on_error_goto_label = Some(label.clone());
-                self.on_error_resume_next = false;
+                self.set_current_error_mode(ErrorMode::GoTo(label.clone()));
             }
             Stmt::ErrClear => {
                 self.err_number = 0;
@@ -2228,8 +2298,12 @@ impl Vm {
                 self.pending_goto = Some(label.clone());
             }
             Stmt::Resume { .. } => {
-                // After error handler runs: clear error state, continue
-                self.on_error_goto_label = None;
+                // After error handler runs: clear error state, continue.
+                // Already `Disabled` by the time a `GoTo` handler's own
+                // body reaches a `Resume` (consumed on the jump itself —
+                // see `exec_body`), so this only matters if the handler
+                // ran under `Resume Next` instead.
+                self.set_current_error_mode(ErrorMode::Disabled);
             }
             Stmt::CallSub { name, args } => {
                 let arg_vals: Vec<Variant> = args.iter().map(|a| self.eval_expr(a)).collect::<Result<_, _>>()?;
@@ -5182,11 +5256,15 @@ mod tests {
     #[test]
     fn a_raise_caught_inside_a_called_sub_does_not_leak_its_number_into_a_later_unrelated_error() {
         // `pending_raised_error` is a single Vm-wide slot (not scoped per
-        // call frame). This confirms it can't survive past the `Err.Raise`
-        // it belongs to: Helper's raise is caught by MySub's still-active
-        // `On Error Resume Next` (a Vm-wide flag) inside Helper's own
-        // statement dispatch, so it's consumed there — the later, unrelated
-        // division error must still report its own number (11), not 9.
+        // call frame, unlike `On Error`'s own mode — see `CallFrame`).
+        // Helper gets a fresh, `Disabled` frame of its own (real VBA: error
+        // handling doesn't inherit into a callee), so `Err.Raise 9` isn't
+        // caught inside Helper's own body — it propagates out and is caught
+        // by MySub's still-active `On Error Resume Next` at the `Call
+        // Helper()` statement itself, in MySub's own frame. This confirms
+        // `pending_raised_error` doesn't survive past the `Err.Raise` it
+        // belongs to either way: the later, unrelated division error must
+        // still report its own number (11), not 9.
         let prog = parser::parse(concat!(
             "Sub Helper()\n",
             "    Err.Raise 9\n",
@@ -5205,12 +5283,210 @@ mod tests {
     }
 
     #[test]
+    fn on_error_resume_next_in_the_caller_does_not_resume_the_rest_of_a_failed_callees_body() {
+        // Deliberate behavior change from the old Vm-wide `on_error_resume_next`
+        // flag: previously the catch fired inside `exec_stmt`, *inside Child's
+        // own body*, so Child's remaining statements kept running after the
+        // error. Real VBA does not work that way — `On Error Resume Next` set
+        // in MySub does not extend into Child's frame (Child has no handler of
+        // its own), so the error propagates out of Child entirely and is only
+        // caught at the `Call Child()` statement in MySub. Child's own
+        // remaining statements after the failing line must NOT run.
+        let vm = run(concat!(
+            "Sub Child()\n",
+            "    x = 1 / 0\n",
+            "    aftertheerror = \"did it run\"\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    Call Child()\n",
+            "    n = Err.Number\n",
+            "End Sub\n",
+        ));
+        assert!(!vm.variables.contains_key("aftertheerror"));
+        assert_eq!(vm.variables["n"], Variant::Integer(11));
+    }
+
+    #[test]
     fn err_number_is_a_real_variable_named_err_is_still_a_plain_variable() {
         // `err` with no `.Number`/`.Description`/`.Clear`/`.Raise` suffix is
         // an ordinary user variable — the Err-object parsing only guards on
         // those exact member names, never a bare `err`.
         let vm = run("Sub MySub()\n    err = 42\nEnd Sub\n");
         assert_eq!(vm.variables["err"], Variant::Integer(42));
+    }
+
+    // ── Call-frame On Error scoping ──────────────────────────────────────
+    // The bug this phase's call-frame rework fixes: `on_error_goto_label`
+    // used to be a single Vm-wide field, so a callee's own `exec_body`
+    // could see a caller's still-set label and try (and fail) to resolve
+    // it against the callee's own body instead of letting the error
+    // propagate to where the label actually lives.
+
+    #[test]
+    fn on_error_goto_in_a_caller_catches_an_error_raised_inside_a_called_sub() {
+        let vm = run(concat!(
+            "Sub Child()\n",
+            "    x = 1 / 0\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    On Error GoTo Handler\n",
+            "    Call Child()\n",
+            "    result = \"not reached\"\n",
+            "    Exit Sub\n",
+            "Handler:\n",
+            "    n = Err.Number\n",
+            "    d = Err.Description\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(11));
+        assert_eq!(vm.variables["d"], Variant::Str("Division by zero".into()));
+        assert!(!vm.variables.contains_key("result"));
+    }
+
+    #[test]
+    fn a_callees_own_handler_catches_its_own_error_without_involving_the_caller() {
+        let vm = run(concat!(
+            "Sub Child()\n",
+            "    On Error GoTo ChildHandler\n",
+            "    y = 1 / 0\n",
+            "    Exit Sub\n",
+            "ChildHandler:\n",
+            "    childcaught = Err.Number\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    On Error GoTo Handler\n",
+            "    Call Child()\n",
+            "    parentreached = True\n",
+            "    Exit Sub\n",
+            "Handler:\n",
+            "    parentcaught = True\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["childcaught"], Variant::Integer(11));
+        assert_eq!(vm.variables["parentreached"], Variant::Boolean(true));
+        assert!(!vm.variables.contains_key("parentcaught"));
+    }
+
+    #[test]
+    fn a_second_failure_inside_a_callees_own_handler_propagates_to_the_caller() {
+        // A GoTo handler is consumed the moment it fires (real VBA: without
+        // a fresh On Error inside the handler itself, a second failure
+        // there isn't caught again by the same handler).
+        let vm = run(concat!(
+            "Sub Child()\n",
+            "    On Error GoTo ChildHandler\n",
+            "    y = 1 / 0\n",
+            "    Exit Sub\n",
+            "ChildHandler:\n",
+            "    z = 1 / 0\n",
+            "    afterseconderror = \"not reached\"\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    On Error GoTo Handler\n",
+            "    Call Child()\n",
+            "    result = \"not reached\"\n",
+            "    Exit Sub\n",
+            "Handler:\n",
+            "    n = Err.Number\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(11));
+        assert!(!vm.variables.contains_key("afterseconderror"));
+        assert!(!vm.variables.contains_key("result"));
+    }
+
+    #[test]
+    fn on_error_goto_0_inside_a_callee_disables_only_that_callees_own_frame() {
+        let vm = run(concat!(
+            "Sub Child()\n",
+            "    On Error GoTo ChildHandler\n",
+            "    On Error GoTo 0\n",
+            "    y = 1 / 0\n",
+            "    Exit Sub\n",
+            "ChildHandler:\n",
+            "    childcaught = True\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    On Error GoTo Handler\n",
+            "    Call Child()\n",
+            "    result = \"not reached\"\n",
+            "    Exit Sub\n",
+            "Handler:\n",
+            "    n = Err.Number\n",
+            "End Sub\n",
+        ));
+        assert!(!vm.variables.contains_key("childcaught"));
+        assert_eq!(vm.variables["n"], Variant::Integer(11));
+    }
+
+    #[test]
+    fn on_error_resume_next_does_not_leak_into_a_sibling_procedure() {
+        let prog = parser::parse(concat!(
+            "Sub SiblingA()\n",
+            "    On Error Resume Next\n",
+            "    a = 1 / 0\n",
+            "    acaught = Err.Number\n",
+            "End Sub\n",
+            "Sub SiblingB()\n",
+            "    b = 1 / 0\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    Call SiblingA()\n",
+            "    Call SiblingB()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        // If SiblingA's Resume Next had leaked into SiblingB, this would
+        // succeed instead (SiblingB's division silently swallowed too).
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Division by zero");
+    }
+
+    #[test]
+    fn recursive_calls_do_not_share_an_on_error_mode_across_frames() {
+        let prog = parser::parse(concat!(
+            "Sub Recur(n)\n",
+            "    If n = 0 Then\n",
+            "        On Error Resume Next\n",
+            "        z = 1 / 0\n",
+            "        zcaught = Err.Number\n",
+            "    Else\n",
+            "        Call Recur(n - 1)\n",
+            "        y = 1 / 0\n",
+            "    End If\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    Call Recur(2)\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        // If n=0's Resume Next had leaked into n=1's own frame, n=1's own
+        // `y = 1 / 0` would be silently swallowed too and the whole call
+        // would succeed instead of propagating.
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Division by zero");
+    }
+
+    #[test]
+    fn a_function_call_propagates_its_error_to_the_caller_the_same_way_a_sub_call_does() {
+        let vm = run(concat!(
+            "Function Child()\n",
+            "    x = 1 / 0\n",
+            "End Function\n",
+            "Sub MySub()\n",
+            "    On Error GoTo Handler\n",
+            "    y = Child()\n",
+            "    result = \"not reached\"\n",
+            "    Exit Sub\n",
+            "Handler:\n",
+            "    n = Err.Number\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(11));
+        assert!(!vm.variables.contains_key("result"));
     }
 
     #[test]
