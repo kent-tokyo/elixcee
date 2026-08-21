@@ -228,6 +228,87 @@ function readFileSyncImpl(filename, opts) {
   return read(require('fs').readFileSync(filename), opts);
 }
 
+// ---- write ----
+//
+// Buffer-first XLSX.write(wb, opts), the inverse of read() above — WorkBook object -> a
+// real, Excel-openable .xlsx file's bytes. No WASM/Rust bridge (unlike read): OOXML
+// writing is pure XML/ZIP generation, verified against elixcee's own reader (src/
+// reader.rs) so "own write -> own read" is a meaningful round trip, not two independently
+// -guessed formats — see internal/xlsx-writer.cjs's own top doc comment.
+//
+// bookType: 'xlsx' only (defaults to 'xlsx' when omitted, matching the oracle's own
+// default) — any other value (the oracle also accepts 'ods'/'csv'/'txt'/legacy .xls
+// variants/etc.) throws ELIXCEE_UNSUPPORTED_BOOK_TYPE rather than silently producing
+// something else. type: 'buffer' | 'array' | 'base64' only — the oracle's other `type`
+// values ('binary'/'string'/'file') are not implemented, matching read()'s own narrow
+// `type` support; type has no default (matching the oracle: XLSX.write(wb, {}) throws
+// "Unrecognized type undefined" there too), so it must be given explicitly.
+const { makeZip } = require('./internal/zip-writer.cjs');
+const { buildXlsxZipEntries } = require('./internal/xlsx-writer.cjs');
+
+const ELIXCEE_UNSUPPORTED_BOOK_TYPE = 'ELIXCEE_UNSUPPORTED_BOOK_TYPE';
+const ELIXCEE_UNSUPPORTED_WRITE_TYPE = 'ELIXCEE_UNSUPPORTED_WRITE_TYPE';
+
+function writeBuffer(wb, opts) {
+  const o = opts || {};
+  const bookType = o.bookType || 'xlsx';
+  if (bookType !== 'xlsx') {
+    const err = new Error(
+      `write(): bookType '${bookType}' is not supported — only 'xlsx' is implemented ` +
+        '(no ODS/CSV/TXT/legacy .xls output yet).'
+    );
+    err.code = ELIXCEE_UNSUPPORTED_BOOK_TYPE;
+    throw err;
+  }
+  // Lazy require, same convention readFileSyncImpl's `require('fs')` already uses — a
+  // caller who never calls write() must not pay for resolving zlib.
+  const zipped = makeZip(buildXlsxZipEntries(wb), (buf) => require('zlib').deflateRawSync(buf, { level: 9 }));
+  // zip-writer.cjs returns a plain Uint8Array (it has no Buffer dependency at all — see
+  // its own doc comment). Wrapped back into a real Node Buffer here, zero-copy, so
+  // type:'buffer' keeps matching the oracle's own contract exactly (a true Buffer, with
+  // e.g. `.toString('base64')` — plain Uint8Array has no such method before Node 20).
+  return Buffer.from(zipped.buffer, zipped.byteOffset, zipped.byteLength);
+}
+
+function write(wb, opts) {
+  const o = opts || {};
+  const buf = writeBuffer(wb, o);
+  switch (o.type) {
+    case 'buffer':
+      return buf;
+    case 'array':
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    case 'base64':
+      return buf.toString('base64');
+    default: {
+      const err = new Error(
+        "write(): unsupported opts.type " +
+          JSON.stringify(o.type) +
+          " — pass 'buffer', 'array', or 'base64'. Other xlsx@0.18.5 `type` values " +
+          "('binary'/'string'/'file') are not implemented yet."
+      );
+      err.code = ELIXCEE_UNSUPPORTED_WRITE_TYPE;
+      throw err;
+    }
+  }
+}
+
+// ---- writeFile / writeFileSync ----
+//
+// Node-only file-path entry points, a thin wrapper over write() above — same one
+// -function-under-two-names shape as readFile/readFileSync (confirmed live against the
+// oracle: `XLSX.writeFile === XLSX.writeFileSync` is true, and the shared function's own
+// `.name` is "writeFileSync"). `opts.type` is never needed here (the bytes always go to
+// `filename` via fs.writeFileSync, never returned) — only `opts.bookType` has any effect,
+// same 'xlsx'-only restriction as write() above.
+//
+// `require('fs')` is INSIDE the function for the same reason readFileSyncImpl's is — see
+// that function's own doc comment. The browser entry exports its own explicitly-throwing
+// writeFile/writeFileSync — see index.browser.mjs.
+function writeFileSyncImpl(wb, filename, opts) {
+  require('fs').writeFileSync(filename, writeBuffer(wb, opts));
+}
+
 // ---- workbook / sheet ----
 
 function bookNew() {
@@ -1429,6 +1510,12 @@ const NAME_OVERRIDES = {
   // same name twice.
   readFile: 'readFileSync',
   readFileSync: 'readFileSync',
+  write: 'writeSync',
+  // Same one-function-two-keys shape as readFile/readFileSync above, confirmed live
+  // against the oracle: `XLSX.writeFile === XLSX.writeFileSync`, `.name` is
+  // "writeFileSync" for both.
+  writeFile: 'writeFileSync',
+  writeFileSync: 'writeFileSync',
 };
 
 // nameAs is for FUNCTION exports only — `consts` is a plain data object (no `.name`
@@ -1473,6 +1560,9 @@ module.exports = {
   // members, so metadata.test.mjs compares them against `XLSX`, not `XLSX.utils`.
   readFile: readFileSyncImpl,
   readFileSync: readFileSyncImpl,
+  write,
+  writeFile: writeFileSyncImpl,
+  writeFileSync: writeFileSyncImpl,
   encode_col: encodeCol,
   encode_row: encodeRow,
   encode_cell: encodeCell,

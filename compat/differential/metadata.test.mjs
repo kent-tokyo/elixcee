@@ -24,14 +24,18 @@ const U = XLSX.utils;
 let failures = 0;
 
 // These exports aren't `utils.*` members at all — the oracle's own `read`/`readFile`/
-// `readFileSync` live at the TOP level (confirmed live: `U.read === undefined`, and
-// `Object.keys(XLSX)` is ["version","parse_xlscfb","parse_zip","read","readFile",
-// "readFileSync","write",...]). Comparing them against `XLSX.utils` in the loop below would
-// always report a type mismatch for a reason that has nothing to do with this package's own
-// correctness — they're checked against the right oracle surface (`XLSX`) in their own
-// block instead, and excluded from the utils-key-order check further down for the same
-// reason. Their relative order against each OTHER is checked separately, below.
-const TOP_LEVEL_KEYS = ['read', 'readFile', 'readFileSync'];
+// `readFileSync`/`write`/`writeFile`/`writeFileSync` live at the TOP level (confirmed
+// live: `U.read === undefined`, and `Object.keys(XLSX)` is
+// ["version","parse_xlscfb","parse_zip","read","readFile","readFileSync","write",
+// "writeFile","writeFileSync","writeFileAsync",...] — writeFileAsync is not implemented
+// here, matching this package's own established convention of simply not exporting a
+// capability it doesn't have, rather than exporting one that throws). Comparing the six
+// implemented ones against `XLSX.utils` in the loop below would always report a type
+// mismatch for a reason that has nothing to do with this package's own correctness —
+// they're checked against the right oracle surface (`XLSX`) in their own block instead,
+// and excluded from the utils-key-order check further down for the same reason. Their
+// relative order against each OTHER is checked separately, below.
+const TOP_LEVEL_KEYS = ['read', 'readFile', 'readFileSync', 'write', 'writeFile', 'writeFileSync'];
 
 for (const key of Object.keys(elixceeCjs)) {
   if (TOP_LEVEL_KEYS.includes(key)) continue;
@@ -128,6 +132,21 @@ for (const key of TOP_LEVEL_KEYS) {
     failures += 1;
   } else {
     console.log(`OK    readFile === readFileSync (same function object, matching the oracle)`);
+  }
+}
+
+// Same aliasing check, for writeFile/writeFileSync (confirmed live:
+// `XLSX.writeFile === XLSX.writeFileSync`).
+{
+  const oracleAliased = XLSX.writeFile === XLSX.writeFileSync;
+  const elixceeAliased = elixceeCjs.writeFile === elixceeCjs.writeFileSync;
+  if (oracleAliased !== elixceeAliased) {
+    console.error(
+      `FAIL  writeFile/writeFileSync aliasing: oracle writeFile===writeFileSync is ${oracleAliased}, elixcee is ${elixceeAliased}`
+    );
+    failures += 1;
+  } else {
+    console.log(`OK    writeFile === writeFileSync (same function object, matching the oracle)`);
   }
 }
 

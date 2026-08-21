@@ -157,6 +157,32 @@ export function readFileSync(
   opts?: { cellStyles?: boolean; cellNF?: boolean; cellDates?: boolean }
 ): WorkBook;
 
+// bookType: 'xlsx' only (see internal/xlsx-writer.cjs and index.cjs's `write` doc comment
+// for exactly what's supported: strings/numbers/booleans/dates/formulas, multiple
+// worksheets, merges, sheet visibility, a basic number-format subset, hidden rows/
+// columns). `type` has no default, matching the oracle (`XLSX.write(wb, {})` throws
+// "Unrecognized type undefined" there too) — it must be given explicitly.
+export type BookType = 'xlsx';
+
+export interface WritingOptions {
+  bookType?: BookType;
+  type: 'buffer' | 'array' | 'base64';
+}
+
+// Return type is `Uint8Array`, not `Buffer` (Node's Buffer subclasses Uint8Array, so a
+// real `type: 'buffer'` result satisfies this too) — this package has no @types/node
+// dependency, matching read()'s own `data: Uint8Array | ...` parameter above rather than
+// introducing a types-only dependency this package's existing exports don't need either.
+export function write(workbook: WorkBook, opts: WritingOptions): Uint8Array | ArrayBuffer | string;
+
+// Node-only file-path entry points, same two-names-one-function shape as readFile/
+// readFileSync (`XLSX.writeFile === XLSX.writeFileSync`, confirmed live). The BROWSER
+// build exports both names too, but they throw `ELIXCEE_UNSUPPORTED_IN_BROWSER` — there
+// is no filesystem to write a path to there; call `write()` and hand the bytes to a
+// download flow instead.
+export function writeFile(workbook: WorkBook, filename: string, opts?: { bookType?: BookType }): void;
+export function writeFileSync(workbook: WorkBook, filename: string, opts?: { bookType?: BookType }): void;
+
 export function encode_col(col: number): string;
 export function decode_col(colstr: string): number;
 export function encode_row(row: number): string;

@@ -42,10 +42,23 @@ before depending on this for anything beyond the surface it actually covers.
   more useful than a missing export or a faked result; read the bytes yourself
   (`FileReader`/`fetch`) and call `read(bytes)`.
 
+- **`XLSX.write(wb, opts)` / `XLSX.writeFile(wb, path, opts)` / `XLSX.writeFileSync(...)`**
+  — `bookType: "xlsx"` only (ODS/CSV/other book types are not implemented — an explicit
+  `ELIXCEE_UNSUPPORTED_BOOK_TYPE` throw, never silently ignored), producing a real OOXML
+  ZIP archive built by a hand-rolled ZIP/DEFLATE writer (no new npm dependency; Node's own
+  `zlib` provides the DEFLATE codec). Supports strings/numbers/booleans/dates/formulas,
+  multiple worksheets, merges, sheet visibility, hidden rows/columns, and basic number
+  formats. Output `type: "buffer" | "array" | "base64"`. `writeFile`/`writeFileSync` are
+  Node-only (one function under both names, matching the real package); the browser build
+  throws `ELIXCEE_UNSUPPORTED_IN_BROWSER` for both, same rationale as `readFile`/
+  `readFileSync` — call `write(wb, {type: "buffer"|"array"|"base64"})` and hand the bytes
+  to a download/File-System-Access-API flow yourself. Round-trip tested both directions
+  against the real `xlsx@0.18.5` package (own write → oracle read, oracle write → own
+  read) and against itself (own write → own read).
+
 ## What's not implemented
 
-- **`write`/`writeFile`/`writeFileSync`** — no writer exists at all yet, for either XLSX or
-  ODS output.
+- **ODS output**, and any `bookType` other than `"xlsx"`.
 - **Streaming reads** — only whole-buffer/whole-file input.
 - Any `Rust ↔ JS` bridge beyond the read path described above.
 

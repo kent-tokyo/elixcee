@@ -141,6 +141,53 @@ Next`/`GoTo`.
   now fail with a clear parse error instead of the same silent misparse — a deliberate behavior
   change, not a regression, for any macro that happened to declare one of these keywords before.
 
+### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
+
+Independent of the root `elixcee` crate: no Rust changes, no new npm dependency.
+`bookType: "xlsx"` only, output `type: "buffer" | "array" | "base64"`, producing a real
+OOXML ZIP via a hand-rolled ZIP/XML writer (no zip/xml-builder dependency added) —
+strings/numbers/booleans/dates/formulas, multiple worksheets, merges, sheet visibility,
+hidden rows/columns, basic number formats, safe XML escaping. Unsupported input (a
+non-`"xlsx"` `bookType`, an unrecognized `type`, an unsupported cell shape/type, a
+non-finite numeric/formula-cached value, an oversized declared `!ref`) throws an explicit
+`ELIXCEE_*` error, never silently ignored or truncated.
+
+- **`packages/xlsx/src/internal/xlsx-writer.cjs`** (new) — the OOXML XML generator:
+  `[Content_Types].xml`, both `.rels` parts, `docProps/{core,app}.xml`, `xl/workbook.xml`,
+  `xl/worksheets/sheetN.xml`, `xl/styles.xml`. Output is deliberately constrained to
+  shapes `src/reader.rs` (elixcee's own reader) already parses, verified by reading
+  `reader.rs` directly — inline strings (not shared strings), a small built-in
+  numFmtId table plus custom `<numFmts>` entries (164+) for anything else.
+- **`packages/xlsx/src/internal/zip-writer.cjs`** (new) — a hand-rolled ZIP archive
+  writer (local file headers, central directory, end-of-central-directory record,
+  table-based CRC-32) with a deterministic fixed epoch, so two `write()` calls on the
+  same `WorkBook` produce byte-identical output. Platform-agnostic by design: no
+  `Buffer`, every byte buffer is a plain `Uint8Array` built with `DataView`/
+  `TextEncoder` — real browsers never had `Buffer` regardless of bundler, so the shared
+  writer core is built to work on both platforms from the start. DEFLATE compression is
+  supplied by the caller as an optional callback rather than required internally (falls
+  back to STORED, a legal ZIP/OOXML method, when omitted — this is what lets the browser
+  entry reuse the same writer with no `zlib` access at all).
+- **`compat/differential/xlsx-write.test.mjs`** (new) — 36 MATCH + 1 disclosed
+  UNSUPPORTED case (`bookType: "ods"`, registered in `classify.mjs`'s
+  `UNSUPPORTED_ALLOWLIST`), covering all three round-trip directions (own write -> own
+  read, own write -> oracle read, oracle write -> own read) against a fourth,
+  independently-computed baseline (oracle write -> oracle read); plus standalone checks
+  for OOXML ZIP/XML structural validation (CRC-32, balanced XML, `[Content_Types].xml`/
+  `.rels` cross-references), 12 malformed-workbook rejection cases, output-type
+  agreement (buffer/array/base64 carry identical bytes), write-determinism, a real
+  filesystem round trip for `writeFile`/`writeFileSync`, and the browser entry's
+  behavior (both throwing `ELIXCEE_UNSUPPORTED_IN_BROWSER` for `writeFile`/
+  `writeFileSync`, and `write()` itself working with no filesystem).
+- `compat/differential/metadata.test.mjs` extended: `write`/`writeFile`/`writeFileSync`
+  now among the 39/39 exports checked (name/length/property-descriptor/CJS-ESM-identity
+  against the oracle), plus a `writeFile === writeFileSync` aliasing check.
+
+Note for whoever bundles this package with esbuild, or cuts its next npm release: the
+Node entry's `write()` reaches `zlib` for DEFLATE compression via a plain, inline
+`require('zlib')` as of this commit — see the next commit for why that has to move into
+its own file before this package is bundler-safe.
+
 ## [0.6.0]
 
 Root `elixcee` (Rust crate + Python package) only — `elixcee-types` stays `0.2.0` (no

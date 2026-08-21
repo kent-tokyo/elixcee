@@ -101,7 +101,18 @@ export const VERDICTS = /** @type {const} */ ([
 // `<v>`'s own `xml:space` attribute and skips the trim when it's "preserve" (see
 // src/reader.rs's `v_preserve_space`). Both `with_text.xlsx` entries this case needed are
 // removed — the allowlist is empty again, same as after the two closures described above.
-export const UNSUPPORTED_ALLOWLIST = new Map([]);
+//
+// Phase D added write()/writeFile()/writeFileSync() (see packages/xlsx/src/internal/
+// xlsx-writer.cjs and compat/differential/xlsx-write.test.mjs), and one real entry under
+// 'write': bookType='ods' — the oracle supports writing ODS output, elixcee's writer
+// deliberately scopes to bookType 'xlsx' only (see xlsx-writer.cjs's own top doc comment)
+// and throws ELIXCEE_UNSUPPORTED_BOOK_TYPE rather than attempting a format it was never
+// built for. A genuine, disclosed capability gap, not a defect — unlike the read()-side
+// entries above, this one is not expected to close by a future bugfix, only by a future
+// phase that deliberately adds ODS writing.
+export const UNSUPPORTED_ALLOWLIST = new Map([
+  ['write', new Map([["bookType='ods' (ODS output not implemented)", 'ODS output is out of scope for this phase — see xlsx-writer.cjs\'s top doc comment.']])],
+]);
 
 // Registered intentional SECURITY divergences, keyed either by the elixcee-side error
 // code that signals them (see docs/xlsx-security-model.md's planned ELIXCEE_* codes), or
@@ -416,7 +427,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // cases (empty-string cell value, declared-<dimension>-wider-than-data) and the earlier
   // Phase 1B-1/1B-2A-era format_cell/sheet_add_aoa cases before them, both closing the same
   // way when their underlying defect was fixed.
-  assert.equal(UNSUPPORTED_ALLOWLIST.size, 0, 'the allowlist is empty again: all registered defects are fixed');
+  assert.equal(UNSUPPORTED_ALLOWLIST.size, 1, "Phase D: one real entry ('write' -> bookType='ods'), a disclosed capability gap");
   assert.equal(
     SECURITY_DIVERGENCE_REGISTRY.size,
     6,

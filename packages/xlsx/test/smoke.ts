@@ -77,10 +77,20 @@ const rowsRangeObj = XLSX.sheet_to_json(ws4, { range: { s: { r: 0, c: 0 }, e: { 
 const denseWs: XLSX.WorkSheet = XLSX.aoa_to_sheet([[1, 2], [3, 4]], { dense: true });
 const rowsDense = XLSX.sheet_to_json(denseWs);
 
+// write()/writeFile()/writeFileSync() — the three output types plus the Node-only
+// file-path entry points.
+const wbForWrite: XLSX.WorkBook = XLSX.book_new();
+XLSX.book_append_sheet(wbForWrite, XLSX.aoa_to_sheet([[1, 'x']]), 'S1');
+const writtenBuffer: Uint8Array | ArrayBuffer | string = XLSX.write(wbForWrite, { type: 'buffer' });
+const writtenArray: Uint8Array | ArrayBuffer | string = XLSX.write(wbForWrite, { type: 'array' });
+const writtenBase64: Uint8Array | ArrayBuffer | string = XLSX.write(wbForWrite, { type: 'base64', bookType: 'xlsx' });
+XLSX.writeFile(wbForWrite, 'out.xlsx');
+XLSX.writeFileSync(wbForWrite, 'out.xlsx', { bookType: 'xlsx' });
+
 console.log(
   decoded, decodedRange, col, colStr, row, rowStr, parts, sheetName, rangeStr2, ws2, ws4, ws5,
   formatted, formatted2, formulae, csv, txt, gotByRef, gotByAddr, gotByRC, gotByRow,
   rowsGeneric, rowsDefault, rowsHeader1, rowsHeaderA, rowsHeaderArray, rowsDefval, rowsRawTrue,
   rowsRawFalse, rowsRangeString, rowsRangeNumber, rowsRangeObj, rowsDense,
-  wbFromBytes, wbFromArray, wbFromBase64, wbWithOpts
+  wbFromBytes, wbFromArray, wbFromBase64, wbWithOpts, writtenBuffer, writtenArray, writtenBase64
 );

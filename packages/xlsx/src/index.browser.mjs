@@ -34,6 +34,8 @@
 // build against).
 import { readWorkbook } from './internal/wasm/elixcee_wasm.browser.mjs';
 import { shapeWorkBook } from './internal/read-shape.cjs';
+import { buildXlsxZipEntries } from './internal/xlsx-writer.cjs';
+import { makeZip } from './internal/zip-writer.cjs';
 
 const ELIXCEE_UNSUPPORTED_READ_TYPE = 'ELIXCEE_UNSUPPORTED_READ_TYPE';
 
@@ -83,6 +85,89 @@ function readFileUnsupported() {
 // Same two-names-one-function shape as the Node entry (and as the oracle itself), so the
 // `readFile === readFileSync` identity holds in the browser build too.
 export { readFileUnsupported as readFile, readFileUnsupported as readFileSync };
+
+function writeFileUnsupported() {
+  const err = new Error(
+    'writeFile()/writeFileSync() are unsupported in the browser build of @elixcee/xlsx: a ' +
+      'browser has no filesystem to write a path to. Call write(wb, {type: "buffer"|"array"|' +
+      '"base64"}) instead and hand the bytes to a download/File-System-Access-API flow yourself.'
+  );
+  err.code = ELIXCEE_UNSUPPORTED_IN_BROWSER;
+  throw err;
+}
+
+// Same two-names-one-function shape as writeFile/writeFileSync's Node counterpart.
+export { writeFileUnsupported as writeFile, writeFileUnsupported as writeFileSync };
+
+// `write` itself, unlike `writeFile`/`writeFileSync`, needs no filesystem — it's pure XML/
+// ZIP generation returning bytes. Unlike every other non-`read` util below, though, it is
+// NOT re-exported verbatim from index.cjs: index.cjs's write() uses Node's `zlib` for
+// DEFLATE compression, and a real bundled-for-browser build cannot resolve that at all —
+// confirmed live (not assumed) by actually bundling it with esbuild `--platform=browser`:
+// "Could not resolve zlib", a build-time failure, not a runtime one, so no amount of lazy
+// -requiring inside index.cjs would have helped a browser build specifically (see
+// zip-writer.cjs's own top doc comment for the full explanation, including why this is a
+// DIFFERENT problem from the ESM-bundle "Dynamic require" issue documented in
+// docs/xlsx-architecture.md's "Phase D" section — that one is about a Node ESM bundle,
+// this one is about a browser bundle, and they need different fixes).
+//
+// So this platform gets its OWN write(), built from the same platform-agnostic
+// buildXlsxZipEntries()/makeZip() the Node entry uses, just called with no `deflate`
+// callback — every entry is written STORED (uncompressed) instead of DEFLATEd. Valid
+// OOXML (elixcee's own reader.rs, and every real spreadsheet application, accept STORED
+// zip entries unconditionally), just larger — the same "state the cost, don't hide it"
+// disclosure this package already makes for the WASM-inlining size cost (see README.md's
+// "Bundling" section). Kept behaviorally identical to index.cjs's write() otherwise: same
+// bookType/type validation, same error codes, same output-type switch.
+const ELIXCEE_UNSUPPORTED_BOOK_TYPE = 'ELIXCEE_UNSUPPORTED_BOOK_TYPE';
+const ELIXCEE_UNSUPPORTED_WRITE_TYPE = 'ELIXCEE_UNSUPPORTED_WRITE_TYPE';
+
+// Uint8Array -> base64 via btoa, chunked (a single String.fromCharCode(...bytes) spread
+// blows the call stack on a large array — this package's own written files easily exceed
+// that in a multi-sheet workbook). btoa/atob are the standard browser (and Node 16+) pair
+// for this; toBytes() above already uses atob for the reverse direction, same rationale:
+// no Buffer, since a real browser doesn't have one and esbuild's `platform: 'browser'`
+// does not polyfill it (confirmed live — see zip-writer.cjs's own doc comment).
+const BASE64_CHUNK = 0x8000;
+function bytesToBase64(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += BASE64_CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + BASE64_CHUNK));
+  }
+  return btoa(binary);
+}
+
+export function write(wb, opts) {
+  const o = opts || {};
+  const bookType = o.bookType || 'xlsx';
+  if (bookType !== 'xlsx') {
+    const err = new Error(
+      `write(): bookType '${bookType}' is not supported — only 'xlsx' is implemented ` +
+        '(no ODS/CSV/TXT/legacy .xls output yet).'
+    );
+    err.code = ELIXCEE_UNSUPPORTED_BOOK_TYPE;
+    throw err;
+  }
+  const buf = makeZip(buildXlsxZipEntries(wb));
+  switch (o.type) {
+    case 'buffer':
+      return buf;
+    case 'array':
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    case 'base64':
+      return bytesToBase64(buf);
+    default: {
+      const err = new Error(
+        "write(): unsupported opts.type " +
+          JSON.stringify(o.type) +
+          " — pass 'buffer', 'array', or 'base64'. Other xlsx@0.18.5 `type` values " +
+          "('binary'/'string'/'file') are not implemented yet."
+      );
+      err.code = ELIXCEE_UNSUPPORTED_WRITE_TYPE;
+      throw err;
+    }
+  }
+}
 
 export {
   encode_col,
