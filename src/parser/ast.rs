@@ -104,6 +104,15 @@ pub enum Expr {
     ErrNumber,
     /// `Err.Description`, paired with `ErrNumber`.
     ErrDescription,
+    /// `Err.Source` — "" unless set by `Err.Raise Number, Source, ...`; this
+    /// project doesn't model a VBA project/class name to default it to for
+    /// an internally-raised runtime error (same disclosed choice as before
+    /// this property existed — see `Stmt::ErrRaise`'s own doc).
+    ErrSource,
+    /// `Err.HelpFile` — "" unless set by `Err.Raise` with a HelpFile argument.
+    ErrHelpFile,
+    /// `Err.HelpContext` — 0 unless set by `Err.Raise` with a HelpContext argument.
+    ErrHelpContext,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -296,17 +305,20 @@ pub enum Stmt {
     ExitFunction,
     OnError { resume_next: bool },     // On Error Resume Next (true) / GoTo 0 (false)
     OnErrorGoTo(String),               // On Error GoTo <label>
-    /// `Err.Clear` — resets `Err.Number` to 0 and `Err.Description` to "".
+    /// `Err.Clear` — resets every `Err` property (`Number`, `Description`,
+    /// `Source`, `HelpFile`, `HelpContext`) back to its zero value.
     ErrClear,
-    /// `Err.Raise Number[, Source][, Description]` — real VBA's positional
-    /// argument order is (Number, Source, Description, HelpFile,
-    /// HelpContext); `source` is parsed (so a supplied Description in the
-    /// 3rd slot is never misread as Source) but not modeled as a readable
-    /// property — `Err.Source` doesn't exist here, matching this project's
-    /// existing choice not to model a VBA project/module naming concept
-    /// elsewhere. `HelpFile`/`HelpContext` aren't parsed at all — genuinely
-    /// unused by any realistic macro's own error-handling logic.
-    ErrRaise { number: Expr, source: Option<Expr>, description: Option<Expr> },
+    /// `Err.Raise Number[, Source][, Description][, HelpFile][, HelpContext]`
+    /// — real VBA's full positional argument order. Any of the four after
+    /// `Number` may be skipped with a bare comma (`Err.Raise 513, ,
+    /// "custom text"` — the idiomatic form for "no custom Source").
+    ErrRaise {
+        number: Expr,
+        source: Option<Expr>,
+        description: Option<Expr>,
+        help_file: Option<Expr>,
+        help_context: Option<Expr>,
+    },
     Label(String),                     // <name>:  — marks a jump target
     GoTo(String),                      // GoTo <label>
     Resume { next: bool },             // Resume (false) / Resume Next (true)

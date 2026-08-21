@@ -498,6 +498,33 @@ impl Parser {
     fn parse_params(&mut self) -> Result<Vec<String>, String> {
         let mut params = vec![];
         while !matches!(self.peek(), Tok::RParen | Tok::Eof) {
+            // `ByVal`/`ByRef` are recognized and discarded — elixcee's own
+            // call semantics don't distinguish them (every call is
+            // effectively by-value; no ByRef write-back to the caller's
+            // variable is modeled), so skipping the keyword is enough to
+            // keep `params` accurate without implementing ByRef semantics.
+            // Without this, `consume_ident()` below would swallow the
+            // keyword itself as a bogus extra parameter name (confirmed:
+            // `Sub Foo(ByVal x As Integer)` used to silently parse as two
+            // params, "byval" and "x", so `Foo(5)` bound 5 to the phantom
+            // "byval" param and left `x` unbound) — exactly the kind of
+            // wrong `params.len()` the new check-time argument-count check
+            // depends on being accurate.
+            if self.is_ident("byval") || self.is_ident("byref") {
+                self.advance();
+            }
+            // `Optional`/`ParamArray` give a parameter variable arity
+            // (default values, "any number of trailing args") that this VM
+            // doesn't model at all — rejecting them outright, rather than
+            // silently mis-consuming the keyword as a parameter name (the
+            // same bug ByVal/ByRef had), keeps `params.len()` trustworthy
+            // for every Sub/Function this parser does accept.
+            if self.is_ident("optional") || self.is_ident("paramarray") {
+                return Err(format!(
+                    "parameter modifier '{}' is not supported",
+                    if self.is_ident("optional") { "Optional" } else { "ParamArray" }
+                ));
+            }
             let name = self.consume_ident()?;
             params.push(name);
             // optional: As <type>
@@ -1160,13 +1187,13 @@ impl Parser {
         }
     }
 
-    /// `Err.Clear` / `Err.Raise Number[, Source][, Description]`. Real
-    /// VBA's positional slots are (Number, Source, Description, HelpFile,
-    /// HelpContext); `Source`/`Description` may each be skipped with a bare
-    /// comma (`Err.Raise 513, , "custom text"` — the idiomatic form for
-    /// "no custom Source"), so this can't just split on commas positionally
-    /// without risking reading a supplied Description as Source. Doesn't
-    /// parse HelpFile/HelpContext at all — see `Stmt::ErrRaise`'s own doc.
+    /// `Err.Clear` / `Err.Raise Number[, Source][, Description][, HelpFile]
+    /// [, HelpContext]`. Real VBA's positional slots are (Number, Source,
+    /// Description, HelpFile, HelpContext); any of the four after Number
+    /// may be skipped with a bare comma (`Err.Raise 513, , "custom text"`
+    /// — the idiomatic form for "no custom Source"), so this can't just
+    /// split on commas positionally without risking reading a supplied
+    /// Description as Source.
     fn parse_err_stmt(&mut self) -> Result<Stmt, String> {
         self.expect_ident("err")?;
         self.expect_tok(Tok::Dot)?;
@@ -1176,21 +1203,19 @@ impl Parser {
         }
         self.expect_ident("raise")?;
         let number = self.parse_expr()?;
-        let mut source = None;
-        let mut description = None;
-        if *self.peek() == Tok::Comma {
+        // Source, Description, HelpFile, HelpContext, in that fixed order —
+        // each slot only advances past its own leading comma, so a bare
+        // comma correctly skips exactly one slot.
+        let mut rest: [Option<Expr>; 4] = [None, None, None, None];
+        for slot in rest.iter_mut() {
+            if *self.peek() != Tok::Comma { break; }
             self.advance();
             if *self.peek() != Tok::Comma && !self.is_stmt_end() {
-                source = Some(self.parse_expr()?);
-            }
-            if *self.peek() == Tok::Comma {
-                self.advance();
-                if !self.is_stmt_end() {
-                    description = Some(self.parse_expr()?);
-                }
+                *slot = Some(self.parse_expr()?);
             }
         }
-        Ok(Stmt::ErrRaise { number, source, description })
+        let [source, description, help_file, help_context] = rest;
+        Ok(Stmt::ErrRaise { number, source, description, help_file, help_context })
     }
 
     fn is_stmt_end(&self) -> bool {
@@ -2282,22 +2307,36 @@ impl Parser {
                         self.expect_tok(Tok::Dot)?;
                         self.parse_sheet_cell_read()
                     }
-                    // `Err.Number` / `Err.Description` — guarded on the
+                    // `Err.Number` / `Err.Description` / `Err.Source` /
+                    // `Err.HelpFile` / `Err.HelpContext` — guarded on the
                     // exact member name, same precedent as the
                     // `thisworkbook`/`activeworkbook` arm above, so a
                     // genuine user variable named `err` with an unrelated
                     // UDT field (`x = err.code`) still parses as ordinary
                     // field access.
-                    "err" if self.is_ident_at(2, "number") || self.is_ident_at(2, "description") =>
+                    "err" if self.is_ident_at(2, "number")
+                        || self.is_ident_at(2, "description")
+                        || self.is_ident_at(2, "source")
+                        || self.is_ident_at(2, "helpfile")
+                        || self.is_ident_at(2, "helpcontext") =>
                     {
                         self.advance();
                         self.expect_tok(Tok::Dot)?;
                         if self.is_ident("number") {
                             self.advance();
                             Ok(Expr::ErrNumber)
-                        } else {
-                            self.expect_ident("description")?;
+                        } else if self.is_ident("description") {
+                            self.advance();
                             Ok(Expr::ErrDescription)
+                        } else if self.is_ident("source") {
+                            self.advance();
+                            Ok(Expr::ErrSource)
+                        } else if self.is_ident("helpfile") {
+                            self.advance();
+                            Ok(Expr::ErrHelpFile)
+                        } else {
+                            self.expect_ident("helpcontext")?;
+                            Ok(Expr::ErrHelpContext)
                         }
                     }
                     _ => self.parse_ident_expr(),
@@ -3014,6 +3053,26 @@ mod tests {
         assert_eq!(prog.subs[0].params, vec!["startrow", "endrow"]);
     }
 
+    #[test] fn byval_and_byref_param_modifiers_are_recognized_and_discarded_not_treated_as_a_param_name() {
+        // Regression: `consume_ident()` used to swallow "byval"/"byref"
+        // itself as a bogus extra parameter, so `Sub Foo(ByVal x As
+        // Integer)` parsed as a 2-param sub (`["byval", "x"]`) and a caller
+        // passing one argument bound it to the phantom "byval" param,
+        // leaving `x` unbound.
+        let prog = parse("Sub Foo(ByVal x As Integer, ByRef y As String)\n    a = x\nEnd Sub\n").unwrap();
+        assert_eq!(prog.subs[0].params, vec!["x", "y"]);
+    }
+
+    #[test] fn optional_parameter_modifier_is_a_clear_parse_error_not_a_silent_misparse() {
+        let err = parse("Sub Foo(Optional x As Integer)\n    a = x\nEnd Sub\n").unwrap_err();
+        assert!(err.contains("Optional"), "error should name the unsupported modifier: {err}");
+    }
+
+    #[test] fn paramarray_parameter_modifier_is_a_clear_parse_error_not_a_silent_misparse() {
+        let err = parse("Sub Foo(ParamArray items())\n    a = 1\nEnd Sub\n").unwrap_err();
+        assert!(err.contains("ParamArray"), "error should name the unsupported modifier: {err}");
+    }
+
     // ── Module-level declarations and access modifiers ─────────────────────────
 
     #[test] fn test_option_explicit_ignored() {
@@ -3279,6 +3338,8 @@ mod tests {
             number: Expr::Integer(5),
             source: None,
             description: None,
+            help_file: None,
+            help_context: None,
         }]);
     }
 
@@ -3288,6 +3349,8 @@ mod tests {
             number: Expr::Integer(513),
             source: None,
             description: Some(Expr::Str("custom text".into())),
+            help_file: None,
+            help_context: None,
         }]);
     }
 
@@ -3297,7 +3360,50 @@ mod tests {
             number: Expr::Integer(513),
             source: Some(Expr::Str("MySource".into())),
             description: Some(Expr::Str("custom text".into())),
+            help_file: None,
+            help_context: None,
         }]);
+    }
+
+    #[test] fn err_raise_with_all_five_positional_arguments_parses() {
+        let body = parse_body(
+            "Sub MySub()\n    Err.Raise 513, \"MySource\", \"custom text\", \"help.chm\", 100\nEnd Sub\n",
+        );
+        assert_eq!(body, vec![Stmt::ErrRaise {
+            number: Expr::Integer(513),
+            source: Some(Expr::Str("MySource".into())),
+            description: Some(Expr::Str("custom text".into())),
+            help_file: Some(Expr::Str("help.chm".into())),
+            help_context: Some(Expr::Integer(100)),
+        }]);
+    }
+
+    #[test] fn err_raise_skips_help_file_with_a_bare_comma() {
+        let body = parse_body(
+            "Sub MySub()\n    Err.Raise 513, \"MySource\", \"custom text\", , 100\nEnd Sub\n",
+        );
+        assert_eq!(body, vec![Stmt::ErrRaise {
+            number: Expr::Integer(513),
+            source: Some(Expr::Str("MySource".into())),
+            description: Some(Expr::Str("custom text".into())),
+            help_file: None,
+            help_context: Some(Expr::Integer(100)),
+        }]);
+    }
+
+    #[test] fn err_source_help_file_help_context_parse_as_expressions() {
+        let body = parse_body(concat!(
+            "Sub MySub()\n",
+            "    s = Err.Source\n",
+            "    h = Err.HelpFile\n",
+            "    c = Err.HelpContext\n",
+            "End Sub\n",
+        ));
+        assert_eq!(body, vec![
+            Stmt::Assignment { var: "s".into(), value: Expr::ErrSource },
+            Stmt::Assignment { var: "h".into(), value: Expr::ErrHelpFile },
+            Stmt::Assignment { var: "c".into(), value: Expr::ErrHelpContext },
+        ]);
     }
 
     #[test] fn err_number_and_description_parse_as_expressions() {

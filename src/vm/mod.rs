@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
+use crate::check;
 use crate::formula;
 use crate::parser::ast::{ArrayDim, CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp};
 use crate::parser::{self, EntrypointResolution};
@@ -37,6 +38,18 @@ struct CallFrame {
     #[allow(dead_code)]
     procedure_name: String,
     error_mode: ErrorMode,
+}
+
+/// The full set of values `Err.Raise` supplies — real VBA's own five
+/// `Err` properties, minus `Number`/`Description`'s own doc (see
+/// `Vm::err_number`) since those two aren't new here.
+#[derive(Debug, Clone)]
+struct RaisedError {
+    number: i64,
+    description: String,
+    source: String,
+    help_file: String,
+    help_context: i64,
 }
 
 /// Evidence for a resolution failure (Milestone B6a's `diagnose`
@@ -626,14 +639,25 @@ pub struct Vm {
     err_number: i64,
     /// Real VBA `Err.Description`, paired with `err_number`.
     err_description: String,
+    /// Real VBA `Err.Source` — "" unless the most recent error was raised
+    /// via `Err.Raise` with an explicit Source argument. This project
+    /// doesn't model a VBA project/class name, so an internally-raised
+    /// runtime error (division by zero, subscript out of range, ...) never
+    /// sets this to anything but "".
+    err_source: String,
+    /// Real VBA `Err.HelpFile` — "" unless set by `Err.Raise`.
+    err_help_file: String,
+    /// Real VBA `Err.HelpContext` — 0 unless set by `Err.Raise`.
+    err_help_context: i64,
     /// Set by `Err.Raise` immediately before it returns its `Err(String)`,
     /// so the next `On Error Resume Next`/`On Error GoTo` catch site uses
-    /// the number/description the user actually raised instead of running
-    /// that message text back through `classify_vba_error_number` (which
-    /// would misclassify it as a generic 1004, since a raised description
-    /// is arbitrary user text, not one of elixcee's own known message
-    /// strings). Taken (cleared) by the first catch site that consumes it.
-    pending_raised_error: Option<(i64, String)>,
+    /// the number/description/source/help-file/help-context the user
+    /// actually raised instead of running that message text back through
+    /// `classify_vba_error_number` (which would misclassify it as a
+    /// generic 1004, since a raised description is arbitrary user text,
+    /// not one of elixcee's own known message strings). Taken (cleared) by
+    /// the first catch site that consumes it.
+    pending_raised_error: Option<RaisedError>,
     /// The current module's `Option Base` value (real VBA: 0 or 1),
     /// default 0. Set from `Program::option_base` at the start of
     /// `run_sub`/`run_sub_multi` — see `eval_array_bounds`. `run_sub_multi`
@@ -679,24 +703,41 @@ impl Vm {
             with_stack: Vec::new(),
             err_number: 0,
             err_description: String::new(),
+            err_source: String::new(),
+            err_help_file: String::new(),
+            err_help_context: 0,
             pending_raised_error: None,
             option_base: 0,
         }
     }
 
-    /// Records a caught runtime error into `Err.Number`/`Err.Description` —
-    /// called at every point an `On Error Resume Next`/`On Error GoTo
-    /// <label>` actually catches an error (see `exec_stmt`/`exec_body`).
-    /// Uses `pending_raised_error` if `Err.Raise` set it (the number/
-    /// description the user actually specified); otherwise classifies the
-    /// plain error message via `classify_vba_error_number`.
+    /// Records a caught runtime error into every `Err` property — called at
+    /// every point an `On Error Resume Next`/`On Error GoTo <label>`
+    /// actually catches an error (see `exec_stmt`/`exec_body`). Uses
+    /// `pending_raised_error` if `Err.Raise` set it (the values the user
+    /// actually specified); otherwise classifies the plain error message
+    /// via `classify_vba_error_number` and leaves Source/HelpFile/
+    /// HelpContext at their zero values — this project doesn't model a VBA
+    /// project/class name to default Source to for an internally-raised
+    /// error.
     fn record_error(&mut self, msg: &str) {
-        let (number, description) = self
-            .pending_raised_error
-            .take()
-            .unwrap_or_else(|| classify_vba_error_number(msg));
-        self.err_number = number;
-        self.err_description = description;
+        match self.pending_raised_error.take() {
+            Some(r) => {
+                self.err_number = r.number;
+                self.err_description = r.description;
+                self.err_source = r.source;
+                self.err_help_file = r.help_file;
+                self.err_help_context = r.help_context;
+            }
+            None => {
+                let (number, description) = classify_vba_error_number(msg);
+                self.err_number = number;
+                self.err_description = description;
+                self.err_source.clear();
+                self.err_help_file.clear();
+                self.err_help_context = 0;
+            }
+        }
     }
 
     /// Drains the resolution-failure evidence set by the most recent failed
@@ -1922,6 +1963,9 @@ impl Vm {
         self.last_resolution_failure = None;
         self.err_number = 0;
         self.err_description.clear();
+        self.err_source.clear();
+        self.err_help_file.clear();
+        self.err_help_context = 0;
         self.pending_raised_error = None;
         // A Vm reused across multiple run_sub calls must not carry the
         // previous run's call frames (or their On Error state) into this
@@ -1935,6 +1979,19 @@ impl Vm {
         for td in &program.type_defs {
             self.type_defs.insert(td.name.clone(), td.fields.clone());
         }
+
+        // Pre-flight compile-time check, run before any statement (including
+        // the entrypoint's own first line) executes — see
+        // `check::compile_check_errors`'s own doc comment for exactly what
+        // this catches. Running it here, ahead of `call_sub_def`, is what
+        // makes these errors uncatchable by `On Error` for free: no `On
+        // Error` statement has had a chance to take effect yet, matching
+        // real VBA (these are compile errors, not runtime ones).
+        if let Some((msg, span)) = check::compile_check_errors(program, &HashSet::new()) {
+            self.current_span = Some(span);
+            return Err(msg);
+        }
+
         let name = sub_name.to_lowercase();
         let sub = self.user_subs.get(&name)
             .ok_or_else(|| format!("Sub '{}' not found", sub_name))?
@@ -1976,6 +2033,9 @@ impl Vm {
         self.last_resolution_failure = None;
         self.err_number = 0;
         self.err_description.clear();
+        self.err_source.clear();
+        self.err_help_file.clear();
+        self.err_help_context = 0;
         self.pending_raised_error = None;
         self.call_stack.clear();
         // Real VBA scopes `Option Base` per module; this codebase's `Vm`
@@ -1990,6 +2050,27 @@ impl Vm {
             for f in &program.funcs { self.user_funcs.insert(f.name.clone(), f.clone()); }
             for s in &program.subs { self.user_subs.insert(s.name.clone(), s.clone()); }
             for td in &program.type_defs { self.type_defs.insert(td.name.clone(), td.fields.clone()); }
+        }
+
+        // Same pre-flight compile-time check as `run_sub`, run once per
+        // module — each module only sees its own `Program`, so
+        // `other_module_names` (every bare Sub/Function name declared in
+        // every *other* module) is built the same way
+        // `main.rs`'s own multi-module `elixcee check` path already does,
+        // or a legitimate unqualified cross-module call would be
+        // misreported as undefined.
+        for (name, program) in modules {
+            let mut other_module_names: HashSet<String> = HashSet::new();
+            for (other_name, other_program) in modules {
+                if other_name != name {
+                    other_module_names.extend(other_program.subs.iter().map(|s| s.name.clone()));
+                    other_module_names.extend(other_program.funcs.iter().map(|f| f.name.clone()));
+                }
+            }
+            if let Some((msg, span)) = check::compile_check_errors(program, &other_module_names) {
+                self.current_span = Some(span);
+                return Err(msg);
+            }
         }
 
         let sub = match parser::resolve_entrypoint(modules, entrypoint) {
@@ -2276,21 +2357,35 @@ impl Vm {
             Stmt::ErrClear => {
                 self.err_number = 0;
                 self.err_description.clear();
+                self.err_source.clear();
+                self.err_help_file.clear();
+                self.err_help_context = 0;
             }
-            Stmt::ErrRaise { number, source, description } => {
+            Stmt::ErrRaise { number, source, description, help_file, help_context } => {
                 let number = to_i64_rounded(&self.eval_expr(number)?)?;
-                // Evaluated for side effects/argument-correctness parity
-                // with real VBA (which evaluates every supplied argument),
-                // even though `Err.Source` isn't modeled as a readable
-                // property here — see `Stmt::ErrRaise`'s own doc.
-                if let Some(source) = source {
-                    self.eval_expr(source)?;
-                }
+                let source = match source {
+                    Some(s) => self.eval_expr(s)?.to_string(),
+                    None => String::new(),
+                };
                 let description = match description {
                     Some(d) => self.eval_expr(d)?.to_string(),
                     None => default_description_for_vba_error_number(number).to_string(),
                 };
-                self.pending_raised_error = Some((number, description.clone()));
+                let help_file = match help_file {
+                    Some(h) => self.eval_expr(h)?.to_string(),
+                    None => String::new(),
+                };
+                let help_context = match help_context {
+                    Some(h) => to_i64_rounded(&self.eval_expr(h)?)?,
+                    None => 0,
+                };
+                self.pending_raised_error = Some(RaisedError {
+                    number,
+                    description: description.clone(),
+                    source,
+                    help_file,
+                    help_context,
+                });
                 return Err(description);
             }
             Stmt::Label(_) => {}  // no-op during normal execution
@@ -2818,6 +2913,9 @@ impl Vm {
             Expr::Bool(b)       => Ok(Variant::Boolean(*b)),
             Expr::ErrNumber      => Ok(Variant::Integer(self.err_number)),
             Expr::ErrDescription => Ok(Variant::Str(self.err_description.clone())),
+            Expr::ErrSource      => Ok(Variant::Str(self.err_source.clone())),
+            Expr::ErrHelpFile    => Ok(Variant::Str(self.err_help_file.clone())),
+            Expr::ErrHelpContext => Ok(Variant::Integer(self.err_help_context)),
             Expr::Var(name) => {
                 if let Some(v) = self.variables.get(name) { return Ok(v.clone()); }
                 // Excel built-in constants
@@ -4014,6 +4112,26 @@ pub fn is_known_builtin_function(name: &str) -> bool {
     }
 }
 
+/// The exact error `eval_vba_func` produces for a zero-arg call to `name`,
+/// or `None` if it's actually a known, working builtin. Same zero-arg-probe
+/// technique as `is_known_builtin_function` (safe here for the same reason:
+/// every "not known" arm — the generic fallback and `eval_wsf`'s own
+/// catch-all — matches purely on `name`, never on the argument list, so the
+/// probed message is identical to what a real call with any other argument
+/// count would produce).
+///
+/// Used by `check::compile_check_errors` so its pre-flight rejection of an
+/// unresolvable `Expr::FuncCall` reports the same wording running it would
+/// have produced, instead of inventing separate text that could drift from
+/// a dispatch arm's own message — `wsf_textjoin`, for instance, fails
+/// inside `eval_wsf` with "WorksheetFunction.textjoin is not implemented",
+/// not the generic "Unknown VBA function" `eval_vba_func`'s own top-level
+/// fallback arm uses.
+pub fn builtin_call_error(name: &str) -> Option<String> {
+    let mut vm = Vm::new();
+    vm.eval_vba_func(name, &[]).err()
+}
+
 fn wsf_criteria_match(v: &Variant, criteria: &Variant) -> bool {
     match criteria {
         Variant::Str(s) => {
@@ -5169,18 +5287,43 @@ mod tests {
     }
 
     #[test]
-    fn err_clear_resets_number_and_description() {
+    fn err_clear_resets_every_err_property() {
         let vm = run(concat!(
             "Sub MySub()\n",
             "    On Error Resume Next\n",
-            "    x = 1 / 0\n",
+            "    Err.Raise 513, \"MySource\", \"custom text\", \"help.chm\", 100\n",
             "    Err.Clear\n",
             "    n = Err.Number\n",
             "    d = Err.Description\n",
+            "    s = Err.Source\n",
+            "    h = Err.HelpFile\n",
+            "    c = Err.HelpContext\n",
             "End Sub\n",
         ));
         assert_eq!(vm.variables["n"], Variant::Integer(0));
         assert_eq!(vm.variables["d"], Variant::Str(String::new()));
+        assert_eq!(vm.variables["s"], Variant::Str(String::new()));
+        assert_eq!(vm.variables["h"], Variant::Str(String::new()));
+        assert_eq!(vm.variables["c"], Variant::Integer(0));
+    }
+
+    #[test]
+    fn err_source_help_file_help_context_are_empty_zero_for_an_internally_raised_error() {
+        // This project doesn't model a VBA project/class name, so an
+        // error the VM itself raises (not via Err.Raise) never populates
+        // Source/HelpFile/HelpContext with anything but their zero values.
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    x = 1 / 0\n",
+            "    s = Err.Source\n",
+            "    h = Err.HelpFile\n",
+            "    c = Err.HelpContext\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["s"], Variant::Str(String::new()));
+        assert_eq!(vm.variables["h"], Variant::Str(String::new()));
+        assert_eq!(vm.variables["c"], Variant::Integer(0));
     }
 
     #[test]
@@ -5222,10 +5365,46 @@ mod tests {
             "    Err.Raise 513, \"MySource\", \"custom text\"\n",
             "    n = Err.Number\n",
             "    d = Err.Description\n",
+            "    s = Err.Source\n",
             "End Sub\n",
         ));
         assert_eq!(vm.variables["n"], Variant::Integer(513));
         assert_eq!(vm.variables["d"], Variant::Str("custom text".into()));
+        assert_eq!(vm.variables["s"], Variant::Str("MySource".into()));
+    }
+
+    #[test]
+    fn err_raise_with_all_five_arguments_fills_in_every_err_property() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    Err.Raise 513, \"MySource\", \"custom text\", \"help.chm\", 100\n",
+            "    n = Err.Number\n",
+            "    d = Err.Description\n",
+            "    s = Err.Source\n",
+            "    h = Err.HelpFile\n",
+            "    c = Err.HelpContext\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(513));
+        assert_eq!(vm.variables["d"], Variant::Str("custom text".into()));
+        assert_eq!(vm.variables["s"], Variant::Str("MySource".into()));
+        assert_eq!(vm.variables["h"], Variant::Str("help.chm".into()));
+        assert_eq!(vm.variables["c"], Variant::Integer(100));
+    }
+
+    #[test]
+    fn err_raise_skipped_help_file_does_not_get_read_as_help_context() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    Err.Raise 513, \"MySource\", \"custom text\", , 100\n",
+            "    h = Err.HelpFile\n",
+            "    c = Err.HelpContext\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["h"], Variant::Str(String::new()));
+        assert_eq!(vm.variables["c"], Variant::Integer(100));
     }
 
     #[test]
@@ -5468,6 +5647,31 @@ mod tests {
         // would succeed instead of propagating.
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert_eq!(err, "Division by zero");
+    }
+
+    #[test]
+    fn a_raise_with_all_five_arguments_inside_a_called_sub_reaches_the_callers_handler_intact() {
+        let vm = run(concat!(
+            "Sub Child()\n",
+            "    Err.Raise 513, \"MySource\", \"custom text\", \"help.chm\", 100\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    On Error GoTo Handler\n",
+            "    Call Child()\n",
+            "    Exit Sub\n",
+            "Handler:\n",
+            "    n = Err.Number\n",
+            "    d = Err.Description\n",
+            "    s = Err.Source\n",
+            "    h = Err.HelpFile\n",
+            "    c = Err.HelpContext\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(513));
+        assert_eq!(vm.variables["d"], Variant::Str("custom text".into()));
+        assert_eq!(vm.variables["s"], Variant::Str("MySource".into()));
+        assert_eq!(vm.variables["h"], Variant::Str("help.chm".into()));
+        assert_eq!(vm.variables["c"], Variant::Integer(100));
     }
 
     #[test]
@@ -8716,5 +8920,132 @@ mod tests {
              t = t + c.Value\n    Next c\nEnd Sub\n",
         );
         assert_eq!(vm.variables["t"], Variant::Integer(10));
+    }
+
+    // ── run_sub's pre-flight compile-check (check::compile_check_errors) ────
+    // Real VBA compiles the whole module before running any of it, and never
+    // lets `On Error` trap a compile error — these confirm `run_sub` gets
+    // both properties by running the check before `call_sub_def`.
+
+    #[test]
+    fn a_compile_error_prevents_even_the_entrypoints_own_earlier_statements_from_running() {
+        let mut vm = Vm::new();
+        let prog = parser::parse(
+            "Sub MySub()\n    x = 1\n    GoTo Nowhere\nEnd Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(!vm.variables.contains_key("x"));
+    }
+
+    #[test]
+    fn a_compile_error_in_an_unrelated_sub_still_blocks_the_entrypoint_from_running() {
+        // Whole-module semantics: Innocent itself has no problem, but
+        // Broken's undefined label is enough to fail the whole run.
+        let mut vm = Vm::new();
+        let prog = parser::parse(concat!(
+            "Sub Broken()\n",
+            "    GoTo Nowhere\n",
+            "End Sub\n",
+            "Sub Innocent()\n",
+            "    x = 42\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let err = vm.run_sub(&prog, "innocent").unwrap_err();
+        assert_eq!(err, "GoTo: label 'nowhere' not found");
+        assert!(!vm.variables.contains_key("x"));
+    }
+
+    #[test]
+    fn on_error_resume_next_does_not_catch_a_compile_error() {
+        let mut vm = Vm::new();
+        let prog = parser::parse(concat!(
+            "Sub MySub()\n",
+            "    On Error Resume Next\n",
+            "    x = 1\n",
+            "    GoTo Nowhere\n",
+            "    y = 2\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "GoTo: label 'nowhere' not found");
+        // Not just uncaught — never ran at all (the whole point of a
+        // pre-flight check), unlike a genuine runtime error under Resume
+        // Next, which would leave x set and skip only the failing line.
+        assert!(!vm.variables.contains_key("x"));
+    }
+
+    #[test]
+    fn on_error_goto_does_not_catch_an_undefined_procedure_call() {
+        let mut vm = Vm::new();
+        let prog = parser::parse(concat!(
+            "Sub MySub()\n",
+            "    On Error GoTo Handler\n",
+            "    Call DoesNotExist()\n",
+            "    Exit Sub\n",
+            "Handler:\n",
+            "    n = Err.Number\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "Sub/Function 'doesnotexist' not found");
+        assert!(!vm.variables.contains_key("n"));
+    }
+
+    #[test]
+    fn an_argument_count_mismatch_is_caught_before_the_call_runs() {
+        let mut vm = Vm::new();
+        let prog = parser::parse(concat!(
+            "Sub Helper(a, b)\n",
+            "    x = a + b\n",
+            "End Sub\n",
+            "Sub MySub()\n",
+            "    Call Helper(1)\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert_eq!(err, "'helper' expects 2 argument(s), got 1");
+    }
+
+    #[test]
+    fn a_clean_program_runs_normally_through_the_new_pre_flight_check() {
+        let vm = run("Sub MySub()\n    x = 1 + 2\nEnd Sub\n");
+        assert_eq!(vm.variables["x"], Variant::Integer(3));
+    }
+
+    #[test]
+    fn run_sub_multi_pre_flight_check_covers_every_module_not_just_the_entrypoints() {
+        // Entrypoint is Innocent (module2), but module1's Broken has the
+        // compile error — must still block the whole run, same as the
+        // single-module case, since real VBA compiles the whole project.
+        let modules = vec![
+            module("module1", "Sub Broken()\n    GoTo Nowhere\nEnd Sub\n"),
+            module("module2", "Sub Innocent()\n    x = 42\nEnd Sub\n"),
+        ];
+        let mut vm = Vm::new();
+        let err = vm.run_sub_multi(&modules, "Innocent").unwrap_err();
+        assert_eq!(err, "GoTo: label 'nowhere' not found");
+        assert!(!vm.variables.contains_key("x"));
+    }
+
+    #[test]
+    fn run_sub_multi_pre_flight_check_does_not_misflag_a_legitimate_cross_module_call() {
+        // Regression guard for the exact risk this design has to avoid:
+        // compile_check_errors only ever sees one module's own Program, so
+        // run_sub_multi must build other_module_names per module (mirroring
+        // main.rs's own multi-module `elixcee check` path) or this would
+        // wrongly reject Main's call to Helper as undefined.
+        let modules = vec![
+            module("module1", "Sub Helper()\n    y = 1\nEnd Sub\n"),
+            module("module2", "Sub Main()\n    Call Helper()\n    x = 42\nEnd Sub\n"),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["x"], Variant::Integer(42));
+        assert_eq!(vm.variables["y"], Variant::Integer(1));
     }
 }

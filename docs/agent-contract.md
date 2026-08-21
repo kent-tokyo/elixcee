@@ -120,7 +120,7 @@ that does.
 | `E1003` | `sheet_not_found` | runtime | Reserved for a `Sheets("X")` reference failing *during* macro execution — still not reachable via `run`/`check`'s plain `--json` contract, since `Sheets("X")` auto-creates on write / reads `Empty` on miss unless `Vm::strict_resolution` is on, which only the `diagnose` subcommand sets (see below — it uses its own richer contract, not this error code) |
 | `E1004` | `msgbox_blocked` | runtime | A `MsgBox` fired while the VM was configured to treat MsgBox as an error (Python API only; not reachable from the CLI today) |
 | `E1007` | `object_variable_not_set` | runtime | A member access (`.Value`, `.Copy`, `.Range(...)`, …) through an object variable holding no live reference — `Dim r As Range` with no `Set`, or after an explicit `Set r = Nothing`. Also covers the *With-block* half of the same condition: a bare `.member` reference with no enclosing `With` block, or a `With` block whose target is an unset object variable. Real VBA's error 91; the message is always exactly `Object variable or With block variable not set` |
-| `E1099` | `runtime_error` | runtime | Any other runtime failure not covered above |
+| `E1099` | `runtime_error` | runtime | Any other runtime failure not covered above — **also where an argument-count mismatch or an undefined `GoTo`/`On Error GoTo` label lands in run-mode's own `--json` output** (see below; `check` reports these under their own `E1008`/`E1009` codes, but run-mode's `classify_runtime_error` has no prefix match for either message yet, so they fall through to the generic bucket) |
 | `E2001` | `parse_error` | parse | The VBA source failed to parse |
 | `E3001` | `io_error` | io | Reading the VBA file, reading `--file`, or writing `--output` failed |
 | `E3002` | `sheet_setup_error` | setup | Resolving which sheet to use failed *before* the macro ran — a workbook with no sheets, or `--sheet <name>` naming a sheet that doesn't exist in `--file` |
@@ -130,6 +130,26 @@ Classification is currently done by pattern-matching the existing
 not by a typed error enum in the VM. This is a known, deliberate interim
 trade-off — see the "runtime error 分類を型付きエラーへ" item in
 `tasks/todo.md` for the plan to harden it before adding more error kinds.
+
+**Undefined Sub/Function calls, argument-count mismatches, and undefined
+`GoTo`/`On Error GoTo` labels are checked once, up front, before the
+entrypoint's first statement executes** — matching real VBA, where these are
+compile errors, not runtime ones. Three consequences worth knowing for a
+`--json` consumer: (1) `On Error Resume Next`/`On Error GoTo` anywhere in the
+project can never catch one of these — the error is unconditionally returned
+from `run`, since no statement (including any `On Error`) has executed yet;
+(2) the check covers the *whole* project, not just the statements the
+entrypoint actually reaches — a Sub the entrypoint never calls, but that
+itself contains one of these three problems, still fails the run; (3) `x = 1`
+followed by one of these three errors on the next line means `x` was never
+actually assigned — nothing in the macro ran at all. An "invalid assignment
+target" check (e.g. calling a Function's result as if it were an array
+element) was considered for this same pre-flight pass and deliberately
+dropped: `name(args) = value` parses the same way whether `name` is a real
+array or (invalidly) a Function name, and telling those apart isn't
+decidable without type inference this project stays out of by design — that
+case still surfaces as an ordinary runtime error, catchable by `On Error`
+like any other.
 
 ## `messages` semantics
 
@@ -253,6 +273,8 @@ This is a separate command from the run-mode above, with its own JSON shape
 | `E1002` | `undefined_sub_or_function` | error | The given `MacroName`/`--entry` doesn't exist as a `Sub` in the file/project (same code as run-mode's missing-entrypoint failure) |
 | `E1005` | `duplicate_sub_or_function` | error | (multi-module) Two modules declare a Sub, or separately a Function, with the same bare name — see "Multi-module projects" above |
 | `E1006` | `duplicate_module_name` | error | (multi-module) Two files resolved to the same module name |
+| `E1008` | `argument_count_mismatch` | error | A call to a Sub/Function declared *in the same file being checked* passes a different number of arguments than it declares — cross-module calls aren't checked (this diagnostic only ever sees one module's own `Program`), and neither is a call inside the callee's own body (recursion) |
+| `E1009` | `undefined_label` | error | A `GoTo`/`On Error GoTo` target isn't a `Label` anywhere in the same Sub/Function (VBA label scope is the whole procedure, not the current block) |
 | `I1001` | `interactive_call` | info | The macro contains a `MsgBox` call — not broken, just not fully headless |
 | `I1002` | `unsupported_construct` | info | A line is a no-op because the construct on it isn't recognized/implemented (`Debug.Print`, an unrecognized `Range`/`Sheets` property or method, a property/field read without assignment, or calling a Sub without `Call`/parentheses) — the macro still runs to completion, this just makes an already-silent no-op visible |
 
@@ -276,6 +298,17 @@ errors. In a multi-module check, a bare call is also resolved against every
 *other* module's Sub/Function names — an unqualified cross-module call
 isn't misreported as undefined just because this diagnostic pass only sees
 one module's own AST at a time.
+
+Two more checks (`E1008`/`argument_count_mismatch` and `E1009`/
+`undefined_label`) exist specifically so `check` agrees with what `run` will
+actually do — `run` enforces both, and `check`, before this pair existed,
+had no way to know about either: a program `check` reported clean could
+still have `run` refuse to execute a single statement of it. Every violation
+of either kind is reported (not just the first, unlike undefined-name
+detection's own early-exit-per-statement style above), each with its own
+located diagnostic. See the run-mode section above for exactly what "`run`
+enforces this pre-flight" means in practice (uncatchable by `On Error`,
+whole-project scope, and so on).
 
 Unrecognized/unsupported constructs that silently became no-ops are also
 detected (`I1002`/`unsupported_construct`, info severity — a plain `Dim x`

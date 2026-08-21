@@ -118,6 +118,8 @@ fn run_check_impl(
         );
     }
 
+    collect_extra_compile_diagnostics(&prog, source, file, &mut diags);
+
     diags
 }
 
@@ -286,6 +288,415 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::Unsupported { .. } => {}
             Stmt::ErrClear => {}
             Stmt::ErrRaise { .. } => {}
+        }
+    }
+}
+
+/// Every nested `Vec<SpannedStmt>` body directly inside `stmt`, in
+/// declaration order — the single source of truth for "which `Stmt`
+/// variants carry a nested body", shared by every walker in this module
+/// that must not silently under-recurse: `collect_labels`,
+/// `check_body_for_compile_errors`, and `collect_extra_compile_diagnostics_body`.
+/// (`collect_declared_names`/`walk_body`/`walk_expr` predate this helper and
+/// keep their own separate exhaustive matches — not worth the churn of
+/// switching already-stable, already-tested code to it.) Exhaustive over
+/// every `Stmt` variant (no wildcard): `compile_check_errors` treats a
+/// `GoTo`/`On Error GoTo` target `collect_labels` fails to find as a
+/// *pre-flight, uncatchable* error that blocks the whole run, so under-
+/// recursing here wouldn't just misreport a diagnostic, it would stop a
+/// legitimate program from running at all. A new `Stmt` variant with a
+/// nested body must be a deliberate addition here, not a silent gap.
+fn nested_bodies(stmt: &Stmt) -> Vec<&[SpannedStmt]> {
+    match stmt {
+        Stmt::WithSheet { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::ForEach { body, .. }
+        | Stmt::DoLoop { body, .. }
+        | Stmt::With { body, .. } => vec![body],
+        Stmt::If { then_body, else_body, .. } => vec![then_body, else_body],
+        Stmt::SelectCase { cases, else_body, .. } => {
+            let mut bodies: Vec<&[SpannedStmt]> = cases.iter().map(|(_, b)| b.as_slice()).collect();
+            bodies.push(else_body);
+            bodies
+        }
+        Stmt::Assignment { .. }
+        | Stmt::CellWrite { .. }
+        | Stmt::SetCalcMode(_)
+        | Stmt::SetAppProp { .. }
+        | Stmt::RangeWrite { .. }
+        | Stmt::RangeCopy { .. }
+        | Stmt::RangeObjectCopy { .. }
+        | Stmt::Set { .. }
+        | Stmt::RangePaste { .. }
+        | Stmt::SheetRangePaste { .. }
+        | Stmt::SheetProtection { .. }
+        | Stmt::RangeClear { .. }
+        | Stmt::RangeOffsetWrite { .. }
+        | Stmt::RangeDelete { .. }
+        | Stmt::RangeInsert { .. }
+        | Stmt::RangeSort { .. }
+        | Stmt::RangeName { .. }
+        | Stmt::SheetCellWrite { .. }
+        | Stmt::SheetRangeWrite { .. }
+        | Stmt::SheetsAdd
+        | Stmt::SheetsDelete { .. }
+        | Stmt::ExitFor
+        | Stmt::ExitDo
+        | Stmt::ExitSub
+        | Stmt::ExitFunction
+        | Stmt::OnError { .. }
+        | Stmt::OnErrorGoTo(_)
+        | Stmt::GoTo(_)
+        | Stmt::Label(_)
+        | Stmt::Resume { .. }
+        | Stmt::CallSub { .. }
+        | Stmt::Dim
+        | Stmt::DimBare { .. }
+        | Stmt::DimArray { .. }
+        | Stmt::ReDim { .. }
+        | Stmt::ArrayWrite { .. }
+        | Stmt::Erase { .. }
+        | Stmt::WithDot { .. }
+        | Stmt::MsgBox { .. }
+        | Stmt::RecordSet { .. }
+        | Stmt::DimRecord { .. }
+        | Stmt::DimArrayRecord { .. }
+        | Stmt::DimMulti(_)
+        | Stmt::RecordSetNested { .. }
+        | Stmt::ArrayRecordSet { .. }
+        | Stmt::Unsupported { .. }
+        | Stmt::ErrClear
+        | Stmt::ErrRaise { .. } => vec![],
+    }
+}
+
+/// Every label declared anywhere in a Sub/Function body (VBA `GoTo`/`On
+/// Error GoTo` scope is the whole procedure, not just the current block —
+/// same reasoning as `local_scope_names` collecting across all nesting, not
+/// just the top level).
+fn collect_labels(body: &[SpannedStmt], labels: &mut HashSet<String>) {
+    for s in body {
+        if let Stmt::Label(name) = &s.stmt {
+            labels.insert(name.clone());
+        }
+        for nested in nested_bodies(&s.stmt) {
+            collect_labels(nested, labels);
+        }
+    }
+}
+
+/// Every `Expr::FuncCall` reachable from `expr`, including `expr` itself —
+/// used by `compile_check_errors` to find calls buried inside a larger
+/// expression (`Foo(Bar(1))`), not just ones that are a whole statement's
+/// value on their own. Not exhaustive over every `Expr` variant the way
+/// `collect_declared_names`/`collect_labels` are: missing a rare nested
+/// container here only means `compile_check_errors` fails to catch that one
+/// case early — it still surfaces as a normal runtime error later (the
+/// existing, pre-this-phase behavior), not a false positive, so the lower
+/// rigor bar is safe.
+fn collect_func_calls<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    if let Expr::FuncCall { args, .. } = expr {
+        out.push(expr);
+        for a in args {
+            collect_func_calls(a, out);
+        }
+        return;
+    }
+    match expr {
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_func_calls(lhs, out);
+            collect_func_calls(rhs, out);
+        }
+        Expr::UnaryMinus(e) | Expr::UnaryNot(e) => collect_func_calls(e, out),
+        Expr::CellRead { row, col } => {
+            collect_func_calls(row, out);
+            collect_func_calls(col, out);
+        }
+        Expr::RangeOffsetRead { row_off, col_off, .. } => {
+            collect_func_calls(row_off, out);
+            collect_func_calls(col_off, out);
+        }
+        Expr::CellsFind { what, .. } => collect_func_calls(what, out),
+        Expr::SheetCellRead { sheet, row, col } => {
+            collect_func_calls(sheet, out);
+            collect_func_calls(row, out);
+            collect_func_calls(col, out);
+        }
+        Expr::SheetRangeRead { sheet, .. } => collect_func_calls(sheet, out),
+        Expr::WorkbookQualifiedSheet { workbook, sheet } => {
+            collect_func_calls(workbook, out);
+            collect_func_calls(sheet, out);
+        }
+        Expr::CellsEndProp { row, col, .. } => {
+            collect_func_calls(row, out);
+            collect_func_calls(col, out);
+        }
+        Expr::ArrayRecordGet { indices, .. } => {
+            for i in indices {
+                collect_func_calls(i, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `Some(params.len())` iff `name` resolves to a Sub or Function declared in
+/// `prog` itself (not shadowed by a local variable/array/param — mirroring
+/// `is_resolvable`'s own local-first precedence). `None` for a local name, a
+/// cross-module call, or a builtin — `compile_check_errors`'s argument-count
+/// check only fires when the callee's own declared arity is actually known,
+/// which this project only tracks for a Sub/Function defined in the same
+/// module being checked.
+fn resolved_user_proc_arity(name: &str, prog: &Program, local_names: &HashSet<String>) -> Option<usize> {
+    if local_names.contains(name) {
+        return None;
+    }
+    if let Some(s) = prog.subs.iter().find(|s| s.name == name) {
+        return Some(s.params.len());
+    }
+    if let Some(f) = prog.funcs.iter().find(|f| f.name == name) {
+        return Some(f.params.len());
+    }
+    None
+}
+
+/// The subset of this module's own findings that are genuine VBA
+/// *compile*-time errors — real VBA refuses to run a macro at all when one
+/// of these is present anywhere in the project, and (being compile, not
+/// runtime, errors) none of them can be trapped by `On Error`.
+/// `Vm::run_sub`/`run_sub_multi` call this once per invocation, over the
+/// whole program, before executing any statement — which is what makes
+/// "uncatchable by `On Error`" true for free: the check runs before any
+/// `On Error` statement has had a chance to take effect.
+///
+/// Checks exactly three things, chosen because each is syntactically
+/// decidable without the type inference a real VBA compiler needs:
+/// - an undefined Sub/Function call (reuses `is_resolvable`, the same logic
+///   `run_check`'s own E1002 diagnostic already uses);
+/// - an argument-count mismatch against a same-module callee's own declared
+///   arity (`resolved_user_proc_arity` — cross-module calls aren't checked,
+///   since this function only ever sees one module's own `Program`);
+/// - a `GoTo`/`On Error GoTo` target that isn't a label anywhere in the
+///   same procedure.
+///
+/// Returns the first violation found (message, span), walking `prog.subs`
+/// then `prog.funcs` in declaration order, each depth-first through nested
+/// blocks — deterministic, but the order carries no severity meaning.
+///
+/// Deliberately omits the fourth item from this phase's own spec, "invalid
+/// assignment target": `name(args) = value` parses unconditionally as
+/// `Stmt::ArrayWrite` (see `parse_ident_stmt`) regardless of whether `name`
+/// is a real declared array or (invalidly) a Function name — telling those
+/// apart isn't syntactically decidable without the type-inference this
+/// project stays out of by design.
+pub fn compile_check_errors(prog: &Program, other_module_names: &HashSet<String>) -> Option<(String, SourceSpan)> {
+    for sub in &prog.subs {
+        let local_names = local_scope_names(&sub.name, &sub.params, &sub.body);
+        let mut labels = HashSet::new();
+        collect_labels(&sub.body, &mut labels);
+        if let Some(v) = check_body_for_compile_errors(&sub.body, prog, &local_names, other_module_names, &labels) {
+            return Some(v);
+        }
+    }
+    for func in &prog.funcs {
+        let local_names = local_scope_names(&func.name, &func.params, &func.body);
+        let mut labels = HashSet::new();
+        collect_labels(&func.body, &mut labels);
+        if let Some(v) = check_body_for_compile_errors(&func.body, prog, &local_names, other_module_names, &labels) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn check_body_for_compile_errors(
+    body: &[SpannedStmt],
+    prog: &Program,
+    local_names: &HashSet<String>,
+    other_module_names: &HashSet<String>,
+    labels: &HashSet<String>,
+) -> Option<(String, SourceSpan)> {
+    for s in body {
+        match &s.stmt {
+            Stmt::GoTo(label) if !labels.contains(label) => {
+                return Some((format!("GoTo: label '{}' not found", label), s.span));
+            }
+            Stmt::OnErrorGoTo(label) if !labels.contains(label) => {
+                return Some((format!("On Error GoTo: label '{}' not found", label), s.span));
+            }
+            Stmt::CallSub { name, args } => {
+                if !is_resolvable(name, prog, local_names, other_module_names) {
+                    return Some((format!("Sub/Function '{}' not found", name), s.span));
+                }
+                if let Some(arity) = resolved_user_proc_arity(name, prog, local_names)
+                    && args.len() != arity
+                {
+                    return Some((
+                        format!(
+                            "'{}' expects {} argument(s), got {}",
+                            name, arity, args.len()
+                        ),
+                        s.span,
+                    ));
+                }
+            }
+            _ => {}
+        }
+
+        let mut exprs = Vec::new();
+        collect_stmt_exprs(&s.stmt, &mut exprs);
+        for e in exprs {
+            let mut calls = Vec::new();
+            collect_func_calls(e, &mut calls);
+            for call in calls {
+                let Expr::FuncCall { name, args } = call else { continue };
+                if !is_resolvable(name, prog, local_names, other_module_names) {
+                    // `Expr::FuncCall` in expression position (unlike
+                    // `Stmt::CallSub`) reaches the real builtin dispatch at
+                    // runtime, so its actual failure text depends on which
+                    // dispatch arm the name matches — e.g. `wsf_textjoin`
+                    // fails inside `eval_wsf` with "WorksheetFunction.
+                    // textjoin is not implemented", not the generic
+                    // "Unknown VBA function" text a name matching no arm at
+                    // all gets. `vm::builtin_call_error` asks the VM
+                    // itself, so this always matches word-for-word.
+                    let msg = vm::builtin_call_error(name)
+                        .unwrap_or_else(|| format!("Unknown VBA function: '{}'", name));
+                    return Some((msg, s.span));
+                }
+                if let Some(arity) = resolved_user_proc_arity(name, prog, local_names)
+                    && args.len() != arity
+                {
+                    return Some((
+                        format!(
+                            "'{}' expects {} argument(s), got {}",
+                            name, arity, args.len()
+                        ),
+                        s.span,
+                    ));
+                }
+            }
+        }
+
+        for nested in nested_bodies(&s.stmt) {
+            if let Some(v) = check_body_for_compile_errors(nested, prog, local_names, other_module_names, labels) {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// `run_check`'s own way of surfacing the argument-count and GoTo-label
+/// checks `compile_check_errors` also runs (see that function's doc for the
+/// exact rules) — without this, `elixcee check` could report a program
+/// clean that `Vm::run_sub`'s pre-flight pass would then refuse to run a
+/// single statement of, since neither check was previously known to this
+/// command at all. A parallel walk rather than a shared one with
+/// `check_body_for_compile_errors`: that function stops at the first
+/// violation (right for a pre-flight gate); this one collects every
+/// violation as a located `Diagnostic` (right for a report meant to be read
+/// in full). Deliberately does NOT re-check undefined-name resolution —
+/// `walk_body`/`walk_expr` already report that as E1002, and running it
+/// again here would double-report the same finding under two codes; that's
+/// also why, unlike `compile_check_errors`, this never needs
+/// `other_module_names` — the only thing that parameter is for.
+fn collect_extra_compile_diagnostics(
+    prog: &Program,
+    source: &str,
+    file: &str,
+    diags: &mut Vec<Diagnostic>,
+) {
+    for sub in &prog.subs {
+        let local_names = local_scope_names(&sub.name, &sub.params, &sub.body);
+        let mut labels = HashSet::new();
+        collect_labels(&sub.body, &mut labels);
+        collect_extra_compile_diagnostics_body(&sub.body, prog, &local_names, &labels, source, file, diags);
+    }
+    for func in &prog.funcs {
+        let local_names = local_scope_names(&func.name, &func.params, &func.body);
+        let mut labels = HashSet::new();
+        collect_labels(&func.body, &mut labels);
+        collect_extra_compile_diagnostics_body(&func.body, prog, &local_names, &labels, source, file, diags);
+    }
+}
+
+fn collect_extra_compile_diagnostics_body(
+    body: &[SpannedStmt],
+    prog: &Program,
+    local_names: &HashSet<String>,
+    labels: &HashSet<String>,
+    source: &str,
+    file: &str,
+    diags: &mut Vec<Diagnostic>,
+) {
+    for s in body {
+        match &s.stmt {
+            Stmt::GoTo(label) if !labels.contains(label) => {
+                diags.push(Diagnostic {
+                    severity: "error",
+                    code: "E1009",
+                    kind: "undefined_label",
+                    message: format!("GoTo: label '{}' not found", label),
+                    location: Some(locate(source, file, s.span)),
+                });
+            }
+            Stmt::OnErrorGoTo(label) if !labels.contains(label) => {
+                diags.push(Diagnostic {
+                    severity: "error",
+                    code: "E1009",
+                    kind: "undefined_label",
+                    message: format!("On Error GoTo: label '{}' not found", label),
+                    location: Some(locate(source, file, s.span)),
+                });
+            }
+            Stmt::CallSub { name, args } => {
+                if let Some(arity) = resolved_user_proc_arity(name, prog, local_names)
+                    && args.len() != arity
+                {
+                    diags.push(Diagnostic {
+                        severity: "error",
+                        code: "E1008",
+                        kind: "argument_count_mismatch",
+                        message: format!(
+                            "'{}' expects {} argument(s), got {}",
+                            name, arity, args.len()
+                        ),
+                        location: Some(locate(source, file, s.span)),
+                    });
+                }
+            }
+            _ => {}
+        }
+
+        let mut exprs = Vec::new();
+        collect_stmt_exprs(&s.stmt, &mut exprs);
+        for e in exprs {
+            let mut calls = Vec::new();
+            collect_func_calls(e, &mut calls);
+            for call in calls {
+                let Expr::FuncCall { name, args } = call else { continue };
+                if let Some(arity) = resolved_user_proc_arity(name, prog, local_names)
+                    && args.len() != arity
+                {
+                    diags.push(Diagnostic {
+                        severity: "error",
+                        code: "E1008",
+                        kind: "argument_count_mismatch",
+                        message: format!(
+                            "'{}' expects {} argument(s), got {}",
+                            name, arity, args.len()
+                        ),
+                        location: Some(locate(source, file, s.span)),
+                    });
+                }
+            }
+        }
+
+        for nested in nested_bodies(&s.stmt) {
+            collect_extra_compile_diagnostics_body(
+                nested, prog, local_names, labels, source, file, diags,
+            );
         }
     }
 }
@@ -596,10 +1007,12 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         }
         Stmt::Unsupported { .. } => {}
         Stmt::ErrClear => {}
-        Stmt::ErrRaise { number, source, description } => {
+        Stmt::ErrRaise { number, source, description, help_file, help_context } => {
             out.push(number);
             if let Some(e) = source { out.push(e); }
             if let Some(e) = description { out.push(e); }
+            if let Some(e) = help_file { out.push(e); }
+            if let Some(e) = help_context { out.push(e); }
         }
     }
 }
@@ -852,7 +1265,10 @@ fn walk_expr(
         | Expr::IsNothing(_)
         | Expr::WithDot(_)
         | Expr::ErrNumber
-        | Expr::ErrDescription => {}
+        | Expr::ErrDescription
+        | Expr::ErrSource
+        | Expr::ErrHelpFile
+        | Expr::ErrHelpContext => {}
     }
 }
 
@@ -1393,5 +1809,281 @@ mod tests {
             Some("Main"),
         );
         assert_eq!(codes(&diags), vec!["E1002"]);
+    }
+
+    // ── compile_check_errors: Vm::run_sub's pre-flight compile-error pass ──
+
+    fn parse_ok(src: &str) -> Program {
+        parser::parse_with_span(src).unwrap_or_else(|e| panic!("should parse: {}", e.message))
+    }
+
+    fn compile_errors(src: &str) -> Option<(String, SourceSpan)> {
+        compile_check_errors(&parse_ok(src), &HashSet::new())
+    }
+
+    #[test]
+    fn clean_program_has_no_compile_errors() {
+        assert!(compile_errors("Sub Main()\n    x = 1\nEnd Sub\n").is_none());
+    }
+
+    #[test]
+    fn undefined_sub_call_is_a_compile_error() {
+        let (msg, _) = compile_errors("Sub Main()\n    Call Helper()\nEnd Sub\n").unwrap();
+        assert_eq!(msg, "Sub/Function 'helper' not found");
+    }
+
+    #[test]
+    fn undefined_function_used_in_an_expression_is_a_compile_error() {
+        let (msg, _) =
+            compile_errors("Sub Main()\n    x = Helper(1)\nEnd Sub\n").unwrap();
+        assert_eq!(msg, "Unknown VBA function: 'helper'");
+    }
+
+    #[test]
+    fn undefined_call_nested_inside_another_call_is_still_caught() {
+        // Foo is defined but Bar isn't — the outer call resolves, the
+        // buried inner one doesn't; collect_func_calls must recurse into
+        // Foo's own argument list to find it.
+        let (msg, _) = compile_errors(
+            "Function Foo(n)\n    Foo = n\nEnd Function\nSub Main()\n    x = Foo(Bar(1))\nEnd Sub\n",
+        )
+        .unwrap();
+        assert_eq!(msg, "Unknown VBA function: 'bar'");
+    }
+
+    #[test]
+    fn defined_sub_call_with_the_right_arg_count_is_not_a_compile_error() {
+        assert!(compile_errors(
+            "Sub Helper(a, b)\n    x = a + b\nEnd Sub\nSub Main()\n    Call Helper(1, 2)\nEnd Sub\n"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn too_few_arguments_to_a_same_module_sub_is_a_compile_error() {
+        let (msg, _) = compile_errors(
+            "Sub Helper(a, b)\n    x = a + b\nEnd Sub\nSub Main()\n    Call Helper(1)\nEnd Sub\n",
+        )
+        .unwrap();
+        assert_eq!(msg, "'helper' expects 2 argument(s), got 1");
+    }
+
+    #[test]
+    fn too_many_arguments_to_a_same_module_function_is_a_compile_error() {
+        let (msg, _) = compile_errors(
+            "Function Helper(a)\n    Helper = a\nEnd Function\nSub Main()\n    x = Helper(1, 2)\nEnd Sub\n",
+        )
+        .unwrap();
+        assert_eq!(msg, "'helper' expects 1 argument(s), got 2");
+    }
+
+    #[test]
+    fn array_index_read_is_not_mistaken_for_an_argument_count_mismatch() {
+        // `arr(1, 2)` and a 2-arg function call are syntactically identical
+        // (`Expr::FuncCall`) — `arr` being a locally-Dim'd array must take
+        // precedence, exactly as `is_resolvable` already establishes for
+        // the undefined-name check.
+        assert!(compile_errors(
+            "Sub Main()\n    Dim arr(3, 3)\n    arr(1, 1) = 5\n    x = arr(1, 1)\nEnd Sub\n"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn goto_to_an_undefined_label_is_a_compile_error() {
+        let (msg, _) = compile_errors("Sub Main()\n    GoTo Nowhere\nEnd Sub\n").unwrap();
+        assert_eq!(msg, "GoTo: label 'nowhere' not found");
+    }
+
+    #[test]
+    fn goto_to_a_label_declared_later_in_the_same_body_is_not_a_compile_error() {
+        assert!(compile_errors("Sub Main()\n    GoTo Skip\n    x = 1\nSkip:\n    y = 2\nEnd Sub\n").is_none());
+    }
+
+    #[test]
+    fn goto_to_a_label_nested_inside_an_if_block_is_not_a_compile_error() {
+        // Real VBA GoTo scope is the whole procedure, not the current
+        // block — a label inside a sibling `If` branch is a valid target.
+        assert!(compile_errors(concat!(
+            "Sub Main()\n",
+            "    If True Then\n",
+            "        GoTo Inner\n",
+            "    End If\n",
+            "    If False Then\n",
+            "Inner:\n",
+            "        y = 2\n",
+            "    End If\n",
+            "End Sub\n",
+        ))
+        .is_none());
+    }
+
+    #[test]
+    fn on_error_goto_an_undefined_label_is_a_compile_error() {
+        let (msg, _) =
+            compile_errors("Sub Main()\n    On Error GoTo Nowhere\nEnd Sub\n").unwrap();
+        assert_eq!(msg, "On Error GoTo: label 'nowhere' not found");
+    }
+
+    #[test]
+    fn on_error_goto_a_real_label_is_not_a_compile_error() {
+        assert!(compile_errors(
+            "Sub Main()\n    On Error GoTo Handler\n    x = 1\n    Exit Sub\nHandler:\n    y = 2\nEnd Sub\n"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn a_deliberately_unimplemented_worksheet_function_is_not_flagged() {
+        // wsf_-prefixed names always reach the real dispatch table at
+        // runtime (`eval_wsf`'s own catch-all), never the generic "Unknown
+        // VBA function" fallback — `is_known_builtin_function` (and so
+        // `is_resolvable`) already treats every not-actually-implemented
+        // wsf_ name as unresolvable, and this compile-check inherits that
+        // via `is_resolvable` too, so a not-yet-implemented
+        // WorksheetFunction call is reported (not silently missed) — this
+        // test exists to pin the exact wording, which must come from
+        // `vm::builtin_call_error` (the real dispatch), not be invented.
+        let (msg, _) = compile_errors(
+            "Sub Main()\n    x = WorksheetFunction.TextJoin(\",\", True, \"a\", \"b\")\nEnd Sub\n",
+        )
+        .unwrap();
+        assert_eq!(msg, "WorksheetFunction.textjoin is not implemented");
+    }
+
+    #[test]
+    fn a_call_to_a_name_in_another_module_is_not_flagged_when_registered() {
+        let mut others = HashSet::new();
+        others.insert("helper".to_string());
+        let prog = parse_ok("Sub Main()\n    Call Helper()\nEnd Sub\n");
+        assert!(compile_check_errors(&prog, &others).is_none());
+    }
+
+    #[test]
+    fn a_cross_module_call_is_not_arg_count_checked_since_its_arity_is_unknown_here() {
+        // `resolved_user_proc_arity` only ever looks at `prog`'s own
+        // subs/funcs — a name registered only via `other_module_names`
+        // (this function's only visibility into other modules) has no
+        // known arity here, so no arg-count diagnostic can fire for it,
+        // regardless of how many arguments the call site actually passes.
+        let mut others = HashSet::new();
+        others.insert("helper".to_string());
+        let prog = parse_ok("Sub Main()\n    Call Helper(1, 2, 3)\nEnd Sub\n");
+        assert!(compile_check_errors(&prog, &others).is_none());
+    }
+
+    #[test]
+    fn first_violation_wins_when_a_program_has_several() {
+        // Sub declaration order (Main, then Second) — Main's own undefined
+        // call is found before Second's is ever reached.
+        let prog = parse_ok(concat!(
+            "Sub Main()\n",
+            "    Call FirstUndefined()\n",
+            "End Sub\n",
+            "Sub Second()\n",
+            "    Call SecondUndefined()\n",
+            "End Sub\n",
+        ));
+        let (msg, _) = compile_check_errors(&prog, &HashSet::new()).unwrap();
+        assert_eq!(msg, "Sub/Function 'firstundefined' not found");
+    }
+
+    // ── run_check itself must agree with compile_check_errors — otherwise
+    // `elixcee check` can report a program clean that `Vm::run_sub`'s
+    // pre-flight pass then refuses to run a single statement of. ──────────
+
+    #[test]
+    fn run_check_reports_an_argument_count_mismatch_as_e1008() {
+        let diags = run_check(
+            "Sub Helper(a, b)\n    x = a + b\nEnd Sub\nSub Main()\n    Call Helper(1)\nEnd Sub\n",
+            "f.bas",
+            Some("Main"),
+        );
+        assert_eq!(codes(&diags), vec!["E1008"]);
+        assert_eq!(diags[0].kind, "argument_count_mismatch");
+        assert_eq!(diags[0].message, "'helper' expects 2 argument(s), got 1");
+        assert!(diags[0].location.is_some());
+    }
+
+    #[test]
+    fn run_check_reports_an_undefined_goto_label_as_e1009() {
+        let diags = run_check("Sub Main()\n    GoTo Nowhere\nEnd Sub\n", "f.bas", Some("Main"));
+        assert_eq!(codes(&diags), vec!["E1009"]);
+        assert_eq!(diags[0].kind, "undefined_label");
+        assert_eq!(diags[0].message, "GoTo: label 'nowhere' not found");
+    }
+
+    #[test]
+    fn run_check_reports_an_undefined_on_error_goto_label_as_e1009() {
+        let diags = run_check(
+            "Sub Main()\n    On Error GoTo Nowhere\nEnd Sub\n",
+            "f.bas",
+            Some("Main"),
+        );
+        assert_eq!(codes(&diags), vec!["E1009"]);
+        assert_eq!(diags[0].message, "On Error GoTo: label 'nowhere' not found");
+    }
+
+    #[test]
+    fn run_check_does_not_double_report_an_undefined_call_as_both_e1002_and_e1008() {
+        let diags = run_check(
+            "Sub Main()\n    Call DoesNotExist(1, 2, 3)\nEnd Sub\n",
+            "f.bas",
+            Some("Main"),
+        );
+        assert_eq!(codes(&diags), vec!["E1002"]);
+    }
+
+    #[test]
+    fn run_check_finds_every_argument_count_mismatch_not_just_the_first() {
+        let diags = run_check(
+            concat!(
+                "Sub Helper(a, b)\n",
+                "    x = a + b\n",
+                "End Sub\n",
+                "Sub Main()\n",
+                "    Call Helper(1)\n",
+                "    Call Helper(1, 2, 3)\n",
+                "End Sub\n",
+            ),
+            "f.bas",
+            Some("Main"),
+        );
+        assert_eq!(codes(&diags), vec!["E1008", "E1008"]);
+    }
+
+    #[test]
+    fn run_check_does_not_flag_a_correct_program_with_the_new_checks() {
+        let diags = run_check(
+            concat!(
+                "Sub Helper(a, b)\n",
+                "    x = a + b\n",
+                "End Sub\n",
+                "Sub Main()\n",
+                "    On Error GoTo Handler\n",
+                "    Call Helper(1, 2)\n",
+                "    GoTo Skip\n",
+                "Handler:\n",
+                "    y = 1\n",
+                "Skip:\n",
+                "    z = 2\n",
+                "End Sub\n",
+            ),
+            "f.bas",
+            Some("Main"),
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn run_check_and_compile_check_errors_agree_on_the_exact_same_program() {
+        // The regression this whole test group exists to prevent: `elixcee
+        // check` reporting "ok" for a program `Vm::run_sub`'s pre-flight
+        // check would then refuse to run.
+        let src = "Sub Helper(a, b)\n    x = a + b\nEnd Sub\nSub Main()\n    Call Helper(1)\nEnd Sub\n";
+        let diags = run_check(src, "f.bas", Some("Main"));
+        let (compile_msg, _) = compile_errors(src).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, compile_msg);
     }
 }

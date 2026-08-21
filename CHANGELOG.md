@@ -66,6 +66,81 @@ catch fired inside the callee's own `exec_stmt`, not at the call site.
   `on_error_goto_label` fields between runs on a reused `Vm` (the Python bindings' own usage
   pattern) — `call_stack.clear()` at the start of each run closes that.
 
+### `Err.Source`/`Err.HelpFile`/`Err.HelpContext`, full `Err.Raise`
+
+- **`Err.Source`/`Err.HelpFile`/`Err.HelpContext`** added as readable properties (`Expr::ErrSource`/
+  `ErrHelpFile`/`ErrHelpContext`), joining the existing `Err.Number`/`Err.Description`.
+  **`Err.Raise`** now accepts and threads through all five real positional arguments (`Number,
+  Source, Description, HelpFile, HelpContext`), correctly handling a bare comma skipping any of
+  the last four at any position (`Err.Raise 513, , "text"` still means Number=513,
+  Description="text", not Source="text"). **`Err.Clear`** now resets all five properties, not
+  just Number/Description.
+- Not done: the richer `RuntimeError`/`RuntimeErrorKind` struct this phase's own spec also
+  asked for (a `span`/`kind`-classified error type, replacing string-matching-based
+  `classify_vba_error_number`) — the five `Err.*` properties above are still backed by flat
+  `Vm` fields (`err_number`/`err_description`/`err_source`/`err_help_file`/`err_help_context`),
+  not a unified struct. Deliberately deferred, not an oversight.
+
+### Undefined-procedure calls, argument-count mismatches, and undefined `GoTo` labels are now compile errors
+
+Real VBA fails a macro that calls an undefined Sub/Function, passes the wrong number of
+arguments to one it can see, or `GoTo`s a label that doesn't exist — *before* running a single
+statement, and never lets `On Error` trap it (a whole-project compile phase, not a runtime
+check). Previously all three were ordinary runtime errors here, reachable partway through
+execution and (incorrectly, relative to real VBA) catchable by an active `On Error Resume
+Next`/`GoTo`.
+
+- **New `check::compile_check_errors`** (`src/check.rs`) walks the whole program (every Sub and
+  Function, not just the ones the entrypoint's call chain actually reaches — matching real
+  VBA's whole-project compile-then-run semantics) for exactly these three conditions, reusing
+  the same `is_resolvable` logic `check`'s existing undefined-name diagnostic (E1002) already
+  used. **`Vm::run_sub`/`run_sub_multi`** now run this once, before `call_sub_def`, and return
+  its finding as an ordinary `Err(String)` — the "uncatchable by `On Error`" property comes for
+  free from running it before any statement (including any `On Error`) has executed.
+  Multi-module runs build each module's own cross-module name set the same way `elixcee check`'s
+  own multi-module path already did, so a legitimate unqualified cross-module call isn't
+  misreported as undefined.
+- A deliberately-unimplemented `WorksheetFunction.*` call (e.g. `.TextJoin`) is still reported,
+  but with the exact message its real dispatch path (`eval_wsf`) would give at runtime — a new
+  `vm::builtin_call_error` helper asks the VM itself instead of guessing generic wording, so
+  `check`'s pre-flight rejection always matches word-for-word what actually running it would
+  have said.
+- **`elixcee check` learned the same two checks** (new diagnostic codes `E1008`/
+  `argument_count_mismatch`, `E1009`/`undefined_label` — see `docs/agent-contract.md`), closing
+  a gap this round's own testing surfaced: without this, `elixcee check` could report a program
+  clean that `run_sub`'s new pre-flight pass would then refuse to run at all. Every violation is
+  reported (not just the first, unlike `run_sub`'s own short-circuit-on-first-violation pass).
+- **Measured, not assumed, performance impact**: `is_known_builtin_function`/
+  `builtin_call_error` each construct a throwaway `Vm` and run a real dispatch probe per
+  unresolved name, and the whole pre-flight check now re-runs on every `run_sub` call —
+  relevant since `test-workbook` reruns the same macro across many generated cases. Measured
+  with a `test-workbook` fixture calling 10 distinct built-in/`WorksheetFunction` names
+  (deliberately adversarial — a typical macro has far fewer), 3000 cases: roughly 5% slower
+  than the pre-this-round build (~0.68s → ~0.72s wall-clock for the whole run, ~13µs/case). Not
+  optimized (no memoization of the builtin probe) — the absolute cost is small and the fixture
+  used to measure it overstates a typical macro's actual builtin-call density.
+- **Deliberately not checked**: "invalid assignment target" (e.g. calling a Function's result on
+  the left of `=` as if it were an array element) — `name(args) = value` parses unconditionally
+  as `Stmt::ArrayWrite` regardless of whether `name` is a real array or (invalidly) a Function
+  name, and telling those apart isn't syntactically decidable without type inference this
+  project stays out of by design. Also not checked: a cross-module call's argument count (this
+  pass only ever sees one module's own declared Sub/Function arities), and a recursive call's
+  own argument count (a procedure's own name is already in its local scope, so it's never
+  treated as a checkable external call).
+- **Found while building this**: `Sub Foo(ByVal x As Integer)` used to silently misparse —
+  `parse_params` had no special handling for the `ByVal`/`ByRef`/`Optional`/`ParamArray`
+  keywords, so `consume_ident()` swallowed `byval` itself as a bogus extra parameter name,
+  making `Foo` a real *2*-parameter Sub (`["byval", "x"]`). Calling `Foo(5)` bound `5` to the
+  phantom `byval` parameter and left `x` unbound — `x` inside `Foo`'s body raised "Undefined
+  variable: 'x'", not a type/argument error, so this was easy to miss. Pre-existing, unrelated
+  to any array/call-frame work above; found because it would have made the new argument-count
+  check wrong for any macro using these (very common) parameter modifiers. Fixed:
+  `ByVal`/`ByRef` are now recognized and discarded (this VM already treats every parameter as
+  effectively by-value, with no `ByRef` write-back modeled for *any* parameter, so discarding
+  the keyword is correct, not a simplification); `Optional`/`ParamArray` are not implemented and
+  now fail with a clear parse error instead of the same silent misparse — a deliberate behavior
+  change, not a regression, for any macro that happened to declare one of these keywords before.
+
 ## [0.6.0]
 
 Root `elixcee` (Rust crate + Python package) only — `elixcee-types` stays `0.2.0` (no
