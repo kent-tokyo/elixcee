@@ -415,6 +415,75 @@ complete output — implementing `elixcee-wasm` itself is a separate, not-yet-st
 this document's own Phase 0/1A sections above cover, now fully executed — surfaced in this
 session's context. It was recognized as stale and not acted on.)
 
+## Phase D: `write()`'s Node-builtin bundling posture
+
+`write()`/`writeFile()`/`writeFileSync()` (a hand-rolled ZIP/DEFLATE writer, no new npm
+dependency — Node's own `zlib` provides DEFLATE) reach a lazy `require('zlib')`/
+`require('fs')` at call time, the same lazy-require convention Phase 2B-0 established for
+the WASM bridge (`getWasmBridge()`): a caller who never calls `write()`/`readFile()` must
+not pay for resolving it.
+
+This is a *different* bundling problem from the WASM one above, and does not have the same
+solution. The WASM problem (an `import "*.wasm"` a bundler can't resolve) was solved by
+inlining the bytes so no bundler support is needed at all. `write()`'s problem is a
+`require()` of a Node **builtin**, reached through CJS-origin code — and that has no
+inlining equivalent (`zlib`/`fs` aren't files this package could vendor bytes for).
+
+Confirmed live, not assumed: an esbuild `--format=esm --platform=node` bundle that inlines
+this package and then actually *calls* `write()` throws `Dynamic require of "zlib" is not
+supported`, regardless of every phrasing tried — a plain `require('zlib')`, a lazy
+`getZlib()` wrapper (matching the WASM-bridge precedent exactly), `require('node:zlib')`,
+and marking the module `--external:zlib`/`--external:fs` while still inlining the
+*package* all fail identically. This is because ESM has no synchronous `require` at all;
+esbuild's ESM output only has a runtime shim for it, and that shim throws for anything not
+part of the bundle no matter how the target is named or how lazily the call is made. An
+esbuild **CJS**-format bundle has no such problem (real `require` exists at runtime there).
+
+The one thing that does work, verified end-to-end: marking `@elixcee/xlsx` itself
+`external` (`--packages=external` or `--external:@elixcee/xlsx`) when bundling for Node in
+ESM format, so esbuild leaves the `import '@elixcee/xlsx'` for Node's own loader to resolve
+at run time instead of inlining it. This is the standard, expected pattern for any
+CJS-based npm package that touches Node builtins bundled into an ESM output — not specific
+to this package — and is now the documented guidance (README.md's "Bundling" section) and
+a permanently pinned regression check (`scripts/wasm-smoke.mjs` step 6: an inlined ESM
+bundle calling `write()` must still throw, an inlined CJS bundle and both externalized
+bundles must still run — so a future esbuild/toolchain change that alters this behavior in
+either direction gets noticed rather than silently drifting).
+
+**A second, distinct bundling problem — for the browser build, not the Node ESM-bundle
+case above — was found the same way (actually bundling and running it, not inferred) and
+was fixed rather than merely documented.** Bundling the browser entry
+(`index.browser.mjs`) with esbuild `--platform=browser` and running the result in a real
+headless Chrome process (`scripts/browser-smoke.mjs`) surfaced two failures in write():
+
+1. A `require('zlib')` reachable ANYWHERE in the bundle's module graph — even dead code,
+   even lazy, even in a function the browser entry never calls — made esbuild refuse to
+   even produce a `platform: 'browser'` bundle at all (`Could not resolve "zlib"`, a
+   build-time failure). The root cause: esbuild cannot tree-shake individual properties
+   out of a CommonJS `module.exports` object, so bundling `index.browser.mjs`'s re-export
+   of `index.cjs`'s OTHER (browser-safe) exports pulled in the whole `index.cjs` module
+   textually, zlib require included, regardless of whether `write()` itself was ever
+   re-exported for the browser.
+2. `Buffer` — used throughout the original `zip-writer.cjs`/`xlsx-writer.cjs` for byte
+   manipulation — bundled without error but threw `ReferenceError: Buffer is not defined`
+   the moment a REAL (unshimmed) browser actually executed it. `Buffer` is a Node global
+   with no standard browser equivalent, and esbuild's `platform: 'browser'` does not
+   polyfill it (unlike older bundlers such as webpack 4).
+
+Both fixed at the source rather than worked around: `zip-writer.cjs`/`xlsx-writer.cjs` no
+longer touch any Node builtin at all — `Uint8Array`/`DataView`/`TextEncoder` throughout,
+standard in both Node (11+) and every real browser — and DEFLATE compression is now
+injected by the CALLER as an optional callback (`index.cjs`'s Node `write()` passes a
+lazy wrapper around `zlib.deflateRawSync`, isolated into its own file,
+`internal/deflate-node.cjs`, so package.json's `browser` field can stub it out via the
+same mechanism already used for `elixcee_wasm.node.cjs`). `index.browser.mjs` gets its own
+`write()` built on the same now-platform-agnostic ZIP writer, called with no `deflate`
+callback — every entry is written STORED (uncompressed) instead of DEFLATEd: valid OOXML,
+just larger. Verified end-to-end in the real Chrome process `scripts/browser-smoke.mjs`
+already uses for `read()`, including the `type: 'base64'` output path (a hand-written
+`btoa`-based chunked encoder, since plain `Uint8Array` has no `.toString('base64')` the
+way a Node `Buffer` does).
+
 ## Consequences
 
 Once the formula/VM split and the buffer-API extraction land, `elixcee-xlsx` can exist as

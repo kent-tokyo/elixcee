@@ -18,7 +18,9 @@
   },
   "browser": {
     "./src/internal/wasm/elixcee_wasm.node.cjs": false,
-    "fs": false
+    "./src/internal/deflate-node.cjs": false,
+    "fs": false,
+    "zlib": false
   },
   "sideEffects": false,
   "engines": {

@@ -135,6 +135,17 @@ step('2. npm install the tarball into a throwaway package', () => {
   fs.copyFileSync(FIXTURE, path.join(consumerDir, 'fixture.xlsx'));
 });
 
+// write() round-trips through THIS consumer's own installed copy (require('@elixcee/xlsx')
+// again inside the probe, not the parent script's) — the point being that write()'s lazy
+// require('zlib') actually resolves correctly from inside a real installed node_modules
+// tree, not just from this repo's own source layout.
+const WRITE_ROUNDTRIP = `
+const wbOut = XLSX.book_new();
+XLSX.book_append_sheet(wbOut, XLSX.aoa_to_sheet([[1, 'two', true]]), 'Written');
+const written = XLSX.write(wbOut, { type: 'buffer' });
+const readBack = XLSX.read(written);
+`;
+
 const CJS_PROBE = `
 const path = require('node:path');
 const fs = require('node:fs');
@@ -143,12 +154,15 @@ const XLSX = require('@elixcee/xlsx');
 const wb = XLSX.read(fs.readFileSync(path.join(__dirname, 'fixture.xlsx')));
 const ws = wb.Sheets[wb.SheetNames[0]];
 const rows = XLSX.sheet_to_json(ws, { header: 1 });
+${WRITE_ROUNDTRIP}
 console.log('__RESULT__ ' + JSON.stringify({
   resolved,
   keys: Object.keys(XLSX).sort(),
   sheetNames: wb.SheetNames,
   ref: ws['!ref'],
   firstRows: rows.slice(0, 3),
+  writeRoundTripSheetNames: readBack.SheetNames,
+  writeRoundTripBytes: written.length,
 }));
 `;
 
@@ -165,14 +179,27 @@ const ws = wb.Sheets[wb.SheetNames[0]];
 // marker — neither is a declared export of this package, so both are filtered out before
 // comparing against the CJS require() key set.
 const keys = Object.keys(XLSX).filter(k => k !== 'default' && k !== '__esModule').sort();
+${WRITE_ROUNDTRIP}
 console.log('__RESULT__ ' + JSON.stringify({
   resolved,
   keys,
   sheetNames: wb.SheetNames,
   ref: ws['!ref'],
   firstRows: XLSX.sheet_to_json(ws, { header: 1 }).slice(0, 3),
+  writeRoundTripSheetNames: readBack.SheetNames,
+  writeRoundTripBytes: written.length,
 }));
 `;
+
+function assertWriteRoundTrip(r) {
+  if (!Array.isArray(r.writeRoundTripSheetNames) || r.writeRoundTripSheetNames[0] !== 'Written') {
+    throw new Error(`write()->read() round trip failed: ${JSON.stringify(r.writeRoundTripSheetNames)}`);
+  }
+  if (!(r.writeRoundTripBytes > 0)) {
+    throw new Error(`write() produced no bytes: ${r.writeRoundTripBytes}`);
+  }
+  console.log(`  write()->read() round trip: ${JSON.stringify(r.writeRoundTripSheetNames)}, ${r.writeRoundTripBytes} bytes`);
+}
 
 const cjs = step('3. require("@elixcee/xlsx") from inside the install (CJS)', () => {
   fs.writeFileSync(path.join(consumerDir, 'probe.cjs'), CJS_PROBE);
@@ -183,6 +210,7 @@ const cjs = step('3. require("@elixcee/xlsx") from inside the install (CJS)', ()
   }
   console.log(`  SheetNames: ${JSON.stringify(r.sheetNames)}  !ref: ${r.ref}`);
   console.log(`  first rows: ${JSON.stringify(r.firstRows)}`);
+  assertWriteRoundTrip(r);
   return r;
 });
 
@@ -191,6 +219,7 @@ const esm = step('4. import * as XLSX from "@elixcee/xlsx" from inside the insta
   const r = runInConsumer(consumerDir, 'probe.mjs');
   assertUnder('import.meta.resolve', r.resolved, consumerDir);
   console.log(`  SheetNames: ${JSON.stringify(r.sheetNames)}  !ref: ${r.ref}`);
+  assertWriteRoundTrip(r);
   return r;
 });
 
@@ -233,7 +262,33 @@ step('6. "browser" export condition resolves from the INSTALLED tarball and runs
   console.log(`  browser-entry SheetNames: ${JSON.stringify(r.sheetNames)}, export set identical`);
 });
 
-step('7. a TypeScript consumer snippet compiles against the installed types', () => {
+step('7. writeFile()/writeFileSync() from inside the install (real filesystem)', () => {
+  const script = `
+const fs = require('node:fs');
+const path = require('node:path');
+const XLSX = require('@elixcee/xlsx');
+const wb = XLSX.book_new();
+XLSX.book_append_sheet(wb, XLSX.aoa_to_sheet([[1, 'two', true]]), 'S1');
+XLSX.writeFile(wb, path.join(__dirname, 'written-via-writeFile.xlsx'));
+XLSX.writeFileSync(wb, path.join(__dirname, 'written-via-writeFileSync.xlsx'));
+const a = XLSX.readFileSync(path.join(__dirname, 'written-via-writeFile.xlsx'));
+const b = XLSX.readFileSync(path.join(__dirname, 'written-via-writeFileSync.xlsx'));
+console.log('__RESULT__ ' + JSON.stringify({
+  aSheetNames: a.SheetNames,
+  bSheetNames: b.SheetNames,
+  aliased: XLSX.writeFile === XLSX.writeFileSync,
+}));
+`;
+  fs.writeFileSync(path.join(consumerDir, 'probe-writefile.cjs'), script);
+  const r = runInConsumer(consumerDir, 'probe-writefile.cjs');
+  if (r.aSheetNames[0] !== 'S1' || r.bSheetNames[0] !== 'S1') {
+    throw new Error(`writeFile()/writeFileSync() round trip failed: ${JSON.stringify(r)}`);
+  }
+  if (!r.aliased) throw new Error('writeFile and writeFileSync must be the same function');
+  console.log(`  writeFile()/writeFileSync() both wrote real, readable files: ${JSON.stringify(r)}`);
+});
+
+step('8. a TypeScript consumer snippet compiles against the installed types', () => {
   fs.writeFileSync(
     path.join(consumerDir, 'consumer.ts'),
     [
@@ -253,7 +308,10 @@ step('7. a TypeScript consumer snippet compiles against the installed types', ()
       `const fresh: XLSX.WorkBook = XLSX.book_new();`,
       `XLSX.book_append_sheet(fresh, XLSX.aoa_to_sheet([[1, 'two', true]]), 'S1');`,
       `const hidden: 2 = XLSX.consts.SHEET_VERY_HIDDEN;`,
-      `export { wb, rows, csv, ref, fresh, hidden };`,
+      `const written: Uint8Array | ArrayBuffer | string = XLSX.write(fresh, { type: 'buffer' });`,
+      `XLSX.writeFile(fresh, 'out.xlsx');`,
+      `XLSX.writeFileSync(fresh, 'out.xlsx', { bookType: 'xlsx' });`,
+      `export { wb, rows, csv, ref, fresh, hidden, written };`,
     ].join('\n')
   );
   fs.writeFileSync(

@@ -260,9 +260,10 @@ function writeBuffer(wb, opts) {
     err.code = ELIXCEE_UNSUPPORTED_BOOK_TYPE;
     throw err;
   }
-  // Lazy require, same convention readFileSyncImpl's `require('fs')` already uses — a
-  // caller who never calls write() must not pay for resolving zlib.
-  const zipped = makeZip(buildXlsxZipEntries(wb), (buf) => require('zlib').deflateRawSync(buf, { level: 9 }));
+  // Lazy require of deflate-node.cjs (not zlib directly) — see that file's own top doc
+  // comment for why the zlib access must live in its own file (so package.json's
+  // `browser` field can stub it out of a bundled browser build) rather than inline here.
+  const zipped = makeZip(buildXlsxZipEntries(wb), require('./internal/deflate-node.cjs').deflateRawSync);
   // zip-writer.cjs returns a plain Uint8Array (it has no Buffer dependency at all — see
   // its own doc comment). Wrapped back into a real Node Buffer here, zero-copy, so
   // type:'buffer' keeps matching the oracle's own contract exactly (a true Buffer, with

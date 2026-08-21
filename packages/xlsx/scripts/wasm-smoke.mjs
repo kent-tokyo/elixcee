@@ -34,6 +34,16 @@
 //      adopting once a baseline exists, not applied here. Measured by decoding the
 //      base64 payload out of the vendored loader, since the raw .wasm file is no longer
 //      vendored (it would double-ship the same bytes; see build.sh).
+//   6. write()'s Node-builtin bundling posture — a DIFFERENT concern from 1-5 above.
+//      write()/readFile()/readFileSync() reach a lazy `require('zlib')`/`require('fs')`
+//      at call time (see src/internal/zip-writer.cjs's doc comment), which is fine for
+//      Node and for an esbuild CJS bundle, but an esbuild ESM bundle can never
+//      synchronously require() anything reached through CJS-origin code — confirmed here
+//      both ways: inlining this package into an ESM bundle and then calling write() must
+//      still throw (pinning the known esbuild limitation so a future esbuild/toolchain
+//      change that silently "fixes" or re-breaks it doesn't go unnoticed), while marking
+//      the package `external` (the documented, correct consumer pattern — see README.md's
+//      "Bundling" section) must let write() run to completion in both CJS and ESM output.
 //
 // Run: `node scripts/wasm-smoke.mjs` from packages/xlsx/ (needs esbuild installed —
 // `npm ci` first).
@@ -158,5 +168,93 @@ step('5. WASM artifact size (recorded, not gated)', () => {
     );
   }
 });
+
+// Bundles a tiny consumer that actually CALLS write() (not just imports it), either with
+// the package inlined into the bundle (an absolute-path import, same convention as
+// bundleAndRun above) or marked `external` (a bare `@elixcee/xlsx` specifier, left for
+// Node's own loader to resolve at run time) — and reports whether it ran.
+function bundleAndRunWrite(format, ext, external) {
+  // The externalized case needs Node's self-referencing-package resolution (see
+  // https://nodejs.org/api/packages.html#self-referencing-a-package-using-its-name),
+  // which only kicks in for a file inside the package's OWN directory tree — so that
+  // bundle is written under PKG_DIR itself, not os.tmpdir(), and cleaned up after.
+  const tmpDir = external
+    ? fs.mkdtempSync(path.join(PKG_DIR, `.write-smoke-${format}-`))
+    : fs.mkdtempSync(path.join(os.tmpdir(), `elixcee-write-smoke-${format}-`));
+  const consumerPath = path.join(tmpDir, `consumer.${ext}`);
+  const bundlePath = path.join(tmpDir, `bundle.${ext}`);
+  const entry = JSON.stringify(path.join(PKG_DIR, 'src', 'index.cjs'));
+  const body = [
+    `const wb = XLSX.book_new();`,
+    `XLSX.book_append_sheet(wb, XLSX.aoa_to_sheet([[1, 'x']]), 'S1');`,
+    `const buf = XLSX.write(wb, { type: 'buffer' });`,
+    `console.log('  write() produced ' + buf.length + ' bytes');`,
+  ];
+  const importLine = external
+    ? format === 'cjs'
+      ? `const XLSX = require('@elixcee/xlsx');`
+      : `import * as XLSX from '@elixcee/xlsx';`
+    : format === 'cjs'
+      ? `const XLSX = require(${entry});`
+      : `import XLSX from ${entry};`;
+  fs.writeFileSync(consumerPath, [importLine].concat(body).join('\n'));
+  try {
+    esbuild.buildSync({
+      entryPoints: [consumerPath],
+      bundle: true,
+      platform: 'node',
+      format,
+      outfile: bundlePath,
+      ...(external ? { packages: 'external' } : {}),
+    });
+    runWriteBundle(bundlePath, format, external);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function runWriteBundle(bundlePath, format, external) {
+  if (external) {
+    // The documented, correct consumer pattern — must always run to completion.
+    execFileSync(process.execPath, [bundlePath], { cwd: PKG_DIR, stdio: 'inherit' });
+    return;
+  }
+  // Inlined: CJS must run fine (real `require` exists at runtime); ESM must still throw
+  // the known "Dynamic require" error (see this script's step-6 doc comment above) — a
+  // pinned regression check, not a wish, so a toolchain change that alters this behavior
+  // gets noticed rather than silently drifting.
+  let threw = false;
+  try {
+    execFileSync(process.execPath, [bundlePath], { stdio: 'pipe' });
+  } catch (e) {
+    threw = true;
+    if (!/Dynamic require/.test(String(e.stderr))) {
+      throw new Error(`inlined ${format} bundle failed for an unexpected reason:\n${e.stderr}`);
+    }
+  }
+  if (format === 'esm' && !threw) {
+    throw new Error(
+      'inlined ESM bundle calling write() unexpectedly SUCCEEDED — the known esbuild ' +
+        '"Dynamic require" limitation may have been fixed upstream, or this package\'s ' +
+        'require()-of-Node-builtins pattern changed; re-check README.md\'s Bundling ' +
+        'section and this script\'s doc comment for step 6.',
+    );
+  }
+  if (format === 'cjs' && threw) {
+    throw new Error('inlined CJS bundle calling write() unexpectedly failed');
+  }
+  console.log(`  ${format} inlined bundle behaved as expected (${threw ? 'threw' : 'ran'})`);
+}
+
+step('6a. inlined ESM bundle + write() — must still throw (known esbuild limitation)', () =>
+  bundleAndRunWrite('esm', 'mjs', false),
+);
+step('6b. inlined CJS bundle + write() — must run (CJS `require` works normally)', () =>
+  bundleAndRunWrite('cjs', 'cjs', false),
+);
+step('6c. externalized ESM bundle + write() — must run (the documented consumer pattern)', () =>
+  bundleAndRunWrite('esm', 'mjs', true),
+);
+step('6d. externalized CJS bundle + write() — must run', () => bundleAndRunWrite('cjs', 'cjs', true));
 
 console.log('\n[wasm-smoke] all checks passed.');

@@ -151,6 +151,14 @@ step('2. bundle the browser entry with esbuild');
       `import * as XLSX from '@elixcee/xlsx';`,
       `const wb = XLSX.read(${JSON.stringify(fixtureB64)}, { type: 'base64' });`,
       `const ws = wb.Sheets[wb.SheetNames[0]];`,
+      // write() is pure XML/ZIP generation, no filesystem needed — this exercises it in a
+      // REAL browser, not just a bundle build (esbuild's platform:'browser' refusing to
+      // resolve 'zlib' was a real bug this same script's build step already guards
+      // against below; this proves the resulting bundle also WORKS, not just builds).
+      `const wbOut = XLSX.book_new();`,
+      `XLSX.book_append_sheet(wbOut, XLSX.aoa_to_sheet([[1, 'two', true]]), 'Written');`,
+      `const written = XLSX.write(wbOut, { type: 'buffer' });`,
+      `const readBack = XLSX.read(written);`,
       `window.__REPORT__({`,
       `  ok: true,`,
       `  sheetNames: wb.SheetNames,`,
@@ -159,6 +167,8 @@ step('2. bundle the browser entry with esbuild');
       `  b2: ws.B2 && ws.B2.v,`,
       `  csvHead: XLSX.sheet_to_csv(ws).split('\\n')[0],`,
       `  exportCount: Object.keys(XLSX).filter(k => k !== 'default').length,`,
+      `  writeRoundTripSheetNames: readBack.SheetNames,`,
+      `  writeRoundTripBytes: written.length,`,
       `});`,
     ].join('\n')
   );
@@ -196,6 +206,17 @@ step('2. bundle the browser entry with esbuild');
   }
   if (/require\(["']fs["']\)|from\s*["']fs["']/.test(bundleSrc)) {
     throw new Error('bundle still requires "fs" — a browser build must never reach the filesystem');
+  }
+  // The real bug this guards against: esbuild's `platform: 'browser'` used to refuse to
+  // even PRODUCE a bundle containing write()'s Node-only `require('zlib')` call, since it
+  // was reachable (dead code, but textually present) via index.browser.mjs's re-export of
+  // index.cjs's other utils — confirmed live, fixed by giving the browser build its own
+  // zlib-free write() and stubbing deflate-node.cjs via package.json's `browser` field
+  // (see index.browser.mjs's and deflate-node.cjs's own doc comments). If this bundle
+  // succeeded at all with `require("zlib")` still present in it, something upstream
+  // (esbuild's own behavior, or the browser-field stub) changed.
+  if (/require\(["']zlib["']\)|from\s*["']zlib["']/.test(bundleSrc)) {
+    throw new Error('bundle contains a "zlib" reference — write() must not reach zlib in a browser build');
   }
   console.log(`  bundle: ${fs.statSync(path.join(siteDir, 'bundle.js')).size} bytes (browser condition, esm)`);
 }
@@ -286,6 +307,10 @@ if (result.ref !== 'A1:D9') problems.push(`unexpected !ref: ${result.ref}`);
 if (result.a1 !== 'Name') problems.push(`unexpected A1 value: ${JSON.stringify(result.a1)}`);
 if (result.b2 !== 42) problems.push(`unexpected B2 value: ${JSON.stringify(result.b2)}`);
 if (result.csvHead !== 'Name,Amount,Active,Note') problems.push(`unexpected CSV header: ${result.csvHead}`);
+if (JSON.stringify(result.writeRoundTripSheetNames) !== JSON.stringify(['Written'])) {
+  problems.push(`write()->read() round trip failed in the browser: ${JSON.stringify(result.writeRoundTripSheetNames)}`);
+}
+if (!(result.writeRoundTripBytes > 0)) problems.push(`write() produced no bytes in the browser: ${result.writeRoundTripBytes}`);
 // Compared against the Node entry's own live export count rather than a hard-coded number,
 // so adding an export doesn't require editing this file — but a browser entry that FORGETS
 // one still fails here.

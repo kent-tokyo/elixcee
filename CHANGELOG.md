@@ -183,10 +183,45 @@ non-finite numeric/formula-cached value, an oversized declared `!ref`) throws an
   now among the 39/39 exports checked (name/length/property-descriptor/CJS-ESM-identity
   against the oracle), plus a `writeFile === writeFileSync` aliasing check.
 
-Note for whoever bundles this package with esbuild, or cuts its next npm release: the
-Node entry's `write()` reaches `zlib` for DEFLATE compression via a plain, inline
-`require('zlib')` as of this commit — see the next commit for why that has to move into
-its own file before this package is bundler-safe.
+### `@elixcee/xlsx` — make writer bundles work in Node ESM and browsers
+
+**Two real bundler bugs found by actually bundling and running the code, not assumed, and
+both fixed at the source**:
+
+1. An esbuild `--format=esm --platform=node` bundle can never synchronously `require()`
+   anything reached through CJS-origin code — confirmed neither a lazy require,
+   `require('node:zlib')`, nor `--external:zlib` changes this; the documented, correct
+   pattern is marking the whole package `external` (`--packages=external`), verified
+   end-to-end and pinned as a permanent regression check in `scripts/wasm-smoke.mjs`
+   (step 6).
+2. An esbuild `--platform=browser` bundle refused to even build at all with a
+   `require('zlib')` reachable anywhere in its module graph (dead code included, since
+   esbuild can't tree-shake CommonJS `module.exports` properties). Fixed by isolating the
+   Node-only `zlib.deflateRawSync` wrapper into its own new file,
+   **`packages/xlsx/src/internal/deflate-node.cjs`**, and stubbing that exact path (plus
+   bare `zlib`) to `false` in `package.json`'s `browser` field — the same mechanism
+   already used for `elixcee_wasm.node.cjs`. This works because `browser`-field
+   path-remapping happens at module-resolution time, before the stubbed file's contents
+   are ever parsed; moving the `require('zlib')` around *within* `index.cjs` (tried
+   first) did not work, since `index.cjs` itself is wholesale-included in the browser
+   bundle graph via `index.browser.mjs`'s re-export of its other, browser-safe exports.
+
+- `scripts/wasm-smoke.mjs` extended (step 6): `bundleAndRunWrite`/`runWriteBundle` verify
+  all four combinations — inlined-ESM-must-throw, inlined-CJS-must-run,
+  externalized-ESM-must-run, externalized-CJS-must-run — pinned as a permanent regression
+  check for bug 1 above.
+- `scripts/browser-smoke.mjs` extended: the bundled entry now calls `write()` then
+  `read()` and asserts the round trip, plus a build-time assertion that the bundle
+  contains zero `zlib` references at all — verified against a real headless Chrome
+  process, not just a passing build.
+- `scripts/pack-consumer-smoke.mjs` extended: a shared `WRITE_ROUNDTRIP` snippet exercises
+  `write()`/`writeFile()`/`writeFileSync()` from inside a real `npm pack` + `npm install`,
+  both from CJS and ESM consumers, plus a new step for `writeFile()`/`writeFileSync()`
+  against a real filesystem.
+- `docs/xlsx-architecture.md` — new "Phase D: `write()`'s Node-builtin bundling posture"
+  section documents both bugs, why each fix works, and why bug 2's fix (isolating the
+  Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
+  externalization) and needs a different solution.
 
 ## [0.6.0]
 
