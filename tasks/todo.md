@@ -247,3 +247,7 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 - [x] **`check-versions.sh`への`packages/xlsx/package.json`ガード追加**（commit `0304e42`）。ROADMAP.mdで開示済みだった「`0.0.0-development`が実リリースバージョンに対して無音でdriftし得る」ギャップに対し、実際に起こり得る失敗モード（`private: false`＝公開準備完了なのに`version`が`0.0.0-development`のまま）だけをピンポイントで検知するチェックを追加（`@elixcee/xlsx`はroot crateと独立バージョニングのため、Cargo.tomlとのクロスチェックはしない）。3パターン（現状=pass／private:false+placeholder=fail／private:false+実バージョン=pass、false positiveなし）を手動検証。
 
 `cargo test --workspace` 957/957（0.8.0時点955から+2）。
+
+## `Call <Sub名>`括弧省略構文の修正（`/greenlane`セッション、commit `f30dce5`）
+
+上記「Phase C/D の公開」セクションで0.7.0リリース検証中に発見・開示のみだった`Call <Sub名>`（引数なし・括弧省略）のパースエラーを修正。`parse_call_stmt`が`LParen`を無条件必須としていたのを、他の任意括弧構文と同じ`if *self.peek() == Tok::LParen`パターンに変更し、括弧省略時は空引数リストとして扱うよう対応。新規テスト2件（`test_call_stmt_no_parens_zero_args`/`test_call_stmt_no_parens_followed_by_another_statement`）。`cargo test --workspace` 959/959、`compat/corpus`（581件・0 UNEXPLAINED/0 MISMATCH）・`compat/vba-semantics`（386件・0 BUG/0 UNCLASSIFIED・KNOWN_LIMITATION 14件で変化なし）とも回帰なしを実release binaryで確認。
