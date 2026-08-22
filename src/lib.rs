@@ -837,7 +837,13 @@ fn build_xlsx_sheet(
             for (&(r, c), content) in row_cells {
                 let cell_ref = format!("{}{}", xlsx_col_letters(c), r);
                 let style_idx = style_indices.and_then(|m| m.get(&(r, c)).copied());
-                if let Some(xml) = xlsx_cell_xml(&cell_ref, &content.value, str_index, style_idx) {
+                if let Some(xml) = xlsx_cell_xml(
+                    &cell_ref,
+                    &content.value,
+                    str_index,
+                    style_idx,
+                    content.formula.as_deref(),
+                ) {
                     out.push_str(&xml);
                     out.push('\n');
                 }
@@ -879,32 +885,50 @@ fn xlsx_cell_xml(
     v: &Variant,
     str_index: &std::collections::HashMap<String, usize>,
     style_idx: Option<u32>,
+    formula: Option<&str>,
 ) -> Option<String> {
     let s_attr = style_idx
         .map(|idx| format!(" s=\"{}\"", idx))
         .unwrap_or_default();
+    // A loaded cell's formula text (no leading `=`, matching how <f> is written in the
+    // file -- see WorkbookSheet::formulas' doc comment); a VBA-assigned formula
+    // (Vm::set_cell_formula) may still carry one, so it's stripped here too rather than
+    // trusting the source. Emitted before <v>, matching real Excel's own element order.
+    let f_tag = formula
+        .map(|f| format!("<f>{}</f>", xml_escape(f.trim().trim_start_matches('='))))
+        .unwrap_or_default();
     match v {
-        Variant::Integer(n) => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, n)),
-        Variant::Float(f) => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, f)),
-        Variant::Date(s) => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, s)),
+        Variant::Integer(n) => Some(format!(
+            "<c r=\"{}\"{}>{}<v>{}</v></c>",
+            cell_ref, s_attr, f_tag, n
+        )),
+        Variant::Float(f) => Some(format!(
+            "<c r=\"{}\"{}>{}<v>{}</v></c>",
+            cell_ref, s_attr, f_tag, f
+        )),
+        Variant::Date(s) => Some(format!(
+            "<c r=\"{}\"{}>{}<v>{}</v></c>",
+            cell_ref, s_attr, f_tag, s
+        )),
         Variant::Str(s) => {
             let idx = str_index[s.as_str()];
             Some(format!(
-                "<c r=\"{}\"{} t=\"s\"><v>{}</v></c>",
-                cell_ref, s_attr, idx
+                "<c r=\"{}\"{} t=\"s\">{}<v>{}</v></c>",
+                cell_ref, s_attr, f_tag, idx
             ))
         }
         Variant::Error(e) => {
             let idx = str_index[e.as_str()];
             Some(format!(
-                "<c r=\"{}\"{} t=\"s\"><v>{}</v></c>",
-                cell_ref, s_attr, idx
+                "<c r=\"{}\"{} t=\"s\">{}<v>{}</v></c>",
+                cell_ref, s_attr, f_tag, idx
             ))
         }
         Variant::Boolean(b) => Some(format!(
-            "<c r=\"{}\"{} t=\"b\"><v>{}</v></c>",
+            "<c r=\"{}\"{} t=\"b\">{}<v>{}</v></c>",
             cell_ref,
             s_attr,
+            f_tag,
             if *b { 1 } else { 0 }
         )),
         Variant::Empty

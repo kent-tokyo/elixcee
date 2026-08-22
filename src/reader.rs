@@ -45,6 +45,14 @@ pub struct WorkbookSheet {
     /// original `s="N"` unchanged — see `docs/xlsx-architecture.md`. Always
     /// empty for `.ods` (no `s`-index concept).
     pub raw_style_indices: HashMap<(u32, u32), u32>,
+    /// Per-cell raw `<f>...</f>` formula text, 1-based `(row, col)` keys matching
+    /// `cells` — the formula string exactly as written in the XML (no leading `=`),
+    /// mirroring `BufferSheet::formulas` (see that field's doc comment for the shared-
+    /// formula-follower-cell caveat, which applies here too). Lets `populate_from_sheets`
+    /// (`src/vm/mod.rs`) keep a loaded cell's formula alive instead of flattening it to a
+    /// bare cached value, which `save_xlsx_impl` would otherwise silently re-emit as a
+    /// permanent literal on the very next save. Always empty for `.ods` (not parsed there).
+    pub formulas: HashMap<(u32, u32), String>,
 }
 
 pub enum SheetCell {
@@ -528,6 +536,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 hidden_rows: sheet_data.hidden_rows,
                 hidden_columns: sheet_data.hidden_columns,
                 raw_style_indices: sheet_data.raw_style_indices,
+                formulas: sheet_data.formulas.clone(),
             },
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
@@ -1053,6 +1062,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             hidden_rows: Vec::new(),
                             hidden_columns: Vec::new(),
                             raw_style_indices: HashMap::new(),
+                            formulas: HashMap::new(),
                         });
                         in_sheet = true;
                         row = 0;

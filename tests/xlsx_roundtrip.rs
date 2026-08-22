@@ -110,6 +110,15 @@ fn workbook_xml() -> String {
 /// declaration), and a hidden, cell-less row (2 -- proves a hidden row with
 /// no cells still gets its own `<row hidden="1"/>` element, since
 /// hidden-ness is a `<row>` attribute an absent element can't carry).
+/// `G1 = A1+B1` (formula, cached value 3) is never touched by any test macro --
+/// proves a formula elixcee doesn't itself write is still carried through a
+/// save as a real `<f>` element, not flattened to a stale literal (found via
+/// a real Excel-authored fixture during elixcee's first 0.9.0-A round-trip
+/// run: `read_workbook`'s `WorkbookSheet` had no field to carry formula text
+/// at all, so every save silently replaced every untouched formula cell with
+/// its last cached value). Deliberately not C1 -- the flagship test already
+/// uses C1 as "a brand-new cell the macro writes," and not row 2 or D1:E1 --
+/// those are the hidden-row-with-no-cells and merge fixtures respectively.
 fn sheet_xml() -> String {
     concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
@@ -118,6 +127,7 @@ fn sheet_xml() -> String {
         "<sheetData>\n<row r=\"1\">",
         "<c r=\"A1\" s=\"1\"><v>1</v></c>",
         "<c r=\"B1\" s=\"1\"><v>2</v></c>",
+        "<c r=\"G1\"><f>A1+B1</f><v>3</v></c>",
         "</row>\n",
         "<row r=\"2\" hidden=\"1\"/>\n",
         "</sheetData>\n",
@@ -441,6 +451,16 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     assert!(
         row2_tag.contains("hidden=\"1\""),
         "cell-less hidden row 2 must still be marked hidden: {row2_tag}"
+    );
+
+    // Formula preservation: an untouched formula cell must keep its <f>, not
+    // flatten to a bare stale <v> (found via a real Excel-authored fixture --
+    // see sheet_xml()'s own doc comment).
+    let g1_tag = &sheet_xml[sheet_xml.find("<c r=\"G1\"").unwrap()..];
+    let g1_tag = &g1_tag[..g1_tag.find("</c>").unwrap() + "</c>".len()];
+    assert!(
+        g1_tag.contains("<f>A1+B1</f>"),
+        "untouched formula cell G1 must keep its formula, not just its cached value: {g1_tag}"
     );
 
     let _ = std::fs::remove_file(&source_path);

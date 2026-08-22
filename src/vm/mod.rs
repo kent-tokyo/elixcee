@@ -2048,7 +2048,7 @@ impl Vm {
                 self.cells_mut().insert(
                     (row, col),
                     CellContent {
-                        formula: None,
+                        formula: sheet_data.formulas.get(&(row, col)).cloned(),
                         value,
                     },
                 );
@@ -8590,6 +8590,7 @@ mod tests {
             hidden_rows: Vec::new(),
             hidden_columns: Vec::new(),
             raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
         }];
 
         let mut vm = Vm::new();
@@ -9483,6 +9484,7 @@ mod tests {
             hidden_rows: Vec::new(),
             hidden_columns: Vec::new(),
             raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -9517,6 +9519,7 @@ mod tests {
             hidden_rows: vec![(3, 5)],
             hidden_columns: vec![(2, 2)],
             raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -9550,6 +9553,7 @@ mod tests {
             hidden_rows: vec![(3, 5)],
             hidden_columns: Vec::new(),
             raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -9572,6 +9576,7 @@ mod tests {
             hidden_rows: vec![(50, 60)],
             hidden_columns: Vec::new(),
             raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
