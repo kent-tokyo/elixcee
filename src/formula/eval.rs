@@ -5608,18 +5608,20 @@ fn resolve_db_field(
 
 /// Test whether a single database row satisfies the criteria range.
 /// Criteria rows (excluding header) are OR-combined; columns within a row are AND-combined.
-/// An empty criteria cell is treated as "match all" (wildcard).
+/// An empty criteria cell is treated as "match all" (wildcard). `db_range`/`criteria_range`
+/// are `(c1, r1, c2, r2)`, matching `require_range`'s own return shape unchanged -- the
+/// caller already has both as one tuple each from `require_range`, so this avoids
+/// destructuring just to re-pass four scalars each (`db_range`'s own `r2` -- the database's
+/// last row -- goes unused here; the caller's own loop bound needs it, this function
+/// doesn't).
 fn db_row_matches_criteria(
     cells: &HashMap<(u32, u32), CellContent>,
     data_row: u32,
-    db_c1: u32,
-    db_c2: u32,
-    db_header_row: u32,
-    cr_c1: u32,
-    cr_c2: u32,
-    cr_r1: u32,
-    cr_r2: u32,
+    db_range: (u32, u32, u32, u32),
+    criteria_range: (u32, u32, u32, u32),
 ) -> bool {
+    let (db_c1, db_header_row, db_c2, _db_r2) = db_range;
+    let (cr_c1, cr_r1, cr_c2, cr_r2) = criteria_range;
     // Each criteria row (cr_r1+1 .. cr_r2) is one OR-branch
     for cr_row in (cr_r1 + 1)..=cr_r2 {
         let mut row_match = true;
@@ -5673,9 +5675,11 @@ fn func_dget(
 
     let (cr_c1, cr_r1, cr_c2, cr_r2) = require_range(&args[2], "DGET")?;
 
+    let db_range = (db_c1, db_r1, db_c2, db_r2);
+    let criteria_range = (cr_c1, cr_r1, cr_c2, cr_r2);
     let mut matched: Vec<Variant> = vec![];
     for row in (db_r1 + 1)..=db_r2 {
-        if db_row_matches_criteria(cells, row, db_c1, db_c2, db_r1, cr_c1, cr_c2, cr_r1, cr_r2) {
+        if db_row_matches_criteria(cells, row, db_range, criteria_range) {
             matched.push(cell_val(cells, row, field_col));
         }
     }
