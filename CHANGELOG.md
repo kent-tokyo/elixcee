@@ -8,79 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Two independent tracks: `@elixcee/xlsx` (still unpublished, `0.0.0-development`/
-`private: true`, no `publishConfig`; see its own two entries below for exactly what's
-implemented) and the root-crate items below, including three real-Excel-round-trip bugs
-found and fixed during `0.9.0`'s validation work (see `ROADMAP.md`).
-
-### CLI: `elixcee --version`/`-V`
-
-The CLI had no way to print its own version at all — found while verifying the `bin-v0.8.0`
-GitHub Release binaries by hand (`gh release download` + run), where `--version` turned out
-to be an unrecognized flag with no substitute (`--help` doesn't print it either). Fixed:
-`elixcee --version`/`-V` now prints `elixcee <CARGO_PKG_VERSION>` and exits 0 — reads
-`env!("CARGO_PKG_VERSION")` at compile time, so it can never drift from `Cargo.toml`. New
-`tests/cli_version.rs` (2 tests, spawning the real built binary, matching the existing
-`tests/cli_*.rs` convention).
-
-### VBA: `Call <Sub>` without parentheses
-
-Real VBA's `Call` grammar is `Call name [(argumentlist)]` — the parentheses are optional,
-required only when passing arguments. `Call Foo` (a valid, zero-argument call) failed to
-parse (`"expected LParen, got Newline"`), while `Call Foo()` and bare `Foo` (no `Call`
-keyword at all) both already worked. Found and disclosed, not fixed, during `0.7.0` release
-verification while writing a fresh-venv smoke test; confirmed unrelated to that round's own
-changes (the parsing function hadn't been touched since the 2026-06-21 hand-written-parser
-rewrite). Fixed: `parse_call_stmt` now checks for `(` before consuming it, the same pattern
-this parser already uses for other optional constructs, defaulting to an empty argument list
-when absent. Two new tests (zero-argument parenless call; a parenless call followed by
-another statement, guarding against over/under-consuming the line).
-
-### Root crate: safe round-trip, milestone 4 — three bugs found opening real-Excel output in real Excel
-
-`0.8.0`'s safe-round-trip work (milestones 1–3) was only ever verified against hand-built
-synthetic fixtures. `0.9.0`'s real-Excel validation (see `ROADMAP.md`) authored the first
-genuinely Excel-produced `.xlsm` round-trip fixture and found three bugs none of the
-synthetic fixtures happened to exercise — the third made Microsoft Excel refuse to open
-the saved file outright, not even a repair prompt.
-
-1. **Formula flattening.** `WorkbookSheet` (the struct backing the CLI `--file` path and
-   PyO3 `load_workbook()`) had no field for per-cell formula text at all — `read_xlsx`
-   already extracted it via the shared `xlsx_sheet_cells` parser, but discarded that half
-   converting down from the buffer-API's `BufferSheet`. Every load flattened every
-   formula cell to its last cached value; every subsequent save wrote that stale literal
-   back with no `<f>` element, silently and permanently — editing any one cell dropped
-   every *other* cell's formula on save. Fixed: `WorkbookSheet.formulas` (new field)
-   threads the formula text through to `Vm::CellContent.formula` on load (keeping the
-   file's own cached value, not recomputing — elixcee's formula engine doesn't cover
-   Excel's full function surface) and `xlsx_cell_xml` now emits `<f>` before `<v>` when
-   present. Shared-formula follower cells (`<f t="shared" si="N"/>`, no inline text) are
-   a pre-existing, documented `reader.rs` limitation, unchanged by this fix.
-2. **Orphaned relationships.** `xl/_rels/workbook.xml.rels` and `_rels/.rels` are both
-   writer-owned (fully regenerated from a fixed template) — the template only ever
-   emitted the relationships it already knew about (worksheet/sharedStrings/styles/
-   vbaProject, officeDocument), with no mechanism to carry over any other kind.
-   `xl/theme/theme1.xml` and `docProps/{app,core}.xml` passed through byte-identical but
-   lost their relationships, becoming orphaned parts. Fixed: new `carry_over_rels()`
-   parses the source's own rels files (`reader::workbook_rels_decls`, new) and re-emits
-   any relationship whose target survived as a passthrough part, skipping types the
-   writer already owns.
-3. **Wrong content type for a non-macro `.xlsm`.** `build_xlsx_content_types` chose
-   `workbook.xml`'s content type from whether the *source* had a VBA project, not from
-   the *output* extension. A real Excel-authored `.xlsm` with zero VBA content still
-   declares `application/vnd.ms-excel.sheet.macroEnabled.main+xml` — the macro-enabled
-   type is a property of the file format, not current content. Any `.xlsm` output with no
-   VBA project (the common case) declared the plain type instead, which Excel treats as a
-   fatal extension/format mismatch. Now driven by the output path's own extension.
-
-All three fixed and covered by new `tests/xlsx_roundtrip.rs` regression tests. New
-`compat/oracle-excel-com/mechanical_check.py` — a pure-stdlib structural OOXML validator
-(content-types, relationship completeness in both directions, formula preservation,
-vbaProject byte-identity) that's the fast, Excel-independent primary signal for this and
-future real-Excel validation rounds; its own self-test deliberately corrupts 7 different
-ways before trusting any real result. Five real Microsoft-Excel-authored `.xlsm` fixtures
-added under `compat/oracle-excel-com/fixtures/pristine/`. Full validation results in
-`compat/oracle-excel-com/results/0.9.0-A_{results.json,summary.md}`.
+`@elixcee/xlsx` only (still unpublished, `0.0.0-development`/`private: true`, no
+`publishConfig`) — see its own two entries below for exactly what's implemented, plus a
+CI observability addition for the shared WASM bridge.
 
 ### CI: WASM artifact size observability
 
@@ -172,6 +102,115 @@ both fixed at the source**:
   section documents both bugs, why each fix works, and why bug 2's fix (isolating the
   Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
   externalization) and needs a different solution.
+
+## [0.9.0] - 2026-08-22
+
+Root `elixcee` (Rust crate + Python package) only: `0.8.0` → `0.9.0`. `elixcee-types` stays
+`0.3.0`, `elixcee-wasm` stays `0.1.0`, `@elixcee/xlsx` stays unpublished/`private:true`/
+`0.0.0-development` — none of them have any public-surface change this round, and
+`@elixcee/xlsx` is untouched by this round entirely (see `[Unreleased]` above for its own,
+independent work).
+
+**First real Microsoft-Excel-validated round trip (`0.9.0-A`, see `ROADMAP.md`).** Five
+sanitized, Microsoft-Excel-for-Mac-authored `.xlsm` fixtures, each edited via elixcee, saved
+both ways (save-as and in-place), and reopened in real Excel: 0 repair warnings, 0
+`vbaProject.bin` loss, 0 relationship breakage, 0 in-place-save failures. Found and fixed
+three real bugs none of the prior synthetic-fixture tests exercised — formula flattening,
+orphaned relationships, and a wrong `.xlsm` content type that made Excel refuse to open the
+file outright (see the "Root crate: safe round-trip, milestone 4" section below). New
+`compat/oracle-excel-com/mechanical_check.py` (structural OOXML validator, self-tests against
+7 deliberately corrupted cases before trusting any real result) and 5 real Excel-authored
+fixtures under `compat/oracle-excel-com/fixtures/pristine/`.
+
+**Explicitly not validated this round, stated precisely in `README.md`/`README_ja.md`/
+`README_zh.md` rather than implied by a blanket claim**: post-save VBA macro execution (blocked
+by a Mac Excel VBA license/environment error that reproduces on an untouched file — neither
+confirmed working nor confirmed broken, not elixcee's own round-trip result either way); and
+worksheet-embedded features (tables, data validation, conditional formatting, hyperlinks,
+comments, defined names, charts, images, print settings) — `build_xlsx_sheet`/
+`build_xlsx_workbook` still fully regenerate their XML on every save, so anything embedded
+there that elixcee doesn't itself model is silently dropped (though the underlying ZIP part
+usually survives as inert, orphaned bytes, and this never causes a repair warning). Already
+disclosed as a `0.8.0` Non-goal, confirmed live here with real fixtures rather than newly
+discovered — closing it is `0.10.0`'s job. The originally-scoped 10-consecutive-cycle
+exit criterion is superseded, not literally met: a 5-cycle chained in-place stress test on
+the same file (harder than 5 independent cycles, since any accumulating corruption would
+compound) stayed clean through a real Excel reopen, judged sufficient in place of running
+every fixture to the full 10. Full results:
+`compat/oracle-excel-com/results/0.9.0-A_{results.json,summary.md}`.
+
+`cargo test --workspace` 961/961 (up from 955 at `[0.8.0]`), `cargo build --release
+--workspace` clean, `cargo check --features python --lib` clean, every GitHub Actions job
+green on `master` before this bump.
+
+### CLI: `elixcee --version`/`-V`
+
+The CLI had no way to print its own version at all — found while verifying the `bin-v0.8.0`
+GitHub Release binaries by hand (`gh release download` + run), where `--version` turned out
+to be an unrecognized flag with no substitute (`--help` doesn't print it either). Fixed:
+`elixcee --version`/`-V` now prints `elixcee <CARGO_PKG_VERSION>` and exits 0 — reads
+`env!("CARGO_PKG_VERSION")` at compile time, so it can never drift from `Cargo.toml`. New
+`tests/cli_version.rs` (2 tests, spawning the real built binary, matching the existing
+`tests/cli_*.rs` convention).
+
+### VBA: `Call <Sub>` without parentheses
+
+Real VBA's `Call` grammar is `Call name [(argumentlist)]` — the parentheses are optional,
+required only when passing arguments. `Call Foo` (a valid, zero-argument call) failed to
+parse (`"expected LParen, got Newline"`), while `Call Foo()` and bare `Foo` (no `Call`
+keyword at all) both already worked. Found and disclosed, not fixed, during `0.7.0` release
+verification while writing a fresh-venv smoke test; confirmed unrelated to that round's own
+changes (the parsing function hadn't been touched since the 2026-06-21 hand-written-parser
+rewrite). Fixed: `parse_call_stmt` now checks for `(` before consuming it, the same pattern
+this parser already uses for other optional constructs, defaulting to an empty argument list
+when absent. Two new tests (zero-argument parenless call; a parenless call followed by
+another statement, guarding against over/under-consuming the line).
+
+### Root crate: safe round-trip, milestone 4 — three bugs found opening real-Excel output in real Excel
+
+`0.8.0`'s safe-round-trip work (milestones 1–3) was only ever verified against hand-built
+synthetic fixtures. `0.9.0`'s real-Excel validation (see `ROADMAP.md`) authored the first
+genuinely Excel-produced `.xlsm` round-trip fixture and found three bugs none of the
+synthetic fixtures happened to exercise — the third made Microsoft Excel refuse to open
+the saved file outright, not even a repair prompt.
+
+1. **Formula flattening.** `WorkbookSheet` (the struct backing the CLI `--file` path and
+   PyO3 `load_workbook()`) had no field for per-cell formula text at all — `read_xlsx`
+   already extracted it via the shared `xlsx_sheet_cells` parser, but discarded that half
+   converting down from the buffer-API's `BufferSheet`. Every load flattened every
+   formula cell to its last cached value; every subsequent save wrote that stale literal
+   back with no `<f>` element, silently and permanently — editing any one cell dropped
+   every *other* cell's formula on save. Fixed: `WorkbookSheet.formulas` (new field)
+   threads the formula text through to `Vm::CellContent.formula` on load (keeping the
+   file's own cached value, not recomputing — elixcee's formula engine doesn't cover
+   Excel's full function surface) and `xlsx_cell_xml` now emits `<f>` before `<v>` when
+   present. Shared-formula follower cells (`<f t="shared" si="N"/>`, no inline text) are
+   a pre-existing, documented `reader.rs` limitation, unchanged by this fix.
+2. **Orphaned relationships.** `xl/_rels/workbook.xml.rels` and `_rels/.rels` are both
+   writer-owned (fully regenerated from a fixed template) — the template only ever
+   emitted the relationships it already knew about (worksheet/sharedStrings/styles/
+   vbaProject, officeDocument), with no mechanism to carry over any other kind.
+   `xl/theme/theme1.xml` and `docProps/{app,core}.xml` passed through byte-identical but
+   lost their relationships, becoming orphaned parts. Fixed: new `carry_over_rels()`
+   parses the source's own rels files (`reader::workbook_rels_decls`, new) and re-emits
+   any relationship whose target survived as a passthrough part, skipping types the
+   writer already owns.
+3. **Wrong content type for a non-macro `.xlsm`.** `build_xlsx_content_types` chose
+   `workbook.xml`'s content type from whether the *source* had a VBA project, not from
+   the *output* extension. A real Excel-authored `.xlsm` with zero VBA content still
+   declares `application/vnd.ms-excel.sheet.macroEnabled.main+xml` — the macro-enabled
+   type is a property of the file format, not current content. Any `.xlsm` output with no
+   VBA project (the common case) declared the plain type instead, which Excel treats as a
+   fatal extension/format mismatch. Now driven by the output path's own extension.
+
+All three fixed and covered by new `tests/xlsx_roundtrip.rs` regression tests. New
+`compat/oracle-excel-com/mechanical_check.py` — a pure-stdlib structural OOXML validator
+(content-types, relationship completeness in both directions, formula preservation,
+vbaProject byte-identity) that's the fast, Excel-independent primary signal for this and
+future real-Excel validation rounds; its own self-test deliberately corrupts 7 different
+ways before trusting any real result. Five real Microsoft-Excel-authored `.xlsm` fixtures
+added under `compat/oracle-excel-com/fixtures/pristine/`. Full validation results in
+`compat/oracle-excel-com/results/0.9.0-A_{results.json,summary.md}`.
 
 ## [0.8.0]
 
