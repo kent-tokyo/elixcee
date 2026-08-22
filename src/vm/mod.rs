@@ -609,14 +609,18 @@ pub struct Vm {
     /// `((row1,col1),(row2,col2))`, 1-based inclusive. Populated by
     /// `populate_from_sheets` from the reader's `WorkbookSheet::
     /// merged_ranges`; empty for any sheet built purely in-VBA (`Sheets.Add`
-    /// has no merge concept).
-    merged_ranges: HashMap<String, Vec<MergeRect>>,
+    /// has no merge concept). `pub(crate)`: read directly by
+    /// `save_xlsx_impl` (`src/lib.rs`, safe round-trip milestone) to
+    /// re-emit `<mergeCells>` on save.
+    pub(crate) merged_ranges: HashMap<String, Vec<MergeRect>>,
     /// Hidden row/column metadata per sheet (Milestone B7b), keyed the same
     /// way as `merged_ranges`/`protected_sheets`. Populated by
     /// `populate_from_sheets` from the reader's `WorkbookSheet::
     /// hidden_rows`/`hidden_columns` (XLSX only — ODS is deferred); empty
-    /// for any sheet built purely in-VBA.
-    sheet_visibility: HashMap<String, SheetVisibility>,
+    /// for any sheet built purely in-VBA. `pub(crate)`: read directly by
+    /// `save_xlsx_impl` (`src/lib.rs`, safe round-trip milestone) to
+    /// re-emit `<row hidden="1">`/`<col hidden="1">` on save.
+    pub(crate) sheet_visibility: HashMap<String, SheetVisibility>,
     /// Per-sheet, per-cell raw `s="N"` style index (Milestone: safe
     /// round-trip), keyed the same way as `merged_ranges`. Populated by
     /// `populate_from_sheets` from the reader's `WorkbookSheet::

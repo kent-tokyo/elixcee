@@ -594,6 +594,35 @@ this repo yet, so "does real Excel open the round-tripped output without a repai
 remains unverified. See `tests/fixtures/xlsm_roundtrip/README.md` for where a real file
 slots in.
 
+### Slice 3: merged ranges and hidden rows/columns are now written back
+
+Unlike the two slices above, this one needed **no new reader work at all** — `Vm::merged_ranges`
+and `Vm::sheet_visibility` were already populated by `populate_from_sheets` from
+`reader::WorkbookSheet::merged_ranges`/`hidden_rows`/`hidden_columns`, and used elsewhere in
+the VM, but `build_xlsx_sheet` (`src/lib.rs`) never emitted `<mergeCells>` or a `<row>`/`<col>`
+`hidden="1"` attribute at all — a pure writer-completeness gap, confirmed live by grepping for
+`mergeCells`/`hidden` in `src/lib.rs` before this slice and finding zero matches. Every save of
+a workbook with merges or hidden rows/columns silently dropped them, independent of any
+unknown-part-passthrough concern.
+
+- **`<cols>`** — one `<col min=".." max=".." hidden="1"/>` per hidden-column interval from
+  `Vm::sheet_visibility`, emitted before `<sheetData>` (OOXML schema element order).
+- **`<row r="N" hidden="1">`** — a hidden row that already has cell data gets the attribute
+  added to its existing `<row>` element; a hidden row with *no* cell data now gets an empty
+  `<row r="N" hidden="1"/>` element synthesized for it, since hidden-ness lives on the `<row>`
+  element itself — an absent `<row>` is indistinguishable from a visible one to a real reader.
+- **`<mergeCells>`** — one `<mergeCell ref="A1:B2"/>` per range in `Vm::merged_ranges`, emitted
+  after `</sheetData>` (schema order again).
+- Both `Vm::merged_ranges` and `Vm::sheet_visibility` promoted from private to `pub(crate)`
+  (matching `cell_style_indices`'s existing visibility) so `save_xlsx_impl` can read them
+  directly — no new field, no new passthrough mechanism, just wiring already-captured data
+  into the writer.
+
+This narrows (but does not close) the "embedded inside worksheet XML" gap noted in slice 2's
+out-of-scope list above: merges and hidden rows/columns now survive a regenerated sheet;
+hyperlinks, data validation, conditional formatting, freeze panes, and print/page setup —
+also worksheet-XML-embedded — still do not, and remain future slices.
+
 ## Consequences
 
 Once the formula/VM split and the buffer-API extraction land, `elixcee-xlsx` can exist as

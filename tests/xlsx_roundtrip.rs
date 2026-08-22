@@ -104,15 +104,24 @@ fn workbook_xml() -> String {
 /// name is passed — deliberately `xl/worksheets/sheet3.xml` in the .xlsm
 /// fixture (not `sheet1.xml`), simulating a book that once had 3 sheets
 /// with two deleted, so the passthrough exclusion logic is proven to be
-/// pattern-based, not keyed off this writer's own sequential naming.
+/// pattern-based, not keyed off this writer's own sequential naming. Also
+/// carries a merged range (`D1:E1`), a hidden column (F, entirely empty --
+/// proves a hidden interval with no cell data still gets a `<col>`
+/// declaration), and a hidden, cell-less row (2 -- proves a hidden row with
+/// no cells still gets its own `<row hidden="1"/>` element, since
+/// hidden-ness is a `<row>` attribute an absent element can't carry).
 fn sheet_xml() -> String {
     concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<cols><col min=\"6\" max=\"6\" hidden=\"1\"/></cols>\n",
         "<sheetData>\n<row r=\"1\">",
         "<c r=\"A1\" s=\"1\"><v>1</v></c>",
         "<c r=\"B1\" s=\"1\"><v>2</v></c>",
-        "</row>\n</sheetData>\n",
+        "</row>\n",
+        "<row r=\"2\" hidden=\"1\"/>\n",
+        "</sheetData>\n",
+        "<mergeCells count=\"1\"><mergeCell ref=\"D1:E1\"/></mergeCells>\n",
         "</worksheet>\n",
     )
     .to_string()
@@ -358,6 +367,25 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
         "xl/styles.xml must be byte-identical to the source, not the hardcoded minimal stylesheet"
     );
 
+    // Merge/hidden-row/hidden-column write-back (Milestone: safe round-trip,
+    // slice 3) — merges and hidden rows/columns were already threaded into
+    // Vm by populate_from_sheets, but build_xlsx_sheet never emitted them.
+    assert!(sheet_xml.contains("<mergeCells"), "output must re-emit the original merge: {sheet_xml}");
+    assert!(sheet_xml.contains("ref=\"D1:E1\""), "merged range must round-trip unchanged: {sheet_xml}");
+
+    assert!(sheet_xml.contains("<cols>"), "output must re-emit the hidden-column declaration: {sheet_xml}");
+    let col_tag = &sheet_xml[sheet_xml.find("<col ").unwrap()..];
+    let col_tag = &col_tag[..col_tag.find('/').unwrap() + 1];
+    assert_eq!(extract_attr(col_tag, "min").as_deref(), Some("6"));
+    assert_eq!(extract_attr(col_tag, "max").as_deref(), Some("6"));
+    assert_eq!(extract_attr(col_tag, "hidden").as_deref(), Some("1"));
+
+    // Row 2 is hidden and has no cells at all -- must still appear as its
+    // own <row hidden="1"/> element (an absent element is default-visible).
+    let row2_tag = &sheet_xml[sheet_xml.find("<row r=\"2\"").unwrap()..];
+    let row2_tag = &row2_tag[..row2_tag.find('>').unwrap() + 1];
+    assert!(row2_tag.contains("hidden=\"1\""), "cell-less hidden row 2 must still be marked hidden: {row2_tag}");
+
     let _ = std::fs::remove_file(&source_path);
     let _ = std::fs::remove_file(&output_path);
 }
@@ -418,6 +446,7 @@ fn xlsm_roundtrip_in_place_save_preserves_vba_project() {
     let a1_tag = &sheet_xml[sheet_xml.find("<c r=\"A1\"").unwrap()..];
     let a1_tag = &a1_tag[..a1_tag.find('>').unwrap() + 1];
     assert!(a1_tag.contains("s=\"1\""), "edited cell A1 must keep its style index across an in-place overwrite: {a1_tag}");
+    assert!(sheet_xml.contains("ref=\"D1:E1\""), "merged range must survive an in-place overwrite: {sheet_xml}");
 
     let sheets = reader::read_workbook(&path).unwrap();
     let sheet = sheets.iter().find(|s| s.name == "sheet1").unwrap();

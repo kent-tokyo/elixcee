@@ -702,35 +702,77 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
-        "<sheetData>\n",
     ));
 
-    let style_indices = vm.cell_style_indices.get(&sheet_name.to_lowercase());
+    let sheet_key = sheet_name.to_lowercase();
+    let style_indices = vm.cell_style_indices.get(&sheet_key);
+    let visibility = vm.sheet_visibility.get(&sheet_key);
+    let hidden_columns = visibility.map(|v| v.hidden_columns.as_slice()).unwrap_or(&[]);
+    let hidden_rows = visibility.map(|v| v.hidden_rows.as_slice()).unwrap_or(&[]);
 
-    if let Some(cells) = vm.get_sheet_cells(sheet_name)
-        && !cells.is_empty() {
-            // Group by row first to avoid O(max_row × total_cells) scanning.
-            let mut by_row: std::collections::BTreeMap<u32, Vec<_>> = std::collections::BTreeMap::new();
-            for (k @ &(r, c), v) in cells.iter() {
-                if r > 0 && c > 0 { by_row.entry(r).or_default().push((k, v)); }
-            }
-            for (row, mut row_cells) in by_row {
-                row_cells.sort_by_key(|&(&(_, c), _)| c);
+    // <cols> — schema-ordered before <sheetData>. <col> natively supports a
+    // min/max range in one element, unlike <row> (see below), so no
+    // per-column expansion is needed.
+    if !hidden_columns.is_empty() {
+        out.push_str("<cols>\n");
+        for iv in hidden_columns {
+            out.push_str(&format!("<col min=\"{}\" max=\"{}\" hidden=\"1\"/>\n", iv.start, iv.end));
+        }
+        out.push_str("</cols>\n");
+    }
 
-                out.push_str(&format!("<row r=\"{}\">\n", row));
-                for (&(r, c), content) in row_cells {
-                    let cell_ref = format!("{}{}", xlsx_col_letters(c), r);
-                    let style_idx = style_indices.and_then(|m| m.get(&(r, c)).copied());
-                    if let Some(xml) = xlsx_cell_xml(&cell_ref, &content.value, str_index, style_idx) {
-                        out.push_str(&xml);
-                        out.push('\n');
-                    }
-                }
-                out.push_str("</row>\n");
+    out.push_str("<sheetData>\n");
+
+    if let Some(cells) = vm.get_sheet_cells(sheet_name) {
+        // Group by row first to avoid O(max_row × total_cells) scanning.
+        let mut by_row: std::collections::BTreeMap<u32, Vec<_>> = std::collections::BTreeMap::new();
+        for (k @ &(r, c), v) in cells.iter() {
+            if r > 0 && c > 0 { by_row.entry(r).or_default().push((k, v)); }
+        }
+        // A hidden row with no cell data still needs its own <row hidden="1"/>
+        // element to actually appear hidden to a real reader — hidden-ness is
+        // a <row> attribute, so an absent element is just default/visible.
+        // Expanded per-row (not min/max like <col>) because that's what a
+        // real <row>-element-per-row source already looks like.
+        for iv in hidden_rows {
+            for r in iv.start..=iv.end {
+                by_row.entry(r).or_default();
             }
         }
+        for (row, mut row_cells) in by_row {
+            row_cells.sort_by_key(|&(&(_, c), _)| c);
+            let row_hidden = hidden_rows.iter().any(|iv| iv.start <= row && row <= iv.end);
+            let hidden_attr = if row_hidden { " hidden=\"1\"" } else { "" };
 
-    out.push_str("</sheetData>\n</worksheet>\n");
+            out.push_str(&format!("<row r=\"{}\"{}>\n", row, hidden_attr));
+            for (&(r, c), content) in row_cells {
+                let cell_ref = format!("{}{}", xlsx_col_letters(c), r);
+                let style_idx = style_indices.and_then(|m| m.get(&(r, c)).copied());
+                if let Some(xml) = xlsx_cell_xml(&cell_ref, &content.value, str_index, style_idx) {
+                    out.push_str(&xml);
+                    out.push('\n');
+                }
+            }
+            out.push_str("</row>\n");
+        }
+    }
+
+    out.push_str("</sheetData>\n");
+
+    // <mergeCells> — schema-ordered after <sheetData>.
+    if let Some(merges) = vm.merged_ranges.get(&sheet_key)
+        && !merges.is_empty() {
+            out.push_str(&format!("<mergeCells count=\"{}\">\n", merges.len()));
+            for &((r1, c1), (r2, c2)) in merges {
+                out.push_str(&format!(
+                    "<mergeCell ref=\"{}{}:{}{}\"/>\n",
+                    xlsx_col_letters(c1), r1, xlsx_col_letters(c2), r2
+                ));
+            }
+            out.push_str("</mergeCells>\n");
+        }
+
+    out.push_str("</worksheet>\n");
     out
 }
 

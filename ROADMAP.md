@@ -292,12 +292,26 @@ recorded as exhausted: no further candidates were found by either method as of t
     untouched-cell style survives, brand-new-cell doesn't spuriously inherit one,
     `xl/styles.xml` byte-identical) rather than new tests added.
 
+    **Slice 3 (same item): merged ranges and hidden rows/columns now written back.** No new
+    reader work — `Vm::merged_ranges`/`Vm::sheet_visibility` were already populated from
+    `WorkbookSheet::merged_ranges`/`hidden_rows`/`hidden_columns` and used elsewhere in the VM,
+    but `build_xlsx_sheet` never emitted `<mergeCells>` or a `<row>`/`<col>` `hidden="1"`
+    attribute at all (confirmed live: grepping `src/lib.rs` for `mergeCells`/`hidden` found
+    zero matches before this slice) — a pure writer-completeness gap, present independent of
+    any unknown-part-passthrough concern. Both fields promoted `pub(crate)` so the writer can
+    read them directly; a hidden row with no cell data now gets a synthesized empty `<row
+    hidden="1"/>` (hidden-ness lives on the element itself, so an absent `<row>` reads as
+    visible). Same 3 tests extended again (merge and hidden-column/row assertions added to the
+    flagship test, a merge-survival assertion added to the in-place-overwrite test) rather than
+    new tests added.
+
     Still genuinely out of scope, not a rearchitecture blocker for any of it later: named
-    ranges, tables/hyperlinks/comments/data-validation/freeze-panes embedded inside worksheet
-    XML (sheets are always fully regenerated, never diffed against the original — a stated
-    simplification), *authoring or changing* styles from VBA (this VM has no such capability
-    at all — only *preserving* an existing cell's style survived this milestone),
-    charts/images/external-link consistency after a structural sheet change,
+    ranges, tables/hyperlinks/comments/data-validation/freeze-panes/print-and-page-setup
+    embedded inside worksheet XML (sheets are always fully regenerated, never diffed against
+    the original — a stated simplification; merges and hidden rows/columns are the two
+    exceptions carved out by slice 3 above), *authoring or changing* styles from VBA (this VM
+    has no such capability at all — only *preserving* an existing cell's style survived slice
+    2), charts/images/external-link consistency after a structural sheet change,
     streaming/large-file handling, `.ods` passthrough, and `@elixcee/xlsx`/
     `crates/elixcee-wasm` (both untouched by this milestone, by design — see item 6 above for
     why they're a separate, unrelated codepath).

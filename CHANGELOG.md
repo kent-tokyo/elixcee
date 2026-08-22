@@ -95,6 +95,28 @@ was lost on every save regardless of whether the style *definitions* survived.
   still cannot *author or change* a style from VBA at all; only *preserving* an existing
   cell's style survived this milestone.
 
+### Root crate: safe round-trip, milestone 3 — merged ranges and hidden rows/columns written back
+
+No new reader work — `Vm::merged_ranges`/`Vm::sheet_visibility` were already populated by
+`populate_from_sheets` and used elsewhere in the VM, but `build_xlsx_sheet` never emitted
+`<mergeCells>` or a `<row>`/`<col>` `hidden="1"` attribute at all (confirmed live: zero
+matches grepping `src/lib.rs` for `mergeCells`/`hidden` before this slice) — every save of a
+workbook with merges or hidden rows/columns silently dropped them, independent of any
+unknown-part-passthrough concern.
+
+- `<cols>` (hidden columns, before `<sheetData>`), `<row hidden="1">` (including synthesizing
+  an empty `<row r="N" hidden="1"/>` for a hidden row with no cell data — hidden-ness lives on
+  the element itself, so an absent `<row>` reads as visible), and `<mergeCells>` (after
+  `</sheetData>`) — all correctly OOXML-schema-ordered.
+- `Vm::merged_ranges`/`Vm::sheet_visibility` promoted from private to `pub(crate)` so
+  `save_xlsx_impl` can read them directly.
+- **Tests**: no new test file — the same 3 tests extended again (merge/hidden-column/hidden-row
+  assertions added to the flagship test, a merge-survival assertion added to the
+  in-place-overwrite test). `cargo test --workspace` still 955/955.
+- Narrows (doesn't close) the "embedded inside worksheet XML" gap milestone 2 noted: merges
+  and hidden rows/columns now survive; hyperlinks, data validation, conditional formatting,
+  freeze panes, and print/page setup — also worksheet-XML-embedded — still don't.
+
 ### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
 
 Independent of the root `elixcee` crate: no Rust changes, no new npm dependency.
