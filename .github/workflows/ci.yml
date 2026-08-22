@@ -209,6 +209,17 @@ jobs:
         working-directory: packages/xlsx
         run: npm run wasm:smoke
 
+      # Vendored loaders carry the compiled .wasm bytes inlined as base64 (see build.sh) --
+      # uploading them directly avoids a separate decode step and lets a reviewer pull down
+      # this exact run's build to diff against another. Retention kept short: this is a
+      # size-observation aid, not a release artifact.
+      - name: upload WASM bridge build
+        uses: actions/upload-artifact@v4
+        with:
+          name: elixcee-wasm-bridge
+          path: packages/xlsx/src/internal/wasm/
+          retention-days: 14
+
       # Diagnostic, deliberately not `set -e`-fatal: prints exactly what browser the runner
       # image actually provides, so the browser step below failing to find one is
       # immediately explainable from this job's own log rather than needing a guess about

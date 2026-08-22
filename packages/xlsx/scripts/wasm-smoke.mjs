@@ -27,13 +27,15 @@
 //      base64 into the loader exactly as build-browser-inline.mjs already did for the
 //      browser build. Neither step below copies any file next to the bundle — that step
 //      being GONE is what these two checks now assert.
-//   5. WASM artifact size — recorded, not gated. No prior-baseline file exists yet to
-//      compare against, and asserting a threshold with no basis for the number would be
-//      exactly the kind of unjustified gate this project avoids elsewhere (see
-//      compat/vba-semantics/'s own anti-laundering discipline) — a policy to consider
-//      adopting once a baseline exists, not applied here. Measured by decoding the
-//      base64 payload out of the vendored loader, since the raw .wasm file is no longer
-//      vendored (it would double-ship the same bytes; see build.sh).
+//   5. WASM artifact size — recorded and diffed against crates/elixcee-wasm/
+//      wasm-size-baseline.json, but never gated: asserting a pass/fail threshold with no
+//      basis for the number would be exactly the kind of unjustified gate this project
+//      avoids elsewhere (see compat/vba-semantics/'s own anti-laundering discipline). The
+//      baseline is updated by hand, deliberately, when a size change is intentional — not
+//      auto-written by this script. Measured by decoding the base64 payload out of the
+//      vendored loader, since the raw .wasm file is no longer vendored (it would
+//      double-ship the same bytes; see build.sh). Also written to $GITHUB_STEP_SUMMARY
+//      (when set) so the number is visible on the CI run without opening logs.
 //   6. write()'s Node-builtin bundling posture — a DIFFERENT concern from 1-5 above.
 //      write()/readFile()/readFileSync() reach a lazy `require('zlib')`/`require('fs')`
 //      at call time (see src/internal/zip-writer.cjs's doc comment), which is fine for
@@ -152,20 +154,34 @@ step('3. esbuild CJS bundle + in-bundle read(), no .wasm copied next to it', () 
 
 step('4. esbuild ESM bundle + in-bundle read(), no .wasm copied next to it', () => bundleAndRun('esm', 'mjs'));
 
-step('5. WASM artifact size (recorded, not gated)', () => {
+step('5. WASM artifact size (recorded + diffed against baseline, not gated)', () => {
   // Decoded from the vendored loader's own base64 constant: the raw .wasm file is no
   // longer vendored (build.sh stopped copying it once both loaders inlined their bytes),
   // so this measures the exact same payload from where it now actually lives.
+  const BASELINE_PATH = path.join(REPO_ROOT, 'crates', 'elixcee-wasm', 'wasm-size-baseline.json');
+  const baseline = fs.existsSync(BASELINE_PATH) ? JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')).wasmBytes : null;
+  const summaryLines = ['| file | on-disk bytes | wasm bytes | vs. baseline |', '| --- | --- | --- | --- |'];
+  let wasmSize;
   for (const f of ['elixcee_wasm.node.cjs', 'elixcee_wasm.browser.mjs']) {
     const src = fs.readFileSync(path.join(WASM_DIR, f), 'utf8');
     const m = src.match(/ELIXCEE_WASM_BASE64 = '([A-Za-z0-9+/=]+)'/);
     if (!m) throw new Error(`${f} has no inlined ELIXCEE_WASM_BASE64 payload`);
-    const wasmSize = Buffer.from(m[1], 'base64').length;
+    wasmSize = Buffer.from(m[1], 'base64').length;
     const fileSize = fs.statSync(path.join(WASM_DIR, f)).size;
+    let diffStr = 'no baseline';
+    if (baseline != null) {
+      const diff = wasmSize - baseline;
+      const pct = ((diff / baseline) * 100).toFixed(2);
+      diffStr = `${diff >= 0 ? '+' : ''}${diff} bytes (${diff >= 0 ? '+' : ''}${pct}%)`;
+    }
     console.log(
       `  ${f}: ${fileSize} bytes on disk, carrying ${wasmSize} bytes of WASM ` +
-        `(${(wasmSize / 1024).toFixed(1)} KiB) as ${m[1].length} base64 chars`,
+        `(${(wasmSize / 1024).toFixed(1)} KiB) as ${m[1].length} base64 chars -- ${diffStr}`,
     );
+    summaryLines.push(`| ${f} | ${fileSize} | ${wasmSize} | ${diffStr} |`);
+  }
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### WASM artifact size\n\n${summaryLines.join('\n')}\n`);
   }
 });
 

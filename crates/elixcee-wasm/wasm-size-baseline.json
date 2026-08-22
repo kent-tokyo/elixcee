@@ -1,0 +1,4 @@
+{
+  "_comment": "Observed WASM payload size (bytes), decoded from the vendored loaders' inlined base64. Update deliberately (not automatically) when a size change is intentional -- see packages/xlsx/scripts/wasm-smoke.mjs step 5.",
+  "wasmBytes": 263299
+}
