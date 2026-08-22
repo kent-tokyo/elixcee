@@ -215,3 +215,35 @@ fuzz CI（上記セッション）の push・green確認後、ユーザーが直
 - [x] `scripts/wasm-smoke.mjs`（step 6、esbuildバンドル4パターン）・`scripts/pack-consumer-smoke.mjs`（実`npm pack`→実`npm install`したtarballからの実行、step 3/4/7に`write()`往復を追加）・`scripts/browser-smoke.mjs`（実ヘッドレスChromeでの`write()`往復とzlib非参照アサート）いずれも`write()`カバレッジを追加して実行・グリーン。`scripts/audit-pack-contents.mjs`はルールが形状ベース（ハードコードされたファイルリストではない）のため変更不要、そのまま新規3ファイル（`xlsx-writer.cjs`/`zip-writer.cjs`/`deflate-node.cjs`）を正しく認識することを確認。
 - [x] `packages/xlsx/package.json`のdescriptionを`write()`対応を反映した内容へ更新。**`version`/`private`/`publishConfig`は意図的に無変更のまま**（`0.0.0-development`/`private:true`/`publishConfig`なし——version bump・公開準備メタデータの変更は今回のコミット分割方針で明示的にスコープ外とされたため、`0.1.0-alpha.1`/`private:false`への変更は行っていない）。`README.md`の「What's implemented」/「Bundling」セクション・`docs/xlsx-architecture.md`（新規「Phase D」セクション、上記2件のバンドラバグの詳細な経緯を記録）を同期。
 - **テスト**：`compat/differential`全スイート（`classify`/`metadata`/`xlsx-read`/`xlsx-write`/`xlsx-utils`/`ssf-format`）グリーン、TypeScript typecheck（DOM有無両方）グリーン、`wasm:smoke`/`audit:pack`/`pack:consumer`（実tarball8ステップ）/`browser:smoke`（実Chrome）全てグリーン。詳細は`CHANGELOG.md`の`[Unreleased]`セクション参照。
+
+## Phase C/D の公開（elixcee 0.7.0）
+
+上記「Phase C」「`@elixcee/xlsx` 0.1.0-alpha.1 準備」セクションはいずれも執筆時点で「ローカルコミット済み・未公開」だったが、その後ユーザーの明示的な承認を得てversion bump・push・tag・publishまで完了した。Phase Cの3コミット（`07b4def`/`07a6747`/`687d70c`）はcrates.io（`elixcee-types` 0.3.0 → `elixcee` 0.7.0の順、index反映待ちを挟む）・PyPI（`v0.7.0`タグpushで自動発火）・CLI GitHub Release（`bin-v0.7.0`、Windows/Linux/macOS 3プラットフォーム）いずれも公開確認済み（各レジストリの実APIで確認、ローカルファイルからの推測ではない）。Phase D（`@elixcee/xlsx`）はversion/private/publishConfigを意図的に無変更のまま維持——npm公開はまだ行っていない。
+
+push前にコミット1（`07b4def`）の本文を訂正：`Variant::VbaArray`が既存`Variant::Array`のペイロード変更ではなく**追加**のenum variantであることを明確化するため、非対話的`git rebase --onto`で後続コミットを再構築（内容は完全に同一であることをdiffで確認済み）。
+
+fresh venv（`pip install elixcee==0.7.0`のみ）での実動作検証：多次元配列・caller/callee間の`On Error`伝播・`Err.Source`/`HelpFile`/`HelpContext`いずれも正常動作を確認。この過程で今回のスコープ外の別バグを発見・開示のみ：`Call <Sub名>`（引数なし・括弧省略構文）がパースエラーになる（`Call Sub()`や`Call`無しの`Sub`呼び出しは正常）——`src/parser/mod.rs`の`parse_call_stmt`が`LParen`を無条件必須にしているためで、2026-06-21のパーサー書き直し以来存在する既存の欠落。0.7.0の変更とは無関係と確認済み（`git log -L`でその関数が今回一切変更されていないことを確認）。
+
+## `elixcee` 0.8.0: Safe Round-Trip（3スライス）
+
+ユーザーから「elixceeはExcelの読み書きに強くなりたい」という新方向の提示を受け、`/plan`で調査・設計。既存の`save_xlsx_impl`（CLI `--output`・PyO3 `save_workbook()`）が元ファイルを一切保持せず、`Vm`内のセル状態から完全にゼロから再生成していることが判明——`--output foo.xlsm`は黙ってマクロ無効な`.xlsx`相当のファイルを生成していた。ユーザーとの3つの確認質問（root Rustエンジン優先／実Excelファイルはユーザー提供待ち／最小の高レバレッジ部分から）を経て、3スライスに分割して実装・各回ごとに`cargo test --workspace`とコード差分の独立検証を実施。
+
+- [x] **スライス1（commit `3ce93c5`）: 未知OOXMLパーツ + `xl/vbaProject.bin`の保持**。新規`reader::read_raw_zip_entries`/`content_type_decls`（保存時にのみ元ファイルを再読込——`check`/`snapshot`/`diagnose`等の読み取り専用パスはコストを払わない設計）。`save_xlsx_impl`が`is_writer_owned_part`（`xl/worksheets/*.xml`をパターンマッチで判定——非連番シート名にも対応）で判定した書き込み対象以外の全パーツをバイト単位でpassthrough。`xl/vbaProject*`は出力が`.xlsm`でない場合のみ除外（実Excelの「.xlsxとして保存するとマクロが消える」挙動を再現）。`[Content_Types].xml`のpassthroughパーツ宣言は元ファイルの実際の宣言から引き継ぐ（`.bin`拡張子への一律`Default`は`printerSettings1.bin`等を誤ってVBAプロジェクトとして宣言してしまうため不採用）。新規`tests/xlsx_roundtrip.rs`（手構築の合成`.xlsm`/`.xlsx`フィクスチャ、実Excel製`.xlsm`はリポジトリに存在しないため）。
+- [x] **スライス2（commit `74d477b`）: セルごとのスタイルインデックス保持 + `xl/styles.xml`のpassthrough**。`xl/styles.xml`だけpassthroughしても、writerが`<c>`要素に`s="N"`属性を一切出力しない設計だったため無意味と判明——両方を同時に修正。新規`WorkbookSheet::raw_style_indices`（既存の`style_ids`＝numFmtId解決とは独立に、生の`s`インデックスを無条件保持）を`Vm::cell_style_indices`へスレッド。このVMは`Interior.Color =`/`NumberFormat =`をno-opとして扱う（`test_range_noop_interior_color`/`test_range_noop_numberformat`で既存確認済み）ため、元のスタイルインデックスは値編集後も常に正しいという設計上の安全性が成立。
+- [x] **スライス3（commit `27b610a`）: merge・非表示行/列の書き戻し**。新規reader実装は不要——`Vm::merged_ranges`/`Vm::sheet_visibility`は既にreaderが解析しVM内に保持していたが、writer（`build_xlsx_sheet`）が`<mergeCells>`/`hidden`属性を一切出力していなかった（`grep`で確認：ゼロ件）という純粋なwriter側の欠落。両フィールドを`pub(crate)`昇格。セルを持たない非表示行にも空の`<row hidden="1"/>`を合成する必要があると判明・対応。
+- [x] **version bump（commit `c5dfa81`）: `elixcee` 0.7.0 → 0.8.0**。`elixcee-types`は0.3.0のまま変更なし（公開API変更なし、全て`src/reader.rs`/`src/lib.rs`/`src/vm/mod.rs`内で完結）。3スライス全体を「0.8.0リストの一部のみの意図的な部分実装」としてユーザーに確認の上、公開に進めることで合意。crates.io（`elixcee 0.8.0`）・PyPI（fresh venvでマージ保持を含む実動作検証済み）・CLI GitHub Release（`bin-v0.8.0`、3プラットフォーム、macOS実バイナリで動作確認）いずれも公開確認済み。
+
+**セッション中のインシデント**: スライス3実装中にホストディスクが実質満杯（残り958MiB）になりENOSPCで作業が中断。原因は`.claude/worktrees/agent-*`配下の過去セッションの残留worktree5個（今回セッションでは作成していない、合計約6.9GB、ほぼ全て`target/`ビルドキャッシュ）——各worktreeの`git status`がクリーンであることを確認した上で`git worktree remove`で除去し復旧（958MiB→14GiB）。中断していたドキュメント更新は復旧後に引き継いで完了。
+
+## ROADMAP.md 全面更新
+
+ユーザーから0.9.0〜1.0.0の詳細ロードマップ（3本柱：実Excel互換性証明・preserve-and-merge拡張・安定版1.0）の提示を受け、`/plan`で構造化。`Current state`セクションが「0.6.0公開済み、Phase C/Dはローカル未公開」という古い記述のまま残っていたため全面書き換え（0.7.0/0.8.0が実際に公開済みである事実を反映）。0.6.0時代の「Recently fixed」セクション削除（CHANGELOG.mdと重複）。Known gaps item 4削除（解決済み）・item 1/13を新0.9.0セクションへのクロスリファレンスに更新。npm/JS/WASM findingsセクションを整理。Date/Time runtime modelセクションを独立見出しから0.11.0エントリへ統合。0.9.0〜1.0.0の各バージョンのgoal/実装項目/完了条件、`@elixcee/xlsx`独立ロードマップ（0.1.0-alpha.1〜beta.1）、スコア推移表（0.7.0:94 → 1.0:97-98）を転記。
+
+## `/greenlane` セッション: 小規模な発見済みギャップの修正
+
+ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Windows+Excel環境・実Excel製フィクスチャ）はこの環境では実行不可（Red/保留）と判断し、承認不要で完結できる小さな発見済みギャップを2件修正：
+
+- [x] **`elixcee --version`/`-V`**（commit `1e9ade9`）。0.8.0リリース検証中に発見した既存の欠落（CLIに`--version`もヘルプ内のversion表記も一切無かった）。`env!("CARGO_PKG_VERSION")`をコンパイル時に埋め込むためCargo.tomlとの乖離が構造的に発生しない。新規`tests/cli_version.rs`（実バイナリを起動する既存の`tests/cli_*.rs`規約に追従）。
+- [x] **`check-versions.sh`への`packages/xlsx/package.json`ガード追加**（commit `0304e42`）。ROADMAP.mdで開示済みだった「`0.0.0-development`が実リリースバージョンに対して無音でdriftし得る」ギャップに対し、実際に起こり得る失敗モード（`private: false`＝公開準備完了なのに`version`が`0.0.0-development`のまま）だけをピンポイントで検知するチェックを追加（`@elixcee/xlsx`はroot crateと独立バージョニングのため、Cargo.tomlとのクロスチェックはしない）。3パターン（現状=pass／private:false+placeholder=fail／private:false+実バージョン=pass、false positiveなし）を手動検証。
+
+`cargo test --workspace` 957/957（0.8.0時点955から+2）。

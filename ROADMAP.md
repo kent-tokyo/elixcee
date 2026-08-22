@@ -281,15 +281,18 @@ Closing this gap for real is `0.9.0`'s entire purpose — see the roadmap below.
 CI wiring, browser/WASM smoke coverage, and package-size measurement are all done (see
 `CHANGELOG.md`'s history for the full investigation and writeup) — the `@elixcee/xlsx`
 roadmap below covers what's still needed for an actual publish far more concretely than the
-narrative version of this section used to. Two narrow gaps that roadmap doesn't separately
+narrative version of this section used to. One narrow gap that roadmap doesn't separately
 call out, still real:
 
 - **No WASM binary size *regression* check.** The size is measured and logged every CI run,
   but nothing fails CI if it grows — a real policy call (what threshold, what to do when a
   legitimate feature grows it) that hasn't been made.
-- **`check-versions.sh` has no awareness of `packages/xlsx/package.json`'s own version** —
-  it only reconciles root `Cargo.toml` against `pyproject.toml`. `0.0.0-development` could
-  drift silently relative to a real release version with no CI signal.
+
+~~`check-versions.sh` has no awareness of `packages/xlsx/package.json`'s own version~~ —
+**fixed**: it now guards the one concrete failure mode this actually risked — `"private":
+false` (publish-ready) paired with `"version": "0.0.0-development"` (the placeholder nobody
+meant to actually publish) — without cross-checking its version against `Cargo.toml`, since
+`@elixcee/xlsx` versions independently by design.
 
 ## Roadmap: 0.9.0 → 1.0.0
 
