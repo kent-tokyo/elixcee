@@ -1488,9 +1488,21 @@ impl Parser {
     fn parse_call_stmt(&mut self) -> Result<Stmt, String> {
         self.expect_ident("call")?;
         let name = self.consume_ident()?;
-        self.expect_tok(Tok::LParen)?;
-        let args = self.parse_arg_list()?;
-        self.expect_tok(Tok::RParen)?;
+        // Real VBA's `Call` grammar is `Call name [(argumentlist)]` — the
+        // parens are optional, required only when passing arguments. Found
+        // missing (`Call Foo` with no args was a syntax error, while
+        // `Call Foo()` and bare `Foo` both already worked) during 0.7.0
+        // release verification; unrelated to that round's own changes —
+        // this function hasn't been touched since the 2026-06-21
+        // hand-written-parser rewrite.
+        let args = if *self.peek() == Tok::LParen {
+            self.advance();
+            let args = self.parse_arg_list()?;
+            self.expect_tok(Tok::RParen)?;
+            args
+        } else {
+            Vec::new()
+        };
         Ok(Stmt::CallSub { name, args })
     }
 
@@ -3041,6 +3053,20 @@ mod tests {
     #[test] fn test_call_stmt() {
         let body = parse_body("Sub MySub()\n    Call MySub2(1, 2)\nEnd Sub\n");
         assert!(matches!(&body[0], Stmt::CallSub { name, args } if name == "mysub2" && args.len() == 2));
+    }
+    #[test] fn test_call_stmt_no_parens_zero_args() {
+        // `Call Name` (no parens) is valid VBA for a zero-argument call —
+        // the parens in `Call name [(argumentlist)]` are optional.
+        let body = parse_body("Sub MySub()\n    Call MySub2\nEnd Sub\n");
+        assert!(matches!(&body[0], Stmt::CallSub { name, args } if name == "mysub2" && args.is_empty()));
+    }
+    #[test] fn test_call_stmt_no_parens_followed_by_another_statement() {
+        // A parenless `Call` must still correctly hand off statement
+        // termination to the caller — regression guard against consuming
+        // too much (or too little) of the line.
+        let body = parse_body("Sub MySub()\n    Call MySub2\n    x = 1\nEnd Sub\n");
+        assert!(matches!(&body[0], Stmt::CallSub { name, args } if name == "mysub2" && args.is_empty()));
+        assert!(matches!(&body[1], Stmt::Assignment { var, .. } if var == "x"));
     }
     #[test] fn test_func_def_parsed() {
         let prog = parse("Function Add(a, b)\n    Add = a + b\nEnd Function\n").unwrap();
