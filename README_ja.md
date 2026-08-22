@@ -504,6 +504,30 @@ Next cell
 
 > **No-op** のプロパティはパースと受理はされますが、効果はありません。これにより、マクロ冒頭の `Application.ScreenUpdating = False` のような VBA のパフォーマンス最適化の書き方を、変更せずそのまま実行できます。
 
+## Microsoft Excel での round-trip 検証
+
+elixcee のワークブック保存経路は、Microsoft Excel for Mac 上で実際に作成した、
+サニタイズ済みの Microsoft Excel 製 `.xlsm` フィクスチャ 5 件を用いて検証されています。
+
+**検証済みの範囲：**
+
+- Excel で作成したワークブックを開く
+- elixcee でセルを編集する
+- 別名保存・上書き保存（in-place save）の両方
+- 修復警告なしで Microsoft Excel から再度開ける
+- 数式・既存のセル書式・結合セル・非表示の行/列・VBA プロジェクトのバイト列・
+  未知の ZIP パーツ・relationship が保持される
+
+**未検証の範囲：**
+
+- 保存後の VBA マクロの実行
+- 再生成されるワークシート XML に埋め込まれる、テーブル・データの入力規則・
+  条件付き書式・ハイパーリンク・コメント・名前の定義・グラフ・画像・印刷設定
+
+詳細な結果は
+[`compat/oracle-excel-com/results/0.9.0-A_summary.md`](compat/oracle-excel-com/results/0.9.0-A_summary.md)
+を参照してください。
+
 ## 未対応関数
 
 詳細リストは **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)** を参照してください。

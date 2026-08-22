@@ -584,6 +584,32 @@ Named ranges are stored on `vm.named_ranges` (a `dict[str, str]` mapping lowerca
 
 ---
 
+## Microsoft Excel round-trip validation
+
+elixcee's workbook save path has been validated using five sanitized,
+Microsoft Excel-authored `.xlsm` fixtures on Microsoft Excel for Mac.
+
+**Validated scope:**
+
+- open an Excel-authored workbook
+- modify cells with elixcee
+- save-as and in-place save
+- reopen in Microsoft Excel without a repair warning
+- preserve formulas, existing cell styles, merged cells, hidden rows/columns,
+  VBA project bytes, unknown ZIP parts, and surviving relationships
+
+**Not validated:**
+
+- post-save VBA macro execution
+- tables, data validation, conditional formatting, hyperlinks, comments,
+  defined names, charts, images, and print settings embedded in regenerated
+  worksheet XML
+
+See [`compat/oracle-excel-com/results/0.9.0-A_summary.md`](compat/oracle-excel-com/results/0.9.0-A_summary.md)
+for the full results.
+
+---
+
 ## Not Yet Supported
 
 See **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)** for the full list.

@@ -505,6 +505,31 @@ Next cell
 
 ---
 
+## Microsoft Excel round-trip 验证
+
+elixcee 的工作簿保存路径已使用 5 个经过脱敏处理、在 Microsoft Excel for Mac
+上实际创建的 Microsoft Excel 制 `.xlsm` fixture 进行了验证。
+
+**已验证范围：**
+
+- 打开 Excel 制作的工作簿
+- 使用 elixcee 修改单元格
+- 另存为与原地保存（in-place save）
+- 在 Microsoft Excel 中重新打开且无修复警告
+- 保留公式、既有单元格样式、合并单元格、隐藏行/列、VBA 项目字节、
+  未知 ZIP 部件以及仍然有效的 relationship
+
+**未验证范围：**
+
+- 保存后的 VBA 宏执行
+- 表格、数据验证、条件格式、超链接、批注、定义名称、图表、图片、
+  打印设置等嵌入在重新生成的工作表 XML 中的内容
+
+完整结果参见
+[`compat/oracle-excel-com/results/0.9.0-A_summary.md`](compat/oracle-excel-com/results/0.9.0-A_summary.md)。
+
+---
+
 ## 暂不支持
 
 详见 **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)**。
