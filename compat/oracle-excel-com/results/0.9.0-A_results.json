@@ -13,7 +13,12 @@
       "content": ["values", "formula", "number_format", "merged_range", "hidden_column", "hidden_row"],
       "runs_summary": "save-as and in-place, 1 cycle each: no repair warning, no cannot-open error, values/formula(recalculated live to 1110)/number-format/merge/hidden-row/hidden-column all EXACT_MATCH or SEMANTIC_MATCH, has_vb_project correctly false.",
       "cycles_completed_per_mode": 1,
-      "cycles_required_per_mode": 10
+      "cycles_required_per_mode": 10,
+      "chained_in_place_cycles": {
+        "cycles_completed": 5,
+        "cycles_required": 10,
+        "note": "Same file edited+saved in-place 5 times consecutively (not 5 fresh copies) -- a stricter test than 5 independent cycles, since any state-accumulation bug would compound. mechanical_check.py STRUCTURALLY_CLEAN/formula CLEAN after every cycle; real Excel reopen after cycle 5 confirmed A1/A2/A3(formula, recalculated to 1110)/merge all still correct."
+      }
     },
     {
       "id": "fixture2_vba_macro",
@@ -123,7 +128,7 @@
   "exit_criteria_status": {
     "excel_authored_fixtures_5_or_more": "5 of 5 (met)",
     "xlsm_fixtures_3_or_more": "5 of 5 are .xlsm (met)",
-    "consecutive_open_save_reopen_cycles_10_or_more": "1 of 10 per fixture per save mode -- NOT met",
+    "consecutive_open_save_reopen_cycles_10_or_more": "1 of 10 per fixture per save mode for fixtures 2-5; fixture 1 additionally chain-tested at 5 consecutive in-place cycles (see fixture1's chained_in_place_cycles) -- NOT met",
     "excel_repair_warnings": 0,
     "vba_project_loss": 0,
     "macro_execution_failures": "not evaluable (environment blocker, see fixture2)",
