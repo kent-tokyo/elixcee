@@ -1085,7 +1085,18 @@ fn build_xlsx_shared_strings(strings: &[String]) -> String {
          count=\"{count}\" uniqueCount=\"{count}\">\n"
     );
     for s in strings {
-        out.push_str(&format!("<si><t>{}</t></si>\n", xml_escape(s)));
+        // Leading/trailing whitespace is only guaranteed to survive a round trip through a
+        // spec-following XML consumer (real Excel included) when marked xml:space="preserve" —
+        // the mirror-image, writer-side counterpart of the xml:space="preserve" handling
+        // xlsx_sheet_cells already honors on read for `<v>` (see reader.rs).
+        if s.trim() != s.as_str() {
+            out.push_str(&format!(
+                "<si><t xml:space=\"preserve\">{}</t></si>\n",
+                xml_escape(s)
+            ));
+        } else {
+            out.push_str(&format!("<si><t>{}</t></si>\n", xml_escape(s)));
+        }
     }
     out.push_str("</sst>\n");
     out
