@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Two independent items: `@elixcee/xlsx` (still unpublished, `0.0.0-development`/
 `private: true`, no `publishConfig`; see its own two entries below for exactly what's
-implemented) and one small root-crate CLI fix below.
+implemented) and two small root-crate fixes below.
 
 ### CLI: `elixcee --version`/`-V`
 
@@ -21,6 +21,19 @@ to be an unrecognized flag with no substitute (`--help` doesn't print it either)
 `env!("CARGO_PKG_VERSION")` at compile time, so it can never drift from `Cargo.toml`. New
 `tests/cli_version.rs` (2 tests, spawning the real built binary, matching the existing
 `tests/cli_*.rs` convention).
+
+### VBA: `Call <Sub>` without parentheses
+
+Real VBA's `Call` grammar is `Call name [(argumentlist)]` — the parentheses are optional,
+required only when passing arguments. `Call Foo` (a valid, zero-argument call) failed to
+parse (`"expected LParen, got Newline"`), while `Call Foo()` and bare `Foo` (no `Call`
+keyword at all) both already worked. Found and disclosed, not fixed, during `0.7.0` release
+verification while writing a fresh-venv smoke test; confirmed unrelated to that round's own
+changes (the parsing function hadn't been touched since the 2026-06-21 hand-written-parser
+rewrite). Fixed: `parse_call_stmt` now checks for `(` before consuming it, the same pattern
+this parser already uses for other optional constructs, defaulting to an empty argument list
+when absent. Two new tests (zero-argument parenless call; a parenless call followed by
+another statement, guarding against over/under-consuming the line).
 
 ### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
 
