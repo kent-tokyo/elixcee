@@ -59,6 +59,8 @@ before depending on this for anything beyond the surface it actually covers.
 ## What's not implemented
 
 - **ODS output**, and any `bookType` other than `"xlsx"`.
+- **`writeFileAsync`** — the real package's async file-write variant; only the synchronous
+  `writeFile`/`writeFileSync` pair is exported.
 - **Streaming reads** — only whole-buffer/whole-file input.
 - Any `Rust ↔ JS` bridge beyond the read path described above.
 

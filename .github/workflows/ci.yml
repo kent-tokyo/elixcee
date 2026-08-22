@@ -149,6 +149,14 @@ jobs:
         working-directory: compat
         run: npm run differential:metadata
 
+      # 36 MATCH (all supported write()/writeFile()/writeFileSync() shapes) + 1 disclosed
+      # UNSUPPORTED (bookType:'ods' — see classify.mjs's UNSUPPORTED_ALLOWLIST). Was written
+      # and passing locally alongside the write() feature itself but not wired into CI until
+      # now — see CHANGELOG.md.
+      - name: compat — XLSX.write()/writeFile()/writeFileSync() differential (36 MATCH + 1 disclosed UNSUPPORTED expected)
+        working-directory: compat
+        run: npm run differential:write
+
   # Builds crates/elixcee-wasm fresh (both wasm-pack targets), then verifies the result
   # actually works as a consumer would use it — the node-js job above only ever exercises
   # the already-vendored/committed copy under packages/xlsx/src/internal/wasm/, never a
