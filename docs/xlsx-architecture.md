@@ -588,11 +588,11 @@ existing cell's style survived this slice), charts/images/external-link consiste
 structural sheet change, streaming/large-file handling, `.ods` passthrough, and any change
 to `@elixcee/xlsx` or `crates/elixcee-wasm` (untouched).
 
-**Verification status:** structural/self-consistency only, against hand-built synthetic
-fixtures (`tests/xlsx_roundtrip.rs`) — no real Microsoft-Excel-authored `.xlsm` exists in
-this repo yet, so "does real Excel open the round-tripped output without a repair prompt"
-remains unverified. See `tests/fixtures/xlsm_roundtrip/README.md` for where a real file
-slots in.
+**Verification status (as of slices 1–3, `0.8.0`):** structural/self-consistency only,
+against hand-built synthetic fixtures (`tests/xlsx_roundtrip.rs`) — no real
+Microsoft-Excel-authored `.xlsm` existed in this repo yet, so "does real Excel open the
+round-tripped output without a repair prompt" was unverified. **Closed as of `0.9.0`** — see
+Milestone 4 below.
 
 ### Slice 3: merged ranges and hidden rows/columns are now written back
 
@@ -621,7 +621,94 @@ unknown-part-passthrough concern.
 This narrows (but does not close) the "embedded inside worksheet XML" gap noted in slice 2's
 out-of-scope list above: merges and hidden rows/columns now survive a regenerated sheet;
 hyperlinks, data validation, conditional formatting, freeze panes, and print/page setup —
-also worksheet-XML-embedded — still do not, and remain future slices.
+also worksheet-XML-embedded — still do not, and remain future slices (`0.10.0`, see
+`ROADMAP.md`).
+
+### Milestone 4 (`0.9.0`): three bugs slices 1–3 never caught, found by real Excel
+
+Slices 1–3 were verified only against hand-built synthetic fixtures. `0.9.0`'s real-Excel
+round-trip validation (`0.9.0-A`, 5 fixtures under
+`compat/oracle-excel-com/fixtures/pristine/`, see `ROADMAP.md` and
+`compat/oracle-excel-com/results/0.9.0-A_summary.md`) found three bugs none of them happened
+to exercise — a real Excel-authored file routinely carries a formula, a theme, and a
+`.xlsm` extension with no VBA project, none of which any synthetic fixture up to this point
+had combined.
+
+**1. Formula flattening.** `reader::WorkbookSheet` (the struct backing `read_workbook`,
+used by the CLI `--file` path and PyO3's `load_workbook()`) had no field for per-cell
+formula text at all — `xlsx_sheet_cells` already extracted it (`sheet_data.formulas`), but
+`read_xlsx` discarded that half converting a `BufferSheet` down to a bare `WorkbookSheet`
+(the buffer-API's own `formulas` field lives on `BufferSheet`, not `WorkbookSheet` — a
+deliberate scoping decision from an earlier round, see that field's own doc comment; it was
+never meant as a decision that the CLI/PyO3 path should stay formula-blind forever). Every
+load flattened every formula cell to its cached value; every subsequent save wrote that
+stale literal back with no `<f>` element — editing any one cell, anywhere in a workbook,
+silently dropped every *other* cell's formula, permanently.
+
+Fixed: `WorkbookSheet.formulas` (new field, mirroring `BufferSheet::formulas`) is populated
+in `read_xlsx` from the same already-parsed `sheet_data.formulas`; `populate_from_sheets`
+sets `CellContent.formula` from it, **keeping the file's own cached value rather than
+recomputing** (elixcee's formula engine doesn't cover Excel's full function surface, so
+recomputation on load risks turning a load into an error or a silently different number);
+`xlsx_cell_xml` now takes an `Option<&str>` formula and emits `<f>{text}</f>` before `<v>`
+when present, `xml_escape`d, with a leading `=` stripped defensively regardless of which
+code path produced the stored string. Shared-formula follower cells (`<f t="shared"
+si="N"/>`, no inline text) remain unresolved — a pre-existing, documented `reader.rs`
+limitation, unaffected by this fix.
+
+**2. Orphaned relationships.** `xl/_rels/workbook.xml.rels` and `_rels/.rels` are both
+writer-owned — fully regenerated from a fixed template (`build_xlsx_workbook_rels`,
+`build_xlsx_root_rels`) that only ever emitted the relationships it already knew about
+(worksheet/sharedStrings/styles/vbaProject; officeDocument), with no mechanism to carry
+over any other kind. `xl/theme/theme1.xml` and `docProps/{app,core}.xml` passed through
+byte-identical (slice 1's own passthrough loop correctly copied the bytes and even
+resolved their content type via `content_type_decls`), but the *relationship* pointing at
+each was silently dropped — an orphaned part, structurally present but unreferenced. Real
+Excel refused to open the result outright for this reason, not even a repair prompt.
+
+Fixed: new `reader::workbook_rels_decls(xml)` parses any `.rels` file's `(Type, Target)`
+pairs (ids dropped — a caller assigns fresh sequential ones, since the writer's own
+worksheet/sharedStrings/styles/vbaProject numbering would otherwise collide with whatever
+ids the source happened to use). New `carry_over_rels()` (`src/lib.rs`) applies this to
+both rels files: for each relationship whose target resolves (via `normalize_part_path`,
+handling `../` climbing out of `xl/`) to a part that survived as passthrough, and whose
+`Type` isn't one of the four the writer already owns, re-emit it with a fresh id. Two call
+sites — `xl/_rels/workbook.xml.rels` (targets relative to `xl/`) and `_rels/.rels` (targets
+relative to the package root) — the only real difference being the `target_base` prefix
+passed in.
+
+**3. Wrong content type for a non-macro `.xlsm`.** `build_xlsx_content_types` chose
+`workbook.xml`'s content type from `has_vba` — whether the *source* actually had a VBA
+project — not from the *output path's* own extension. A real Excel-authored `.xlsm` with
+zero VBA content still declares `application/vnd.ms-excel.sheet.macroEnabled.main+xml`;
+the macro-enabled type is a property of the file *format*, not of what's currently inside
+it (an empty `.xlsm` can still have macros added to it later without a format change).
+Since fixture 1 (values/formula/style/merge/hidden, no VBA project) is the common real-world
+case — any workbook someone habitually saves as `.xlsm` without necessarily having active
+macros right now — this was the dominant cause of the "cannot open" failure among the three,
+not an edge case.
+
+Fixed: `build_xlsx_content_types`'s content-type decision is now driven by `is_xlsm_output`
+(the output path's own extension, already computed earlier in `save_xlsx_impl` for the
+vbaProject-passthrough decision) instead of `has_vba`. `build_xlsx_workbook_rels`'s own use
+of `has_vba` (to decide whether to emit a vbaProject *relationship*) is intentionally left
+unchanged — that one correctly stays tied to whether `xl/vbaProject.bin` actually exists to
+point at; emitting a vbaProject relationship with nothing behind it would just be a fourth,
+different orphaned-relationship bug.
+
+**New verification infrastructure**: `compat/oracle-excel-com/mechanical_check.py` — a
+pure-stdlib structural OOXML validator (content-types resolution, relationship completeness
+in *both* directions — dangling target, the new orphaned-part check that specifically
+caught bug 2 — vbaProject byte-identity, and a semantic formula-preservation check for bug
+1) that's the fast, Excel-independent primary signal for this and future real-Excel
+validation rounds. Self-tests against 7 deliberately corrupted cases before trusting any
+real result (see its own module docstring for why this matters: every 0.9.0-A pass
+criterion is a zero, and a checker that structurally cannot detect a failure reports all
+zeros regardless of correctness). `tests/xlsx_roundtrip.rs` gained matching Rust regression
+tests for all three bugs, plus `real_excel_xlsm_roundtrip_preserves_vba_project_and_relationships`,
+which runs the same assertions against a real Excel-authored fixture
+(`compat/oracle-excel-com/fixtures/pristine/fixture2_vba_macro.xlsm`) rather than a
+synthetic one.
 
 ## Consequences
 
