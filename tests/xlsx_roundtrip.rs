@@ -1,13 +1,13 @@
 /// Safe round-trip: unknown-OOXML-part passthrough + `xl/vbaProject.bin`
 /// preservation (see `docs/xlsx-architecture.md`'s "regenerate vs.
-/// preserve-and-merge" section and `/Users/k_tanabe/.claude/plans/wise-waddling-fern.md`).
+/// preserve-and-merge" section).
 ///
-/// No real Excel-authored `.xlsm` exists in this repo yet, so the fixture is
-/// hand-built in-test via `zip::write::ZipWriter` (already a normal
-/// dependency, used identically by `save_xlsx_impl` itself) rather than a
+/// These fixtures are hand-built in-test via `zip::write::ZipWriter` (already a
+/// normal dependency, used identically by `save_xlsx_impl` itself) rather than a
 /// committed binary blob or a SheetJS-generated file (SheetJS can't write
-/// macro-enabled workbooks at all). See `tests/fixtures/xlsm_roundtrip/README.md`
-/// for where a real file slots in later.
+/// macro-enabled workbooks at all) -- kept as a synthetic, reviewable-as-source
+/// complement to the real Excel-authored fixtures now under
+/// `compat/oracle-excel-com/fixtures/pristine/` (see `ROADMAP.md`'s `0.9.0-A`).
 use elixcee::{parser, reader, save_workbook, vm::Vm};
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};

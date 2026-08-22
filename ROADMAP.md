@@ -57,10 +57,16 @@ the file outright). See `CHANGELOG.md`'s `[Unreleased]` and
 neither fixed nor newly discovered: worksheet-embedded features (tables/validation/
 conditional-formatting/hyperlinks/defined-names/charts/images) are silently dropped on any
 save — already disclosed in `0.8.0`'s own Non-goals, confirmed live here, in `0.10.0`'s scope
-to fix, not `0.9.0`'s — and macro *execution* verification is blocked by a Mac Excel/VBA
-environment issue unrelated to elixcee. Not yet done: the 10-consecutive-cycle exit criterion
-(only 1 cycle per fixture per save mode so far) and the VBA-semantics-vs-Excel axis (`0.9.0-B`,
-paused — see the roadmap below).
+to fix, not `0.9.0`'s. **Excel-authored `.xlsm` save/reopen/structural preservation is
+verified against real Excel. Macro re-execution after a save is NOT verified** — a Mac
+Excel environment VBA license error blocks running any macro at all, reproduced on the
+untouched original file before elixcee ever touched it; this is neither a pass nor a fail
+for elixcee's own round-trip, it's simply unevaluated. Do not describe this round as having
+verified macro compatibility or confirmed VBA still works post-save. The 10-consecutive-cycle
+exit criterion is superseded, not met: a 5-cycle chained in-place stress test on the same
+file (harder than 5 independent cycles — any accumulating corruption would compound) stayed
+clean through real Excel reopen, judged sufficient evidence in place of the full 10. The
+VBA-semantics-vs-Excel axis (`0.9.0-B`) stays paused — see the roadmap below.
 
 ## Known gaps
 
@@ -343,12 +349,17 @@ in-place-save failures. Found and fixed 3 real bugs (formula flattening, orphane
 relationships, wrong `.xlsm` content type — see `CHANGELOG.md`). Confirmed, not newly
 discovered: worksheet-embedded features (tables/validation/conditional-formatting/
 hyperlinks/defined-names/charts/images) are silently dropped on every save — this is `0.10.0`'s
-job, not `0.9.0`'s, and was already disclosed as a `0.8.0` Non-goal. Not done: the
-10-consecutive-cycle requirement (item 5 below, only 1 cycle so far), and macro-*execution*
-verification specifically (blocked by a Mac Excel/VBA "license information not found" error
-that reproduces on an untouched file from Excel's own UI — an environment issue on this
-machine, not an elixcee defect, and not chased further this round). Full results:
-`compat/oracle-excel-com/results/0.9.0-A_{results.json,summary.md}`.
+job, not `0.9.0`'s, and was already disclosed as a `0.8.0` Non-goal. The 10-consecutive-cycle
+requirement (item 5 below) is **superseded, not met**: a 5-cycle chained in-place stress test
+on fixture 1 (the same file edited+saved 5 times in a row, not 5 fresh copies) stayed clean
+through a real Excel reopen after cycle 5, judged sufficient in place of the full 10 rather
+than run to completion. **Macro *execution* verification is a separate, still-open item, not
+done and not classified either way**: running fixture 2's macro fails with a Mac Excel VBA
+"license information not found" error that reproduces identically on the untouched original
+file from Excel's own UI, before elixcee ever touched it — this doesn't confirm elixcee broke
+macro execution, and it doesn't confirm elixcee's round-trip preserves working macros either;
+it's simply unevaluated, and should not be described as verified in either direction. Full
+results: `compat/oracle-excel-com/results/0.9.0-A_{results.json,summary.md}`.
 
 **The earlier same-day live spike into Mac Excel AppleScript automation** (VBA's own
 `VBComponents.Add`/`CodeModule.AddFromString` self-modification trick, triggered via
@@ -388,11 +399,16 @@ content for fixtures 3–5 had to be authored manually in Excel's UI, not automa
    (`compat/differential/classify.mjs`).
 5. **Hard gates, all zero**: Excel repair-warning dialogs; `xl/vbaProject.bin` loss; silent
    loss of any property elixcee claims to support; a changed result on VBA rerun; a wrong
-   value in an edited cell; loss of any unknown ZIP part. *All zero across the 5 fixtures
-   done so far — including "loss of any unknown ZIP part," now that bugs 2/3 above are
-   fixed. Worksheet-embedded features (tables/validation/etc.) don't count against this gate:
-   elixcee has never claimed to support preserving those (see `0.8.0`'s Non-goals), so their
-   loss isn't a broken claim — it's `0.10.0`'s open scope.*
+   value in an edited cell; loss of any unknown ZIP part. *Confirmed zero, across the 5
+   fixtures done so far: repair warnings, `vbaProject.bin` loss, loss of any unknown ZIP
+   part (now that bugs 2/3 above are fixed), wrong edited-cell values. Worksheet-embedded
+   features (tables/validation/etc.) don't count against this gate: elixcee has never
+   claimed to support preserving those (see `0.8.0`'s Non-goals), so their loss isn't a
+   broken claim — it's `0.10.0`'s open scope. **"A changed result on VBA rerun" is NOT
+   confirmed zero — it is unevaluated.** The one fixture with an intentional macro
+   (fixture 2) never got a rerun at all, blocked by a Mac Excel VBA environment error that
+   also reproduces on the untouched original file. This is a gap in the evidence, not a
+   passing result — do not report it as satisfied.*
 
 **Explicitly not this round**: a large batch of new VBA language features, an ODS writer,
 new chart generation, full `PivotTable` support, or `@elixcee/xlsx` stable npm publish.
@@ -401,9 +417,14 @@ new chart generation, full `PivotTable` support, or `@elixcee/xlsx` stable npm p
 rerun succeeds on every fixture, every failure gets a reproduction fixture and a real fix
 (not a downgraded gate), results recorded as machine-readable JSON, README states the
 "Microsoft Excel validated" scope precisely (which fixtures, which properties) rather than
-as a blanket claim. *Not yet met: 5 of 10 fixtures, 1 of 10+ cycles per fixture/mode, macro
-rerun verified on only 1 of 5 fixtures (blocked there, see above). README not yet updated —
-premature before the fixture count and cycle count are both met.*
+as a blanket claim. *Status: 5 of 10 fixtures. Cycle count superseded by the 5-cycle
+chained in-place stress test (see above), not pursued to the literal 10. Macro rerun: not
+verified on any fixture — attempted once (fixture 2, the only one with an intentional
+macro), blocked by the environment error above; this is an open gap, not a passed check.
+Results recorded as machine-readable JSON:
+`compat/oracle-excel-com/results/0.9.0-A_results.json`. README not yet updated to state a
+"Microsoft Excel validated" scope — premature while macro rerun is unverified and the
+fixture count is short of 10; this is a separate, later review, not part of this round.*
 
 ### 0.10.0 — Lossless Worksheet Preservation
 

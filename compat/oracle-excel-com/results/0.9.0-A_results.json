@@ -30,8 +30,9 @@
       "cycles_completed_per_mode": 1,
       "cycles_required_per_mode": 10,
       "macro_execution": {
-        "status": "NOT_EVALUABLE",
-        "reason": "Running the macro (IncrementCounter) fails with 'Microsoft Visual Basic: license information for this component was not found' -- reproduced identically when run from Excel's own Macro dialog (⌥F8) against the UNTOUCHED original fixture, before elixcee ever touched it. This is a Mac Excel/VBA-runtime environment issue on this machine, not an elixcee defect -- ruled out: not a codeName/binding issue (macro is correctly listed and resolvable in the Macro dialog), not specific to external invocation (fails from inside Excel's own UI too), not caused by any file elixcee wrote (fails on the pristine file too). Out of scope for this round; flagged for a fresh environment/session per MACOS_APPLESCRIPT_EXPLORATION.md's own recommendation."
+        "status": "NOT_EVALUATED",
+        "status_note": "Neither a pass nor a fail for elixcee -- unevaluated. Do not report macro compatibility or post-save VBA execution as verified.",
+        "reason": "Running the macro (IncrementCounter) fails with 'Microsoft Visual Basic: license information for this component was not found' -- reproduced identically when run from Excel's own Macro dialog (⌥F8) against the UNTOUCHED original fixture, before elixcee ever touched it. Diagnostic facts, offered without a root-cause conclusion: not a codeName/binding issue (the macro is correctly listed and resolvable in the Macro dialog); not specific to external AppleScript invocation (fails from inside Excel's own UI too); the same error reproduces on a file elixcee never wrote. Flagged for a fresh environment/session per MACOS_APPLESCRIPT_EXPLORATION.md's own recommendation -- not chased further this round."
       }
     },
     {
@@ -120,18 +121,18 @@
       "recommendation": "Real feature work (re-inject known elements into the regenerated worksheet, or move to diff/merge instead of full regeneration), not attempted this round -- matches the scope of a planned future milestone."
     },
     {
-      "id": "macro-execution-environment-blocker",
+      "id": "macro-execution-not-evaluated",
       "found_via": "fixture2",
-      "summary": "Mac Excel VBA license/component error, reproduces on the untouched original file from inside Excel's own UI -- not an elixcee issue, not evaluated further this round."
+      "summary": "Mac Excel VBA license/component error blocks running any macro, reproduces on the untouched original file from inside Excel's own UI. Not classified as a pass or a fail for elixcee -- macro execution after save is simply unverified. Do not report as confirmed working or confirmed broken."
     }
   ],
   "exit_criteria_status": {
     "excel_authored_fixtures_5_or_more": "5 of 5 (met)",
     "xlsm_fixtures_3_or_more": "5 of 5 are .xlsm (met)",
-    "consecutive_open_save_reopen_cycles_10_or_more": "1 of 10 per fixture per save mode for fixtures 2-5; fixture 1 additionally chain-tested at 5 consecutive in-place cycles (see fixture1's chained_in_place_cycles) -- NOT met",
+    "consecutive_open_save_reopen_cycles_10_or_more": "SUPERSEDED, not met literally: 1 cycle per fixture per save mode for fixtures 1-5, plus a 5-cycle chained in-place stress test on fixture 1 (see fixture1's chained_in_place_cycles) judged sufficient evidence in place of running all fixtures to the full 10.",
     "excel_repair_warnings": 0,
     "vba_project_loss": 0,
-    "macro_execution_failures": "not evaluable (environment blocker, see fixture2)",
+    "macro_execution_failures": "NOT_EVALUATED -- neither a pass nor a fail. A Mac Excel VBA license/environment error blocks running fixture 2's macro at all, reproduced on the untouched original file. Do not report macro execution as verified working or verified broken.",
     "supported_workbook_property_loss": "0 for cell values/formulas/styles/merges/hidden rows-cols/vbaProject; nonzero for worksheet-embedded features (tables/validation/conditional-formatting/hyperlinks/defined-names/charts/images) -- known, already-documented gap, not new",
     "relationship_breakage": 0,
     "in_place_save_failures": 0

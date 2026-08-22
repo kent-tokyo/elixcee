@@ -275,10 +275,16 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
   3. **`.xlsm`のcontent-type誤り**（commit `1ea4066`、最も深刻）：`workbook.xml`のcontent-typeを「ソースに実際にVBAプロジェクトがあるか」で決めていたため、VBAなしの`.xlsm`出力（このfixtureのような一般的なケース）が拡張子と矛盾する非マクロ型content-typeを宣言してしまい、**Excelが修復警告すら出さずファイルを開くこと自体を拒否**していた。
 - [x] AppleScriptでテーブル・データ検証・条件付き書式・ハイパーリンク・グラフの**作成**が一切できないことを実機で確認（`make new`系が軒並み`-50`パラメータエラー、`add data validation`は「メッセージを認識できない」——sdefに載っているが未実装）。ユーザーが手動でfixture 2〜5を作成、Desktopで受け渡し。
 - [x] **fixture 2〜5**を同じ手順で完走（`compat/oracle-excel-com/fixtures/pristine/`に格納）：
-  - fixture 2（VBAマクロ）：ファイル保存自体は問題なし（`has_vb_project`正しく`true`、修復警告なし）。ただし**マクロの実行検証は不能**——elixcee未編集のオリジナルファイルをExcel自身のマクロダイアログ（⌥F8）から実行しても「このコンポーネントのライセンス情報が見つかりません」というVBAランタイム側のエラーが再現し、elixceeとは無関係なこのMac環境固有の問題と判明（前回spikeで未解明だった`-50`系の不安定さと同系統の可能性）。
+  - fixture 2（VBAマクロ）：ファイル保存自体は問題なし（`has_vb_project`正しく`true`、修復警告なし）。ただし**マクロの実行検証は未評価のまま**——elixcee未編集のオリジナルファイルをExcel自身のマクロダイアログ（⌥F8）から実行しても「このコンポーネントのライセンス情報が見つかりません」というエラーが再現した（前回spikeで未解明だった`-50`系の不安定さと同系統の可能性）。ユーザーの明示的指示により、これをelixceeの成功・失敗いずれにも分類しない——マクロ実行の互換性は「検証済み」でも「破損確認済み」でもなく、単に未評価。
   - fixture 3（テーブル・データ検証・条件付き書式）／fixture 4（ハイパーリンク・コメント・定義名）／fixture 5（グラフ・画像・印刷範囲）：いずれも保存は問題なし（修復警告なし）が、**対象の機能が全て静かに消失**することを実機で確認。原因は`build_xlsx_sheet`/`build_xlsx_workbook`がシート・ワークブックXMLを毎回まるごと再生成し、これらの機能を一切モデル化していないため——ただし0.8.0マイルストーンの時点でNon-goalsとして既に開示済みの制約であり、今回新たに見つかったバグではない（ROADMAP.mdの0.10.0「Lossless Worksheet Preservation」の対象）。
 - [x] 発見した3バグはいずれも`tests/xlsx_roundtrip.rs`へ回帰テスト追加、`mechanical_check.py`のself_testにも各バグ用のnegative caseを追加。`cargo test --workspace` 828+件（テストファイル分割後の集計、旧959件相当から純増）グリーン、`cargo fmt --all --check`クリーン。
 - [x] `CHANGELOG.md`の`[Unreleased]`・`ROADMAP.md`の`Current state`と`0.9.0`セクションを実態に同期（`/greenlane`）。
-- [ ] **未完了**：10回連続open/save/reopenサイクル要件（現状は各fixture・各保存モード1回のみ）。fixture 2のマクロ実行検証（環境要因でブロック）。0.9.0-B（VBA意味論oracle）は引き続き保留。
+- [ ] **未完了**：10回連続open/save/reopenサイクル要件（現状は各fixture・各保存モード1回のみ）。fixture 2のマクロ実行検証（未評価のまま）。0.9.0-B（VBA意味論oracle）は引き続き保留。
 
 結果は`compat/oracle-excel-com/results/0.9.0-A_results.json`（機械可読）と`0.9.0-A_summary.md`に保存。version bump・push・tag・publishは一切実施していない。
+
+### 追補：5-cycle chained stress testとpush判定
+
+- [x] fixture 1に対し、同一ファイルへの**5回連続in-place保存**（毎回新規コピーではなく累積編集）を実施——反復によるXML/ZIP構造の劣化・style/merge/formulaの累積消失・2回目以降だけ発生する非冪等な破損を検査する、単発試験より厳しいテスト。5サイクル全てmechanical checker clean、5サイクル後の実Excel再オープンでも値・数式（再計算されて1110）・結合セル全て正常を確認。
+- [x] ユーザー判定：**10サイクルへの追加反復は不要**——5-cycle chained testを代替証拠として採用し、ROADMAP.md/結果ファイルには「10-cycle達成」ではなく「superseded」と正確に明記。マクロ実行の未評価扱いも同様に、elixceeの成功・失敗どちらにも分類しないよう全ドキュメントの表現を修正。
+- [x] 今回の9ローカルコミット（`2b87ef2`〜`b74bfbd`）をユーザー承認の上`origin/master`へpush。push後GitHub Actions全job確認、機密情報混入チェック、versionが0.8.0のまま変更されていないことを確認——詳細はCI確認結果として別途記録。
