@@ -312,3 +312,13 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 - [x] 副産物として、`cargo clippy --features python --lib -- -D warnings`がこのセッション以前に一度も実行されていなかったことが判明（CIの`cargo clippy -p elixcee-types`はroot crateのpython featureをカバーしない）——実行したところ`pyclass`修正とは無関係な既存の`redundant_closure`警告5件（`.map_err(|e| PyErr::new::<X,_>(e))` → `.map_err(PyErr::new::<X,_>)`）を発見、同じcommitで機械的に修正。
 
 `cargo clippy --lib -- -D warnings`と`cargo clippy --features python --lib -- -D warnings`、両方とも完全にクリーン（警告ゼロ）になった。
+
+## `/greenlane`セッション続き：`--all-targets`／`cargo doc`を初めて実行し追加のlint課題を発見・解消
+
+前ラウンドの「`--lib`のみでは見えない範囲を洗う」方針をさらに広げ、これまで一度もこのリポジトリで実行されていなかった検証コマンドを2つ試したところ、いずれも実際の（false positiveだが未対応の）警告を発見した。
+
+- [x] **`cargo clippy --all-targets -- -D warnings`**（commit `1063cb7`）：test/bench/example コードは`--lib`では一切コンパイル・lintされない別ターゲットのため、このリポジトリで初めて実行。8箇所で`clippy::approx_constant`（`3.14`がπに近すぎるという警告）が発生——いずれもTRUNC/VALUE/ABS/浮動小数点パース等のテストで使われた「たまたまπに近い」任意の小数値で、π近似とは無関係と確認。各テスト関数単位で`#[allow(clippy::approx_constant)]`（コメント付き）を追加——crate全体やモジュール全体でのallowは避け、将来同じテストモジュール内で本当にπ近似のバグが混入した場合に検知できる範囲を維持。`cargo clippy --workspace --all-targets`（python feature有無問わず）が完全にクリーンになったことを確認。
+- [x] **`cargo doc --no-deps --workspace --features python --document-private-items`**（commit `d23c1fe`）：docビルドを検証するCI jobが存在せず、このリポジトリで初めて実行（`--document-private-items`は、アプリケーションであるこのcrateの大半のdocコメントがprivate itemに付いているため必須）。`<label>`・`Vec<Variant>`・`Vec<bool>`という3箇所のdocコメントが、バッククォート無しの山括弧のためrustdocに未閉じHTMLタグとして誤解釈されていた（`rustdoc::invalid_html_tags`）。rustdoc自身が提示した修正案（バッククォートで囲む）をそのまま適用し、警告ゼロを確認。
+- [x] `wasm32-unknown-unknown`ターゲットでの`cargo clippy -p elixcee-wasm --target wasm32-unknown-unknown -- -D warnings`、プレーンな`cargo build --workspace --all-targets`（clippy無し、素のrustc警告のみ）もあわせて確認——いずれもクリーン。
+
+いずれの修正も`cargo test --workspace`（828+件）・`cargo fmt --all --check`に影響なし（lint抑制とdocコメント文言のみの変更、挙動変更ゼロ）。
