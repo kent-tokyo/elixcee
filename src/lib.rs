@@ -1102,6 +1102,23 @@ fn build_xlsx_shared_strings(strings: &[String]) -> String {
     out
 }
 
+#[cfg(test)]
+mod shared_strings_tests {
+    use super::build_xlsx_shared_strings;
+
+    #[test]
+    fn marks_leading_or_trailing_whitespace_as_xml_space_preserve() {
+        let xml = build_xlsx_shared_strings(&[
+            "plain".to_string(),
+            " leading and trailing ".to_string(),
+            "trailing ".to_string(),
+        ]);
+        assert!(xml.contains("<si><t>plain</t></si>"));
+        assert!(xml.contains("<si><t xml:space=\"preserve\"> leading and trailing </t></si>"));
+        assert!(xml.contains("<si><t xml:space=\"preserve\">trailing </t></si>"));
+    }
+}
+
 fn xlsx_col_letters(mut col: u32) -> String {
     let mut bytes = Vec::new();
     while col > 0 {
