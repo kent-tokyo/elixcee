@@ -8,9 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-`@elixcee/xlsx` only (still unpublished, `0.0.0-development`/`private: true`, no
-`publishConfig`) — see its own two entries below for exactly what's implemented, plus a
-CI observability addition for the shared WASM bridge.
+Root `elixcee` (Rust crate + Python package): one dependency-security fix plus a writer bug
+it exposed (see below). `@elixcee/xlsx` (still unpublished, `0.0.0-development`/
+`private: true`, no `publishConfig`): see its own two entries below for exactly what's
+implemented, plus a CI observability addition for the shared WASM bridge.
+
+### Root crate: dev-dependency security fix, plus a real writer bug it uncovered
+
+`cargo audit` (run for the first time in this project) found three RustSec advisories in
+`Cargo.lock`: `RUSTSEC-2026-0204` (`crossbeam-epoch`, bench-only via `criterion`/`rayon`,
+fixed with a plain `cargo update`) and two HIGH-severity (7.5) `quick-xml` advisories
+(`RUSTSEC-2026-0195` memory-exhaustion DoS, `RUSTSEC-2026-0194` quadratic-time DoS) reached
+via `calamine` — a `[dev-dependencies]`-only differential-testing oracle, never shipped to
+users (`src/reader.rs`'s own header comment: elixcee's real XLSX/ODS reader "replaces
+calamine as a runtime dependency"). Fixed by bumping `calamine` `0.24` → `0.36`.
+
+That bump changed the oracle's own parsing behavior enough to fail an existing differential
+test — calamine 0.36 trims leading/trailing whitespace on a shared-string `<t>` element that
+lacks `xml:space="preserve"`, where 0.24 didn't. Tracing the raw XML elixcee itself writes
+confirmed this isn't an oracle regression to route around: `build_xlsx_shared_strings` never
+emitted `xml:space="preserve"`, so any string with leading/trailing whitespace round-tripped
+ambiguously through *any* strict XML consumer — real Excel included. This is the writer-side
+counterpart of the `xml:space="preserve"`-on-read fix already applied to `<v>` cells. Fixed by
+emitting `xml:space="preserve"` on `<t>` whenever a shared string's content differs from its
+own `trim()`, with a direct unit test on the raw XML output.
+
+`cargo audit` now reports zero advisories.
 
 ### CI: WASM artifact size observability
 
