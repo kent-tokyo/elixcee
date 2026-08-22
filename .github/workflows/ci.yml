@@ -106,6 +106,21 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
 
+      # `cargo audit` (RustSec advisory-db scan of Cargo.lock) had no CI signal at all
+      # before this — the first-ever local run found 3 real advisories (crossbeam-epoch,
+      # and two HIGH-severity quick-xml DoS advisories via the calamine dev-dependency),
+      # all fixed; see CHANGELOG.md. Installed via `cargo install --locked`, not a
+      # marketplace Action, matching this job's own wasm-pack/cargo-fuzz precedent of
+      # pinning an exact tool version rather than trusting an Action's own resolution.
+      # No ignore-list: Cargo.lock is clean as of this commit, so a bare `cargo audit`
+      # is the plain, unqualified check — add an `audit.toml` ignore entry only if a
+      # future advisory genuinely has no upgrade path and is accepted as a known risk.
+      - name: install cargo-audit
+        run: cargo install cargo-audit --version 0.22.1 --locked
+
+      - name: cargo audit
+        run: cargo audit
+
   # @elixcee/xlsx (packages/xlsx) and its differential-testing harness
   # (compat/) — previously not wired into CI at all despite every one of
   # these commands already working locally (verified live before adding
