@@ -475,6 +475,40 @@ fn is_writer_owned_part(name: &str) -> bool {
         && !name["xl/worksheets/".len()..].contains('/'))
 }
 
+/// Parses `rels_part` out of `raw_entries` (a source's raw zip contents) and returns
+/// every `(Type, Target)` relationship whose target both (a) survived into `passthrough`
+/// and (b) isn't already one of `skip_types` -- the types this writer emits its own
+/// relationship for elsewhere, which would otherwise get a duplicate. `target_base` is
+/// prepended before resolving (`"xl/"` for `xl/_rels/workbook.xml.rels`, whose targets
+/// are relative to `xl/`; `""` for `_rels/.rels`, whose targets are already relative to
+/// the package root). See `save_xlsx_impl`'s `carried_rels`/`carried_root_rels` doc
+/// comments for why this exists at all: a writer-owned `.rels` file that's regenerated
+/// from a fixed template (not derived from the source) silently drops any relationship
+/// the template doesn't know about, orphaning an otherwise-correctly-passed-through part
+/// -- confirmed live against real Excel, which refuses to open the result outright.
+fn carry_over_rels(
+    raw_entries: &std::collections::HashMap<String, Vec<u8>>,
+    rels_part: &str,
+    target_base: &str,
+    passthrough: &[(String, Vec<u8>)],
+    skip_types: &[&str],
+) -> Vec<(String, String)> {
+    let Some(rels_xml) = raw_entries
+        .get(rels_part)
+        .and_then(|b| String::from_utf8(b.clone()).ok())
+    else {
+        return Vec::new();
+    };
+    reader::workbook_rels_decls(&rels_xml)
+        .into_iter()
+        .filter(|(ty, _)| !skip_types.contains(&ty.as_str()))
+        .filter(|(_, target)| {
+            let resolved = normalize_part_path(&format!("{}{}", target_base, target));
+            passthrough.iter().any(|(name, _)| *name == resolved)
+        })
+        .collect()
+}
+
 fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     use std::collections::HashMap;
     use std::io::{Cursor, Write};
@@ -519,6 +553,19 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     let mut passthrough: Vec<(String, Vec<u8>)> = Vec::new();
     let mut has_vba = false;
     let mut carried_overrides: Vec<(String, String)> = Vec::new();
+    // Other workbook-level relationships (theme, calcChain, etc.) whose target part
+    // survives as a passthrough entry -- see the loop below for why this is needed at
+    // all: a part being copied through byte-for-byte does NOT mean anything still
+    // references it. Excel found and confirmed this live (a real .xlsm's own
+    // theme/theme1.xml, copied through correctly, refused to open at all once its
+    // workbook.xml.rels relationship vanished -- an orphaned part, not just a stale
+    // one). (Type, Target) pairs; Target is re-relativized against "xl/" by
+    // build_xlsx_workbook_rels, matching how workbook.xml.rels' own Target values work.
+    let mut carried_rels: Vec<(String, String)> = Vec::new();
+    // Same idea as `carried_rels`, but for the root `_rels/.rels` file (docProps/core.xml,
+    // docProps/app.xml, ...) -- see `carried_rels`'s own comment below for why this is
+    // needed at all.
+    let mut carried_root_rels: Vec<(String, String)> = Vec::new();
     // xl/styles.xml is writer-owned (never enters the generic `passthrough` loop
     // below, via `is_writer_owned_part`) but, unlike the other writer-owned parts,
     // its CONTENT is conditionally passed through rather than always regenerated
@@ -587,9 +634,41 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
                 carried_overrides.push((part_name, ct));
             }
         }
+
+        // Any OTHER relationship (theme, calcChain, docProps, ...) whose target survived
+        // as a passthrough part -- skip the types this writer already emits its own
+        // relationship for, or every passthrough part would get a duplicate, conflicting
+        // relationship pointing at the same target. Applied to BOTH rels files that
+        // matter here: xl/_rels/workbook.xml.rels (targets relative to "xl/") and
+        // _rels/.rels (targets relative to the package root, no prefix) -- the root rels
+        // file is just as writer-owned/hardcoded as the workbook one (XLSX_ROOT_RELS),
+        // and orphaned docProps/core.xml + docProps/app.xml relationships were found
+        // missing the exact same way theme/calcChain were.
+        carried_rels.extend(carry_over_rels(
+            &raw_entries,
+            "xl/_rels/workbook.xml.rels",
+            "xl/",
+            &passthrough,
+            &[
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet",
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings",
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles",
+                "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
+            ],
+        ));
+        carried_root_rels.extend(carry_over_rels(
+            &raw_entries,
+            "_rels/.rels",
+            "",
+            &passthrough,
+            &["http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"],
+        ));
+
         // Deterministic, reviewable output order.
         passthrough.sort_by(|a, b| a.0.cmp(&b.0));
         carried_overrides.sort_by(|a, b| a.0.cmp(&b.0));
+        carried_rels.sort_by(|a, b| a.1.cmp(&b.1));
+        carried_root_rels.sort_by(|a, b| a.1.cmp(&b.1));
     }
 
     let cursor = Cursor::new(Vec::<u8>::new());
@@ -599,12 +678,14 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
     zip.start_file("[Content_Types].xml", deflated)
         .map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_content_types(&sheet_names, has_vba, &carried_overrides).as_bytes())
-        .map_err(|e| e.to_string())?;
+    zip.write_all(
+        build_xlsx_content_types(&sheet_names, is_xlsm_output, &carried_overrides).as_bytes(),
+    )
+    .map_err(|e| e.to_string())?;
 
     zip.start_file("_rels/.rels", deflated)
         .map_err(|e| e.to_string())?;
-    zip.write_all(XLSX_ROOT_RELS.as_bytes())
+    zip.write_all(build_xlsx_root_rels(&carried_root_rels).as_bytes())
         .map_err(|e| e.to_string())?;
 
     zip.start_file("xl/workbook.xml", deflated)
@@ -614,7 +695,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
     zip.start_file("xl/_rels/workbook.xml.rels", deflated)
         .map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_workbook_rels(&sheet_names, has_vba).as_bytes())
+    zip.write_all(build_xlsx_workbook_rels(&sheet_names, has_vba, &carried_rels).as_bytes())
         .map_err(|e| e.to_string())?;
 
     for (i, sheet_name) in sheet_names.iter().enumerate() {
@@ -649,14 +730,25 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-const XLSX_ROOT_RELS: &str = concat!(
-    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
-    "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
-    "<Relationship Id=\"rId1\" ",
-    "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" ",
-    "Target=\"xl/workbook.xml\"/>\n",
-    "</Relationships>\n",
-);
+fn build_xlsx_root_rels(carried_root_rels: &[(String, String)]) -> String {
+    let mut out = String::from(concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" ",
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" ",
+        "Target=\"xl/workbook.xml\"/>\n",
+    ));
+    for (i, (ty, target)) in carried_root_rels.iter().enumerate() {
+        out.push_str(&format!(
+            "<Relationship Id=\"rId{}\" Type=\"{}\" Target=\"{}\"/>\n",
+            i + 2,
+            xml_escape(ty),
+            xml_escape(target)
+        ));
+    }
+    out.push_str("</Relationships>\n");
+    out
+}
 
 const XLSX_STYLES: &str = concat!(
     "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
@@ -671,7 +763,7 @@ const XLSX_STYLES: &str = concat!(
 
 fn build_xlsx_content_types(
     sheet_names: &[String],
-    has_vba: bool,
+    is_xlsm_output: bool,
     carried_overrides: &[(String, String)],
 ) -> String {
     let mut out = String::from(concat!(
@@ -680,7 +772,14 @@ fn build_xlsx_content_types(
         "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\n",
         "<Default Extension=\"xml\" ContentType=\"application/xml\"/>\n",
     ));
-    let workbook_ct = if has_vba {
+    // The macro-enabled content type is a property of the FILE FORMAT (.xlsm), not of
+    // whether a VBA project happens to be present right now -- confirmed live against a
+    // real Excel-authored .xlsm fixture with zero VBA content, which still declares
+    // macroEnabled.main+xml for workbook.xml. Using has_vba here instead (as this
+    // function did originally) declares the WRONG content type for the very common case
+    // of an .xlsm workbook with no macros, which Excel treats as a fatal extension/format
+    // mismatch and refuses to open at all -- not even a repair prompt.
+    let workbook_ct = if is_xlsm_output {
         "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
     } else {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -733,7 +832,31 @@ fn build_xlsx_workbook(sheet_names: &[String]) -> String {
     out
 }
 
-fn build_xlsx_workbook_rels(sheet_names: &[String], has_vba: bool) -> String {
+/// Resolves a relationship `Target` (as written in some `.rels` file, e.g.
+/// `"theme/theme1.xml"` or `"../customXml/item1.xml"`) against a zip-entry path,
+/// collapsing `.`/`..` segments -- mirrors OOXML's own "relative to the part's own
+/// directory" resolution rule (the same rule `compat/oracle-excel-com/
+/// mechanical_check.py`'s `_normalize_part_path` implements independently, for the same
+/// reason: a target can legitimately climb out of `xl/`).
+fn normalize_part_path(joined: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in joined.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(seg),
+        }
+    }
+    parts.join("/")
+}
+
+fn build_xlsx_workbook_rels(
+    sheet_names: &[String],
+    has_vba: bool,
+    carried_rels: &[(String, String)],
+) -> String {
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
@@ -761,14 +884,24 @@ fn build_xlsx_workbook_rels(sheet_names: &[String], has_vba: bool) -> String {
          Target=\"styles.xml\"/>\n",
         styles_id
     ));
+    let mut next_id = sheet_names.len() + 3;
     if has_vba {
-        let vba_id = sheet_names.len() + 3;
         out.push_str(&format!(
             "<Relationship Id=\"rId{}\" \
              Type=\"http://schemas.microsoft.com/office/2006/relationships/vbaProject\" \
              Target=\"vbaProject.bin\"/>\n",
-            vba_id
+            next_id
         ));
+        next_id += 1;
+    }
+    for (ty, target) in carried_rels {
+        out.push_str(&format!(
+            "<Relationship Id=\"rId{}\" Type=\"{}\" Target=\"{}\"/>\n",
+            next_id,
+            xml_escape(ty),
+            xml_escape(target)
+        ));
+        next_id += 1;
     }
     out.push_str("</Relationships>\n");
     out

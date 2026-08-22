@@ -105,6 +105,31 @@ def default_edited_parts(entries):
     }
 
 
+def _referenced_targets(entries):
+    """Every part path referenced by ANY internal (non-External) relationship in ANY
+    .rels file across `entries` -- used to detect an orphaned part: physically present
+    and byte-identical, but nothing points to it any more. This is exactly the bug found
+    authoring elixcee's first real-Excel fixture: xl/theme/theme1.xml passed through
+    correctly, but the regenerated xl/_rels/workbook.xml.rels dropped its relationship
+    (build_xlsx_workbook_rels only ever emitted worksheet/sharedStrings/styles/vbaProject
+    relationships, with no mechanism to carry over any other kind) -- real Excel refused
+    to open the result outright, not even a repair prompt."""
+    targets = set()
+    for name, data in entries.items():
+        if not name.endswith(".rels"):
+            continue
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError:
+            continue
+        base = _rels_target_dir(name)
+        for rel in root.findall(f"{REL_NS}Relationship"):
+            if rel.get("TargetMode") == "External":
+                continue
+            targets.add(_normalize_part_path(base + rel.get("Target", "")))
+    return targets
+
+
 def check_roundtrip(original_path, output_path, edited_parts=None):
     """Structural check of `output_path`, produced from `original_path` by elixcee.
 
@@ -169,6 +194,22 @@ def check_roundtrip(original_path, output_path, edited_parts=None):
                     f"'{name}': relationship Id={rel.get('Id')} Target='{target}' "
                     f"resolves to '{resolved}', which does not exist in the output"
                 )
+
+    # 2b. The dual check: a part that was referenced in the original and still exists
+    # (byte-identical, i.e. genuinely passed through, not intentionally dropped) must
+    # still be referenced by SOMETHING in the output -- an orphaned part (present but
+    # unreferenced) is exactly as invalid to Excel as a dangling reference, but #2 above
+    # can't see it (it only walks forward from relationships, never asks "is this part
+    # pointed to by anything").
+    orig_referenced = _referenced_targets(original)
+    out_referenced = _referenced_targets(output)
+    for name in orig_referenced:
+        if name in output and original.get(name) == output.get(name) and name not in out_referenced:
+            violations.append(
+                f"'{name}' was referenced by a relationship in the original and survived "
+                f"byte-identical into the output, but no relationship in the output "
+                f"references it any more (orphaned part)"
+            )
 
     # 3. vbaProject.bin: present in original => must survive byte-identical in an .xlsm
     #    output (0.9.0-A never edits VBA source, so ANY diff here is a loss, not an
@@ -316,6 +357,7 @@ def self_test():
                 f'<Override PartName="/xl/workbook.xml" ContentType="{VBA_ROOT_CONTENT_TYPE}"/>'
                 '<Override PartName="/xl/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/>'
                 '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                '<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>'
                 "</Types>",
             )
             zf.writestr(
@@ -329,8 +371,10 @@ def self_test():
                 f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vbaProject" Target="vbaProject.bin"/>'
                 '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>'
                 "</Relationships>",
             )
+            zf.writestr("xl/theme/theme1.xml", f'<?xml version="1.0"?><theme xmlns="{SML_NS[1:-1]}"/>')
             R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
             zf.writestr(
                 "xl/workbook.xml",
@@ -412,9 +456,27 @@ def self_test():
         assert result["formula_verdict"] == "ELIXCEE_DATA_LOSS", result
         assert any("A2" in v and "formula" in v for v in result["violations"]), result["violations"]
 
+        # --- Case G: orphaned part. theme1.xml stays byte-identical, but its
+        # relationship is dropped from workbook.xml.rels -- this is the exact real bug
+        # found opening elixcee's first real-Excel round-trip output in actual Excel
+        # (which refused to open the file outright, not even a repair prompt).
+        orphaned_path = os.path.join(tmp, "orphaned.xlsm")
+        with zipfile.ZipFile(orig_path) as src, zipfile.ZipFile(orphaned_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/_rels/workbook.xml.rels":
+                    data = data.replace(
+                        b'<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>',
+                        b"",
+                    )
+                dst.writestr(item, data)
+        result = check_roundtrip(orig_path, orphaned_path, edited_parts={"xl/workbook.xml"})
+        assert result["structural_verdict"] != "STRUCTURALLY_CLEAN", "failed to detect an orphaned part"
+        assert any("orphaned" in v for v in result["violations"]), result["violations"]
+
     print(
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
-        "target, and stripped-formula all caught)"
+        "target, stripped-formula, and orphaned part all caught)"
     )
 
 

@@ -474,6 +474,29 @@ pub(crate) fn content_type_decls(xml: &str) -> ContentTypeDecls {
     (defaults, overrides)
 }
 
+/// `xl/_rels/workbook.xml.rels`'s own `<Relationship Type=".." Target=".."/>` entries —
+/// `(Type, Target)` pairs, `Target` exactly as written (relative to `xl/`, no leading `/`).
+/// Ids are dropped: callers assign fresh ones when carrying a relationship into a
+/// regenerated rels file (see `save_xlsx_impl`'s `carried_rels`), since the writer's own
+/// sequential-id scheme for worksheets/sharedStrings/styles/vbaProject would otherwise
+/// collide with whatever ids the source happened to use.
+pub(crate) fn workbook_rels_decls(xml: &str) -> Vec<(String, String)> {
+    let mut rels = vec![];
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev {
+            let local = tag.split(':').next_back().unwrap_or(tag);
+            if local == "Relationship"
+                && let (Some(ty), Some(target)) =
+                    (attr_get(attrs, "Type"), attr_get(attrs, "Target"))
+            {
+                rels.push((ty.to_string(), target.to_string()));
+            }
+        }
+    }
+    rels
+}
+
 // ── XLSX reader ───────────────────────────────────────────────────────────────
 
 fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {

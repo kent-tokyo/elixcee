@@ -547,3 +547,131 @@ fn xlsm_roundtrip_in_place_save_preserves_vba_project() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+/// A `.xlsm` output must declare workbook.xml as macro-enabled even when the SOURCE has
+/// no VBA project at all -- the macro-enabled content type is a property of the file
+/// FORMAT (the `.xlsm` extension), not of whether a VBA project happens to be present.
+/// Found live: a real Excel-authored `.xlsm` fixture with zero macros still declares
+/// `macroEnabled.main+xml`; elixcee's writer previously kept the plain
+/// `spreadsheetml.sheet.main+xml` type whenever `has_vba` was false, regardless of output
+/// extension -- Excel treats that mismatch as fatal and refuses to open the file at all,
+/// not even a repair prompt. `build_fixture_xlsx()` (no VBA project) is reused here purely
+/// as "some real .xlsx-shaped source with no VBA," saved to a `.xlsm` output path.
+#[test]
+fn xlsm_output_declares_macro_enabled_content_type_even_without_a_vba_project() {
+    let fixture_bytes = build_fixture_xlsx();
+    let source_path = tmp_path("source_novba.xlsx");
+    let output_path = tmp_path("output_novba.xlsm");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    let prog = parser::parse("Sub EditCell()\n    Cells(1, 1).Value = 42\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditCell").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let ct_xml = String::from_utf8(output_entries["[Content_Types].xml"].clone()).unwrap();
+    assert_eq!(
+        resolve_content_type(&ct_xml, "xl/workbook.xml").as_deref(),
+        Some("application/vnd.ms-excel.sheet.macroEnabled.main+xml"),
+        ".xlsm output must declare the macro-enabled content type regardless of whether \
+         the source had a VBA project: {ct_xml}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// A relationship pointing at a passthrough part (here: a theme, mirroring
+/// `xl/theme/theme1.xml`) must survive into the regenerated `.rels` file, not just the
+/// part's bytes. Found live: `xl/theme/theme1.xml` passed through byte-identical, but
+/// `xl/_rels/workbook.xml.rels` -- entirely regenerated from a fixed template that only
+/// ever emitted worksheet/sharedStrings/styles/vbaProject relationships -- silently
+/// dropped the theme relationship, orphaning an otherwise-intact part. Real Excel refused
+/// to open the result outright. Uses a dedicated minimal fixture (not `build_fixture_xlsm`)
+/// since none of the existing fixtures have a theme part or relationship.
+#[test]
+fn passthrough_part_referenced_only_by_a_non_writer_owned_relationship_type_keeps_its_relationship()
+{
+    const CONTENT_TYPES_WITH_THEME: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\n",
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\n",
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>\n",
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>\n",
+        "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>\n",
+        "<Override PartName=\"/xl/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>\n",
+        "</Types>\n",
+    );
+    const WORKBOOK_RELS_WITH_THEME: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const THEME_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<theme xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" name=\"t\"/>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_WITH_THEME.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", &workbook_xml().into_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS_WITH_THEME.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet1.xml",
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+            "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+            "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n</worksheet>\n",
+        )
+        .as_bytes(),
+    );
+    zip_add(&mut zip, "xl/theme/theme1.xml", THEME_XML.as_bytes());
+    let fixture_bytes = zip.finish().unwrap().into_inner();
+
+    let source_path = tmp_path("source_theme.xlsx");
+    let output_path = tmp_path("output_theme.xlsx");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    let prog = parser::parse("Sub EditCell()\n    Cells(1, 1).Value = 42\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditCell").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+
+    assert_eq!(
+        output_entries.get("xl/theme/theme1.xml"),
+        Some(&THEME_XML.as_bytes().to_vec()),
+        "theme1.xml itself must still pass through byte-identical"
+    );
+    let rels_xml = String::from_utf8(output_entries["xl/_rels/workbook.xml.rels"].clone()).unwrap();
+    assert!(
+        rels_xml.contains("relationships/theme") && rels_xml.contains("theme/theme1.xml"),
+        "the theme relationship must survive into the regenerated workbook.xml.rels, not \
+         just the theme part's bytes -- an orphaned part is what made real Excel refuse to \
+         open the file outright: {rels_xml}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
+}
