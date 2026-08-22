@@ -11,8 +11,8 @@
 use elixcee::{parser, reader, save_workbook, vm::Vm};
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
-use zip::write::{SimpleFileOptions, ZipWriter};
 use zip::ZipArchive;
+use zip::write::{SimpleFileOptions, ZipWriter};
 
 const CONTENT_TYPES: &str = concat!(
     "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
@@ -163,14 +163,23 @@ fn build_fixture_xlsm() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
     zip_add(&mut zip, "xl/tables/table1.xml", TABLE_XML.as_bytes());
     zip_add(&mut zip, "xl/styles.xml", STYLES_XML.as_bytes());
     let data = zip.finish().unwrap().into_inner();
-    (data, vba_bytes, TABLE_XML.as_bytes().to_vec(), STYLES_XML.as_bytes().to_vec())
+    (
+        data,
+        vba_bytes,
+        TABLE_XML.as_bytes().to_vec(),
+        STYLES_XML.as_bytes().to_vec(),
+    )
 }
 
 /// Same shape, `.xlsx` (no VBA project), one unknown part.
 fn build_fixture_xlsx() -> Vec<u8> {
     let cursor = Cursor::new(Vec::<u8>::new());
     let mut zip = ZipWriter::new(cursor);
-    zip_add(&mut zip, "[Content_Types].xml", CONTENT_TYPES_NO_VBA.as_bytes());
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
     zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
     zip_add(
         &mut zip,
@@ -265,7 +274,9 @@ fn resolve_content_type(content_types_xml: &str, part_name: &str) -> Option<Stri
             if extract_attr(tag, "PartName").as_deref() == Some(full.as_str()) {
                 override_ct = extract_attr(tag, "ContentType");
             }
-        } else if tag.starts_with("<Default ") && extract_attr(tag, "Extension").as_deref() == Some(ext) {
+        } else if tag.starts_with("<Default ")
+            && extract_attr(tag, "Extension").as_deref() == Some(ext)
+        {
             default_ct = extract_attr(tag, "ContentType");
         }
     }
@@ -274,7 +285,11 @@ fn resolve_content_type(content_types_xml: &str, part_name: &str) -> Option<Stri
 
 fn tmp_path(name: &str) -> String {
     std::env::temp_dir()
-        .join(format!("elixcee_test_xlsx_roundtrip_{}_{}", std::process::id(), name))
+        .join(format!(
+            "elixcee_test_xlsx_roundtrip_{}_{}",
+            std::process::id(),
+            name
+        ))
         .to_string_lossy()
         .to_string()
 }
@@ -287,7 +302,8 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     std::fs::write(&source_path, &fixture_bytes).unwrap();
 
     let mut vm = Vm::new();
-    vm.load_workbook_file(&source_path).expect("fixture should load");
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
     // A1: edit an already-styled cell's value. C1: write a brand-new cell
     // (empty in the source, no original style to inherit).
     let prog = parser::parse(
@@ -299,10 +315,16 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
 
     // (i) edited cell round-trips
     let sheets = reader::read_workbook(&output_path).expect("output should be readable");
-    let sheet = sheets.iter().find(|s| s.name == "sheet1").expect("sheet1 present");
+    let sheet = sheets
+        .iter()
+        .find(|s| s.name == "sheet1")
+        .expect("sheet1 present");
     match sheet.cells.get(&(1, 1)) {
         Some(reader::SheetCell::Integer(999)) => {}
-        other => panic!("expected A1 == 999, got {:?}", other.map(|_| "non-matching cell")),
+        other => panic!(
+            "expected A1 == 999, got {:?}",
+            other.map(|_| "non-matching cell")
+        ),
     }
 
     let output_bytes = std::fs::read(&output_path).unwrap();
@@ -310,16 +332,27 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     let fixture_entries = read_all_zip_entries(&fixture_bytes);
 
     // (ii) xl/vbaProject.bin byte-identical
-    assert_eq!(output_entries.get("xl/vbaProject.bin"), Some(&vba_bytes), "vbaProject.bin must survive byte-identical");
+    assert_eq!(
+        output_entries.get("xl/vbaProject.bin"),
+        Some(&vba_bytes),
+        "vbaProject.bin must survive byte-identical"
+    );
 
     // (iii) every non-writer-owned original part is byte-identical in the output
     for (name, bytes) in &fixture_entries {
         if is_writer_owned(name) {
             continue;
         }
-        assert_eq!(output_entries.get(name), Some(bytes), "passthrough part {name} must be byte-identical");
+        assert_eq!(
+            output_entries.get(name),
+            Some(bytes),
+            "passthrough part {name} must be byte-identical"
+        );
     }
-    assert_eq!(output_entries.get("xl/tables/table1.xml"), Some(&table_bytes));
+    assert_eq!(
+        output_entries.get("xl/tables/table1.xml"),
+        Some(&table_bytes)
+    );
 
     // (iv) stale non-sequential worksheet part must NOT survive
     assert!(
@@ -332,7 +365,10 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     // and every part actually present in the output resolves via the output's
     // own [Content_Types].xml (full self-consistency, not a spot check).
     let ct_xml = String::from_utf8(output_entries["[Content_Types].xml"].clone()).unwrap();
-    assert!(ct_xml.contains("macroEnabled.main+xml"), "workbook.xml must declare macro-enabled content type");
+    assert!(
+        ct_xml.contains("macroEnabled.main+xml"),
+        "workbook.xml must declare macro-enabled content type"
+    );
     assert_eq!(
         resolve_content_type(&ct_xml, "xl/vbaProject.bin").as_deref(),
         Some("application/vnd.ms-office.vbaProject")
@@ -351,15 +387,24 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
     let a1_tag = &sheet_xml[sheet_xml.find("<c r=\"A1\"").unwrap()..];
     let a1_tag = &a1_tag[..a1_tag.find('>').unwrap() + 1];
-    assert!(a1_tag.contains("s=\"1\""), "edited cell A1 must keep its original style index: {a1_tag}");
+    assert!(
+        a1_tag.contains("s=\"1\""),
+        "edited cell A1 must keep its original style index: {a1_tag}"
+    );
 
     let b1_tag = &sheet_xml[sheet_xml.find("<c r=\"B1\"").unwrap()..];
     let b1_tag = &b1_tag[..b1_tag.find('>').unwrap() + 1];
-    assert!(b1_tag.contains("s=\"1\""), "untouched cell B1 must keep its original style index: {b1_tag}");
+    assert!(
+        b1_tag.contains("s=\"1\""),
+        "untouched cell B1 must keep its original style index: {b1_tag}"
+    );
 
     let c1_tag = &sheet_xml[sheet_xml.find("<c r=\"C1\"").unwrap()..];
     let c1_tag = &c1_tag[..c1_tag.find('>').unwrap() + 1];
-    assert!(!c1_tag.contains("s=\"1\""), "a brand-new cell must not spuriously inherit style 1: {c1_tag}");
+    assert!(
+        !c1_tag.contains("s=\"1\""),
+        "a brand-new cell must not spuriously inherit style 1: {c1_tag}"
+    );
 
     assert_eq!(
         output_entries.get("xl/styles.xml"),
@@ -370,10 +415,19 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     // Merge/hidden-row/hidden-column write-back (Milestone: safe round-trip,
     // slice 3) — merges and hidden rows/columns were already threaded into
     // Vm by populate_from_sheets, but build_xlsx_sheet never emitted them.
-    assert!(sheet_xml.contains("<mergeCells"), "output must re-emit the original merge: {sheet_xml}");
-    assert!(sheet_xml.contains("ref=\"D1:E1\""), "merged range must round-trip unchanged: {sheet_xml}");
+    assert!(
+        sheet_xml.contains("<mergeCells"),
+        "output must re-emit the original merge: {sheet_xml}"
+    );
+    assert!(
+        sheet_xml.contains("ref=\"D1:E1\""),
+        "merged range must round-trip unchanged: {sheet_xml}"
+    );
 
-    assert!(sheet_xml.contains("<cols>"), "output must re-emit the hidden-column declaration: {sheet_xml}");
+    assert!(
+        sheet_xml.contains("<cols>"),
+        "output must re-emit the hidden-column declaration: {sheet_xml}"
+    );
     let col_tag = &sheet_xml[sheet_xml.find("<col ").unwrap()..];
     let col_tag = &col_tag[..col_tag.find('/').unwrap() + 1];
     assert_eq!(extract_attr(col_tag, "min").as_deref(), Some("6"));
@@ -384,7 +438,10 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     // own <row hidden="1"/> element (an absent element is default-visible).
     let row2_tag = &sheet_xml[sheet_xml.find("<row r=\"2\"").unwrap()..];
     let row2_tag = &row2_tag[..row2_tag.find('>').unwrap() + 1];
-    assert!(row2_tag.contains("hidden=\"1\""), "cell-less hidden row 2 must still be marked hidden: {row2_tag}");
+    assert!(
+        row2_tag.contains("hidden=\"1\""),
+        "cell-less hidden row 2 must still be marked hidden: {row2_tag}"
+    );
 
     let _ = std::fs::remove_file(&source_path);
     let _ = std::fs::remove_file(&output_path);
@@ -398,7 +455,8 @@ fn xlsx_roundtrip_passes_through_unknown_parts_without_macro_content_type() {
     std::fs::write(&source_path, &fixture_bytes).unwrap();
 
     let mut vm = Vm::new();
-    vm.load_workbook_file(&source_path).expect("fixture should load");
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
     let prog = parser::parse("Sub EditCell()\n    Cells(1, 1).Value = 42\nEnd Sub\n").unwrap();
     vm.run_sub(&prog, "EditCell").expect("macro should run");
     save_workbook(&vm, &output_path).expect("save should succeed");
@@ -406,11 +464,17 @@ fn xlsx_roundtrip_passes_through_unknown_parts_without_macro_content_type() {
     let output_bytes = std::fs::read(&output_path).unwrap();
     let output_entries = read_all_zip_entries(&output_bytes);
 
-    assert_eq!(output_entries.get("xl/tables/table1.xml"), Some(&TABLE_XML.as_bytes().to_vec()));
+    assert_eq!(
+        output_entries.get("xl/tables/table1.xml"),
+        Some(&TABLE_XML.as_bytes().to_vec())
+    );
     assert!(!output_entries.contains_key("xl/vbaProject.bin"));
 
     let ct_xml = String::from_utf8(output_entries["[Content_Types].xml"].clone()).unwrap();
-    assert!(!ct_xml.contains("macroEnabled"), "a workbook that never had a VBA project must not declare macro-enabled content type");
+    assert!(
+        !ct_xml.contains("macroEnabled"),
+        "a workbook that never had a VBA project must not declare macro-enabled content type"
+    );
     assert!(ct_xml.contains("spreadsheetml.sheet.main+xml"));
 
     let _ = std::fs::remove_file(&source_path);
@@ -445,12 +509,21 @@ fn xlsm_roundtrip_in_place_save_preserves_vba_project() {
     let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
     let a1_tag = &sheet_xml[sheet_xml.find("<c r=\"A1\"").unwrap()..];
     let a1_tag = &a1_tag[..a1_tag.find('>').unwrap() + 1];
-    assert!(a1_tag.contains("s=\"1\""), "edited cell A1 must keep its style index across an in-place overwrite: {a1_tag}");
-    assert!(sheet_xml.contains("ref=\"D1:E1\""), "merged range must survive an in-place overwrite: {sheet_xml}");
+    assert!(
+        a1_tag.contains("s=\"1\""),
+        "edited cell A1 must keep its style index across an in-place overwrite: {a1_tag}"
+    );
+    assert!(
+        sheet_xml.contains("ref=\"D1:E1\""),
+        "merged range must survive an in-place overwrite: {sheet_xml}"
+    );
 
     let sheets = reader::read_workbook(&path).unwrap();
     let sheet = sheets.iter().find(|s| s.name == "sheet1").unwrap();
-    assert!(matches!(sheet.cells.get(&(1, 1)), Some(reader::SheetCell::Integer(7))));
+    assert!(matches!(
+        sheet.cells.get(&(1, 1)),
+        Some(reader::SheetCell::Integer(7))
+    ));
 
     let _ = std::fs::remove_file(&path);
 }
