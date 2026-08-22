@@ -2,7 +2,7 @@
 
 **English** | [日本語](README_ja.md) | [中文](README_zh.md)
 
-Run, test, and diagnose Excel VBA macros without Microsoft Excel. elixcee is a Rust-powered headless VBA runtime for Linux, macOS, and Windows, with static analysis, property-based workbook testing, and root-cause diagnostics for common Excel operation failures.
+Run, test, and diagnose Excel VBA macros without requiring Microsoft Excel. elixcee is a Rust-powered headless VBA runtime for Linux, macOS, and Windows, with static checks, property-based workbook testing, and structured diagnostics for VBA and workbook-operation failures.
 
 The core engine is written in **Rust**; Python bindings are provided via **pyo3 + maturin**.
 
