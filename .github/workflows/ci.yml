@@ -55,6 +55,57 @@ jobs:
       - name: cargo clippy -p elixcee-types
         run: cargo clippy -p elixcee-types --all-targets -- -D warnings
 
+  # Format/lint/doc checks that were, until now, only ever run by hand — and only
+  # sometimes: `test`'s own clippy step is scoped to `-p elixcee-types --all-targets`
+  # deliberately (the root crate's pre-existing clippy warnings weren't a release
+  # blocker, tracked separately in tasks/todo.md), which meant NEITHER `cargo fmt
+  # --check` NOR any clippy/doc pass over the root crate's own `--all-targets` (test/
+  # bench/example code, invisible to a bare `--lib` check) NOR `cargo doc` had any CI
+  # signal at all. All four gaps found real, fixable issues the first time each was
+  # actually run: 8 clippy::approx_constant false positives in test code (arbitrary
+  # `3.14` literals unrelated to π, silenced narrowly per test function — see
+  # CHANGELOG.md/tasks/todo.md), and 3 rustdoc::invalid_html_tags warnings (bare
+  # `<label>`/`Vec<Variant>`/`Vec<bool>` in doc comments, misparsed as literal HTML).
+  # No `--all-features`/`continue-on-error`/broad `#[allow]` shortcuts — every check
+  # here runs both without and with the `python` feature, at the same `-D warnings`
+  # strictness `test`'s own `elixcee-types` clippy step already uses.
+  rust-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # Same reasoning as the `test` job's identical block: an explicit, job-local
+      # interpreter so pyo3's build script never picks up an inherited/ambient
+      # $PYO3_PYTHON or $VIRTUAL_ENV.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Export PYO3_PYTHON
+        run: echo "PYO3_PYTHON=$(python3 -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo clippy --workspace --all-targets --features python -- -D warnings
+        run: cargo clippy --workspace --all-targets --features python -- -D warnings
+
+      # --document-private-items: most of this codebase's own doc comments are on
+      # private items (it's an application, not primarily a public library), so the
+      # default public-only doc build would miss most of what rustdoc actually
+      # parses here.
+      - name: cargo doc --workspace --no-deps --features python --document-private-items
+        run: cargo doc --workspace --no-deps --features python --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
   # @elixcee/xlsx (packages/xlsx) and its differential-testing harness
   # (compat/) — previously not wired into CI at all despite every one of
   # these commands already working locally (verified live before adding
@@ -171,6 +222,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: clippy
+
+      # Real wasm32 target, not the host target `rust-quality`'s workspace-wide clippy
+      # already covers — a lint that only fires (or only stays silent) under wasm32's
+      # own cfg/feature resolution wouldn't be caught by that job at all. Placed here
+      # rather than in `rust-quality` specifically to reuse this job's own already-set-up
+      # wasm32 toolchain instead of a second, separate one.
+      - name: cargo clippy -p elixcee-wasm --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy -p elixcee-wasm --target wasm32-unknown-unknown -- -D warnings
 
       - uses: actions/setup-node@v4
         with:
