@@ -8,19 +8,115 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Two independent, unrelated items since `[0.7.0]`: (1) `@elixcee/xlsx` CI/docs polish (still
-unpublished, `0.0.0-development`/`private: true`, no `publishConfig`) and (2) the root
-`elixcee` crate's "safe round-trip" direction, two slices in so far (unknown-part/
-`xl/vbaProject.bin` passthrough, then per-cell style-index/`xl/styles.xml` passthrough) —
-no version bumped yet for either.
+`@elixcee/xlsx` only — independently-versioned, still unpublished (`0.0.0-development`/
+`private: true`, no `publishConfig`; see its own two entries below for exactly what's
+implemented). Nothing here touches the root `elixcee`/`elixcee-types`/`elixcee-wasm`
+crates, which this round's "safe round-trip" work moved to `[0.8.0]` below.
 
-`@elixcee/xlsx`: `compat/differential/xlsx-write.test.mjs` (36 MATCH + 1 disclosed
-`UNSUPPORTED`, unchanged) is now wired into CI's `node-js` job alongside the read-side
-differential suites — it existed and passed locally from the start but wasn't CI-gated
-until now (new `differential:write` script in `compat/package.json`). `writeFileAsync`
-(not implemented — only `writeFile`/`writeFileSync` are exported) is now named explicitly
-in `packages/xlsx/README.md`'s "What's not implemented" list, rather than only covered by
-that list's general not-exported-means-not-supported policy statement.
+### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
+
+Independent of the root `elixcee` crate: no Rust changes, no new npm dependency.
+`bookType: "xlsx"` only, output `type: "buffer" | "array" | "base64"`, producing a real
+OOXML ZIP via a hand-rolled ZIP/XML writer (no zip/xml-builder dependency added) —
+strings/numbers/booleans/dates/formulas, multiple worksheets, merges, sheet visibility,
+hidden rows/columns, basic number formats, safe XML escaping. Unsupported input (a
+non-`"xlsx"` `bookType`, an unrecognized `type`, an unsupported cell shape/type, a
+non-finite numeric/formula-cached value, an oversized declared `!ref`) throws an explicit
+`ELIXCEE_*` error, never silently ignored or truncated.
+
+- **`packages/xlsx/src/internal/xlsx-writer.cjs`** (new) — the OOXML XML generator:
+  `[Content_Types].xml`, both `.rels` parts, `docProps/{core,app}.xml`, `xl/workbook.xml`,
+  `xl/worksheets/sheetN.xml`, `xl/styles.xml`. Output is deliberately constrained to
+  shapes `src/reader.rs` (elixcee's own reader) already parses, verified by reading
+  `reader.rs` directly — inline strings (not shared strings), a small built-in
+  numFmtId table plus custom `<numFmts>` entries (164+) for anything else.
+- **`packages/xlsx/src/internal/zip-writer.cjs`** (new) — a hand-rolled ZIP archive
+  writer (local file headers, central directory, end-of-central-directory record,
+  table-based CRC-32) with a deterministic fixed epoch, so two `write()` calls on the
+  same `WorkBook` produce byte-identical output. Platform-agnostic by design: no
+  `Buffer`, every byte buffer is a plain `Uint8Array` built with `DataView`/
+  `TextEncoder` — real browsers never had `Buffer` regardless of bundler, so the shared
+  writer core is built to work on both platforms from the start. DEFLATE compression is
+  supplied by the caller as an optional callback rather than required internally (falls
+  back to STORED, a legal ZIP/OOXML method, when omitted — this is what lets the browser
+  entry reuse the same writer with no `zlib` access at all).
+- **`compat/differential/xlsx-write.test.mjs`** (new) — 36 MATCH + 1 disclosed
+  UNSUPPORTED case (`bookType: "ods"`, registered in `classify.mjs`'s
+  `UNSUPPORTED_ALLOWLIST`), covering all three round-trip directions (own write -> own
+  read, own write -> oracle read, oracle write -> own read) against a fourth,
+  independently-computed baseline (oracle write -> oracle read); plus standalone checks
+  for OOXML ZIP/XML structural validation (CRC-32, balanced XML, `[Content_Types].xml`/
+  `.rels` cross-references), 12 malformed-workbook rejection cases, output-type
+  agreement (buffer/array/base64 carry identical bytes), write-determinism, a real
+  filesystem round trip for `writeFile`/`writeFileSync`, and the browser entry's
+  behavior (both throwing `ELIXCEE_UNSUPPORTED_IN_BROWSER` for `writeFile`/
+  `writeFileSync`, and `write()` itself working with no filesystem).
+- `compat/differential/metadata.test.mjs` extended: `write`/`writeFile`/`writeFileSync`
+  now among the 39/39 exports checked (name/length/property-descriptor/CJS-ESM-identity
+  against the oracle), plus a `writeFile === writeFileSync` aliasing check.
+
+### `@elixcee/xlsx` — make writer bundles work in Node ESM and browsers
+
+**Two real bundler bugs found by actually bundling and running the code, not assumed, and
+both fixed at the source**:
+
+1. An esbuild `--format=esm --platform=node` bundle can never synchronously `require()`
+   anything reached through CJS-origin code — confirmed neither a lazy require,
+   `require('node:zlib')`, nor `--external:zlib` changes this; the documented, correct
+   pattern is marking the whole package `external` (`--packages=external`), verified
+   end-to-end and pinned as a permanent regression check in `scripts/wasm-smoke.mjs`
+   (step 6).
+2. An esbuild `--platform=browser` bundle refused to even build at all with a
+   `require('zlib')` reachable anywhere in its module graph (dead code included, since
+   esbuild can't tree-shake CommonJS `module.exports` properties). Fixed by isolating the
+   Node-only `zlib.deflateRawSync` wrapper into its own new file,
+   **`packages/xlsx/src/internal/deflate-node.cjs`**, and stubbing that exact path (plus
+   bare `zlib`) to `false` in `package.json`'s `browser` field — the same mechanism
+   already used for `elixcee_wasm.node.cjs`. This works because `browser`-field
+   path-remapping happens at module-resolution time, before the stubbed file's contents
+   are ever parsed; moving the `require('zlib')` around *within* `index.cjs` (tried
+   first) did not work, since `index.cjs` itself is wholesale-included in the browser
+   bundle graph via `index.browser.mjs`'s re-export of its other, browser-safe exports.
+
+- `scripts/wasm-smoke.mjs` extended (step 6): `bundleAndRunWrite`/`runWriteBundle` verify
+  all four combinations — inlined-ESM-must-throw, inlined-CJS-must-run,
+  externalized-ESM-must-run, externalized-CJS-must-run — pinned as a permanent regression
+  check for bug 1 above.
+- `scripts/browser-smoke.mjs` extended: the bundled entry now calls `write()` then
+  `read()` and asserts the round trip, plus a build-time assertion that the bundle
+  contains zero `zlib` references at all — verified against a real headless Chrome
+  process, not just a passing build.
+- `scripts/pack-consumer-smoke.mjs` extended: a shared `WRITE_ROUNDTRIP` snippet exercises
+  `write()`/`writeFile()`/`writeFileSync()` from inside a real `npm pack` + `npm install`,
+  both from CJS and ESM consumers, plus a new step for `writeFile()`/`writeFileSync()`
+  against a real filesystem.
+- `docs/xlsx-architecture.md` — new "Phase D: `write()`'s Node-builtin bundling posture"
+  section documents both bugs, why each fix works, and why bug 2's fix (isolating the
+  Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
+  externalization) and needs a different solution.
+
+## [0.8.0]
+
+Root `elixcee` (Rust crate + Python package) only: `0.7.0` → `0.8.0`. `elixcee-types` stays
+`0.3.0` (no public-surface change this round — every change lives in the root crate's own
+`src/reader.rs`/`src/lib.rs`/`src/vm/mod.rs`), `elixcee-wasm` stays `0.1.0` (no real source
+change; one test fixture needed a one-line mechanical fix to keep compiling against a new
+`WorkbookSheet` field — see the milestone-2 section below). `@elixcee/xlsx` stays
+unpublished/`private:true`/`0.0.0-development`, untouched by this round.
+
+**"Safe round-trip", first three slices — a deliberately partial release, not the full
+scope originally proposed for this direction.** The three sections below (unknown-part +
+`xl/vbaProject.bin` passthrough; per-cell style-index + `xl/styles.xml` passthrough; merged
+ranges + hidden rows/columns write-back) are shipped as `0.8.0` on their own merits — each
+independently closes a real "your changes destroyed the workbook" failure mode. Still
+genuinely unimplemented, deferred to a later release, not a scope cut discovered late: named
+ranges (`<definedNames>`), tables/hyperlinks/comments/data-validation/freeze-panes/
+print-and-page-setup embedded in worksheet XML, and richer workbook metadata. `cargo test
+--workspace` 955/955 (up from 952 at `[0.7.0]`), `cargo build --release --workspace` clean,
+`cargo check --features python --lib` clean, every GitHub Actions job green on `master`
+before this bump. Verification for all three sections below is structural/synthetic-fixture
+only (`tests/xlsx_roundtrip.rs`) — no real Microsoft-Excel-authored `.xlsm` exists in this
+repo yet; see `tests/fixtures/xlsm_roundtrip/README.md` for where one slots in later.
 
 ### Root crate: safe round-trip, milestone 1 — unknown-part passthrough + `xl/vbaProject.bin` preservation
 
@@ -116,88 +212,6 @@ unknown-part-passthrough concern.
 - Narrows (doesn't close) the "embedded inside worksheet XML" gap milestone 2 noted: merges
   and hidden rows/columns now survive; hyperlinks, data validation, conditional formatting,
   freeze panes, and print/page setup — also worksheet-XML-embedded — still don't.
-
-### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
-
-Independent of the root `elixcee` crate: no Rust changes, no new npm dependency.
-`bookType: "xlsx"` only, output `type: "buffer" | "array" | "base64"`, producing a real
-OOXML ZIP via a hand-rolled ZIP/XML writer (no zip/xml-builder dependency added) —
-strings/numbers/booleans/dates/formulas, multiple worksheets, merges, sheet visibility,
-hidden rows/columns, basic number formats, safe XML escaping. Unsupported input (a
-non-`"xlsx"` `bookType`, an unrecognized `type`, an unsupported cell shape/type, a
-non-finite numeric/formula-cached value, an oversized declared `!ref`) throws an explicit
-`ELIXCEE_*` error, never silently ignored or truncated.
-
-- **`packages/xlsx/src/internal/xlsx-writer.cjs`** (new) — the OOXML XML generator:
-  `[Content_Types].xml`, both `.rels` parts, `docProps/{core,app}.xml`, `xl/workbook.xml`,
-  `xl/worksheets/sheetN.xml`, `xl/styles.xml`. Output is deliberately constrained to
-  shapes `src/reader.rs` (elixcee's own reader) already parses, verified by reading
-  `reader.rs` directly — inline strings (not shared strings), a small built-in
-  numFmtId table plus custom `<numFmts>` entries (164+) for anything else.
-- **`packages/xlsx/src/internal/zip-writer.cjs`** (new) — a hand-rolled ZIP archive
-  writer (local file headers, central directory, end-of-central-directory record,
-  table-based CRC-32) with a deterministic fixed epoch, so two `write()` calls on the
-  same `WorkBook` produce byte-identical output. Platform-agnostic by design: no
-  `Buffer`, every byte buffer is a plain `Uint8Array` built with `DataView`/
-  `TextEncoder` — real browsers never had `Buffer` regardless of bundler, so the shared
-  writer core is built to work on both platforms from the start. DEFLATE compression is
-  supplied by the caller as an optional callback rather than required internally (falls
-  back to STORED, a legal ZIP/OOXML method, when omitted — this is what lets the browser
-  entry reuse the same writer with no `zlib` access at all).
-- **`compat/differential/xlsx-write.test.mjs`** (new) — 36 MATCH + 1 disclosed
-  UNSUPPORTED case (`bookType: "ods"`, registered in `classify.mjs`'s
-  `UNSUPPORTED_ALLOWLIST`), covering all three round-trip directions (own write -> own
-  read, own write -> oracle read, oracle write -> own read) against a fourth,
-  independently-computed baseline (oracle write -> oracle read); plus standalone checks
-  for OOXML ZIP/XML structural validation (CRC-32, balanced XML, `[Content_Types].xml`/
-  `.rels` cross-references), 12 malformed-workbook rejection cases, output-type
-  agreement (buffer/array/base64 carry identical bytes), write-determinism, a real
-  filesystem round trip for `writeFile`/`writeFileSync`, and the browser entry's
-  behavior (both throwing `ELIXCEE_UNSUPPORTED_IN_BROWSER` for `writeFile`/
-  `writeFileSync`, and `write()` itself working with no filesystem).
-- `compat/differential/metadata.test.mjs` extended: `write`/`writeFile`/`writeFileSync`
-  now among the 39/39 exports checked (name/length/property-descriptor/CJS-ESM-identity
-  against the oracle), plus a `writeFile === writeFileSync` aliasing check.
-
-### `@elixcee/xlsx` — make writer bundles work in Node ESM and browsers
-
-**Two real bundler bugs found by actually bundling and running the code, not assumed, and
-both fixed at the source**:
-
-1. An esbuild `--format=esm --platform=node` bundle can never synchronously `require()`
-   anything reached through CJS-origin code — confirmed neither a lazy require,
-   `require('node:zlib')`, nor `--external:zlib` changes this; the documented, correct
-   pattern is marking the whole package `external` (`--packages=external`), verified
-   end-to-end and pinned as a permanent regression check in `scripts/wasm-smoke.mjs`
-   (step 6).
-2. An esbuild `--platform=browser` bundle refused to even build at all with a
-   `require('zlib')` reachable anywhere in its module graph (dead code included, since
-   esbuild can't tree-shake CommonJS `module.exports` properties). Fixed by isolating the
-   Node-only `zlib.deflateRawSync` wrapper into its own new file,
-   **`packages/xlsx/src/internal/deflate-node.cjs`**, and stubbing that exact path (plus
-   bare `zlib`) to `false` in `package.json`'s `browser` field — the same mechanism
-   already used for `elixcee_wasm.node.cjs`. This works because `browser`-field
-   path-remapping happens at module-resolution time, before the stubbed file's contents
-   are ever parsed; moving the `require('zlib')` around *within* `index.cjs` (tried
-   first) did not work, since `index.cjs` itself is wholesale-included in the browser
-   bundle graph via `index.browser.mjs`'s re-export of its other, browser-safe exports.
-
-- `scripts/wasm-smoke.mjs` extended (step 6): `bundleAndRunWrite`/`runWriteBundle` verify
-  all four combinations — inlined-ESM-must-throw, inlined-CJS-must-run,
-  externalized-ESM-must-run, externalized-CJS-must-run — pinned as a permanent regression
-  check for bug 1 above.
-- `scripts/browser-smoke.mjs` extended: the bundled entry now calls `write()` then
-  `read()` and asserts the round trip, plus a build-time assertion that the bundle
-  contains zero `zlib` references at all — verified against a real headless Chrome
-  process, not just a passing build.
-- `scripts/pack-consumer-smoke.mjs` extended: a shared `WRITE_ROUNDTRIP` snippet exercises
-  `write()`/`writeFile()`/`writeFileSync()` from inside a real `npm pack` + `npm install`,
-  both from CJS and ESM consumers, plus a new step for `writeFile()`/`writeFileSync()`
-  against a real filesystem.
-- `docs/xlsx-architecture.md` — new "Phase D: `write()`'s Node-builtin bundling posture"
-  section documents both bugs, why each fix works, and why bug 2's fix (isolating the
-  Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
-  externalization) and needs a different solution.
 
 ## [0.7.0]
 
