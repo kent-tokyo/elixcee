@@ -389,11 +389,14 @@ pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>
     Ok(out)
 }
 
+/// `(defaults, overrides)` — see `content_type_decls`.
+pub(crate) type ContentTypeDecls = (Vec<(String, String)>, Vec<(String, String)>);
+
 /// Parses `[Content_Types].xml`'s `Default`/`Override` declarations, in document
 /// order — `(extension, content_type)` for `Default`, `(part_name, content_type)`
 /// for `Override`. Used by `save_xlsx_impl` to carry over a passed-through part's
 /// real declared content type instead of guessing one.
-pub(crate) fn content_type_decls(xml: &str) -> (Vec<(String, String)>, Vec<(String, String)>) {
+pub(crate) fn content_type_decls(xml: &str) -> ContentTypeDecls {
     let mut defaults = vec![];
     let mut overrides = vec![];
     let mut iter = XmlIter::new(xml);
