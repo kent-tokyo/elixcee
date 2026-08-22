@@ -472,10 +472,21 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     let mut passthrough: Vec<(String, Vec<u8>)> = Vec::new();
     let mut has_vba = false;
     let mut carried_overrides: Vec<(String, String)> = Vec::new();
+    // xl/styles.xml is writer-owned (never enters the generic `passthrough` loop
+    // below, via `is_writer_owned_part`) but, unlike the other writer-owned parts,
+    // its CONTENT is conditionally passed through rather than always regenerated
+    // from the hardcoded `XLSX_STYLES` minimal stylesheet -- safe because no VBA
+    // statement in this VM ever mutates a cell's style (see
+    // `Vm::cell_style_indices`'s doc comment), so the source's real style
+    // definitions (fonts/fills/borders/number formats) stay exactly correct for
+    // every surviving cell's re-emitted `s="N"` index. See
+    // `docs/xlsx-architecture.md`.
+    let mut passthrough_styles: Option<Vec<u8>> = None;
 
     if let Some(source_path) = passthrough_source {
         let raw_entries = reader::read_raw_zip_entries(source_path)?;
         has_vba = is_xlsm_output && raw_entries.keys().any(|n| n.starts_with("xl/vbaProject"));
+        passthrough_styles = raw_entries.get("xl/styles.xml").cloned();
 
         let (defaults, overrides) = raw_entries
             .get("[Content_Types].xml")
@@ -557,7 +568,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     zip.write_all(build_xlsx_shared_strings(&shared_strings).as_bytes()).map_err(|e| e.to_string())?;
 
     zip.start_file("xl/styles.xml", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(XLSX_STYLES.as_bytes()).map_err(|e| e.to_string())?;
+    zip.write_all(passthrough_styles.as_deref().unwrap_or_else(|| XLSX_STYLES.as_bytes())).map_err(|e| e.to_string())?;
 
     for (name, bytes) in &passthrough {
         zip.start_file(name.as_str(), deflated).map_err(|e| e.to_string())?;
@@ -694,6 +705,8 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
         "<sheetData>\n",
     ));
 
+    let style_indices = vm.cell_style_indices.get(&sheet_name.to_lowercase());
+
     if let Some(cells) = vm.get_sheet_cells(sheet_name)
         && !cells.is_empty() {
             // Group by row first to avoid O(max_row × total_cells) scanning.
@@ -707,7 +720,8 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
                 out.push_str(&format!("<row r=\"{}\">\n", row));
                 for (&(r, c), content) in row_cells {
                     let cell_ref = format!("{}{}", xlsx_col_letters(c), r);
-                    if let Some(xml) = xlsx_cell_xml(&cell_ref, &content.value, str_index) {
+                    let style_idx = style_indices.and_then(|m| m.get(&(r, c)).copied());
+                    if let Some(xml) = xlsx_cell_xml(&cell_ref, &content.value, str_index, style_idx) {
                         out.push_str(&xml);
                         out.push('\n');
                     }
@@ -720,21 +734,27 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
     out
 }
 
-fn xlsx_cell_xml(cell_ref: &str, v: &Variant, str_index: &std::collections::HashMap<String, usize>) -> Option<String> {
+// `style_idx` is the cell's original `s="N"` index (Milestone: safe round-trip,
+// style-index preservation) -- `Some` when this cell survived from a passthrough
+// source (see `Vm::cell_style_indices`), `None` for a cell built purely in-VBA.
+// Always safe to re-emit unchanged: no VBA statement in this VM ever mutates a
+// cell's style (see `Vm::cell_style_indices`'s own doc comment).
+fn xlsx_cell_xml(cell_ref: &str, v: &Variant, str_index: &std::collections::HashMap<String, usize>, style_idx: Option<u32>) -> Option<String> {
+    let s_attr = style_idx.map(|idx| format!(" s=\"{}\"", idx)).unwrap_or_default();
     match v {
-        Variant::Integer(n) => Some(format!("<c r=\"{}\"><v>{}</v></c>", cell_ref, n)),
-        Variant::Float(f)   => Some(format!("<c r=\"{}\"><v>{}</v></c>", cell_ref, f)),
-        Variant::Date(s)    => Some(format!("<c r=\"{}\"><v>{}</v></c>", cell_ref, s)),
+        Variant::Integer(n) => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, n)),
+        Variant::Float(f)   => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, f)),
+        Variant::Date(s)    => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, s)),
         Variant::Str(s) => {
             let idx = str_index[s.as_str()];
-            Some(format!("<c r=\"{}\" t=\"s\"><v>{}</v></c>", cell_ref, idx))
+            Some(format!("<c r=\"{}\"{} t=\"s\"><v>{}</v></c>", cell_ref, s_attr, idx))
         }
         Variant::Error(e) => {
             let idx = str_index[e.as_str()];
-            Some(format!("<c r=\"{}\" t=\"s\"><v>{}</v></c>", cell_ref, idx))
+            Some(format!("<c r=\"{}\"{} t=\"s\"><v>{}</v></c>", cell_ref, s_attr, idx))
         }
         Variant::Boolean(b) => Some(format!(
-            "<c r=\"{}\" t=\"b\"><v>{}</v></c>", cell_ref, if *b { 1 } else { 0 }
+            "<c r=\"{}\"{} t=\"b\"><v>{}</v></c>", cell_ref, s_attr, if *b { 1 } else { 0 }
         )),
         Variant::Empty | Variant::Null | Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => None,
     }

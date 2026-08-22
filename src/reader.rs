@@ -35,6 +35,16 @@ pub struct WorkbookSheet {
     /// (Milestone B7b) — from XLSX's `<col min=".." max=".." hidden="1">`.
     /// Always empty for `.ods` (deferred).
     pub hidden_columns: Vec<(u32, u32)>,
+    /// Per-cell raw `s="N"` index (0-based position in `<cellXfs>`), 1-based
+    /// `(row, col)` keys — kept whenever the attribute is present and parses,
+    /// regardless of whether that `<xf>`'s own `numFmtId` is 0 (unlike
+    /// `BufferSheet::style_ids`, which only keeps a non-zero *resolved*
+    /// format id; a style index can carry font/fill/border info under a
+    /// General number format, which still needs to survive a save). Lets
+    /// `save_xlsx_impl` (`src/lib.rs`) re-emit each surviving cell's
+    /// original `s="N"` unchanged — see `docs/xlsx-architecture.md`. Always
+    /// empty for `.ods` (no `s`-index concept).
+    pub raw_style_indices: HashMap<(u32, u32), u32>,
 }
 
 pub enum SheetCell {
@@ -460,6 +470,7 @@ fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Res
                 merged_ranges: sheet_data.merged_ranges,
                 hidden_rows: sheet_data.hidden_rows,
                 hidden_columns: sheet_data.hidden_columns,
+                raw_style_indices: sheet_data.raw_style_indices,
             },
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
@@ -639,6 +650,8 @@ struct XlsxSheetData {
     dimension: Option<MergeRect>,
     /// Per-cell resolved non-zero numFmtId — see `BufferSheet::style_ids`.
     style_ids: HashMap<(u32, u32), u32>,
+    /// Per-cell raw `s="N"` index — see `WorkbookSheet::raw_style_indices`.
+    raw_style_indices: HashMap<(u32, u32), u32>,
 }
 
 fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> XlsxSheetData {
@@ -651,6 +664,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     let mut formulas: HashMap<(u32, u32), String> = HashMap::new();
     let mut dimension: Option<MergeRect> = None;
     let mut style_ids: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut raw_style_indices: HashMap<(u32, u32), u32> = HashMap::new();
     let mut cur_row: u32 = 0;
     let mut cur_col: u32 = 0;
     let mut cur_type = String::new();
@@ -716,13 +730,23 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                         // exactly: an absent/out-of-range index, or an <xf> whose own
                         // numFmtId attribute was absent, all fall back to 0 (General) —
                         // matching the oracle's `fmtid = 0` default — so only a resolved
-                        // NON-zero id is worth recording (0 == "no entry" downstream).
-                        if cur_row > 0 && cur_col > 0
-                            && let Some(idx) = attr_get(attrs, "s").and_then(|s| s.parse::<usize>().ok())
-                            && let Some(Some(fmt_id)) = cell_xfs.get(idx)
-                            && *fmt_id != 0
-                        {
-                            style_ids.insert((cur_row, cur_col), *fmt_id);
+                        // NON-zero id is worth recording (0 == "no entry" downstream) in
+                        // `style_ids`. `raw_style_indices` below keeps the index itself
+                        // unconditionally — a style can carry font/fill/border info under
+                        // a General number format, which still needs to survive a save
+                        // (see `WorkbookSheet::raw_style_indices`).
+                        let s_idx = if cur_row > 0 && cur_col > 0 {
+                            attr_get(attrs, "s").and_then(|s| s.parse::<usize>().ok())
+                        } else {
+                            None
+                        };
+                        if let Some(idx) = s_idx {
+                            raw_style_indices.insert((cur_row, cur_col), idx as u32);
+                            if let Some(Some(fmt_id)) = cell_xfs.get(idx)
+                                && *fmt_id != 0
+                            {
+                                style_ids.insert((cur_row, cur_col), *fmt_id);
+                            }
                         }
                     }
                     "v" => {
@@ -814,7 +838,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     if let Some(run) = pending_hidden_row_run.take() {
         hidden_rows.push(run);
     }
-    XlsxSheetData { cells, merged_ranges, hidden_rows, hidden_columns, formulas, dimension, style_ids }
+    XlsxSheetData { cells, merged_ranges, hidden_rows, hidden_columns, formulas, dimension, style_ids, raw_style_indices }
 }
 
 fn xlsx_parse_cell(v: &str, t: &str, shared: &[String]) -> Option<SheetCell> {
@@ -925,6 +949,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             merged_ranges: Vec::new(),
                             hidden_rows: Vec::new(),
                             hidden_columns: Vec::new(),
+                            raw_style_indices: HashMap::new(),
                         });
                         in_sheet = true;
                         row = 0;

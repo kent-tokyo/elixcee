@@ -547,14 +547,46 @@ memory (`Cursor<Vec<u8>>`) and written to disk only as the very last step
 truncating write touches the same path. A future streaming refactor of this writer would
 silently corrupt the source mid-read if this ordering is broken.
 
+**Slice 2: per-cell style-index preservation + `xl/styles.xml` passthrough.** Passing
+through `xl/styles.xml` alone would have been pointless on its own — the regenerated
+`xl/worksheets/*.xml` parts never emitted a cell's `s="N"` style-index attribute at all, so
+every cell's visible formatting (fonts/fills/borders) was lost on every save regardless of
+whether the style *definitions* survived. Fixed together:
+
+- **`reader::WorkbookSheet::raw_style_indices`** — a new per-cell map of the raw `s="N"`
+  index (0-based `<cellXfs>` position), captured unconditionally whenever the attribute is
+  present, independent of `style_ids`'s existing numFmtId resolution (a style index can
+  carry font/fill/border info under a General number format, which still needs to survive).
+  Threaded into `Vm::cell_style_indices` (same per-sheet-map pattern as `merged_ranges`) by
+  `populate_from_sheets`.
+- **`xlsx_cell_xml`** (`src/lib.rs`) now takes the cell's original style index and re-emits
+  `s="N"` on every `<c>` arm when present.
+- **This is always safe, not just usually safe**: no VBA statement in this VM ever mutates a
+  cell's style — `Range.Interior.Color =` and `Range.NumberFormat =` are explicit no-ops
+  (`test_range_noop_interior_color`/`test_range_noop_numberformat`, `src/vm/mod.rs`). A
+  cell's original style index is therefore still correct after any VBA edit to that cell's
+  *value*, and a brand-new cell (absent from the source) simply has no entry to inherit.
+- **`xl/styles.xml` conditional passthrough** — a distinct mechanism from the general
+  passthrough loop above, not a generalization of it: `xl/styles.xml` stays in
+  `is_writer_owned_part`'s fixed set (so it's never looped through the generic
+  `passthrough`/`carried_overrides` machinery), but its *content* is now the source's own
+  bytes when a passthrough source has one, falling back to the hardcoded minimal
+  `XLSX_STYLES` stylesheet only when there is none (e.g. a `Vm` built purely in-VBA). Since
+  cellXf indices are meaningless without the exact stylesheet they index into, this always
+  travels together with the style-index preservation above — passing through a *different*
+  styles.xml than the one a cell's `s="N"` was captured against would silently misapply
+  formatting.
+
 **Explicitly out of scope for this slice** (none of it requires re-architecting the
 regenerate/passthrough split above — these are additive follow-ups): named ranges
 (`<definedNames>`), tables/hyperlinks/comments/data-validation/freeze-panes *embedded inside
 worksheet XML* (separate-part tables like `xl/tables/*.xml` already pass through today;
 anything embedded in a regenerated `xl/worksheets/sheetN.xml` does not survive, since that
-part is always fully regenerated), styles beyond the existing numFmt handling, charts/images/
-external-link consistency after a structural sheet change, streaming/large-file handling,
-`.ods` passthrough, and any change to `@elixcee/xlsx` or `crates/elixcee-wasm` (untouched).
+part is always fully regenerated), *authoring or changing* styles from VBA (this VM has no
+such capability at all, by design — see the no-op tests above; only *preserving* an
+existing cell's style survived this slice), charts/images/external-link consistency after a
+structural sheet change, streaming/large-file handling, `.ods` passthrough, and any change
+to `@elixcee/xlsx` or `crates/elixcee-wasm` (untouched).
 
 **Verification status:** structural/self-consistency only, against hand-built synthetic
 fixtures (`tests/xlsx_roundtrip.rs`) — no real Microsoft-Excel-authored `.xlsm` exists in

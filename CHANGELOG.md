@@ -10,7 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Two independent, unrelated items since `[0.7.0]`: (1) `@elixcee/xlsx` CI/docs polish (still
 unpublished, `0.0.0-development`/`private: true`, no `publishConfig`) and (2) the root
-`elixcee` crate's first "safe round-trip" milestone — no version bumped yet for either.
+`elixcee` crate's "safe round-trip" direction, two slices in so far (unknown-part/
+`xl/vbaProject.bin` passthrough, then per-cell style-index/`xl/styles.xml` passthrough) —
+no version bumped yet for either.
 
 `@elixcee/xlsx`: `compat/differential/xlsx-write.test.mjs` (36 MATCH + 1 disclosed
 `UNSUPPORTED`, unchanged) is now wired into CI's `node-js` job alongside the read-side
@@ -56,6 +58,42 @@ produced a non-macro-enabled `.xlsx`-shaped file, losing `xl/vbaProject.bin` out
   `tests/fixtures/xlsm_roundtrip/README.md` for the documented slot to add one later) plus
   a manual CLI smoke test of the realistic in-place `--file foo.xlsm --output foo.xlsm`
   overwrite case. `cargo test --workspace` 955/955 (up from 952).
+
+### Root crate: safe round-trip, milestone 2 — per-cell style-index preservation + `xl/styles.xml` passthrough
+
+Second slice of the same direction (see `docs/xlsx-architecture.md`'s "Root-crate writer:
+regenerate vs. preserve-and-merge" section, "Slice 2" subsection, and `ROADMAP.md`'s item
+13). Milestone 1's passthrough mechanism could technically have carried `xl/styles.xml`
+through unchanged, but on its own that would have been pointless: the writer never emitted
+a cell's `s="N"` style-index attribute at all, so every cell's font/fill/border formatting
+was lost on every save regardless of whether the style *definitions* survived.
+
+- **New `reader::WorkbookSheet::raw_style_indices`** — a cell's raw `s="N"` index, captured
+  unconditionally whenever present, independent of the existing `style_ids` numFmtId
+  resolution (a style index can carry font/fill/border info under a General number format).
+  Threaded into new **`Vm::cell_style_indices`** by `populate_from_sheets`, same per-sheet
+  pattern as `merged_ranges`.
+- **`xlsx_cell_xml`** (`src/lib.rs`) now re-emits a surviving cell's original `s="N"`
+  unchanged on every `<c>` arm.
+- **Always safe, not just usually safe**: no VBA statement in this VM ever mutates a cell's
+  style — `Range.Interior.Color =`/`.NumberFormat =` are explicit no-ops
+  (`test_range_noop_interior_color`/`test_range_noop_numberformat`, pre-existing tests in
+  `src/vm/mod.rs`). A cell's original style index is therefore still correct after any VBA
+  edit to that cell's value; a brand-new cell simply has no entry to inherit.
+- **`xl/styles.xml` conditional passthrough** — a distinct mechanism from milestone 1's
+  general passthrough loop, not a generalization of it: stays in `is_writer_owned_part`'s
+  fixed set, but its content is now the source's own bytes when available, falling back to
+  the hardcoded minimal stylesheet only when there's no passthrough source. Deliberately
+  paired with the style-index change above in the same slice: a cell's `s="N"` is only
+  meaningful against the exact stylesheet it was captured from.
+- **Tests**: no new test file — the 3 tests from milestone 1 (`tests/xlsx_roundtrip.rs`)
+  extended in place (styled edited/untouched/brand-new cells, `xl/styles.xml` byte-identity,
+  including across the in-place-overwrite case). `cargo test --workspace` still 955/955 (test
+  *count* unchanged; existing tests got stronger assertions, not new tests).
+- Deliberately not done: everything milestone 1 already deferred, still deferred — see that
+  section above and `docs/xlsx-architecture.md`'s non-goals list. In particular, this VM
+  still cannot *author or change* a style from VBA at all; only *preserving* an existing
+  cell's style survived this milestone.
 
 ### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
 

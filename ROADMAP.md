@@ -278,13 +278,29 @@ recorded as exhausted: no further candidates were found by either method as of t
     via `tests/xlsx_roundtrip.rs` (3 tests, hand-built synthetic fixtures — no real `.xlsm`
     exists in this repo yet, see `tests/fixtures/xlsm_roundtrip/README.md`) plus a manual CLI
     smoke test (in-place `--file foo.xlsm --output foo.xlsm` overwrite, inspected by hand).
+    **Slice 2 (same item, same docs section): per-cell style-index (`s="N"`) preservation +
+    `xl/styles.xml` conditional passthrough.** Passing through `xl/styles.xml` alone would
+    have been pointless — the writer never emitted a cell's `s="N"` attribute at all, so
+    every cell's font/fill/border formatting was lost on every save regardless of whether the
+    style *definitions* survived. Both fixed together: a cell's original style index is now
+    captured on read (`WorkbookSheet::raw_style_indices`, independent of the existing
+    numFmtId resolution) and re-emitted unchanged on write; `xl/styles.xml` itself is now the
+    source's own bytes when available, not the hardcoded minimal stylesheet. Always safe: no
+    VBA statement in this VM ever mutates a cell's style (`Range.Interior.Color =`/
+    `.NumberFormat =` are explicit no-ops, confirmed by existing tests of those names). Same
+    3 tests in `tests/xlsx_roundtrip.rs` extended to cover this (edited-cell style survives,
+    untouched-cell style survives, brand-new-cell doesn't spuriously inherit one,
+    `xl/styles.xml` byte-identical) rather than new tests added.
+
     Still genuinely out of scope, not a rearchitecture blocker for any of it later: named
     ranges, tables/hyperlinks/comments/data-validation/freeze-panes embedded inside worksheet
     XML (sheets are always fully regenerated, never diffed against the original — a stated
-    simplification), styles beyond existing numFmt handling, charts/images/external-link
-    consistency after a structural sheet change, streaming/large-file handling, `.ods`
-    passthrough, and `@elixcee/xlsx`/`crates/elixcee-wasm` (both untouched by this milestone,
-    by design — see item 6 above for why they're a separate, unrelated codepath).
+    simplification), *authoring or changing* styles from VBA (this VM has no such capability
+    at all — only *preserving* an existing cell's style survived this milestone),
+    charts/images/external-link consistency after a structural sheet change,
+    streaming/large-file handling, `.ods` passthrough, and `@elixcee/xlsx`/
+    `crates/elixcee-wasm` (both untouched by this milestone, by design — see item 6 above for
+    why they're a separate, unrelated codepath).
 
 ## npm/JS/WASM findings (from a dedicated investigation this round — see git history for the
 full report; this is a summary)

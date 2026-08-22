@@ -184,6 +184,7 @@ mod tests {
             merged_ranges: Vec::new(),
             hidden_rows: Vec::new(),
             hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
         }
     }
 

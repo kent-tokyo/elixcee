@@ -617,6 +617,16 @@ pub struct Vm {
     /// hidden_rows`/`hidden_columns` (XLSX only — ODS is deferred); empty
     /// for any sheet built purely in-VBA.
     sheet_visibility: HashMap<String, SheetVisibility>,
+    /// Per-sheet, per-cell raw `s="N"` style index (Milestone: safe
+    /// round-trip), keyed the same way as `merged_ranges`. Populated by
+    /// `populate_from_sheets` from the reader's `WorkbookSheet::
+    /// raw_style_indices`; used only by `save_xlsx_impl` (`src/lib.rs`) to
+    /// re-emit each surviving cell's original style index unchanged --
+    /// always correct for this VM to do, since no VBA statement here ever
+    /// mutates a cell's style (`Range.Interior.Color =`/`.NumberFormat =`
+    /// are explicit no-ops, see the tests of those same names below). Empty
+    /// for any sheet built purely in-VBA.
+    pub(crate) cell_style_indices: HashMap<String, HashMap<(u32, u32), u32>>,
     /// `Set`-assigned object variables (Milestone B7c) — lowercase name →
     /// `ObjectRef`, a namespace deliberately separate from `Vm::variables`
     /// (`Variant`s), matching VBA's own distinction between plain `=` and
@@ -706,6 +716,7 @@ impl Vm {
             protected_sheets: HashSet::new(),
             merged_ranges: HashMap::new(),
             sheet_visibility: HashMap::new(),
+            cell_style_indices: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
             err_number: 0,
@@ -1919,6 +1930,9 @@ impl Vm {
             let key = sheet_data.name.to_lowercase();
             if !sheet_data.merged_ranges.is_empty() {
                 self.merged_ranges.insert(key.clone(), sheet_data.merged_ranges.clone());
+            }
+            if !sheet_data.raw_style_indices.is_empty() {
+                self.cell_style_indices.insert(key.clone(), sheet_data.raw_style_indices.clone());
             }
             if !sheet_data.hidden_rows.is_empty() || !sheet_data.hidden_columns.is_empty() {
                 self.sheet_visibility.insert(
@@ -7477,6 +7491,7 @@ mod tests {
             merged_ranges: Vec::new(),
             hidden_rows: Vec::new(),
             hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
         }];
 
         let mut vm = Vm::new();
@@ -8276,6 +8291,7 @@ mod tests {
             merged_ranges: vec![((1, 2), (1, 4))],
             hidden_rows: Vec::new(),
             hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -8309,6 +8325,7 @@ mod tests {
             merged_ranges: Vec::new(),
             hidden_rows: vec![(3, 5)],
             hidden_columns: vec![(2, 2)],
+            raw_style_indices: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -8341,6 +8358,7 @@ mod tests {
             merged_ranges: Vec::new(),
             hidden_rows: vec![(3, 5)],
             hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -8364,6 +8382,7 @@ mod tests {
             merged_ranges: Vec::new(),
             hidden_rows: vec![(50, 60)],
             hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
