@@ -1,0 +1,134 @@
+{
+  "_comment": "0.9.0-A real-Excel round-trip results, fixtures 1-5. See ROADMAP.md 0.9.0-A and compat/oracle-excel-com/mechanical_check.py. Verdict values: EXACT_MATCH | SEMANTIC_MATCH | EXPECTED_REWRITE | UNSUPPORTED_PRESERVED | ELIXCEE_DATA_LOSS | ELIXCEE_RELATIONSHIP_BREAK | EXCEL_REPAIR_REQUIRED | ORACLE_FAILURE. Verified live against Microsoft Excel for Mac 16.108 -- not simulated.",
+  "environment": {
+    "excel_version": "16.108 (Mac)",
+    "elixcee_commit": "1ea4066 (fixtures 1-5 all tested against this commit; fixes de2ee3f/1ea4066 predate all runs below)"
+  },
+  "fixtures": [
+    {
+      "id": "fixture1_values_styles_merge_hidden",
+      "path": "compat/oracle-excel-com/fixtures/pristine/fixture1_values_styles_merge_hidden.xlsm",
+      "authored_by": "live AppleScript automation against Microsoft Excel for Mac 16.108",
+      "has_vba_project": false,
+      "content": ["values", "formula", "number_format", "merged_range", "hidden_column", "hidden_row"],
+      "runs_summary": "save-as and in-place, 1 cycle each: no repair warning, no cannot-open error, values/formula(recalculated live to 1110)/number-format/merge/hidden-row/hidden-column all EXACT_MATCH or SEMANTIC_MATCH, has_vb_project correctly false.",
+      "cycles_completed_per_mode": 1,
+      "cycles_required_per_mode": 10
+    },
+    {
+      "id": "fixture2_vba_macro",
+      "path": "compat/oracle-excel-com/fixtures/pristine/fixture2_vba_macro.xlsm",
+      "authored_by": "user, manually, in Microsoft Excel for Mac 16.108 (VBA authoring has no AppleScript surface -- see MACOS_APPLESCRIPT_EXPLORATION.md)",
+      "has_vba_project": true,
+      "content": ["values", "vba_macro (Sheet1 code-behind, not a standard module)"],
+      "runs_summary": "save-as and in-place: mechanical check clean, no repair warning, has_vb_project correctly true, edited/unedited cells correct.",
+      "cycles_completed_per_mode": 1,
+      "cycles_required_per_mode": 10,
+      "macro_execution": {
+        "status": "NOT_EVALUABLE",
+        "reason": "Running the macro (IncrementCounter) fails with 'Microsoft Visual Basic: license information for this component was not found' -- reproduced identically when run from Excel's own Macro dialog (⌥F8) against the UNTOUCHED original fixture, before elixcee ever touched it. This is a Mac Excel/VBA-runtime environment issue on this machine, not an elixcee defect -- ruled out: not a codeName/binding issue (macro is correctly listed and resolvable in the Macro dialog), not specific to external invocation (fails from inside Excel's own UI too), not caused by any file elixcee wrote (fails on the pristine file too). Out of scope for this round; flagged for a fresh environment/session per MACOS_APPLESCRIPT_EXPLORATION.md's own recommendation."
+      }
+    },
+    {
+      "id": "fixture3_table_validation_conditional",
+      "path": "compat/oracle-excel-com/fixtures/pristine/fixture3_table_validation_conditional.xlsm",
+      "authored_by": "user, manually (AppleScript's make-new-based creation for list objects/data validation/conditional formatting all failed with -50 parameter errors, confirmed empirically against a live Excel instance -- documented in the sdef but not actually implemented)",
+      "has_vba_project": true,
+      "has_vba_project_note": "Present but unintentional/empty -- carried over from the authoring session's Excel state, not something this fixture set out to test (fixture 2 covers VBA specifically). Not a problem: exercises vbaProject.bin passthrough as a bonus.",
+      "content": ["table (ListObject)", "data_validation (list, 'Yes,No,Maybe')", "conditional_formatting (cellIs greaterThan 700)"],
+      "runs_summary": "save-as and in-place: mechanical check clean, no repair warning, edited cell correct. Table/data-validation/conditional-formatting are ALL SILENTLY DROPPED -- see known_gap below.",
+      "cycles_completed_per_mode": 1,
+      "cycles_required_per_mode": 10,
+      "known_gap": {
+        "id": "worksheet-embedded-features-not-preserved",
+        "severity": "ELIXCEE_DATA_LOSS",
+        "already_documented": true,
+        "summary": "xl/tables/table1.xml survives as a passthrough part (bytes intact), but the worksheet's own <tableParts>/<dataValidations>/<conditionalFormatting> elements are gone -- build_xlsx_sheet fully regenerates xl/worksheets/sheetN.xml from Vm cell state on every save, with no mechanism for any worksheet-embedded XML feature it doesn't itself model (only <cols>/<sheetData>/<mergeCells> are emitted). This is NOT a new bug: the 0.8.0 safe-round-trip milestone's own Non-goals section already named exactly this ('anything embedded in a regenerated xl/worksheets/sheetN.xml does not survive'). Confirmed live: after any elixcee save touching this sheet, real Excel shows 0 list objects, no data validation type on the previously-validated cell, 0 format conditions -- silently, no repair warning. Fixing this is a real feature (selectively re-inject known worksheet-embedded elements, or diff/merge instead of fully regenerating sheetN.xml), matching the scope of a future milestone (ROADMAP.md's planned 'Lossless Worksheet Preservation'), not a quick fix -- explicitly not attempted in this round."
+      }
+    },
+    {
+      "id": "fixture4_hyperlink_comment_name",
+      "path": "compat/oracle-excel-com/fixtures/pristine/fixture4_hyperlink_comment_name.xlsm",
+      "authored_by": "user, manually (hyperlink creation has no AppleScript command at all; only 'follow hyperlink' and 'clear hyperlinks' are exposed)",
+      "has_vba_project": true,
+      "has_vba_project_note": "Same as fixture 3 -- unintentional but harmless bonus coverage.",
+      "content": ["hyperlink", "threaded_comment + legacy VML comment drawing", "defined_name", "conditional_formatting (also present, unintentionally)"],
+      "runs_summary": "save-as and in-place: mechanical check clean, no repair warning, edited/unedited cells (including the hyperlink's own display text) correct, has_vb_project correctly true.",
+      "cycles_completed_per_mode": 1,
+      "cycles_required_per_mode": 10,
+      "known_gap": {
+        "id": "worksheet-embedded-features-not-preserved",
+        "severity": "ELIXCEE_DATA_LOSS",
+        "same_root_cause_as": "fixture3_table_validation_conditional",
+        "summary": "Hyperlink, defined name (xl/workbook.xml's own <definedNames>, also fully regenerated), and conditional formatting all silently dropped for the same reason as fixture 3. Comment/threaded-comment/VML-drawing parts (xl/comments1.xml, xl/threadedComments/, xl/persons/, xl/drawings/vmlDrawing1.vml) survive as passthrough bytes but become orphaned (no <legacyDrawing>/comment anchor left in the regenerated sheet). No repair warning either way -- confirmed live."
+      }
+    },
+    {
+      "id": "fixture5_chart_image_freeze_print",
+      "path": "compat/oracle-excel-com/fixtures/pristine/fixture5_chart_image_freeze_print.xlsm",
+      "authored_by": "user, manually (chart creation via AppleScript's make-new also failed with -50, same pattern as tables)",
+      "has_vba_project": false,
+      "content": ["chart", "image (xl/media/image1.png, ~1.28MB)", "print_area (_xlnm.Print_Area defined name)", "richData parts (unintentional -- from an accidental rich-value cell, #VALUE! at D8)"],
+      "content_note": "Freeze panes did NOT end up in this fixture (no <pane> element in the authored file) -- not evaluated this round.",
+      "runs_summary": "save-as and in-place: mechanical check clean, no repair warning, edited cell correct.",
+      "cycles_completed_per_mode": 1,
+      "cycles_required_per_mode": 10,
+      "known_gap": {
+        "id": "worksheet-embedded-features-not-preserved",
+        "severity": "ELIXCEE_DATA_LOSS",
+        "same_root_cause_as": "fixture3_table_validation_conditional",
+        "summary": "Chart/image/drawing parts survive as passthrough bytes but <drawing r:id=.../> is gone from the regenerated sheet, orphaning the whole chain. Confirmed live: 0 chart objects, 0 shapes after an elixcee save. No repair warning. Print area's <definedNames> also dropped (workbook.xml is fully regenerated, same as fixture 4's defined name)."
+      },
+      "not_evaluated": ["freeze_panes (not present in the authored fixture)"]
+    }
+  ],
+  "bugs_found_and_fixed_this_round": [
+    {
+      "id": "formula-flattening",
+      "commit": "de2ee3f",
+      "severity": "ELIXCEE_DATA_LOSS",
+      "found_via": "fixture1",
+      "summary": "WorkbookSheet (the struct backing the CLI/PyO3 load path) had no field for formula text at all -- every save silently flattened every untouched formula cell to its last cached value, with no <f> element."
+    },
+    {
+      "id": "orphaned-relationships",
+      "commit": "1ea4066",
+      "severity": "ELIXCEE_RELATIONSHIP_BREAK",
+      "found_via": "fixture1",
+      "summary": "xl/_rels/workbook.xml.rels and _rels/.rels are both fully regenerated from a fixed template that only knew about worksheet/sharedStrings/styles/vbaProject/officeDocument -- xl/theme/theme1.xml and docProps/{app,core}.xml passed through byte-identical but lost their relationships, becoming orphaned parts."
+    },
+    {
+      "id": "xlsm-content-type-mismatch",
+      "commit": "1ea4066",
+      "severity": "EXCEL_REPAIR_REQUIRED",
+      "found_via": "fixture1",
+      "summary": "workbook.xml's content type was chosen from whether a VBA project was actually present, not from the output file extension -- any .xlsm output with no VBA project (the common case for fixture 1) declared the plain (non-macro) content type inside a .xlsm-named file. This was the dominant cause: Excel refused to open the file outright, not even a repair prompt, until fixed."
+    }
+  ],
+  "known_gaps_confirmed_not_new_bugs": [
+    {
+      "id": "worksheet-embedded-features-not-preserved",
+      "found_via": "fixtures 3, 4, 5",
+      "already_documented_in": "0.8.0 safe-round-trip milestone's own Non-goals section",
+      "affects": ["tables (ListObject)", "data validation", "conditional formatting", "hyperlinks", "defined names", "comments/threaded comments (orphaned, not deleted)", "charts/images/drawings (orphaned, not deleted)", "print area"],
+      "not_affected": "None of these ever cause a repair warning -- Excel silently drops the feature, confirmed for every case above.",
+      "recommendation": "Real feature work (re-inject known elements into the regenerated worksheet, or move to diff/merge instead of full regeneration), not attempted this round -- matches the scope of a planned future milestone."
+    },
+    {
+      "id": "macro-execution-environment-blocker",
+      "found_via": "fixture2",
+      "summary": "Mac Excel VBA license/component error, reproduces on the untouched original file from inside Excel's own UI -- not an elixcee issue, not evaluated further this round."
+    }
+  ],
+  "exit_criteria_status": {
+    "excel_authored_fixtures_5_or_more": "5 of 5 (met)",
+    "xlsm_fixtures_3_or_more": "5 of 5 are .xlsm (met)",
+    "consecutive_open_save_reopen_cycles_10_or_more": "1 of 10 per fixture per save mode -- NOT met",
+    "excel_repair_warnings": 0,
+    "vba_project_loss": 0,
+    "macro_execution_failures": "not evaluable (environment blocker, see fixture2)",
+    "supported_workbook_property_loss": "0 for cell values/formulas/styles/merges/hidden rows-cols/vbaProject; nonzero for worksheet-embedded features (tables/validation/conditional-formatting/hyperlinks/defined-names/charts/images) -- known, already-documented gap, not new",
+    "relationship_breakage": 0,
+    "in_place_save_failures": 0
+  }
+}
