@@ -302,3 +302,13 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 - [x] `ROADMAP.md`の`Current state`と`0.9.0`セクションを実際のリリース状態に同期（`/greenlane`）：「0.9.0-A進行中・未リリース」という記述を「0.9.0として出荷済み」へ更新、Known gaps item 1（旧「実Excel検証皆無」）とitem 13（旧「合成fixtureのみ検証」）を実態に合わせて書き換え。
 
 `elixcee-types` 0.3.0、`elixcee-wasm` 0.1.0、`@elixcee/xlsx` `0.0.0-development`/`private:true`はいずれも今回変更なし。ユーザー評価：96/100点（0.7.0:94→0.8.0:95→0.9.0:96）。
+
+## `/greenlane`セッション：長年「メンテナ判断待ち」だった2件のclippy項目を再調査し両方解消
+
+複数セッションにわたり「公開API設計の決定が必要」として保留し続けていた2項目を、実際に再調査したところ両方とも決定不要な機械的修正で解決できることが判明。「見つからなかった」で終わらせず、過去の判断を検証し直した結果。
+
+- [x] **`db_row_matches_criteria`のtoo_many_arguments**（commit `8fd389d`）：この関数はprivateかつ呼び出し元は同一ファイル内の`func_dget`ただ1箇所のみ——公開APIとは無関係と判明。`db_range`/`criteria_range`を`require_range`の戻り値と同じ`(c1,r1,c2,r2)`タプル形にまとめ、9引数→4引数へ。呼び出し側もタプルをそのまま渡すだけになり、むしろ簡潔化。`cargo test --workspace`（828+件）・`compat/vba-semantics`（386件、0 BUG/0 UNCLASSIFIED、変化なし）・`compat/corpus`（581件、0 UNEXPLAINED/0 MISMATCH、変化なし）で無変化を確認。
+- [x] **`#[pyclass]`の`FromPyObject`非推奨警告**（commit `a7ee662`）：`PyExcelError`の自動導出`FromPyObject`が実際に`python_to_variant`内の`obj.extract::<PyExcelError>()`で使われている（Pythonから`ExcelError`インスタンスを`set_cell`へ渡す際の受け口）ことを確認——`skip_from_py_object`を選んでいたら無音でこの機能を壊していた。`from_py_object`で明示的にopt-inして現状維持。ローカルの`.venv`が別クローン（`oss_rust/elixcee`）のシェバンパスを内蔵していて使い物にならないことが判明（環境変数の問題ではなくvenv自体が壊れている）——scratchpadに新規venvを作りmaturinで実ビルドし、`#DIV/0!`エラーセルの読み出し→Pythonの`ExcelError`インスタンスとして`set_cell`へ書き戻し→再読み出しの実往復を確認。
+- [x] 副産物として、`cargo clippy --features python --lib -- -D warnings`がこのセッション以前に一度も実行されていなかったことが判明（CIの`cargo clippy -p elixcee-types`はroot crateのpython featureをカバーしない）——実行したところ`pyclass`修正とは無関係な既存の`redundant_closure`警告5件（`.map_err(|e| PyErr::new::<X,_>(e))` → `.map_err(PyErr::new::<X,_>)`）を発見、同じcommitで機械的に修正。
+
+`cargo clippy --lib -- -D warnings`と`cargo clippy --features python --lib -- -D warnings`、両方とも完全にクリーン（警告ゼロ）になった。
