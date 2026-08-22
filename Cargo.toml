@@ -1,6 +1,6 @@
 [package]
 name = "elixcee"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = ["kent-tokyo <kent-tokyo@users.noreply.github.com>"]
 repository = "https://github.com/kent-tokyo/elixcee"
@@ -26,7 +26,7 @@ crate-type = ["cdylib", "rlib"]
 python = ["dep:pyo3", "pyo3/extension-module"]
 
 [dependencies]
-elixcee-types = { path = "crates/elixcee-types", version = "0.2.0" }
+elixcee-types = { path = "crates/elixcee-types", version = "0.3.0" }
 pyo3 = { version = "0.29.0", optional = true }
 # default-features off: elixcee only ever reads/writes Stored/Deflated zip entries
 # (grep-confirmed — no zstd/bzip2/lzma/AES anywhere in src/), but zip's *default*
