@@ -8,10 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-`@elixcee/xlsx` only — independently-versioned, still unpublished (`0.0.0-development`/
+Two independent items: `@elixcee/xlsx` (still unpublished, `0.0.0-development`/
 `private: true`, no `publishConfig`; see its own two entries below for exactly what's
-implemented). Nothing here touches the root `elixcee`/`elixcee-types`/`elixcee-wasm`
-crates, which this round's "safe round-trip" work moved to `[0.8.0]` below.
+implemented) and one small root-crate CLI fix below.
+
+### CLI: `elixcee --version`/`-V`
+
+The CLI had no way to print its own version at all — found while verifying the `bin-v0.8.0`
+GitHub Release binaries by hand (`gh release download` + run), where `--version` turned out
+to be an unrecognized flag with no substitute (`--help` doesn't print it either). Fixed:
+`elixcee --version`/`-V` now prints `elixcee <CARGO_PKG_VERSION>` and exits 0 — reads
+`env!("CARGO_PKG_VERSION")` at compile time, so it can never drift from `Cargo.toml`. New
+`tests/cli_version.rs` (2 tests, spawning the real built binary, matching the existing
+`tests/cli_*.rs` convention).
 
 ### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
 

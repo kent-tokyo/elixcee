@@ -24,6 +24,7 @@ fn usage() -> ! {
            --sheet <name>   Active sheet name (default: first sheet in --file)\n\
            --output <path>  Save result cells to spreadsheet (.xlsx / .xlsm / .ods)\n\
            --json           Emit a single JSON object (result or error) instead of plain text\n\
+           --version, -V    Print the version number and exit\n\
          \n\
          Subcommands:\n\
            elixcee check <vba_file>... [--entry <MacroName>] [--json]\n\
@@ -749,6 +750,10 @@ fn messages_to_json(messages: &[String]) -> String {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
+    if matches!(args.get(1).map(String::as_str), Some("--version") | Some("-V")) {
+        println!("elixcee {}", env!("CARGO_PKG_VERSION"));
+        process::exit(0);
+    }
     if args.get(1).map(String::as_str) == Some("check") {
         run_check_command(&args[2..]);
     }
