@@ -675,3 +675,135 @@ fn passthrough_part_referenced_only_by_a_non_writer_owned_relationship_type_keep
     let _ = std::fs::remove_file(&source_path);
     let _ = std::fs::remove_file(&output_path);
 }
+
+/// A genuine Microsoft-Excel-for-Mac-authored `.xlsm` (real VBA project, real
+/// `xr:uid`/`calcChain.xml`/`theme1.xml`), not a hand-built stand-in -- see
+/// `compat/oracle-excel-com/results/0.9.0-A_summary.md` for the full real-Excel
+/// validation this fixture is part of (open in real Excel, edit via elixcee,
+/// save, reopen -- no repair warning, formulas/relationships/vbaProject
+/// preserved). This function reads it directly rather than duplicating the
+/// bytes into `tests/fixtures/xlsm_roundtrip/` -- see that directory's own
+/// README for why.
+fn real_fixture(name: &str) -> String {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("compat/oracle-excel-com/fixtures/pristine")
+        .join(name)
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+/// The real-fixture counterpart to the synthetic flagship test above: same
+/// assertions (edited cell, unedited cell, `xl/vbaProject.bin` byte-identity,
+/// every other original part byte-identical, content-types self-consistency),
+/// but against a real Microsoft-Excel-authored `.xlsm` instead of a hand-built
+/// one -- and additionally checks the two relationship-carry-over bugs found
+/// via this exact fixture (theme/docProps relationships surviving into the
+/// regenerated `.rels` files, not just the parts' bytes) don't regress.
+/// Covers both save modes, mirroring `xlsm_roundtrip_in_place_save_preserves_vba_project`.
+#[test]
+fn real_excel_xlsm_roundtrip_preserves_vba_project_and_relationships() {
+    let source_path = real_fixture("fixture2_vba_macro.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let vba_bytes = fixture_entries["xl/vbaProject.bin"].clone();
+
+    // --- save-as ---
+    let output_path = tmp_path("real_fixture_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditB1()\n    Cells(1, 2).Value = 999\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditB1").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+    check_real_fixture_output(&fixture_entries, &vba_bytes, &output_path, "save-as");
+
+    // --- in-place: source_path == output_path, on a scratch copy so the committed
+    // fixture under compat/oracle-excel-com/fixtures/pristine/ is never touched ---
+    let inplace_path = tmp_path("real_fixture_inplace.xlsm");
+    std::fs::copy(&source_path, &inplace_path).unwrap();
+    let mut vm2 = Vm::new();
+    vm2.load_workbook_file(&inplace_path)
+        .expect("copied real fixture should load");
+    vm2.run_sub(&prog, "EditB1").expect("macro should run");
+    save_workbook(&vm2, &inplace_path).expect("in-place save should succeed");
+    check_real_fixture_output(&fixture_entries, &vba_bytes, &inplace_path, "in-place");
+
+    let _ = std::fs::remove_file(&output_path);
+    let _ = std::fs::remove_file(&inplace_path);
+}
+
+fn check_real_fixture_output(
+    fixture_entries: &HashMap<String, Vec<u8>>,
+    vba_bytes: &[u8],
+    output_path: &str,
+    mode: &str,
+) {
+    let output_bytes = std::fs::read(output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+
+    // (i) edited and unedited cells
+    let sheets = reader::read_workbook(output_path).expect("output should be readable");
+    let sheet = sheets.iter().find(|s| s.name == "sheet1").unwrap();
+    assert!(
+        matches!(
+            sheet.cells.get(&(1, 2)),
+            Some(reader::SheetCell::Integer(999))
+        ),
+        "[{mode}] B1 should be edited to 999"
+    );
+    assert!(
+        matches!(sheet.cells.get(&(1, 1)), Some(reader::SheetCell::Str(s)) if s == "Counter"),
+        "[{mode}] unedited A1 ('Counter') must survive"
+    );
+
+    // (ii) xl/vbaProject.bin byte-identical
+    assert_eq!(
+        output_entries.get("xl/vbaProject.bin"),
+        Some(&vba_bytes.to_vec()),
+        "[{mode}] vbaProject.bin must survive byte-identical from a real Excel-authored file"
+    );
+
+    // (iii) every non-writer-owned original part is byte-identical
+    for (name, bytes) in fixture_entries {
+        if is_writer_owned(name) {
+            continue;
+        }
+        assert_eq!(
+            output_entries.get(name),
+            Some(bytes),
+            "[{mode}] passthrough part {name} must be byte-identical"
+        );
+    }
+
+    // (iv) content-types self-consistency + macro-enabled root type
+    let ct_xml = String::from_utf8(output_entries["[Content_Types].xml"].clone()).unwrap();
+    assert!(
+        ct_xml.contains("macroEnabled.main+xml"),
+        "[{mode}] workbook.xml must declare the macro-enabled content type"
+    );
+    for name in output_entries.keys() {
+        if name == "[Content_Types].xml" {
+            continue;
+        }
+        assert!(
+            resolve_content_type(&ct_xml, name).is_some(),
+            "[{mode}] output part {name} has no resolvable content type"
+        );
+    }
+
+    // (v) relationship carry-over regression guard: theme and docProps
+    // relationships (not just the parts' bytes) must survive -- the exact
+    // bugs found and fixed via this fixture (see CHANGELOG.md's [0.9.0]).
+    let workbook_rels =
+        String::from_utf8(output_entries["xl/_rels/workbook.xml.rels"].clone()).unwrap();
+    assert!(
+        workbook_rels.contains("relationships/theme") && workbook_rels.contains("theme1.xml"),
+        "[{mode}] theme relationship must survive: {workbook_rels}"
+    );
+    let root_rels = String::from_utf8(output_entries["_rels/.rels"].clone()).unwrap();
+    assert!(
+        root_rels.contains("core.xml") && root_rels.contains("app.xml"),
+        "[{mode}] docProps relationships must survive: {root_rels}"
+    );
+}
