@@ -6522,6 +6522,8 @@ mod tests {
     }
 
     #[test]
+    // 3.14 here is an arbitrary decimal test value for TRUNC/MOD, not an approximation of π.
+    #[allow(clippy::approx_constant)]
     fn test_int_trunc_mod() {
         let c = HashMap::new();
         assert_eq!(calc("=INT(3.9)", &c), Variant::Integer(3));
@@ -6676,6 +6678,8 @@ mod tests {
     }
 
     #[test]
+    // 3.14 is an arbitrary decimal test value for VALUE()'s string-to-number parsing, not π.
+    #[allow(clippy::approx_constant)]
     fn test_value() {
         let c = HashMap::new();
         assert_eq!(calc("=VALUE(\"42\")", &c), Variant::Integer(42));
@@ -6897,6 +6901,8 @@ mod tests {
     }
 
     #[test]
+    // 3.14 is an arbitrary decimal test value for ABS(), not an approximation of π.
+    #[allow(clippy::approx_constant)]
     fn test_math_functions() {
         let c = HashMap::new();
         assert_eq!(calc("=ABS(-5)", &c), Variant::Integer(5));

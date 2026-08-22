@@ -5456,6 +5456,8 @@ mod tests {
     }
 
     #[test]
+    // 3.14 is an arbitrary decimal test value for Variant::Float's Display impl, not π.
+    #[allow(clippy::approx_constant)]
     fn test_variant_display() {
         assert_eq!(Variant::Integer(42).to_string(), "42");
         assert_eq!(Variant::Float(3.14).to_string(), "3.14");

@@ -3239,6 +3239,8 @@ mod tests {
         );
     }
     #[test]
+    // 3.14 is an arbitrary decimal test value for float-literal assignment, not π.
+    #[allow(clippy::approx_constant)]
     fn test_variable_assignment_float() {
         let body = parse_body("Sub MySub()\n    x = 3.14\nEnd Sub\n");
         assert_eq!(

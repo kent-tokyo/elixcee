@@ -1265,6 +1265,8 @@ mod tests {
     use calamine::{Reader, Xlsx, open_workbook};
 
     #[test]
+    // 3.14 is an arbitrary decimal test value for the save/load round trip, not π.
+    #[allow(clippy::approx_constant)]
     fn test_save_workbook_roundtrip() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
@@ -1460,6 +1462,8 @@ mod diff_reader_tests {
     }
 
     #[test]
+    // 3.14 is an arbitrary decimal test value covering a float cell type, not π.
+    #[allow(clippy::approx_constant)]
     fn diff_xlsx_all_types() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(

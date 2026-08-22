@@ -363,6 +363,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // 3.14 is an arbitrary decimal test value for number-literal parsing, not π.
+    #[allow(clippy::approx_constant)]
     fn test_number() {
         assert_eq!(parse("=42").unwrap(), FormulaExpr::Number(42.0));
         assert_eq!(parse("3.14").unwrap(), FormulaExpr::Number(3.14));
