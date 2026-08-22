@@ -29,12 +29,19 @@ use crate::testworkbook::FixtureResult;
 /// array when it is. Success shape is `test-workbook`'s, unchanged.
 pub fn to_json(result: &FixtureResult) -> String {
     match result {
-        FixtureResult::Passed { seed, cases_run, hidden_cells } => {
+        FixtureResult::Passed {
+            seed,
+            cases_run,
+            hidden_cells,
+        } => {
             // Milestone B7b: a sibling field, present only when `Some` —
             // same "never an always-present empty array" contract as
             // plain `diagnose`'s own `observations` field.
             let observations_field = if hidden_cells.is_some() {
-                format!(",\"observations\":{}", observations_json(hidden_cells.as_deref()))
+                format!(
+                    ",\"observations\":{}",
+                    observations_json(hidden_cells.as_deref())
+                )
             } else {
                 String::new()
             };
@@ -72,7 +79,10 @@ pub fn to_json(result: &FixtureResult) -> String {
                 fields.push(format!("\"message\":{}", json_string(m)));
             }
             let observations_field = if hidden_cells.is_some() {
-                format!(",\"observations\":{}", observations_json(hidden_cells.as_deref()))
+                format!(
+                    ",\"observations\":{}",
+                    observations_json(hidden_cells.as_deref())
+                )
             } else {
                 String::new()
             };
@@ -95,7 +105,11 @@ pub fn to_json(result: &FixtureResult) -> String {
 /// "plain text is a simplified view" convention (`snapshot`, `diagnose`).
 pub fn to_plain_text(result: &FixtureResult) -> String {
     match result {
-        FixtureResult::Passed { seed, cases_run, hidden_cells } => {
+        FixtureResult::Passed {
+            seed,
+            cases_run,
+            hidden_cells,
+        } => {
             let mut line = format!("ok: {} case(s) passed (seed {})", cases_run, seed);
             if let Some(obs) = hidden_cells {
                 line.push_str(&format!(

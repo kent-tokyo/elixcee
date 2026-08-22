@@ -106,7 +106,11 @@ fn worksheet_json(bs: &BufferSheet) -> String {
         max_c = max_c.max(col);
         out.push_str(&json_string(&cell_ref(row, col)));
         out.push(':');
-        out.push_str(&cell_json(cell, bs.formulas.get(&(row, col)), bs.style_ids.get(&(row, col))));
+        out.push_str(&cell_json(
+            cell,
+            bs.formulas.get(&(row, col)),
+            bs.style_ids.get(&(row, col)),
+        ));
     }
 
     // <dimension>, when present and trusted (reader.rs's parse_dimension_ref already
@@ -115,7 +119,9 @@ fn worksheet_json(bs: &BufferSheet) -> String {
     // never falls back to a bounding box once a valid <dimension> set !ref. Only fall
     // back to the bounding box (and only when at least one cell exists) when no
     // dimension was trusted, same as this bridge's pre-existing behavior.
-    let ref_range = bs.dimension.or_else(|| (!first).then_some(((min_r, min_c), (max_r, max_c))));
+    let ref_range = bs
+        .dimension
+        .or_else(|| (!first).then_some(((min_r, min_c), (max_r, max_c))));
     if let Some(((r1, c1), (r2, c2))) = ref_range {
         out.push_str(",\"!ref\":");
         // A single-cell range collapses to just the cell ref, no colon — matching the
@@ -263,7 +269,11 @@ mod tests {
     // test here exercises one sheet at a time, so this is the common case; number_formats/
     // date1904-specific tests build a BufferWorkbook directly instead of through this.
     fn wb1(s: BufferSheet) -> BufferWorkbook {
-        BufferWorkbook { sheets: vec![s], number_formats: HashMap::new(), date1904: false }
+        BufferWorkbook {
+            sheets: vec![s],
+            number_formats: HashMap::new(),
+            date1904: false,
+        }
     }
 
     #[test]
@@ -277,7 +287,10 @@ mod tests {
     #[test]
     fn workbook_json_shapes_an_empty_sheet_with_no_ref() {
         let json = workbook_json(&wb1(sheet("Sheet1", vec![])));
-        assert_eq!(json, r#"{"SheetNames":["Sheet1"],"Sheets":{"Sheet1":{}},"!date1904":false}"#);
+        assert_eq!(
+            json,
+            r#"{"SheetNames":["Sheet1"],"Sheets":{"Sheet1":{}},"!date1904":false}"#
+        );
     }
 
     #[test]
@@ -333,7 +346,10 @@ mod tests {
     fn worksheet_json_falls_back_to_the_bounding_box_when_dimension_is_absent() {
         let json = workbook_json(&wb1(sheet(
             "Sheet1",
-            vec![((2, 2), SheetCell::Integer(1)), ((3, 4), SheetCell::Integer(2))],
+            vec![
+                ((2, 2), SheetCell::Integer(1)),
+                ((3, 4), SheetCell::Integer(2)),
+            ],
         )));
         assert!(json.contains(r#""!ref":"B2:D3""#));
     }

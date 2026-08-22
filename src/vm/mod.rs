@@ -2,7 +2,10 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::check;
 use crate::formula;
-use crate::parser::ast::{ArrayDim, CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp};
+use crate::parser::ast::{
+    ArrayDim, CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan,
+    SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp,
+};
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{self, SheetCell, WorkbookSheet};
 
@@ -11,8 +14,8 @@ use crate::reader::{self, SheetCell, WorkbookSheet};
 /// 2A) — re-exported here so every existing `vm::X` / `crate::vm::X`
 /// reference across the codebase keeps resolving unchanged.
 pub use crate::types::{
-    ArrayBound, CellContent, ExcelError, MAX_ARRAY_ELEMENTS, Variant, VbaArray,
-    parse_cell_addr, parse_range_addr, serial_to_display,
+    ArrayBound, CellContent, ExcelError, MAX_ARRAY_ELEMENTS, Variant, VbaArray, parse_cell_addr,
+    parse_range_addr, serial_to_display,
 };
 
 /// A procedure's own `On Error` state — real VBA scopes this per Sub/
@@ -230,7 +233,12 @@ pub enum CalculationMode {
 
 /// Signals emitted by Exit For / Exit Do / Exit Sub / Exit Function.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ExitKind { For, Do, Sub, Function }
+pub enum ExitKind {
+    For,
+    Do,
+    Sub,
+    Function,
+}
 
 /// A 1-based inclusive `((row1,col1),(row2,col2))` rect (Milestone B6c2) —
 /// a private per-module alias, not a shared type, matching this codebase's
@@ -317,7 +325,11 @@ impl Interval {
     fn clip(&self, lo: u32, hi: u32) -> Option<Interval> {
         let start = self.start.max(lo);
         let end = self.end.min(hi);
-        if start <= end { Some(Interval { start, end }) } else { None }
+        if start <= end {
+            Some(Interval { start, end })
+        } else {
+            None
+        }
     }
 }
 
@@ -333,13 +345,21 @@ fn visible_runs(lo: u32, hi: u32, hidden: &[Interval]) -> Vec<Interval> {
     let mut cursor = lo;
     for h in &clipped {
         if h.start > cursor {
-            runs.push(Interval { start: cursor, end: h.start - 1 });
+            runs.push(Interval {
+                start: cursor,
+                end: h.start - 1,
+            });
         }
         cursor = cursor.max(h.end.saturating_add(1));
-        if cursor > hi { break; }
+        if cursor > hi {
+            break;
+        }
     }
     if cursor <= hi {
-        runs.push(Interval { start: cursor, end: hi });
+        runs.push(Interval {
+            start: cursor,
+            end: hi,
+        });
     }
     runs
 }
@@ -505,12 +525,14 @@ enum WithValue {
 fn expect_range_ref(obj: ObjectRef, context: &str) -> Result<RangeRef, String> {
     match obj {
         ObjectRef::Range(r) => Ok(r),
-        ObjectRef::Worksheet(_) => {
-            Err(format!("{}: expected a Range object, got a Worksheet reference", context))
-        }
-        ObjectRef::Workbook => {
-            Err(format!("{}: expected a Range object, got a Workbook reference", context))
-        }
+        ObjectRef::Worksheet(_) => Err(format!(
+            "{}: expected a Range object, got a Worksheet reference",
+            context
+        )),
+        ObjectRef::Workbook => Err(format!(
+            "{}: expected a Range object, got a Workbook reference",
+            context
+        )),
         ObjectRef::Nothing => Err(OBJECT_NOT_SET.to_string()),
     }
 }
@@ -550,7 +572,7 @@ pub struct Vm {
     /// replaced.
     call_stack: Vec<CallFrame>,
     user_funcs: HashMap<String, FuncDef>,
-    user_subs:  HashMap<String, SubDef>,
+    user_subs: HashMap<String, SubDef>,
     /// Workbook-level named ranges: lowercase name → address string (e.g. "A1:B5").
     pub named_ranges: HashMap<String, String>,
     /// User-defined types: lowercase type name → vec of (field_name, vba_type).
@@ -704,7 +726,7 @@ impl Vm {
             pending_goto: None,
             call_stack: Vec::new(),
             user_funcs: HashMap::new(),
-            user_subs:  HashMap::new(),
+            user_subs: HashMap::new(),
             named_ranges: HashMap::new(),
             type_defs: HashMap::new(),
             col_rows: HashMap::new(),
@@ -791,8 +813,11 @@ impl Vm {
     /// Resolve a range address, expanding named ranges if needed.
     /// Accepts both "A1:B3" syntax and registered range names (case-insensitive).
     fn resolve_range_addr(&self, addr: &str) -> Option<((u32, u32), (u32, u32))> {
-        if let Some(r) = parse_range_addr(addr) { return Some(r); }
-        self.named_ranges.get(&addr.to_lowercase())
+        if let Some(r) = parse_range_addr(addr) {
+            return Some(r);
+        }
+        self.named_ranges
+            .get(&addr.to_lowercase())
             .and_then(|real| parse_range_addr(real))
     }
 
@@ -802,22 +827,31 @@ impl Vm {
     /// sheet-range write, formula evaluation), which have no need for
     /// comma-separated addresses.
     fn resolve_multi_area_addr(&self, addr: &str) -> Option<Vec<Rect>> {
-        if let Some(r) = parse_multi_area_addr(addr) { return Some(r); }
-        self.named_ranges.get(&addr.to_lowercase())
+        if let Some(r) = parse_multi_area_addr(addr) {
+            return Some(r);
+        }
+        self.named_ranges
+            .get(&addr.to_lowercase())
             .and_then(|real| parse_multi_area_addr(real))
     }
 
     pub fn cells(&self) -> &HashMap<(u32, u32), CellContent> {
-        self.sheets.get(&self.active_sheet).expect("active sheet must exist")
+        self.sheets
+            .get(&self.active_sheet)
+            .expect("active sheet must exist")
     }
 
     pub fn cells_mut(&mut self) -> &mut HashMap<(u32, u32), CellContent> {
         self.cell_index_dirty = true;
-        self.sheets.get_mut(&self.active_sheet).expect("active sheet must exist")
+        self.sheets
+            .get_mut(&self.active_sheet)
+            .expect("active sheet must exist")
     }
 
     fn rebuild_cell_index(&mut self) {
-        let pairs: Vec<(u32, u32)> = self.cells().iter()
+        let pairs: Vec<(u32, u32)> = self
+            .cells()
+            .iter()
             .filter(|(_, cell)| !matches!(cell.value, Variant::Empty))
             .map(|(&(r, c), _)| (r, c))
             .collect();
@@ -886,7 +920,12 @@ impl Vm {
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 WithValue::Range(RangeRef::single(
                     self.active_sheet.clone(),
-                    Rect { start_row: r, start_col: c, end_row: r, end_col: c },
+                    Rect {
+                        start_row: r,
+                        start_col: c,
+                        end_row: r,
+                        end_col: c,
+                    },
                 ))
             }
             // A bare identifier: the parser can't know its type, so decide
@@ -918,7 +957,9 @@ impl Vm {
         let mut result = Ok(());
         for s in body {
             result = self.exec_stmt(s);
-            if result.is_err() || self.exit_flag.is_some() { break; }
+            if result.is_err() || self.exit_flag.is_some() {
+                break;
+            }
         }
         self.with_stack.pop();
         result
@@ -931,7 +972,10 @@ impl Vm {
     /// just a runtime one, since a bare `.member` can now appear anywhere a
     /// statement or expression can.
     fn current_with(&self) -> Result<WithValue, String> {
-        self.with_stack.last().cloned().ok_or_else(|| OBJECT_NOT_SET.to_string())
+        self.with_stack
+            .last()
+            .cloned()
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())
     }
 
     /// Resolves a `.Cells(r, c)` / `.Range("addr")` qualifier inside a With
@@ -986,13 +1030,20 @@ impl Vm {
             if let Some((sheet, r, c)) = self.resolve_with_qualified_cell(member)? {
                 let target = RangeRef::single(
                     sheet,
-                    Rect { start_row: r, start_col: c, end_row: r, end_col: c },
+                    Rect {
+                        start_row: r,
+                        start_col: c,
+                        end_row: r,
+                        end_col: c,
+                    },
                 );
                 self.write_range_ref_value(&target, is_formula, &v)?;
             }
             return Ok(());
         }
-        let WithMember::Fields(fields) = member else { unreachable!("guarded above") };
+        let WithMember::Fields(fields) = member else {
+            unreachable!("guarded above")
+        };
         match self.current_with()? {
             WithValue::Range(r) => {
                 let f = fields.first().map(String::as_str).unwrap_or("");
@@ -1008,7 +1059,9 @@ impl Vm {
                 // `.a = 1` / `.a.b = 1` on a UDT target — the same
                 // `nested_set` path `Stmt::RecordSetNested` uses, which also
                 // covers the single-field case.
-                let target = self.variables.entry(var)
+                let target = self
+                    .variables
+                    .entry(var)
                     .or_insert_with(|| Variant::Record(HashMap::new()));
                 nested_set(target, fields, v);
             }
@@ -1167,7 +1220,12 @@ impl Vm {
     /// failure mode — so evidence is explicitly cleared for that case
     /// rather than left at whatever an earlier, unrelated operation set;
     /// the returned message is still correct, just without extra evidence.
-    fn vba_array_oob_error_for(&mut self, name: &str, indices: &[i64], bounds: &[ArrayBound]) -> String {
+    fn vba_array_oob_error_for(
+        &mut self,
+        name: &str,
+        indices: &[i64],
+        bounds: &[ArrayBound],
+    ) -> String {
         if indices.len() == bounds.len() {
             for (&sub, bound) in indices.iter().zip(bounds.iter()) {
                 if sub < bound.lower || sub > bound.upper {
@@ -1201,7 +1259,10 @@ impl Vm {
     /// Evaluates `arr(i, j, ...)`-style subscript `Expr`s into the `i64`
     /// indices `VbaArray::get`/`set`/`linear_index` take.
     fn eval_array_indices(&mut self, indices: &[Expr]) -> Result<Vec<i64>, String> {
-        indices.iter().map(|e| Ok(to_f64(&self.eval_expr(e)?)? as i64)).collect()
+        indices
+            .iter()
+            .map(|e| Ok(to_f64(&self.eval_expr(e)?)? as i64))
+            .collect()
     }
 
     /// Evaluates `LBound`/`UBound`'s optional second (dimension) argument —
@@ -1283,12 +1344,19 @@ impl Vm {
     fn eval_object_expr(&mut self, expr: &ObjectExpr) -> Result<ObjectRef, String> {
         match expr {
             ObjectExpr::RangeLit(addr) => {
-                let areas = self.resolve_multi_area_addr(addr)
+                let areas = self
+                    .resolve_multi_area_addr(addr)
                     .ok_or_else(|| format!("Range: invalid address '{}'", addr))?;
-                Ok(ObjectRef::Range(RangeRef { sheet: self.active_sheet.clone(), areas }))
+                Ok(ObjectRef::Range(RangeRef {
+                    sheet: self.active_sheet.clone(),
+                    areas,
+                }))
             }
             ObjectExpr::Var(name) => self.object_variables.get(name).cloned().ok_or_else(|| {
-                format!("Object variable '{}' is not set (Set was never called, or it holds Nothing)", name)
+                format!(
+                    "Object variable '{}' is not set (Set was never called, or it holds Nothing)",
+                    name
+                )
             }),
             ObjectExpr::Union(parts) => {
                 let mut areas: Vec<Rect> = Vec::new();
@@ -1315,18 +1383,28 @@ impl Vm {
                 if i < 1 || i as usize > r.areas.len() {
                     return Err(format!(
                         "Areas: index {} out of range (range has {} area{})",
-                        i, r.areas.len(), if r.areas.len() == 1 { "" } else { "s" }
+                        i,
+                        r.areas.len(),
+                        if r.areas.len() == 1 { "" } else { "s" }
                     ));
                 }
-                Ok(ObjectRef::Range(RangeRef::single(r.sheet.clone(), r.areas[(i - 1) as usize])))
+                Ok(ObjectRef::Range(RangeRef::single(
+                    r.sheet.clone(),
+                    r.areas[(i - 1) as usize],
+                )))
             }
             ObjectExpr::SpecialCellsVisible(base) => {
                 let r = expect_range_ref(self.eval_object_expr(base)?, "SpecialCells")?;
                 let areas = self.visible_areas(&r.sheet, &r.areas);
                 if areas.is_empty() {
-                    return Err("SpecialCells: no visible cells were found (Error 1004)".to_string());
+                    return Err(
+                        "SpecialCells: no visible cells were found (Error 1004)".to_string()
+                    );
                 }
-                Ok(ObjectRef::Range(RangeRef { sheet: r.sheet, areas }))
+                Ok(ObjectRef::Range(RangeRef {
+                    sheet: r.sheet,
+                    areas,
+                }))
             }
         }
     }
@@ -1353,8 +1431,10 @@ impl Vm {
             for rr in &row_runs {
                 for cc in &col_runs {
                     out.push(Rect {
-                        start_row: rr.start, start_col: cc.start,
-                        end_row: rr.end, end_col: cc.end,
+                        start_row: rr.start,
+                        start_col: cc.start,
+                        end_row: rr.end,
+                        end_col: cc.end,
                     });
                 }
             }
@@ -1374,7 +1454,10 @@ impl Vm {
         })?;
         let sheet_cells = self.sheets.get(&r.sheet);
         let get = |row: u32, col: u32| {
-            sheet_cells.and_then(|s| s.get(&(row, col))).map(|c| c.value.clone()).unwrap_or(Variant::Empty)
+            sheet_cells
+                .and_then(|s| s.get(&(row, col)))
+                .map(|c| c.value.clone())
+                .unwrap_or(Variant::Empty)
         };
         if area.start_row == area.end_row && area.start_col == area.end_col {
             Ok(get(area.start_row, area.start_col))
@@ -1391,7 +1474,12 @@ impl Vm {
     /// (Milestone B7c) — the write-side twin of `read_range_ref_value`,
     /// mirroring `Stmt::RangeWrite`'s fill-the-whole-rect behavior but
     /// against the range's own captured sheet.
-    fn write_range_ref_value(&mut self, r: &RangeRef, is_formula: bool, v: &Variant) -> Result<(), String> {
+    fn write_range_ref_value(
+        &mut self,
+        r: &RangeRef,
+        is_formula: bool,
+        v: &Variant,
+    ) -> Result<(), String> {
         let area = *r.single_rect().ok_or_else(|| {
             "Range.Value: multi-area range has no single .Value — write through .Areas(n) instead".to_string()
         })?;
@@ -1416,7 +1504,13 @@ impl Vm {
             if let Some(cells) = self.sheets.get_mut(&r.sheet) {
                 for row in area.start_row..=area.end_row {
                     for col in area.start_col..=area.end_col {
-                        cells.insert((row, col), CellContent { formula: None, value: v.clone() });
+                        cells.insert(
+                            (row, col),
+                            CellContent {
+                                formula: None,
+                                value: v.clone(),
+                            },
+                        );
                     }
                 }
             }
@@ -1440,17 +1534,25 @@ impl Vm {
         let empty: HashMap<(u32, u32), CellContent> = HashMap::new();
         let sheet_cells = self.sheets.get(&sheet).unwrap_or(&empty);
         let get = |row: u32, col: u32| -> Variant {
-            sheet_cells.get(&(row, col)).map(|c| c.value.clone()).unwrap_or(Variant::Empty)
+            sheet_cells
+                .get(&(row, col))
+                .map(|c| c.value.clone())
+                .unwrap_or(Variant::Empty)
         };
         let first = areas[0];
         let cells: Vec<Vec<Variant>> = if areas.len() == 1 {
             (first.start_row..=first.end_row)
-                .map(|r| (first.start_col..=first.end_col).map(|c| get(r, c)).collect())
+                .map(|r| {
+                    (first.start_col..=first.end_col)
+                        .map(|c| get(r, c))
+                        .collect()
+                })
                 .collect()
         } else {
             Vec::new()
         };
-        let area_cells: Vec<Vec<Vec<Variant>>> = areas.iter()
+        let area_cells: Vec<Vec<Vec<Variant>>> = areas
+            .iter()
             .map(|a| {
                 (a.start_row..=a.end_row)
                     .map(|r| (a.start_col..=a.end_col).map(|c| get(r, c)).collect())
@@ -1491,8 +1593,11 @@ impl Vm {
             (anchor_row, anchor_col),
             (anchor_row + fill_rows - 1, anchor_col + fill_cols - 1),
         );
-        let dest_merges: Vec<MergeRect> =
-            self.merged_ranges.get(dest_sheet).cloned().unwrap_or_default();
+        let dest_merges: Vec<MergeRect> = self
+            .merged_ranges
+            .get(dest_sheet)
+            .cloned()
+            .unwrap_or_default();
 
         // 1. Anchor cell is a covered (non-top-left) cell of an existing
         // merge — applies regardless of destination shape.
@@ -1543,8 +1648,11 @@ impl Vm {
         if !single_cell_source
             && let Some(src_rect @ ((sr1, sc1), _)) = self.resolve_range_addr(&clip.source_addr)
         {
-            let src_merges: Vec<MergeRect> =
-                self.merged_ranges.get(&clip.src_sheet).cloned().unwrap_or_default();
+            let src_merges: Vec<MergeRect> = self
+                .merged_ranges
+                .get(&clip.src_sheet)
+                .cloned()
+                .unwrap_or_default();
 
             let mut src_rel: Vec<MergeRect> = src_merges
                 .iter()
@@ -1559,7 +1667,11 @@ impl Vm {
                 .map(|&((r1, c1), (r2, c2))| {
                     let (rr1, rc1) = (r1 - anchor_row, c1 - anchor_col);
                     let (rr2, rc2) = (r2 - anchor_row, c2 - anchor_col);
-                    if transpose { ((rc1, rr1), (rc2, rr2)) } else { ((rr1, rc1), (rr2, rc2)) }
+                    if transpose {
+                        ((rc1, rr1), (rc2, rr2))
+                    } else {
+                        ((rr1, rc1), (rr2, rc2))
+                    }
                 })
                 .collect();
             dest_rel.sort();
@@ -1579,9 +1691,7 @@ impl Vm {
                         conflicts,
                         copy_span: Some(clip.span),
                     });
-                return Err(
-                    "Paste error: source and destination merge layouts differ".to_string()
-                );
+                return Err("Paste error: source and destination merge layouts differ".to_string());
             }
         }
 
@@ -1624,8 +1734,8 @@ impl Vm {
         // unparseable destination or a single-area-only paste falls
         // through untouched to the existing logic below.
         let dest_areas_probe = self.resolve_multi_area_addr(dest_addr);
-        let is_multi_area = clip.areas.len() > 1
-            || dest_areas_probe.as_ref().is_some_and(|d| d.len() > 1);
+        let is_multi_area =
+            clip.areas.len() > 1 || dest_areas_probe.as_ref().is_some_and(|d| d.len() > 1);
         if is_multi_area {
             // Milestone B7c item 5: the one multi-area paste shape that's
             // now actually executed rather than only diagnosed — source
@@ -1652,7 +1762,10 @@ impl Vm {
                 && clip.areas.len() > 1
                 && !transpose
                 && dest_areas.len() == clip.areas.len()
-                && clip.areas.iter().zip(dest_areas.iter())
+                && clip
+                    .areas
+                    .iter()
+                    .zip(dest_areas.iter())
                     .all(|(s, d)| s.rows() == d.rows() && s.cols() == d.cols())
             {
                 for (i, dst_area) in dest_areas.iter().enumerate() {
@@ -1662,7 +1775,10 @@ impl Vm {
                             let v = clip.area_cells[i][r as usize][c as usize].clone();
                             self.cells_mut().insert(
                                 (dst_area.start_row + r, dst_area.start_col + c),
-                                CellContent { formula: None, value: v },
+                                CellContent {
+                                    formula: None,
+                                    value: v,
+                                },
                             );
                         }
                     }
@@ -1760,10 +1876,11 @@ impl Vm {
 
         if source_areas.len() > 1 && dest_areas.len() == 1 {
             let count = source_areas.len();
-            self.last_resolution_failure = Some(ResolutionFailureKind::MultiAreaToSingleAreaPaste {
-                source_areas,
-                destination_areas: dest_areas,
-            });
+            self.last_resolution_failure =
+                Some(ResolutionFailureKind::MultiAreaToSingleAreaPaste {
+                    source_areas,
+                    destination_areas: dest_areas,
+                });
             return format!(
                 "Paste error: source has {} disjoint areas but the destination is a single area",
                 count
@@ -1773,10 +1890,11 @@ impl Vm {
         if source_areas.len() > 1 && dest_areas.len() > 1 {
             if source_areas.len() != dest_areas.len() {
                 let (src_count, dst_count) = (source_areas.len(), dest_areas.len());
-                self.last_resolution_failure = Some(ResolutionFailureKind::MultiAreaCountMismatch {
-                    source_areas,
-                    destination_areas: dest_areas,
-                });
+                self.last_resolution_failure =
+                    Some(ResolutionFailureKind::MultiAreaCountMismatch {
+                        source_areas,
+                        destination_areas: dest_areas,
+                    });
                 return format!(
                     "Paste error: source has {} areas but destination has {} areas",
                     src_count, dst_count
@@ -1786,11 +1904,12 @@ impl Vm {
                 if s.rows() != d.rows() || s.cols() != d.cols() {
                     let (area_index, source_area, destination_area) = (i + 1, *s, *d);
                     let (sr, sc, dr, dc) = (s.rows(), s.cols(), d.rows(), d.cols());
-                    self.last_resolution_failure = Some(ResolutionFailureKind::MultiAreaShapeMismatch {
-                        area_index,
-                        source_area,
-                        destination_area,
-                    });
+                    self.last_resolution_failure =
+                        Some(ResolutionFailureKind::MultiAreaShapeMismatch {
+                            area_index,
+                            source_area,
+                            destination_area,
+                        });
                     return format!(
                         "Paste error: area {} shape mismatch (source {}x{}, destination {}x{})",
                         area_index, sr, sc, dr, dc
@@ -1850,15 +1969,19 @@ impl Vm {
         // increasing order, columns come from non-overlapping <col>
         // spans) — `saturating_sub` is just arithmetic hygiene against a
         // malformed input, not validation of a case this milestone models.
-        let hidden_row_count: u64 =
-            hidden_rows.iter().map(|iv| (iv.end - iv.start + 1) as u64).sum();
-        let hidden_col_count: u64 =
-            hidden_columns.iter().map(|iv| (iv.end - iv.start + 1) as u64).sum();
+        let hidden_row_count: u64 = hidden_rows
+            .iter()
+            .map(|iv| (iv.end - iv.start + 1) as u64)
+            .sum();
+        let hidden_col_count: u64 = hidden_columns
+            .iter()
+            .map(|iv| (iv.end - iv.start + 1) as u64)
+            .sum();
         let rows = rect.rows() as u64;
         let cols = rect.cols() as u64;
         let total_cells = rows * cols;
-        let visible_cells = rows.saturating_sub(hidden_row_count)
-            * cols.saturating_sub(hidden_col_count);
+        let visible_cells =
+            rows.saturating_sub(hidden_row_count) * cols.saturating_sub(hidden_col_count);
 
         Some(HiddenCellsObservation {
             sheet: clip.src_sheet.clone(),
@@ -1933,10 +2056,12 @@ impl Vm {
             self.active_sheet = prev;
             let key = sheet_data.name.to_lowercase();
             if !sheet_data.merged_ranges.is_empty() {
-                self.merged_ranges.insert(key.clone(), sheet_data.merged_ranges.clone());
+                self.merged_ranges
+                    .insert(key.clone(), sheet_data.merged_ranges.clone());
             }
             if !sheet_data.raw_style_indices.is_empty() {
-                self.cell_style_indices.insert(key.clone(), sheet_data.raw_style_indices.clone());
+                self.cell_style_indices
+                    .insert(key.clone(), sheet_data.raw_style_indices.clone());
             }
             if !sheet_data.hidden_rows.is_empty() || !sheet_data.hidden_columns.is_empty() {
                 self.sheet_visibility.insert(
@@ -2000,8 +2125,16 @@ impl Vm {
         self.call_stack.clear();
         self.option_base = program.option_base;
         // Cache user-defined functions, subs, and type definitions.
-        self.user_funcs = program.funcs.iter().map(|f| (f.name.clone(), f.clone())).collect();
-        self.user_subs  = program.subs.iter().map(|s| (s.name.clone(), s.clone())).collect();
+        self.user_funcs = program
+            .funcs
+            .iter()
+            .map(|f| (f.name.clone(), f.clone()))
+            .collect();
+        self.user_subs = program
+            .subs
+            .iter()
+            .map(|s| (s.name.clone(), s.clone()))
+            .collect();
         for td in &program.type_defs {
             self.type_defs.insert(td.name.clone(), td.fields.clone());
         }
@@ -2019,7 +2152,9 @@ impl Vm {
         }
 
         let name = sub_name.to_lowercase();
-        let sub = self.user_subs.get(&name)
+        let sub = self
+            .user_subs
+            .get(&name)
             .ok_or_else(|| format!("Sub '{}' not found", sub_name))?
             .clone();
         self.call_sub_def(&sub, &[])
@@ -2069,13 +2204,23 @@ impl Vm {
         // simplification `user_funcs`/`user_subs`/`type_defs` already
         // make), so this takes the first module that declares one rather
         // than modeling true per-module scoping.
-        self.option_base = modules.iter().map(|(_, p)| p.option_base).find(|&b| b != 0).unwrap_or(0);
+        self.option_base = modules
+            .iter()
+            .map(|(_, p)| p.option_base)
+            .find(|&b| b != 0)
+            .unwrap_or(0);
         self.user_funcs.clear();
         self.user_subs.clear();
         for (_, program) in modules {
-            for f in &program.funcs { self.user_funcs.insert(f.name.clone(), f.clone()); }
-            for s in &program.subs { self.user_subs.insert(s.name.clone(), s.clone()); }
-            for td in &program.type_defs { self.type_defs.insert(td.name.clone(), td.fields.clone()); }
+            for f in &program.funcs {
+                self.user_funcs.insert(f.name.clone(), f.clone());
+            }
+            for s in &program.subs {
+                self.user_subs.insert(s.name.clone(), s.clone());
+            }
+            for td in &program.type_defs {
+                self.type_defs.insert(td.name.clone(), td.fields.clone());
+            }
         }
 
         // Same pre-flight compile-time check as `run_sub`, run once per
@@ -2109,11 +2254,18 @@ impl Vm {
     }
 
     fn call_sub_def(&mut self, sub: &SubDef, args: &[Variant]) -> Result<(), String> {
-        let saved: Vec<(String, Option<Variant>)> = sub.params.iter().enumerate().map(|(i, p)| {
-            let old = self.variables.get(p).cloned();
-            if let Some(v) = args.get(i) { self.variables.insert(p.clone(), v.clone()); }
-            (p.clone(), old)
-        }).collect();
+        let saved: Vec<(String, Option<Variant>)> = sub
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let old = self.variables.get(p).cloned();
+                if let Some(v) = args.get(i) {
+                    self.variables.insert(p.clone(), v.clone());
+                }
+                (p.clone(), old)
+            })
+            .collect();
         let body = sub.body.clone();
         // A fresh frame per call — real VBA's `On Error` scope is the
         // procedure, not the call site, so this callee starts with no
@@ -2121,54 +2273,93 @@ impl Vm {
         // (see `exec_body`'s doc comment). Popped before propagating any
         // error, so the caller's own frame is what a failure that escapes
         // this call is actually checked against.
-        self.call_stack.push(CallFrame { procedure_name: sub.name.clone(), error_mode: ErrorMode::Disabled });
+        self.call_stack.push(CallFrame {
+            procedure_name: sub.name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
         let result = self.exec_body(&body, |f| matches!(f, ExitKind::Sub));
         self.call_stack.pop();
         result?;
         for (p, old) in saved {
-            match old { Some(v) => { self.variables.insert(p, v); } None => { self.variables.remove(&p); } }
+            match old {
+                Some(v) => {
+                    self.variables.insert(p, v);
+                }
+                None => {
+                    self.variables.remove(&p);
+                }
+            }
         }
         Ok(())
     }
 
     fn call_func_def(&mut self, func: &FuncDef, args: &[Variant]) -> Result<Variant, String> {
-        let saved: Vec<(String, Option<Variant>)> = func.params.iter().enumerate().map(|(i, p)| {
-            let old = self.variables.get(p).cloned();
-            if let Some(v) = args.get(i) { self.variables.insert(p.clone(), v.clone()); }
-            (p.clone(), old)
-        }).collect();
+        let saved: Vec<(String, Option<Variant>)> = func
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let old = self.variables.get(p).cloned();
+                if let Some(v) = args.get(i) {
+                    self.variables.insert(p.clone(), v.clone());
+                }
+                (p.clone(), old)
+            })
+            .collect();
         let ret_name = func.name.clone();
         let old_ret = self.variables.remove(&ret_name);
         let body = func.body.clone();
-        self.call_stack.push(CallFrame { procedure_name: func.name.clone(), error_mode: ErrorMode::Disabled });
+        self.call_stack.push(CallFrame {
+            procedure_name: func.name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
         let result = self.exec_body(&body, |f| matches!(f, ExitKind::Function | ExitKind::Sub));
         self.call_stack.pop();
         result?;
         let ret_val = self.variables.remove(&ret_name).unwrap_or(Variant::Empty);
         for (p, old) in saved {
-            match old { Some(v) => { self.variables.insert(p, v); } None => { self.variables.remove(&p); } }
+            match old {
+                Some(v) => {
+                    self.variables.insert(p, v);
+                }
+                None => {
+                    self.variables.remove(&p);
+                }
+            }
         }
-        if let Some(v) = old_ret { self.variables.insert(ret_name, v); }
+        if let Some(v) = old_ret {
+            self.variables.insert(ret_name, v);
+        }
         Ok(ret_val)
     }
 
     /// Execute a body slice with label-jump support (for GoTo and On Error GoTo).
     /// The existing per-statement `exec_stmt` error catch (resume_next) is preserved.
     fn exec_body<F>(&mut self, stmts: &[SpannedStmt], is_exit: F) -> Result<(), String>
-    where F: Fn(&ExitKind) -> bool
+    where
+        F: Fn(&ExitKind) -> bool,
     {
         let mut i = 0;
         while i < stmts.len() {
             // Handle pending unconditional GoTo
             if let Some(label) = self.pending_goto.take() {
-                match stmts.iter().position(|s| matches!(&s.stmt, Stmt::Label(l) if l == &label)) {
-                    Some(pos) => { i = pos; continue; }
-                    None      => return Err(format!("GoTo: label '{}' not found", label)),
+                match stmts
+                    .iter()
+                    .position(|s| matches!(&s.stmt, Stmt::Label(l) if l == &label))
+                {
+                    Some(pos) => {
+                        i = pos;
+                        continue;
+                    }
+                    None => return Err(format!("GoTo: label '{}' not found", label)),
                 }
             }
 
             if let Some(ref f) = self.exit_flag {
-                if is_exit(f) { self.exit_flag = None; break; }
+                if is_exit(f) {
+                    self.exit_flag = None;
+                    break;
+                }
                 break; // other exit kinds bubble up
             }
 
@@ -2226,15 +2417,18 @@ impl Vm {
     }
 
     fn exec_stmt(&mut self, spanned: &SpannedStmt) -> Result<(), String> {
-        if self.exit_flag.is_some() { return Ok(()); }
+        if self.exit_flag.is_some() {
+            return Ok(());
+        }
         self.current_span = Some(spanned.span);
         let result = self.exec_stmt_inner(&spanned.stmt);
         match result {
             Ok(()) => Ok(()),
             // `On Error Resume Next` is not honored in strict-resolution
             // mode (`diagnose`) — see the field doc on `strict_resolution`.
-            Err(e) if !self.strict_resolution
-                && matches!(self.current_error_mode(), Some(ErrorMode::ResumeNext)) =>
+            Err(e)
+                if !self.strict_resolution
+                    && matches!(self.current_error_mode(), Some(ErrorMode::ResumeNext)) =>
             {
                 self.record_error(&e);
                 Ok(())
@@ -2255,33 +2449,60 @@ impl Vm {
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 let v = self.eval_expr(value)?;
-                self.cells_mut().insert((r, c), CellContent { formula: None, value: v });
+                self.cells_mut().insert(
+                    (r, c),
+                    CellContent {
+                        formula: None,
+                        value: v,
+                    },
+                );
             }
             Stmt::SetCalcMode(mode) => {
                 let m = match mode {
                     CalcModeValue::Automatic => CalculationMode::Automatic,
-                    CalcModeValue::Manual    => CalculationMode::Manual,
+                    CalcModeValue::Manual => CalculationMode::Manual,
                 };
                 self.set_calc_mode(m)?;
             }
-            Stmt::For { var, from, to, step, body } => {
-                let mut i  = to_f64(&self.eval_expr(from)?)?;
-                let to_f   = to_f64(&self.eval_expr(to)?)?;
-                let step_f = match step { Some(s) => to_f64(&self.eval_expr(s)?)?, None => 1.0 };
-                if step_f == 0.0 { return Err("For loop: step cannot be zero".into()); }
+            Stmt::For {
+                var,
+                from,
+                to,
+                step,
+                body,
+            } => {
+                let mut i = to_f64(&self.eval_expr(from)?)?;
+                let to_f = to_f64(&self.eval_expr(to)?)?;
+                let step_f = match step {
+                    Some(s) => to_f64(&self.eval_expr(s)?)?,
+                    None => 1.0,
+                };
+                if step_f == 0.0 {
+                    return Err("For loop: step cannot be zero".into());
+                }
                 'for_loop: while (step_f > 0.0 && i <= to_f) || (step_f < 0.0 && i >= to_f) {
                     self.check_deadline()?;
                     self.variables.insert(var.clone(), as_int_if_whole(i));
                     for s in body {
                         self.exec_stmt(s)?;
-                        if matches!(self.exit_flag, Some(ExitKind::For)) { self.exit_flag = None; break 'for_loop; }
-                        if self.exit_flag.is_some() { return Ok(()); }
+                        if matches!(self.exit_flag, Some(ExitKind::For)) {
+                            self.exit_flag = None;
+                            break 'for_loop;
+                        }
+                        if self.exit_flag.is_some() {
+                            return Ok(());
+                        }
                     }
                     i += step_f;
                 }
             }
-            Stmt::ForEach { var, range_addr, body } => {
-                let ((r1, c1), (r2, c2)) = self.resolve_range_addr(range_addr)
+            Stmt::ForEach {
+                var,
+                range_addr,
+                body,
+            } => {
+                let ((r1, c1), (r2, c2)) = self
+                    .resolve_range_addr(range_addr)
                     .ok_or_else(|| format!("ForEach: invalid range '{}'", range_addr))?;
                 'fe_outer: for r in r1..=r2 {
                     for c in c1..=c2 {
@@ -2302,28 +2523,59 @@ impl Vm {
                             var.clone(),
                             ObjectRef::Range(RangeRef::single(
                                 self.active_sheet.clone(),
-                                Rect { start_row: r, start_col: c, end_row: r, end_col: c },
+                                Rect {
+                                    start_row: r,
+                                    start_col: c,
+                                    end_row: r,
+                                    end_col: c,
+                                },
                             )),
                         );
                         for s in body {
                             self.exec_stmt(s)?;
-                            if matches!(self.exit_flag, Some(ExitKind::For)) { self.exit_flag = None; break 'fe_outer; }
-                            if self.exit_flag.is_some() { return Ok(()); }
+                            if matches!(self.exit_flag, Some(ExitKind::For)) {
+                                self.exit_flag = None;
+                                break 'fe_outer;
+                            }
+                            if self.exit_flag.is_some() {
+                                return Ok(());
+                            }
                         }
                     }
                 }
             }
-            Stmt::If { condition, then_body, else_body } => {
-                let branch = if is_truthy(&self.eval_expr(condition)?) { then_body } else { else_body };
-                for s in branch { self.exec_stmt(s)?; if self.exit_flag.is_some() { return Ok(()); } }
+            Stmt::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                let branch = if is_truthy(&self.eval_expr(condition)?) {
+                    then_body
+                } else {
+                    else_body
+                };
+                for s in branch {
+                    self.exec_stmt(s)?;
+                    if self.exit_flag.is_some() {
+                        return Ok(());
+                    }
+                }
             }
-            Stmt::DoLoop { pre_cond, post_cond, body } => {
+            Stmt::DoLoop {
+                pre_cond,
+                post_cond,
+                body,
+            } => {
                 let check = |vm: &mut Vm, cond: &Option<(bool, Expr)>| -> Result<bool, String> {
                     match cond {
                         None => Ok(true),
                         Some((is_until, expr)) => {
                             let v = vm.eval_expr(expr)?;
-                            Ok(if *is_until { !is_truthy(&v) } else { is_truthy(&v) })
+                            Ok(if *is_until {
+                                !is_truthy(&v)
+                            } else {
+                                is_truthy(&v)
+                            })
                         }
                     }
                 };
@@ -2331,13 +2583,24 @@ impl Vm {
                     self.check_deadline()?;
                     for s in body.clone() {
                         self.exec_stmt(&s)?;
-                        if matches!(self.exit_flag, Some(ExitKind::Do)) { self.exit_flag = None; break 'do_loop; }
-                        if self.exit_flag.is_some() { return Ok(()); }
+                        if matches!(self.exit_flag, Some(ExitKind::Do)) {
+                            self.exit_flag = None;
+                            break 'do_loop;
+                        }
+                        if self.exit_flag.is_some() {
+                            return Ok(());
+                        }
                     }
-                    if !check(self, post_cond)? { break 'do_loop; }
+                    if !check(self, post_cond)? {
+                        break 'do_loop;
+                    }
                 }
             }
-            Stmt::SelectCase { expr, cases, else_body } => {
+            Stmt::SelectCase {
+                expr,
+                cases,
+                else_body,
+            } => {
                 let val = self.eval_expr(expr)?;
                 let mut matched = false;
                 'outer: for (matchers, body) in cases {
@@ -2345,37 +2608,55 @@ impl Vm {
                         let hit = match m {
                             CaseMatch::Value(v) => vba_eq(&val, &self.eval_expr(v)?),
                             CaseMatch::Range(lo, hi) => {
-                                let l = self.eval_expr(lo)?; let h = self.eval_expr(hi)?;
-                                vba_cmp(&val, &l)? != std::cmp::Ordering::Less && vba_cmp(&val, &h)? != std::cmp::Ordering::Greater
+                                let l = self.eval_expr(lo)?;
+                                let h = self.eval_expr(hi)?;
+                                vba_cmp(&val, &l)? != std::cmp::Ordering::Less
+                                    && vba_cmp(&val, &h)? != std::cmp::Ordering::Greater
                             }
                             CaseMatch::IsOp(op, rhs) => {
                                 let r = self.eval_expr(rhs)?;
                                 match op {
-                                    VbaBinOp::Eq => vba_eq(&val, &r), VbaBinOp::Ne => !vba_eq(&val, &r),
+                                    VbaBinOp::Eq => vba_eq(&val, &r),
+                                    VbaBinOp::Ne => !vba_eq(&val, &r),
                                     VbaBinOp::Lt => vba_cmp(&val, &r)? == std::cmp::Ordering::Less,
-                                    VbaBinOp::Le => vba_cmp(&val, &r)? != std::cmp::Ordering::Greater,
-                                    VbaBinOp::Gt => vba_cmp(&val, &r)? == std::cmp::Ordering::Greater,
+                                    VbaBinOp::Le => {
+                                        vba_cmp(&val, &r)? != std::cmp::Ordering::Greater
+                                    }
+                                    VbaBinOp::Gt => {
+                                        vba_cmp(&val, &r)? == std::cmp::Ordering::Greater
+                                    }
                                     VbaBinOp::Ge => vba_cmp(&val, &r)? != std::cmp::Ordering::Less,
                                     _ => false,
                                 }
                             }
                         };
                         if hit {
-                            for s in body { self.exec_stmt(s)?; }
-                            matched = true; break 'outer;
+                            for s in body {
+                                self.exec_stmt(s)?;
+                            }
+                            matched = true;
+                            break 'outer;
                         }
                     }
                 }
-                if !matched { for s in else_body { self.exec_stmt(s)?; } }
+                if !matched {
+                    for s in else_body {
+                        self.exec_stmt(s)?;
+                    }
+                }
             }
-            Stmt::ExitFor      => self.exit_flag = Some(ExitKind::For),
-            Stmt::ExitDo       => self.exit_flag = Some(ExitKind::Do),
-            Stmt::ExitSub      => self.exit_flag = Some(ExitKind::Sub),
+            Stmt::ExitFor => self.exit_flag = Some(ExitKind::For),
+            Stmt::ExitDo => self.exit_flag = Some(ExitKind::Do),
+            Stmt::ExitSub => self.exit_flag = Some(ExitKind::Sub),
             Stmt::ExitFunction => self.exit_flag = Some(ExitKind::Function),
             Stmt::OnError { resume_next } => {
                 // `On Error Resume Next` (true) / `On Error GoTo 0` (false)
                 // — both scoped to the current frame only.
-                self.set_current_error_mode(if *resume_next { ErrorMode::ResumeNext } else { ErrorMode::Disabled });
+                self.set_current_error_mode(if *resume_next {
+                    ErrorMode::ResumeNext
+                } else {
+                    ErrorMode::Disabled
+                });
             }
             Stmt::OnErrorGoTo(label) => {
                 self.set_current_error_mode(ErrorMode::GoTo(label.clone()));
@@ -2387,7 +2668,13 @@ impl Vm {
                 self.err_help_file.clear();
                 self.err_help_context = 0;
             }
-            Stmt::ErrRaise { number, source, description, help_file, help_context } => {
+            Stmt::ErrRaise {
+                number,
+                source,
+                description,
+                help_file,
+                help_context,
+            } => {
                 let number = to_i64_rounded(&self.eval_expr(number)?)?;
                 let source = match source {
                     Some(s) => self.eval_expr(s)?.to_string(),
@@ -2414,7 +2701,7 @@ impl Vm {
                 });
                 return Err(description);
             }
-            Stmt::Label(_) => {}  // no-op during normal execution
+            Stmt::Label(_) => {} // no-op during normal execution
             Stmt::GoTo(label) => {
                 self.pending_goto = Some(label.clone());
             }
@@ -2427,7 +2714,10 @@ impl Vm {
                 self.set_current_error_mode(ErrorMode::Disabled);
             }
             Stmt::CallSub { name, args } => {
-                let arg_vals: Vec<Variant> = args.iter().map(|a| self.eval_expr(a)).collect::<Result<_, _>>()?;
+                let arg_vals: Vec<Variant> = args
+                    .iter()
+                    .map(|a| self.eval_expr(a))
+                    .collect::<Result<_, _>>()?;
                 if let Some(func) = self.user_funcs.get(name).cloned() {
                     let _ = self.call_func_def(&func, &arg_vals)?;
                 } else if let Some(sub) = self.user_subs.get(name).cloned() {
@@ -2448,16 +2738,23 @@ impl Vm {
             Stmt::RangeName { addr, name } => {
                 self.named_ranges.insert(name.to_lowercase(), addr.clone());
             }
-            Stmt::RangeWrite { addr, is_formula, value } => {
+            Stmt::RangeWrite {
+                addr,
+                is_formula,
+                value,
+            } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
                 let v = self.eval_expr(value)?;
-                let ((r1,c1),(r2,c2)) = self.resolve_range_addr(addr)
+                let ((r1, c1), (r2, c2)) = self
+                    .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeWrite: invalid address '{}'", addr))?;
                 if *is_formula {
                     let s = vba_to_str(&v);
                     for r in r1..=r2 {
-                        for c in c1..=c2 { self.set_cell_formula(r, c, &s)?; }
+                        for c in c1..=c2 {
+                            self.set_cell_formula(r, c, &s)?;
+                        }
                     }
                 } else {
                     // Batch writes: access sheet directly to avoid N dirty-flag sets
@@ -2465,7 +2762,13 @@ impl Vm {
                     if let Some(cells) = self.sheets.get_mut(&sheet) {
                         for r in r1..=r2 {
                             for c in c1..=c2 {
-                                cells.insert((r, c), CellContent { formula: None, value: v.clone() });
+                                cells.insert(
+                                    (r, c),
+                                    CellContent {
+                                        formula: None,
+                                        value: v.clone(),
+                                    },
+                                );
                             }
                         }
                     }
@@ -2475,15 +2778,25 @@ impl Vm {
             Stmt::RangeClear { addr, .. } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
-                let ((r1,c1),(r2,c2)) = self.resolve_range_addr(addr)
+                let ((r1, c1), (r2, c2)) = self
+                    .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeClear: invalid address '{}'", addr))?;
                 let sheet = self.active_sheet.clone();
                 if let Some(cells) = self.sheets.get_mut(&sheet) {
-                    for r in r1..=r2 { for c in c1..=c2 { cells.remove(&(r, c)); } }
+                    for r in r1..=r2 {
+                        for c in c1..=c2 {
+                            cells.remove(&(r, c));
+                        }
+                    }
                 }
                 self.cell_index_dirty = true;
             }
-            Stmt::RangeOffsetWrite { addr, row_off, col_off, value } => {
+            Stmt::RangeOffsetWrite {
+                addr,
+                row_off,
+                col_off,
+                value,
+            } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
                 let v = self.eval_expr(value)?;
@@ -2493,48 +2806,74 @@ impl Vm {
                 let co = to_f64(&self.eval_expr(col_off)?)? as i64;
                 let row = (base_r as i64 + ro) as u32;
                 let col = (base_c as i64 + co) as u32;
-                self.cells_mut().insert((row, col), CellContent { formula: None, value: v });
+                self.cells_mut().insert(
+                    (row, col),
+                    CellContent {
+                        formula: None,
+                        value: v,
+                    },
+                );
             }
             Stmt::RangeDelete { addr } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
-                let ((r1,_),(r2,_)) = self.resolve_range_addr(addr)
+                let ((r1, _), (r2, _)) = self
+                    .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeDelete: invalid address '{}'", addr))?;
                 let rows_del = r2 - r1 + 1;
                 // Collect cells below the deleted range and shift them up
-                let to_move: Vec<((u32,u32), CellContent)> = self.cells().iter()
-                    .filter(|((r,_),_)| *r > r2)
-                    .map(|((r,c),v)| ((*r,*c), v.clone())).collect();
-                for ((r,c),_) in &to_move { self.cells_mut().remove(&(*r,*c)); }
-                for r in r1..=r2 { self.cells_mut().retain(|&(row,_),_| row != r); }
-                for ((r,c),v) in to_move {
+                let to_move: Vec<((u32, u32), CellContent)> = self
+                    .cells()
+                    .iter()
+                    .filter(|((r, _), _)| *r > r2)
+                    .map(|((r, c), v)| ((*r, *c), v.clone()))
+                    .collect();
+                for ((r, c), _) in &to_move {
+                    self.cells_mut().remove(&(*r, *c));
+                }
+                for r in r1..=r2 {
+                    self.cells_mut().retain(|&(row, _), _| row != r);
+                }
+                for ((r, c), v) in to_move {
                     self.cells_mut().insert((r - rows_del, c), v);
                 }
             }
             Stmt::RangeInsert { addr } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
-                let ((r1,_),(r2,_)) = self.resolve_range_addr(addr)
+                let ((r1, _), (r2, _)) = self
+                    .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeInsert: invalid address '{}'", addr))?;
                 let rows_ins = r2 - r1 + 1;
                 // Shift cells at r1 and below downward
-                let to_move: Vec<((u32,u32), CellContent)> = self.cells().iter()
-                    .filter(|((r,_),_)| *r >= r1)
-                    .map(|((r,c),v)| ((*r,*c), v.clone())).collect();
-                for ((r,c),_) in &to_move { self.cells_mut().remove(&(*r,*c)); }
-                for ((r,c),v) in to_move {
+                let to_move: Vec<((u32, u32), CellContent)> = self
+                    .cells()
+                    .iter()
+                    .filter(|((r, _), _)| *r >= r1)
+                    .map(|((r, c), v)| ((*r, *c), v.clone()))
+                    .collect();
+                for ((r, c), _) in &to_move {
+                    self.cells_mut().remove(&(*r, *c));
+                }
+                for ((r, c), v) in to_move {
                     self.cells_mut().insert((r + rows_ins, c), v);
                 }
             }
-            Stmt::RangeSort { addr, key_col, descending } => {
+            Stmt::RangeSort {
+                addr,
+                key_col,
+                descending,
+            } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
-                let ((r1,c1),(r2,c2)) = self.resolve_range_addr(addr)
+                let ((r1, c1), (r2, c2)) = self
+                    .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeSort: invalid address '{}'", addr))?;
                 // key_col is 1-based absolute column; convert to 0-based offset within range
                 let key_off = (*key_col).saturating_sub(c1) as usize;
                 let mut rows: Vec<Vec<Variant>> = (r1..=r2)
-                    .map(|r| (c1..=c2).map(|c| self.get_cell(r, c)).collect()).collect();
+                    .map(|r| (c1..=c2).map(|c| self.get_cell(r, c)).collect())
+                    .collect();
                 rows.sort_by(|a, b| {
                     let va = a.get(key_off).unwrap_or(&Variant::Empty);
                     let vb = b.get(key_off).unwrap_or(&Variant::Empty);
@@ -2543,13 +2882,19 @@ impl Vm {
                 });
                 for (ri, row) in rows.iter().enumerate() {
                     for (ci, val) in row.iter().enumerate() {
-                        self.cells_mut().insert((r1 + ri as u32, c1 + ci as u32),
-                            CellContent { formula: None, value: val.clone() });
+                        self.cells_mut().insert(
+                            (r1 + ri as u32, c1 + ci as u32),
+                            CellContent {
+                                formula: None,
+                                value: val.clone(),
+                            },
+                        );
                     }
                 }
             }
             Stmt::RangeCopy { src, dst } => {
-                let areas = self.resolve_multi_area_addr(src)
+                let areas = self
+                    .resolve_multi_area_addr(src)
                     .ok_or_else(|| format!("RangeCopy: invalid source range '{}'", src))?;
                 // `resolve_multi_area_addr` never returns `Some(vec![])` — every
                 // comma-separated piece (at least 1) must itself parse.
@@ -2561,7 +2906,10 @@ impl Vm {
             }
             Stmt::RangeObjectCopy { var, dst } => {
                 self.require_live_object(var)?;
-                let obj = self.object_variables.get(var).cloned()
+                let obj = self
+                    .object_variables
+                    .get(var)
+                    .cloned()
                     .ok_or_else(|| format!("'{}' is Nothing — Set was never called", var))?;
                 let r = expect_range_ref(obj, "Copy")?;
                 let display = format!("<{}>", var);
@@ -2584,12 +2932,15 @@ impl Vm {
                     // `Set ws = ActiveSheet` silently did nothing.
                     match name.as_str() {
                         "activesheet" => {
-                            self.object_variables
-                                .insert(var.clone(), ObjectRef::Worksheet(self.active_sheet.clone()));
+                            self.object_variables.insert(
+                                var.clone(),
+                                ObjectRef::Worksheet(self.active_sheet.clone()),
+                            );
                             return Ok(());
                         }
                         "thisworkbook" | "activeworkbook" => {
-                            self.object_variables.insert(var.clone(), ObjectRef::Workbook);
+                            self.object_variables
+                                .insert(var.clone(), ObjectRef::Workbook);
                             return Ok(());
                         }
                         // `Set r = Nothing` clears ONLY this variable's own
@@ -2601,7 +2952,8 @@ impl Vm {
                         // "not a live object variable" no-op below, which is
                         // where this used to land (silently doing nothing).
                         "nothing" => {
-                            self.object_variables.insert(var.clone(), ObjectRef::Nothing);
+                            self.object_variables
+                                .insert(var.clone(), ObjectRef::Nothing);
                             return Ok(());
                         }
                         _ => {}
@@ -2654,17 +3006,35 @@ impl Vm {
                 self.cell_index_dirty = true;
                 result?;
             }
-            Stmt::SheetCellWrite { sheet, row, col, value } => {
+            Stmt::SheetCellWrite {
+                sheet,
+                row,
+                col,
+                value,
+            } => {
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
                 self.check_strict_sheet_exists(&display, &key)?;
                 self.check_sheet_not_protected(&key, &display)?;
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 let v = self.eval_expr(value)?;
-                if !self.strict_resolution { self.ensure_sheet(&key); }
-                self.sheet_cells_mut(&key).unwrap().insert((r, c), CellContent { formula: None, value: v });
+                if !self.strict_resolution {
+                    self.ensure_sheet(&key);
+                }
+                self.sheet_cells_mut(&key).unwrap().insert(
+                    (r, c),
+                    CellContent {
+                        formula: None,
+                        value: v,
+                    },
+                );
             }
-            Stmt::SheetRangeWrite { sheet, addr, is_formula, value } => {
+            Stmt::SheetRangeWrite {
+                sheet,
+                addr,
+                is_formula,
+                value,
+            } => {
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
                 self.check_strict_sheet_exists(&display, &key)?;
                 self.check_sheet_not_protected(&key, &display)?;
@@ -2702,7 +3072,9 @@ impl Vm {
             Stmt::WithSheet { sheet_name, body } => {
                 self.check_strict_sheet_exists(sheet_name, &sheet_name.to_lowercase())?;
                 let prev = self.active_sheet.clone();
-                if !self.strict_resolution { self.ensure_sheet(sheet_name); }
+                if !self.strict_resolution {
+                    self.ensure_sheet(sheet_name);
+                }
                 let key = sheet_name.to_lowercase();
                 self.active_sheet = key.clone();
                 self.cell_index_dirty = true;
@@ -2725,7 +3097,9 @@ impl Vm {
             Stmt::SheetsDelete { sheet } => {
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
                 self.check_sheet_not_protected(&key, &display)?;
-                if key != self.active_sheet { self.sheets.remove(&key); }
+                if key != self.active_sheet {
+                    self.sheets.remove(&key);
+                }
             }
             Stmt::SheetProtection {
                 sheet,
@@ -2763,7 +3137,9 @@ impl Vm {
                 self.variables.entry(var.clone()).or_insert(Variant::Empty);
             }
             Stmt::DimMulti(decls) => {
-                for s in decls { self.exec_stmt_inner(s)?; }
+                for s in decls {
+                    self.exec_stmt_inner(s)?;
+                }
             }
             Stmt::Unsupported { .. } => {}
             Stmt::DimArray { name, sizes } => {
@@ -2773,14 +3149,24 @@ impl Vm {
                     // yet have a shape at all, so any subscript access on it
                     // (rank always mismatches) correctly errors with
                     // "Subscript out of range", same as real VBA.
-                    self.variables.insert(name.clone(), Variant::VbaArray(VbaArray { bounds: vec![], elements: vec![] }));
+                    self.variables.insert(
+                        name.clone(),
+                        Variant::VbaArray(VbaArray {
+                            bounds: vec![],
+                            elements: vec![],
+                        }),
+                    );
                 } else {
                     let bounds = self.eval_array_bounds(sizes)?;
                     let arr = VbaArray::new_zeroed(bounds)?;
                     self.variables.insert(name.clone(), Variant::VbaArray(arr));
                 }
             }
-            Stmt::ReDim { name, sizes, preserve } => {
+            Stmt::ReDim {
+                name,
+                sizes,
+                preserve,
+            } => {
                 let bounds = self.eval_array_bounds(sizes)?;
                 let new_arr = if *preserve {
                     match self.variables.get(name) {
@@ -2792,14 +3178,21 @@ impl Vm {
                 } else {
                     VbaArray::new_zeroed(bounds)?
                 };
-                self.variables.insert(name.clone(), Variant::VbaArray(new_arr));
+                self.variables
+                    .insert(name.clone(), Variant::VbaArray(new_arr));
             }
             Stmt::Erase { name } => {
                 if let Some(Variant::VbaArray(arr)) = self.variables.get_mut(name) {
-                    for v in arr.elements.iter_mut() { *v = Variant::Empty; }
+                    for v in arr.elements.iter_mut() {
+                        *v = Variant::Empty;
+                    }
                 }
             }
-            Stmt::ArrayWrite { name, indices, value } => {
+            Stmt::ArrayWrite {
+                name,
+                indices,
+                value,
+            } => {
                 let v = self.eval_expr(value)?;
                 let idx = self.eval_array_indices(indices)?;
                 let bounds = match self.variables.get(name) {
@@ -2831,8 +3224,12 @@ impl Vm {
                 // reflect every MsgBox the macro attempted to show, even
                 // ones that are then treated as a blocking error.
                 self.msgbox_log.push(msg.to_string());
-                if self.error_on_msgbox { return Err(format!("MsgBox: {}", msg)); }
-                if self.print_msgbox { println!("{}", msg); }
+                if self.error_on_msgbox {
+                    return Err(format!("MsgBox: {}", msg));
+                }
+                if self.print_msgbox {
+                    println!("{}", msg);
+                }
             }
             Stmt::DimRecord { var, type_name } => {
                 if let Some(fields) = self.type_defs.get(type_name).cloned() {
@@ -2848,26 +3245,40 @@ impl Vm {
                     // `Type` of the same name, so a `Type Range ... End Type`
                     // module still wins — VBA's own name resolution prefers
                     // the user type too.
-                    self.object_variables.entry(var.clone()).or_insert(ObjectRef::Nothing);
+                    self.object_variables
+                        .entry(var.clone())
+                        .or_insert(ObjectRef::Nothing);
                 }
                 // Any other unknown type name → no-op (built-in type)
             }
-            Stmt::DimArrayRecord { name, sizes, type_name } => {
+            Stmt::DimArrayRecord {
+                name,
+                sizes,
+                type_name,
+            } => {
                 let upper = to_f64(&self.eval_expr(&sizes[0])?)? as usize;
                 let element = if let Some(fields) = self.type_defs.get(type_name).cloned() {
                     make_record_default(&fields, &self.type_defs)
                 } else {
                     Variant::Empty
                 };
-                self.variables.insert(name.clone(), Variant::Array(vec![element; upper + 1]));
+                self.variables
+                    .insert(name.clone(), Variant::Array(vec![element; upper + 1]));
             }
             Stmt::RecordSetNested { var, fields, value } => {
                 let v = self.eval_expr(value)?;
-                let target = self.variables.entry(var.clone())
+                let target = self
+                    .variables
+                    .entry(var.clone())
                     .or_insert_with(|| Variant::Record(HashMap::new()));
                 nested_set(target, fields, v);
             }
-            Stmt::ArrayRecordSet { name, indices, field, value } => {
+            Stmt::ArrayRecordSet {
+                name,
+                indices,
+                field,
+                value,
+            } => {
                 let v = self.eval_expr(value)?;
                 let idx = to_f64(&self.eval_expr(&indices[0])?)? as usize;
                 let oob_len = match self.variables.get(name) {
@@ -2916,15 +3327,21 @@ impl Vm {
                     return Ok(());
                 }
                 let v = self.eval_expr(value)?;
-                let entry = self.variables.entry(var.clone()).or_insert(Variant::Record(std::collections::HashMap::new()));
+                let entry = self
+                    .variables
+                    .entry(var.clone())
+                    .or_insert(Variant::Record(std::collections::HashMap::new()));
                 if let Variant::Record(m) = entry {
                     m.insert(field.clone(), v);
                 } else {
-                    self.variables.insert(var.clone(), Variant::Record({
-                        let mut m = std::collections::HashMap::new();
-                        m.insert(field.clone(), v);
-                        m
-                    }));
+                    self.variables.insert(
+                        var.clone(),
+                        Variant::Record({
+                            let mut m = std::collections::HashMap::new();
+                            m.insert(field.clone(), v);
+                            m
+                        }),
+                    );
                 }
             }
         }
@@ -2933,48 +3350,50 @@ impl Vm {
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<Variant, String> {
         match expr {
-            Expr::Integer(n)    => Ok(Variant::Integer(*n)),
-            Expr::Float(f)      => Ok(Variant::Float(*f)),
-            Expr::Str(s)        => Ok(Variant::Str(s.clone())),
-            Expr::Bool(b)       => Ok(Variant::Boolean(*b)),
-            Expr::ErrNumber      => Ok(Variant::Integer(self.err_number)),
+            Expr::Integer(n) => Ok(Variant::Integer(*n)),
+            Expr::Float(f) => Ok(Variant::Float(*f)),
+            Expr::Str(s) => Ok(Variant::Str(s.clone())),
+            Expr::Bool(b) => Ok(Variant::Boolean(*b)),
+            Expr::ErrNumber => Ok(Variant::Integer(self.err_number)),
             Expr::ErrDescription => Ok(Variant::Str(self.err_description.clone())),
-            Expr::ErrSource      => Ok(Variant::Str(self.err_source.clone())),
-            Expr::ErrHelpFile    => Ok(Variant::Str(self.err_help_file.clone())),
+            Expr::ErrSource => Ok(Variant::Str(self.err_source.clone())),
+            Expr::ErrHelpFile => Ok(Variant::Str(self.err_help_file.clone())),
             Expr::ErrHelpContext => Ok(Variant::Integer(self.err_help_context)),
             Expr::Var(name) => {
-                if let Some(v) = self.variables.get(name) { return Ok(v.clone()); }
+                if let Some(v) = self.variables.get(name) {
+                    return Ok(v.clone());
+                }
                 // Excel built-in constants
                 Ok(match name.as_str() {
                     // Calculation mode
-                    "xlcalculationmanual"        => Variant::Integer(-4135),
-                    "xlcalculationautomatic"     => Variant::Integer(-4105),
+                    "xlcalculationmanual" => Variant::Integer(-4135),
+                    "xlcalculationautomatic" => Variant::Integer(-4105),
                     "xlcalculationsemiautomatic" => Variant::Integer(2),
                     // Direction
-                    "xlup"        => Variant::Integer(-4162),
-                    "xldown"      => Variant::Integer(-4121),
-                    "xltoleft"    => Variant::Integer(-4159),
-                    "xltoright"   => Variant::Integer(-4161),
+                    "xlup" => Variant::Integer(-4162),
+                    "xldown" => Variant::Integer(-4121),
+                    "xltoleft" => Variant::Integer(-4159),
+                    "xltoright" => Variant::Integer(-4161),
                     // Cursor
-                    "xlwait"           => Variant::Integer(2),
-                    "xldefault"        => Variant::Integer(1),
-                    "xlibeam"          => Variant::Integer(3),
+                    "xlwait" => Variant::Integer(2),
+                    "xldefault" => Variant::Integer(1),
+                    "xlibeam" => Variant::Integer(3),
                     "xlnorthwestarrow" => Variant::Integer(4),
                     // VB string constants
-                    "vbcrlf"       => Variant::Str("\r\n".into()),
-                    "vblf"         => Variant::Str("\n".into()),
-                    "vbcr"         => Variant::Str("\r".into()),
-                    "vbtab"        => Variant::Str("\t".into()),
+                    "vbcrlf" => Variant::Str("\r\n".into()),
+                    "vblf" => Variant::Str("\n".into()),
+                    "vbcr" => Variant::Str("\r".into()),
+                    "vbtab" => Variant::Str("\t".into()),
                     "vbnullstring" => Variant::Str(String::new()),
-                    "vbnullchar"   => Variant::Str("\0".into()),
+                    "vbnullchar" => Variant::Str("\0".into()),
                     // VB boolean constants (in addition to True/False literals)
-                    "vbtrue"  => Variant::Boolean(true),
+                    "vbtrue" => Variant::Boolean(true),
                     "vbfalse" => Variant::Boolean(false),
                     // VB MsgBox return values
-                    "vbok"     => Variant::Integer(1),
+                    "vbok" => Variant::Integer(1),
                     "vbcancel" => Variant::Integer(2),
-                    "vbyes"    => Variant::Integer(6),
-                    "vbno"     => Variant::Integer(7),
+                    "vbyes" => Variant::Integer(6),
+                    "vbno" => Variant::Integer(7),
                     // `Null` is its own value, not Empty: "no valid data"
                     // versus "uninitialized". Folding the two together (as
                     // this line used to) made every documented Null rule
@@ -2997,10 +3416,10 @@ impl Vm {
             }
             Expr::UnaryMinus(inner) => match self.eval_expr(inner)? {
                 Variant::Integer(n) => Ok(Variant::Integer(-n)),
-                Variant::Float(f)   => Ok(Variant::Float(-f)),
+                Variant::Float(f) => Ok(Variant::Float(-f)),
                 // Same documented rule as binary `-`: "If one or both
                 // expressions are Null expressions, result is Null."
-                Variant::Null       => Ok(Variant::Null),
+                Variant::Null => Ok(Variant::Null),
                 other => Err(format!("Unary minus on non-numeric: {}", other)),
             },
             Expr::UnaryNot(inner) => {
@@ -3031,7 +3450,10 @@ impl Vm {
             Expr::FuncCall { name, args } => {
                 // User-defined functions take priority over built-ins
                 if let Some(func) = self.user_funcs.get(name).cloned() {
-                    let arg_vals: Vec<Variant> = args.iter().map(|a| self.eval_expr(a)).collect::<Result<_, _>>()?;
+                    let arg_vals: Vec<Variant> = args
+                        .iter()
+                        .map(|a| self.eval_expr(a))
+                        .collect::<Result<_, _>>()?;
                     return self.call_func_def(&func, &arg_vals);
                 }
                 // Array subscript access on a plain (Range-value-read /
@@ -3039,12 +3461,21 @@ impl Vm {
                 // always 0-based, unchanged from before this round (a real
                 // `Dim`-declared array is `Variant::VbaArray`, below).
                 if matches!(self.variables.get(name.as_str()), Some(Variant::Array(_))) {
-                    let vba_idx = to_f64(&self.eval_expr(args.first().ok_or_else(|| format!("Array '{}' requires index", name))?)?)? as i64;
+                    let vba_idx = to_f64(
+                        &self.eval_expr(
+                            args.first()
+                                .ok_or_else(|| format!("Array '{}' requires index", name))?,
+                        )?,
+                    )? as i64;
                     let lower = 0;
                     let internal = vba_idx - lower;
                     let (found, len) = match self.variables.get(name.as_str()) {
                         Some(Variant::Array(arr)) => {
-                            let v = if internal >= 0 { arr.get(internal as usize).cloned() } else { None };
+                            let v = if internal >= 0 {
+                                arr.get(internal as usize).cloned()
+                            } else {
+                                None
+                            };
                             (v, arr.len())
                         }
                         _ => return Err(format!("'{}' is not an array", name)),
@@ -3056,7 +3487,10 @@ impl Vm {
                 }
                 // Array subscript access on a real (possibly multi-dim)
                 // VBA-declared array: arr(i, j, ...).
-                if matches!(self.variables.get(name.as_str()), Some(Variant::VbaArray(_))) {
+                if matches!(
+                    self.variables.get(name.as_str()),
+                    Some(Variant::VbaArray(_))
+                ) {
                     let idx = self.eval_array_indices(args)?;
                     let bounds = match self.variables.get(name.as_str()) {
                         Some(Variant::VbaArray(arr)) => arr.bounds.clone(),
@@ -3073,7 +3507,8 @@ impl Vm {
                 self.eval_vba_func(name, args)
             }
             Expr::RangeRead { addr } => {
-                let ((r1, c1), (r2, c2)) = self.resolve_range_addr(addr)
+                let ((r1, c1), (r2, c2)) = self
+                    .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeRead: invalid address '{}'", addr))?;
                 if r1 == r2 && c1 == c2 {
                     Ok(self.get_cell(r1, c1))
@@ -3085,7 +3520,11 @@ impl Vm {
                     Ok(Variant::Array(arr))
                 }
             }
-            Expr::RangeOffsetRead { addr, row_off, col_off } => {
+            Expr::RangeOffsetRead {
+                addr,
+                row_off,
+                col_off,
+            } => {
                 let (base_r, base_c) = parse_cell_addr(addr)
                     .ok_or_else(|| format!("RangeOffsetRead: invalid address '{}'", addr))?;
                 let ro = to_f64(&self.eval_expr(row_off)?)? as i64;
@@ -3154,25 +3593,34 @@ impl Vm {
                 keys.sort(); // 行優先スキャン
                 for (r, c) in keys {
                     if vba_eq(&self.get_cell(r, c), &target) {
-                        return Ok(Variant::Integer(if *find_row { r as i64 } else { c as i64 }));
+                        return Ok(Variant::Integer(if *find_row {
+                            r as i64
+                        } else {
+                            c as i64
+                        }));
                     }
                 }
                 Ok(Variant::Integer(0)) // not found
             }
             Expr::RowsCount => Ok(Variant::Integer(1_048_576)),
             Expr::ColsCount => Ok(Variant::Integer(16_384)),
-            Expr::CellsEndProp { row, col, dir, prop } => {
+            Expr::CellsEndProp {
+                row,
+                col,
+                dir,
+                prop,
+            } => {
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 let result = match (dir, prop) {
-                    (XlDir::Up,    XlEndProp::Row)    => self.last_nonempty_row(c, r),
-                    (XlDir::Down,  XlEndProp::Row)    => self.first_empty_row(c, r).saturating_sub(1),
-                    (XlDir::Left,  XlEndProp::Column) => self.last_nonempty_col(r, c),
-                    (XlDir::Right, XlEndProp::Column) => self.first_empty_col(r, c).saturating_sub(1),
-                    (XlDir::Up,    XlEndProp::Column) |
-                    (XlDir::Down,  XlEndProp::Column) => c,
-                    (XlDir::Left,  XlEndProp::Row)    |
-                    (XlDir::Right, XlEndProp::Row)    => r,
+                    (XlDir::Up, XlEndProp::Row) => self.last_nonempty_row(c, r),
+                    (XlDir::Down, XlEndProp::Row) => self.first_empty_row(c, r).saturating_sub(1),
+                    (XlDir::Left, XlEndProp::Column) => self.last_nonempty_col(r, c),
+                    (XlDir::Right, XlEndProp::Column) => {
+                        self.first_empty_col(r, c).saturating_sub(1)
+                    }
+                    (XlDir::Up, XlEndProp::Column) | (XlDir::Down, XlEndProp::Column) => c,
+                    (XlDir::Left, XlEndProp::Row) | (XlDir::Right, XlEndProp::Row) => r,
                 };
                 Ok(Variant::Integer(result as i64))
             }
@@ -3213,7 +3661,9 @@ impl Vm {
                 // of the VM has no way to raise.
                 Ok(Variant::Boolean(!matches!(
                     self.object_variables.get(name),
-                    Some(ObjectRef::Range(_)) | Some(ObjectRef::Worksheet(_)) | Some(ObjectRef::Workbook)
+                    Some(ObjectRef::Range(_))
+                        | Some(ObjectRef::Worksheet(_))
+                        | Some(ObjectRef::Workbook)
                 )))
             }
             Expr::RecordGet { var, field } => {
@@ -3254,7 +3704,11 @@ impl Vm {
                 }
                 Ok(cur)
             }
-            Expr::ArrayRecordGet { name, indices, field } => {
+            Expr::ArrayRecordGet {
+                name,
+                indices,
+                field,
+            } => {
                 let idx = to_f64(&self.eval_expr(&indices[0])?)? as usize;
                 let (found, len) = match self.variables.get(name) {
                     Some(Variant::Array(arr)) => (arr.get(idx).cloned(), arr.len()),
@@ -3270,7 +3724,10 @@ impl Vm {
     }
 
     fn eval_vba_func(&mut self, name: &str, args: &[Expr]) -> Result<Variant, String> {
-        let vals: Vec<Variant> = args.iter().map(|a| self.eval_expr(a)).collect::<Result<_, _>>()?;
+        let vals: Vec<Variant> = args
+            .iter()
+            .map(|a| self.eval_expr(a))
+            .collect::<Result<_, _>>()?;
         match name {
             "int" => {
                 let f = to_f64(vals.first().ok_or("INT requires 1 argument")?)?;
@@ -3296,7 +3753,7 @@ impl Vm {
                     // bug this arm used to have: CBool("True") tried to
                     // parse "True" as a number and errored).
                     Variant::Str(s) => match s.trim().to_lowercase().as_str() {
-                        "true"  => true,
+                        "true" => true,
                         "false" => false,
                         _ => to_f64(v)? != 0.0,
                     },
@@ -3312,7 +3769,13 @@ impl Vm {
             }
             "sgn" => {
                 let f = to_f64(vals.first().ok_or("Sgn requires 1 argument")?)?;
-                let n: i64 = if f > 0.0 { 1 } else if f < 0.0 { -1 } else { 0 };
+                let n: i64 = if f > 0.0 {
+                    1
+                } else if f < 0.0 {
+                    -1
+                } else {
+                    0
+                };
                 Ok(Variant::Integer(n))
             }
             "round" => {
@@ -3324,7 +3787,11 @@ impl Vm {
                 // functions in real VBA/Excel, not aliases of each other,
                 // so this doesn't share `eval_wsf`'s "round" arm.
                 let f = to_f64(vals.first().ok_or("Round requires 1 argument")?)?;
-                let digits = if vals.len() >= 2 { to_f64(&vals[1])? as i32 } else { 0 };
+                let digits = if vals.len() >= 2 {
+                    to_f64(&vals[1])? as i32
+                } else {
+                    0
+                };
                 // Unlike WorksheetFunction.Round/Excel's ROUND(), which both
                 // accept a negative NumDigitsAfterDecimal to round left of
                 // the decimal point, real VBA's Round() raises "Invalid
@@ -3354,7 +3821,11 @@ impl Vm {
                 let v = vals.first().ok_or("Str requires 1 argument")?;
                 let non_negative_number = matches!(v, Variant::Integer(n) if *n >= 0)
                     || matches!(v, Variant::Float(f) if *f >= 0.0);
-                let s = if non_negative_number { format!(" {}", v) } else { v.to_string() };
+                let s = if non_negative_number {
+                    format!(" {}", v)
+                } else {
+                    v.to_string()
+                };
                 Ok(Variant::Str(s))
             }
             "val" => {
@@ -3373,8 +3844,8 @@ impl Vm {
             "len" => {
                 let s = match vals.first().ok_or("Len requires 1 argument")? {
                     Variant::Str(s) => s.chars().count() as i64,
-                    Variant::Empty  => 0,
-                    v               => v.to_string().chars().count() as i64,
+                    Variant::Empty => 0,
+                    v => v.to_string().chars().count() as i64,
                 };
                 Ok(Variant::Integer(s))
             }
@@ -3387,21 +3858,29 @@ impl Vm {
                 let s = vba_to_str(vals.first().ok_or("Right requires 2 arguments")?);
                 let n = to_f64(vals.get(1).ok_or("Right requires 2 arguments")?)? as usize;
                 let chars: Vec<char> = s.chars().collect();
-                Ok(Variant::Str(chars[chars.len().saturating_sub(n)..].iter().collect()))
+                Ok(Variant::Str(
+                    chars[chars.len().saturating_sub(n)..].iter().collect(),
+                ))
             }
             "mid" => {
-                if vals.len() < 2 { return Err("Mid requires at least 2 arguments".into()); }
+                if vals.len() < 2 {
+                    return Err("Mid requires at least 2 arguments".into());
+                }
                 let s = vba_to_str(&vals[0]);
                 let start = (to_f64(&vals[1])? as usize).saturating_sub(1);
-                let len = if vals.len() >= 3 { to_f64(&vals[2])? as usize } else { usize::MAX };
+                let len = if vals.len() >= 3 {
+                    to_f64(&vals[2])? as usize
+                } else {
+                    usize::MAX
+                };
                 Ok(Variant::Str(s.chars().skip(start).take(len).collect()))
             }
-            "ucase" => {
-                Ok(Variant::Str(vba_to_str(vals.first().ok_or("UCase requires 1 argument")?).to_uppercase()))
-            }
-            "lcase" => {
-                Ok(Variant::Str(vba_to_str(vals.first().ok_or("LCase requires 1 argument")?).to_lowercase()))
-            }
+            "ucase" => Ok(Variant::Str(
+                vba_to_str(vals.first().ok_or("UCase requires 1 argument")?).to_uppercase(),
+            )),
+            "lcase" => Ok(Variant::Str(
+                vba_to_str(vals.first().ok_or("LCase requires 1 argument")?).to_lowercase(),
+            )),
             "trim" => {
                 let s = vba_to_str(vals.first().ok_or("Trim requires 1 argument")?);
                 Ok(Variant::Str(s.trim().to_string()))
@@ -3426,8 +3905,14 @@ impl Vm {
             // IsNull asks "is this the Null value", IsEmpty asks "is this an
             // uninitialized Variant". IsNull(Empty) and IsEmpty(Null) are
             // both False in real VBA.
-            "isnull"  => Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Null)))),
-            "isempty" => Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Empty) | None))),
+            "isnull" => Ok(Variant::Boolean(matches!(
+                vals.first(),
+                Some(Variant::Null)
+            ))),
+            "isempty" => Ok(Variant::Boolean(matches!(
+                vals.first(),
+                Some(Variant::Empty) | None
+            ))),
             "isnumeric" => {
                 // Real VBA's IsNumeric also accepts a string that parses as
                 // a number (`IsNumeric("123")` is True) and Empty (an
@@ -3441,7 +3926,9 @@ impl Vm {
                 // needed, and guessing at locale-specific parsing rules
                 // isn't this project's style.
                 let is_numeric = match vals.first() {
-                    Some(Variant::Integer(_)) | Some(Variant::Float(_)) | Some(Variant::Empty) => true,
+                    Some(Variant::Integer(_)) | Some(Variant::Float(_)) | Some(Variant::Empty) => {
+                        true
+                    }
                     Some(Variant::Str(s)) => s.trim().parse::<f64>().is_ok(),
                     _ => false,
                 };
@@ -3455,37 +3942,59 @@ impl Vm {
             }
             "asc" => {
                 let s = vba_to_str(vals.first().ok_or("Asc requires 1 argument")?);
-                s.chars().next()
+                s.chars()
+                    .next()
                     .map(|c| Variant::Integer(c as i64))
                     .ok_or_else(|| "Asc: empty string".into())
             }
             "instr" => {
                 // InStr([start,] string1, string2 [, compare])
                 let (start, s1, s2) = if vals.len() >= 3 {
-                    (to_f64(&vals[0])? as usize, vba_to_str(&vals[1]), vba_to_str(&vals[2]))
+                    (
+                        to_f64(&vals[0])? as usize,
+                        vba_to_str(&vals[1]),
+                        vba_to_str(&vals[2]),
+                    )
                 } else {
-                    (1, vba_to_str(vals.first().ok_or("InStr requires at least 2 arguments")?),
-                        vba_to_str(vals.get(1).ok_or("InStr requires at least 2 arguments")?))
+                    (
+                        1,
+                        vba_to_str(vals.first().ok_or("InStr requires at least 2 arguments")?),
+                        vba_to_str(vals.get(1).ok_or("InStr requires at least 2 arguments")?),
+                    )
                 };
                 let h: Vec<char> = s1.chars().collect();
                 let n: Vec<char> = s2.chars().collect();
                 // VBA: empty needle → return start position; start > len → return 0
-                if n.is_empty() { return Ok(Variant::Integer(start as i64)); }
+                if n.is_empty() {
+                    return Ok(Variant::Integer(start as i64));
+                }
                 let begin = start.saturating_sub(1);
-                if begin >= h.len() { return Ok(Variant::Integer(0)); }
-                let pos = h[begin..].windows(n.len())
-                    .position(|w| w.iter().map(|c| c.to_uppercase().next().unwrap_or(*c))
-                        .eq(n.iter().map(|c| c.to_uppercase().next().unwrap_or(*c))))
+                if begin >= h.len() {
+                    return Ok(Variant::Integer(0));
+                }
+                let pos = h[begin..]
+                    .windows(n.len())
+                    .position(|w| {
+                        w.iter()
+                            .map(|c| c.to_uppercase().next().unwrap_or(*c))
+                            .eq(n.iter().map(|c| c.to_uppercase().next().unwrap_or(*c)))
+                    })
                     .map(|p| p + start)
                     .unwrap_or(0);
                 Ok(Variant::Integer(pos as i64))
             }
             "replace" => {
-                if vals.len() < 3 { return Err("Replace requires at least 3 arguments".into()); }
+                if vals.len() < 3 {
+                    return Err("Replace requires at least 3 arguments".into());
+                }
                 let s = vba_to_str(&vals[0]);
                 let old = vba_to_str(&vals[1]);
                 let new = vba_to_str(&vals[2]);
-                Ok(Variant::Str(if old.is_empty() { s } else { s.replace(&old as &str, &new as &str) }))
+                Ok(Variant::Str(if old.is_empty() {
+                    s
+                } else {
+                    s.replace(&old as &str, &new as &str)
+                }))
             }
             // Real VBA's `Now`/`Date`/`Time` all return a Date-typed value —
             // Excel's own epoch-serial number, split into a whole-day part
@@ -3519,44 +4028,56 @@ impl Vm {
             }
             // ── Inline conditional ───────────────────────────────────────────
             "iif" => {
-                if vals.len() < 3 { return Err("IIf requires 3 arguments".into()); }
-                Ok(if is_truthy(&vals[0]) { vals[1].clone() } else { vals[2].clone() })
+                if vals.len() < 3 {
+                    return Err("IIf requires 3 arguments".into());
+                }
+                Ok(if is_truthy(&vals[0]) {
+                    vals[1].clone()
+                } else {
+                    vals[2].clone()
+                })
             }
             // ── Format ───────────────────────────────────────────────────────
             "format" => {
-                if vals.is_empty() { return Err("Format requires at least 1 argument".into()); }
+                if vals.is_empty() {
+                    return Err("Format requires at least 1 argument".into());
+                }
                 let v = &vals[0];
-                let fmt = if vals.len() >= 2 { vba_to_str(&vals[1]) } else { String::new() };
+                let fmt = if vals.len() >= 2 {
+                    vba_to_str(&vals[1])
+                } else {
+                    String::new()
+                };
                 Ok(Variant::Str(format_vba(v, &fmt)))
             }
             // ── Type inspection ──────────────────────────────────────────────
             "typename" => {
                 let name = match vals.first().ok_or("TypeName requires 1 argument")? {
                     Variant::Integer(_) => "Long",
-                    Variant::Float(_)   => "Double",
-                    Variant::Str(_)     => "String",
+                    Variant::Float(_) => "Double",
+                    Variant::Str(_) => "String",
                     Variant::Boolean(_) => "Boolean",
-                    Variant::Date(_)    => "Date",
-                    Variant::Error(_)   => "Error",
+                    Variant::Date(_) => "Date",
+                    Variant::Error(_) => "Error",
                     Variant::Array(_) | Variant::VbaArray(_) => "Variant()",
-                    Variant::Empty      => "Empty",
-                    Variant::Null       => "Null",
-                    Variant::Record(_)  => "Object",
+                    Variant::Empty => "Empty",
+                    Variant::Null => "Null",
+                    Variant::Record(_) => "Object",
                 };
                 Ok(Variant::Str(name.into()))
             }
             "vartype" => {
                 let n: i64 = match vals.first().ok_or("VarType requires 1 argument")? {
-                    Variant::Empty      => 0,
-                    Variant::Null       => 1,  // vbNull
-                    Variant::Integer(_) => 3,  // vbLong
-                    Variant::Float(_)   => 5,  // vbDouble
-                    Variant::Str(_)     => 8,  // vbString
-                    Variant::Boolean(_) => 11, // vbBoolean
-                    Variant::Date(_)    => 7,  // vbDate
+                    Variant::Empty => 0,
+                    Variant::Null => 1,                               // vbNull
+                    Variant::Integer(_) => 3,                         // vbLong
+                    Variant::Float(_) => 5,                           // vbDouble
+                    Variant::Str(_) => 8,                             // vbString
+                    Variant::Boolean(_) => 11,                        // vbBoolean
+                    Variant::Date(_) => 7,                            // vbDate
                     Variant::Array(_) | Variant::VbaArray(_) => 8204, // vbArray + vbVariant
-                    Variant::Error(_)   => 10, // vbError
-                    Variant::Record(_)  => 0,  // vbEmpty as fallback
+                    Variant::Error(_) => 10,                          // vbError
+                    Variant::Record(_) => 0,                          // vbEmpty as fallback
                 };
                 Ok(Variant::Integer(n))
             }
@@ -3565,20 +4086,35 @@ impl Vm {
             // arguments. `Array()` with no arguments is a legal empty array.
             "array" => Ok(Variant::VbaArray(VbaArray::from_vec(vals.to_vec()))),
             "split" => {
-                if vals.is_empty() { return Err("Split requires at least 1 argument".into()); }
+                if vals.is_empty() {
+                    return Err("Split requires at least 1 argument".into());
+                }
                 let s = vba_to_str(&vals[0]);
-                let delim = if vals.len() >= 2 { vba_to_str(&vals[1]) } else { " ".to_string() };
-                let parts = s.split(delim.as_str()).map(|p| Variant::Str(p.to_string())).collect();
+                let delim = if vals.len() >= 2 {
+                    vba_to_str(&vals[1])
+                } else {
+                    " ".to_string()
+                };
+                let parts = s
+                    .split(delim.as_str())
+                    .map(|p| Variant::Str(p.to_string()))
+                    .collect();
                 Ok(Variant::VbaArray(VbaArray::from_vec(parts)))
             }
             "join" => {
-                if vals.is_empty() { return Err("Join requires at least 1 argument".into()); }
+                if vals.is_empty() {
+                    return Err("Join requires at least 1 argument".into());
+                }
                 let parts = match &vals[0] {
                     Variant::Array(a) => a.iter().map(vba_to_str).collect::<Vec<_>>(),
                     Variant::VbaArray(a) => a.elements.iter().map(vba_to_str).collect::<Vec<_>>(),
-                    v                 => vec![vba_to_str(v)],
+                    v => vec![vba_to_str(v)],
                 };
-                let delim = if vals.len() >= 2 { vba_to_str(&vals[1]) } else { " ".to_string() };
+                let delim = if vals.len() >= 2 {
+                    vba_to_str(&vals[1])
+                } else {
+                    " ".to_string()
+                };
                 Ok(Variant::Str(parts.join(&delim)))
             }
             "ubound" => {
@@ -3597,28 +4133,32 @@ impl Vm {
                     _ => Err("UBound: argument is not an array".into()),
                 }
             }
-            "lbound" => {
-                match vals.first().ok_or("LBound requires 1 argument")? {
-                    Variant::Array(_) => Ok(Variant::Integer(0)),
-                    Variant::VbaArray(a) => {
-                        let dim = self.array_func_dimension(args.get(1))?;
-                        a.lbound(dim).map(Variant::Integer)
-                    }
-                    _ => Err("LBound: argument is not an array".into()),
+            "lbound" => match vals.first().ok_or("LBound requires 1 argument")? {
+                Variant::Array(_) => Ok(Variant::Integer(0)),
+                Variant::VbaArray(a) => {
+                    let dim = self.array_func_dimension(args.get(1))?;
+                    a.lbound(dim).map(Variant::Integer)
                 }
-            }
-            "isarray" => {
-                Ok(Variant::Boolean(matches!(vals.first(), Some(Variant::Array(_) | Variant::VbaArray(_)))))
-            }
+                _ => Err("LBound: argument is not an array".into()),
+            },
+            "isarray" => Ok(Variant::Boolean(matches!(
+                vals.first(),
+                Some(Variant::Array(_) | Variant::VbaArray(_))
+            ))),
             // ── Range object (used as WSF arg) ───────────────────────────────
             "range" => {
                 if let Some(Variant::Str(addr)) = vals.first() {
-                    let ((r1,c1),(r2,c2)) = self.resolve_range_addr(addr)
+                    let ((r1, c1), (r2, c2)) = self
+                        .resolve_range_addr(addr)
                         .ok_or_else(|| format!("Range: invalid address '{}'", addr))?;
-                    let arr = (r1..=r2).flat_map(|r| (c1..=c2).map(move |c| (r,c)))
-                        .map(|(r,c)| self.get_cell(r,c)).collect();
+                    let arr = (r1..=r2)
+                        .flat_map(|r| (c1..=c2).map(move |c| (r, c)))
+                        .map(|(r, c)| self.get_cell(r, c))
+                        .collect();
                     Ok(Variant::Array(arr))
-                } else { Err("Range: requires a string address argument".into()) }
+                } else {
+                    Err("Range: requires a string address argument".into())
+                }
             }
             // ── WorksheetFunction.*  ─────────────────────────────────────────
             name if name.starts_with("wsf_") => {
@@ -3630,22 +4170,34 @@ impl Vm {
     }
 
     pub fn get_cell(&self, row: u32, col: u32) -> Variant {
-        self.cells().get(&(row, col)).map(|c| c.value.clone()).unwrap_or(Variant::Empty)
+        self.cells()
+            .get(&(row, col))
+            .map(|c| c.value.clone())
+            .unwrap_or(Variant::Empty)
     }
 
     pub fn set_cell_formula(&mut self, row: u32, col: u32, formula: &str) -> Result<(), String> {
-        let expr  = formula::parse(formula)?;
+        let expr = formula::parse(formula)?;
         let value = formula::evaluate(&expr, self.cells())?;
-        self.cells_mut().insert((row, col), CellContent { formula: Some(formula.to_string()), value });
+        self.cells_mut().insert(
+            (row, col),
+            CellContent {
+                formula: Some(formula.to_string()),
+                value,
+            },
+        );
         Ok(())
     }
 
     pub fn recalculate_all(&mut self) -> Result<(), String> {
         // Collect all formula cells and parse them
         let formula_cells: Vec<(u32, u32, formula::FormulaExpr)> = {
-            self.cells().iter()
+            self.cells()
+                .iter()
                 .filter_map(|((r, c), cell)| {
-                    cell.formula.as_ref().and_then(|f| formula::parse(f).ok().map(|e| (*r, *c, e)))
+                    cell.formula
+                        .as_ref()
+                        .and_then(|f| formula::parse(f).ok().map(|e| (*r, *c, e)))
                 })
                 .collect()
         };
@@ -3658,12 +4210,18 @@ impl Vm {
         for idx in order {
             let (row, col, ref expr) = formula_cells[idx];
             let value = formula::evaluate(expr, self.cells())?;
-            if let Some(cell) = self.sheets.get_mut(&active).and_then(|m| m.get_mut(&(row, col))) {
+            if let Some(cell) = self
+                .sheets
+                .get_mut(&active)
+                .and_then(|m| m.get_mut(&(row, col)))
+            {
                 cell.value = value;
             }
         }
         // Mark index dirty once (formula values changed, End queries may be stale)
-        if !formula_cells.is_empty() { self.cell_index_dirty = true; }
+        if !formula_cells.is_empty() {
+            self.cell_index_dirty = true;
+        }
         Ok(())
     }
 
@@ -3679,42 +4237,56 @@ impl Vm {
     /// Find the last non-empty row in `col` at or above `max_row` (xlUp).
     /// Find the last non-empty row in `col` at or above `max_row` (xlUp).
     pub fn last_nonempty_row(&mut self, col: u32, max_row: u32) -> u32 {
-        if self.cell_index_dirty { self.rebuild_cell_index(); }
-        self.col_rows.get(&col)
+        if self.cell_index_dirty {
+            self.rebuild_cell_index();
+        }
+        self.col_rows
+            .get(&col)
             .and_then(|rows| rows.range(..=max_row).next_back().copied())
             .unwrap_or(1)
     }
 
     /// Find the first empty row in `col` at or below `start_row` (xlDown helper).
     pub fn first_empty_row(&mut self, col: u32, start_row: u32) -> u32 {
-        if self.cell_index_dirty { self.rebuild_cell_index(); }
+        if self.cell_index_dirty {
+            self.rebuild_cell_index();
+        }
         if let Some(rows) = self.col_rows.get(&col) {
             let mut prev = start_row.saturating_sub(1);
             for &r in rows.range(start_row..) {
-                if r != prev + 1 { return prev + 1; }  // gap found
+                if r != prev + 1 {
+                    return prev + 1;
+                } // gap found
                 prev = r;
             }
             prev + 1
         } else {
-            start_row  // column is entirely empty
+            start_row // column is entirely empty
         }
     }
 
     /// Find the last non-empty column in `row` at or left of `max_col` (xlToLeft).
     pub fn last_nonempty_col(&mut self, row: u32, max_col: u32) -> u32 {
-        if self.cell_index_dirty { self.rebuild_cell_index(); }
-        self.row_cols.get(&row)
+        if self.cell_index_dirty {
+            self.rebuild_cell_index();
+        }
+        self.row_cols
+            .get(&row)
             .and_then(|cols| cols.range(..=max_col).next_back().copied())
             .unwrap_or(1)
     }
 
     /// Find the first empty column in `row` at or right of `start_col` (xlToRight helper).
     pub fn first_empty_col(&mut self, row: u32, start_col: u32) -> u32 {
-        if self.cell_index_dirty { self.rebuild_cell_index(); }
+        if self.cell_index_dirty {
+            self.rebuild_cell_index();
+        }
         if let Some(cols) = self.row_cols.get(&row) {
             let mut prev = start_col.saturating_sub(1);
             for &c in cols.range(start_col..) {
-                if c != prev + 1 { return prev + 1; }
+                if c != prev + 1 {
+                    return prev + 1;
+                }
                 prev = c;
             }
             prev + 1
@@ -3725,7 +4297,9 @@ impl Vm {
 }
 
 impl Default for Vm {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -3743,7 +4317,12 @@ pub fn parse_multi_area_addr(addr: &str) -> Option<Vec<Rect>> {
     addr.split(',')
         .map(|piece| {
             let ((start_row, start_col), (end_row, end_col)) = parse_range_addr(piece)?;
-            Some(Rect { start_row, start_col, end_row, end_col })
+            Some(Rect {
+                start_row,
+                start_col,
+                end_row,
+                end_col,
+            })
         })
         .collect()
 }
@@ -3825,30 +4404,36 @@ fn make_record_default(
     fields: &[(String, String)],
     type_defs: &HashMap<String, Vec<(String, String)>>,
 ) -> Variant {
-    let map: HashMap<String, Variant> = fields.iter().map(|(name, vba_type)| {
-        let default = match vba_type.as_str() {
-            "integer" | "long" | "longlong" | "byte" => Variant::Integer(0),
-            "single" | "double" | "currency" | "decimal" => Variant::Float(0.0),
-            "boolean" => Variant::Boolean(false),
-            "string"  => Variant::Str(String::new()),
-            other => {
-                if let Some(nested) = type_defs.get(other) {
-                    make_record_default(nested, type_defs)
-                } else {
-                    Variant::Empty
+    let map: HashMap<String, Variant> = fields
+        .iter()
+        .map(|(name, vba_type)| {
+            let default = match vba_type.as_str() {
+                "integer" | "long" | "longlong" | "byte" => Variant::Integer(0),
+                "single" | "double" | "currency" | "decimal" => Variant::Float(0.0),
+                "boolean" => Variant::Boolean(false),
+                "string" => Variant::Str(String::new()),
+                other => {
+                    if let Some(nested) = type_defs.get(other) {
+                        make_record_default(nested, type_defs)
+                    } else {
+                        Variant::Empty
+                    }
                 }
-            }
-        };
-        (name.clone(), default)
-    }).collect();
+            };
+            (name.clone(), default)
+        })
+        .collect();
     Variant::Record(map)
 }
 
 /// Recursively set a value at the path given by `fields` inside a `Variant::Record` tree.
 fn nested_set(target: &mut Variant, fields: &[String], value: Variant) {
-    if fields.is_empty() { *target = value; return; }
+    if fields.is_empty() {
+        *target = value;
+        return;
+    }
     let field = &fields[0];
-    let rest  = &fields[1..];
+    let rest = &fields[1..];
     match target {
         Variant::Record(m) => {
             let inner = m.entry(field.clone()).or_insert(Variant::Empty);
@@ -3870,16 +4455,24 @@ fn nested_set(target: &mut Variant, fields: &[String], value: Variant) {
 fn extract_cell_refs(expr: &formula::FormulaExpr) -> HashSet<(u32, u32)> {
     use formula::FormulaExpr::*;
     match expr {
-        CellRef { col, row }                 => [(*row, *col)].into(),
-        Range { c1, r1, c2, r2 }             => {
+        CellRef { col, row } => [(*row, *col)].into(),
+        Range { c1, r1, c2, r2 } => {
             let mut s = HashSet::new();
-            for r in *r1..=*r2 { for c in *c1..=*c2 { s.insert((r, c)); } }
+            for r in *r1..=*r2 {
+                for c in *c1..=*c2 {
+                    s.insert((r, c));
+                }
+            }
             s
         }
-        BinOp { lhs, rhs, .. }               => { let mut s = extract_cell_refs(lhs); s.extend(extract_cell_refs(rhs)); s }
-        UnaryMinus(inner)                    => extract_cell_refs(inner),
-        FuncCall { args, .. }                => args.iter().flat_map(extract_cell_refs).collect(),
-        Number(_) | Str(_) | Bool(_)         => HashSet::new(),
+        BinOp { lhs, rhs, .. } => {
+            let mut s = extract_cell_refs(lhs);
+            s.extend(extract_cell_refs(rhs));
+            s
+        }
+        UnaryMinus(inner) => extract_cell_refs(inner),
+        FuncCall { args, .. } => args.iter().flat_map(extract_cell_refs).collect(),
+        Number(_) | Str(_) | Bool(_) => HashSet::new(),
     }
 }
 
@@ -3887,12 +4480,14 @@ fn extract_cell_refs(expr: &formula::FormulaExpr) -> HashSet<(u32, u32)> {
 /// Returns indices into `cells` in safe evaluation order.
 /// Cells with no inter-formula dependencies appear first.
 /// Returns `Err` if a circular reference is detected.
-fn topo_sort_formulas(
-    cells: &[(u32, u32, formula::FormulaExpr)],
-) -> Result<Vec<usize>, String> {
+fn topo_sort_formulas(cells: &[(u32, u32, formula::FormulaExpr)]) -> Result<Vec<usize>, String> {
     let n = cells.len();
     // map (row, col) → index in cells slice
-    let pos: HashMap<(u32, u32), usize> = cells.iter().enumerate().map(|(i, (r,c,_))| ((*r,*c), i)).collect();
+    let pos: HashMap<(u32, u32), usize> = cells
+        .iter()
+        .enumerate()
+        .map(|(i, (r, c, _))| ((*r, *c), i))
+        .collect();
 
     // in_degree[i] = number of formula cells that i depends on
     let mut in_degree = vec![0usize; n];
@@ -3902,10 +4497,12 @@ fn topo_sort_formulas(
     for (i, (_, _, expr)) in cells.iter().enumerate() {
         for dep in extract_cell_refs(expr) {
             if let Some(&j) = pos.get(&dep)
-                && j != i { // skip self-reference
-                    adj[j].push(i);
-                    in_degree[i] += 1;
-                }
+                && j != i
+            {
+                // skip self-reference
+                adj[j].push(i);
+                in_degree[i] += 1;
+            }
         }
     }
 
@@ -3916,14 +4513,20 @@ fn topo_sort_formulas(
         order.push(i);
         for &j in &adj[i] {
             in_degree[j] -= 1;
-            if in_degree[j] == 0 { queue.push_back(j); }
+            if in_degree[j] == 0 {
+                queue.push_back(j);
+            }
         }
     }
 
     if order.len() != n {
         // Circular reference detected — evaluate remaining cells in original order with a warning
         let visited: HashSet<usize> = order.iter().copied().collect();
-        for i in 0..n { if !visited.contains(&i) { order.push(i); } }
+        for i in 0..n {
+            if !visited.contains(&i) {
+                order.push(i);
+            }
+        }
         // Return Ok with best-effort order rather than hard-erroring; circular refs will show stale values
     }
     Ok(order)
@@ -3960,17 +4563,19 @@ fn redim_preserve(old: &VbaArray, new_bounds: &[ArrayBound]) -> Result<VbaArray,
         return Ok(new_arr);
     }
     loop {
-        if let (Ok(old_i), Ok(new_i)) =
-            (old.linear_index(&idx), new_arr.linear_index(&idx))
-        {
+        if let (Ok(old_i), Ok(new_i)) = (old.linear_index(&idx), new_arr.linear_index(&idx)) {
             new_arr.elements[new_i] = old.elements[old_i].clone();
         }
         let mut d = idx.len();
         loop {
-            if d == 0 { return Ok(new_arr); }
+            if d == 0 {
+                return Ok(new_arr);
+            }
             d -= 1;
             idx[d] += 1;
-            if idx[d] <= old.bounds[d].upper { break; }
+            if idx[d] <= old.bounds[d].upper {
+                break;
+            }
             idx[d] = old.bounds[d].lower;
         }
     }
@@ -3978,19 +4583,30 @@ fn redim_preserve(old: &VbaArray, new_bounds: &[ArrayBound]) -> Result<VbaArray,
 
 fn vba_to_str(v: &Variant) -> String {
     match v {
-        Variant::Str(s)     => s.clone(),
+        Variant::Str(s) => s.clone(),
         Variant::Integer(n) => n.to_string(),
-        Variant::Float(f)   => f.to_string(),
-        Variant::Boolean(b) => if *b { "True".into() } else { "False".into() },
-        Variant::Date(s)    => serial_to_display(*s),
-        Variant::Error(e)   => e.as_str().to_string(),
+        Variant::Float(f) => f.to_string(),
+        Variant::Boolean(b) => {
+            if *b {
+                "True".into()
+            } else {
+                "False".into()
+            }
+        }
+        Variant::Date(s) => serial_to_display(*s),
+        Variant::Error(e) => e.as_str().to_string(),
         // "Any expression that is Empty is also treated as a zero-length
         // string"; a lone Null concatenates the same way (the both-Null
         // case is decided earlier, in `null_rule`).
         Variant::Empty | Variant::Null => String::new(),
-        Variant::Array(a)   => a.iter().map(vba_to_str).collect::<Vec<_>>().join(", "),
-        Variant::VbaArray(a) => a.elements.iter().map(vba_to_str).collect::<Vec<_>>().join(", "),
-        Variant::Record(_)  => "[Record]".into(),
+        Variant::Array(a) => a.iter().map(vba_to_str).collect::<Vec<_>>().join(", "),
+        Variant::VbaArray(a) => a
+            .elements
+            .iter()
+            .map(vba_to_str)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Variant::Record(_) => "[Record]".into(),
     }
 }
 
@@ -3998,14 +4614,16 @@ fn cmp_variants(a: &Variant, b: &Variant) -> std::cmp::Ordering {
     use std::cmp::Ordering::*;
     match (a, b) {
         (Variant::Integer(x), Variant::Integer(y)) => x.cmp(y),
-        (Variant::Float(x),   Variant::Float(y))   => x.partial_cmp(y).unwrap_or(Equal),
-        (Variant::Integer(x), Variant::Float(y))   => (*x as f64).partial_cmp(y).unwrap_or(Equal),
-        (Variant::Float(x),   Variant::Integer(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(Equal),
-        (Variant::Str(x),     Variant::Str(y))     => x.to_lowercase().cmp(&y.to_lowercase()),
-        (Variant::Empty,      Variant::Empty)       => Equal,
-        (Variant::Empty,      _)                   => Less,
-        (_,                   Variant::Empty)       => Greater,
-        _ => vba_to_str(a).to_lowercase().cmp(&vba_to_str(b).to_lowercase()),
+        (Variant::Float(x), Variant::Float(y)) => x.partial_cmp(y).unwrap_or(Equal),
+        (Variant::Integer(x), Variant::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(Equal),
+        (Variant::Float(x), Variant::Integer(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(Equal),
+        (Variant::Str(x), Variant::Str(y)) => x.to_lowercase().cmp(&y.to_lowercase()),
+        (Variant::Empty, Variant::Empty) => Equal,
+        (Variant::Empty, _) => Less,
+        (_, Variant::Empty) => Greater,
+        _ => vba_to_str(a)
+            .to_lowercase()
+            .cmp(&vba_to_str(b).to_lowercase()),
     }
 }
 
@@ -4014,19 +4632,27 @@ fn flat_nums(vals: &[Variant]) -> Vec<f64> {
     for v in vals {
         match v {
             Variant::Array(a) => out.extend(a.iter().filter_map(|x| to_f64_excel(x).ok())),
-            Variant::VbaArray(a) => out.extend(a.elements.iter().filter_map(|x| to_f64_excel(x).ok())),
-            _ => { if let Ok(f) = to_f64_excel(v) { out.push(f); } }
+            Variant::VbaArray(a) => {
+                out.extend(a.elements.iter().filter_map(|x| to_f64_excel(x).ok()))
+            }
+            _ => {
+                if let Ok(f) = to_f64_excel(v) {
+                    out.push(f);
+                }
+            }
         }
     }
     out
 }
 
 fn flat_all(vals: &[Variant]) -> Vec<Variant> {
-    vals.iter().flat_map(|v| match v {
-        Variant::Array(a) => a.clone(),
-        Variant::VbaArray(a) => a.elements.clone(),
-        other             => vec![other.clone()],
-    }).collect()
+    vals.iter()
+        .flat_map(|v| match v {
+            Variant::Array(a) => a.clone(),
+            Variant::VbaArray(a) => a.elements.clone(),
+            other => vec![other.clone()],
+        })
+        .collect()
 }
 
 fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
@@ -4037,86 +4663,145 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
         }
         "max" => {
             let nums = flat_nums(vals);
-            nums.iter().cloned().reduce(f64::max)
+            nums.iter()
+                .cloned()
+                .reduce(f64::max)
                 .map(as_int_if_whole)
                 .ok_or_else(|| "WorksheetFunction.Max: no values".into())
         }
         "min" => {
             let nums = flat_nums(vals);
-            nums.iter().cloned().reduce(f64::min)
+            nums.iter()
+                .cloned()
+                .reduce(f64::min)
                 .map(as_int_if_whole)
                 .ok_or_else(|| "WorksheetFunction.Min: no values".into())
         }
         "average" => {
             let nums = flat_nums(vals);
-            if nums.is_empty() { return Err("WorksheetFunction.Average: no values".into()); }
-            Ok(as_int_if_whole(nums.iter().sum::<f64>() / nums.len() as f64))
+            if nums.is_empty() {
+                return Err("WorksheetFunction.Average: no values".into());
+            }
+            Ok(as_int_if_whole(
+                nums.iter().sum::<f64>() / nums.len() as f64,
+            ))
         }
         "count" => {
-            let n = flat_all(vals).iter().filter(|v| matches!(v, Variant::Integer(_) | Variant::Float(_))).count();
+            let n = flat_all(vals)
+                .iter()
+                .filter(|v| matches!(v, Variant::Integer(_) | Variant::Float(_)))
+                .count();
             Ok(Variant::Integer(n as i64))
         }
         "counta" => {
-            let n = flat_all(vals).iter().filter(|v| !matches!(v, Variant::Empty)).count();
+            let n = flat_all(vals)
+                .iter()
+                .filter(|v| !matches!(v, Variant::Empty))
+                .count();
             Ok(Variant::Integer(n as i64))
         }
         "countblank" => {
-            let n = flat_all(vals).iter().filter(|v| matches!(v, Variant::Empty)).count();
+            let n = flat_all(vals)
+                .iter()
+                .filter(|v| matches!(v, Variant::Empty))
+                .count();
             Ok(Variant::Integer(n as i64))
         }
         "countif" => {
-            if vals.len() < 2 { return Err("WorksheetFunction.CountIf requires 2 arguments".into()); }
+            if vals.len() < 2 {
+                return Err("WorksheetFunction.CountIf requires 2 arguments".into());
+            }
             let range = flat_all(&vals[..1]);
             let criteria = &vals[1];
-            let n = range.iter().filter(|v| wsf_criteria_match(v, criteria)).count();
+            let n = range
+                .iter()
+                .filter(|v| wsf_criteria_match(v, criteria))
+                .count();
             Ok(Variant::Integer(n as i64))
         }
         "sumif" => {
             // SumIf(range, criteria [, sum_range])
-            if vals.len() < 2 { return Err("WorksheetFunction.SumIf requires at least 2 arguments".into()); }
+            if vals.len() < 2 {
+                return Err("WorksheetFunction.SumIf requires at least 2 arguments".into());
+            }
             let crit_range = flat_all(&vals[..1]);
-            let criteria   = &vals[1];
-            let sum_range  = if vals.len() >= 3 { flat_all(&vals[2..3]) } else { crit_range.clone() };
-            let total: f64 = crit_range.iter().zip(sum_range.iter())
+            let criteria = &vals[1];
+            let sum_range = if vals.len() >= 3 {
+                flat_all(&vals[2..3])
+            } else {
+                crit_range.clone()
+            };
+            let total: f64 = crit_range
+                .iter()
+                .zip(sum_range.iter())
                 .filter(|(cv, _)| wsf_criteria_match(cv, criteria))
                 .filter_map(|(_, sv)| to_f64_excel(sv).ok())
                 .sum();
             Ok(as_int_if_whole(total))
         }
         "round" => {
-            if vals.is_empty() { return Err("WorksheetFunction.Round requires arguments".into()); }
+            if vals.is_empty() {
+                return Err("WorksheetFunction.Round requires arguments".into());
+            }
             let f = to_f64_excel(&vals[0])?;
-            let digits = if vals.len() >= 2 { to_f64_excel(&vals[1])? as i32 } else { 0 };
+            let digits = if vals.len() >= 2 {
+                to_f64_excel(&vals[1])? as i32
+            } else {
+                0
+            };
             let factor = 10f64.powi(digits);
             Ok(as_int_if_whole((f * factor).round() / factor))
         }
-        "abs"   => { let f = to_f64_excel(vals.first().ok_or("Abs: no arg")?)?; Ok(as_int_if_whole(f.abs())) }
-        "sqrt"  => { let f = to_f64_excel(vals.first().ok_or("Sqrt: no arg")?)?; Ok(Variant::Float(f.sqrt())) }
-        "power" => {
-            if vals.len() < 2 { return Err("Power requires 2 arguments".into()); }
-            Ok(as_int_if_whole(to_f64_excel(&vals[0])?.powf(to_f64_excel(&vals[1])?)))
+        "abs" => {
+            let f = to_f64_excel(vals.first().ok_or("Abs: no arg")?)?;
+            Ok(as_int_if_whole(f.abs()))
         }
-        "log"   => {
+        "sqrt" => {
+            let f = to_f64_excel(vals.first().ok_or("Sqrt: no arg")?)?;
+            Ok(Variant::Float(f.sqrt()))
+        }
+        "power" => {
+            if vals.len() < 2 {
+                return Err("Power requires 2 arguments".into());
+            }
+            Ok(as_int_if_whole(
+                to_f64_excel(&vals[0])?.powf(to_f64_excel(&vals[1])?),
+            ))
+        }
+        "log" => {
             let x = to_f64_excel(vals.first().ok_or("Log: no arg")?)?;
-            let base = if vals.len() >= 2 { to_f64_excel(&vals[1])? } else { std::f64::consts::E };
+            let base = if vals.len() >= 2 {
+                to_f64_excel(&vals[1])?
+            } else {
+                std::f64::consts::E
+            };
             Ok(Variant::Float(x.log(base)))
         }
         "match" => {
             // Match(lookup_val, lookup_array, [match_type]) — returns 1-based position
-            if vals.len() < 2 { return Err("Match: requires at least 2 arguments".into()); }
-            let target  = &vals[0];
-            let arr     = flat_all(&vals[1..2]);
-            let pos = arr.iter().position(|v| vba_eq(v, target))
+            if vals.len() < 2 {
+                return Err("Match: requires at least 2 arguments".into());
+            }
+            let target = &vals[0];
+            let arr = flat_all(&vals[1..2]);
+            let pos = arr
+                .iter()
+                .position(|v| vba_eq(v, target))
                 .map(|i| Variant::Integer(i as i64 + 1))
                 .unwrap_or(Variant::Error(ExcelError::NA));
             Ok(pos)
         }
         "index" => {
             // Index(array, row_num [, col_num])
-            if vals.len() < 2 { return Err("Index: requires at least 2 arguments".into()); }
+            if vals.len() < 2 {
+                return Err("Index: requires at least 2 arguments".into());
+            }
             let arr = flat_all(&vals[0..1]);
             let idx = (to_f64_excel(&vals[1])? as usize).saturating_sub(1);
-            Ok(arr.get(idx).cloned().unwrap_or(Variant::Error(ExcelError::Ref)))
+            Ok(arr
+                .get(idx)
+                .cloned()
+                .unwrap_or(Variant::Error(ExcelError::Ref)))
         }
         _ => Err(format!("WorksheetFunction.{} is not implemented", func)),
     }
@@ -4164,16 +4849,27 @@ fn wsf_criteria_match(v: &Variant, criteria: &Variant) -> bool {
             let s = s.trim();
             // Comparison criteria like ">5", "<>0", ">=10"
             if let Some(rest) = s.strip_prefix(">=") {
-                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f >= n); }
+                if let Ok(n) = rest.parse::<f64>() {
+                    return to_f64(v).is_ok_and(|f| f >= n);
+                }
             } else if let Some(rest) = s.strip_prefix("<=") {
-                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f <= n); }
+                if let Ok(n) = rest.parse::<f64>() {
+                    return to_f64(v).is_ok_and(|f| f <= n);
+                }
             } else if let Some(rest) = s.strip_prefix("<>") {
-                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f != n); }
+                if let Ok(n) = rest.parse::<f64>() {
+                    return to_f64(v).is_ok_and(|f| f != n);
+                }
                 return vba_to_str(v).to_lowercase() != rest.to_lowercase();
             } else if let Some(rest) = s.strip_prefix('>') {
-                if let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f > n); }
+                if let Ok(n) = rest.parse::<f64>() {
+                    return to_f64(v).is_ok_and(|f| f > n);
+                }
             } else if let Some(rest) = s.strip_prefix('<')
-                && let Ok(n) = rest.parse::<f64>() { return to_f64(v).is_ok_and(|f| f < n); }
+                && let Ok(n) = rest.parse::<f64>()
+            {
+                return to_f64(v).is_ok_and(|f| f < n);
+            }
             // Exact match
             vba_to_str(v).to_lowercase() == s.to_lowercase()
         }
@@ -4189,18 +4885,46 @@ fn format_vba(v: &Variant, fmt: &str) -> String {
     }
     // Numeric formatting: count decimal places from pattern like "0.00" or "#,##0.00"
     let thousands = fmt.contains(',');
-    let dec_places = fmt.find('.').map(|i| fmt[i+1..].chars().filter(|c| *c == '0' || *c == '#').count()).unwrap_or(0);
+    let dec_places = fmt
+        .find('.')
+        .map(|i| {
+            fmt[i + 1..]
+                .chars()
+                .filter(|c| *c == '0' || *c == '#')
+                .count()
+        })
+        .unwrap_or(0);
     match v {
         Variant::Integer(n) => {
             let f = *n as f64;
             if thousands {
                 // Simple thousands separator
                 let int_part = format!("{}", n.abs());
-                let grouped: String = int_part.chars().rev().enumerate()
-                    .flat_map(|(i, c)| if i > 0 && i % 3 == 0 { vec![',', c] } else { vec![c] })
-                    .collect::<String>().chars().rev().collect();
-                let signed = if *n < 0 { format!("-{}", grouped) } else { grouped };
-                if dec_places > 0 { format!("{}.{}", signed, "0".repeat(dec_places)) } else { signed }
+                let grouped: String = int_part
+                    .chars()
+                    .rev()
+                    .enumerate()
+                    .flat_map(|(i, c)| {
+                        if i > 0 && i % 3 == 0 {
+                            vec![',', c]
+                        } else {
+                            vec![c]
+                        }
+                    })
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                let signed = if *n < 0 {
+                    format!("-{}", grouped)
+                } else {
+                    grouped
+                };
+                if dec_places > 0 {
+                    format!("{}.{}", signed, "0".repeat(dec_places))
+                } else {
+                    signed
+                }
             } else if dec_places > 0 {
                 format!("{:.prec$}", f, prec = dec_places)
             } else {
@@ -4210,12 +4934,31 @@ fn format_vba(v: &Variant, fmt: &str) -> String {
         Variant::Float(f) => {
             if thousands {
                 let int_part = format!("{}", (*f as i64).abs());
-                let grouped: String = int_part.chars().rev().enumerate()
-                    .flat_map(|(i, c)| if i > 0 && i % 3 == 0 { vec![',', c] } else { vec![c] })
-                    .collect::<String>().chars().rev().collect();
-                let signed = if *f < 0.0 { format!("-{}", grouped) } else { grouped };
-                if dec_places > 0 { format!("{}.{:.prec$}", signed, f.fract().abs(), prec = dec_places)
-                } else { signed }
+                let grouped: String = int_part
+                    .chars()
+                    .rev()
+                    .enumerate()
+                    .flat_map(|(i, c)| {
+                        if i > 0 && i % 3 == 0 {
+                            vec![',', c]
+                        } else {
+                            vec![c]
+                        }
+                    })
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                let signed = if *f < 0.0 {
+                    format!("-{}", grouped)
+                } else {
+                    grouped
+                };
+                if dec_places > 0 {
+                    format!("{}.{:.prec$}", signed, f.fract().abs(), prec = dec_places)
+                } else {
+                    signed
+                }
             } else {
                 format!("{:.prec$}", f, prec = dec_places)
             }
@@ -4227,25 +4970,27 @@ fn format_vba(v: &Variant, fmt: &str) -> String {
 fn to_f64(v: &Variant) -> Result<f64, String> {
     match v {
         Variant::Integer(n) => Ok(*n as f64),
-        Variant::Float(f)   => Ok(*f),
+        Variant::Float(f) => Ok(*f),
         // VBA represents True as -1 internally (CInt(True) = -1), unlike Excel worksheet
         // formulas where TRUE arithmetic-coerces to 1 -- see formula::eval's separate
         // to_float, which is correct as 1.0 for that different language. Found via the
         // vba-semantics suite's operator-coercion matrix: True + 5 was returning 6 instead
         // of VBA's documented 4.
         Variant::Boolean(b) => Ok(if *b { -1.0 } else { 0.0 }),
-        Variant::Date(s)    => Ok(*s as f64),
-        Variant::Error(e)   => Err(e.to_string()),
-        Variant::Empty      => Ok(0.0),
+        Variant::Date(s) => Ok(*s as f64),
+        Variant::Error(e) => Err(e.to_string()),
+        Variant::Empty => Ok(0.0),
         // Real VBA error 94. Unlike Empty (documented as 0 in a numeric
         // context), Null has no numeric value at all. Every documented
         // Null-propagating operator short-circuits before reaching here, so
         // this only fires where a Null genuinely can't propagate (e.g. a
         // function argument that must be a number).
-        Variant::Null       => Err("Invalid use of Null".into()),
-        Variant::Str(s)     => s.parse::<f64>().map_err(|_| format!("Cannot convert '{}' to number", s)),
+        Variant::Null => Err("Invalid use of Null".into()),
+        Variant::Str(s) => s
+            .parse::<f64>()
+            .map_err(|_| format!("Cannot convert '{}' to number", s)),
         Variant::Array(_) | Variant::VbaArray(_) => Err("Cannot convert array to number".into()),
-        Variant::Record(_)  => Err("Cannot convert record to number".into()),
+        Variant::Record(_) => Err("Cannot convert record to number".into()),
     }
 }
 
@@ -4266,41 +5011,43 @@ fn is_truthy(v: &Variant) -> bool {
     match v {
         Variant::Boolean(b) => *b,
         Variant::Integer(n) => *n != 0,
-        Variant::Float(f)   => *f != 0.0,
-        Variant::Str(s)     => !s.is_empty(),
-        Variant::Date(_)    => true,
-        Variant::Error(_)   => false,
-        Variant::Empty      => false,
+        Variant::Float(f) => *f != 0.0,
+        Variant::Str(s) => !s.is_empty(),
+        Variant::Date(_) => true,
+        Variant::Error(_) => false,
+        Variant::Empty => false,
         // Documented on the If...Then...Else statement page: "If condition
         // is Null, condition is treated as False." Not an error — this is
         // the one place VBA gives Null a Boolean reading.
-        Variant::Null       => false,
-        Variant::Array(a)   => !a.is_empty(),
+        Variant::Null => false,
+        Variant::Array(a) => !a.is_empty(),
         Variant::VbaArray(a) => !a.elements.is_empty(),
-        Variant::Record(_)  => true,
+        Variant::Record(_) => true,
     }
 }
 
 fn vba_eq(a: &Variant, b: &Variant) -> bool {
     match (a, b) {
         (Variant::Integer(x), Variant::Integer(y)) => x == y,
-        (Variant::Float(x),   Variant::Float(y))   => x == y,
-        (Variant::Integer(x), Variant::Float(y))   => (*x as f64) == *y,
-        (Variant::Float(x),   Variant::Integer(y)) => *x == (*y as f64),
-        (Variant::Date(x),    Variant::Date(y))    => x == y,
-        (Variant::Date(x),    Variant::Integer(y)) => x == y,
-        (Variant::Integer(x), Variant::Date(y))    => x == y,
-        (Variant::Str(x),     Variant::Str(y))     => x.to_uppercase() == y.to_uppercase(),
+        (Variant::Float(x), Variant::Float(y)) => x == y,
+        (Variant::Integer(x), Variant::Float(y)) => (*x as f64) == *y,
+        (Variant::Float(x), Variant::Integer(y)) => *x == (*y as f64),
+        (Variant::Date(x), Variant::Date(y)) => x == y,
+        (Variant::Date(x), Variant::Integer(y)) => x == y,
+        (Variant::Integer(x), Variant::Date(y)) => x == y,
+        (Variant::Str(x), Variant::Str(y)) => x.to_uppercase() == y.to_uppercase(),
         (Variant::Boolean(x), Variant::Boolean(y)) => x == y,
-        (Variant::Empty,      Variant::Empty)       => true,
+        (Variant::Empty, Variant::Empty) => true,
         // Documented VBA comparison rules: Empty numeric-compares as 0, string-compares as
         // "" -- vba_cmp (used for </>) already applies this via to_f64's Empty=>0.0 arm, but
         // vba_eq's old catch-all fell through to `false` for e.g. `0 = Empty`, an internal
         // inconsistency between = and < on the same operand pair. Found via the
         // vba-semantics suite's comparison-coercion matrix.
         (Variant::Empty, Variant::Str(s)) | (Variant::Str(s), Variant::Empty) => s.is_empty(),
-        (Variant::Empty, other) | (other, Variant::Empty) => to_f64(other).map(|f| f == 0.0).unwrap_or(false),
-        (Variant::Error(_),   _) | (_, Variant::Error(_)) => false,
+        (Variant::Empty, other) | (other, Variant::Empty) => {
+            to_f64(other).map(|f| f == 0.0).unwrap_or(false)
+        }
+        (Variant::Error(_), _) | (_, Variant::Error(_)) => false,
         _ => false,
     }
 }
@@ -4312,10 +5059,18 @@ fn vba_cmp(a: &Variant, b: &Variant) -> Result<std::cmp::Ordering, String> {
     }
     // Mixed string/number: try numeric first, fall back to string coercion.
     match (to_f64(a), to_f64(b)) {
-        (Ok(fa), Ok(fb)) => fa.partial_cmp(&fb).ok_or_else(|| "Cannot compare NaN values".into()),
+        (Ok(fa), Ok(fb)) => fa
+            .partial_cmp(&fb)
+            .ok_or_else(|| "Cannot compare NaN values".into()),
         _ => {
-            let sa = match a { Variant::Str(s) => s.clone(), _ => format!("{:?}", a) };
-            let sb = match b { Variant::Str(s) => s.clone(), _ => format!("{:?}", b) };
+            let sa = match a {
+                Variant::Str(s) => s.clone(),
+                _ => format!("{:?}", a),
+            };
+            let sb = match b {
+                Variant::Str(s) => s.clone(),
+                _ => format!("{:?}", b),
+            };
             Ok(sa.to_uppercase().cmp(&sb.to_uppercase()))
         }
     }
@@ -4391,7 +5146,10 @@ fn unix_seconds_of_day() -> u64 {
 fn to_cell_index(v: Variant, label: &str) -> Result<u32, String> {
     let f = to_f64(&v)?;
     if f < 1.0 || f.fract() != 0.0 {
-        return Err(format!("Cell {} must be a positive integer, got {}", label, f));
+        return Err(format!(
+            "Cell {} must be a positive integer, got {}",
+            label, f
+        ));
     }
     Ok(f as u32)
 }
@@ -4443,15 +5201,30 @@ fn to_i64_bitwise(v: &Variant) -> Result<i64, String> {
 fn null_rule(op: &VbaBinOp, l: &Variant, r: &Variant) -> Option<Variant> {
     let l_null = matches!(l, Variant::Null);
     let r_null = matches!(r, Variant::Null);
-    if !l_null && !r_null { return None; }
+    if !l_null && !r_null {
+        return None;
+    }
     match op {
-        VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div
-        | VbaBinOp::Pow | VbaBinOp::IntDiv | VbaBinOp::Mod
-        | VbaBinOp::Eq | VbaBinOp::Ne | VbaBinOp::Lt | VbaBinOp::Le
-        | VbaBinOp::Gt | VbaBinOp::Ge => Some(Variant::Null),
+        VbaBinOp::Add
+        | VbaBinOp::Sub
+        | VbaBinOp::Mul
+        | VbaBinOp::Div
+        | VbaBinOp::Pow
+        | VbaBinOp::IntDiv
+        | VbaBinOp::Mod
+        | VbaBinOp::Eq
+        | VbaBinOp::Ne
+        | VbaBinOp::Lt
+        | VbaBinOp::Le
+        | VbaBinOp::Gt
+        | VbaBinOp::Ge => Some(Variant::Null),
         // Only both-Null concatenates to Null; a single Null is "".
         VbaBinOp::Concat => {
-            if l_null && r_null { Some(Variant::Null) } else { None }
+            if l_null && r_null {
+                Some(Variant::Null)
+            } else {
+                None
+            }
         }
         // `False And Null` -> False; `Null And False` -> False; everything
         // else involving Null -> Null.
@@ -4495,7 +5268,9 @@ fn arith_to_f64(v: &Variant) -> Result<f64, String> {
 }
 
 fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> {
-    if let Some(v) = null_rule(op, &l, &r) { return Ok(v); }
+    if let Some(v) = null_rule(op, &l, &r) {
+        return Ok(v);
+    }
     match op {
         VbaBinOp::Add | VbaBinOp::Sub | VbaBinOp::Mul | VbaBinOp::Div | VbaBinOp::Pow => {
             let lf = arith_to_f64(&l)?;
@@ -4505,7 +5280,9 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
                 VbaBinOp::Sub => lf - rf,
                 VbaBinOp::Mul => lf * rf,
                 VbaBinOp::Div => {
-                    if rf == 0.0 { return Err("Division by zero".into()); }
+                    if rf == 0.0 {
+                        return Err("Division by zero".into());
+                    }
                     lf / rf
                 }
                 VbaBinOp::Pow => lf.powf(rf),
@@ -4518,7 +5295,7 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
             let ri = to_i64_rounded(&r)?;
             let result = match op {
                 VbaBinOp::IntDiv => li.checked_div(ri),
-                VbaBinOp::Mod    => li.checked_rem(ri),
+                VbaBinOp::Mod => li.checked_rem(ri),
                 _ => unreachable!(),
             };
             match result {
@@ -4534,7 +5311,7 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
             if let (Variant::Boolean(lb), Variant::Boolean(rb)) = (&l, &r) {
                 let result = match op {
                     VbaBinOp::And => *lb && *rb,
-                    VbaBinOp::Or  => *lb || *rb,
+                    VbaBinOp::Or => *lb || *rb,
                     VbaBinOp::Xor => *lb != *rb,
                     _ => unreachable!(),
                 };
@@ -4544,7 +5321,7 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
                 let ri = to_i64_bitwise(&r)?;
                 let result = match op {
                     VbaBinOp::And => li & ri,
-                    VbaBinOp::Or  => li | ri,
+                    VbaBinOp::Or => li | ri,
                     VbaBinOp::Xor => li ^ ri,
                     _ => unreachable!(),
                 };
@@ -4555,16 +5332,32 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
             // A single Null operand is documented to concatenate as a
             // zero-length string, exactly like Empty (the both-Null case
             // already returned Null in `null_rule`).
-            let l = if matches!(l, Variant::Null) { Variant::Empty } else { l };
-            let r = if matches!(r, Variant::Null) { Variant::Empty } else { r };
+            let l = if matches!(l, Variant::Null) {
+                Variant::Empty
+            } else {
+                l
+            };
+            let r = if matches!(r, Variant::Null) {
+                Variant::Empty
+            } else {
+                r
+            };
             Ok(Variant::Str(format!("{}{}", l, r)))
         }
-        VbaBinOp::Eq  => Ok(Variant::Boolean(vba_eq(&l, &r))),
-        VbaBinOp::Ne  => Ok(Variant::Boolean(!vba_eq(&l, &r))),
-        VbaBinOp::Lt  => Ok(Variant::Boolean(vba_cmp(&l, &r)? == std::cmp::Ordering::Less)),
-        VbaBinOp::Le  => Ok(Variant::Boolean(vba_cmp(&l, &r)? != std::cmp::Ordering::Greater)),
-        VbaBinOp::Gt  => Ok(Variant::Boolean(vba_cmp(&l, &r)? == std::cmp::Ordering::Greater)),
-        VbaBinOp::Ge  => Ok(Variant::Boolean(vba_cmp(&l, &r)? != std::cmp::Ordering::Less)),
+        VbaBinOp::Eq => Ok(Variant::Boolean(vba_eq(&l, &r))),
+        VbaBinOp::Ne => Ok(Variant::Boolean(!vba_eq(&l, &r))),
+        VbaBinOp::Lt => Ok(Variant::Boolean(
+            vba_cmp(&l, &r)? == std::cmp::Ordering::Less,
+        )),
+        VbaBinOp::Le => Ok(Variant::Boolean(
+            vba_cmp(&l, &r)? != std::cmp::Ordering::Greater,
+        )),
+        VbaBinOp::Gt => Ok(Variant::Boolean(
+            vba_cmp(&l, &r)? == std::cmp::Ordering::Greater,
+        )),
+        VbaBinOp::Ge => Ok(Variant::Boolean(
+            vba_cmp(&l, &r)? != std::cmp::Ordering::Less,
+        )),
     }
 }
 
@@ -4584,32 +5377,50 @@ mod tests {
 
     #[test]
     fn test_variable_assignment_integer() {
-        assert_eq!(run("Sub MySub()\n    a = 42\nEnd Sub\n").variables["a"], Variant::Integer(42));
+        assert_eq!(
+            run("Sub MySub()\n    a = 42\nEnd Sub\n").variables["a"],
+            Variant::Integer(42)
+        );
     }
 
     #[test]
     fn test_variable_assignment_float() {
-        assert_eq!(run("Sub MySub()\n    x = 1.5\nEnd Sub\n").variables["x"], Variant::Float(1.5));
+        assert_eq!(
+            run("Sub MySub()\n    x = 1.5\nEnd Sub\n").variables["x"],
+            Variant::Float(1.5)
+        );
     }
 
     #[test]
     fn test_variable_assignment_string() {
-        assert_eq!(run("Sub MySub()\n    s = \"hello\"\nEnd Sub\n").variables["s"], Variant::Str("hello".into()));
+        assert_eq!(
+            run("Sub MySub()\n    s = \"hello\"\nEnd Sub\n").variables["s"],
+            Variant::Str("hello".into())
+        );
     }
 
     #[test]
     fn test_cell_write_literal() {
-        assert_eq!(run("Sub MySub()\n    Cells(1, 1).Value = 100\nEnd Sub\n").get_cell(1, 1), Variant::Integer(100));
+        assert_eq!(
+            run("Sub MySub()\n    Cells(1, 1).Value = 100\nEnd Sub\n").get_cell(1, 1),
+            Variant::Integer(100)
+        );
     }
 
     #[test]
     fn test_cell_write_from_variable() {
-        assert_eq!(run("Sub MySub()\n    x = 99\n    Cells(2, 3).Value = x\nEnd Sub\n").get_cell(2, 3), Variant::Integer(99));
+        assert_eq!(
+            run("Sub MySub()\n    x = 99\n    Cells(2, 3).Value = x\nEnd Sub\n").get_cell(2, 3),
+            Variant::Integer(99)
+        );
     }
 
     #[test]
     fn test_cell_write_string() {
-        assert_eq!(run("Sub MySub()\n    Cells(1, 2).Value = \"world\"\nEnd Sub\n").get_cell(1, 2), Variant::Str("world".into()));
+        assert_eq!(
+            run("Sub MySub()\n    Cells(1, 2).Value = \"world\"\nEnd Sub\n").get_cell(1, 2),
+            Variant::Str("world".into())
+        );
     }
 
     #[test]
@@ -4619,7 +5430,9 @@ mod tests {
 
     #[test]
     fn test_multiple_cells() {
-        let vm = run("Sub MySub()\n    Cells(1, 1).Value = 1\n    Cells(1, 2).Value = 2\n    Cells(2, 1).Value = 3\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Cells(1, 1).Value = 1\n    Cells(1, 2).Value = 2\n    Cells(2, 1).Value = 3\nEnd Sub\n",
+        );
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
         assert_eq!(vm.get_cell(2, 1), Variant::Integer(3));
@@ -4654,7 +5467,9 @@ mod tests {
 
     #[test]
     fn test_arithmetic_assignment() {
-        let vm = run("Sub MySub()\n    a = 3 + 4\n    b = 10 - 3\n    c = 2 * 5\n    d = 10 / 4\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    a = 3 + 4\n    b = 10 - 3\n    c = 2 * 5\n    d = 10 / 4\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(7));
         assert_eq!(vm.variables["b"], Variant::Integer(7));
         assert_eq!(vm.variables["c"], Variant::Integer(10));
@@ -4733,7 +5548,8 @@ mod tests {
     fn test_if_false_branch_not_taken() {
         let prog = parser::parse(
             "Sub MySub()\n    x = 1\n    If x > 5 Then\n        result = 1\n    End If\nEnd Sub\n",
-        ).unwrap();
+        )
+        .unwrap();
         let mut vm = Vm::new();
         vm.run_sub(&prog, "mysub").unwrap();
         assert!(!vm.variables.contains_key("result"));
@@ -4751,20 +5567,26 @@ mod tests {
 
     #[test]
     fn test_do_while_loop() {
-        let vm = run("Sub MySub()\n    x = 0\n    Do While x < 5\n        x = x + 1\n    Loop\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 0\n    Do While x < 5\n        x = x + 1\n    Loop\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(5));
     }
 
     #[test]
     fn test_do_until_loop() {
-        let vm = run("Sub MySub()\n    x = 0\n    Do Until x >= 5\n        x = x + 1\n    Loop\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 0\n    Do Until x >= 5\n        x = x + 1\n    Loop\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(5));
     }
 
     #[test]
     fn test_do_loop_while_post() {
         // Post-check: body runs at least once even if condition is already false
-        let vm = run("Sub MySub()\n    x = 99\n    Do\n        x = x + 1\n    Loop While x < 5\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 99\n    Do\n        x = x + 1\n    Loop While x < 5\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(100));
     }
 
@@ -4772,31 +5594,41 @@ mod tests {
 
     #[test]
     fn test_select_case_value() {
-        let vm = run("Sub MySub()\n    x = 2\n    Select Case x\n        Case 1\n            r = \"one\"\n        Case 2\n            r = \"two\"\n        Case Else\n            r = \"other\"\n    End Select\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 2\n    Select Case x\n        Case 1\n            r = \"one\"\n        Case 2\n            r = \"two\"\n        Case Else\n            r = \"other\"\n    End Select\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["r"], Variant::Str("two".into()));
     }
 
     #[test]
     fn test_select_case_else() {
-        let vm = run("Sub MySub()\n    x = 99\n    Select Case x\n        Case 1\n            r = 1\n        Case Else\n            r = 0\n    End Select\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 99\n    Select Case x\n        Case 1\n            r = 1\n        Case Else\n            r = 0\n    End Select\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["r"], Variant::Integer(0));
     }
 
     #[test]
     fn test_select_case_multi_value() {
-        let vm = run("Sub MySub()\n    x = 3\n    Select Case x\n        Case 1, 2\n            r = 12\n        Case 3, 4\n            r = 34\n    End Select\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 3\n    Select Case x\n        Case 1, 2\n            r = 12\n        Case 3, 4\n            r = 34\n    End Select\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["r"], Variant::Integer(34));
     }
 
     #[test]
     fn test_select_case_is_op() {
-        let vm = run("Sub MySub()\n    x = 10\n    Select Case x\n        Case Is > 5\n            r = 1\n        Case Else\n            r = 0\n    End Select\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 10\n    Select Case x\n        Case Is > 5\n            r = 1\n        Case Else\n            r = 0\n    End Select\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["r"], Variant::Integer(1));
     }
 
     #[test]
     fn test_select_case_range() {
-        let vm = run("Sub MySub()\n    x = 3\n    Select Case x\n        Case 1 To 5\n            r = 1\n        Case Else\n            r = 0\n    End Select\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 3\n    Select Case x\n        Case 1 To 5\n            r = 1\n        Case Else\n            r = 0\n    End Select\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["r"], Variant::Integer(1));
     }
 
@@ -4812,7 +5644,9 @@ mod tests {
 
     #[test]
     fn test_with_block() {
-        let vm = run("Sub MySub()\n    With Sheet1\n        .Cells(1, 1).Value = 100\n        .Cells(2, 1).Value = 200\n    End With\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    With Sheet1\n        .Cells(1, 1).Value = 100\n        .Cells(2, 1).Value = 200\n    End With\nEnd Sub\n",
+        );
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(100));
         assert_eq!(vm.get_cell(2, 1), Variant::Integer(200));
     }
@@ -5022,7 +5856,9 @@ mod tests {
 
     #[test]
     fn test_vba_mid_left_right() {
-        let vm = run("Sub MySub()\n    a = Mid(\"Hello\", 2, 3)\n    b = Left(\"Hello\", 3)\n    c = Right(\"Hello\", 2)\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    a = Mid(\"Hello\", 2, 3)\n    b = Left(\"Hello\", 3)\n    c = Right(\"Hello\", 2)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Str("ell".into()));
         assert_eq!(vm.variables["b"], Variant::Str("Hel".into()));
         assert_eq!(vm.variables["c"], Variant::Str("lo".into()));
@@ -5056,7 +5892,9 @@ mod tests {
 
     #[test]
     fn test_elseif_chain() {
-        let vm = run("Sub MySub()\n    x = 7\n    If x > 10 Then\n        r = 1\n    ElseIf x > 5 Then\n        r = 2\n    Else\n        r = 3\n    End If\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 7\n    If x > 10 Then\n        r = 1\n    ElseIf x > 5 Then\n        r = 2\n    Else\n        r = 3\n    End If\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["r"], Variant::Integer(2));
     }
 
@@ -5105,10 +5943,14 @@ mod tests {
         // `If cond Then Exit Sub Else stmt` — makes sure parse_exit's own
         // fixed-arity `consume_ident()` (for the Exit target) doesn't
         // swallow a following `Else` the way GoTo's label parse could.
-        let exits = run("Sub MySub()\n    x = 5\n    If x > 0 Then Exit Sub Else y = 1\n    y = 2\nEnd Sub\n");
+        let exits = run(
+            "Sub MySub()\n    x = 5\n    If x > 0 Then Exit Sub Else y = 1\n    y = 2\nEnd Sub\n",
+        );
         assert!(!exits.variables.contains_key("y"));
 
-        let takes_else = run("Sub MySub()\n    x = -1\n    If x > 0 Then Exit Sub Else y = 1\n    z = y\nEnd Sub\n");
+        let takes_else = run(
+            "Sub MySub()\n    x = -1\n    If x > 0 Then Exit Sub Else y = 1\n    z = y\nEnd Sub\n",
+        );
         assert_eq!(takes_else.variables["y"], Variant::Integer(1));
         assert_eq!(takes_else.variables["z"], Variant::Integer(1));
     }
@@ -5250,13 +6092,17 @@ mod tests {
 
     #[test]
     fn test_exit_for() {
-        let vm = run("Sub MySub()\n    s = 0\n    For i = 1 To 10\n        If i > 3 Then\n            Exit For\n        End If\n        s = s + i\n    Next i\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    s = 0\n    For i = 1 To 10\n        If i > 3 Then\n            Exit For\n        End If\n        s = s + i\n    Next i\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["s"], Variant::Integer(6)); // 1+2+3
     }
 
     #[test]
     fn test_exit_do() {
-        let vm = run("Sub MySub()\n    x = 0\n    Do\n        x = x + 1\n        If x >= 5 Then\n            Exit Do\n        End If\n    Loop While x < 100\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    x = 0\n    Do\n        x = x + 1\n        If x >= 5 Then\n            Exit Do\n        End If\n    Loop While x < 100\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(5));
     }
 
@@ -5264,7 +6110,9 @@ mod tests {
 
     #[test]
     fn test_on_error_resume_next() {
-        let vm = run("Sub MySub()\n    On Error Resume Next\n    a = 1\n    b = 2\n    a = 1\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    On Error Resume Next\n    a = 1\n    b = 2\n    a = 1\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(1));
     }
 
@@ -5276,14 +6124,14 @@ mod tests {
             "    On Error GoTo ErrH\n",
             "    x = 1\n",
             "    Cells(0, 0).Value = 1\n", // invalid cell → error
-            "    x = 99\n",               // should be skipped
+            "    x = 99\n",                // should be skipped
             "    Exit Sub\n",
             "ErrH:\n",
             "    handled = 1\n",
             "End Sub\n",
         );
         let vm = run(code);
-        assert_eq!(vm.variables["x"], Variant::Integer(1));   // set before error
+        assert_eq!(vm.variables["x"], Variant::Integer(1)); // set before error
         assert!(!vm.variables.contains_key("x") || vm.variables["x"] != Variant::Integer(99)); // not 99
         assert_eq!(vm.variables["handled"], Variant::Integer(1)); // handler ran
     }
@@ -5363,7 +6211,10 @@ mod tests {
             "End Sub\n",
         ));
         assert_eq!(vm.variables["n"], Variant::Integer(5));
-        assert_eq!(vm.variables["d"], Variant::Str("Invalid procedure call or argument".into()));
+        assert_eq!(
+            vm.variables["d"],
+            Variant::Str("Invalid procedure call or argument".into())
+        );
     }
 
     #[test]
@@ -5725,7 +6576,7 @@ mod tests {
             "Sub MySub()\n",
             "    a = 1\n",
             "    GoTo Skip\n",
-            "    a = 99\n",  // should be skipped
+            "    a = 99\n", // should be skipped
             "Skip:\n",
             "    b = 2\n",
             "End Sub\n",
@@ -5755,7 +6606,7 @@ mod tests {
         let vm = run(concat!(
             "Sub MySub()\n",
             "    p.x = 10\n",
-            "    result = p.y\n",  // p.y not set → Empty → 0 in arithmetic
+            "    result = p.y\n", // p.y not set → Empty → 0 in arithmetic
             "End Sub\n",
         ));
         assert_eq!(vm.variables["result"], Variant::Empty);
@@ -5789,7 +6640,9 @@ mod tests {
 
     #[test]
     fn test_for_each_range() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    Cells(3,1).Value = 30\n    total = 0\n    For Each cell In Range(\"A1:A3\")\n        total = total + cell\n    Next cell\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    Cells(3,1).Value = 30\n    total = 0\n    For Each cell In Range(\"A1:A3\")\n        total = total + cell\n    Next cell\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["total"], Variant::Integer(60));
     }
 
@@ -5806,26 +6659,34 @@ mod tests {
 
     #[test]
     fn test_function_return_value_in_expr() {
-        let vm = run("Function Square(n)\n    Square = n * n\nEnd Function\nSub MySub()\n    result = Square(7)\nEnd Sub\n");
+        let vm = run(
+            "Function Square(n)\n    Square = n * n\nEnd Function\nSub MySub()\n    result = Square(7)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["result"], Variant::Integer(49));
     }
 
     #[test]
     fn test_function_return_value_nested() {
-        let vm = run("Function Add(a, b)\n    Add = a + b\nEnd Function\nSub MySub()\n    x = Add(3, 4) + Add(1, 2)\nEnd Sub\n");
+        let vm = run(
+            "Function Add(a, b)\n    Add = a + b\nEnd Function\nSub MySub()\n    x = Add(3, 4) + Add(1, 2)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(10));
     }
 
     #[test]
     fn test_function_recursive() {
         // Factorial: 5! = 120
-        let vm = run("Function Fact(n)\n    If n <= 1 Then\n        Fact = 1\n    Else\n        Fact = n * Fact(n - 1)\n    End If\nEnd Function\nSub MySub()\n    result = Fact(5)\nEnd Sub\n");
+        let vm = run(
+            "Function Fact(n)\n    If n <= 1 Then\n        Fact = 1\n    Else\n        Fact = n * Fact(n - 1)\n    End If\nEnd Function\nSub MySub()\n    result = Fact(5)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["result"], Variant::Integer(120));
     }
 
     #[test]
     fn test_function_in_cell_write() {
-        let vm = run("Function Double(x)\n    Double = x * 2\nEnd Function\nSub MySub()\n    Cells(1, 1).Value = Double(21)\nEnd Sub\n");
+        let vm = run(
+            "Function Double(x)\n    Double = x * 2\nEnd Function\nSub MySub()\n    Cells(1, 1).Value = Double(21)\nEnd Sub\n",
+        );
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(42));
     }
 
@@ -5866,39 +6727,50 @@ mod tests {
 
     #[test]
     fn test_vb_string_constants() {
-        let vm = run("Sub MySub()\n    a = \"Hello\" & vbCrLf & \"World\"\n    b = \"tab\" & vbTab & \"here\"\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    a = \"Hello\" & vbCrLf & \"World\"\n    b = \"tab\" & vbTab & \"here\"\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Str("Hello\r\nWorld".into()));
         assert_eq!(vm.variables["b"], Variant::Str("tab\there".into()));
     }
 
     // ── While ... Wend ───────────────────────────────────────────────────────
 
-    #[test] fn test_while_wend() {
-        let vm = run("Sub MySub()\n    x = 0\n    While x < 5\n        x = x + 1\n    Wend\nEnd Sub\n");
+    #[test]
+    fn test_while_wend() {
+        let vm =
+            run("Sub MySub()\n    x = 0\n    While x < 5\n        x = x + 1\n    Wend\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(5));
     }
 
-    #[test] fn test_while_wend_no_iteration() {
-        let vm = run("Sub MySub()\n    x = 10\n    While x < 5\n        x = x + 1\n    Wend\n    y = 99\nEnd Sub\n");
+    #[test]
+    fn test_while_wend_no_iteration() {
+        let vm = run(
+            "Sub MySub()\n    x = 10\n    While x < 5\n        x = x + 1\n    Wend\n    y = 99\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(10));
         assert_eq!(vm.variables["y"], Variant::Integer(99));
     }
 
     // ── Const ─────────────────────────────────────────────────────────────────
 
-    #[test] fn test_const_declaration() {
+    #[test]
+    fn test_const_declaration() {
         let vm = run("Sub MySub()\n    Const MAX_ROW As Long = 100\n    x = MAX_ROW\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(100));
     }
 
-    #[test] fn test_const_string() {
-        let vm = run("Sub MySub()\n    Const PREFIX = \"ID_\"\n    s = PREFIX & \"001\"\nEnd Sub\n");
+    #[test]
+    fn test_const_string() {
+        let vm =
+            run("Sub MySub()\n    Const PREFIX = \"ID_\"\n    s = PREFIX & \"001\"\nEnd Sub\n");
         assert_eq!(vm.variables["s"], Variant::Str("ID_001".into()));
     }
 
     // ── Empty / Null / Nothing ────────────────────────────────────────────────
 
-    #[test] fn test_empty_literal() {
+    #[test]
+    fn test_empty_literal() {
         // `Null` is no longer folded into `Empty` — they are genuinely
         // different VBA values (see `Variant::Null`), which is what makes
         // every documented Null-propagation rule expressible. `Nothing`
@@ -5912,32 +6784,39 @@ mod tests {
 
     // ── IIf ──────────────────────────────────────────────────────────────────
 
-    #[test] fn test_iif_true() {
+    #[test]
+    fn test_iif_true() {
         let vm = run("Sub MySub()\n    x = IIf(1 > 0, \"yes\", \"no\")\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Str("yes".into()));
     }
 
-    #[test] fn test_iif_false() {
+    #[test]
+    fn test_iif_false() {
         let vm = run("Sub MySub()\n    x = IIf(0 > 1, 10, 20)\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(20));
     }
 
     // ── Format ───────────────────────────────────────────────────────────────
 
-    #[test] fn test_format_decimal() {
+    #[test]
+    fn test_format_decimal() {
         let vm = run("Sub MySub()\n    s = Format(3.14159, \"0.00\")\nEnd Sub\n");
         assert_eq!(vm.variables["s"], Variant::Str("3.14".into()));
     }
 
-    #[test] fn test_format_integer_no_dec() {
+    #[test]
+    fn test_format_integer_no_dec() {
         let vm = run("Sub MySub()\n    s = Format(42, \"0\")\nEnd Sub\n");
         assert_eq!(vm.variables["s"], Variant::Str("42".into()));
     }
 
     // ── TypeName / VarType ───────────────────────────────────────────────────
 
-    #[test] fn test_typename() {
-        let vm = run("Sub MySub()\n    a = TypeName(42)\n    b = TypeName(\"hi\")\n    c = TypeName(True)\n    d = TypeName(Empty)\nEnd Sub\n");
+    #[test]
+    fn test_typename() {
+        let vm = run(
+            "Sub MySub()\n    a = TypeName(42)\n    b = TypeName(\"hi\")\n    c = TypeName(True)\n    d = TypeName(Empty)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Str("Long".into()));
         assert_eq!(vm.variables["b"], Variant::Str("String".into()));
         assert_eq!(vm.variables["c"], Variant::Str("Boolean".into()));
@@ -5946,86 +6825,125 @@ mod tests {
 
     // ── Arrays ───────────────────────────────────────────────────────────────
 
-    #[test] fn test_dim_array_write_read() {
-        let vm = run("Sub MySub()\n    Dim arr(5)\n    arr(0) = 10\n    arr(3) = 99\n    a = arr(0)\n    b = arr(3)\n    c = arr(1)\nEnd Sub\n");
+    #[test]
+    fn test_dim_array_write_read() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(5)\n    arr(0) = 10\n    arr(3) = 99\n    a = arr(0)\n    b = arr(3)\n    c = arr(1)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(10));
         assert_eq!(vm.variables["b"], Variant::Integer(99));
         assert_eq!(vm.variables["c"], Variant::Empty);
     }
 
-    #[test] fn test_dim_array_loop() {
-        let vm = run("Sub MySub()\n    Dim arr(4)\n    For i = 0 To 4\n        arr(i) = i * 2\n    Next i\n    s = 0\n    For i = 0 To 4\n        s = s + arr(i)\n    Next i\nEnd Sub\n");
+    #[test]
+    fn test_dim_array_loop() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(4)\n    For i = 0 To 4\n        arr(i) = i * 2\n    Next i\n    s = 0\n    For i = 0 To 4\n        s = s + arr(i)\n    Next i\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["s"], Variant::Integer(20)); // 0+2+4+6+8
     }
 
-    #[test] fn test_redim_preserve() {
-        let vm = run("Sub MySub()\n    Dim arr(2)\n    arr(0) = 1\n    arr(1) = 2\n    ReDim Preserve arr(4)\n    arr(3) = 99\n    a = arr(0)\n    b = arr(3)\nEnd Sub\n");
+    #[test]
+    fn test_redim_preserve() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(2)\n    arr(0) = 1\n    arr(1) = 2\n    ReDim Preserve arr(4)\n    arr(3) = 99\n    a = arr(0)\n    b = arr(3)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(1));
         assert_eq!(vm.variables["b"], Variant::Integer(99));
     }
 
-    #[test] fn test_ubound_lbound() {
-        let vm = run("Sub MySub()\n    Dim arr(9)\n    u = UBound(arr)\n    l = LBound(arr)\nEnd Sub\n");
+    #[test]
+    fn test_ubound_lbound() {
+        let vm =
+            run("Sub MySub()\n    Dim arr(9)\n    u = UBound(arr)\n    l = LBound(arr)\nEnd Sub\n");
         assert_eq!(vm.variables["u"], Variant::Integer(9));
         assert_eq!(vm.variables["l"], Variant::Integer(0));
     }
 
-    #[test] fn dim_array_explicit_lower_bound_is_honored() {
-        let vm = run("Sub MySub()\n    Dim arr(2 To 8)\n    l = LBound(arr)\n    u = UBound(arr)\nEnd Sub\n");
+    #[test]
+    fn dim_array_explicit_lower_bound_is_honored() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(2 To 8)\n    l = LBound(arr)\n    u = UBound(arr)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["l"], Variant::Integer(2));
         assert_eq!(vm.variables["u"], Variant::Integer(8));
     }
 
-    #[test] fn dim_array_explicit_lower_bound_indices_read_and_write_at_their_real_positions() {
-        let vm = run("Sub MySub()\n    Dim arr(2 To 4)\n    arr(2) = 10\n    arr(4) = 30\n    a = arr(2)\n    b = arr(4)\nEnd Sub\n");
+    #[test]
+    fn dim_array_explicit_lower_bound_indices_read_and_write_at_their_real_positions() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(2 To 4)\n    arr(2) = 10\n    arr(4) = 30\n    a = arr(2)\n    b = arr(4)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(10));
         assert_eq!(vm.variables["b"], Variant::Integer(30));
     }
 
-    #[test] fn dim_array_index_below_an_explicit_lower_bound_is_out_of_range() {
-        let prog = parser::parse("Sub MySub()\n    Dim arr(2 To 4)\n    arr(1) = 1\nEnd Sub\n").unwrap();
+    #[test]
+    fn dim_array_index_below_an_explicit_lower_bound_is_out_of_range() {
+        let prog =
+            parser::parse("Sub MySub()\n    Dim arr(2 To 4)\n    arr(1) = 1\nEnd Sub\n").unwrap();
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert_eq!(err, "Subscript out of range");
     }
 
-    #[test] fn option_base_one_shifts_the_default_lower_bound() {
-        let vm = run("Option Base 1\nSub MySub()\n    Dim arr(5)\n    l = LBound(arr)\n    u = UBound(arr)\nEnd Sub\n");
+    #[test]
+    fn option_base_one_shifts_the_default_lower_bound() {
+        let vm = run(
+            "Option Base 1\nSub MySub()\n    Dim arr(5)\n    l = LBound(arr)\n    u = UBound(arr)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["l"], Variant::Integer(1));
         assert_eq!(vm.variables["u"], Variant::Integer(5));
     }
 
-    #[test] fn option_base_one_does_not_override_an_explicit_lower_bound() {
-        let vm = run("Option Base 1\nSub MySub()\n    Dim arr(0 To 5)\n    l = LBound(arr)\nEnd Sub\n");
+    #[test]
+    fn option_base_one_does_not_override_an_explicit_lower_bound() {
+        let vm =
+            run("Option Base 1\nSub MySub()\n    Dim arr(0 To 5)\n    l = LBound(arr)\nEnd Sub\n");
         assert_eq!(vm.variables["l"], Variant::Integer(0));
     }
 
-    #[test] fn dim_array_empty_parens_declares_a_dynamic_array_sizable_by_redim() {
-        let vm = run("Sub MySub()\n    Dim arr()\n    ReDim arr(5)\n    arr(3) = 99\n    u = UBound(arr)\n    v = arr(3)\nEnd Sub\n");
+    #[test]
+    fn dim_array_empty_parens_declares_a_dynamic_array_sizable_by_redim() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr()\n    ReDim arr(5)\n    arr(3) = 99\n    u = UBound(arr)\n    v = arr(3)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["u"], Variant::Integer(5));
         assert_eq!(vm.variables["v"], Variant::Integer(99));
     }
 
-    #[test] fn erase_on_a_fixed_array_resets_elements_to_empty_but_keeps_its_bounds() {
-        let vm = run("Sub MySub()\n    Dim arr(3)\n    arr(0) = 5\n    arr(1) = 10\n    Erase arr\n    e = IsEmpty(arr(0))\n    u = UBound(arr)\nEnd Sub\n");
+    #[test]
+    fn erase_on_a_fixed_array_resets_elements_to_empty_but_keeps_its_bounds() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(3)\n    arr(0) = 5\n    arr(1) = 10\n    Erase arr\n    e = IsEmpty(arr(0))\n    u = UBound(arr)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["e"], Variant::Boolean(true));
         assert_eq!(vm.variables["u"], Variant::Integer(3));
     }
 
-    #[test] fn erase_on_an_explicit_lower_bound_array_preserves_that_bound_too() {
-        let vm = run("Sub MySub()\n    Dim arr(2 To 4)\n    arr(2) = 5\n    Erase arr\n    l = LBound(arr)\n    e = IsEmpty(arr(2))\nEnd Sub\n");
+    #[test]
+    fn erase_on_an_explicit_lower_bound_array_preserves_that_bound_too() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(2 To 4)\n    arr(2) = 5\n    Erase arr\n    l = LBound(arr)\n    e = IsEmpty(arr(2))\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["l"], Variant::Integer(2));
         assert_eq!(vm.variables["e"], Variant::Boolean(true));
     }
 
-    #[test] fn test_split_join() {
-        let vm = run("Sub MySub()\n    arr = Split(\"a,b,c\", \",\")\n    s = Join(arr, \"-\")\n    n = UBound(arr)\nEnd Sub\n");
+    #[test]
+    fn test_split_join() {
+        let vm = run(
+            "Sub MySub()\n    arr = Split(\"a,b,c\", \",\")\n    s = Join(arr, \"-\")\n    n = UBound(arr)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["s"], Variant::Str("a-b-c".into()));
         assert_eq!(vm.variables["n"], Variant::Integer(2));
     }
 
-    #[test] fn test_isarray() {
-        let vm = run("Sub MySub()\n    Dim arr(3)\n    a = IsArray(arr)\n    b = IsArray(42)\nEnd Sub\n");
+    #[test]
+    fn test_isarray() {
+        let vm = run(
+            "Sub MySub()\n    Dim arr(3)\n    a = IsArray(arr)\n    b = IsArray(42)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Boolean(true));
         assert_eq!(vm.variables["b"], Variant::Boolean(false));
     }
@@ -6047,11 +6965,9 @@ mod tests {
 
     #[test]
     fn lbound_ubound_report_each_dimension_of_a_two_dimensional_array_independently() {
-        let vm = run(
-            "Sub MySub()\n    Dim arr(1 To 3, -2 To 2)\n\
+        let vm = run("Sub MySub()\n    Dim arr(1 To 3, -2 To 2)\n\
              a = LBound(arr, 1)\n    b = UBound(arr, 1)\n\
-             c = LBound(arr, 2)\n    d = UBound(arr, 2)\nEnd Sub\n",
-        );
+             c = LBound(arr, 2)\n    d = UBound(arr, 2)\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Integer(1));
         assert_eq!(vm.variables["b"], Variant::Integer(3));
         assert_eq!(vm.variables["c"], Variant::Integer(-2));
@@ -6060,7 +6976,9 @@ mod tests {
 
     #[test]
     fn ubound_dimension_zero_is_subscript_out_of_range() {
-        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    u = UBound(arr, 0)\nEnd Sub\n").unwrap();
+        let prog =
+            parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    u = UBound(arr, 0)\nEnd Sub\n")
+                .unwrap();
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert_eq!(err, "Subscript out of range");
@@ -6068,7 +6986,9 @@ mod tests {
 
     #[test]
     fn ubound_of_a_dimension_beyond_the_arrays_rank_is_subscript_out_of_range() {
-        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    u = UBound(arr, 3)\nEnd Sub\n").unwrap();
+        let prog =
+            parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    u = UBound(arr, 3)\nEnd Sub\n")
+                .unwrap();
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert_eq!(err, "Subscript out of range");
@@ -6076,7 +6996,8 @@ mod tests {
 
     #[test]
     fn too_few_subscripts_on_a_two_dimensional_array_is_not_silently_accepted() {
-        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    a = arr(1)\nEnd Sub\n").unwrap();
+        let prog =
+            parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    a = arr(1)\nEnd Sub\n").unwrap();
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert_eq!(err, "Subscript out of range");
@@ -6084,23 +7005,31 @@ mod tests {
 
     #[test]
     fn too_many_subscripts_on_a_two_dimensional_array_is_not_silently_accepted() {
-        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    a = arr(1, 1, 1)\nEnd Sub\n").unwrap();
+        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    a = arr(1, 1, 1)\nEnd Sub\n")
+            .unwrap();
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert_eq!(err, "Subscript out of range");
     }
 
     #[test]
-    fn array_out_of_bounds_evidence_on_a_two_dimensional_array_reports_the_failing_dimensions_own_bounds() {
+    fn array_out_of_bounds_evidence_on_a_two_dimensional_array_reports_the_failing_dimensions_own_bounds()
+     {
         // Regression for a zip/enumerate mixup: the evidence must name
         // dimension 2's bounds (0..2), not dimension 1's (0..3), since
         // dimension 2's index (-1) is the one that's actually out of range.
-        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    arr(0, -1) = 1\nEnd Sub\n").unwrap();
+        let prog =
+            parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    arr(0, -1) = 1\nEnd Sub\n").unwrap();
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert_eq!(err, "Subscript out of range");
         match vm.take_resolution_failure() {
-            Some(ResolutionFailureKind::ArrayIndexOutOfBounds { name, index, lower, upper }) => {
+            Some(ResolutionFailureKind::ArrayIndexOutOfBounds {
+                name,
+                index,
+                lower,
+                upper,
+            }) => {
                 assert_eq!(name, "arr");
                 assert_eq!(index, -1);
                 assert_eq!(lower, 0);
@@ -6112,12 +7041,14 @@ mod tests {
 
     #[test]
     fn an_out_of_range_index_on_either_dimension_of_a_two_dimensional_array_errors() {
-        let prog = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    arr(4, 0) = 1\nEnd Sub\n").unwrap();
+        let prog =
+            parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    arr(4, 0) = 1\nEnd Sub\n").unwrap();
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert_eq!(err, "Subscript out of range");
 
-        let prog2 = parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    arr(0, -1) = 1\nEnd Sub\n").unwrap();
+        let prog2 =
+            parser::parse("Sub MySub()\n    Dim arr(3, 2)\n    arr(0, -1) = 1\nEnd Sub\n").unwrap();
         let mut vm2 = Vm::new();
         let err2 = vm2.run_sub(&prog2, "mysub").unwrap_err();
         assert_eq!(err2, "Subscript out of range");
@@ -6125,10 +7056,8 @@ mod tests {
 
     #[test]
     fn option_base_one_shifts_every_dimensions_default_lower_bound() {
-        let vm = run(
-            "Option Base 1\nSub MySub()\n    Dim arr(3, 2)\n\
-             a = LBound(arr, 1)\n    b = LBound(arr, 2)\nEnd Sub\n",
-        );
+        let vm = run("Option Base 1\nSub MySub()\n    Dim arr(3, 2)\n\
+             a = LBound(arr, 1)\n    b = LBound(arr, 2)\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Integer(1));
         assert_eq!(vm.variables["b"], Variant::Integer(1));
     }
@@ -6205,10 +7134,8 @@ mod tests {
 
     #[test]
     fn an_absurdly_huge_two_dimensional_dim_is_rejected_as_out_of_memory_not_a_hang_or_crash() {
-        let prog = parser::parse(
-            "Sub MySub()\n    Dim arr(2000000000, 2000000000)\nEnd Sub\n",
-        )
-        .unwrap();
+        let prog =
+            parser::parse("Sub MySub()\n    Dim arr(2000000000, 2000000000)\nEnd Sub\n").unwrap();
         let mut vm = Vm::new();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert_eq!(err, "Out of memory");
@@ -6254,11 +7181,9 @@ mod tests {
 
     #[test]
     fn a_two_dimensional_array_passed_to_a_function_and_returned_keeps_its_shape() {
-        let vm = run(
-            "Function Echo(a)\n    Echo = a\nEnd Function\n\
+        let vm = run("Function Echo(a)\n    Echo = a\nEnd Function\n\
              Sub MySub()\n    Dim arr(1, 1)\n    arr(0, 1) = 7\n    r = Echo(arr)\n\
-             v = r(0, 1)\n    u2 = UBound(r, 2)\nEnd Sub\n",
-        );
+             v = r(0, 1)\n    u2 = UBound(r, 2)\nEnd Sub\n");
         assert_eq!(vm.variables["v"], Variant::Integer(7));
         assert_eq!(vm.variables["u2"], Variant::Integer(1));
     }
@@ -6317,13 +7242,17 @@ mod tests {
 
     #[test]
     fn test_app_prop_noop() {
-        let vm = run("Sub MySub()\n    Application.ScreenUpdating = False\n    Application.EnableEvents = False\n    x = 1\n    Application.ScreenUpdating = True\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Application.ScreenUpdating = False\n    Application.EnableEvents = False\n    x = 1\n    Application.ScreenUpdating = True\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(1));
     }
 
     #[test]
     fn test_xl_constants() {
-        let vm = run("Sub MySub()\n    a = xlUp\n    b = xlDown\n    c = xlCalculationManual\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    a = xlUp\n    b = xlDown\n    c = xlCalculationManual\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(-4162));
         assert_eq!(vm.variables["b"], Variant::Integer(-4121));
         assert_eq!(vm.variables["c"], Variant::Integer(-4135));
@@ -6333,20 +7262,26 @@ mod tests {
 
     #[test]
     fn test_range_write_value() {
-        let vm = run("Sub MySub()\n    Range(\"A1\").Value = 42\n    Range(\"B2\").Value = \"hello\"\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Range(\"A1\").Value = 42\n    Range(\"B2\").Value = \"hello\"\nEnd Sub\n",
+        );
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(42));
         assert_eq!(vm.get_cell(2, 2), Variant::Str("hello".into()));
     }
 
     #[test]
     fn test_range_write_formula() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(1,2).Value = 20\n    Range(\"C1\").Formula = \"=SUM(A1:B1)\"\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(1,2).Value = 20\n    Range(\"C1\").Formula = \"=SUM(A1:B1)\"\nEnd Sub\n",
+        );
         assert_eq!(vm.get_cell(1, 3), Variant::Integer(30));
     }
 
     #[test]
     fn test_range_copy() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    Cells(3,1).Value = 30\n    Range(\"A1:A3\").Copy Destination:=Range(\"B1\")\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    Cells(3,1).Value = 30\n    Range(\"A1:A3\").Copy Destination:=Range(\"B1\")\nEnd Sub\n",
+        );
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(10));
         assert_eq!(vm.get_cell(2, 2), Variant::Integer(20));
         assert_eq!(vm.get_cell(3, 2), Variant::Integer(30));
@@ -6354,63 +7289,100 @@ mod tests {
 
     #[test]
     fn test_range_read_expr() {
-        let vm = run("Sub MySub()\n    Cells(5,1).Value = 99\n    x = Range(\"A5\").Value\nEnd Sub\n");
+        let vm =
+            run("Sub MySub()\n    Cells(5,1).Value = 99\n    x = Range(\"A5\").Value\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(99));
     }
 
     // ── WorksheetFunction ────────────────────────────────────────────────────
 
-    #[test] fn test_wsf_sum() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    Cells(3,1).Value = 30\n    s = WorksheetFunction.Sum(Range(\"A1:A3\"))\nEnd Sub\n");
+    #[test]
+    fn test_wsf_sum() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    Cells(3,1).Value = 30\n    s = WorksheetFunction.Sum(Range(\"A1:A3\"))\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["s"], Variant::Integer(60));
     }
 
-    #[test] fn test_wsf_max_min() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 5\n    Cells(2,1).Value = 3\n    Cells(3,1).Value = 8\n    mx = WorksheetFunction.Max(Range(\"A1:A3\"))\n    mn = WorksheetFunction.Min(Range(\"A1:A3\"))\nEnd Sub\n");
+    #[test]
+    fn test_wsf_max_min() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 5\n    Cells(2,1).Value = 3\n    Cells(3,1).Value = 8\n    mx = WorksheetFunction.Max(Range(\"A1:A3\"))\n    mn = WorksheetFunction.Min(Range(\"A1:A3\"))\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["mx"], Variant::Integer(8));
         assert_eq!(vm.variables["mn"], Variant::Integer(3));
     }
 
-    #[test] fn test_wsf_average() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    av = WorksheetFunction.Average(Range(\"A1:A2\"))\nEnd Sub\n");
+    #[test]
+    fn test_wsf_average() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    av = WorksheetFunction.Average(Range(\"A1:A2\"))\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["av"], Variant::Integer(15));
     }
 
-    #[test] fn test_wsf_countif() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 5\n    Cells(2,1).Value = 10\n    Cells(3,1).Value = 3\n    n = WorksheetFunction.CountIf(Range(\"A1:A3\"), \">4\")\nEnd Sub\n");
+    #[test]
+    fn test_wsf_countif() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 5\n    Cells(2,1).Value = 10\n    Cells(3,1).Value = 3\n    n = WorksheetFunction.CountIf(Range(\"A1:A3\"), \">4\")\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["n"], Variant::Integer(2));
     }
 
-    #[test] fn test_wsf_sumif() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 5\n    Cells(2,1).Value = 10\n    Cells(3,1).Value = 3\n    s = WorksheetFunction.SumIf(Range(\"A1:A3\"), \">4\")\nEnd Sub\n");
+    #[test]
+    fn test_wsf_sumif() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 5\n    Cells(2,1).Value = 10\n    Cells(3,1).Value = 3\n    s = WorksheetFunction.SumIf(Range(\"A1:A3\"), \">4\")\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["s"], Variant::Integer(15));
     }
 
-    #[test] fn test_wsf_application_prefix() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 7\n    Cells(2,1).Value = 3\n    s = Application.WorksheetFunction.Sum(Range(\"A1:A2\"))\nEnd Sub\n");
+    #[test]
+    fn test_wsf_application_prefix() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 7\n    Cells(2,1).Value = 3\n    s = Application.WorksheetFunction.Sum(Range(\"A1:A2\"))\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["s"], Variant::Integer(10));
     }
 
-    #[test] fn test_wsf_match() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = \"a\"\n    Cells(2,1).Value = \"b\"\n    Cells(3,1).Value = \"c\"\n    pos = WorksheetFunction.Match(\"b\", Range(\"A1:A3\"), 0)\nEnd Sub\n");
+    #[test]
+    fn test_wsf_match() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"a\"\n    Cells(2,1).Value = \"b\"\n    Cells(3,1).Value = \"c\"\n    pos = WorksheetFunction.Match(\"b\", Range(\"A1:A3\"), 0)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["pos"], Variant::Integer(2));
     }
 
     // ── Range("A1:A10").Value 多セル読み取り ─────────────────────────────────
 
-    #[test] fn test_range_read_multi_cell() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    x = Range(\"A1:A3\").Value\nEnd Sub\n");
-        assert_eq!(vm.variables["x"], Variant::Array(vec![Variant::Integer(1), Variant::Integer(2), Variant::Integer(3)]));
+    #[test]
+    fn test_range_read_multi_cell() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    x = Range(\"A1:A3\").Value\nEnd Sub\n",
+        );
+        assert_eq!(
+            vm.variables["x"],
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(3)
+            ])
+        );
     }
 
-    #[test] fn test_range_read_single_cell_backward_compat() {
-        let vm = run("Sub MySub()\n    Cells(5,1).Value = 99\n    x = Range(\"A5\").Value\nEnd Sub\n");
+    #[test]
+    fn test_range_read_single_cell_backward_compat() {
+        let vm =
+            run("Sub MySub()\n    Cells(5,1).Value = 99\n    x = Range(\"A5\").Value\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(99));
     }
 
-    #[test] fn test_range_read_2d_row_major() {
+    #[test]
+    fn test_range_read_2d_row_major() {
         // A1=1, B1=2, A2=3, B2=4 → Range("A1:B2").Value → [1,2,3,4]
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(1,2).Value = 2\n    Cells(2,1).Value = 3\n    Cells(2,2).Value = 4\n    arr = Range(\"A1:B2\").Value\n    a = arr(0)\n    b = arr(1)\n    c = arr(2)\n    d = arr(3)\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(1,2).Value = 2\n    Cells(2,1).Value = 3\n    Cells(2,2).Value = 4\n    arr = Range(\"A1:B2\").Value\n    a = arr(0)\n    b = arr(1)\n    c = arr(2)\n    d = arr(3)\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(1));
         assert_eq!(vm.variables["b"], Variant::Integer(2));
         assert_eq!(vm.variables["c"], Variant::Integer(3));
@@ -6419,75 +7391,109 @@ mod tests {
 
     // ── Cells.Find ───────────────────────────────────────────────────────────
 
-    #[test] fn test_cells_find_row() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = \"apple\"\n    Cells(2,1).Value = \"banana\"\n    Cells(3,1).Value = \"cherry\"\n    r = Cells.Find(What:=\"banana\").Row\nEnd Sub\n");
+    #[test]
+    fn test_cells_find_row() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"apple\"\n    Cells(2,1).Value = \"banana\"\n    Cells(3,1).Value = \"cherry\"\n    r = Cells.Find(What:=\"banana\").Row\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["r"], Variant::Integer(2));
     }
 
-    #[test] fn test_cells_find_column() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = \"x\"\n    Cells(1,2).Value = \"y\"\n    Cells(1,3).Value = \"z\"\n    c = Cells.Find(What:=\"y\").Column\nEnd Sub\n");
+    #[test]
+    fn test_cells_find_column() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"x\"\n    Cells(1,2).Value = \"y\"\n    Cells(1,3).Value = \"z\"\n    c = Cells.Find(What:=\"y\").Column\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["c"], Variant::Integer(2));
     }
 
-    #[test] fn test_cells_find_not_found() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = \"a\"\n    r = Cells.Find(What:=\"missing\").Row\nEnd Sub\n");
+    #[test]
+    fn test_cells_find_not_found() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"a\"\n    r = Cells.Find(What:=\"missing\").Row\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["r"], Variant::Integer(0));
     }
 
-    #[test] fn test_cells_find_extra_kwargs() {
-        let vm = run("Sub MySub()\n    Cells(2,1).Value = 42\n    r = Cells.Find(What:=42, LookIn:=xlValues, SearchDirection:=xlPrevious).Row\nEnd Sub\n");
+    #[test]
+    fn test_cells_find_extra_kwargs() {
+        let vm = run(
+            "Sub MySub()\n    Cells(2,1).Value = 42\n    r = Cells.Find(What:=42, LookIn:=xlValues, SearchDirection:=xlPrevious).Row\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["r"], Variant::Integer(2));
     }
 
     // ── EntireRow / EntireColumn ──────────────────────────────────────────────
 
-    #[test] fn test_entirerow_delete() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    Range(\"A2:A2\").EntireRow.Delete\n    x = Cells(2,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_entirerow_delete() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    Range(\"A2:A2\").EntireRow.Delete\n    x = Cells(2,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(3)); // 3 が行2に移動
     }
 
-    #[test] fn test_entirerow_clear() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 99\n    Range(\"A1\").EntireRow.Clear\n    x = Cells(1,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_entirerow_clear() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 99\n    Range(\"A1\").EntireRow.Clear\n    x = Cells(1,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Empty);
     }
 
-    #[test] fn test_entirerow_clear_contents() {
-        let vm = run("Sub MySub()\n    Cells(2,1).Value = 55\n    Range(\"A2\").EntireRow.ClearContents\n    x = Cells(2,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_entirerow_clear_contents() {
+        let vm = run(
+            "Sub MySub()\n    Cells(2,1).Value = 55\n    Range(\"A2\").EntireRow.ClearContents\n    x = Cells(2,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Empty);
     }
 
-    #[test] fn test_entirecolumn_delete() {
+    #[test]
+    fn test_entirecolumn_delete() {
         // パースエラーなしで実行できることを確認
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 10\n    Range(\"A1:A3\").EntireColumn.Delete\n    x = 1\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Range(\"A1:A3\").EntireColumn.Delete\n    x = 1\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(1));
     }
 
-    #[test] fn test_range_noop_hidden() {
+    #[test]
+    fn test_range_noop_hidden() {
         let vm = run("Sub MySub()\n    Range(\"A1\").Hidden = True\n    x = 1\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(1));
     }
 
-    #[test] fn test_range_noop_interior_color() {
+    #[test]
+    fn test_range_noop_interior_color() {
         let vm = run("Sub MySub()\n    Range(\"A1:B2\").Interior.Color = 3\n    x = 2\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(2));
     }
 
-    #[test] fn test_range_noop_numberformat() {
-        let vm = run("Sub MySub()\n    Range(\"A1\").NumberFormat = \"0.00\"\n    x = 3\nEnd Sub\n");
+    #[test]
+    fn test_range_noop_numberformat() {
+        let vm =
+            run("Sub MySub()\n    Range(\"A1\").NumberFormat = \"0.00\"\n    x = 3\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(3));
     }
 
     // ── Range.Delete / Range.Insert ──────────────────────────────────────────
 
-    #[test] fn test_range_delete_shifts_up() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    Cells(4,1).Value = 4\n    Range(\"A2:A2\").Delete\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\n    c = Cells(3,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_range_delete_shifts_up() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    Cells(4,1).Value = 4\n    Range(\"A2:A2\").Delete\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\n    c = Cells(3,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(1));
         assert_eq!(vm.variables["b"], Variant::Integer(3)); // 3 shifted up
         assert_eq!(vm.variables["c"], Variant::Integer(4)); // 4 shifted up
     }
 
-    #[test] fn test_range_insert_shifts_down() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Range(\"A2:A2\").Insert\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\n    c = Cells(3,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_range_insert_shifts_down() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Range(\"A2:A2\").Insert\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\n    c = Cells(3,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(1));
         assert_eq!(vm.variables["b"], Variant::Empty); // new empty row
         assert_eq!(vm.variables["c"], Variant::Integer(2)); // shifted down
@@ -6495,88 +7501,131 @@ mod tests {
 
     // ── Range.Sort ───────────────────────────────────────────────────────────
 
-    #[test] fn test_range_sort_ascending() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 3\n    Cells(2,1).Value = 1\n    Cells(3,1).Value = 2\n    Range(\"A1:A3\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\n    c = Cells(3,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_range_sort_ascending() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 3\n    Cells(2,1).Value = 1\n    Cells(3,1).Value = 2\n    Range(\"A1:A3\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\n    c = Cells(3,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(1));
         assert_eq!(vm.variables["b"], Variant::Integer(2));
         assert_eq!(vm.variables["c"], Variant::Integer(3));
     }
 
-    #[test] fn test_range_sort_descending() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 3\n    Cells(2,1).Value = 1\n    Cells(3,1).Value = 2\n    Range(\"A1:A3\").Sort Key1:=Range(\"A1\"), Order1:=xlDescending\n    a = Cells(1,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_range_sort_descending() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 3\n    Cells(2,1).Value = 1\n    Cells(3,1).Value = 2\n    Range(\"A1:A3\").Sort Key1:=Range(\"A1\"), Order1:=xlDescending\n    a = Cells(1,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["a"], Variant::Integer(3));
     }
 
     // ── Range clear / offset / multi-cell write / Sheets() ───────────────────
 
-    #[test] fn test_range_clear_contents() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 99\n    Range(\"A1\").ClearContents\nEnd Sub\n");
+    #[test]
+    fn test_range_clear_contents() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 99\n    Range(\"A1\").ClearContents\nEnd Sub\n",
+        );
         assert_eq!(vm.get_cell(1, 1), Variant::Empty);
     }
 
-    #[test] fn test_range_clear() {
-        let vm = run("Sub MySub()\n    Range(\"A1:A3\").Value = 5\n    Range(\"A1:A3\").Clear\nEnd Sub\n");
+    #[test]
+    fn test_range_clear() {
+        let vm = run(
+            "Sub MySub()\n    Range(\"A1:A3\").Value = 5\n    Range(\"A1:A3\").Clear\nEnd Sub\n",
+        );
         assert_eq!(vm.get_cell(1, 1), Variant::Empty);
         assert_eq!(vm.get_cell(2, 1), Variant::Empty);
         assert_eq!(vm.get_cell(3, 1), Variant::Empty);
     }
 
-    #[test] fn test_range_write_multi_cell() {
+    #[test]
+    fn test_range_write_multi_cell() {
         let vm = run("Sub MySub()\n    Range(\"A1:A3\").Value = 7\nEnd Sub\n");
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
         assert_eq!(vm.get_cell(2, 1), Variant::Integer(7));
         assert_eq!(vm.get_cell(3, 1), Variant::Integer(7));
     }
 
-    #[test] fn test_range_offset_read() {
-        let vm = run("Sub MySub()\n    Cells(2,2).Value = 42\n    x = Range(\"A1\").Offset(1,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_range_offset_read() {
+        let vm = run(
+            "Sub MySub()\n    Cells(2,2).Value = 42\n    x = Range(\"A1\").Offset(1,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(42));
     }
 
-    #[test] fn test_range_offset_write() {
+    #[test]
+    fn test_range_offset_write() {
         let vm = run("Sub MySub()\n    Range(\"A1\").Offset(2,0).Value = 99\nEnd Sub\n");
         assert_eq!(vm.get_cell(3, 1), Variant::Integer(99));
     }
 
-    #[test] fn test_sheets_cell_write() {
+    #[test]
+    fn test_sheets_cell_write() {
         let vm = run("Sub MySub()\n    Sheets(\"Sheet1\").Cells(1,1).Value = 123\nEnd Sub\n");
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(123));
     }
 
-    #[test] fn test_sheets_cell_read() {
-        let vm = run("Sub MySub()\n    Sheets(\"Sheet1\").Cells(1,1).Value = 55\n    x = Sheets(\"Sheet1\").Cells(1,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_sheets_cell_read() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Sheet1\").Cells(1,1).Value = 55\n    x = Sheets(\"Sheet1\").Cells(1,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(55));
     }
 
-    #[test] fn test_worksheets_cell_write() {
+    #[test]
+    fn test_worksheets_cell_write() {
         let vm = run("Sub MySub()\n    Worksheets(\"Data\").Cells(2,3).Value = 77\nEnd Sub\n");
         // Now routes to "data" sheet, not the active "sheet1"
-        let cell = vm.get_sheet_cells("data").and_then(|s| s.get(&(2,3))).map(|c| c.value.clone());
+        let cell = vm
+            .get_sheet_cells("data")
+            .and_then(|s| s.get(&(2, 3)))
+            .map(|c| c.value.clone());
         assert_eq!(cell, Some(Variant::Integer(77)));
     }
 
     // ── Multi-sheet (Phase 9) ────────────────────────────────────────────────
 
-    #[test] fn test_multisheet_write_read_different_sheets() {
-        let vm = run("Sub MySub()\n    Sheets(\"Sheet1\").Cells(1,1).Value = 10\n    Sheets(\"Sheet2\").Cells(1,1).Value = 20\nEnd Sub\n");
-        let s1 = vm.get_sheet_cells("sheet1").and_then(|s| s.get(&(1,1))).map(|c| c.value.clone());
-        let s2 = vm.get_sheet_cells("sheet2").and_then(|s| s.get(&(1,1))).map(|c| c.value.clone());
+    #[test]
+    fn test_multisheet_write_read_different_sheets() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Sheet1\").Cells(1,1).Value = 10\n    Sheets(\"Sheet2\").Cells(1,1).Value = 20\nEnd Sub\n",
+        );
+        let s1 = vm
+            .get_sheet_cells("sheet1")
+            .and_then(|s| s.get(&(1, 1)))
+            .map(|c| c.value.clone());
+        let s2 = vm
+            .get_sheet_cells("sheet2")
+            .and_then(|s| s.get(&(1, 1)))
+            .map(|c| c.value.clone());
         assert_eq!(s1, Some(Variant::Integer(10)));
         assert_eq!(s2, Some(Variant::Integer(20)));
     }
 
-    #[test] fn test_multisheet_cross_sheet_read() {
-        let vm = run("Sub MySub()\n    Sheets(\"Data\").Cells(1,1).Value = 42\n    x = Sheets(\"Data\").Cells(1,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_multisheet_cross_sheet_read() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Data\").Cells(1,1).Value = 42\n    x = Sheets(\"Data\").Cells(1,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(42));
     }
 
-    #[test] fn test_with_sheets_block() {
-        let vm = run("Sub MySub()\n    With Sheets(\"Sheet2\")\n        .Cells(1,1).Value = 99\n    End With\n    x = Sheets(\"Sheet2\").Cells(1,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_with_sheets_block() {
+        let vm = run(
+            "Sub MySub()\n    With Sheets(\"Sheet2\")\n        .Cells(1,1).Value = 99\n    End With\n    x = Sheets(\"Sheet2\").Cells(1,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(99));
     }
 
-    #[test] fn test_with_sheets_restores_active() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 1\n    With Sheets(\"Sheet2\")\n        .Cells(1,1).Value = 2\n    End With\n    x = Cells(1,1).Value\nEnd Sub\n");
+    #[test]
+    fn test_with_sheets_restores_active() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    With Sheets(\"Sheet2\")\n        .Cells(1,1).Value = 2\n    End With\n    x = Cells(1,1).Value\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(1)); // active sheet unchanged
     }
 
@@ -6608,14 +7657,22 @@ mod tests {
         let vm = run(
             "Sub MySub()\n    With Sheets(\"Sheet2\")\n        ActiveSheet.Cells(1,1).Value = 42\n    End With\nEnd Sub\n",
         );
-        let cell = vm.get_sheet_cells("sheet2").and_then(|s| s.get(&(1, 1))).map(|c| c.value.clone());
+        let cell = vm
+            .get_sheet_cells("sheet2")
+            .and_then(|s| s.get(&(1, 1)))
+            .map(|c| c.value.clone());
         assert_eq!(cell, Some(Variant::Integer(42)));
     }
 
     #[test]
     fn thisworkbook_worksheets_cell_write_targets_the_named_sheet() {
-        let vm = run("Sub MySub()\n    ThisWorkbook.Worksheets(\"Data\").Cells(2,3).Value = 77\nEnd Sub\n");
-        let cell = vm.get_sheet_cells("data").and_then(|s| s.get(&(2, 3))).map(|c| c.value.clone());
+        let vm = run(
+            "Sub MySub()\n    ThisWorkbook.Worksheets(\"Data\").Cells(2,3).Value = 77\nEnd Sub\n",
+        );
+        let cell = vm
+            .get_sheet_cells("data")
+            .and_then(|s| s.get(&(2, 3)))
+            .map(|c| c.value.clone());
         assert_eq!(cell, Some(Variant::Integer(77)));
     }
 
@@ -6628,13 +7685,17 @@ mod tests {
         assert_eq!(vm.variables["x"], Variant::Integer(42));
     }
 
-    #[test] fn test_sheets_add() {
+    #[test]
+    fn test_sheets_add() {
         let vm = run("Sub MySub()\n    Sheets.Add\n    n = 1\nEnd Sub\n");
         assert!(vm.sheet_names().len() >= 2);
     }
 
-    #[test] fn test_sheets_delete() {
-        let vm = run("Sub MySub()\n    Sheets(\"Sheet2\").Cells(1,1).Value = 5\n    Sheets(\"Sheet2\").Delete\n    n = 1\nEnd Sub\n");
+    #[test]
+    fn test_sheets_delete() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Sheet2\").Cells(1,1).Value = 5\n    Sheets(\"Sheet2\").Delete\n    n = 1\nEnd Sub\n",
+        );
         assert!(!vm.sheet_names().contains(&"sheet2".to_string()));
     }
 
@@ -6870,8 +7931,11 @@ mod tests {
         assert_eq!(closest_match("ZzzUnrelated", &candidates), None);
     }
 
-    #[test] fn test_sheet_names() {
-        let vm = run("Sub MySub()\n    Sheets(\"Alpha\").Cells(1,1).Value = 1\n    Sheets(\"Beta\").Cells(1,1).Value = 2\nEnd Sub\n");
+    #[test]
+    fn test_sheet_names() {
+        let vm = run(
+            "Sub MySub()\n    Sheets(\"Alpha\").Cells(1,1).Value = 1\n    Sheets(\"Beta\").Cells(1,1).Value = 2\nEnd Sub\n",
+        );
         let names = vm.sheet_names();
         assert!(names.contains(&"alpha".to_string()));
         assert!(names.contains(&"beta".to_string()));
@@ -6891,13 +7955,17 @@ mod tests {
 
     #[test]
     fn test_cells_end_row_up() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    Cells(3,1).Value = 30\n    lastRow = Cells(Rows.Count,1).End(xlUp).Row\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    Cells(3,1).Value = 30\n    lastRow = Cells(Rows.Count,1).End(xlUp).Row\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["lastrow"], Variant::Integer(3));
     }
 
     #[test]
     fn test_cells_end_col_left() {
-        let vm = run("Sub MySub()\n    Cells(1,1).Value = \"a\"\n    Cells(1,2).Value = \"b\"\n    Cells(1,3).Value = \"c\"\n    lastCol = Cells(1,Columns.Count).End(xlToLeft).Column\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"a\"\n    Cells(1,2).Value = \"b\"\n    Cells(1,3).Value = \"c\"\n    lastCol = Cells(1,Columns.Count).End(xlToLeft).Column\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["lastcol"], Variant::Integer(3));
     }
 
@@ -7008,8 +8076,8 @@ mod tests {
             "    act = p.Active\n",
             "End Sub\n",
         ));
-        assert_eq!(vm.variables["xi"],  Variant::Integer(0));
-        assert_eq!(vm.variables["yi"],  Variant::Integer(0));
+        assert_eq!(vm.variables["xi"], Variant::Integer(0));
+        assert_eq!(vm.variables["yi"], Variant::Integer(0));
         assert_eq!(vm.variables["lbl"], Variant::Str(String::new()));
         assert_eq!(vm.variables["act"], Variant::Boolean(false));
     }
@@ -7083,8 +8151,8 @@ mod tests {
             "Type Outer\n    Val As String\n    Pt As Inner\nEnd Type\n",
             "Sub MySub()\n",
             "    Dim o As Outer\n",
-            "    s = o.Val\n",       // default "" for String
-            "    x = o.Pt.X\n",     // default 0 for nested Integer
+            "    s = o.Val\n",  // default "" for String
+            "    x = o.Pt.X\n", // default 0 for nested Integer
             "    y = o.Pt.Y\n",
             "End Sub\n",
         ));
@@ -7105,7 +8173,7 @@ mod tests {
             "    a = items(1).Value\n",
             "    b = items(2).Value\n",
             "    c = items(1).Label\n",
-            "    d = items(0).Value\n",  // default 0
+            "    d = items(0).Value\n", // default 0
             "End Sub\n",
         ));
         assert_eq!(vm.variables["a"], Variant::Integer(10));
@@ -7129,8 +8197,8 @@ mod tests {
             "    ry = p.Y\n",
             "End Sub\n",
         ));
-        assert_eq!(vm.variables["rx"],    Variant::Integer(5));
-        assert_eq!(vm.variables["ry"],    Variant::Integer(10));
+        assert_eq!(vm.variables["rx"], Variant::Integer(5));
+        assert_eq!(vm.variables["ry"], Variant::Integer(10));
         assert_eq!(vm.variables["total"], Variant::Integer(15));
     }
 
@@ -7188,12 +8256,24 @@ mod tests {
     fn test_sheet_cells_mut_dirty_flag() {
         // Writing via Sheets("sheet1").Cells() must invalidate the End-query index
         let mut vm = Vm::new();
-        vm.cells_mut().insert((1,1), CellContent { formula: None, value: Variant::Integer(10) });
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(10),
+            },
+        );
         // Force index rebuild
         let _ = vm.last_nonempty_row(1, 1_048_576);
         assert!(!vm.cell_index_dirty);
         // Write via sheet_cells_mut (simulated by inserting through the public method)
-        vm.cells_mut().insert((5,1), CellContent { formula: None, value: Variant::Integer(50) });
+        vm.cells_mut().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(50),
+            },
+        );
         // dirty flag must be set
         assert!(vm.cell_index_dirty);
         // Next query should rebuild and find row 5
@@ -7236,7 +8316,10 @@ mod tests {
         .unwrap();
         let mut vm = Vm::new();
         let result = vm.run_sub(&prog, "MySub");
-        assert!(result.is_err(), "expected the undefined-variable error to propagate");
+        assert!(
+            result.is_err(),
+            "expected the undefined-variable error to propagate"
+        );
         assert_eq!(vm.take_messages(), vec!["seen before failure".to_string()]);
     }
 
@@ -7246,7 +8329,10 @@ mod tests {
         let mut vm = Vm::new();
         vm.error_on_msgbox = true;
         let result = vm.run_sub(&prog, "MySub");
-        assert!(result.is_err(), "MsgBox must still fail when error_on_msgbox is set");
+        assert!(
+            result.is_err(),
+            "MsgBox must still fail when error_on_msgbox is set"
+        );
         // Spec: messages reflects every MsgBox the macro attempted to show,
         // even ones that are then treated as a blocking error.
         assert_eq!(vm.take_messages(), vec!["blocked".to_string()]);
@@ -7327,9 +8413,8 @@ mod tests {
         // Range("A1").NumberFormat isn't a recognized Range property, so it
         // parses to Stmt::Unsupported — confirm it doesn't error and later
         // statements still run normally, exactly like Stmt::Dim.
-        let vm = run(
-            "Sub MySub()\n    Range(\"A1\").NumberFormat = \"0.00\"\n    x = 3\nEnd Sub\n",
-        );
+        let vm =
+            run("Sub MySub()\n    Range(\"A1\").NumberFormat = \"0.00\"\n    x = 3\nEnd Sub\n");
         assert_eq!(vm.variables["x"], Variant::Integer(3));
     }
 
@@ -7372,7 +8457,10 @@ mod tests {
     fn run_sub_multi_resolves_unique_bare_name_across_modules() {
         let modules = vec![
             module("module1", "Sub Helper()\n    y = 1\nEnd Sub\n"),
-            module("module2", "Sub Main()\n    Call Helper()\n    x = 42\nEnd Sub\n"),
+            module(
+                "module2",
+                "Sub Main()\n    Call Helper()\n    x = 42\nEnd Sub\n",
+            ),
         ];
         let mut vm = Vm::new();
         vm.run_sub_multi(&modules, "Main").unwrap();
@@ -7407,13 +8495,19 @@ mod tests {
         let mut vm = Vm::new();
         let err = vm.run_sub_multi(&modules, "Main").unwrap_err();
         assert!(err.contains("duplicate Sub 'main'"), "{:?}", err);
-        assert!(!vm.variables.contains_key("x"), "no execution should have happened");
+        assert!(
+            !vm.variables.contains_key("x"),
+            "no execution should have happened"
+        );
     }
 
     #[test]
     fn run_sub_multi_rejects_a_genuine_func_collision() {
         let modules = vec![
-            module("module1", "Function Foo()\n    Foo = 1\nEnd Function\nSub Main()\n    x = 1\nEnd Sub\n"),
+            module(
+                "module1",
+                "Function Foo()\n    Foo = 1\nEnd Function\nSub Main()\n    x = 1\nEnd Sub\n",
+            ),
             module("module2", "Function Foo()\n    Foo = 2\nEnd Function\n"),
         ];
         let mut vm = Vm::new();
@@ -7630,7 +8724,12 @@ mod tests {
 
     #[test]
     fn rect_and_range_ref_helpers_report_dimensions_and_area_count() {
-        let a = Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 3 };
+        let a = Rect {
+            start_row: 1,
+            start_col: 1,
+            end_row: 10,
+            end_col: 3,
+        };
         assert_eq!((a.rows(), a.cols()), (10, 3));
 
         let single = RangeRef::single("sheet1".to_string(), a);
@@ -7638,8 +8737,16 @@ mod tests {
         assert_eq!(single.single_rect(), Some(&a));
         assert_eq!(single.cell_count(), 30);
 
-        let b = Rect { start_row: 1, start_col: 5, end_row: 4, end_col: 5 };
-        let multi = RangeRef { sheet: "sheet1".to_string(), areas: vec![a, b] };
+        let b = Rect {
+            start_row: 1,
+            start_col: 5,
+            end_row: 4,
+            end_col: 5,
+        };
+        let multi = RangeRef {
+            sheet: "sheet1".to_string(),
+            areas: vec![a, b],
+        };
         assert!(!multi.is_single_area());
         assert_eq!(multi.single_rect(), None);
         assert_eq!(multi.cell_count(), 30 + 4);
@@ -7649,7 +8756,12 @@ mod tests {
     fn parse_multi_area_addr_returns_one_rect_for_a_plain_range() {
         assert_eq!(
             parse_multi_area_addr("A1:C10"),
-            Some(vec![Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 3 }])
+            Some(vec![Rect {
+                start_row: 1,
+                start_col: 1,
+                end_row: 10,
+                end_col: 3
+            }])
         );
     }
 
@@ -7658,8 +8770,18 @@ mod tests {
         assert_eq!(
             parse_multi_area_addr("A1:A10,C1:C10"),
             Some(vec![
-                Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 1 },
-                Rect { start_row: 1, start_col: 3, end_row: 10, end_col: 3 },
+                Rect {
+                    start_row: 1,
+                    start_col: 1,
+                    end_row: 10,
+                    end_col: 1
+                },
+                Rect {
+                    start_row: 1,
+                    start_col: 3,
+                    end_row: 10,
+                    end_col: 3
+                },
             ])
         );
     }
@@ -7671,15 +8793,29 @@ mod tests {
 
     #[test]
     fn range_copy_of_a_multi_area_source_populates_clipboard_areas_without_snapshotting_cells() {
-        let prog = parser::parse("Sub MySub()\n    Range(\"A1:A10,C1:C10\").Copy\nEnd Sub\n").unwrap();
+        let prog =
+            parser::parse("Sub MySub()\n    Range(\"A1:A10,C1:C10\").Copy\nEnd Sub\n").unwrap();
         let mut vm = Vm::new();
         vm.run_sub(&prog, "mysub").unwrap();
-        let clip = vm.clipboard.as_ref().expect("Copy should have populated the clipboard");
+        let clip = vm
+            .clipboard
+            .as_ref()
+            .expect("Copy should have populated the clipboard");
         assert_eq!(
             clip.areas,
             vec![
-                Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 1 },
-                Rect { start_row: 1, start_col: 3, end_row: 10, end_col: 3 },
+                Rect {
+                    start_row: 1,
+                    start_col: 1,
+                    end_row: 10,
+                    end_col: 1
+                },
+                Rect {
+                    start_row: 1,
+                    start_col: 3,
+                    end_row: 10,
+                    end_col: 3
+                },
             ]
         );
         assert!(
@@ -7699,17 +8835,35 @@ mod tests {
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert!(err.contains("disjoint areas"), "{:?}", err);
         match vm.take_resolution_failure() {
-            Some(ResolutionFailureKind::MultiAreaToSingleAreaPaste { source_areas, destination_areas }) => {
+            Some(ResolutionFailureKind::MultiAreaToSingleAreaPaste {
+                source_areas,
+                destination_areas,
+            }) => {
                 assert_eq!(
                     source_areas,
                     vec![
-                        Rect { start_row: 1, start_col: 1, end_row: 10, end_col: 1 },
-                        Rect { start_row: 1, start_col: 3, end_row: 10, end_col: 3 },
+                        Rect {
+                            start_row: 1,
+                            start_col: 1,
+                            end_row: 10,
+                            end_col: 1
+                        },
+                        Rect {
+                            start_row: 1,
+                            start_col: 3,
+                            end_row: 10,
+                            end_col: 3
+                        },
                     ]
                 );
                 assert_eq!(
                     destination_areas,
-                    vec![Rect { start_row: 1, start_col: 5, end_row: 10, end_col: 6 }]
+                    vec![Rect {
+                        start_row: 1,
+                        start_col: 5,
+                        end_row: 10,
+                        end_col: 6
+                    }]
                 );
             }
             other => panic!("expected MultiAreaToSingleAreaPaste, got {:?}", other),
@@ -7728,7 +8882,10 @@ mod tests {
         assert!(err.contains("3 areas"), "{:?}", err);
         assert!(err.contains("2 areas"), "{:?}", err);
         match vm.take_resolution_failure() {
-            Some(ResolutionFailureKind::MultiAreaCountMismatch { source_areas, destination_areas }) => {
+            Some(ResolutionFailureKind::MultiAreaCountMismatch {
+                source_areas,
+                destination_areas,
+            }) => {
                 assert_eq!(source_areas.len(), 3);
                 assert_eq!(destination_areas.len(), 2);
             }
@@ -7737,7 +8894,8 @@ mod tests {
     }
 
     #[test]
-    fn multi_area_source_and_destination_with_matching_counts_but_differing_shapes_reports_shape_mismatch() {
+    fn multi_area_source_and_destination_with_matching_counts_but_differing_shapes_reports_shape_mismatch()
+     {
         let prog = parser::parse(
             "Sub MySub()\n    Range(\"A1:A10,C1:C10\").Copy\n    \
              Range(\"G1:G10,I1:J10\").PasteSpecial\nEnd Sub\n",
@@ -7747,10 +8905,30 @@ mod tests {
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert!(err.contains("area 2"), "{:?}", err);
         match vm.take_resolution_failure() {
-            Some(ResolutionFailureKind::MultiAreaShapeMismatch { area_index, source_area, destination_area }) => {
+            Some(ResolutionFailureKind::MultiAreaShapeMismatch {
+                area_index,
+                source_area,
+                destination_area,
+            }) => {
                 assert_eq!(area_index, 2);
-                assert_eq!(source_area, Rect { start_row: 1, start_col: 3, end_row: 10, end_col: 3 });
-                assert_eq!(destination_area, Rect { start_row: 1, start_col: 9, end_row: 10, end_col: 10 });
+                assert_eq!(
+                    source_area,
+                    Rect {
+                        start_row: 1,
+                        start_col: 3,
+                        end_row: 10,
+                        end_col: 3
+                    }
+                );
+                assert_eq!(
+                    destination_area,
+                    Rect {
+                        start_row: 1,
+                        start_col: 9,
+                        end_row: 10,
+                        end_col: 10
+                    }
+                );
             }
             other => panic!("expected MultiAreaShapeMismatch, got {:?}", other),
         }
@@ -7766,7 +8944,10 @@ mod tests {
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert!(err.contains("not yet supported"), "{:?}", err);
         match vm.take_resolution_failure() {
-            Some(ResolutionFailureKind::MultiAreaPasteUnsupported { source_areas, destination_areas }) => {
+            Some(ResolutionFailureKind::MultiAreaPasteUnsupported {
+                source_areas,
+                destination_areas,
+            }) => {
                 assert_eq!(source_areas.len(), 1);
                 assert_eq!(destination_areas.len(), 2);
             }
@@ -7778,9 +8959,7 @@ mod tests {
 
     #[test]
     fn set_and_dot_value_read_write_a_range_object_through_to_the_sheet() {
-        let vm = run(
-            "Sub MySub()\n    Set rng = Range(\"B2\")\n    rng.Value = 42\nEnd Sub\n",
-        );
+        let vm = run("Sub MySub()\n    Set rng = Range(\"B2\")\n    rng.Value = 42\nEnd Sub\n");
         assert_eq!(vm.get_cell(2, 2), Variant::Integer(42));
     }
 
@@ -7855,7 +9034,8 @@ mod tests {
 
     #[test]
     fn areas_count_is_1_for_a_single_area_range() {
-        let vm = run("Sub MySub()\n    Set rng = Range(\"A1:B2\")\n    n = rng.Areas.Count\nEnd Sub\n");
+        let vm =
+            run("Sub MySub()\n    Set rng = Range(\"A1:B2\")\n    n = rng.Areas.Count\nEnd Sub\n");
         assert_eq!(vm.variables["n"], Variant::Integer(1));
     }
 
@@ -7886,7 +9066,10 @@ mod tests {
         let mut vm = Vm::new();
         vm.sheet_visibility.insert(
             "sheet1".to_string(),
-            SheetVisibility { hidden_rows: vec![Interval { start: 2, end: 2 }], hidden_columns: vec![] },
+            SheetVisibility {
+                hidden_rows: vec![Interval { start: 2, end: 2 }],
+                hidden_columns: vec![],
+            },
         );
         let prog = parser::parse(
             "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    \
@@ -7935,7 +9118,8 @@ mod tests {
     }
 
     #[test]
-    fn matching_shape_multi_area_paste_with_transpose_still_errors_instead_of_silently_mis_pasting() {
+    fn matching_shape_multi_area_paste_with_transpose_still_errors_instead_of_silently_mis_pasting()
+    {
         // `transpose` isn't modeled for the multi-area execution path — it
         // must fall through to the pre-existing diagnose-only error rather
         // than silently writing UN-transposed data while claiming success.
@@ -8243,7 +9427,10 @@ mod tests {
         // has a merged first row at the same relative position (E1:G1) —
         // identical layouts must not be flagged as a mismatch.
         let mut vm = Vm::new();
-        vm.merged_ranges.insert("sheet1".to_string(), vec![((1, 1), (1, 3)), ((1, 5), (1, 7))]);
+        vm.merged_ranges.insert(
+            "sheet1".to_string(),
+            vec![((1, 1), (1, 3)), ((1, 5), (1, 7))],
+        );
         let prog = parser::parse(
             "Sub MySub()\n    Cells(2,1).Value = 42\n    Range(\"A1:C10\").Copy\n    \
              Range(\"E1:G10\").PasteSpecial\nEnd Sub\n",
@@ -8367,10 +9554,8 @@ mod tests {
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
 
-        let prog = parser::parse(
-            "Sub MySub()\n    Range(\"A1:A10,C1:C10\").Copy\nEnd Sub\n",
-        )
-        .unwrap();
+        let prog =
+            parser::parse("Sub MySub()\n    Range(\"A1:A10,C1:C10\").Copy\nEnd Sub\n").unwrap();
         vm.run_sub(&prog, "mysub").unwrap();
         assert_eq!(vm.hidden_cells_observation(), None);
     }
@@ -8423,7 +9608,8 @@ mod tests {
     #[test]
     fn intdiv_and_mod_round_fractional_operands_half_to_even_first() {
         // 0.5 rounds to 0 (nearest even), not 1 — so `5 \ 0.5` is `5 \ 0`.
-        let prog = parser::parse("Sub MySub()\n    Cells(1, 1).Value = 5 \\ 0.5\nEnd Sub\n").unwrap();
+        let prog =
+            parser::parse("Sub MySub()\n    Cells(1, 1).Value = 5 \\ 0.5\nEnd Sub\n").unwrap();
         assert!(Vm::new().run_sub(&prog, "mysub").is_err());
         // 2.5 rounds to 2 (nearest even), not 3.
         let vm = run("Sub MySub()\n    a = 2.5 \\ 4\nEnd Sub\n");
@@ -8484,9 +9670,8 @@ mod tests {
     #[test]
     fn not_binds_looser_than_comparison_and_tighter_than_and() {
         // `Not a And b` is `(Not a) And b`, not `Not (a And b)`.
-        let vm = run(
-            "Sub MySub()\n    a = Not False And True\n    b = Not (False And True)\nEnd Sub\n",
-        );
+        let vm =
+            run("Sub MySub()\n    a = Not False And True\n    b = Not (False And True)\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Boolean(true));
         assert_eq!(vm.variables["b"], Variant::Boolean(true));
         // `Not x = y` is `Not (x = y)`, not `(Not x) = y`.
@@ -8505,9 +9690,7 @@ mod tests {
     #[test]
     fn or_binds_looser_than_and() {
         // a Or b And c is a Or (b And c), not (a Or b) And c.
-        let vm = run(
-            "Sub MySub()\n    a = True Or False And False\nEnd Sub\n",
-        );
+        let vm = run("Sub MySub()\n    a = True Or False And False\nEnd Sub\n");
         // True Or (False And False) = True Or False = True.
         // (True Or False) And False would be False — this distinguishes them.
         assert_eq!(vm.variables["a"], Variant::Boolean(true));
@@ -8556,7 +9739,9 @@ mod tests {
 
     #[test]
     fn with_range_bare_value_write_alone() {
-        let vm = run("Sub MySub()\n    With Range(\"B2\")\n        .Value = 42\n    End With\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    With Range(\"B2\")\n        .Value = 42\n    End With\nEnd Sub\n",
+        );
         assert_eq!(vm.get_cell(2, 2), Variant::Integer(42));
     }
 
@@ -8600,7 +9785,10 @@ mod tests {
         let vm = run(
             "Sub MySub()\n    With Sheets(\"Sheet2\")\n        Set ws = ActiveSheet\n    End With\n    ws.Cells(1, 1).Value = 42\nEnd Sub\n",
         );
-        let cell = vm.get_sheet_cells("sheet2").and_then(|s| s.get(&(1, 1))).map(|c| c.value.clone());
+        let cell = vm
+            .get_sheet_cells("sheet2")
+            .and_then(|s| s.get(&(1, 1)))
+            .map(|c| c.value.clone());
         assert_eq!(cell, Some(Variant::Integer(42)));
         // And Sheet1 (still the active sheet) is untouched.
         assert_eq!(vm.get_cell(1, 1), Variant::Empty);
@@ -8611,7 +9799,10 @@ mod tests {
         let vm = run(
             "Sub MySub()\n    Set wb = ThisWorkbook\n    wb.Worksheets(\"Data\").Cells(2, 3).Value = 77\nEnd Sub\n",
         );
-        let cell = vm.get_sheet_cells("data").and_then(|s| s.get(&(2, 3))).map(|c| c.value.clone());
+        let cell = vm
+            .get_sheet_cells("data")
+            .and_then(|s| s.get(&(2, 3)))
+            .map(|c| c.value.clone());
         assert_eq!(cell, Some(Variant::Integer(77)));
     }
 
@@ -8673,18 +9864,19 @@ mod tests {
              Set r = Nothing\n    x = r2.Value\nEnd Sub\n",
         );
         assert_eq!(vm.object_variables.get("r"), Some(&ObjectRef::Nothing));
-        assert!(matches!(vm.object_variables.get("r2"), Some(ObjectRef::Range(_))));
+        assert!(matches!(
+            vm.object_variables.get("r2"),
+            Some(ObjectRef::Range(_))
+        ));
         assert_eq!(vm.variables["x"], Variant::Integer(42));
     }
 
     #[test]
     fn is_nothing_reflects_each_variables_own_state() {
-        let vm = run(
-            "Sub MySub()\n    Dim r As Range\n    Dim r2 As Range\n    \
+        let vm = run("Sub MySub()\n    Dim r As Range\n    Dim r2 As Range\n    \
              a = (r Is Nothing)\n    Set r = Range(\"A1\")\n    b = (r Is Nothing)\n    \
              Set r2 = r\n    Set r = Nothing\n    c = (r Is Nothing)\n    \
-             d = (r2 Is Nothing)\nEnd Sub\n",
-        );
+             d = (r2 Is Nothing)\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Boolean(true));
         assert_eq!(vm.variables["b"], Variant::Boolean(false));
         assert_eq!(vm.variables["c"], Variant::Boolean(true));
@@ -8764,8 +9956,12 @@ mod tests {
         );
         // `ws` captured Sheet1 (the active sheet at Set time), so the write
         // lands there regardless of anything else.
-        assert_eq!(vm.get_sheet_cells("sheet1").and_then(|s| s.get(&(1, 1))).map(|c| c.value.clone()),
-                   Some(Variant::Integer(42)));
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .and_then(|s| s.get(&(1, 1)))
+                .map(|c| c.value.clone()),
+            Some(Variant::Integer(42))
+        );
     }
 
     #[test]
@@ -8783,7 +9979,8 @@ mod tests {
 
     #[test]
     fn the_with_stack_is_empty_again_after_a_block_completes() {
-        let vm = run("Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n    End With\nEnd Sub\n");
+        let vm =
+            run("Sub MySub()\n    With Range(\"A1\")\n        .Value = 1\n    End With\nEnd Sub\n");
         assert!(vm.with_stack.is_empty());
     }
 
@@ -8824,7 +10021,9 @@ mod tests {
     #[test]
     fn a_with_block_over_an_unset_object_variable_raises_error_91() {
         assert_eq!(
-            run_err("Sub MySub()\n    Dim r As Range\n    With r\n        .Value = 1\n    End With\nEnd Sub\n"),
+            run_err(
+                "Sub MySub()\n    Dim r As Range\n    With r\n        .Value = 1\n    End With\nEnd Sub\n"
+            ),
             OBJECT_NOT_SET
         );
     }
@@ -8930,7 +10129,9 @@ mod tests {
         // occurs." Scoped to the arithmetic operators — `to_f64`'s own
         // message, and its ~53 other call sites, are unchanged.
         assert_eq!(
-            run_err("Sub MySub()\n    Dim v1, v2\n    v1 = \"abc\"\n    v2 = 3\n    x = v1 + v2\nEnd Sub\n"),
+            run_err(
+                "Sub MySub()\n    Dim v1, v2\n    v1 = \"abc\"\n    v2 = 3\n    x = v1 + v2\nEnd Sub\n"
+            ),
             "Type mismatch"
         );
     }
@@ -8939,7 +10140,9 @@ mod tests {
     fn a_numeric_looking_string_still_adds_rather_than_type_mismatching() {
         // The complement of the test above: `arith_to_f64` must only fire on
         // a string that genuinely can't convert.
-        let vm = run("Sub MySub()\n    Dim v1, v2\n    v1 = \"34\"\n    v2 = 6\n    x = v1 + v2\nEnd Sub\n");
+        let vm = run(
+            "Sub MySub()\n    Dim v1, v2\n    v1 = \"34\"\n    v2 = 6\n    x = v1 + v2\nEnd Sub\n",
+        );
         assert_eq!(vm.variables["x"], Variant::Integer(40));
     }
 
@@ -8961,10 +10164,7 @@ mod tests {
     #[test]
     fn a_compile_error_prevents_even_the_entrypoints_own_earlier_statements_from_running() {
         let mut vm = Vm::new();
-        let prog = parser::parse(
-            "Sub MySub()\n    x = 1\n    GoTo Nowhere\nEnd Sub\n",
-        )
-        .unwrap();
+        let prog = parser::parse("Sub MySub()\n    x = 1\n    GoTo Nowhere\nEnd Sub\n").unwrap();
         vm.run_sub(&prog, "mysub").unwrap_err();
         assert!(!vm.variables.contains_key("x"));
     }
@@ -9072,7 +10272,10 @@ mod tests {
         // wrongly reject Main's call to Helper as undefined.
         let modules = vec![
             module("module1", "Sub Helper()\n    y = 1\nEnd Sub\n"),
-            module("module2", "Sub Main()\n    Call Helper()\n    x = 42\nEnd Sub\n"),
+            module(
+                "module2",
+                "Sub Main()\n    Call Helper()\n    x = 42\nEnd Sub\n",
+            ),
         ];
         let mut vm = Vm::new();
         vm.run_sub_multi(&modules, "Main").unwrap();

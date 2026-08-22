@@ -5,7 +5,9 @@
 use std::collections::HashSet;
 
 use crate::diagnostics::{SourceLocation, json_string, locate};
-use crate::parser::{self, CaseMatch, Expr, Program, SourceSpan, SpannedStmt, Stmt, WithMember, WithTarget};
+use crate::parser::{
+    self, CaseMatch, Expr, Program, SourceSpan, SpannedStmt, Stmt, WithMember, WithTarget,
+};
 use crate::vm;
 
 /// One static-analysis finding. `severity` "error" means the file can't (or
@@ -271,7 +273,9 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::DimMulti(decls) => {
                 for d in decls {
                     match d {
-                        Stmt::DimRecord { var, .. } | Stmt::DimBare { var } => { names.insert(var.clone()); }
+                        Stmt::DimRecord { var, .. } | Stmt::DimBare { var } => {
+                            names.insert(var.clone());
+                        }
                         Stmt::DimArray { name, .. } | Stmt::DimArrayRecord { name, .. } => {
                             names.insert(name.clone());
                         }
@@ -313,8 +317,14 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[SpannedStmt]> {
         | Stmt::ForEach { body, .. }
         | Stmt::DoLoop { body, .. }
         | Stmt::With { body, .. } => vec![body],
-        Stmt::If { then_body, else_body, .. } => vec![then_body, else_body],
-        Stmt::SelectCase { cases, else_body, .. } => {
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => vec![then_body, else_body],
+        Stmt::SelectCase {
+            cases, else_body, ..
+        } => {
             let mut bodies: Vec<&[SpannedStmt]> = cases.iter().map(|(_, b)| b.as_slice()).collect();
             bodies.push(else_body);
             bodies
@@ -412,7 +422,9 @@ fn collect_func_calls<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
             collect_func_calls(row, out);
             collect_func_calls(col, out);
         }
-        Expr::RangeOffsetRead { row_off, col_off, .. } => {
+        Expr::RangeOffsetRead {
+            row_off, col_off, ..
+        } => {
             collect_func_calls(row_off, out);
             collect_func_calls(col_off, out);
         }
@@ -447,7 +459,11 @@ fn collect_func_calls<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
 /// check only fires when the callee's own declared arity is actually known,
 /// which this project only tracks for a Sub/Function defined in the same
 /// module being checked.
-fn resolved_user_proc_arity(name: &str, prog: &Program, local_names: &HashSet<String>) -> Option<usize> {
+fn resolved_user_proc_arity(
+    name: &str,
+    prog: &Program,
+    local_names: &HashSet<String>,
+) -> Option<usize> {
     if local_names.contains(name) {
         return None;
     }
@@ -489,12 +505,21 @@ fn resolved_user_proc_arity(name: &str, prog: &Program, local_names: &HashSet<St
 /// is a real declared array or (invalidly) a Function name — telling those
 /// apart isn't syntactically decidable without the type-inference this
 /// project stays out of by design.
-pub fn compile_check_errors(prog: &Program, other_module_names: &HashSet<String>) -> Option<(String, SourceSpan)> {
+pub fn compile_check_errors(
+    prog: &Program,
+    other_module_names: &HashSet<String>,
+) -> Option<(String, SourceSpan)> {
     for sub in &prog.subs {
         let local_names = local_scope_names(&sub.name, &sub.params, &sub.body);
         let mut labels = HashSet::new();
         collect_labels(&sub.body, &mut labels);
-        if let Some(v) = check_body_for_compile_errors(&sub.body, prog, &local_names, other_module_names, &labels) {
+        if let Some(v) = check_body_for_compile_errors(
+            &sub.body,
+            prog,
+            &local_names,
+            other_module_names,
+            &labels,
+        ) {
             return Some(v);
         }
     }
@@ -502,7 +527,13 @@ pub fn compile_check_errors(prog: &Program, other_module_names: &HashSet<String>
         let local_names = local_scope_names(&func.name, &func.params, &func.body);
         let mut labels = HashSet::new();
         collect_labels(&func.body, &mut labels);
-        if let Some(v) = check_body_for_compile_errors(&func.body, prog, &local_names, other_module_names, &labels) {
+        if let Some(v) = check_body_for_compile_errors(
+            &func.body,
+            prog,
+            &local_names,
+            other_module_names,
+            &labels,
+        ) {
             return Some(v);
         }
     }
@@ -522,7 +553,10 @@ fn check_body_for_compile_errors(
                 return Some((format!("GoTo: label '{}' not found", label), s.span));
             }
             Stmt::OnErrorGoTo(label) if !labels.contains(label) => {
-                return Some((format!("On Error GoTo: label '{}' not found", label), s.span));
+                return Some((
+                    format!("On Error GoTo: label '{}' not found", label),
+                    s.span,
+                ));
             }
             Stmt::CallSub { name, args } => {
                 if !is_resolvable(name, prog, local_names, other_module_names) {
@@ -534,7 +568,9 @@ fn check_body_for_compile_errors(
                     return Some((
                         format!(
                             "'{}' expects {} argument(s), got {}",
-                            name, arity, args.len()
+                            name,
+                            arity,
+                            args.len()
                         ),
                         s.span,
                     ));
@@ -549,7 +585,9 @@ fn check_body_for_compile_errors(
             let mut calls = Vec::new();
             collect_func_calls(e, &mut calls);
             for call in calls {
-                let Expr::FuncCall { name, args } = call else { continue };
+                let Expr::FuncCall { name, args } = call else {
+                    continue;
+                };
                 if !is_resolvable(name, prog, local_names, other_module_names) {
                     // `Expr::FuncCall` in expression position (unlike
                     // `Stmt::CallSub`) reaches the real builtin dispatch at
@@ -570,7 +608,9 @@ fn check_body_for_compile_errors(
                     return Some((
                         format!(
                             "'{}' expects {} argument(s), got {}",
-                            name, arity, args.len()
+                            name,
+                            arity,
+                            args.len()
                         ),
                         s.span,
                     ));
@@ -579,7 +619,9 @@ fn check_body_for_compile_errors(
         }
 
         for nested in nested_bodies(&s.stmt) {
-            if let Some(v) = check_body_for_compile_errors(nested, prog, local_names, other_module_names, labels) {
+            if let Some(v) =
+                check_body_for_compile_errors(nested, prog, local_names, other_module_names, labels)
+            {
                 return Some(v);
             }
         }
@@ -611,13 +653,29 @@ fn collect_extra_compile_diagnostics(
         let local_names = local_scope_names(&sub.name, &sub.params, &sub.body);
         let mut labels = HashSet::new();
         collect_labels(&sub.body, &mut labels);
-        collect_extra_compile_diagnostics_body(&sub.body, prog, &local_names, &labels, source, file, diags);
+        collect_extra_compile_diagnostics_body(
+            &sub.body,
+            prog,
+            &local_names,
+            &labels,
+            source,
+            file,
+            diags,
+        );
     }
     for func in &prog.funcs {
         let local_names = local_scope_names(&func.name, &func.params, &func.body);
         let mut labels = HashSet::new();
         collect_labels(&func.body, &mut labels);
-        collect_extra_compile_diagnostics_body(&func.body, prog, &local_names, &labels, source, file, diags);
+        collect_extra_compile_diagnostics_body(
+            &func.body,
+            prog,
+            &local_names,
+            &labels,
+            source,
+            file,
+            diags,
+        );
     }
 }
 
@@ -660,7 +718,9 @@ fn collect_extra_compile_diagnostics_body(
                         kind: "argument_count_mismatch",
                         message: format!(
                             "'{}' expects {} argument(s), got {}",
-                            name, arity, args.len()
+                            name,
+                            arity,
+                            args.len()
                         ),
                         location: Some(locate(source, file, s.span)),
                     });
@@ -675,7 +735,9 @@ fn collect_extra_compile_diagnostics_body(
             let mut calls = Vec::new();
             collect_func_calls(e, &mut calls);
             for call in calls {
-                let Expr::FuncCall { name, args } = call else { continue };
+                let Expr::FuncCall { name, args } = call else {
+                    continue;
+                };
                 if let Some(arity) = resolved_user_proc_arity(name, prog, local_names)
                     && args.len() != arity
                 {
@@ -685,7 +747,9 @@ fn collect_extra_compile_diagnostics_body(
                         kind: "argument_count_mismatch",
                         message: format!(
                             "'{}' expects {} argument(s), got {}",
-                            name, arity, args.len()
+                            name,
+                            arity,
+                            args.len()
                         ),
                         location: Some(locate(source, file, s.span)),
                     });
@@ -695,7 +759,13 @@ fn collect_extra_compile_diagnostics_body(
 
         for nested in nested_bodies(&s.stmt) {
             collect_extra_compile_diagnostics_body(
-                nested, prog, local_names, labels, source, file, diags,
+                nested,
+                prog,
+                local_names,
+                labels,
+                source,
+                file,
+                diags,
             );
         }
     }
@@ -954,13 +1024,17 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         Stmt::DimArray { sizes, .. } => {
             for d in sizes {
                 out.push(&d.upper);
-                if let Some(lo) = &d.lower { out.push(lo); }
+                if let Some(lo) = &d.lower {
+                    out.push(lo);
+                }
             }
         }
         Stmt::ReDim { sizes, .. } => {
             for d in sizes {
                 out.push(&d.upper);
-                if let Some(lo) = &d.lower { out.push(lo); }
+                if let Some(lo) = &d.lower {
+                    out.push(lo);
+                }
             }
         }
         Stmt::Erase { .. } => {}
@@ -1007,12 +1081,26 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         }
         Stmt::Unsupported { .. } => {}
         Stmt::ErrClear => {}
-        Stmt::ErrRaise { number, source, description, help_file, help_context } => {
+        Stmt::ErrRaise {
+            number,
+            source,
+            description,
+            help_file,
+            help_context,
+        } => {
             out.push(number);
-            if let Some(e) = source { out.push(e); }
-            if let Some(e) = description { out.push(e); }
-            if let Some(e) = help_file { out.push(e); }
-            if let Some(e) = help_context { out.push(e); }
+            if let Some(e) = source {
+                out.push(e);
+            }
+            if let Some(e) = description {
+                out.push(e);
+            }
+            if let Some(e) = help_file {
+                out.push(e);
+            }
+            if let Some(e) = help_context {
+                out.push(e);
+            }
         }
     }
 }
@@ -1834,8 +1922,7 @@ mod tests {
 
     #[test]
     fn undefined_function_used_in_an_expression_is_a_compile_error() {
-        let (msg, _) =
-            compile_errors("Sub Main()\n    x = Helper(1)\nEnd Sub\n").unwrap();
+        let (msg, _) = compile_errors("Sub Main()\n    x = Helper(1)\nEnd Sub\n").unwrap();
         assert_eq!(msg, "Unknown VBA function: 'helper'");
     }
 
@@ -1883,10 +1970,12 @@ mod tests {
         // (`Expr::FuncCall`) — `arr` being a locally-Dim'd array must take
         // precedence, exactly as `is_resolvable` already establishes for
         // the undefined-name check.
-        assert!(compile_errors(
-            "Sub Main()\n    Dim arr(3, 3)\n    arr(1, 1) = 5\n    x = arr(1, 1)\nEnd Sub\n"
-        )
-        .is_none());
+        assert!(
+            compile_errors(
+                "Sub Main()\n    Dim arr(3, 3)\n    arr(1, 1) = 5\n    x = arr(1, 1)\nEnd Sub\n"
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1897,31 +1986,35 @@ mod tests {
 
     #[test]
     fn goto_to_a_label_declared_later_in_the_same_body_is_not_a_compile_error() {
-        assert!(compile_errors("Sub Main()\n    GoTo Skip\n    x = 1\nSkip:\n    y = 2\nEnd Sub\n").is_none());
+        assert!(
+            compile_errors("Sub Main()\n    GoTo Skip\n    x = 1\nSkip:\n    y = 2\nEnd Sub\n")
+                .is_none()
+        );
     }
 
     #[test]
     fn goto_to_a_label_nested_inside_an_if_block_is_not_a_compile_error() {
         // Real VBA GoTo scope is the whole procedure, not the current
         // block — a label inside a sibling `If` branch is a valid target.
-        assert!(compile_errors(concat!(
-            "Sub Main()\n",
-            "    If True Then\n",
-            "        GoTo Inner\n",
-            "    End If\n",
-            "    If False Then\n",
-            "Inner:\n",
-            "        y = 2\n",
-            "    End If\n",
-            "End Sub\n",
-        ))
-        .is_none());
+        assert!(
+            compile_errors(concat!(
+                "Sub Main()\n",
+                "    If True Then\n",
+                "        GoTo Inner\n",
+                "    End If\n",
+                "    If False Then\n",
+                "Inner:\n",
+                "        y = 2\n",
+                "    End If\n",
+                "End Sub\n",
+            ))
+            .is_none()
+        );
     }
 
     #[test]
     fn on_error_goto_an_undefined_label_is_a_compile_error() {
-        let (msg, _) =
-            compile_errors("Sub Main()\n    On Error GoTo Nowhere\nEnd Sub\n").unwrap();
+        let (msg, _) = compile_errors("Sub Main()\n    On Error GoTo Nowhere\nEnd Sub\n").unwrap();
         assert_eq!(msg, "On Error GoTo: label 'nowhere' not found");
     }
 
@@ -2007,7 +2100,11 @@ mod tests {
 
     #[test]
     fn run_check_reports_an_undefined_goto_label_as_e1009() {
-        let diags = run_check("Sub Main()\n    GoTo Nowhere\nEnd Sub\n", "f.bas", Some("Main"));
+        let diags = run_check(
+            "Sub Main()\n    GoTo Nowhere\nEnd Sub\n",
+            "f.bas",
+            Some("Main"),
+        );
         assert_eq!(codes(&diags), vec!["E1009"]);
         assert_eq!(diags[0].kind, "undefined_label");
         assert_eq!(diags[0].message, "GoTo: label 'nowhere' not found");
@@ -2080,7 +2177,8 @@ mod tests {
         // The regression this whole test group exists to prevent: `elixcee
         // check` reporting "ok" for a program `Vm::run_sub`'s pre-flight
         // check would then refuse to run.
-        let src = "Sub Helper(a, b)\n    x = a + b\nEnd Sub\nSub Main()\n    Call Helper(1)\nEnd Sub\n";
+        let src =
+            "Sub Helper(a, b)\n    x = a + b\nEnd Sub\nSub Main()\n    Call Helper(1)\nEnd Sub\n";
         let diags = run_check(src, "f.bas", Some("Main"));
         let (compile_msg, _) = compile_errors(src).unwrap();
         assert_eq!(diags.len(), 1);

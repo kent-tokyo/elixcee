@@ -18,12 +18,12 @@ impl ExcelError {
     pub fn as_str(&self) -> &'static str {
         match self {
             ExcelError::DivZero => "#DIV/0!",
-            ExcelError::NA      => "#N/A",
-            ExcelError::Value   => "#VALUE!",
-            ExcelError::Ref     => "#REF!",
-            ExcelError::Name    => "#NAME?",
-            ExcelError::Num     => "#NUM!",
-            ExcelError::Null    => "#NULL!",
+            ExcelError::NA => "#N/A",
+            ExcelError::Value => "#VALUE!",
+            ExcelError::Ref => "#REF!",
+            ExcelError::Name => "#NAME?",
+            ExcelError::Num => "#NUM!",
+            ExcelError::Null => "#NULL!",
         }
     }
 }
@@ -40,8 +40,8 @@ pub enum Variant {
     Float(f64),
     Str(String),
     Boolean(bool),
-    Date(i64),           // Excel serial date — displays as "YYYY-MM-DD"
-    Error(ExcelError),   // Excel error value (#DIV/0!, #N/A, …)
+    Date(i64),         // Excel serial date — displays as "YYYY-MM-DD"
+    Error(ExcelError), // Excel error value (#DIV/0!, #N/A, …)
     Empty,
     /// VBA's `Null` — "no valid data" (as from a database NULL), a
     /// genuinely different concept from `Empty` (an uninitialized Variant).
@@ -118,14 +118,20 @@ impl VbaArray {
                 .filter(|&t| t >= 0 && (t as u64) <= MAX_ARRAY_ELEMENTS as u64)
                 .ok_or_else(|| "Out of memory".to_string())?;
         }
-        Ok(VbaArray { bounds, elements: vec![Variant::Empty; total as usize] })
+        Ok(VbaArray {
+            bounds,
+            elements: vec![Variant::Empty; total as usize],
+        })
     }
 
     /// A 1-D, 0-based array built directly from already-computed elements —
     /// `Array(...)`/`Split(...)`'s shape.
     pub fn from_vec(elements: Vec<Variant>) -> Self {
         let upper = elements.len() as i64 - 1;
-        VbaArray { bounds: vec![ArrayBound { lower: 0, upper }], elements }
+        VbaArray {
+            bounds: vec![ArrayBound { lower: 0, upper }],
+            elements,
+        }
     }
 
     pub fn rank(&self) -> usize {
@@ -194,21 +200,37 @@ impl std::fmt::Display for Variant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Variant::Integer(n) => write!(f, "{}", n),
-            Variant::Float(v)   => write!(f, "{}", v),
-            Variant::Str(s)     => write!(f, "{}", s),
+            Variant::Float(v) => write!(f, "{}", v),
+            Variant::Str(s) => write!(f, "{}", s),
             Variant::Boolean(b) => write!(f, "{}", if *b { "True" } else { "False" }),
-            Variant::Date(s)    => write!(f, "{}", serial_to_display(*s)),
-            Variant::Error(e)   => write!(f, "{}", e),
-            Variant::Empty      => write!(f, ""),
+            Variant::Date(s) => write!(f, "{}", serial_to_display(*s)),
+            Variant::Error(e) => write!(f, "{}", e),
+            Variant::Empty => write!(f, ""),
             // Matches what real VBA's own `Debug.Print Null` prints. Never
             // reached by `&` concatenation, which applies the documented
             // Null rules (both-Null -> Null, one-Null -> "") before ever
             // formatting an operand.
-            Variant::Null       => write!(f, "Null"),
-            Variant::Array(a)   => write!(f, "[{}]", a.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")),
-            Variant::VbaArray(a) => write!(f, "[{}]", a.elements.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")),
-            Variant::Record(m)  => {
-                let mut pairs: Vec<String> = m.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
+            Variant::Null => write!(f, "Null"),
+            Variant::Array(a) => write!(
+                f,
+                "[{}]",
+                a.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Variant::VbaArray(a) => write!(
+                f,
+                "[{}]",
+                a.elements
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Variant::Record(m) => {
+                let mut pairs: Vec<String> =
+                    m.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
                 pairs.sort();
                 write!(f, "{{{}}}", pairs.join(", "))
             }
@@ -227,32 +249,46 @@ pub struct CellContent {
 // both — previously private to that file, now pub since a different crate
 // needs them; bodies unchanged.
 
-pub fn is_leap(y: i32) -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
+pub fn is_leap(y: i32) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
 
 pub fn days_in_month(y: i32, m: u32) -> u32 {
     match m {
-        1|3|5|7|8|10|12 => 31,
-        4|6|9|11        => 30,
-        2               => if is_leap(y) { 29 } else { 28 },
-        _               => 0,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap(y) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
     }
 }
 
 pub fn serial_to_ymd(mut s: i64) -> (i32, u32, u32) {
     // Undo the Excel leap-year bug offset for dates after serial 60
-    if s > 60 { s -= 1; }
+    if s > 60 {
+        s -= 1;
+    }
     // s is now days since Jan 1 1900 (1-based)
     let mut y = 1900i32;
     loop {
         let days = if is_leap(y) { 366i64 } else { 365 };
-        if s <= days { break; }
+        if s <= days {
+            break;
+        }
         s -= days;
         y += 1;
     }
     let mut m = 1u32;
     loop {
         let dim = days_in_month(y, m) as i64;
-        if s <= dim { break; }
+        if s <= dim {
+            break;
+        }
         s -= dim;
         m += 1;
     }
@@ -264,13 +300,17 @@ pub fn serial_to_ymd(mut s: i64) -> (i32, u32, u32) {
 // further crate:: dependencies of its own.
 
 fn col_letters_to_num_vm(s: &str) -> u32 {
-    s.chars().fold(0u32, |acc, c| acc * 26 + (c.to_ascii_uppercase() as u32 - b'A' as u32 + 1))
+    s.chars().fold(0u32, |acc, c| {
+        acc * 26 + (c.to_ascii_uppercase() as u32 - b'A' as u32 + 1)
+    })
 }
 
 pub fn parse_cell_addr(addr: &str) -> Option<(u32, u32)> {
     let addr = addr.trim().to_uppercase();
     let alpha_end = addr.find(|c: char| c.is_ascii_digit())?;
-    if alpha_end == 0 { return None; }
+    if alpha_end == 0 {
+        return None;
+    }
     let col = col_letters_to_num_vm(&addr[..alpha_end]);
     let row: u32 = addr[alpha_end..].parse().ok()?;
     Some((row, col))
@@ -279,7 +319,10 @@ pub fn parse_cell_addr(addr: &str) -> Option<(u32, u32)> {
 pub fn parse_range_addr(addr: &str) -> Option<((u32, u32), (u32, u32))> {
     let addr = addr.trim();
     if let Some(i) = addr.find(':') {
-        Some((parse_cell_addr(&addr[..i])?, parse_cell_addr(&addr[i+1..])?))
+        Some((
+            parse_cell_addr(&addr[..i])?,
+            parse_cell_addr(&addr[i + 1..])?,
+        ))
     } else {
         let c = parse_cell_addr(addr)?;
         Some((c, c))
@@ -343,8 +386,14 @@ mod tests {
 
     fn dim2(lo0: i64, hi0: i64, lo1: i64, hi1: i64) -> VbaArray {
         VbaArray::new_zeroed(vec![
-            ArrayBound { lower: lo0, upper: hi0 },
-            ArrayBound { lower: lo1, upper: hi1 },
+            ArrayBound {
+                lower: lo0,
+                upper: hi0,
+            },
+            ArrayBound {
+                lower: lo1,
+                upper: hi1,
+            },
         ])
         .unwrap()
     }
@@ -397,21 +446,37 @@ mod tests {
     #[test]
     fn element_count_overflow_is_rejected_as_out_of_memory() {
         let huge = vec![
-            ArrayBound { lower: 0, upper: i64::MAX / 2 },
-            ArrayBound { lower: 0, upper: i64::MAX / 2 },
+            ArrayBound {
+                lower: 0,
+                upper: i64::MAX / 2,
+            },
+            ArrayBound {
+                lower: 0,
+                upper: i64::MAX / 2,
+            },
         ];
         assert_eq!(VbaArray::new_zeroed(huge), Err("Out of memory".to_string()));
     }
 
     #[test]
     fn a_practically_huge_but_non_overflowing_array_hits_the_element_cap() {
-        let too_big = vec![ArrayBound { lower: 0, upper: (MAX_ARRAY_ELEMENTS as i64) + 1 }];
-        assert_eq!(VbaArray::new_zeroed(too_big), Err("Out of memory".to_string()));
+        let too_big = vec![ArrayBound {
+            lower: 0,
+            upper: (MAX_ARRAY_ELEMENTS as i64) + 1,
+        }];
+        assert_eq!(
+            VbaArray::new_zeroed(too_big),
+            Err("Out of memory".to_string())
+        );
     }
 
     #[test]
     fn from_vec_is_1d_zero_based_matching_array_and_splits_shape() {
-        let a = VbaArray::from_vec(vec![Variant::Integer(1), Variant::Integer(2), Variant::Integer(3)]);
+        let a = VbaArray::from_vec(vec![
+            Variant::Integer(1),
+            Variant::Integer(2),
+            Variant::Integer(3),
+        ]);
         assert_eq!(a.rank(), 1);
         assert_eq!(a.lbound(1), Ok(0));
         assert_eq!(a.ubound(1), Ok(2));
@@ -432,7 +497,10 @@ mod tests {
 
     #[test]
     fn cell_content_holds_formula_and_value() {
-        let c = CellContent { formula: Some("=A1+1".into()), value: Variant::Integer(2) };
+        let c = CellContent {
+            formula: Some("=A1+1".into()),
+            value: Variant::Integer(2),
+        };
         assert_eq!(c.formula.as_deref(), Some("=A1+1"));
         assert_eq!(c.value, Variant::Integer(2));
     }

@@ -10,13 +10,27 @@ enum Tok {
     Str(String),
     Ident(String), // always lowercase
     // Comparison operators
-    Eq, Ne, Lt, Le, Gt, Ge,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
     // Arithmetic / string
-    Plus, Minus, Star, Slash, Amp,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Amp,
     Backslash, // integer division (`\`)
     Caret,     // exponentiation (`^`)
     // Punctuation
-    LParen, RParen, Comma, Dot, ColonEq, Colon,
+    LParen,
+    RParen,
+    Comma,
+    Dot,
+    ColonEq,
+    Colon,
     // End of line
     Newline,
     Eof,
@@ -29,82 +43,164 @@ fn tokenize(input: &str) -> (Vec<Tok>, Vec<(u32, u32)>) {
     // Parallel (start, end) char-offset span per token in `toks`.
     let mut spans: Vec<(u32, u32)> = Vec::new();
 
-    macro_rules! ch { () => { chars[pos] }; }
+    macro_rules! ch {
+        () => {
+            chars[pos]
+        };
+    }
 
     while pos < chars.len() {
         let tok_start = pos;
         match chars[pos] {
-            ' ' | '\t' => { pos += 1; }
+            ' ' | '\t' => {
+                pos += 1;
+            }
             '\'' => {
-                while pos < chars.len() && chars[pos] != '\n' && chars[pos] != '\r' { pos += 1; }
+                while pos < chars.len() && chars[pos] != '\n' && chars[pos] != '\r' {
+                    pos += 1;
+                }
             }
             '\r' => {
                 pos += 1;
-                if pos < chars.len() && chars[pos] == '\n' { pos += 1; }
+                if pos < chars.len() && chars[pos] == '\n' {
+                    pos += 1;
+                }
                 push_nl(&mut toks);
             }
-            '\n' => { pos += 1; push_nl(&mut toks); }
+            '\n' => {
+                pos += 1;
+                push_nl(&mut toks);
+            }
             '"' => {
                 pos += 1;
                 let mut s = String::new();
                 loop {
-                    if pos >= chars.len() { break; }
+                    if pos >= chars.len() {
+                        break;
+                    }
                     if chars[pos] == '"' {
                         pos += 1;
-                        if pos < chars.len() && chars[pos] == '"' { s.push('"'); pos += 1; }
-                        else { break; }
+                        if pos < chars.len() && chars[pos] == '"' {
+                            s.push('"');
+                            pos += 1;
+                        } else {
+                            break;
+                        }
                     } else {
-                        s.push(chars[pos]); pos += 1;
+                        s.push(chars[pos]);
+                        pos += 1;
                     }
                 }
                 toks.push(Tok::Str(s));
             }
             '<' => {
                 pos += 1;
-                if pos < chars.len() && ch!() == '>' { pos += 1; toks.push(Tok::Ne); }
-                else if pos < chars.len() && ch!() == '=' { pos += 1; toks.push(Tok::Le); }
-                else { toks.push(Tok::Lt); }
+                if pos < chars.len() && ch!() == '>' {
+                    pos += 1;
+                    toks.push(Tok::Ne);
+                } else if pos < chars.len() && ch!() == '=' {
+                    pos += 1;
+                    toks.push(Tok::Le);
+                } else {
+                    toks.push(Tok::Lt);
+                }
             }
             '>' => {
                 pos += 1;
-                if pos < chars.len() && ch!() == '=' { pos += 1; toks.push(Tok::Ge); }
-                else { toks.push(Tok::Gt); }
+                if pos < chars.len() && ch!() == '=' {
+                    pos += 1;
+                    toks.push(Tok::Ge);
+                } else {
+                    toks.push(Tok::Gt);
+                }
             }
-            '=' => { pos += 1; toks.push(Tok::Eq); }
-            '+' => { pos += 1; toks.push(Tok::Plus); }
-            '-' => { pos += 1; toks.push(Tok::Minus); }
-            '*' => { pos += 1; toks.push(Tok::Star); }
-            '/' => { pos += 1; toks.push(Tok::Slash); }
-            '&' => { pos += 1; toks.push(Tok::Amp); }
-            '\\' => { pos += 1; toks.push(Tok::Backslash); }
-            '^' => { pos += 1; toks.push(Tok::Caret); }
-            '(' => { pos += 1; toks.push(Tok::LParen); }
-            ')' => { pos += 1; toks.push(Tok::RParen); }
-            ',' => { pos += 1; toks.push(Tok::Comma); }
-            '.' => { pos += 1; toks.push(Tok::Dot); }
+            '=' => {
+                pos += 1;
+                toks.push(Tok::Eq);
+            }
+            '+' => {
+                pos += 1;
+                toks.push(Tok::Plus);
+            }
+            '-' => {
+                pos += 1;
+                toks.push(Tok::Minus);
+            }
+            '*' => {
+                pos += 1;
+                toks.push(Tok::Star);
+            }
+            '/' => {
+                pos += 1;
+                toks.push(Tok::Slash);
+            }
+            '&' => {
+                pos += 1;
+                toks.push(Tok::Amp);
+            }
+            '\\' => {
+                pos += 1;
+                toks.push(Tok::Backslash);
+            }
+            '^' => {
+                pos += 1;
+                toks.push(Tok::Caret);
+            }
+            '(' => {
+                pos += 1;
+                toks.push(Tok::LParen);
+            }
+            ')' => {
+                pos += 1;
+                toks.push(Tok::RParen);
+            }
+            ',' => {
+                pos += 1;
+                toks.push(Tok::Comma);
+            }
+            '.' => {
+                pos += 1;
+                toks.push(Tok::Dot);
+            }
             ':' => {
                 pos += 1;
-                if pos < chars.len() && ch!() == '=' { pos += 1; toks.push(Tok::ColonEq); }
-                else { toks.push(Tok::Colon); }
+                if pos < chars.len() && ch!() == '=' {
+                    pos += 1;
+                    toks.push(Tok::ColonEq);
+                } else {
+                    toks.push(Tok::Colon);
+                }
             }
             '_' => {
                 // Line continuation: _ at end of line
                 pos += 1;
-                while pos < chars.len() && (chars[pos] == ' ' || chars[pos] == '\t') { pos += 1; }
+                while pos < chars.len() && (chars[pos] == ' ' || chars[pos] == '\t') {
+                    pos += 1;
+                }
                 if pos < chars.len() && (chars[pos] == '\n' || chars[pos] == '\r') {
-                    if chars[pos] == '\r' { pos += 1; }
-                    if pos < chars.len() && chars[pos] == '\n' { pos += 1; }
+                    if chars[pos] == '\r' {
+                        pos += 1;
+                    }
+                    if pos < chars.len() && chars[pos] == '\n' {
+                        pos += 1;
+                    }
                     // continuation: don't emit Newline, keep parsing next line
                 }
             }
             c if c.is_ascii_digit() => {
                 let start = pos;
-                while pos < chars.len() && chars[pos].is_ascii_digit() { pos += 1; }
-                if pos < chars.len() && chars[pos] == '.'
-                    && pos + 1 < chars.len() && chars[pos + 1].is_ascii_digit()
+                while pos < chars.len() && chars[pos].is_ascii_digit() {
+                    pos += 1;
+                }
+                if pos < chars.len()
+                    && chars[pos] == '.'
+                    && pos + 1 < chars.len()
+                    && chars[pos + 1].is_ascii_digit()
                 {
                     pos += 1;
-                    while pos < chars.len() && chars[pos].is_ascii_digit() { pos += 1; }
+                    while pos < chars.len() && chars[pos].is_ascii_digit() {
+                        pos += 1;
+                    }
                     let s: String = chars[start..pos].iter().collect();
                     toks.push(Tok::Float(s.parse().unwrap()));
                 } else {
@@ -122,13 +218,16 @@ fn tokenize(input: &str) -> (Vec<Tok>, Vec<(u32, u32)>) {
             }
             c if c.is_ascii_alphabetic() => {
                 let start = pos;
-                while pos < chars.len() && (chars[pos].is_ascii_alphanumeric() || chars[pos] == '_') {
+                while pos < chars.len() && (chars[pos].is_ascii_alphanumeric() || chars[pos] == '_')
+                {
                     pos += 1;
                 }
                 let s: String = chars[start..pos].iter().collect::<String>().to_lowercase();
                 toks.push(Tok::Ident(s));
             }
-            _ => { pos += 1; }
+            _ => {
+                pos += 1;
+            }
         }
         // The match arm above pushed 0 or 1 tokens (0 for whitespace/comments/
         // line continuations) — record the same (tok_start, pos) span for
@@ -165,7 +264,11 @@ struct Parser {
 
 impl Parser {
     fn new(tokens: Vec<Tok>, spans: Vec<(u32, u32)>) -> Self {
-        Parser { tokens, spans, pos: 0 }
+        Parser {
+            tokens,
+            spans,
+            pos: 0,
+        }
     }
 
     fn peek(&self) -> &Tok {
@@ -175,8 +278,11 @@ impl Parser {
     /// Span of the token at the current position (clamped to the last
     /// recorded span — the EOF sentinel — if past the end).
     fn peek_span(&self) -> SourceSpan {
-        let &(start, end) = self.spans.get(self.pos)
-            .unwrap_or_else(|| self.spans.last().expect("tokenize always emits at least an EOF span"));
+        let &(start, end) = self.spans.get(self.pos).unwrap_or_else(|| {
+            self.spans
+                .last()
+                .expect("tokenize always emits at least an EOF span")
+        });
         SourceSpan { start, end }
     }
 
@@ -186,7 +292,9 @@ impl Parser {
 
     fn advance(&mut self) -> Tok {
         let t = self.tokens.get(self.pos).cloned().unwrap_or(Tok::Eof);
-        if self.pos < self.tokens.len() { self.pos += 1; }
+        if self.pos < self.tokens.len() {
+            self.pos += 1;
+        }
         t
     }
 
@@ -200,7 +308,10 @@ impl Parser {
 
     fn expect_ident(&mut self, name: &str) -> Result<(), String> {
         match self.peek() {
-            Tok::Ident(s) if s == name => { self.advance(); Ok(()) }
+            Tok::Ident(s) if s == name => {
+                self.advance();
+                Ok(())
+            }
             t => Err(format!("expected '{}', got {:?}", name, t)),
         }
     }
@@ -229,7 +340,9 @@ impl Parser {
     }
 
     fn skip_nl(&mut self) {
-        while *self.peek() == Tok::Newline { self.advance(); }
+        while *self.peek() == Tok::Newline {
+            self.advance();
+        }
     }
 
     /// Consumes whatever ends the statement just parsed: a newline, EOF, or
@@ -245,12 +358,17 @@ impl Parser {
     /// deliberately leaves it in place so `label1: a = 1` works.
     fn eat_stmt_end(&mut self) -> Result<(), String> {
         match self.peek() {
-            Tok::Newline => { self.advance(); Ok(()) }
-            Tok::Eof     => Ok(()),
-            Tok::Colon   => {
+            Tok::Newline => {
+                self.advance();
+                Ok(())
+            }
+            Tok::Eof => Ok(()),
+            Tok::Colon => {
                 // `a = 1:: b = 2` — an empty statement between two colons is
                 // legal VBA and means nothing; collapse a run of them.
-                while *self.peek() == Tok::Colon { self.advance(); }
+                while *self.peek() == Tok::Colon {
+                    self.advance();
+                }
                 Ok(())
             }
             t => Err(format!("expected newline, got {:?}", t)),
@@ -263,9 +381,14 @@ impl Parser {
     fn skip_to_eol(&mut self) {
         loop {
             match self.peek() {
-                Tok::Newline => { self.advance(); return; }
+                Tok::Newline => {
+                    self.advance();
+                    return;
+                }
                 Tok::Eof => return,
-                _ => { self.advance(); }
+                _ => {
+                    self.advance();
+                }
             }
         }
     }
@@ -276,7 +399,9 @@ impl Parser {
     /// `parse_simple_stmt_no_eol`, so an unrecognized statement doesn't
     /// swallow the colon-separated statements after it on the same line.
     fn skip_to_stmt_end(&mut self) {
-        while !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
+        while !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Colon) {
+            self.advance();
+        }
     }
 
     fn is_end_kw(&self, kw: &str) -> bool {
@@ -289,8 +414,7 @@ impl Parser {
     }
 
     fn is_elseif(&self) -> bool {
-        self.is_ident_at(0, "elseif")
-            || (self.is_ident_at(0, "else") && self.is_ident_at(1, "if"))
+        self.is_ident_at(0, "elseif") || (self.is_ident_at(0, "else") && self.is_ident_at(1, "if"))
     }
 
     fn consume_elseif(&mut self) {
@@ -308,11 +432,16 @@ impl Parser {
         let mut stmts = vec![];
         loop {
             self.skip_nl();
-            if *self.peek() == Tok::Eof || at_end(self) { break; }
+            if *self.peek() == Tok::Eof || at_end(self) {
+                break;
+            }
             let start = self.peek_span().start;
             if let Some(s) = self.parse_stmt()? {
                 let end = self.peek_span().start;
-                stmts.push(SpannedStmt { stmt: s, span: SourceSpan { start, end } });
+                stmts.push(SpannedStmt {
+                    stmt: s,
+                    span: SourceSpan { start, end },
+                });
             }
         }
         Ok(stmts)
@@ -322,8 +451,8 @@ impl Parser {
 
     fn parse_program(&mut self) -> Result<Program, String> {
         self.skip_nl();
-        let mut subs      = vec![];
-        let mut funcs     = vec![];
+        let mut subs = vec![];
+        let mut funcs = vec![];
         let mut type_defs = vec![];
         let mut module_diagnostics: Vec<(String, SourceSpan)> = vec![];
         let mut module_name: Option<String> = None;
@@ -361,8 +490,10 @@ impl Parser {
                 continue;
             }
             // Access/scope modifiers before Sub, Function, or Type
-            if self.is_ident("public") || self.is_ident("private")
-                || self.is_ident("friend") || self.is_ident("static")
+            if self.is_ident("public")
+                || self.is_ident("private")
+                || self.is_ident("friend")
+                || self.is_ident("static")
             {
                 let start = self.peek_span().start;
                 self.advance();
@@ -440,7 +571,9 @@ impl Parser {
         let mut fields = vec![];
         loop {
             self.skip_nl();
-            if self.is_end_kw("type") || *self.peek() == Tok::Eof { break; }
+            if self.is_end_kw("type") || *self.peek() == Tok::Eof {
+                break;
+            }
             // Each line: FieldName As TypeName  (or blank/comment)
             if let Tok::Ident(_) = self.peek().clone() {
                 let field_name = self.consume_ident()?.to_lowercase();
@@ -522,7 +655,11 @@ impl Parser {
             if self.is_ident("optional") || self.is_ident("paramarray") {
                 return Err(format!(
                     "parameter modifier '{}' is not supported",
-                    if self.is_ident("optional") { "Optional" } else { "ParamArray" }
+                    if self.is_ident("optional") {
+                        "Optional"
+                    } else {
+                        "ParamArray"
+                    }
                 ));
             }
             let name = self.consume_ident()?;
@@ -532,7 +669,9 @@ impl Parser {
                 self.advance();
                 self.consume_ident()?; // type name
             }
-            if *self.peek() == Tok::Comma { self.advance(); }
+            if *self.peek() == Tok::Comma {
+                self.advance();
+            }
         }
         Ok(params)
     }
@@ -554,7 +693,12 @@ impl Parser {
                 self.eat_stmt_end()?;
                 return Ok(Some(s));
             }
-            _ => return Err(format!("unexpected token starting statement: {:?}", self.peek())),
+            _ => {
+                return Err(format!(
+                    "unexpected token starting statement: {:?}",
+                    self.peek()
+                ));
+            }
         }
 
         // A bare `name = ...` is always a plain assignment, even when `name`
@@ -576,13 +720,27 @@ impl Parser {
         // go through `parse_simple_stmt_no_eol`/`eat_stmt_end()` at all, and
         // (being blocks, not single statements) don't belong inside a
         // single-line `If`'s Then/Else branch either.
-        if self.is_ident("do")     { return Ok(Some(self.parse_do_loop()?)); }
-        if self.is_ident("select") { return Ok(Some(self.parse_select_case()?)); }
-        if self.is_ident("with")   { return Ok(Some(self.parse_with()?)); }
-        if self.is_ident("for") && self.is_ident_at(1, "each") { return Ok(Some(self.parse_for_each()?)); }
-        if self.is_ident("for")    { return Ok(Some(self.parse_for()?)); }
-        if self.is_ident("if")     { return Ok(Some(self.parse_if()?)); }
-        if self.is_ident("while")  { return Ok(Some(self.parse_while_wend()?)); }
+        if self.is_ident("do") {
+            return Ok(Some(self.parse_do_loop()?));
+        }
+        if self.is_ident("select") {
+            return Ok(Some(self.parse_select_case()?));
+        }
+        if self.is_ident("with") {
+            return Ok(Some(self.parse_with()?));
+        }
+        if self.is_ident("for") && self.is_ident_at(1, "each") {
+            return Ok(Some(self.parse_for_each()?));
+        }
+        if self.is_ident("for") {
+            return Ok(Some(self.parse_for()?));
+        }
+        if self.is_ident("if") {
+            return Ok(Some(self.parse_if()?));
+        }
+        if self.is_ident("while") {
+            return Ok(Some(self.parse_while_wend()?));
+        }
 
         let s = self.parse_simple_stmt_no_eol()?;
         self.eat_stmt_end()?;
@@ -606,7 +764,12 @@ impl Parser {
     fn parse_simple_stmt_no_eol(&mut self) -> Result<Stmt, String> {
         let first = match self.peek() {
             Tok::Ident(s) => s.clone(),
-            _ => return Err(format!("unexpected token starting statement: {:?}", self.peek())),
+            _ => {
+                return Err(format!(
+                    "unexpected token starting statement: {:?}",
+                    self.peek()
+                ));
+            }
         };
 
         // A bare `name = ...` is always a plain assignment, even when `name`
@@ -621,27 +784,32 @@ impl Parser {
         }
 
         match first.as_str() {
-            "exit"    => self.parse_exit(),
+            "exit" => self.parse_exit(),
             "on" if self.is_ident_at(1, "error") => self.parse_on_error(),
-            "goto"    => {
+            "goto" => {
                 self.advance();
                 let label = self.consume_ident()?;
                 Ok(Stmt::GoTo(label))
             }
-            "resume"  => {
+            "resume" => {
                 self.advance();
-                let next = if self.is_ident("next") { self.advance(); true } else { false };
+                let next = if self.is_ident("next") {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
                 Ok(Stmt::Resume { next })
             }
-            "set"     => self.parse_set(),
-            "dim"     => self.parse_dim(),
-            "redim"   => self.parse_redim(),
-            "erase"   => self.parse_erase(),
-            "const"   => self.parse_const(),
-            "msgbox"  => self.parse_msgbox(),
-            "call"    => self.parse_call_stmt(),
-            "range"   => self.parse_range_stmt(),
-            "cells"   => self.parse_cell_write_stmt(),
+            "set" => self.parse_set(),
+            "dim" => self.parse_dim(),
+            "redim" => self.parse_redim(),
+            "erase" => self.parse_erase(),
+            "const" => self.parse_const(),
+            "msgbox" => self.parse_msgbox(),
+            "call" => self.parse_call_stmt(),
+            "range" => self.parse_range_stmt(),
+            "cells" => self.parse_cell_write_stmt(),
             "application" => self.parse_application_stmt(),
             "worksheetfunction" => self.parse_wsf_call_stmt(None),
             "worksheets" | "sheets" => self.parse_sheets_stmt(),
@@ -708,13 +876,23 @@ impl Parser {
         let step = if self.is_ident("step") {
             self.advance();
             Some(self.parse_expr()?)
-        } else { None };
+        } else {
+            None
+        };
         self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("next"))?;
         self.expect_ident("next")?;
-        if matches!(self.peek(), Tok::Ident(_)) { self.advance(); } // optional loop var
+        if matches!(self.peek(), Tok::Ident(_)) {
+            self.advance();
+        } // optional loop var
         self.skip_nl();
-        Ok(Stmt::For { var, from, to, step, body })
+        Ok(Stmt::For {
+            var,
+            from,
+            to,
+            step,
+            body,
+        })
     }
 
     fn parse_for_each(&mut self) -> Result<Stmt, String> {
@@ -726,9 +904,15 @@ impl Parser {
         self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("next"))?;
         self.expect_ident("next")?;
-        if matches!(self.peek(), Tok::Ident(_)) { self.advance(); }
+        if matches!(self.peek(), Tok::Ident(_)) {
+            self.advance();
+        }
         self.skip_nl();
-        Ok(Stmt::ForEach { var, range_addr, body })
+        Ok(Stmt::ForEach {
+            var,
+            range_addr,
+            body,
+        })
     }
 
     fn parse_for_each_source(&mut self) -> Result<String, String> {
@@ -755,9 +939,8 @@ impl Parser {
             return self.parse_single_line_if(condition);
         }
         self.eat_stmt_end()?;
-        let then_body = self.parse_stmts(|p| {
-            p.is_elseif() || p.is_ident("else") || p.is_end_kw("if")
-        })?;
+        let then_body =
+            self.parse_stmts(|p| p.is_elseif() || p.is_ident("else") || p.is_end_kw("if"))?;
         let else_body = if self.is_elseif() {
             self.parse_elseif_chain()?
         } else if self.is_ident("else") {
@@ -769,7 +952,11 @@ impl Parser {
         };
         self.consume_end_kw("if")?;
         self.skip_nl();
-        Ok(Stmt::If { condition, then_body, else_body })
+        Ok(Stmt::If {
+            condition,
+            then_body,
+            else_body,
+        })
     }
 
     /// `If cond Then stmt [Else stmt]` all on one line, no `End If` — real
@@ -785,7 +972,11 @@ impl Parser {
             vec![]
         };
         self.eat_stmt_end()?;
-        Ok(Stmt::If { condition, then_body, else_body })
+        Ok(Stmt::If {
+            condition,
+            then_body,
+            else_body,
+        })
     }
 
     /// One single-line-`If` branch: a `:`-separated *list* of statements, not
@@ -799,8 +990,12 @@ impl Parser {
     fn parse_single_line_if_branch_list(&mut self) -> Result<Vec<SpannedStmt>, String> {
         let mut out = vec![self.parse_single_line_if_branch()?];
         while *self.peek() == Tok::Colon {
-            while *self.peek() == Tok::Colon { self.advance(); }
-            if matches!(self.peek(), Tok::Newline | Tok::Eof) || self.is_ident("else") { break; }
+            while *self.peek() == Tok::Colon {
+                self.advance();
+            }
+            if matches!(self.peek(), Tok::Newline | Tok::Eof) || self.is_ident("else") {
+                break;
+            }
             out.push(self.parse_single_line_if_branch()?);
         }
         Ok(out)
@@ -846,7 +1041,10 @@ impl Parser {
             }
         };
         let end = self.peek_span().start;
-        Ok(SpannedStmt { stmt, span: SourceSpan { start, end } })
+        Ok(SpannedStmt {
+            stmt,
+            span: SourceSpan { start, end },
+        })
     }
 
     fn parse_elseif_chain(&mut self) -> Result<Vec<SpannedStmt>, String> {
@@ -855,9 +1053,8 @@ impl Parser {
         let condition = self.parse_expr()?;
         self.expect_ident("then")?;
         self.eat_stmt_end()?;
-        let then_body = self.parse_stmts(|p| {
-            p.is_elseif() || p.is_ident("else") || p.is_end_kw("if")
-        })?;
+        let then_body =
+            self.parse_stmts(|p| p.is_elseif() || p.is_ident("else") || p.is_end_kw("if"))?;
         let else_body = if self.is_elseif() {
             self.parse_elseif_chain()?
         } else if self.is_ident("else") {
@@ -868,23 +1065,38 @@ impl Parser {
             vec![]
         };
         let end = self.peek_span().start;
-        let stmt = Stmt::If { condition, then_body, else_body };
-        Ok(vec![SpannedStmt { stmt, span: SourceSpan { start, end } }])
+        let stmt = Stmt::If {
+            condition,
+            then_body,
+            else_body,
+        };
+        Ok(vec![SpannedStmt {
+            stmt,
+            span: SourceSpan { start, end },
+        }])
     }
 
     fn parse_do_loop(&mut self) -> Result<Stmt, String> {
         self.expect_ident("do")?;
         let pre_cond = if self.is_ident("while") || self.is_ident("until") {
             Some(self.parse_do_cond()?)
-        } else { None };
+        } else {
+            None
+        };
         self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("loop"))?;
         self.expect_ident("loop")?;
         let post_cond = if self.is_ident("while") || self.is_ident("until") {
             Some(self.parse_do_cond()?)
-        } else { None };
+        } else {
+            None
+        };
         self.skip_nl();
-        Ok(Stmt::DoLoop { pre_cond, post_cond, body })
+        Ok(Stmt::DoLoop {
+            pre_cond,
+            post_cond,
+            body,
+        })
     }
 
     fn parse_do_cond(&mut self) -> Result<(bool, Expr), String> {
@@ -917,9 +1129,14 @@ impl Parser {
         let mut cases = vec![];
         let mut else_body = vec![];
         loop {
-            if self.is_end_kw("select") || *self.peek() == Tok::Eof { break; }
+            if self.is_end_kw("select") || *self.peek() == Tok::Eof {
+                break;
+            }
             if !self.is_ident("case") {
-                return Err(format!("expected 'Case' in Select Case, got {:?}", self.peek()));
+                return Err(format!(
+                    "expected 'Case' in Select Case, got {:?}",
+                    self.peek()
+                ));
             }
             self.advance(); // "case"
             if self.is_ident("else") {
@@ -935,7 +1152,11 @@ impl Parser {
         }
         self.consume_end_kw("select")?;
         self.skip_nl();
-        Ok(Stmt::SelectCase { expr, cases, else_body })
+        Ok(Stmt::SelectCase {
+            expr,
+            cases,
+            else_body,
+        })
     }
 
     fn parse_case_match_list(&mut self) -> Result<Vec<CaseMatch>, String> {
@@ -968,12 +1189,12 @@ impl Parser {
 
     fn parse_cmp_op(&mut self) -> Result<VbaBinOp, String> {
         let op = match self.peek() {
-            Tok::Eq    => VbaBinOp::Eq,
-            Tok::Ne    => VbaBinOp::Ne,
-            Tok::Lt    => VbaBinOp::Lt,
-            Tok::Le    => VbaBinOp::Le,
-            Tok::Gt    => VbaBinOp::Gt,
-            Tok::Ge    => VbaBinOp::Ge,
+            Tok::Eq => VbaBinOp::Eq,
+            Tok::Ne => VbaBinOp::Ne,
+            Tok::Lt => VbaBinOp::Lt,
+            Tok::Le => VbaBinOp::Le,
+            Tok::Gt => VbaBinOp::Gt,
+            Tok::Ge => VbaBinOp::Ge,
             t => return Err(format!("expected comparison operator, got {:?}", t)),
         };
         self.advance();
@@ -1006,13 +1227,19 @@ impl Parser {
                 let body = self.parse_with_body()?;
                 self.consume_end_kw("with")?;
                 self.skip_nl();
-                return Ok(Stmt::WithSheet { sheet_name: name, body });
+                return Ok(Stmt::WithSheet {
+                    sheet_name: name,
+                    body,
+                });
             }
             self.skip_to_eol();
             let body = self.parse_with_body()?;
             self.consume_end_kw("with")?;
             self.skip_nl();
-            return Ok(Stmt::With { target: WithTarget::Unmodeled, body });
+            return Ok(Stmt::With {
+                target: WithTarget::Unmodeled,
+                body,
+            });
         }
 
         // ── Cells(row, col) — a computed single-cell target ──────────────────
@@ -1037,7 +1264,10 @@ impl Parser {
             let body = self.parse_with_body()?;
             self.consume_end_kw("with")?;
             self.skip_nl();
-            return Ok(Stmt::With { target: WithTarget::Unmodeled, body });
+            return Ok(Stmt::With {
+                target: WithTarget::Unmodeled,
+                body,
+            });
         }
 
         // ── With <identifier> ────────────────────────────────────────────────
@@ -1046,7 +1276,9 @@ impl Parser {
         // `WithTarget::Var`). A trailing `.something` (e.g.
         // `With ws.Range("A1:B2")`) isn't modeled — skip to the no-op body
         // rather than mis-parsing it as a bare variable target.
-        if matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek_at(1), Tok::Newline | Tok::Eof | Tok::Colon) {
+        if matches!(self.peek(), Tok::Ident(_))
+            && matches!(self.peek_at(1), Tok::Newline | Tok::Eof | Tok::Colon)
+        {
             let var = self.consume_ident()?.to_lowercase();
             return self.finish_with(WithTarget::Var(var));
         }
@@ -1056,7 +1288,10 @@ impl Parser {
         let body = self.parse_with_body()?;
         self.consume_end_kw("with")?;
         self.skip_nl();
-        Ok(Stmt::With { target: WithTarget::Unmodeled, body })
+        Ok(Stmt::With {
+            target: WithTarget::Unmodeled,
+            body,
+        })
     }
 
     /// Shared tail of every recognized `With` target: eat the header's
@@ -1108,7 +1343,11 @@ impl Parser {
                 let col = self.parse_expr()?;
                 self.expect_tok(Tok::RParen)?;
                 let fields = self.parse_dot_field_chain()?;
-                WithMember::Cells { row: Box::new(row), col: Box::new(col), fields }
+                WithMember::Cells {
+                    row: Box::new(row),
+                    col: Box::new(col),
+                    fields,
+                }
             } else {
                 let addr = self.consume_str()?;
                 self.expect_tok(Tok::RParen)?;
@@ -1150,16 +1389,19 @@ impl Parser {
         }
         self.skip_to_stmt_end();
         Ok(Stmt::Unsupported {
-            reason: format!("With-block '.{}' read without assignment has no effect", described),
+            reason: format!(
+                "With-block '.{}' read without assignment has no effect",
+                described
+            ),
         })
     }
 
     fn parse_exit(&mut self) -> Result<Stmt, String> {
         self.expect_ident("exit")?;
         match self.consume_ident()?.as_str() {
-            "for"      => Ok(Stmt::ExitFor),
-            "do"       => Ok(Stmt::ExitDo),
-            "sub"      => Ok(Stmt::ExitSub),
+            "for" => Ok(Stmt::ExitFor),
+            "do" => Ok(Stmt::ExitDo),
+            "sub" => Ok(Stmt::ExitSub),
             "function" => Ok(Stmt::ExitFunction),
             other => Err(format!("unknown exit target: {}", other)),
         }
@@ -1175,12 +1417,18 @@ impl Parser {
         } else if self.is_ident("goto") {
             self.advance();
             match self.peek().clone() {
-                Tok::Int(0) => { self.advance(); Ok(Stmt::OnError { resume_next: false }) }
+                Tok::Int(0) => {
+                    self.advance();
+                    Ok(Stmt::OnError { resume_next: false })
+                }
                 Tok::Ident(_) => {
                     let label = self.consume_ident()?;
                     Ok(Stmt::OnErrorGoTo(label))
                 }
-                _ => { self.advance(); Ok(Stmt::OnError { resume_next: false }) }
+                _ => {
+                    self.advance();
+                    Ok(Stmt::OnError { resume_next: false })
+                }
             }
         } else {
             Err(format!("unexpected On Error action: {:?}", self.peek()))
@@ -1208,14 +1456,22 @@ impl Parser {
         // comma correctly skips exactly one slot.
         let mut rest: [Option<Expr>; 4] = [None, None, None, None];
         for slot in rest.iter_mut() {
-            if *self.peek() != Tok::Comma { break; }
+            if *self.peek() != Tok::Comma {
+                break;
+            }
             self.advance();
             if *self.peek() != Tok::Comma && !self.is_stmt_end() {
                 *slot = Some(self.parse_expr()?);
             }
         }
         let [source, description, help_file, help_context] = rest;
-        Ok(Stmt::ErrRaise { number, source, description, help_file, help_context })
+        Ok(Stmt::ErrRaise {
+            number,
+            source,
+            description,
+            help_file,
+            help_context,
+        })
     }
 
     fn is_stmt_end(&self) -> bool {
@@ -1226,8 +1482,22 @@ impl Parser {
 
     /// Known VBA built-in type names that do NOT correspond to a user-defined type.
     fn is_vba_builtin_type(name: &str) -> bool {
-        matches!(name, "integer" | "long" | "longlong" | "single" | "double" | "currency"
-            | "boolean" | "string" | "date" | "object" | "variant" | "byte" | "decimal")
+        matches!(
+            name,
+            "integer"
+                | "long"
+                | "longlong"
+                | "single"
+                | "double"
+                | "currency"
+                | "boolean"
+                | "string"
+                | "date"
+                | "object"
+                | "variant"
+                | "byte"
+                | "decimal"
+        )
     }
 
     /// `Dim <decl> [, <decl> ...]` — each declarator is parsed by
@@ -1276,7 +1546,11 @@ impl Parser {
                     // needs it) — only the upper-bound expression carries
                     // over, same as before this method gained `lo To hi`.
                     let upper_only = sizes.into_iter().map(|d| d.upper).collect();
-                    return Ok(Stmt::DimArrayRecord { name, sizes: upper_only, type_name });
+                    return Ok(Stmt::DimArrayRecord {
+                        name,
+                        sizes: upper_only,
+                        type_name,
+                    });
                 }
             }
             Ok(Stmt::DimArray { name, sizes })
@@ -1298,14 +1572,24 @@ impl Parser {
             // loop instead of hard-failing at `eat_stmt_end()` — the
             // single-declarator form had this same tolerance (bounded by
             // EOL instead of comma) before the comma loop existed.
-            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
+            while !matches!(
+                self.peek(),
+                Tok::Comma | Tok::Newline | Tok::Eof | Tok::Colon
+            ) {
+                self.advance();
+            }
             Ok(Stmt::DimBare { var })
         } else {
             // Not even an identifier here (malformed `Dim`) — same
             // permissive no-op the pre-comma-loop parser gave any
             // unparseable `Dim` line, just bounded by comma now so a
             // trailing `, nextDecl` still reaches the outer loop.
-            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof | Tok::Colon) { self.advance(); }
+            while !matches!(
+                self.peek(),
+                Tok::Comma | Tok::Newline | Tok::Eof | Tok::Colon
+            ) {
+                self.advance();
+            }
             Ok(Stmt::Dim)
         }
     }
@@ -1317,9 +1601,15 @@ impl Parser {
         if self.is_ident("to") {
             self.advance();
             let upper = self.parse_expr()?;
-            Ok(ArrayDim { lower: Some(first), upper })
+            Ok(ArrayDim {
+                lower: Some(first),
+                upper,
+            })
         } else {
-            Ok(ArrayDim { lower: None, upper: first })
+            Ok(ArrayDim {
+                lower: None,
+                upper: first,
+            })
         }
     }
 
@@ -1380,7 +1670,11 @@ impl Parser {
                         Some(p) => parts.push(p),
                         None => return Ok(None),
                     }
-                    if *self.peek() == Tok::Comma { self.advance(); } else { break; }
+                    if *self.peek() == Tok::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
                 }
                 self.expect_tok(Tok::RParen)?;
                 self.parse_object_suffix(ObjectExpr::Union(parts))
@@ -1409,10 +1703,14 @@ impl Parser {
     fn parse_object_suffix(&mut self, base: ObjectExpr) -> Result<Option<ObjectExpr>, String> {
         let mut cur = base;
         loop {
-            if *self.peek() != Tok::Dot { break; }
+            if *self.peek() != Tok::Dot {
+                break;
+            }
             let is_areas = self.is_ident_at(1, "areas");
             let is_special = self.is_ident_at(1, "specialcells");
-            if !is_areas && !is_special { break; }
+            if !is_areas && !is_special {
+                break;
+            }
             self.advance(); // '.'
             self.advance(); // 'areas' | 'specialcells'
             if is_areas {
@@ -1423,16 +1721,26 @@ impl Parser {
             } else {
                 self.expect_tok(Tok::LParen)?;
                 let recognized = match self.peek().clone() {
-                    Tok::Ident(ref s) if s == "xlcelltypevisible" => { self.advance(); true }
-                    Tok::Int(12) => { self.advance(); true }
+                    Tok::Ident(ref s) if s == "xlcelltypevisible" => {
+                        self.advance();
+                        true
+                    }
+                    Tok::Int(12) => {
+                        self.advance();
+                        true
+                    }
                     _ => false,
                 };
                 if !recognized {
                     // Unrecognized SpecialCells type — consume through the
                     // matching ')' so the caller's eventual `skip_to_eol`
                     // still lands cleanly, then bail.
-                    while *self.peek() != Tok::RParen && *self.peek() != Tok::Eof { self.advance(); }
-                    if *self.peek() == Tok::RParen { self.advance(); }
+                    while *self.peek() != Tok::RParen && *self.peek() != Tok::Eof {
+                        self.advance();
+                    }
+                    if *self.peek() == Tok::RParen {
+                        self.advance();
+                    }
                     return Ok(None);
                 }
                 self.expect_tok(Tok::RParen)?;
@@ -1452,7 +1760,12 @@ impl Parser {
 
     fn parse_redim(&mut self) -> Result<Stmt, String> {
         self.expect_ident("redim")?;
-        let preserve = if self.is_ident("preserve") { self.advance(); true } else { false };
+        let preserve = if self.is_ident("preserve") {
+            self.advance();
+            true
+        } else {
+            false
+        };
         let name = self.consume_ident()?;
         self.expect_tok(Tok::LParen)?;
         let mut sizes = vec![self.parse_array_dim()?];
@@ -1461,14 +1774,24 @@ impl Parser {
             sizes.push(self.parse_array_dim()?);
         }
         self.expect_tok(Tok::RParen)?;
-        if self.is_ident("as") { self.advance(); self.consume_ident()?; }
-        Ok(Stmt::ReDim { name, sizes, preserve })
+        if self.is_ident("as") {
+            self.advance();
+            self.consume_ident()?;
+        }
+        Ok(Stmt::ReDim {
+            name,
+            sizes,
+            preserve,
+        })
     }
 
     fn parse_const(&mut self) -> Result<Stmt, String> {
         self.expect_ident("const")?;
         let var = self.consume_ident()?;
-        if self.is_ident("as") { self.advance(); self.consume_ident()?; }
+        if self.is_ident("as") {
+            self.advance();
+            self.consume_ident()?;
+        }
         self.expect_tok(Tok::Eq)?;
         let value = self.parse_expr()?;
         Ok(Stmt::Assignment { var, value })
@@ -1521,7 +1844,11 @@ impl Parser {
                 let is_formula = prop == "formula";
                 self.expect_tok(Tok::Eq)?;
                 let value = self.parse_expr()?;
-                Ok(Stmt::RangeWrite { addr, is_formula, value })
+                Ok(Stmt::RangeWrite {
+                    addr,
+                    is_formula,
+                    value,
+                })
             }
             "copy" => {
                 // Optional: Destination:=Range("dst") — a bare `.Copy` (no
@@ -1581,9 +1908,14 @@ impl Parser {
                 let mut key_col: u32 = 1;
                 let mut descending = false;
                 while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof {
-                    if !matches!(self.peek(), Tok::Ident(_)) { self.advance(); continue; }
+                    if !matches!(self.peek(), Tok::Ident(_)) {
+                        self.advance();
+                        continue;
+                    }
                     let kw_name = self.consume_ident()?;
-                    if *self.peek() != Tok::ColonEq { continue; }
+                    if *self.peek() != Tok::ColonEq {
+                        continue;
+                    }
                     self.advance(); // :=
                     match kw_name.as_str() {
                         "key1" => {
@@ -1602,21 +1934,37 @@ impl Parser {
                         }
                         "order1" => {
                             let val = match self.peek().clone() {
-                                Tok::Ident(s) => { self.advance(); s }
-                                _ => { self.parse_expr()?; String::new() }
+                                Tok::Ident(s) => {
+                                    self.advance();
+                                    s
+                                }
+                                _ => {
+                                    self.parse_expr()?;
+                                    String::new()
+                                }
                             };
                             descending = val.contains("descend");
                         }
-                        _ => { self.parse_expr()?; }
+                        _ => {
+                            self.parse_expr()?;
+                        }
                     }
-                    if *self.peek() == Tok::Comma { self.advance(); }
+                    if *self.peek() == Tok::Comma {
+                        self.advance();
+                    }
                 }
-                Ok(Stmt::RangeSort { addr, key_col, descending })
+                Ok(Stmt::RangeSort {
+                    addr,
+                    key_col,
+                    descending,
+                })
             }
             "delete" => Ok(Stmt::RangeDelete { addr }),
             "insert" => {
                 // optional kwargs
-                while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof { self.advance(); }
+                while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof {
+                    self.advance();
+                }
                 Ok(Stmt::RangeInsert { addr })
             }
             "offset" => {
@@ -1629,7 +1977,12 @@ impl Parser {
                 self.expect_ident("value")?;
                 self.expect_tok(Tok::Eq)?;
                 let value = self.parse_expr()?;
-                Ok(Stmt::RangeOffsetWrite { addr: addr.to_uppercase(), row_off, col_off, value })
+                Ok(Stmt::RangeOffsetWrite {
+                    addr: addr.to_uppercase(),
+                    row_off,
+                    col_off,
+                    value,
+                })
             }
             "entirerow" | "entirecolumn" => {
                 self.expect_tok(Tok::Dot)?;
@@ -1705,14 +2058,19 @@ impl Parser {
             other => {
                 self.expect_tok(Tok::Eq)?;
                 let value = self.parse_expr()?;
-                Ok(Stmt::SetAppProp { prop: other.to_string(), value })
+                Ok(Stmt::SetAppProp {
+                    prop: other.to_string(),
+                    value,
+                })
             }
         }
     }
 
     fn parse_wsf_call_stmt(&mut self, _prefix: Option<()>) -> Result<Stmt, String> {
         // consume "worksheetfunction" if still present
-        if self.is_ident("worksheetfunction") { self.advance(); }
+        if self.is_ident("worksheetfunction") {
+            self.advance();
+        }
         self.expect_tok(Tok::Dot)?;
         let name = self.consume_ident()?;
         self.expect_tok(Tok::LParen)?;
@@ -1720,7 +2078,10 @@ impl Parser {
         self.expect_tok(Tok::RParen)?;
         Ok(Stmt::Assignment {
             var: "_".into(),
-            value: Expr::FuncCall { name: format!("wsf_{}", name), args },
+            value: Expr::FuncCall {
+                name: format!("wsf_{}", name),
+                args,
+            },
         })
     }
 
@@ -1931,7 +2292,11 @@ impl Parser {
                 self.advance();
                 let value = self.parse_expr()?;
                 let indices: Vec<Expr> = args;
-                Ok(Stmt::ArrayWrite { name, indices, value })
+                Ok(Stmt::ArrayWrite {
+                    name,
+                    indices,
+                    value,
+                })
             } else if *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
                 // arr(i).Field = val
                 self.advance(); // consume '.'
@@ -1939,7 +2304,12 @@ impl Parser {
                 if *self.peek() == Tok::Eq {
                     self.advance();
                     let value = self.parse_expr()?;
-                    Ok(Stmt::ArrayRecordSet { name, indices: args, field, value })
+                    Ok(Stmt::ArrayRecordSet {
+                        name,
+                        indices: args,
+                        field,
+                        value,
+                    })
                 } else {
                     // Leave the trailing newline for the caller's own
                     // `eat_stmt_end()` (the ident-statement dispatch fallback) —
@@ -2032,9 +2402,17 @@ impl Parser {
                 self.advance();
                 let value = self.parse_expr()?;
                 if fields.len() == 1 {
-                    Ok(Stmt::RecordSet { var: name, field: fields.remove(0), value })
+                    Ok(Stmt::RecordSet {
+                        var: name,
+                        field: fields.remove(0),
+                        value,
+                    })
                 } else {
-                    Ok(Stmt::RecordSetNested { var: name, fields, value })
+                    Ok(Stmt::RecordSetNested {
+                        var: name,
+                        fields,
+                        value,
+                    })
                 }
             } else {
                 // p.Method / property access without assignment — skip to
@@ -2065,7 +2443,9 @@ impl Parser {
 
     fn parse_arg_list(&mut self) -> Result<Vec<Expr>, String> {
         let mut args = vec![];
-        if *self.peek() == Tok::RParen { return Ok(args); }
+        if *self.peek() == Tok::RParen {
+            return Ok(args);
+        }
         args.push(self.parse_expr()?);
         while *self.peek() == Tok::Comma {
             self.advance();
@@ -2093,7 +2473,11 @@ impl Parser {
         while self.is_ident("xor") {
             self.advance();
             let rhs = self.parse_or()?;
-            lhs = Expr::BinOp { op: VbaBinOp::Xor, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op: VbaBinOp::Xor,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2103,7 +2487,11 @@ impl Parser {
         while self.is_ident("or") {
             self.advance();
             let rhs = self.parse_and()?;
-            lhs = Expr::BinOp { op: VbaBinOp::Or, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op: VbaBinOp::Or,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2113,7 +2501,11 @@ impl Parser {
         while self.is_ident("and") {
             self.advance();
             let rhs = self.parse_not_level()?;
-            lhs = Expr::BinOp { op: VbaBinOp::And, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op: VbaBinOp::And,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2143,7 +2535,8 @@ impl Parser {
         // a general `a Is b` is left unparsed rather than guessed at, and
         // `Case Is > 5` never reaches here (parse_case_match consumes its own
         // `Is` before ever calling parse_expr).
-        if self.is_ident("is") && self.is_ident_at(1, "nothing")
+        if self.is_ident("is")
+            && self.is_ident_at(1, "nothing")
             && let Expr::Var(name) = &lhs
         {
             let name = name.clone();
@@ -2153,17 +2546,21 @@ impl Parser {
         }
         loop {
             let op = match self.peek() {
-                Tok::Eq    => VbaBinOp::Eq,
-                Tok::Ne    => VbaBinOp::Ne,
-                Tok::Lt    => VbaBinOp::Lt,
-                Tok::Le    => VbaBinOp::Le,
-                Tok::Gt    => VbaBinOp::Gt,
-                Tok::Ge    => VbaBinOp::Ge,
+                Tok::Eq => VbaBinOp::Eq,
+                Tok::Ne => VbaBinOp::Ne,
+                Tok::Lt => VbaBinOp::Lt,
+                Tok::Le => VbaBinOp::Le,
+                Tok::Gt => VbaBinOp::Gt,
+                Tok::Ge => VbaBinOp::Ge,
                 _ => break,
             };
             self.advance();
             let rhs = self.parse_concat()?;
-            lhs = Expr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2177,7 +2574,11 @@ impl Parser {
         while *self.peek() == Tok::Amp {
             self.advance();
             let rhs = self.parse_additive()?;
-            lhs = Expr::BinOp { op: VbaBinOp::Concat, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op: VbaBinOp::Concat,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2186,13 +2587,17 @@ impl Parser {
         let mut lhs = self.parse_modop()?;
         loop {
             let op = match self.peek() {
-                Tok::Plus  => VbaBinOp::Add,
+                Tok::Plus => VbaBinOp::Add,
                 Tok::Minus => VbaBinOp::Sub,
                 _ => break,
             };
             self.advance();
             let rhs = self.parse_modop()?;
-            lhs = Expr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2202,7 +2607,11 @@ impl Parser {
         while self.is_ident("mod") {
             self.advance();
             let rhs = self.parse_intdiv()?;
-            lhs = Expr::BinOp { op: VbaBinOp::Mod, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op: VbaBinOp::Mod,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2212,7 +2621,11 @@ impl Parser {
         while *self.peek() == Tok::Backslash {
             self.advance();
             let rhs = self.parse_term()?;
-            lhs = Expr::BinOp { op: VbaBinOp::IntDiv, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op: VbaBinOp::IntDiv,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2221,13 +2634,17 @@ impl Parser {
         let mut lhs = self.parse_unary()?;
         loop {
             let op = match self.peek() {
-                Tok::Star  => VbaBinOp::Mul,
+                Tok::Star => VbaBinOp::Mul,
                 Tok::Slash => VbaBinOp::Div,
                 _ => break,
             };
             self.advance();
             let rhs = self.parse_unary()?;
-            lhs = Expr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2255,7 +2672,11 @@ impl Parser {
         while *self.peek() == Tok::Caret {
             self.advance();
             let rhs = self.parse_pow_operand()?;
-            lhs = Expr::BinOp { op: VbaBinOp::Pow, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::BinOp {
+                op: VbaBinOp::Pow,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -2284,15 +2705,30 @@ impl Parser {
                 self.expect_tok(Tok::RParen)?;
                 Ok(e)
             }
-            Tok::Int(n)  => { self.advance(); Ok(Expr::Integer(n)) }
-            Tok::Float(f) => { self.advance(); Ok(Expr::Float(f)) }
-            Tok::Str(s)  => { self.advance(); Ok(Expr::Str(s)) }
+            Tok::Int(n) => {
+                self.advance();
+                Ok(Expr::Integer(n))
+            }
+            Tok::Float(f) => {
+                self.advance();
+                Ok(Expr::Float(f))
+            }
+            Tok::Str(s) => {
+                self.advance();
+                Ok(Expr::Str(s))
+            }
             Tok::Ident(ref s) => {
                 let s = s.clone();
                 match s.as_str() {
-                    "true"  => { self.advance(); Ok(Expr::Bool(true)) }
-                    "false" => { self.advance(); Ok(Expr::Bool(false)) }
-                    "rows"  => self.parse_rows_cols_count("rows", Expr::RowsCount),
+                    "true" => {
+                        self.advance();
+                        Ok(Expr::Bool(true))
+                    }
+                    "false" => {
+                        self.advance();
+                        Ok(Expr::Bool(false))
+                    }
+                    "rows" => self.parse_rows_cols_count("rows", Expr::RowsCount),
                     "columns" => self.parse_rows_cols_count("columns", Expr::ColsCount),
                     "cells" => self.parse_cells_expr(),
                     "range" => self.parse_range_expr(),
@@ -2326,11 +2762,12 @@ impl Parser {
                     // genuine user variable named `err` with an unrelated
                     // UDT field (`x = err.code`) still parses as ordinary
                     // field access.
-                    "err" if self.is_ident_at(2, "number")
-                        || self.is_ident_at(2, "description")
-                        || self.is_ident_at(2, "source")
-                        || self.is_ident_at(2, "helpfile")
-                        || self.is_ident_at(2, "helpcontext") =>
+                    "err"
+                        if self.is_ident_at(2, "number")
+                            || self.is_ident_at(2, "description")
+                            || self.is_ident_at(2, "source")
+                            || self.is_ident_at(2, "helpfile")
+                            || self.is_ident_at(2, "helpcontext") =>
                     {
                         self.advance();
                         self.expect_tok(Tok::Dot)?;
@@ -2391,14 +2828,21 @@ impl Parser {
                 let kw_name = self.consume_ident()?;
                 self.expect_tok(Tok::ColonEq)?;
                 let val = self.parse_expr()?;
-                if kw_name == "what" { what_expr = val; }
-                if *self.peek() == Tok::Comma { self.advance(); }
+                if kw_name == "what" {
+                    what_expr = val;
+                }
+                if *self.peek() == Tok::Comma {
+                    self.advance();
+                }
             }
             self.expect_tok(Tok::RParen)?;
             self.expect_tok(Tok::Dot)?;
             let prop_kw = self.consume_ident()?;
             let find_row = prop_kw == "row";
-            return Ok(Expr::CellsFind { what: Box::new(what_expr), find_row });
+            return Ok(Expr::CellsFind {
+                what: Box::new(what_expr),
+                find_row,
+            });
         }
         self.expect_tok(Tok::LParen)?;
         let row = self.parse_expr()?;
@@ -2408,23 +2852,33 @@ impl Parser {
         self.expect_tok(Tok::Dot)?;
         let prop = self.consume_ident()?;
         match prop.as_str() {
-            "value" => Ok(Expr::CellRead { row: Box::new(row), col: Box::new(col) }),
+            "value" => Ok(Expr::CellRead {
+                row: Box::new(row),
+                col: Box::new(col),
+            }),
             "end" => {
                 self.expect_tok(Tok::LParen)?;
                 let dir_str = self.consume_ident()?;
                 let dir = match dir_str.as_str() {
-                    "xlup"      => XlDir::Up,
-                    "xldown"    => XlDir::Down,
-                    "xltoleft"  => XlDir::Left,
+                    "xlup" => XlDir::Up,
+                    "xldown" => XlDir::Down,
+                    "xltoleft" => XlDir::Left,
                     "xltoright" => XlDir::Right,
                     other => return Err(format!("unknown xl_dir: {}", other)),
                 };
                 self.expect_tok(Tok::RParen)?;
                 self.expect_tok(Tok::Dot)?;
                 let end_prop = self.consume_ident()?;
-                let prop = if end_prop == "row" { XlEndProp::Row } else { XlEndProp::Column };
+                let prop = if end_prop == "row" {
+                    XlEndProp::Row
+                } else {
+                    XlEndProp::Column
+                };
                 Ok(Expr::CellsEndProp {
-                    row: Box::new(row), col: Box::new(col), dir, prop
+                    row: Box::new(row),
+                    col: Box::new(col),
+                    dir,
+                    prop,
                 })
             }
             other => Err(format!("unexpected property after Cells(...): {}", other)),
@@ -2438,7 +2892,10 @@ impl Parser {
         self.expect_tok(Tok::RParen)?;
         // Without '.value': used as a Range object arg to WSF (e.g. WorksheetFunction.Sum(Range("A1:A3")))
         if *self.peek() != Tok::Dot {
-            return Ok(Expr::FuncCall { name: "range".into(), args: vec![Expr::Str(addr)] });
+            return Ok(Expr::FuncCall {
+                name: "range".into(),
+                args: vec![Expr::Str(addr)],
+            });
         }
         self.advance(); // consume '.'
         let prop = self.consume_ident()?;
@@ -2545,13 +3002,18 @@ impl Parser {
     fn parse_wsf_expr(&mut self) -> Result<Expr, String> {
         // peek: already consumed "worksheetfunction" if coming from application path;
         // or still need to consume it
-        if self.is_ident("worksheetfunction") { self.advance(); }
+        if self.is_ident("worksheetfunction") {
+            self.advance();
+        }
         self.expect_tok(Tok::Dot)?;
         let name = self.consume_ident()?;
         self.expect_tok(Tok::LParen)?;
         let args = self.parse_arg_list()?;
         self.expect_tok(Tok::RParen)?;
-        Ok(Expr::FuncCall { name: format!("wsf_{}", name), args })
+        Ok(Expr::FuncCall {
+            name: format!("wsf_{}", name),
+            args,
+        })
     }
 
     fn parse_ident_expr(&mut self) -> Result<Expr, String> {
@@ -2564,7 +3026,11 @@ impl Parser {
             if *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
                 self.advance(); // consume '.'
                 let field = self.consume_ident()?.to_lowercase();
-                return Ok(Expr::ArrayRecordGet { name, indices: args, field });
+                return Ok(Expr::ArrayRecordGet {
+                    name,
+                    indices: args,
+                    field,
+                });
             }
             Ok(Expr::FuncCall { name, args })
         } else if *self.peek() == Tok::Dot
@@ -2597,7 +3063,10 @@ impl Parser {
                 fields.push(self.consume_ident()?.to_lowercase());
             }
             if fields.len() == 1 {
-                Ok(Expr::RecordGet { var: name, field: fields.remove(0) })
+                Ok(Expr::RecordGet {
+                    var: name,
+                    field: fields.remove(0),
+                })
             } else {
                 Ok(Expr::RecordGetNested { var: name, fields })
             }
@@ -2612,7 +3081,9 @@ impl Parser {
 fn parse_cell_addr(addr: &str) -> Option<(u32, u32)> {
     let addr = addr.trim().to_uppercase();
     let alpha_end = addr.find(|c: char| c.is_ascii_digit())?;
-    if alpha_end == 0 { return None; }
+    if alpha_end == 0 {
+        return None;
+    }
     let col = addr[..alpha_end]
         .chars()
         .fold(0u32, |acc, c| acc * 26 + (c as u32 - 'A' as u32 + 1));
@@ -2738,87 +3209,183 @@ mod tests {
     use super::*;
 
     fn parse_body(code: &str) -> Vec<Stmt> {
-        parse(code).unwrap().subs.into_iter().next().unwrap().body
-            .into_iter().map(|s| s.stmt).collect()
+        parse(code)
+            .unwrap()
+            .subs
+            .into_iter()
+            .next()
+            .unwrap()
+            .body
+            .into_iter()
+            .map(|s| s.stmt)
+            .collect()
     }
 
-    #[test] fn test_empty_sub() {
+    #[test]
+    fn test_empty_sub() {
         let prog = parse("Sub MySub()\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs[0].name, "mysub");
         assert!(prog.subs[0].body.is_empty());
     }
-    #[test] fn test_variable_assignment_integer() {
+    #[test]
+    fn test_variable_assignment_integer() {
         let body = parse_body("Sub MySub()\n    a = 10\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment { var: "a".into(), value: Expr::Integer(10) }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::Integer(10)
+            }]
+        );
     }
-    #[test] fn test_variable_assignment_float() {
+    #[test]
+    fn test_variable_assignment_float() {
         let body = parse_body("Sub MySub()\n    x = 3.14\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment { var: "x".into(), value: Expr::Float(3.14) }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "x".into(),
+                value: Expr::Float(3.14)
+            }]
+        );
     }
-    #[test] fn test_variable_assignment_string() {
+    #[test]
+    fn test_variable_assignment_string() {
         let body = parse_body("Sub MySub()\n    msg = \"hello\"\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment { var: "msg".into(), value: Expr::Str("hello".into()) }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "msg".into(),
+                value: Expr::Str("hello".into())
+            }]
+        );
     }
-    #[test] fn test_cell_write_integer() {
+    #[test]
+    fn test_cell_write_integer() {
         let body = parse_body("Sub MySub()\n    Cells(1, 1).Value = 42\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::CellWrite { row: Expr::Integer(1), col: Expr::Integer(1), value: Expr::Integer(42) }]);
+        assert_eq!(
+            body,
+            vec![Stmt::CellWrite {
+                row: Expr::Integer(1),
+                col: Expr::Integer(1),
+                value: Expr::Integer(42)
+            }]
+        );
     }
-    #[test] fn test_cell_write_var_ref() {
+    #[test]
+    fn test_cell_write_var_ref() {
         let body = parse_body("Sub MySub()\n    a = 10\n    Cells(1, 1).Value = a\nEnd Sub\n");
-        assert_eq!(body[1], Stmt::CellWrite { row: Expr::Integer(1), col: Expr::Integer(1), value: Expr::Var("a".into()) });
+        assert_eq!(
+            body[1],
+            Stmt::CellWrite {
+                row: Expr::Integer(1),
+                col: Expr::Integer(1),
+                value: Expr::Var("a".into())
+            }
+        );
     }
-    #[test] fn test_case_insensitive_keywords() {
+    #[test]
+    fn test_case_insensitive_keywords() {
         let prog = parse("SUB MYSUB()\n    A = 10\n    CELLS(1, 1).VALUE = A\nEND SUB\n").unwrap();
         assert_eq!(prog.subs[0].name, "mysub");
     }
-    #[test] fn test_comment_ignored() {
+    #[test]
+    fn test_comment_ignored() {
         let body = parse_body("Sub MySub()\n    ' comment\n    a = 10\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment { var: "a".into(), value: Expr::Integer(10) }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::Integer(10)
+            }]
+        );
     }
-    #[test] fn test_multiple_subs() {
-        let prog = parse("Sub First()\n    a = 1\nEnd Sub\n\nSub Second()\n    b = 2\nEnd Sub\n").unwrap();
+    #[test]
+    fn test_multiple_subs() {
+        let prog =
+            parse("Sub First()\n    a = 1\nEnd Sub\n\nSub Second()\n    b = 2\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs.len(), 2);
     }
-    #[test] fn test_arithmetic_expr() {
+    #[test]
+    fn test_arithmetic_expr() {
         let body = parse_body("Sub MySub()\n    a = 1 + 2\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment {
-            var: "a".into(),
-            value: Expr::BinOp { op: VbaBinOp::Add, lhs: Box::new(Expr::Integer(1)), rhs: Box::new(Expr::Integer(2)) },
-        }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::BinOp {
+                    op: VbaBinOp::Add,
+                    lhs: Box::new(Expr::Integer(1)),
+                    rhs: Box::new(Expr::Integer(2))
+                },
+            }]
+        );
     }
-    #[test] fn test_precedence_mul_over_add() {
+    #[test]
+    fn test_precedence_mul_over_add() {
         let body = parse_body("Sub MySub()\n    a = 1 + 2 * 3\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment {
-            var: "a".into(),
-            value: Expr::BinOp {
-                op: VbaBinOp::Add,
-                lhs: Box::new(Expr::Integer(1)),
-                rhs: Box::new(Expr::BinOp { op: VbaBinOp::Mul, lhs: Box::new(Expr::Integer(2)), rhs: Box::new(Expr::Integer(3)) }),
-            },
-        }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::BinOp {
+                    op: VbaBinOp::Add,
+                    lhs: Box::new(Expr::Integer(1)),
+                    rhs: Box::new(Expr::BinOp {
+                        op: VbaBinOp::Mul,
+                        lhs: Box::new(Expr::Integer(2)),
+                        rhs: Box::new(Expr::Integer(3))
+                    }),
+                },
+            }]
+        );
     }
-    #[test] fn test_for_loop() {
-        let body = parse_body("Sub MySub()\n    For i = 1 To 3\n        a = i\n    Next i\nEnd Sub\n");
+    #[test]
+    fn test_for_loop() {
+        let body =
+            parse_body("Sub MySub()\n    For i = 1 To 3\n        a = i\n    Next i\nEnd Sub\n");
         assert!(matches!(body[0], Stmt::For { .. }));
     }
-    #[test] fn test_for_loop_step() {
-        let body = parse_body("Sub MySub()\n    For i = 0 To 10 Step 2\n        a = i\n    Next i\nEnd Sub\n");
-        if let Stmt::For { step, .. } = &body[0] { assert_eq!(*step, Some(Expr::Integer(2))); }
-    }
-    #[test] fn test_if_no_else() {
-        let body = parse_body("Sub MySub()\n    If a > 0 Then\n        b = 1\n    End If\nEnd Sub\n");
-        assert!(matches!(&body[0], Stmt::If { else_body, .. } if else_body.is_empty()));
-    }
-    #[test] fn test_if_with_else() {
-        let body = parse_body("Sub MySub()\n    If a > 0 Then\n        b = 1\n    Else\n        b = 0\n    End If\nEnd Sub\n");
-        if let Stmt::If { then_body, else_body, .. } = &body[0] {
-            assert_eq!(then_body.len(), 1); assert_eq!(else_body.len(), 1);
+    #[test]
+    fn test_for_loop_step() {
+        let body = parse_body(
+            "Sub MySub()\n    For i = 0 To 10 Step 2\n        a = i\n    Next i\nEnd Sub\n",
+        );
+        if let Stmt::For { step, .. } = &body[0] {
+            assert_eq!(*step, Some(Expr::Integer(2)));
         }
     }
-    #[test] fn test_single_line_if_no_else() {
+    #[test]
+    fn test_if_no_else() {
+        let body =
+            parse_body("Sub MySub()\n    If a > 0 Then\n        b = 1\n    End If\nEnd Sub\n");
+        assert!(matches!(&body[0], Stmt::If { else_body, .. } if else_body.is_empty()));
+    }
+    #[test]
+    fn test_if_with_else() {
+        let body = parse_body(
+            "Sub MySub()\n    If a > 0 Then\n        b = 1\n    Else\n        b = 0\n    End If\nEnd Sub\n",
+        );
+        if let Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } = &body[0]
+        {
+            assert_eq!(then_body.len(), 1);
+            assert_eq!(else_body.len(), 1);
+        }
+    }
+    #[test]
+    fn test_single_line_if_no_else() {
         let body = parse_body("Sub MySub()\n    If a > m Then m = a\n    n = 1\nEnd Sub\n");
         assert!(matches!(&body[0], Stmt::If { .. }));
-        if let Stmt::If { then_body, else_body, .. } = &body[0] {
+        if let Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } = &body[0]
+        {
             assert_eq!(then_body.len(), 1);
             assert!(else_body.is_empty());
             assert!(matches!(&then_body[0].stmt, Stmt::Assignment { var, .. } if var == "m"));
@@ -2827,9 +3394,15 @@ mod tests {
         assert_eq!(body.len(), 2);
         assert!(matches!(&body[1], Stmt::Assignment { var, .. } if var == "n"));
     }
-    #[test] fn test_single_line_if_with_else() {
+    #[test]
+    fn test_single_line_if_with_else() {
         let body = parse_body("Sub MySub()\n    If a > 0 Then b = 1 Else b = 0\nEnd Sub\n");
-        if let Stmt::If { then_body, else_body, .. } = &body[0] {
+        if let Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } = &body[0]
+        {
             assert_eq!(then_body.len(), 1);
             assert_eq!(else_body.len(), 1);
             assert!(matches!(&then_body[0].stmt, Stmt::Assignment { .. }));
@@ -2838,139 +3411,265 @@ mod tests {
             panic!("expected Stmt::If");
         }
     }
-    #[test] fn test_comparison_expr() {
+    #[test]
+    fn test_comparison_expr() {
         let body = parse_body("Sub MySub()\n    x = a > 5\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment {
-            var: "x".into(),
-            value: Expr::BinOp { op: VbaBinOp::Gt, lhs: Box::new(Expr::Var("a".into())), rhs: Box::new(Expr::Integer(5)) },
-        }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "x".into(),
+                value: Expr::BinOp {
+                    op: VbaBinOp::Gt,
+                    lhs: Box::new(Expr::Var("a".into())),
+                    rhs: Box::new(Expr::Integer(5))
+                },
+            }]
+        );
     }
-    #[test] fn test_unary_minus() {
+    #[test]
+    fn test_unary_minus() {
         let body = parse_body("Sub MySub()\n    a = -1\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment { var: "a".into(), value: Expr::UnaryMinus(Box::new(Expr::Integer(1))) }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::UnaryMinus(Box::new(Expr::Integer(1)))
+            }]
+        );
     }
-    #[test] fn test_do_while_loop() {
-        let body = parse_body("Sub MySub()\n    x = 0\n    Do While x < 3\n        x = x + 1\n    Loop\nEnd Sub\n");
-        assert!(matches!(&body[1], Stmt::DoLoop { pre_cond: Some((false, _)), .. }));
+    #[test]
+    fn test_do_while_loop() {
+        let body = parse_body(
+            "Sub MySub()\n    x = 0\n    Do While x < 3\n        x = x + 1\n    Loop\nEnd Sub\n",
+        );
+        assert!(matches!(
+            &body[1],
+            Stmt::DoLoop {
+                pre_cond: Some((false, _)),
+                ..
+            }
+        ));
     }
-    #[test] fn test_do_until_loop() {
-        let body = parse_body("Sub MySub()\n    x = 0\n    Do Until x >= 3\n        x = x + 1\n    Loop\nEnd Sub\n");
-        assert!(matches!(&body[1], Stmt::DoLoop { pre_cond: Some((true, _)), .. }));
+    #[test]
+    fn test_do_until_loop() {
+        let body = parse_body(
+            "Sub MySub()\n    x = 0\n    Do Until x >= 3\n        x = x + 1\n    Loop\nEnd Sub\n",
+        );
+        assert!(matches!(
+            &body[1],
+            Stmt::DoLoop {
+                pre_cond: Some((true, _)),
+                ..
+            }
+        ));
     }
-    #[test] fn test_do_loop_while() {
-        let body = parse_body("Sub MySub()\n    x = 0\n    Do\n        x = x + 1\n    Loop While x < 3\nEnd Sub\n");
-        assert!(matches!(&body[1], Stmt::DoLoop { pre_cond: None, post_cond: Some((false, _)), .. }));
+    #[test]
+    fn test_do_loop_while() {
+        let body = parse_body(
+            "Sub MySub()\n    x = 0\n    Do\n        x = x + 1\n    Loop While x < 3\nEnd Sub\n",
+        );
+        assert!(matches!(
+            &body[1],
+            Stmt::DoLoop {
+                pre_cond: None,
+                post_cond: Some((false, _)),
+                ..
+            }
+        ));
     }
-    #[test] fn test_select_case() {
-        let body = parse_body("Sub MySub()\n    Select Case x\n        Case 1\n            a = 1\n        Case 2, 3\n            a = 23\n        Case Else\n            a = 0\n    End Select\nEnd Sub\n");
+    #[test]
+    fn test_select_case() {
+        let body = parse_body(
+            "Sub MySub()\n    Select Case x\n        Case 1\n            a = 1\n        Case 2, 3\n            a = 23\n        Case Else\n            a = 0\n    End Select\nEnd Sub\n",
+        );
         assert!(matches!(&body[0], Stmt::SelectCase { .. }));
-        if let Stmt::SelectCase { cases, else_body, .. } = &body[0] {
-            assert_eq!(cases.len(), 2); assert_eq!(else_body.len(), 1);
+        if let Stmt::SelectCase {
+            cases, else_body, ..
+        } = &body[0]
+        {
+            assert_eq!(cases.len(), 2);
+            assert_eq!(else_body.len(), 1);
         }
     }
-    #[test] fn test_dim_is_noop() {
+    #[test]
+    fn test_dim_is_noop() {
         let body = parse_body("Sub MySub()\n    Dim x As Integer\n    x = 42\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::DimBare { var: "x".to_string() });
+        assert_eq!(
+            body[0],
+            Stmt::DimBare {
+                var: "x".to_string()
+            }
+        );
     }
-    #[test] fn test_dim_multi_declarator_all_builtin() {
-        let body = parse_body("Sub MySub()\n    Dim a As Integer, b As String\n    a = 1\nEnd Sub\n");
+    #[test]
+    fn test_dim_multi_declarator_all_builtin() {
+        let body =
+            parse_body("Sub MySub()\n    Dim a As Integer, b As String\n    a = 1\nEnd Sub\n");
         assert_eq!(
             body[0],
             Stmt::DimMulti(vec![
-                Stmt::DimBare { var: "a".to_string() },
-                Stmt::DimBare { var: "b".to_string() },
+                Stmt::DimBare {
+                    var: "a".to_string()
+                },
+                Stmt::DimBare {
+                    var: "b".to_string()
+                },
             ])
         );
     }
-    #[test] fn test_dim_multi_declarator_mixed_record_type() {
+    #[test]
+    fn test_dim_multi_declarator_mixed_record_type() {
         // The exact shape called out in CHANGELOG.md's Known limitations as
         // unparseable before this fix: a built-in-typed declarator followed
         // by a user-defined-typed one on the same `Dim`.
-        let body = parse_body("Sub MySub()\n    Dim a As Integer, b As MyType\n    a = 1\nEnd Sub\n");
+        let body =
+            parse_body("Sub MySub()\n    Dim a As Integer, b As MyType\n    a = 1\nEnd Sub\n");
         assert_eq!(
             body[0],
             Stmt::DimMulti(vec![
-                Stmt::DimBare { var: "a".to_string() },
-                Stmt::DimRecord { var: "b".to_string(), type_name: "mytype".to_string() },
+                Stmt::DimBare {
+                    var: "a".to_string()
+                },
+                Stmt::DimRecord {
+                    var: "b".to_string(),
+                    type_name: "mytype".to_string()
+                },
             ])
         );
     }
-    #[test] fn test_dim_multi_declarator_three_way_with_array() {
-        let body = parse_body("Sub MySub()\n    Dim a As Integer, b(3) As Integer, c As MyType\n    a = 1\nEnd Sub\n");
+    #[test]
+    fn test_dim_multi_declarator_three_way_with_array() {
+        let body = parse_body(
+            "Sub MySub()\n    Dim a As Integer, b(3) As Integer, c As MyType\n    a = 1\nEnd Sub\n",
+        );
         assert_eq!(
             body[0],
             Stmt::DimMulti(vec![
-                Stmt::DimBare { var: "a".to_string() },
-                Stmt::DimArray { name: "b".to_string(), sizes: vec![ArrayDim { lower: None, upper: Expr::Integer(3) }] },
-                Stmt::DimRecord { var: "c".to_string(), type_name: "mytype".to_string() },
+                Stmt::DimBare {
+                    var: "a".to_string()
+                },
+                Stmt::DimArray {
+                    name: "b".to_string(),
+                    sizes: vec![ArrayDim {
+                        lower: None,
+                        upper: Expr::Integer(3)
+                    }]
+                },
+                Stmt::DimRecord {
+                    var: "c".to_string(),
+                    type_name: "mytype".to_string()
+                },
             ])
         );
     }
 
-    #[test] fn dim_array_explicit_lo_to_hi_parses() {
+    #[test]
+    fn dim_array_explicit_lo_to_hi_parses() {
         let body = parse_body("Sub MySub()\n    Dim arr(2 To 8)\n    a = 1\nEnd Sub\n");
         assert_eq!(
             body[0],
             Stmt::DimArray {
                 name: "arr".to_string(),
-                sizes: vec![ArrayDim { lower: Some(Expr::Integer(2)), upper: Expr::Integer(8) }],
+                sizes: vec![ArrayDim {
+                    lower: Some(Expr::Integer(2)),
+                    upper: Expr::Integer(8)
+                }],
             }
         );
     }
 
-    #[test] fn dim_array_empty_parens_parses_as_a_zero_dimension_declarator() {
+    #[test]
+    fn dim_array_empty_parens_parses_as_a_zero_dimension_declarator() {
         let body = parse_body("Sub MySub()\n    Dim arr()\n    a = 1\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::DimArray { name: "arr".to_string(), sizes: vec![] });
+        assert_eq!(
+            body[0],
+            Stmt::DimArray {
+                name: "arr".to_string(),
+                sizes: vec![]
+            }
+        );
     }
 
-    #[test] fn redim_explicit_lo_to_hi_parses() {
+    #[test]
+    fn redim_explicit_lo_to_hi_parses() {
         let body = parse_body("Sub MySub()\n    ReDim arr(2 To 8)\n    a = 1\nEnd Sub\n");
         assert_eq!(
             body[0],
             Stmt::ReDim {
                 name: "arr".to_string(),
-                sizes: vec![ArrayDim { lower: Some(Expr::Integer(2)), upper: Expr::Integer(8) }],
+                sizes: vec![ArrayDim {
+                    lower: Some(Expr::Integer(2)),
+                    upper: Expr::Integer(8)
+                }],
                 preserve: false,
             }
         );
     }
 
-    #[test] fn erase_parses_as_its_own_statement() {
+    #[test]
+    fn erase_parses_as_its_own_statement() {
         let body = parse_body("Sub MySub()\n    Erase arr\n    a = 1\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::Erase { name: "arr".to_string() });
+        assert_eq!(
+            body[0],
+            Stmt::Erase {
+                name: "arr".to_string()
+            }
+        );
     }
-    #[test] fn test_dim_fixed_length_string_trailing_syntax_is_tolerated() {
+    #[test]
+    fn test_dim_fixed_length_string_trailing_syntax_is_tolerated() {
         // `As String * 10`'s fixed-length suffix isn't modeled by
         // `parse_dim_declarator`, but it must still be tolerated (consumed,
         // not left for `eat_stmt_end()` to choke on) the same way a
         // single-declarator `Dim` always tolerated unmodeled trailing
         // syntax on its own line, before the comma loop existed.
         let body = parse_body("Sub MySub()\n    Dim s As String * 10\n    s = \"hi\"\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::DimBare { var: "s".to_string() });
+        assert_eq!(
+            body[0],
+            Stmt::DimBare {
+                var: "s".to_string()
+            }
+        );
     }
-    #[test] fn test_dim_fixed_length_string_mixed_with_comma_declarator() {
-        let body = parse_body("Sub MySub()\n    Dim s As String * 10, i As Integer\n    i = 1\nEnd Sub\n");
+    #[test]
+    fn test_dim_fixed_length_string_mixed_with_comma_declarator() {
+        let body =
+            parse_body("Sub MySub()\n    Dim s As String * 10, i As Integer\n    i = 1\nEnd Sub\n");
         assert_eq!(
             body[0],
             Stmt::DimMulti(vec![
-                Stmt::DimBare { var: "s".to_string() },
-                Stmt::DimBare { var: "i".to_string() },
+                Stmt::DimBare {
+                    var: "s".to_string()
+                },
+                Stmt::DimBare {
+                    var: "i".to_string()
+                },
             ])
         );
     }
-    #[test] fn test_with_block() {
-        let body = parse_body("Sub MySub()\n    With Sheet1\n        .Cells(1, 1).Value = 99\n    End With\nEnd Sub\n");
+    #[test]
+    fn test_with_block() {
+        let body = parse_body(
+            "Sub MySub()\n    With Sheet1\n        .Cells(1, 1).Value = 99\n    End With\nEnd Sub\n",
+        );
         // `With Sheet1` is a bare-identifier target — `WithTarget::Var`,
         // resolved at runtime (it may name a Set-assigned object variable
         // or a UDT record; the parser can't tell).
         let body_len = match &body[0] {
-            Stmt::With { target: WithTarget::Var(v), body } if v == "sheet1" => body.len(),
-            other => panic!("expected With {{ target: Var(\"sheet1\") }}, got {:?}", other),
+            Stmt::With {
+                target: WithTarget::Var(v),
+                body,
+            } if v == "sheet1" => body.len(),
+            other => panic!(
+                "expected With {{ target: Var(\"sheet1\") }}, got {:?}",
+                other
+            ),
         };
         assert_eq!(body_len, 1);
     }
 
-    #[test] fn test_with_udt_field_read_without_assignment_is_unsupported() {
+    #[test]
+    fn test_with_udt_field_read_without_assignment_is_unsupported() {
         let body = parse_body("Sub MySub()\n    With p\n        .Field\n    End With\nEnd Sub\n");
         let inner = match &body[0] {
             Stmt::With { body, .. } => body,
@@ -2984,7 +3683,8 @@ mod tests {
         );
     }
 
-    #[test] fn test_with_unrecognized_dot_method_is_unsupported() {
+    #[test]
+    fn test_with_unrecognized_dot_method_is_unsupported() {
         let body = parse_body(
             "Sub MySub()\n    With Sheets(\"Sheet1\")\n        .Foo\n    End With\nEnd Sub\n",
         );
@@ -3000,7 +3700,8 @@ mod tests {
         );
     }
 
-    #[test] fn test_with_non_identifier_dotted_statement_is_unsupported() {
+    #[test]
+    fn test_with_non_identifier_dotted_statement_is_unsupported() {
         // `.42` tokenizes as Dot, Int(42) — a non-identifier after the dot.
         let body = parse_body("Sub MySub()\n    With p\n        .42\n    End With\nEnd Sub\n");
         let inner = match &body[0] {
@@ -3014,140 +3715,210 @@ mod tests {
             }
         );
     }
-    #[test] fn test_func_call_in_expr() {
+    #[test]
+    fn test_func_call_in_expr() {
         let body = parse_body("Sub MySub()\n    a = Len(\"hello\")\nEnd Sub\n");
-        assert!(matches!(&body[0], Stmt::Assignment { value: Expr::FuncCall { name, .. }, .. } if name == "len"));
+        assert!(
+            matches!(&body[0], Stmt::Assignment { value: Expr::FuncCall { name, .. }, .. } if name == "len")
+        );
     }
-    #[test] fn test_bool_literal() {
+    #[test]
+    fn test_bool_literal() {
         let body = parse_body("Sub MySub()\n    a = True\n    b = False\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::Assignment { var: "a".into(), value: Expr::Bool(true) });
-        assert_eq!(body[1], Stmt::Assignment { var: "b".into(), value: Expr::Bool(false) });
+        assert_eq!(
+            body[0],
+            Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::Bool(true)
+            }
+        );
+        assert_eq!(
+            body[1],
+            Stmt::Assignment {
+                var: "b".into(),
+                value: Expr::Bool(false)
+            }
+        );
     }
-    #[test] fn test_unary_not() {
+    #[test]
+    fn test_unary_not() {
         let body = parse_body("Sub MySub()\n    a = Not True\nEnd Sub\n");
-        assert!(matches!(&body[0], Stmt::Assignment { value: Expr::UnaryNot(_), .. }));
+        assert!(matches!(
+            &body[0],
+            Stmt::Assignment {
+                value: Expr::UnaryNot(_),
+                ..
+            }
+        ));
     }
-    #[test] fn test_dot_function_name() {
+    #[test]
+    fn test_dot_function_name() {
         // Handled in formula parser; VBA parser test
         let _ = parse("Sub MySub()\n    a = 1\nEnd Sub\n").unwrap();
     }
-    #[test] fn test_elseif_chain() {
-        let body = parse_body("Sub MySub()\n    If x > 10 Then\n        a = 1\n    ElseIf x > 5 Then\n        a = 2\n    Else\n        a = 3\n    End If\nEnd Sub\n");
+    #[test]
+    fn test_elseif_chain() {
+        let body = parse_body(
+            "Sub MySub()\n    If x > 10 Then\n        a = 1\n    ElseIf x > 5 Then\n        a = 2\n    Else\n        a = 3\n    End If\nEnd Sub\n",
+        );
         assert!(matches!(&body[0], Stmt::If { .. }));
         if let Stmt::If { else_body, .. } = &body[0] {
             assert!(matches!(else_body[0].stmt, Stmt::If { .. }));
         }
     }
-    #[test] fn test_exit_for() {
-        let body = parse_body("Sub MySub()\n    For i = 1 To 10\n        Exit For\n    Next i\nEnd Sub\n");
-        if let Stmt::For { body, .. } = &body[0] { assert_eq!(body[0].stmt, Stmt::ExitFor); }
+    #[test]
+    fn test_exit_for() {
+        let body =
+            parse_body("Sub MySub()\n    For i = 1 To 10\n        Exit For\n    Next i\nEnd Sub\n");
+        if let Stmt::For { body, .. } = &body[0] {
+            assert_eq!(body[0].stmt, Stmt::ExitFor);
+        }
     }
-    #[test] fn test_on_error_resume_next() {
+    #[test]
+    fn test_on_error_resume_next() {
         let body = parse_body("Sub MySub()\n    On Error Resume Next\n    a = 1\nEnd Sub\n");
         assert_eq!(body[0], Stmt::OnError { resume_next: true });
     }
-    #[test] fn test_for_each() {
-        let body = parse_body("Sub MySub()\n    For Each cell In Range(\"A1:A5\")\n        x = 1\n    Next cell\nEnd Sub\n");
+    #[test]
+    fn test_for_each() {
+        let body = parse_body(
+            "Sub MySub()\n    For Each cell In Range(\"A1:A5\")\n        x = 1\n    Next cell\nEnd Sub\n",
+        );
         assert!(matches!(&body[0], Stmt::ForEach { var, .. } if var == "cell"));
     }
-    #[test] fn test_call_stmt() {
+    #[test]
+    fn test_call_stmt() {
         let body = parse_body("Sub MySub()\n    Call MySub2(1, 2)\nEnd Sub\n");
-        assert!(matches!(&body[0], Stmt::CallSub { name, args } if name == "mysub2" && args.len() == 2));
+        assert!(
+            matches!(&body[0], Stmt::CallSub { name, args } if name == "mysub2" && args.len() == 2)
+        );
     }
-    #[test] fn test_call_stmt_no_parens_zero_args() {
+    #[test]
+    fn test_call_stmt_no_parens_zero_args() {
         // `Call Name` (no parens) is valid VBA for a zero-argument call —
         // the parens in `Call name [(argumentlist)]` are optional.
         let body = parse_body("Sub MySub()\n    Call MySub2\nEnd Sub\n");
-        assert!(matches!(&body[0], Stmt::CallSub { name, args } if name == "mysub2" && args.is_empty()));
+        assert!(
+            matches!(&body[0], Stmt::CallSub { name, args } if name == "mysub2" && args.is_empty())
+        );
     }
-    #[test] fn test_call_stmt_no_parens_followed_by_another_statement() {
+    #[test]
+    fn test_call_stmt_no_parens_followed_by_another_statement() {
         // A parenless `Call` must still correctly hand off statement
         // termination to the caller — regression guard against consuming
         // too much (or too little) of the line.
         let body = parse_body("Sub MySub()\n    Call MySub2\n    x = 1\nEnd Sub\n");
-        assert!(matches!(&body[0], Stmt::CallSub { name, args } if name == "mysub2" && args.is_empty()));
+        assert!(
+            matches!(&body[0], Stmt::CallSub { name, args } if name == "mysub2" && args.is_empty())
+        );
         assert!(matches!(&body[1], Stmt::Assignment { var, .. } if var == "x"));
     }
-    #[test] fn test_func_def_parsed() {
+    #[test]
+    fn test_func_def_parsed() {
         let prog = parse("Function Add(a, b)\n    Add = a + b\nEnd Function\n").unwrap();
         assert_eq!(prog.funcs.len(), 1);
         assert_eq!(prog.funcs[0].name, "add");
         assert_eq!(prog.funcs[0].params, vec!["a", "b"]);
     }
-    #[test] fn test_sub_with_params() {
-        let prog = parse("Sub Fill(startRow As Long, endRow As Long)\n    a = startRow\nEnd Sub\n").unwrap();
+    #[test]
+    fn test_sub_with_params() {
+        let prog = parse("Sub Fill(startRow As Long, endRow As Long)\n    a = startRow\nEnd Sub\n")
+            .unwrap();
         assert_eq!(prog.subs[0].params, vec!["startrow", "endrow"]);
     }
 
-    #[test] fn byval_and_byref_param_modifiers_are_recognized_and_discarded_not_treated_as_a_param_name() {
+    #[test]
+    fn byval_and_byref_param_modifiers_are_recognized_and_discarded_not_treated_as_a_param_name() {
         // Regression: `consume_ident()` used to swallow "byval"/"byref"
         // itself as a bogus extra parameter, so `Sub Foo(ByVal x As
         // Integer)` parsed as a 2-param sub (`["byval", "x"]`) and a caller
         // passing one argument bound it to the phantom "byval" param,
         // leaving `x` unbound.
-        let prog = parse("Sub Foo(ByVal x As Integer, ByRef y As String)\n    a = x\nEnd Sub\n").unwrap();
+        let prog =
+            parse("Sub Foo(ByVal x As Integer, ByRef y As String)\n    a = x\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs[0].params, vec!["x", "y"]);
     }
 
-    #[test] fn optional_parameter_modifier_is_a_clear_parse_error_not_a_silent_misparse() {
+    #[test]
+    fn optional_parameter_modifier_is_a_clear_parse_error_not_a_silent_misparse() {
         let err = parse("Sub Foo(Optional x As Integer)\n    a = x\nEnd Sub\n").unwrap_err();
-        assert!(err.contains("Optional"), "error should name the unsupported modifier: {err}");
+        assert!(
+            err.contains("Optional"),
+            "error should name the unsupported modifier: {err}"
+        );
     }
 
-    #[test] fn paramarray_parameter_modifier_is_a_clear_parse_error_not_a_silent_misparse() {
+    #[test]
+    fn paramarray_parameter_modifier_is_a_clear_parse_error_not_a_silent_misparse() {
         let err = parse("Sub Foo(ParamArray items())\n    a = 1\nEnd Sub\n").unwrap_err();
-        assert!(err.contains("ParamArray"), "error should name the unsupported modifier: {err}");
+        assert!(
+            err.contains("ParamArray"),
+            "error should name the unsupported modifier: {err}"
+        );
     }
 
     // ── Module-level declarations and access modifiers ─────────────────────────
 
-    #[test] fn test_option_explicit_ignored() {
+    #[test]
+    fn test_option_explicit_ignored() {
         let prog = parse("Option Explicit\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs[0].name, "mysub");
     }
 
-    #[test] fn test_option_base_is_captured_and_does_not_disrupt_parsing() {
-        let prog = parse("Option Base 1\nOption Explicit\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+    #[test]
+    fn test_option_base_is_captured_and_does_not_disrupt_parsing() {
+        let prog =
+            parse("Option Base 1\nOption Explicit\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs.len(), 1);
         assert_eq!(prog.option_base, 1);
     }
 
-    #[test] fn test_option_base_defaults_to_zero_when_absent() {
+    #[test]
+    fn test_option_base_defaults_to_zero_when_absent() {
         let prog = parse("Sub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.option_base, 0);
     }
 
-    #[test] fn test_public_sub() {
+    #[test]
+    fn test_public_sub() {
         let prog = parse("Public Sub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs[0].name, "mysub");
         assert_eq!(prog.subs[0].body.len(), 1);
     }
 
-    #[test] fn test_private_sub() {
+    #[test]
+    fn test_private_sub() {
         let prog = parse("Private Sub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs[0].name, "mysub");
     }
 
-    #[test] fn test_public_function() {
+    #[test]
+    fn test_public_function() {
         let prog = parse("Public Function Add(a, b)\n    Add = a + b\nEnd Function\n").unwrap();
         assert_eq!(prog.funcs[0].name, "add");
     }
 
-    #[test] fn test_private_function() {
+    #[test]
+    fn test_private_function() {
         let prog = parse("Private Function Sq(x)\n    Sq = x * x\nEnd Function\n").unwrap();
         assert_eq!(prog.funcs[0].name, "sq");
     }
 
-    #[test] fn test_module_level_dim_ignored() {
+    #[test]
+    fn test_module_level_dim_ignored() {
         // Module-level Dim (outside Sub) is skipped
-        let prog = parse("Option Explicit\nDim counter As Long\nSub MySub()\n    counter = 1\nEnd Sub\n").unwrap();
+        let prog =
+            parse("Option Explicit\nDim counter As Long\nSub MySub()\n    counter = 1\nEnd Sub\n")
+                .unwrap();
         assert_eq!(prog.subs[0].name, "mysub");
     }
 
-    #[test] fn test_module_level_const_with_modifier_is_flagged() {
+    #[test]
+    fn test_module_level_const_with_modifier_is_flagged() {
         // `Public Const` never gets its value evaluated anywhere — a real
         // gap, unlike a plain declaration, so it's recorded for `check`.
-        let prog = parse("Public Const MAX_RETRIES = 5\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+        let prog =
+            parse("Public Const MAX_RETRIES = 5\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.module_diagnostics.len(), 1);
         assert_eq!(
             prog.module_diagnostics[0].0,
@@ -3155,7 +3926,8 @@ mod tests {
         );
     }
 
-    #[test] fn test_module_level_bare_const_is_flagged() {
+    #[test]
+    fn test_module_level_bare_const_is_flagged() {
         let prog = parse("Const MAX_RETRIES = 5\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.module_diagnostics.len(), 1);
         assert_eq!(
@@ -3164,7 +3936,8 @@ mod tests {
         );
     }
 
-    #[test] fn test_module_level_unrecognized_line_is_flagged() {
+    #[test]
+    fn test_module_level_unrecognized_line_is_flagged() {
         let prog =
             parse("Declare Function Foo Lib \"x.dll\" ()\nSub MySub()\n    a = 1\nEnd Sub\n")
                 .unwrap();
@@ -3175,7 +3948,8 @@ mod tests {
         );
     }
 
-    #[test] fn test_module_level_plain_public_declaration_is_not_flagged() {
+    #[test]
+    fn test_module_level_plain_public_declaration_is_not_flagged() {
         // Group A parity with the Sub-level case: no separate module scope
         // exists (`Vm::variables` is one flat namespace), so a plain
         // declaration with no value is a harmless no-op, not a gap.
@@ -3183,27 +3957,34 @@ mod tests {
         assert!(prog.module_diagnostics.is_empty());
     }
 
-    #[test] fn test_module_level_bare_dim_is_not_flagged() {
+    #[test]
+    fn test_module_level_bare_dim_is_not_flagged() {
         let prog = parse("Dim counter As Long\nSub MySub()\n    counter = 1\nEnd Sub\n").unwrap();
         assert!(prog.module_diagnostics.is_empty());
     }
 
-    #[test] fn test_attribute_ignored() {
-        let prog = parse("Attribute VB_Name = \"Module1\"\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+    #[test]
+    fn test_attribute_ignored() {
+        let prog =
+            parse("Attribute VB_Name = \"Module1\"\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs.len(), 1);
     }
 
-    #[test] fn test_vb_name_attribute_is_captured_as_module_name() {
-        let prog = parse("Attribute VB_Name = \"Module1\"\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
+    #[test]
+    fn test_vb_name_attribute_is_captured_as_module_name() {
+        let prog =
+            parse("Attribute VB_Name = \"Module1\"\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.module_name, Some("Module1".to_string()));
     }
 
-    #[test] fn test_module_name_is_none_without_vb_name_attribute() {
+    #[test]
+    fn test_module_name_is_none_without_vb_name_attribute() {
         let prog = parse("Sub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.module_name, None);
     }
 
-    #[test] fn test_other_attribute_lines_still_ignored_alongside_vb_name() {
+    #[test]
+    fn test_other_attribute_lines_still_ignored_alongside_vb_name() {
         let prog = parse(
             "Attribute VB_Name = \"Module1\"\nAttribute VB_GlobalNameSpace = False\nSub MySub()\n    a = 1\nEnd Sub\n",
         )
@@ -3214,23 +3995,38 @@ mod tests {
 
     // ── Debug.Print and statement-level modifiers ─────────────────────────────
 
-    #[test] fn test_debug_print_noop() {
+    #[test]
+    fn test_debug_print_noop() {
         let body = parse_body("Sub MySub()\n    Debug.Print \"hello\"\n    a = 1\nEnd Sub\n");
         // Debug.Print is a no-op; only the assignment remains
         assert_eq!(body.len(), 2); // Stmt::Unsupported (noop) + Assignment
-        assert_eq!(body[1], Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) });
+        assert_eq!(
+            body[1],
+            Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::Integer(1)
+            }
+        );
     }
 
-    #[test] fn test_debug_assert_noop() {
+    #[test]
+    fn test_debug_assert_noop() {
         let body = parse_body("Sub MySub()\n    Debug.Assert x > 0\n    a = 1\nEnd Sub\n");
-        assert_eq!(body[1], Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) });
+        assert_eq!(
+            body[1],
+            Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::Integer(1)
+            }
+        );
     }
 
     // ── Stmt::Unsupported: unrecognized constructs preserve *why*, distinct
     // from Stmt::Dim's intentional no-op (see test_static_dim_inside_sub and
     // test_dim_is_noop below, which are untouched by this) ──────────────────
 
-    #[test] fn test_debug_print_reason_is_specific() {
+    #[test]
+    fn test_debug_print_reason_is_specific() {
         let body = parse_body("Sub MySub()\n    Debug.Print \"hello\"\nEnd Sub\n");
         assert_eq!(
             body[0],
@@ -3240,7 +4036,8 @@ mod tests {
         );
     }
 
-    #[test] fn test_entirerow_unknown_method_reason() {
+    #[test]
+    fn test_entirerow_unknown_method_reason() {
         let body = parse_body("Sub MySub()\n    Range(\"A1\").EntireRow.Foo\nEnd Sub\n");
         assert_eq!(
             body[0],
@@ -3250,7 +4047,8 @@ mod tests {
         );
     }
 
-    #[test] fn test_range_unknown_property_reason() {
+    #[test]
+    fn test_range_unknown_property_reason() {
         let body = parse_body("Sub MySub()\n    Range(\"A1\").Hidden = True\nEnd Sub\n");
         assert_eq!(
             body[0],
@@ -3260,23 +4058,30 @@ mod tests {
         );
     }
 
-    #[test] fn test_sheets_unknown_method_reason() {
+    #[test]
+    fn test_sheets_unknown_method_reason() {
         let body = parse_body("Sub MySub()\n    Sheets.Foo\nEnd Sub\n");
         assert_eq!(
             body[0],
-            Stmt::Unsupported { reason: "Sheets.foo is not implemented".into() }
+            Stmt::Unsupported {
+                reason: "Sheets.foo is not implemented".into()
+            }
         );
     }
 
-    #[test] fn test_sheets_indexed_unknown_method_reason() {
+    #[test]
+    fn test_sheets_indexed_unknown_method_reason() {
         let body = parse_body("Sub MySub()\n    Sheets(\"Sheet1\").Foo\nEnd Sub\n");
         assert_eq!(
             body[0],
-            Stmt::Unsupported { reason: "Sheets(...).foo is not implemented".into() }
+            Stmt::Unsupported {
+                reason: "Sheets(...).foo is not implemented".into()
+            }
         );
     }
 
-    #[test] fn test_array_field_read_without_assignment_reason() {
+    #[test]
+    fn test_array_field_read_without_assignment_reason() {
         let body = parse_body("Sub MySub()\n    arr(0).Name\nEnd Sub\n");
         assert_eq!(
             body[0],
@@ -3286,7 +4091,8 @@ mod tests {
         );
     }
 
-    #[test] fn test_record_field_read_without_assignment_reason() {
+    #[test]
+    fn test_record_field_read_without_assignment_reason() {
         let body = parse_body("Sub MySub()\n    p.Refresh\nEnd Sub\n");
         assert_eq!(
             body[0],
@@ -3296,7 +4102,8 @@ mod tests {
         );
     }
 
-    #[test] fn test_bare_ident_statement_reason() {
+    #[test]
+    fn test_bare_ident_statement_reason() {
         let body = parse_body("Sub MySub()\n    Foo\nEnd Sub\n");
         assert_eq!(
             body[0],
@@ -3306,13 +4113,22 @@ mod tests {
         );
     }
 
-    #[test] fn test_static_dim_inside_sub() {
-        let body = parse_body("Sub MySub()\n    Static counter As Long\n    counter = 1\nEnd Sub\n");
+    #[test]
+    fn test_static_dim_inside_sub() {
+        let body =
+            parse_body("Sub MySub()\n    Static counter As Long\n    counter = 1\nEnd Sub\n");
         assert_eq!(body[0], Stmt::Dim);
-        assert_eq!(body[1], Stmt::Assignment { var: "counter".into(), value: Expr::Integer(1) });
+        assert_eq!(
+            body[1],
+            Stmt::Assignment {
+                var: "counter".into(),
+                value: Expr::Integer(1)
+            }
+        );
     }
 
-    #[test] fn test_mixed_module_preamble() {
+    #[test]
+    fn test_mixed_module_preamble() {
         // Real-world VBA module preamble
         let code = concat!(
             "Option Explicit\n",
@@ -3338,86 +4154,123 @@ mod tests {
 
     // ── On Error GoTo / labels / GoTo ─────────────────────────────────────────
 
-    #[test] fn test_on_error_goto_label() {
+    #[test]
+    fn test_on_error_goto_label() {
         let body = parse_body(
             "Sub MySub()\n    On Error GoTo ErrH\n    a = 1\nErrH:\n    b = 2\nEnd Sub\n",
         );
         assert_eq!(body[0], Stmt::OnErrorGoTo("errh".into()));
-        assert_eq!(body[1], Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) });
+        assert_eq!(
+            body[1],
+            Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::Integer(1)
+            }
+        );
         assert_eq!(body[2], Stmt::Label("errh".into()));
-        assert_eq!(body[3], Stmt::Assignment { var: "b".into(), value: Expr::Integer(2) });
+        assert_eq!(
+            body[3],
+            Stmt::Assignment {
+                var: "b".into(),
+                value: Expr::Integer(2)
+            }
+        );
     }
 
-    #[test] fn test_on_error_goto_zero() {
+    #[test]
+    fn test_on_error_goto_zero() {
         let body = parse_body("Sub MySub()\n    On Error GoTo 0\n    a = 1\nEnd Sub\n");
         assert_eq!(body[0], Stmt::OnError { resume_next: false });
     }
 
-    #[test] fn err_clear_parses() {
+    #[test]
+    fn err_clear_parses() {
         let body = parse_body("Sub MySub()\n    Err.Clear\nEnd Sub\n");
         assert_eq!(body, vec![Stmt::ErrClear]);
     }
 
-    #[test] fn err_raise_number_only_parses() {
+    #[test]
+    fn err_raise_number_only_parses() {
         let body = parse_body("Sub MySub()\n    Err.Raise 5\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::ErrRaise {
-            number: Expr::Integer(5),
-            source: None,
-            description: None,
-            help_file: None,
-            help_context: None,
-        }]);
+        assert_eq!(
+            body,
+            vec![Stmt::ErrRaise {
+                number: Expr::Integer(5),
+                source: None,
+                description: None,
+                help_file: None,
+                help_context: None,
+            }]
+        );
     }
 
-    #[test] fn err_raise_skips_source_with_a_bare_comma() {
+    #[test]
+    fn err_raise_skips_source_with_a_bare_comma() {
         let body = parse_body("Sub MySub()\n    Err.Raise 513, , \"custom text\"\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::ErrRaise {
-            number: Expr::Integer(513),
-            source: None,
-            description: Some(Expr::Str("custom text".into())),
-            help_file: None,
-            help_context: None,
-        }]);
+        assert_eq!(
+            body,
+            vec![Stmt::ErrRaise {
+                number: Expr::Integer(513),
+                source: None,
+                description: Some(Expr::Str("custom text".into())),
+                help_file: None,
+                help_context: None,
+            }]
+        );
     }
 
-    #[test] fn err_raise_with_source_and_description_parses() {
-        let body = parse_body("Sub MySub()\n    Err.Raise 513, \"MySource\", \"custom text\"\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::ErrRaise {
-            number: Expr::Integer(513),
-            source: Some(Expr::Str("MySource".into())),
-            description: Some(Expr::Str("custom text".into())),
-            help_file: None,
-            help_context: None,
-        }]);
+    #[test]
+    fn err_raise_with_source_and_description_parses() {
+        let body =
+            parse_body("Sub MySub()\n    Err.Raise 513, \"MySource\", \"custom text\"\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::ErrRaise {
+                number: Expr::Integer(513),
+                source: Some(Expr::Str("MySource".into())),
+                description: Some(Expr::Str("custom text".into())),
+                help_file: None,
+                help_context: None,
+            }]
+        );
     }
 
-    #[test] fn err_raise_with_all_five_positional_arguments_parses() {
+    #[test]
+    fn err_raise_with_all_five_positional_arguments_parses() {
         let body = parse_body(
             "Sub MySub()\n    Err.Raise 513, \"MySource\", \"custom text\", \"help.chm\", 100\nEnd Sub\n",
         );
-        assert_eq!(body, vec![Stmt::ErrRaise {
-            number: Expr::Integer(513),
-            source: Some(Expr::Str("MySource".into())),
-            description: Some(Expr::Str("custom text".into())),
-            help_file: Some(Expr::Str("help.chm".into())),
-            help_context: Some(Expr::Integer(100)),
-        }]);
+        assert_eq!(
+            body,
+            vec![Stmt::ErrRaise {
+                number: Expr::Integer(513),
+                source: Some(Expr::Str("MySource".into())),
+                description: Some(Expr::Str("custom text".into())),
+                help_file: Some(Expr::Str("help.chm".into())),
+                help_context: Some(Expr::Integer(100)),
+            }]
+        );
     }
 
-    #[test] fn err_raise_skips_help_file_with_a_bare_comma() {
+    #[test]
+    fn err_raise_skips_help_file_with_a_bare_comma() {
         let body = parse_body(
             "Sub MySub()\n    Err.Raise 513, \"MySource\", \"custom text\", , 100\nEnd Sub\n",
         );
-        assert_eq!(body, vec![Stmt::ErrRaise {
-            number: Expr::Integer(513),
-            source: Some(Expr::Str("MySource".into())),
-            description: Some(Expr::Str("custom text".into())),
-            help_file: None,
-            help_context: Some(Expr::Integer(100)),
-        }]);
+        assert_eq!(
+            body,
+            vec![Stmt::ErrRaise {
+                number: Expr::Integer(513),
+                source: Some(Expr::Str("MySource".into())),
+                description: Some(Expr::Str("custom text".into())),
+                help_file: None,
+                help_context: Some(Expr::Integer(100)),
+            }]
+        );
     }
 
-    #[test] fn err_source_help_file_help_context_parse_as_expressions() {
+    #[test]
+    fn err_source_help_file_help_context_parse_as_expressions() {
         let body = parse_body(concat!(
             "Sub MySub()\n",
             "    s = Err.Source\n",
@@ -3425,35 +4278,67 @@ mod tests {
             "    c = Err.HelpContext\n",
             "End Sub\n",
         ));
-        assert_eq!(body, vec![
-            Stmt::Assignment { var: "s".into(), value: Expr::ErrSource },
-            Stmt::Assignment { var: "h".into(), value: Expr::ErrHelpFile },
-            Stmt::Assignment { var: "c".into(), value: Expr::ErrHelpContext },
-        ]);
+        assert_eq!(
+            body,
+            vec![
+                Stmt::Assignment {
+                    var: "s".into(),
+                    value: Expr::ErrSource
+                },
+                Stmt::Assignment {
+                    var: "h".into(),
+                    value: Expr::ErrHelpFile
+                },
+                Stmt::Assignment {
+                    var: "c".into(),
+                    value: Expr::ErrHelpContext
+                },
+            ]
+        );
     }
 
-    #[test] fn err_number_and_description_parse_as_expressions() {
-        let body = parse_body("Sub MySub()\n    n = Err.Number\n    d = Err.Description\nEnd Sub\n");
-        assert_eq!(body, vec![
-            Stmt::Assignment { var: "n".into(), value: Expr::ErrNumber },
-            Stmt::Assignment { var: "d".into(), value: Expr::ErrDescription },
-        ]);
+    #[test]
+    fn err_number_and_description_parse_as_expressions() {
+        let body =
+            parse_body("Sub MySub()\n    n = Err.Number\n    d = Err.Description\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![
+                Stmt::Assignment {
+                    var: "n".into(),
+                    value: Expr::ErrNumber
+                },
+                Stmt::Assignment {
+                    var: "d".into(),
+                    value: Expr::ErrDescription
+                },
+            ]
+        );
     }
 
-    #[test] fn a_bare_err_variable_is_unaffected_by_err_object_parsing() {
+    #[test]
+    fn a_bare_err_variable_is_unaffected_by_err_object_parsing() {
         // No `.Number`/`.Description`/`.Clear`/`.Raise` suffix — an
         // ordinary variable assignment, same as any other identifier.
         let body = parse_body("Sub MySub()\n    err = 1\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment { var: "err".into(), value: Expr::Integer(1) }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "err".into(),
+                value: Expr::Integer(1)
+            }]
+        );
     }
 
-    #[test] fn test_goto_stmt() {
+    #[test]
+    fn test_goto_stmt() {
         let body = parse_body("Sub MySub()\n    GoTo Done\nDone:\n    a = 1\nEnd Sub\n");
         assert_eq!(body[0], Stmt::GoTo("done".into()));
         assert_eq!(body[1], Stmt::Label("done".into()));
     }
 
-    #[test] fn test_resume_next_stmt() {
+    #[test]
+    fn test_resume_next_stmt() {
         let body = parse_body("Sub MySub()\n    Resume Next\nEnd Sub\n");
         assert_eq!(body[0], Stmt::Resume { next: true });
     }
@@ -3464,7 +4349,8 @@ mod tests {
         (name.to_string(), parse(src).unwrap())
     }
 
-    #[test] fn resolve_entrypoint_bare_name_found() {
+    #[test]
+    fn resolve_entrypoint_bare_name_found() {
         let modules = vec![module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n")];
         assert!(matches!(
             resolve_entrypoint(&modules, "Foo"),
@@ -3472,7 +4358,8 @@ mod tests {
         ));
     }
 
-    #[test] fn resolve_entrypoint_bare_name_not_found() {
+    #[test]
+    fn resolve_entrypoint_bare_name_not_found() {
         let modules = vec![module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n")];
         assert!(matches!(
             resolve_entrypoint(&modules, "Bar"),
@@ -3480,7 +4367,8 @@ mod tests {
         ));
     }
 
-    #[test] fn resolve_entrypoint_bare_name_across_modules() {
+    #[test]
+    fn resolve_entrypoint_bare_name_across_modules() {
         let modules = vec![
             module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
             module("module2", "Sub Bar()\n    a = 1\nEnd Sub\n"),
@@ -3491,7 +4379,8 @@ mod tests {
         ));
     }
 
-    #[test] fn resolve_entrypoint_qualified_found() {
+    #[test]
+    fn resolve_entrypoint_qualified_found() {
         let modules = vec![
             module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
             module("module2", "Sub Foo()\n    a = 2\nEnd Sub\n"),
@@ -3502,7 +4391,8 @@ mod tests {
         ));
     }
 
-    #[test] fn resolve_entrypoint_qualified_unknown_module() {
+    #[test]
+    fn resolve_entrypoint_qualified_unknown_module() {
         let modules = vec![module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n")];
         assert!(matches!(
             resolve_entrypoint(&modules, "NoSuchModule.Foo"),
@@ -3510,7 +4400,8 @@ mod tests {
         ));
     }
 
-    #[test] fn resolve_entrypoint_qualified_unknown_sub_in_known_module() {
+    #[test]
+    fn resolve_entrypoint_qualified_unknown_sub_in_known_module() {
         let modules = vec![module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n")];
         assert!(matches!(
             resolve_entrypoint(&modules, "Module1.Bar"),
@@ -3518,7 +4409,8 @@ mod tests {
         ));
     }
 
-    #[test] fn no_sub_collisions_across_disjoint_modules() {
+    #[test]
+    fn no_sub_collisions_across_disjoint_modules() {
         let modules = vec![
             module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
             module("module2", "Sub Bar()\n    a = 1\nEnd Sub\n"),
@@ -3526,7 +4418,8 @@ mod tests {
         assert!(find_cross_module_sub_collisions(&modules).is_empty());
     }
 
-    #[test] fn one_sub_collision_across_two_modules() {
+    #[test]
+    fn one_sub_collision_across_two_modules() {
         let modules = vec![
             module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
             module("module2", "Sub Foo()\n    a = 2\nEnd Sub\n"),
@@ -3539,7 +4432,8 @@ mod tests {
         assert_eq!(mods, vec!["module1".to_string(), "module2".to_string()]);
     }
 
-    #[test] fn sub_collision_spanning_three_modules() {
+    #[test]
+    fn sub_collision_spanning_three_modules() {
         let modules = vec![
             module("module1", "Sub Foo()\n    a = 1\nEnd Sub\n"),
             module("module2", "Sub Foo()\n    a = 2\nEnd Sub\n"),
@@ -3550,7 +4444,8 @@ mod tests {
         assert_eq!(collisions[0].1.len(), 3);
     }
 
-    #[test] fn func_collisions_are_a_separate_namespace_from_subs() {
+    #[test]
+    fn func_collisions_are_a_separate_namespace_from_subs() {
         // A Sub and a Function sharing a name across modules is not a
         // collision — Subs and Funcs are separate namespaces, as within a
         // single module today.
@@ -3562,7 +4457,8 @@ mod tests {
         assert!(find_cross_module_func_collisions(&modules).is_empty());
     }
 
-    #[test] fn one_func_collision_across_two_modules() {
+    #[test]
+    fn one_func_collision_across_two_modules() {
         let modules = vec![
             module("module1", "Function Foo()\n    Foo = 1\nEnd Function\n"),
             module("module2", "Function Foo()\n    Foo = 2\nEnd Function\n"),
@@ -3574,20 +4470,32 @@ mod tests {
 
     // ── Milestone B7c: Set / object references ───────────────────────────────
 
-    #[test] fn set_range_literal_parses_to_stmt_set_with_a_range_lit_object_expr() {
+    #[test]
+    fn set_range_literal_parses_to_stmt_set_with_a_range_lit_object_expr() {
         let body = parse_body("Sub MySub()\n    Set rng = Range(\"A1:B2\")\nEnd Sub\n");
         assert_eq!(
             body,
-            vec![Stmt::Set { var: "rng".into(), value: ObjectExpr::RangeLit("A1:B2".into()) }]
+            vec![Stmt::Set {
+                var: "rng".into(),
+                value: ObjectExpr::RangeLit("A1:B2".into())
+            }]
         );
     }
 
-    #[test] fn set_from_another_object_variable_parses_to_object_expr_var() {
+    #[test]
+    fn set_from_another_object_variable_parses_to_object_expr_var() {
         let body = parse_body("Sub MySub()\n    Set a = Range(\"A1\")\n    Set b = a\nEnd Sub\n");
-        assert_eq!(body[1], Stmt::Set { var: "b".into(), value: ObjectExpr::Var("a".into()) });
+        assert_eq!(
+            body[1],
+            Stmt::Set {
+                var: "b".into(),
+                value: ObjectExpr::Var("a".into())
+            }
+        );
     }
 
-    #[test] fn set_union_of_two_range_literals_parses_to_object_expr_union() {
+    #[test]
+    fn set_union_of_two_range_literals_parses_to_object_expr_union() {
         let body = parse_body(
             "Sub MySub()\n    Set u = Union(Range(\"A1:A2\"), Range(\"C1:C2\"))\nEnd Sub\n",
         );
@@ -3603,18 +4511,25 @@ mod tests {
         );
     }
 
-    #[test] fn set_areas_index_parses_to_object_expr_area() {
-        let body = parse_body("Sub MySub()\n    Set u = Range(\"A1,C1\")\n    Set a = u.Areas(1)\nEnd Sub\n");
+    #[test]
+    fn set_areas_index_parses_to_object_expr_area() {
+        let body = parse_body(
+            "Sub MySub()\n    Set u = Range(\"A1,C1\")\n    Set a = u.Areas(1)\nEnd Sub\n",
+        );
         assert_eq!(
             body[1],
             Stmt::Set {
                 var: "a".into(),
-                value: ObjectExpr::Area(Box::new(ObjectExpr::Var("u".into())), Box::new(Expr::Integer(1))),
+                value: ObjectExpr::Area(
+                    Box::new(ObjectExpr::Var("u".into())),
+                    Box::new(Expr::Integer(1))
+                ),
             }
         );
     }
 
-    #[test] fn set_specialcells_visible_parses_to_object_expr_special_cells_visible() {
+    #[test]
+    fn set_specialcells_visible_parses_to_object_expr_special_cells_visible() {
         let body = parse_body(
             "Sub MySub()\n    Set u = Range(\"A1:A3\")\n    Set v = u.SpecialCells(xlCellTypeVisible)\nEnd Sub\n",
         );
@@ -3627,7 +4542,8 @@ mod tests {
         );
     }
 
-    #[test] fn set_with_an_unrecognized_rhs_degrades_to_unsupported_not_a_parse_error() {
+    #[test]
+    fn set_with_an_unrecognized_rhs_degrades_to_unsupported_not_a_parse_error() {
         // `CreateObject(...)` isn't a modeled object expression — this must
         // stay a soft no-op (see `parse_set`'s doc comment), not a hard
         // parse error that would take down an otherwise-parseable module.
@@ -3637,24 +4553,36 @@ mod tests {
         assert!(matches!(body[0], Stmt::Unsupported { .. }), "{:?}", body[0]);
     }
 
-    #[test] fn range_object_copy_with_destination_parses_to_range_object_copy() {
+    #[test]
+    fn range_object_copy_with_destination_parses_to_range_object_copy() {
         let body = parse_body(
             "Sub MySub()\n    Set rng = Range(\"A1\")\n    rng.Copy Destination:=Range(\"B1\")\nEnd Sub\n",
         );
         assert_eq!(
             body[1],
-            Stmt::RangeObjectCopy { var: "rng".into(), dst: Some("B1".into()) }
+            Stmt::RangeObjectCopy {
+                var: "rng".into(),
+                dst: Some("B1".into())
+            }
         );
     }
 
-    #[test] fn bare_range_object_copy_has_no_destination() {
+    #[test]
+    fn bare_range_object_copy_has_no_destination() {
         let body = parse_body("Sub MySub()\n    Set rng = Range(\"A1\")\n    rng.Copy\nEnd Sub\n");
-        assert_eq!(body[1], Stmt::RangeObjectCopy { var: "rng".into(), dst: None });
+        assert_eq!(
+            body[1],
+            Stmt::RangeObjectCopy {
+                var: "rng".into(),
+                dst: None
+            }
+        );
     }
 
     // ── Milestone B7c item 6: ThisWorkbook / ActiveWorkbook / ActiveSheet ────
 
-    #[test] fn activesheet_cell_write_parses_to_sheet_cell_write_with_activesheetref() {
+    #[test]
+    fn activesheet_cell_write_parses_to_sheet_cell_write_with_activesheetref() {
         let body = parse_body("Sub MySub()\n    ActiveSheet.Cells(1, 1).Value = 5\nEnd Sub\n");
         assert_eq!(
             body,
@@ -3667,35 +4595,47 @@ mod tests {
         );
     }
 
-    #[test] fn thisworkbook_worksheets_cell_write_parses_identically_to_bare_worksheets() {
+    #[test]
+    fn thisworkbook_worksheets_cell_write_parses_identically_to_bare_worksheets() {
         let with_prefix = parse_body(
             "Sub MySub()\n    ThisWorkbook.Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n",
         );
-        let bare = parse_body("Sub MySub()\n    Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n");
+        let bare =
+            parse_body("Sub MySub()\n    Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n");
         assert_eq!(with_prefix, bare);
     }
 
-    #[test] fn activeworkbook_worksheets_range_read_parses_identically_to_bare_worksheets() {
+    #[test]
+    fn activeworkbook_worksheets_range_read_parses_identically_to_bare_worksheets() {
         let with_prefix = parse_body(
             "Sub MySub()\n    x = ActiveWorkbook.Worksheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n",
         );
-        let bare = parse_body("Sub MySub()\n    x = Worksheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n");
+        let bare =
+            parse_body("Sub MySub()\n    x = Worksheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n");
         assert_eq!(with_prefix, bare);
     }
 
-    #[test] fn a_bare_activesheet_without_a_dot_is_not_captured_by_the_activesheet_grammar() {
+    #[test]
+    fn a_bare_activesheet_without_a_dot_is_not_captured_by_the_activesheet_grammar() {
         // `Set ws = ActiveSheet` — a bare `ActiveSheet` with no `.property`
         // suffix falls through to a plain identifier (harmless; the VM
         // treats an unresolved bare object-variable reference as a no-op —
         // see `Stmt::Set`'s doc comment). This just confirms the parser
         // doesn't error out on it.
         let body = parse_body("Sub MySub()\n    Set ws = ActiveSheet\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Set { var: "ws".into(), value: ObjectExpr::Var("activesheet".into()) }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Set {
+                var: "ws".into(),
+                value: ObjectExpr::Var("activesheet".into())
+            }]
+        );
     }
 
     // ── Phase 2C items 7/8: object-variable sheet/workbook qualifiers ────────
 
-    #[test] fn object_var_range_write_parses_to_range_write_with_objectvarsheet() {
+    #[test]
+    fn object_var_range_write_parses_to_range_write_with_objectvarsheet() {
         let body = parse_body("Sub MySub()\n    ws.Range(\"A1\").Value = 5\nEnd Sub\n");
         assert_eq!(
             body,
@@ -3708,7 +4648,8 @@ mod tests {
         );
     }
 
-    #[test] fn object_var_cells_read_parses_to_sheet_cell_read_with_objectvarsheet() {
+    #[test]
+    fn object_var_cells_read_parses_to_sheet_cell_read_with_objectvarsheet() {
         let body = parse_body("Sub MySub()\n    x = ws.Cells(1, 1).Value\nEnd Sub\n");
         assert_eq!(
             body,
@@ -3723,11 +4664,12 @@ mod tests {
         );
     }
 
-    #[test] fn object_var_worksheets_write_parses_identically_to_bare_worksheets() {
-        let with_prefix = parse_body(
-            "Sub MySub()\n    wb.Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n",
-        );
-        let bare = parse_body("Sub MySub()\n    Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n");
+    #[test]
+    fn object_var_worksheets_write_parses_identically_to_bare_worksheets() {
+        let with_prefix =
+            parse_body("Sub MySub()\n    wb.Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n");
+        let bare =
+            parse_body("Sub MySub()\n    Worksheets(\"Data\").Cells(1, 1).Value = 5\nEnd Sub\n");
         assert_eq!(with_prefix, bare);
     }
 
@@ -3741,16 +4683,22 @@ mod tests {
     // pin the fix; they don't need to assert *what* the fallback parses to,
     // only that it doesn't error, matching this file's existing "confirms
     // the parser doesn't error out on it" precedent just above.
-    #[test] fn paren_less_worksheets_property_falls_back_instead_of_erroring() {
+    #[test]
+    fn paren_less_worksheets_property_falls_back_instead_of_erroring() {
         let _ = parse("Sub MySub()\n    x = wb.Worksheets.Count\nEnd Sub\n").unwrap();
         let _ = parse("Sub MySub()\n    wb.Sheets.Add\nEnd Sub\n").unwrap();
     }
 
-    #[test] fn udt_field_literally_named_sheets_still_round_trips() {
+    #[test]
+    fn udt_field_literally_named_sheets_still_round_trips() {
         let body = parse_body("Sub MySub()\n    p.sheets = 5\nEnd Sub\n");
         assert_eq!(
             body,
-            vec![Stmt::RecordSet { var: "p".into(), field: "sheets".into(), value: Expr::Integer(5) }]
+            vec![Stmt::RecordSet {
+                var: "p".into(),
+                field: "sheets".into(),
+                value: Expr::Integer(5)
+            }]
         );
     }
 
@@ -3761,51 +4709,96 @@ mod tests {
     // `label:` declaration form, and mangle a single-line `If`'s own
     // Then/Else boundary. Each of those three is pinned below.
 
-    #[test] fn colon_separates_two_statements_on_one_line() {
+    #[test]
+    fn colon_separates_two_statements_on_one_line() {
         let body = parse_body("Sub MySub()\n    a = 1: b = 2\nEnd Sub\n");
-        assert_eq!(body, vec![
-            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
-            Stmt::Assignment { var: "b".into(), value: Expr::Integer(2) },
-        ]);
+        assert_eq!(
+            body,
+            vec![
+                Stmt::Assignment {
+                    var: "a".into(),
+                    value: Expr::Integer(1)
+                },
+                Stmt::Assignment {
+                    var: "b".into(),
+                    value: Expr::Integer(2)
+                },
+            ]
+        );
     }
 
-    #[test] fn colon_separates_three_statements_on_one_line() {
+    #[test]
+    fn colon_separates_three_statements_on_one_line() {
         let body = parse_body("Sub MySub()\n    a = 1: b = 2: c = 3\nEnd Sub\n");
         assert_eq!(body.len(), 3);
-        assert_eq!(body[2], Stmt::Assignment { var: "c".into(), value: Expr::Integer(3) });
+        assert_eq!(
+            body[2],
+            Stmt::Assignment {
+                var: "c".into(),
+                value: Expr::Integer(3)
+            }
+        );
     }
 
-    #[test] fn colon_inside_a_string_literal_is_not_a_separator() {
+    #[test]
+    fn colon_inside_a_string_literal_is_not_a_separator() {
         // The load-bearing case against a naive `:`→newline pre-rewrite.
         let body = parse_body("Sub MySub()\n    MsgBox \"10:30\": a = 1\nEnd Sub\n");
-        assert_eq!(body, vec![
-            Stmt::MsgBox { message: Expr::Str("10:30".into()) },
-            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
-        ]);
+        assert_eq!(
+            body,
+            vec![
+                Stmt::MsgBox {
+                    message: Expr::Str("10:30".into())
+                },
+                Stmt::Assignment {
+                    var: "a".into(),
+                    value: Expr::Integer(1)
+                },
+            ]
+        );
     }
 
-    #[test] fn label_followed_by_a_statement_on_the_same_line() {
+    #[test]
+    fn label_followed_by_a_statement_on_the_same_line() {
         let body = parse_body("Sub MySub()\n    label1: a = 1\nEnd Sub\n");
-        assert_eq!(body, vec![
-            Stmt::Label("label1".into()),
-            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
-        ]);
+        assert_eq!(
+            body,
+            vec![
+                Stmt::Label("label1".into()),
+                Stmt::Assignment {
+                    var: "a".into(),
+                    value: Expr::Integer(1)
+                },
+            ]
+        );
     }
 
-    #[test] fn a_bare_label_on_its_own_line_still_parses_as_just_a_label() {
+    #[test]
+    fn a_bare_label_on_its_own_line_still_parses_as_just_a_label() {
         let body = parse_body("Sub MySub()\n    errh:\n    a = 1\nEnd Sub\n");
-        assert_eq!(body, vec![
-            Stmt::Label("errh".into()),
-            Stmt::Assignment { var: "a".into(), value: Expr::Integer(1) },
-        ]);
+        assert_eq!(
+            body,
+            vec![
+                Stmt::Label("errh".into()),
+                Stmt::Assignment {
+                    var: "a".into(),
+                    value: Expr::Integer(1)
+                },
+            ]
+        );
     }
 
-    #[test] fn single_line_if_then_takes_a_colon_separated_statement_list() {
+    #[test]
+    fn single_line_if_then_takes_a_colon_separated_statement_list() {
         // Microsoft's own worked example shape: every colon-separated
         // statement after `Then` belongs to the Then branch.
         let body = parse_body("Sub MySub()\n    If x > 10 Then a = 1: b = 2: c = 3\nEnd Sub\n");
         match &body[0] {
-            Stmt::If { then_body, else_body, .. } => {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
                 assert_eq!(then_body.len(), 3);
                 assert!(else_body.is_empty());
             }
@@ -3813,10 +4806,15 @@ mod tests {
         }
     }
 
-    #[test] fn single_line_if_else_takes_everything_after_else_on_the_line() {
+    #[test]
+    fn single_line_if_else_takes_everything_after_else_on_the_line() {
         let body = parse_body("Sub MySub()\n    If x Then a = 1 Else b = 2: c = 3\nEnd Sub\n");
         match &body[0] {
-            Stmt::If { then_body, else_body, .. } => {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
                 assert_eq!(then_body.len(), 1);
                 assert_eq!(else_body.len(), 2);
             }
@@ -3824,18 +4822,24 @@ mod tests {
         }
     }
 
-    #[test] fn colon_separated_statements_keep_their_own_distinct_spans() {
+    #[test]
+    fn colon_separated_statements_keep_their_own_distinct_spans() {
         // Not collapsed into one span: an error on the second statement must
         // point at the second statement, exactly as a newline-separated one
         // would (`SourceSpan` accuracy is what `--json`'s `location` reports).
-        let sub = parse("Sub MySub()\n    a = 1: b = 2\nEnd Sub\n").unwrap()
-            .subs.into_iter().next().unwrap();
+        let sub = parse("Sub MySub()\n    a = 1: b = 2\nEnd Sub\n")
+            .unwrap()
+            .subs
+            .into_iter()
+            .next()
+            .unwrap();
         assert_ne!(sub.body[0].span.start, sub.body[1].span.start);
         // `b` starts after `a = 1: ` on the same line.
         assert!(sub.body[1].span.start > sub.body[0].span.start);
     }
 
-    #[test] fn colon_terminates_a_block_construct_header_and_body() {
+    #[test]
+    fn colon_terminates_a_block_construct_header_and_body() {
         let body = parse_body("Sub MySub()\n    For i = 1 To 3: a = i: Next i\nEnd Sub\n");
         match &body[0] {
             Stmt::For { body, .. } => assert_eq!(body.len(), 1),
@@ -3843,7 +4847,8 @@ mod tests {
         }
     }
 
-    #[test] fn trailing_colon_after_then_still_parses_as_a_block_if() {
+    #[test]
+    fn trailing_colon_after_then_still_parses_as_a_block_if() {
         let body = parse_body("Sub MySub()\n    If x Then:\n    a = 1\n    End If\nEnd Sub\n");
         match &body[0] {
             Stmt::If { then_body, .. } => assert_eq!(then_body.len(), 1),
@@ -3851,22 +4856,27 @@ mod tests {
         }
     }
 
-    #[test] fn named_argument_colon_equals_is_not_a_statement_separator() {
+    #[test]
+    fn named_argument_colon_equals_is_not_a_statement_separator() {
         // `:=` tokenizes as `Tok::ColonEq`, never `Tok::Colon`.
-        let body = parse_body(
-            "Sub MySub()\n    Range(\"A1\").Copy Destination:=Range(\"B1\")\nEnd Sub\n");
+        let body =
+            parse_body("Sub MySub()\n    Range(\"A1\").Copy Destination:=Range(\"B1\")\nEnd Sub\n");
         assert_eq!(body.len(), 1);
     }
 
-    #[test] fn integer_literal_wider_than_i64_falls_back_to_float_instead_of_panicking() {
+    #[test]
+    fn integer_literal_wider_than_i64_falls_back_to_float_instead_of_panicking() {
         // Found by fuzz_vba_parser: a decimal literal too large for i64 used to
         // panic in tokenize() via `s.parse().unwrap()` on a `PosOverflow` error —
         // a crash on ordinary (if unusual) source text, not just adversarial
         // bytes.
         let body = parse_body("Sub MySub()\n    a = 99999999999999999999\nEnd Sub\n");
-        assert_eq!(body, vec![Stmt::Assignment {
-            var: "a".into(),
-            value: Expr::Float(99999999999999999999.0),
-        }]);
+        assert_eq!(
+            body,
+            vec![Stmt::Assignment {
+                var: "a".into(),
+                value: Expr::Float(99999999999999999999.0),
+            }]
+        );
     }
 }

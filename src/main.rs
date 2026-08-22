@@ -3,9 +3,8 @@ use std::{env, fs, process};
 use elixcee::{
     check, diagnose, diagnoseworkbook,
     diagnostics::{self, ElixceeError},
-    parser, reader,
-    save_workbook, snapshot, testworkbook,
-    vm::{serial_to_display, Variant, Vm},
+    parser, reader, save_workbook, snapshot, testworkbook,
+    vm::{Variant, Vm, serial_to_display},
 };
 
 fn usage() -> ! {
@@ -66,7 +65,11 @@ struct LoadedModule {
 
 enum LoadModuleError {
     Io(String),
-    Parse { message: String, span: parser::SourceSpan, source: String },
+    Parse {
+        message: String,
+        span: parser::SourceSpan,
+        source: String,
+    },
 }
 
 fn derive_module_name(path: &str) -> String {
@@ -84,12 +87,22 @@ fn derive_module_name(path: &str) -> String {
 fn load_one_module(path: &str) -> Result<LoadedModule, LoadModuleError> {
     let code = fs::read_to_string(path)
         .map_err(|e| LoadModuleError::Io(format!("cannot read '{}': {}", path, e)))?;
-    let program = parser::parse_with_span(&code)
-        .map_err(|e| LoadModuleError::Parse { message: e.message, span: e.span, source: code.clone() })?;
-    let name = program.module_name.clone()
+    let program = parser::parse_with_span(&code).map_err(|e| LoadModuleError::Parse {
+        message: e.message,
+        span: e.span,
+        source: code.clone(),
+    })?;
+    let name = program
+        .module_name
+        .clone()
         .unwrap_or_else(|| derive_module_name(path))
         .to_lowercase();
-    Ok(LoadedModule { name, path: path.to_string(), source: code, program })
+    Ok(LoadedModule {
+        name,
+        path: path.to_string(),
+        source: code,
+        program,
+    })
 }
 
 /// Run-mode's module loader: reads and parses every file in `paths`,
@@ -103,12 +116,23 @@ fn load_modules(paths: &[String], json: bool) -> Vec<LoadedModule> {
         let module = match load_one_module(path) {
             Ok(m) => m,
             Err(LoadModuleError::Io(msg)) => {
-                if json { fail_json(ElixceeError::io_error(msg), &[]) } else { die(&msg) }
+                if json {
+                    fail_json(ElixceeError::io_error(msg), &[])
+                } else {
+                    die(&msg)
+                }
             }
-            Err(LoadModuleError::Parse { message, span, source }) => {
+            Err(LoadModuleError::Parse {
+                message,
+                span,
+                source,
+            }) => {
                 let location = diagnostics::locate(&source, path, span);
                 if json {
-                    fail_json(ElixceeError::parse_error(message).with_location(Some(location)), &[])
+                    fail_json(
+                        ElixceeError::parse_error(message).with_location(Some(location)),
+                        &[],
+                    )
                 } else {
                     die(&format!("parse error in '{}': {}", path, message))
                 }
@@ -119,7 +143,11 @@ fn load_modules(paths: &[String], json: bool) -> Vec<LoadedModule> {
                 "duplicate module name '{}' (from '{}') — every module in a project needs a unique name",
                 module.name, path,
             );
-            if json { fail_json(ElixceeError::io_error(msg), &[]) } else { die(&msg) }
+            if json {
+                fail_json(ElixceeError::io_error(msg), &[])
+            } else {
+                die(&msg)
+            }
         }
         modules.push(module);
     }
@@ -159,7 +187,11 @@ fn check_load_modules(paths: &[String]) -> (Vec<LoadedModule>, Vec<check::Diagno
                 message: msg,
                 location: None,
             }),
-            Err(LoadModuleError::Parse { message, span, source }) => diags.push(check::Diagnostic {
+            Err(LoadModuleError::Parse {
+                message,
+                span,
+                source,
+            }) => diags.push(check::Diagnostic {
                 severity: "error",
                 code: "E2001",
                 kind: "parse_error",
@@ -188,19 +220,29 @@ fn run_check_command(args: &[String]) -> ! {
     while i < args.len() {
         match args[i].as_str() {
             "--json" => json = true,
-            "--entry" => { i += 1; macro_name = args.get(i).cloned().or_else(|| die("--entry requires a name")); }
+            "--entry" => {
+                i += 1;
+                macro_name = args
+                    .get(i)
+                    .cloned()
+                    .or_else(|| die("--entry requires a name"));
+            }
             a if a.starts_with('-') => die(&format!("unknown option: {}", a)),
             _ => vba_files.push(args[i].clone()),
         }
         i += 1;
     }
-    if vba_files.is_empty() { usage(); }
+    if vba_files.is_empty() {
+        usage();
+    }
 
     let (modules, mut diags) = check_load_modules(&vba_files);
 
     if modules.len() > 1 {
-        let project: Vec<(String, parser::Program)> =
-            modules.iter().map(|m| (m.name.clone(), m.program.clone())).collect();
+        let project: Vec<(String, parser::Program)> = modules
+            .iter()
+            .map(|m| (m.name.clone(), m.program.clone()))
+            .collect();
 
         for (name, mods) in parser::find_cross_module_sub_collisions(&project) {
             diags.push(check::Diagnostic {
@@ -709,48 +751,67 @@ fn col_to_letters(mut col: u32) -> String {
 fn format_variant(v: &Variant) -> String {
     match v {
         Variant::Integer(n) => n.to_string(),
-        Variant::Float(f)   => f.to_string(),
-        Variant::Str(s)     => s.clone(),
-        Variant::Boolean(b) => if *b { "TRUE".into() } else { "FALSE".into() },
-        Variant::Date(s)    => serial_to_display(*s),
-        Variant::Error(e)   => e.as_str().to_string(),
+        Variant::Float(f) => f.to_string(),
+        Variant::Str(s) => s.clone(),
+        Variant::Boolean(b) => {
+            if *b {
+                "TRUE".into()
+            } else {
+                "FALSE".into()
+            }
+        }
+        Variant::Date(s) => serial_to_display(*s),
+        Variant::Error(e) => e.as_str().to_string(),
         // Null has no representable cell text, same as Empty — the
         // Empty-vs-Null distinction is a VBA-language one (`IsNull`,
         // `TypeName`), not a CSV/table-output one.
         Variant::Empty | Variant::Null => String::new(),
         Variant::Array(_) | Variant::VbaArray(_) => "[array]".into(),
-        Variant::Record(_)  => "[record]".into(),
+        Variant::Record(_) => "[record]".into(),
     }
 }
 
 /// Build the `"cells"` JSON array from the active sheet's non-empty cells —
 /// same selection the plain-text TSV output uses.
 fn cells_to_json(vm: &Vm) -> String {
-    let mut cells: Vec<_> = vm.cells().iter()
+    let mut cells: Vec<_> = vm
+        .cells()
+        .iter()
         .filter(|(_, c)| !matches!(c.value, Variant::Empty | Variant::Null))
         .collect();
     cells.sort_by_key(|&(&(r, c), _)| (r, c));
 
     let sheet = diagnostics::json_string(&vm.active_sheet);
-    let items: Vec<String> = cells.iter().map(|&(&(row, col), content)| {
-        let address = diagnostics::json_string(&format!("{}{}", col_to_letters(col), row));
-        format!(
-            "{{\"sheet\":{},\"address\":{},\"value\":{}}}",
-            sheet, address, diagnostics::variant_to_json(&content.value),
-        )
-    }).collect();
+    let items: Vec<String> = cells
+        .iter()
+        .map(|&(&(row, col), content)| {
+            let address = diagnostics::json_string(&format!("{}{}", col_to_letters(col), row));
+            format!(
+                "{{\"sheet\":{},\"address\":{},\"value\":{}}}",
+                sheet,
+                address,
+                diagnostics::variant_to_json(&content.value),
+            )
+        })
+        .collect();
     format!("[{}]", items.join(","))
 }
 
 fn messages_to_json(messages: &[String]) -> String {
-    let items: Vec<String> = messages.iter().map(|m| diagnostics::json_string(m)).collect();
+    let items: Vec<String> = messages
+        .iter()
+        .map(|m| diagnostics::json_string(m))
+        .collect();
     format!("[{}]", items.join(","))
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if matches!(args.get(1).map(String::as_str), Some("--version") | Some("-V")) {
+    if matches!(
+        args.get(1).map(String::as_str),
+        Some("--version") | Some("-V")
+    ) {
         println!("elixcee {}", env!("CARGO_PKG_VERSION"));
         process::exit(0);
     }
@@ -771,18 +832,38 @@ fn main() {
     }
 
     let mut positionals: Vec<String> = Vec::new();
-    let mut xlsx_file:  Option<String> = None;
+    let mut xlsx_file: Option<String> = None;
     let mut sheet_name: Option<String> = None;
-    let mut output:     Option<String> = None;
+    let mut output: Option<String> = None;
     let mut json = false;
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--file"   => { i += 1; xlsx_file  = args.get(i).cloned().or_else(|| die("--file requires a path")); }
-            "--sheet"  => { i += 1; sheet_name = args.get(i).cloned().or_else(|| die("--sheet requires a name")); }
-            "--output" => { i += 1; output     = args.get(i).cloned().or_else(|| die("--output requires a path")); }
-            "--json"   => { json = true; }
+            "--file" => {
+                i += 1;
+                xlsx_file = args
+                    .get(i)
+                    .cloned()
+                    .or_else(|| die("--file requires a path"));
+            }
+            "--sheet" => {
+                i += 1;
+                sheet_name = args
+                    .get(i)
+                    .cloned()
+                    .or_else(|| die("--sheet requires a name"));
+            }
+            "--output" => {
+                i += 1;
+                output = args
+                    .get(i)
+                    .cloned()
+                    .or_else(|| die("--output requires a path"));
+            }
+            "--json" => {
+                json = true;
+            }
             "--help" | "-h" => usage(),
             arg if arg.starts_with('-') => die(&format!("unknown option: {}", arg)),
             _ => positionals.push(args[i].clone()),
@@ -794,9 +875,13 @@ fn main() {
     // unambiguous: the last positional is the entrypoint, everything before
     // it is a source file. A single file + single macro name — today's only
     // shape until now — parses identically to before.
-    if positionals.is_empty() { usage(); }
+    if positionals.is_empty() {
+        usage();
+    }
     let macro_name = positionals.pop().unwrap();
-    if positionals.is_empty() { usage(); }
+    if positionals.is_empty() {
+        usage();
+    }
     let vba_paths = positionals;
 
     let modules = load_modules(&vba_paths, json);
@@ -811,29 +896,47 @@ fn main() {
         match vm.load_workbook_file(path) {
             Ok(_) => {}
             Err(e) if e == "workbook has no sheets" => {
-                if json { fail_json(ElixceeError::sheet_setup_error(e), &[]) } else { die(&e) }
+                if json {
+                    fail_json(ElixceeError::sheet_setup_error(e), &[])
+                } else {
+                    die(&e)
+                }
             }
             Err(e) => {
-                if json { fail_json(ElixceeError::io_error(e), &[]) } else { die(&e) }
+                if json {
+                    fail_json(ElixceeError::io_error(e), &[])
+                } else {
+                    die(&e)
+                }
             }
         }
         if let Some(ref name) = sheet_name
             && let Err(e) = vm.set_active_sheet(name)
         {
-            if json { fail_json(ElixceeError::sheet_setup_error(e), &[]) } else { die(&e) }
+            if json {
+                fail_json(ElixceeError::sheet_setup_error(e), &[])
+            } else {
+                die(&e)
+            }
         }
     } else if let Some(ref name) = sheet_name
         && let Err(e) = vm.set_active_sheet(name)
     {
-        if json { fail_json(ElixceeError::sheet_setup_error(e), &[]) } else { die(&e) }
+        if json {
+            fail_json(ElixceeError::sheet_setup_error(e), &[])
+        } else {
+            die(&e)
+        }
     }
 
     let start = std::time::Instant::now();
     let run_result = if modules.len() == 1 {
         vm.run_sub(&modules[0].program, &macro_name)
     } else {
-        let project: Vec<(String, parser::Program)> =
-            modules.iter().map(|m| (m.name.clone(), m.program.clone())).collect();
+        let project: Vec<(String, parser::Program)> = modules
+            .iter()
+            .map(|m| (m.name.clone(), m.program.clone()))
+            .collect();
         vm.run_sub_multi(&project, &macro_name)
     };
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -850,11 +953,15 @@ fn main() {
             // instead — single-module runs are completely unaffected and
             // keep today's exact precise location.
             let location = if modules.len() == 1 {
-                vm.current_span().map(|span| diagnostics::locate(&modules[0].source, &modules[0].path, span))
+                vm.current_span()
+                    .map(|span| diagnostics::locate(&modules[0].source, &modules[0].path, span))
             } else {
                 None
             };
-            fail_json(ElixceeError::runtime_error(e).with_location(location), &vm.take_messages())
+            fail_json(
+                ElixceeError::runtime_error(e).with_location(location),
+                &vm.take_messages(),
+            )
         } else {
             die(&format!("runtime error: {}", e))
         }
@@ -865,27 +972,41 @@ fn main() {
         // success object already printed — --json must emit exactly one
         // JSON object on stdout.
         if let Some(ref path) = output
-            && let Err(e) = save_workbook(&vm, path) {
-                // The macro already ran successfully — don't drop any MsgBox
-                // text it showed just because the save step failed after.
-                fail_json(ElixceeError::io_error(format!("cannot write '{}': {}", path, e)), &vm.take_messages());
-            }
+            && let Err(e) = save_workbook(&vm, path)
+        {
+            // The macro already ran successfully — don't drop any MsgBox
+            // text it showed just because the save step failed after.
+            fail_json(
+                ElixceeError::io_error(format!("cannot write '{}': {}", path, e)),
+                &vm.take_messages(),
+            );
+        }
         let messages = vm.take_messages();
         println!(
             "{{\"schema_version\":1,\"ok\":true,\"entrypoint\":{},\"duration_ms\":{:.3},\"cells\":{},\"messages\":{}}}",
-            diagnostics::json_string(&macro_name), duration_ms, cells_to_json(&vm), messages_to_json(&messages),
+            diagnostics::json_string(&macro_name),
+            duration_ms,
+            cells_to_json(&vm),
+            messages_to_json(&messages),
         );
         return;
     }
 
     // Print non-empty cells sorted by (row, col)
-    let mut cells: Vec<_> = vm.cells().iter()
+    let mut cells: Vec<_> = vm
+        .cells()
+        .iter()
         .filter(|(_, c)| !matches!(c.value, Variant::Empty | Variant::Null))
         .collect();
     cells.sort_by_key(|&(&(r, c), _)| (r, c));
 
     for &(&(row, col), content) in &cells {
-        println!("{}{}\t{}", col_to_letters(col), row, format_variant(&content.value));
+        println!(
+            "{}{}\t{}",
+            col_to_letters(col),
+            row,
+            format_variant(&content.value)
+        );
     }
 
     // Save output file if requested

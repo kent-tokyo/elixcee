@@ -179,14 +179,22 @@ impl RootCause {
                 ]
             }
             ResolutionFailureKind::PastePartialMergedRange { conflicts, .. } => {
-                let addrs = conflicts.iter().map(|r| rect_addr(*r)).collect::<Vec<_>>().join(", ");
+                let addrs = conflicts
+                    .iter()
+                    .map(|r| rect_addr(*r))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 vec![format!(
                     "unmerge {} before pasting, or resize the destination to fully contain it",
                     addrs
                 )]
             }
             ResolutionFailureKind::PasteMergeLayoutMismatch { conflicts, .. } => {
-                let addrs = conflicts.iter().map(|r| rect_addr(*r)).collect::<Vec<_>>().join(", ");
+                let addrs = conflicts
+                    .iter()
+                    .map(|r| rect_addr(*r))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 vec![
                     format!("unmerge {} before pasting", addrs),
                     "or make the source and destination merge layouts identical".to_string(),
@@ -272,7 +280,11 @@ fn area_json(r: Rect) -> String {
 fn areas_json(areas: &[Rect]) -> String {
     format!(
         "[{}]",
-        areas.iter().map(|r| area_json(*r)).collect::<Vec<_>>().join(",")
+        areas
+            .iter()
+            .map(|r| area_json(*r))
+            .collect::<Vec<_>>()
+            .join(",")
     )
 }
 
@@ -292,14 +304,22 @@ fn col_interval_addr(iv: &Interval) -> String {
 fn row_intervals_json(intervals: &[Interval]) -> String {
     format!(
         "[{}]",
-        intervals.iter().map(|iv| json_string(&row_interval_addr(iv))).collect::<Vec<_>>().join(",")
+        intervals
+            .iter()
+            .map(|iv| json_string(&row_interval_addr(iv)))
+            .collect::<Vec<_>>()
+            .join(",")
     )
 }
 
 fn col_intervals_json(intervals: &[Interval]) -> String {
     format!(
         "[{}]",
-        intervals.iter().map(|iv| json_string(&col_interval_addr(iv))).collect::<Vec<_>>().join(",")
+        intervals
+            .iter()
+            .map(|iv| json_string(&col_interval_addr(iv)))
+            .collect::<Vec<_>>()
+            .join(",")
     )
 }
 
@@ -531,9 +551,18 @@ fn root_cause_json(rc: &RootCause, copy_location: Option<&SourceLocation>) -> St
             conflicts_json(conflicts),
             location_json(copy_location),
         ),
-        ResolutionFailureKind::MultiAreaToSingleAreaPaste { source_areas, destination_areas }
-        | ResolutionFailureKind::MultiAreaCountMismatch { source_areas, destination_areas }
-        | ResolutionFailureKind::MultiAreaPasteUnsupported { source_areas, destination_areas } => {
+        ResolutionFailureKind::MultiAreaToSingleAreaPaste {
+            source_areas,
+            destination_areas,
+        }
+        | ResolutionFailureKind::MultiAreaCountMismatch {
+            source_areas,
+            destination_areas,
+        }
+        | ResolutionFailureKind::MultiAreaPasteUnsupported {
+            source_areas,
+            destination_areas,
+        } => {
             format!(
                 "\"source_areas\":{},\"destination_areas\":{}",
                 areas_json(source_areas),
@@ -567,7 +596,10 @@ fn root_cause_json(rc: &RootCause, copy_location: Option<&SourceLocation>) -> St
 /// caller doesn't resolve one.
 pub(crate) fn root_causes_json(kind: Option<&ResolutionFailureKind>) -> String {
     match kind {
-        Some(k) => format!("[{}]", root_cause_json(&RootCause::from_kind(k.clone()), None)),
+        Some(k) => format!(
+            "[{}]",
+            root_cause_json(&RootCause::from_kind(k.clone()), None)
+        ),
         None => "[]".to_string(),
     }
 }
@@ -715,7 +747,10 @@ pub fn to_plain_text(
                     dest_addr, dest_sheet, rect_addr(*merged_range),
                 ));
                 if let Some(loc) = copy_location {
-                    out.push_str(&format!("\n  copied at {}:{}:{}", loc.file, loc.line, loc.column));
+                    out.push_str(&format!(
+                        "\n  copied at {}:{}:{}",
+                        loc.file, loc.line, loc.column
+                    ));
                 }
             }
             ResolutionFailureKind::PastePartialMergedRange {
@@ -727,10 +762,15 @@ pub fn to_plain_text(
                 let addrs: Vec<String> = conflicts.iter().map(|r| rect_addr(*r)).collect();
                 out.push_str(&format!(
                     "paste destination {} (sheet '{}') partially overlaps merged range(s): {}",
-                    dest_addr, dest_sheet, addrs.join(", "),
+                    dest_addr,
+                    dest_sheet,
+                    addrs.join(", "),
                 ));
                 if let Some(loc) = copy_location {
-                    out.push_str(&format!("\n  copied at {}:{}:{}", loc.file, loc.line, loc.column));
+                    out.push_str(&format!(
+                        "\n  copied at {}:{}:{}",
+                        loc.file, loc.line, loc.column
+                    ));
                 }
             }
             ResolutionFailureKind::PasteMergeLayoutMismatch {
@@ -747,12 +787,24 @@ pub fn to_plain_text(
                     source_addr, source_sheet, dest_addr, dest_sheet, addrs.join(", "),
                 ));
                 if let Some(loc) = copy_location {
-                    out.push_str(&format!("\n  copied at {}:{}:{}", loc.file, loc.line, loc.column));
+                    out.push_str(&format!(
+                        "\n  copied at {}:{}:{}",
+                        loc.file, loc.line, loc.column
+                    ));
                 }
             }
-            ResolutionFailureKind::MultiAreaToSingleAreaPaste { source_areas, destination_areas }
-            | ResolutionFailureKind::MultiAreaCountMismatch { source_areas, destination_areas }
-            | ResolutionFailureKind::MultiAreaPasteUnsupported { source_areas, destination_areas } => {
+            ResolutionFailureKind::MultiAreaToSingleAreaPaste {
+                source_areas,
+                destination_areas,
+            }
+            | ResolutionFailureKind::MultiAreaCountMismatch {
+                source_areas,
+                destination_areas,
+            }
+            | ResolutionFailureKind::MultiAreaPasteUnsupported {
+                source_areas,
+                destination_areas,
+            } => {
                 let src: Vec<String> = source_areas.iter().map(|r| area_addr(*r)).collect();
                 let dst: Vec<String> = destination_areas.iter().map(|r| area_addr(*r)).collect();
                 out.push_str(&format!(
@@ -804,12 +856,20 @@ fn hidden_cells_plain_text_note(obs: &HiddenCellsObservation) -> String {
         if obs.hidden_rows.is_empty() {
             "none".to_string()
         } else {
-            obs.hidden_rows.iter().map(row_interval_addr).collect::<Vec<_>>().join(", ")
+            obs.hidden_rows
+                .iter()
+                .map(row_interval_addr)
+                .collect::<Vec<_>>()
+                .join(", ")
         },
         if obs.hidden_columns.is_empty() {
             "none".to_string()
         } else {
-            obs.hidden_columns.iter().map(col_interval_addr).collect::<Vec<_>>().join(", ")
+            obs.hidden_columns
+                .iter()
+                .map(col_interval_addr)
+                .collect::<Vec<_>>()
+                .join(", ")
         },
     )
 }
@@ -1017,7 +1077,10 @@ mod tests {
         );
         let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
         assert!(!diag.ok);
-        let rc = diag.root_cause.as_ref().expect("should classify a root cause");
+        let rc = diag
+            .root_cause
+            .as_ref()
+            .expect("should classify a root cause");
         assert_eq!(rc.code, "MULTI_AREA_TO_SINGLE_AREA_PASTE");
         assert_eq!(
             rc.suggestions(),
@@ -1050,7 +1113,10 @@ mod tests {
         );
         let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
         assert!(!diag.ok);
-        let rc = diag.root_cause.as_ref().expect("should classify a root cause");
+        let rc = diag
+            .root_cause
+            .as_ref()
+            .expect("should classify a root cause");
         assert_eq!(rc.code, "MULTI_AREA_COUNT_MISMATCH");
         let json = to_json(&diag, None, None);
         assert!(json.contains("\"source_areas\":[{\"address\":\"A1:A10\""));
@@ -1068,14 +1134,21 @@ mod tests {
         );
         let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
         assert!(!diag.ok);
-        let rc = diag.root_cause.as_ref().expect("should classify a root cause");
+        let rc = diag
+            .root_cause
+            .as_ref()
+            .expect("should classify a root cause");
         assert_eq!(rc.code, "MULTI_AREA_SHAPE_MISMATCH");
         let json = to_json(&diag, None, None);
         assert!(json.contains("\"area_index\":2"));
-        assert!(json.contains("\"source_area\":{\"address\":\"C1:C10\",\"rows\":10,\"columns\":1}"));
-        assert!(json.contains(
-            "\"destination_area\":{\"address\":\"I1:J10\",\"rows\":10,\"columns\":2}"
-        ));
+        assert!(
+            json.contains("\"source_area\":{\"address\":\"C1:C10\",\"rows\":10,\"columns\":1}")
+        );
+        assert!(
+            json.contains(
+                "\"destination_area\":{\"address\":\"I1:J10\",\"rows\":10,\"columns\":2}"
+            )
+        );
         assert!(json.contains("resize destination area 2 to match the source area's shape"));
     }
 
@@ -1088,10 +1161,15 @@ mod tests {
         );
         let diag = run_diagnosis(&programs, out_path.to_str().unwrap(), "Main").unwrap();
         assert!(!diag.ok);
-        let rc = diag.root_cause.as_ref().expect("should classify a root cause");
+        let rc = diag
+            .root_cause
+            .as_ref()
+            .expect("should classify a root cause");
         assert_eq!(rc.code, "MULTI_AREA_PASTE_UNSUPPORTED");
         let json = to_json(&diag, None, None);
-        assert!(json.contains("\"source_areas\":[{\"address\":\"A1:B10\",\"rows\":10,\"columns\":2}]"));
+        assert!(
+            json.contains("\"source_areas\":[{\"address\":\"A1:B10\",\"rows\":10,\"columns\":2}]")
+        );
         assert!(json.contains("\"destination_areas\":[{\"address\":\"E1:E10\""));
     }
 
@@ -1215,10 +1293,7 @@ mod tests {
             messages: vec![],
         };
         let full_json = to_json(&diag, None, None);
-        let root_causes_fragment = format!(
-            "\"root_causes\":{}",
-            root_causes_json(Some(&kind))
-        );
+        let root_causes_fragment = format!("\"root_causes\":{}", root_causes_json(Some(&kind)));
         assert!(
             full_json.contains(&root_causes_fragment),
             "expected {} to contain {}",
@@ -1267,23 +1342,30 @@ mod tests {
         assert!(json.contains("\"visible_cells\":172"));
     }
 
-    fn diagnosis_with_hidden_cells(ok: bool, hidden_cells: Option<HiddenCellsObservation>) -> Diagnosis {
+    fn diagnosis_with_hidden_cells(
+        ok: bool,
+        hidden_cells: Option<HiddenCellsObservation>,
+    ) -> Diagnosis {
         Diagnosis {
             ok,
-            message: if ok { None } else { Some("Sheet 'x' not found".to_string()) },
+            message: if ok {
+                None
+            } else {
+                Some("Sheet 'x' not found".to_string())
+            },
             span: None,
             copy_span: None,
             root_cause: if ok {
                 None
             } else {
-                Some(RootCause::from_kind(ResolutionFailureKind::WorksheetNotFound(
-                    ResolutionEvidence {
+                Some(RootCause::from_kind(
+                    ResolutionFailureKind::WorksheetNotFound(ResolutionEvidence {
                         expression: "Worksheets(\"x\")".to_string(),
                         requested: "x".to_string(),
                         available: vec![],
                         suggested: None,
-                    },
-                )))
+                    }),
+                ))
             },
             hidden_cells,
             messages: vec![],
@@ -1292,10 +1374,13 @@ mod tests {
 
     #[test]
     fn to_json_omits_the_observations_field_when_there_is_nothing_to_observe() {
-        assert!(!to_json(&diagnosis_with_hidden_cells(true, None), None, None)
-            .contains("observations"));
-        assert!(!to_json(&diagnosis_with_hidden_cells(false, None), None, None)
-            .contains("observations"));
+        assert!(
+            !to_json(&diagnosis_with_hidden_cells(true, None), None, None).contains("observations")
+        );
+        assert!(
+            !to_json(&diagnosis_with_hidden_cells(false, None), None, None)
+                .contains("observations")
+        );
     }
 
     #[test]

@@ -32,8 +32,7 @@
 use crate::diagnostics::{json_string, variant_to_json};
 use crate::parser::ast::Program;
 use crate::vm::{
-    CellContent, HiddenCellsObservation, ResolutionFailureKind, Variant, Vm,
-    parse_sheet_range_addr,
+    CellContent, HiddenCellsObservation, ResolutionFailureKind, Variant, Vm, parse_sheet_range_addr,
 };
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -639,7 +638,9 @@ pub fn run_fixture(
 
 pub fn to_json(result: &FixtureResult) -> String {
     match result {
-        FixtureResult::Passed { seed, cases_run, .. } => {
+        FixtureResult::Passed {
+            seed, cases_run, ..
+        } => {
             format!(
                 "{{\"schema_version\":1,\"ok\":true,\"seed\":{},\"cases_run\":{}}}",
                 seed, cases_run
@@ -692,7 +693,9 @@ fn display_variant(v: &Variant) -> String {
 
 pub fn to_plain_text(result: &FixtureResult) -> String {
     match result {
-        FixtureResult::Passed { seed, cases_run, .. } => {
+        FixtureResult::Passed {
+            seed, cases_run, ..
+        } => {
             format!("ok: {} case(s) passed (seed {})", cases_run, seed)
         }
         FixtureResult::Failed {
@@ -891,8 +894,16 @@ rule = "no_excel_errors"
             }],
         };
 
-        let result =
-            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, false).unwrap();
+        let result = run_fixture(
+            &fixture,
+            &programs,
+            &fixture.workbook,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         let (seed, case_index, inputs_used) = match &result {
             FixtureResult::Failed {
                 seed,
@@ -966,8 +977,16 @@ rule = "no_excel_errors"
             }],
         };
 
-        let result =
-            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, false).unwrap();
+        let result = run_fixture(
+            &fixture,
+            &programs,
+            &fixture.workbook,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         match result {
             FixtureResult::Passed { cases_run, .. } => assert_eq!(cases_run, 20),
             FixtureResult::Failed { .. } => {
@@ -1003,8 +1022,16 @@ rule = "no_excel_errors"
             assertions: vec![],
         };
 
-        let result =
-            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, false).unwrap();
+        let result = run_fixture(
+            &fixture,
+            &programs,
+            &fixture.workbook,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         match result {
             FixtureResult::Failed {
                 resolution_kind: Some(kind),
@@ -1043,12 +1070,28 @@ rule = "no_excel_errors"
             assertions: vec![],
         };
 
-        let lenient =
-            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, false).unwrap();
+        let lenient = run_fixture(
+            &fixture,
+            &programs,
+            &fixture.workbook,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         assert!(matches!(lenient, FixtureResult::Passed { .. }));
 
-        let strict =
-            run_fixture(&fixture, &programs, &fixture.workbook, None, None, None, true).unwrap();
+        let strict = run_fixture(
+            &fixture,
+            &programs,
+            &fixture.workbook,
+            None,
+            None,
+            None,
+            true,
+        )
+        .unwrap();
         match strict {
             FixtureResult::Failed {
                 resolution_kind: Some(kind),
@@ -1083,9 +1126,16 @@ rule = "no_excel_errors"
             }],
         };
 
-        let result =
-            run_fixture(&fixture, &programs, &fixture.workbook, None, None, Some(5), false)
-                .unwrap();
+        let result = run_fixture(
+            &fixture,
+            &programs,
+            &fixture.workbook,
+            None,
+            None,
+            Some(5),
+            false,
+        )
+        .unwrap();
         match result {
             FixtureResult::Passed { cases_run, .. } => assert_eq!(cases_run, 5),
             FixtureResult::Failed { .. } => panic!("unexpected failure"),

@@ -3,8 +3,7 @@
 /// Each test verifies an invariant that must hold for *all* inputs in the
 /// generated domain, not just the hand-picked cases in unit tests.
 use elixcee::{
-    formula,
-    parser,
+    formula, parser,
     vm::{CellContent, Variant, Vm},
 };
 use proptest::prelude::*;

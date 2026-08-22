@@ -7,7 +7,10 @@ pub struct FormulaParser {
 
 impl FormulaParser {
     fn new(input: &str) -> Self {
-        FormulaParser { chars: input.chars().collect(), pos: 0 }
+        FormulaParser {
+            chars: input.chars().collect(),
+            pos: 0,
+        }
     }
 
     fn peek(&self) -> Option<char> {
@@ -16,7 +19,9 @@ impl FormulaParser {
 
     fn advance(&mut self) -> Option<char> {
         let c = self.chars.get(self.pos).copied();
-        if c.is_some() { self.pos += 1; }
+        if c.is_some() {
+            self.pos += 1;
+        }
         c
     }
 
@@ -27,7 +32,12 @@ impl FormulaParser {
     }
 
     fn consume(&mut self, c: char) -> bool {
-        if self.peek() == Some(c) { self.pos += 1; true } else { false }
+        if self.peek() == Some(c) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn parse_expr(&mut self) -> Result<FormulaExpr, String> {
@@ -42,20 +52,35 @@ impl FormulaParser {
             let op = match self.peek() {
                 Some('<') => {
                     self.advance();
-                    if self.consume('>') { BinOpKind::Ne }
-                    else if self.consume('=') { BinOpKind::Le }
-                    else { BinOpKind::Lt }
+                    if self.consume('>') {
+                        BinOpKind::Ne
+                    } else if self.consume('=') {
+                        BinOpKind::Le
+                    } else {
+                        BinOpKind::Lt
+                    }
                 }
                 Some('>') => {
                     self.advance();
-                    if self.consume('=') { BinOpKind::Ge } else { BinOpKind::Gt }
+                    if self.consume('=') {
+                        BinOpKind::Ge
+                    } else {
+                        BinOpKind::Gt
+                    }
                 }
-                Some('=') => { self.advance(); BinOpKind::Eq }
+                Some('=') => {
+                    self.advance();
+                    BinOpKind::Eq
+                }
                 _ => break,
             };
             self.skip_ws();
             let rhs = self.parse_concat()?;
-            lhs = FormulaExpr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = FormulaExpr::BinOp {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -68,8 +93,14 @@ impl FormulaParser {
                 self.advance();
                 self.skip_ws();
                 let rhs = self.parse_additive()?;
-                lhs = FormulaExpr::BinOp { op: BinOpKind::Concat, lhs: Box::new(lhs), rhs: Box::new(rhs) };
-            } else { break; }
+                lhs = FormulaExpr::BinOp {
+                    op: BinOpKind::Concat,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                };
+            } else {
+                break;
+            }
         }
         Ok(lhs)
     }
@@ -79,13 +110,23 @@ impl FormulaParser {
         loop {
             self.skip_ws();
             let op = match self.peek() {
-                Some('+') => { self.advance(); BinOpKind::Add }
-                Some('-') => { self.advance(); BinOpKind::Sub }
+                Some('+') => {
+                    self.advance();
+                    BinOpKind::Add
+                }
+                Some('-') => {
+                    self.advance();
+                    BinOpKind::Sub
+                }
                 _ => break,
             };
             self.skip_ws();
             let rhs = self.parse_multiplicative()?;
-            lhs = FormulaExpr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = FormulaExpr::BinOp {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -95,13 +136,23 @@ impl FormulaParser {
         loop {
             self.skip_ws();
             let op = match self.peek() {
-                Some('*') => { self.advance(); BinOpKind::Mul }
-                Some('/') => { self.advance(); BinOpKind::Div }
+                Some('*') => {
+                    self.advance();
+                    BinOpKind::Mul
+                }
+                Some('/') => {
+                    self.advance();
+                    BinOpKind::Div
+                }
                 _ => break,
             };
             self.skip_ws();
             let rhs = self.parse_unary()?;
-            lhs = FormulaExpr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = FormulaExpr::BinOp {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -112,7 +163,9 @@ impl FormulaParser {
             self.advance();
             Ok(FormulaExpr::UnaryMinus(Box::new(self.parse_primary()?)))
         } else {
-            if self.peek() == Some('+') { self.advance(); }
+            if self.peek() == Some('+') {
+                self.advance();
+            }
             self.parse_primary()
         }
     }
@@ -124,7 +177,9 @@ impl FormulaParser {
                 self.advance();
                 let expr = self.parse_expr()?;
                 self.skip_ws();
-                if !self.consume(')') { return Err("Expected ')'".into()); }
+                if !self.consume(')') {
+                    return Err("Expected ')'".into());
+                }
                 Ok(expr)
             }
             Some('"') => self.parse_string(),
@@ -142,10 +197,17 @@ impl FormulaParser {
             match self.peek() {
                 Some('"') => {
                     self.advance();
-                    if self.peek() == Some('"') { self.advance(); s.push('"'); }
-                    else { break; }
+                    if self.peek() == Some('"') {
+                        self.advance();
+                        s.push('"');
+                    } else {
+                        break;
+                    }
                 }
-                Some(c) => { s.push(c); self.advance(); }
+                Some(c) => {
+                    s.push(c);
+                    self.advance();
+                }
                 None => return Err("Unterminated string literal".into()),
             }
         }
@@ -163,7 +225,9 @@ impl FormulaParser {
                 s.push(self.advance().unwrap());
             }
         }
-        s.parse::<f64>().map(FormulaExpr::Number).map_err(|e| e.to_string())
+        s.parse::<f64>()
+            .map(FormulaExpr::Number)
+            .map_err(|e| e.to_string())
     }
 
     fn parse_ident_or_ref(&mut self) -> Result<FormulaExpr, String> {
@@ -202,7 +266,9 @@ impl FormulaParser {
             } else {
                 // Cell reference: name = column letters, trailing_digits = row number
                 let col = col_letters_to_num(&name);
-                let row: u32 = trailing_digits.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+                let row: u32 = trailing_digits
+                    .parse()
+                    .map_err(|e: std::num::ParseIntError| e.to_string())?;
                 self.skip_ws();
                 // Range: A1:B10
                 if self.peek() == Some(':') {
@@ -217,8 +283,15 @@ impl FormulaParser {
                     while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
                         row2_s.push(self.advance().unwrap());
                     }
-                    let row2: u32 = row2_s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-                    return Ok(FormulaExpr::Range { c1: col, r1: row, c2: col2, r2: row2 });
+                    let row2: u32 = row2_s
+                        .parse()
+                        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+                    return Ok(FormulaExpr::Range {
+                        c1: col,
+                        r1: row,
+                        c2: col2,
+                        r2: row2,
+                    });
                 }
                 return Ok(FormulaExpr::CellRef { col, row });
             }
@@ -234,8 +307,12 @@ impl FormulaParser {
                 args.push(self.parse_expr()?);
                 loop {
                     self.skip_ws();
-                    if self.consume(',') { self.skip_ws(); args.push(self.parse_expr()?); }
-                    else { break; }
+                    if self.consume(',') {
+                        self.skip_ws();
+                        args.push(self.parse_expr()?);
+                    } else {
+                        break;
+                    }
                 }
             }
             self.skip_ws();
@@ -271,7 +348,11 @@ pub fn parse(formula: &str) -> Result<FormulaExpr, String> {
     let expr = p.parse_expr()?;
     p.skip_ws();
     if p.pos < p.chars.len() {
-        Err(format!("Unexpected input at position {}: '{}'", p.pos, p.chars[p.pos..].iter().collect::<String>()))
+        Err(format!(
+            "Unexpected input at position {}: '{}'",
+            p.pos,
+            p.chars[p.pos..].iter().collect::<String>()
+        ))
     } else {
         Ok(expr)
     }
@@ -289,7 +370,10 @@ mod tests {
 
     #[test]
     fn test_string() {
-        assert_eq!(parse("=\"hello\"").unwrap(), FormulaExpr::Str("hello".into()));
+        assert_eq!(
+            parse("=\"hello\"").unwrap(),
+            FormulaExpr::Str("hello".into())
+        );
     }
 
     #[test]
@@ -300,16 +384,30 @@ mod tests {
 
     #[test]
     fn test_cell_ref() {
-        assert_eq!(parse("=A1").unwrap(), FormulaExpr::CellRef { col: 1, row: 1 });
-        assert_eq!(parse("=B3").unwrap(), FormulaExpr::CellRef { col: 2, row: 3 });
-        assert_eq!(parse("=AA1").unwrap(), FormulaExpr::CellRef { col: 27, row: 1 });
+        assert_eq!(
+            parse("=A1").unwrap(),
+            FormulaExpr::CellRef { col: 1, row: 1 }
+        );
+        assert_eq!(
+            parse("=B3").unwrap(),
+            FormulaExpr::CellRef { col: 2, row: 3 }
+        );
+        assert_eq!(
+            parse("=AA1").unwrap(),
+            FormulaExpr::CellRef { col: 27, row: 1 }
+        );
     }
 
     #[test]
     fn test_range() {
         assert_eq!(
             parse("=A1:B10").unwrap(),
-            FormulaExpr::Range { c1: 1, r1: 1, c2: 2, r2: 10 }
+            FormulaExpr::Range {
+                c1: 1,
+                r1: 1,
+                c2: 2,
+                r2: 10
+            }
         );
     }
 
@@ -336,7 +434,12 @@ mod tests {
             expr,
             FormulaExpr::FuncCall {
                 name: "SUM".into(),
-                args: vec![FormulaExpr::Range { c1: 1, r1: 1, c2: 1, r2: 3 }],
+                args: vec![FormulaExpr::Range {
+                    c1: 1,
+                    r1: 1,
+                    c2: 1,
+                    r2: 3
+                }],
             }
         );
     }
@@ -400,7 +503,13 @@ mod tests {
         assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "ATAN2"));
 
         // Cell references with the same letter+digit pattern must still work
-        assert_eq!(parse("=A1").unwrap(), FormulaExpr::CellRef { col: 1, row: 1 });
-        assert_eq!(parse("=B10").unwrap(), FormulaExpr::CellRef { col: 2, row: 10 });
+        assert_eq!(
+            parse("=A1").unwrap(),
+            FormulaExpr::CellRef { col: 1, row: 1 }
+        );
+        assert_eq!(
+            parse("=B10").unwrap(),
+            FormulaExpr::CellRef { col: 2, row: 10 }
+        );
     }
 }

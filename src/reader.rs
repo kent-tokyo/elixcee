@@ -162,11 +162,15 @@ struct XmlIter<'a> {
 }
 
 impl<'a> XmlIter<'a> {
-    fn new(s: &'a str) -> Self { XmlIter { s } }
+    fn new(s: &'a str) -> Self {
+        XmlIter { s }
+    }
 
     fn next_ev(&mut self) -> Option<Ev> {
         loop {
-            if self.s.is_empty() { return None; }
+            if self.s.is_empty() {
+                return None;
+            }
 
             if !self.s.starts_with('<') {
                 // Text node — preserve verbatim (trim happens at call site for leaf nodes)
@@ -174,7 +178,9 @@ impl<'a> XmlIter<'a> {
                 let raw = &self.s[..end];
                 self.s = &self.s[end..];
                 let text = xml_unescape(raw);
-                if text.is_empty() { continue; }
+                if text.is_empty() {
+                    continue;
+                }
                 return Some(Ev::Text(text));
             }
 
@@ -202,7 +208,9 @@ impl<'a> XmlIter<'a> {
                 let end = self.s.find("]]>").unwrap_or(self.s.len());
                 let text = self.s[..end].to_string();
                 self.s = &self.s[(end + 3).min(self.s.len())..];
-                if !text.is_empty() { return Some(Ev::Text(text)); }
+                if !text.is_empty() {
+                    return Some(Ev::Text(text));
+                }
                 continue;
             }
 
@@ -244,10 +252,15 @@ fn find_tag_close(s: &str) -> usize {
     let mut qchar = '"';
     for (i, c) in s.char_indices() {
         if in_quote {
-            if c == qchar { in_quote = false; }
+            if c == qchar {
+                in_quote = false;
+            }
         } else {
             match c {
-                '"' | '\'' => { in_quote = true; qchar = c; }
+                '"' | '\'' => {
+                    in_quote = true;
+                    qchar = c;
+                }
                 '>' => return i,
                 _ => {}
             }
@@ -261,13 +274,19 @@ fn parse_attrs(mut s: &str) -> Vec<Attr> {
     let mut attrs = vec![];
     loop {
         s = s.trim_start();
-        if s.is_empty() { break; }
+        if s.is_empty() {
+            break;
+        }
         let Some(eq) = s.find('=') else { break };
         let name = s[..eq].trim().to_string();
-        if name.is_empty() { break; }
+        if name.is_empty() {
+            break;
+        }
         s = s[eq + 1..].trim_start();
         let Some(quote) = s.chars().next() else { break };
-        if quote != '"' && quote != '\'' { break; }
+        if quote != '"' && quote != '\'' {
+            break;
+        }
         s = &s[1..]; // skip opening quote
         let end = s.find(quote).unwrap_or(s.len());
         let value = xml_unescape(&s[..end]);
@@ -278,7 +297,8 @@ fn parse_attrs(mut s: &str) -> Vec<Attr> {
 }
 
 fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
-    attrs.iter()
+    attrs
+        .iter()
         .find(|a| a.name == name || a.name.split(':').next_back() == Some(name))
         .map(|a| a.value.as_str())
 }
@@ -292,7 +312,10 @@ fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
 /// recognized an oracle-written hidden column at all. Used for both `<row>` and `<col>`
 /// so the two stay consistent rather than each hardcoding its own literal.
 fn attr_is_true(attrs: &[Attr], name: &str) -> bool {
-    matches!(attr_get(attrs, name), Some("1") | Some("true") | Some("TRUE"))
+    matches!(
+        attr_get(attrs, name),
+        Some("1") | Some("true") | Some("TRUE")
+    )
 }
 
 // Longest real entity is a numeric ref like "&#x10FFFF;" (10 chars between
@@ -302,7 +325,9 @@ fn attr_is_true(attrs: &[Attr], name: &str) -> bool {
 const MAX_ENTITY_BODY_LEN: usize = 12;
 
 fn xml_unescape(s: &str) -> String {
-    if !s.contains('&') { return s.to_string(); }
+    if !s.contains('&') {
+        return s.to_string();
+    }
     // Single forward pass, each '&...;' consumed at most once — chained
     // .replace() calls (the previous implementation) double-unescape
     // input like the literal text "&amp;lt;", which must stay "&lt;", not
@@ -323,7 +348,10 @@ fn xml_unescape(s: &str) -> String {
                 "quot" => Some('"'),
                 "apos" => Some('\''),
                 _ => entity.strip_prefix('#').and_then(|numeric| {
-                    let code = if let Some(hex) = numeric.strip_prefix('x').or_else(|| numeric.strip_prefix('X')) {
+                    let code = if let Some(hex) = numeric
+                        .strip_prefix('x')
+                        .or_else(|| numeric.strip_prefix('X'))
+                    {
                         u32::from_str_radix(hex, 16).ok()
                     } else {
                         numeric.parse::<u32>().ok()
@@ -356,10 +384,19 @@ fn xml_unescape(s: &str) -> String {
 /// 64 MB decompressed cap per entry — enough for any real spreadsheet XML.
 const ZIP_ENTRY_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
-fn zip_read_text<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Result<String, String> {
-    let mut entry = archive.by_name(name).map_err(|e| format!("{}: {}", name, e))?;
+fn zip_read_text<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+) -> Result<String, String> {
+    let mut entry = archive
+        .by_name(name)
+        .map_err(|e| format!("{}: {}", name, e))?;
     let mut s = String::new();
-    entry.by_ref().take(ZIP_ENTRY_MAX_BYTES).read_to_string(&mut s).map_err(|e| e.to_string())?;
+    entry
+        .by_ref()
+        .take(ZIP_ENTRY_MAX_BYTES)
+        .read_to_string(&mut s)
+        .map_err(|e| e.to_string())?;
     Ok(s)
 }
 
@@ -383,7 +420,11 @@ pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>
         }
         let name = entry.name().to_string();
         let mut buf = Vec::new();
-        entry.by_ref().take(ZIP_ENTRY_MAX_BYTES).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        entry
+            .by_ref()
+            .take(ZIP_ENTRY_MAX_BYTES)
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
         out.insert(name, buf);
     }
     Ok(out)
@@ -405,12 +446,16 @@ pub(crate) fn content_type_decls(xml: &str) -> ContentTypeDecls {
             let local = tag.split(':').next_back().unwrap_or(tag);
             match local {
                 "Default" => {
-                    if let (Some(ext), Some(ct)) = (attr_get(attrs, "Extension"), attr_get(attrs, "ContentType")) {
+                    if let (Some(ext), Some(ct)) =
+                        (attr_get(attrs, "Extension"), attr_get(attrs, "ContentType"))
+                    {
                         defaults.push((ext.to_string(), ct.to_string()));
                     }
                 }
                 "Override" => {
-                    if let (Some(part), Some(ct)) = (attr_get(attrs, "PartName"), attr_get(attrs, "ContentType")) {
+                    if let (Some(part), Some(ct)) =
+                        (attr_get(attrs, "PartName"), attr_get(attrs, "ContentType"))
+                    {
                         overrides.push((part.to_string(), ct.to_string()));
                     }
                 }
@@ -428,14 +473,20 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     let archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
     // Path-based read_workbook doesn't expose formulas/!ref/style ids (see BufferSheet's
     // doc comment) — discard that half here rather than changing WorkbookSheet itself.
-    Ok(read_workbook_from_archive(archive)?.sheets.into_iter().map(|bs| bs.sheet).collect())
+    Ok(read_workbook_from_archive(archive)?
+        .sheets
+        .into_iter()
+        .map(|bs| bs.sheet)
+        .collect())
 }
 
 /// The body of the XLSX reader, generalized over any `R: Read + Seek` archive source
 /// (a `std::fs::File` for path-based reads, a `Cursor<&[u8]>` for `read_workbook_from_bytes`)
 /// — see `docs/xlsx-architecture.md`'s "reader.rs buffer-API resolution". Pure extraction
 /// from the former `read_xlsx`, no behavior change.
-fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Result<BufferWorkbook, String> {
+fn read_workbook_from_archive<R: Read + Seek>(
+    mut archive: ZipArchive<R>,
+) -> Result<BufferWorkbook, String> {
     let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
     let date1904 = xlsx_workbook_date1904(&wb_xml);
@@ -445,24 +496,27 @@ fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Res
 
     let shared: Vec<String> = match zip_read_text(&mut archive, "xl/sharedStrings.xml") {
         Ok(xml) => xlsx_shared_strings(&xml),
-        Err(_)  => vec![],
+        Err(_) => vec![],
     };
 
     let styles = match zip_read_text(&mut archive, "xl/styles.xml") {
         Ok(xml) => xlsx_styles(&xml),
-        Err(_)  => XlsxStyles::default(),
+        Err(_) => XlsxStyles::default(),
     };
 
     let mut sheets = vec![];
     for (name, rid, sheet_id) in sheet_refs {
-        let Some(target) = rels.get(&rid) else { continue };
+        let Some(target) = rels.get(&rid) else {
+            continue;
+        };
         let zip_path = if let Some(rest) = target.strip_prefix('/') {
             rest.to_string()
         } else {
             format!("xl/{}", target)
         };
         let sheet_xml = match zip_read_text(&mut archive, &zip_path) {
-            Ok(s) => s, Err(_) => continue,
+            Ok(s) => s,
+            Err(_) => continue,
         };
         let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared, &styles.cell_xfs);
         sheets.push(BufferSheet {
@@ -480,7 +534,11 @@ fn read_workbook_from_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> Res
             style_ids: sheet_data.style_ids,
         });
     }
-    Ok(BufferWorkbook { sheets, number_formats: styles.number_formats, date1904 })
+    Ok(BufferWorkbook {
+        sheets,
+        number_formats: styles.number_formats,
+        date1904,
+    })
 }
 
 /// Whether `xl/workbook.xml` declares `<workbookPr date1904="1"/>` (the 1904 date
@@ -491,9 +549,10 @@ fn xlsx_workbook_date1904(xml: &str) -> bool {
     let mut iter = XmlIter::new(xml);
     while let Some(ev) = iter.next_ev() {
         if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev
-            && tag.split(':').next_back() == Some("workbookPr") {
-                return attr_is_true(attrs, "date1904");
-            }
+            && tag.split(':').next_back() == Some("workbookPr")
+        {
+            return attr_is_true(attrs, "date1904");
+        }
     }
     false
 }
@@ -506,13 +565,11 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>)> {
         if let Ev::SelfClose(ref tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local == "sheet"
-                && let (Some(name), Some(rid)) = (
-                    attr_get(attrs, "name"),
-                    attr_get(attrs, "id"),
-                ) {
-                    let sheet_id = attr_get(attrs, "sheetId").map(|s| s.to_string());
-                    result.push((name.to_string(), rid.to_string(), sheet_id));
-                }
+                && let (Some(name), Some(rid)) = (attr_get(attrs, "name"), attr_get(attrs, "id"))
+            {
+                let sheet_id = attr_get(attrs, "sheetId").map(|s| s.to_string());
+                result.push((name.to_string(), rid.to_string(), sheet_id));
+            }
         }
     }
     result
@@ -531,9 +588,10 @@ fn xlsx_rels(xml: &str) -> HashMap<String, String> {
                     attr_get(attrs, "Type"),
                     attr_get(attrs, "Target"),
                 )
-                    && ty.ends_with("/worksheet") {
-                        map.insert(id.to_string(), target.to_string());
-                    }
+                && ty.ends_with("/worksheet")
+            {
+                map.insert(id.to_string(), target.to_string());
+            }
         }
     }
     map
@@ -552,16 +610,26 @@ fn xlsx_shared_strings(xml: &str) -> Vec<String> {
             Ev::Open(tag, _) | Ev::SelfClose(tag, _) => {
                 let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
-                    "si" => { in_si = true; current.clear(); }
-                    "t"  => { in_t = true; }
+                    "si" => {
+                        in_si = true;
+                        current.clear();
+                    }
+                    "t" => {
+                        in_t = true;
+                    }
                     _ => {}
                 }
             }
             Ev::Close(tag) => {
                 let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
-                    "si" => { strings.push(current.clone()); in_si = false; }
-                    "t"  => { in_t = false; }
+                    "si" => {
+                        strings.push(current.clone());
+                        in_si = false;
+                    }
+                    "t" => {
+                        in_t = false;
+                    }
                     _ => {}
                 }
             }
@@ -614,20 +682,28 @@ fn xlsx_styles(xml: &str) -> XlsxStyles {
                     // A self-closing <cellXfs/> (zero entries) never produces a matching
                     // Close event — only an actual Open sets in_cell_xfs, mirroring how
                     // xlsx_sheet_cells already guards <f/>.
-                    "cellXfs" if matches!(ev, Ev::Open(_, _)) => { in_cell_xfs = true; }
+                    "cellXfs" if matches!(ev, Ev::Open(_, _)) => {
+                        in_cell_xfs = true;
+                    }
                     "xf" if in_cell_xfs => {
-                        cell_xfs.push(attr_get(attrs, "numFmtId").and_then(|s| s.parse::<u32>().ok()));
+                        cell_xfs
+                            .push(attr_get(attrs, "numFmtId").and_then(|s| s.parse::<u32>().ok()));
                     }
                     _ => {}
                 }
             }
             Ev::Close(tag) => {
-                if tag.split(':').next_back() == Some("cellXfs") { in_cell_xfs = false; }
+                if tag.split(':').next_back() == Some("cellXfs") {
+                    in_cell_xfs = false;
+                }
             }
             Ev::Text(_) => {}
         }
     }
-    XlsxStyles { number_formats, cell_xfs }
+    XlsxStyles {
+        number_formats,
+        cell_xfs,
+    }
 }
 
 /// Parses a single worksheet XML into a 1-based (row, col) → SheetCell map,
@@ -721,10 +797,11 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                         cur_type = attr_get(attrs, "t").unwrap_or("").to_string();
                         in_v = false;
                         if let Some(r) = attr_get(attrs, "r")
-                            && let Some((row, col)) = parse_cell_ref(r) {
-                                cur_row = row;
-                                cur_col = col;
-                            }
+                            && let Some((row, col)) = parse_cell_ref(r)
+                        {
+                            cur_row = row;
+                            cur_col = col;
+                        }
                         is_text.clear();
                         in_f = false;
                         cur_formula.clear();
@@ -785,7 +862,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
             Ev::Close(ref tag) => {
                 let local = tag.split(':').next_back().unwrap_or(tag.as_str());
                 match local {
-                    "v"  => {
+                    "v" => {
                         // A zero-character <v></v> never produces an Ev::Text event (there's
                         // no text to emit), so `in_v` is still true here — the Text-event
                         // handler below never ran for this cell. Route the empty string
@@ -795,14 +872,19 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                         // cell, t="s" -> index parse fails -> no cell. Confirmed live: the
                         // oracle's own writer emits exactly this shape for an empty-string
                         // aoa cell (`<c t="str"><v></v></c>`), reporting {t:"s", v:""}.
-                        if in_v && cur_row > 0 && cur_col > 0
-                            && let Some(c) = xlsx_parse_cell("", &cur_type, shared) {
-                                cells.insert((cur_row, cur_col), c);
-                            }
+                        if in_v
+                            && cur_row > 0
+                            && cur_col > 0
+                            && let Some(c) = xlsx_parse_cell("", &cur_type, shared)
+                        {
+                            cells.insert((cur_row, cur_col), c);
+                        }
                         in_v = false;
                     }
-                    "t"  => { in_is_t = false; }
-                    "f"  => {
+                    "t" => {
+                        in_is_t = false;
+                    }
+                    "f" => {
                         if in_f && cur_row > 0 && cur_col > 0 && !cur_formula.is_empty() {
                             formulas.insert((cur_row, cur_col), cur_formula.clone());
                         }
@@ -813,7 +895,11 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
             }
             Ev::Text(ref text) => {
                 if in_v && cur_row > 0 && cur_col > 0 {
-                    let raw = if v_preserve_space { text.as_str() } else { text.trim() };
+                    let raw = if v_preserve_space {
+                        text.as_str()
+                    } else {
+                        text.trim()
+                    };
                     let cell = xlsx_parse_cell(raw, &cur_type, shared);
                     if let Some(c) = cell {
                         cells.insert((cur_row, cur_col), c);
@@ -830,18 +916,28 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
         // Emit inline string on </c>
         if let Ev::Close(ref tag) = ev
             && tag.split(':').next_back() == Some("c")
-                && cur_type == "inlineStr"
-                && !is_text.is_empty()
-                && cur_row > 0 && cur_col > 0
-            {
-                cells.insert((cur_row, cur_col), SheetCell::Str(is_text.clone()));
-                is_text.clear();
-            }
+            && cur_type == "inlineStr"
+            && !is_text.is_empty()
+            && cur_row > 0
+            && cur_col > 0
+        {
+            cells.insert((cur_row, cur_col), SheetCell::Str(is_text.clone()));
+            is_text.clear();
+        }
     }
     if let Some(run) = pending_hidden_row_run.take() {
         hidden_rows.push(run);
     }
-    XlsxSheetData { cells, merged_ranges, hidden_rows, hidden_columns, formulas, dimension, style_ids, raw_style_indices }
+    XlsxSheetData {
+        cells,
+        merged_ranges,
+        hidden_rows,
+        hidden_columns,
+        formulas,
+        dimension,
+        style_ids,
+        raw_style_indices,
+    }
 }
 
 fn xlsx_parse_cell(v: &str, t: &str, shared: &[String]) -> Option<SheetCell> {
@@ -872,7 +968,9 @@ fn num_to_cell(f: f64) -> SheetCell {
 fn parse_cell_ref(r: &str) -> Option<(u32, u32)> {
     let r = r.trim().to_uppercase();
     let alpha_end = r.find(|c: char| c.is_ascii_digit())?;
-    if alpha_end == 0 { return None; }
+    if alpha_end == 0 {
+        return None;
+    }
     let col = r[..alpha_end]
         .chars()
         .fold(0u32, |acc, c| acc * 26 + (c as u32 - 'A' as u32 + 1));
@@ -901,7 +999,11 @@ fn parse_merge_ref(s: &str) -> Option<MergeRect> {
 /// oracle's own `parse_ws_xml_dim`'s `d.s.r<=d.e.r && d.s.c<=d.e.c` guard.
 fn parse_dimension_ref(s: &str) -> Option<MergeRect> {
     let (start, end) = parse_merge_ref(s)?;
-    if start.0 <= end.0 && start.1 <= end.1 { Some((start, end)) } else { None }
+    if start.0 <= end.0 && start.1 <= end.1 {
+        Some((start, end))
+    } else {
+        None
+    }
 }
 
 // ── ODS reader ────────────────────────────────────────────────────────────────
@@ -942,9 +1044,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                 let local = tag.split(':').next_back().unwrap_or(tag.as_str());
                 match local {
                     "table" => {
-                        let name = attr_get(attrs, "name")
-                            .unwrap_or("sheet1")
-                            .to_lowercase();
+                        let name = attr_get(attrs, "name").unwrap_or("sheet1").to_lowercase();
                         sheets.push(WorkbookSheet {
                             name,
                             cells: HashMap::new(),
@@ -979,7 +1079,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             .filter(|n| *n >= 1)
                             .unwrap_or(1);
                         let cell_type = attr_get(attrs, "value-type").unwrap_or("").to_string();
-                        let val_attr  = attr_get(attrs, "value").unwrap_or("").to_string();
+                        let val_attr = attr_get(attrs, "value").unwrap_or("").to_string();
                         let bool_attr = attr_get(attrs, "boolean-value").unwrap_or("").to_string();
                         cell_text.clear();
                         in_text_p = false;
@@ -1005,7 +1105,12 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                         }
 
                         let make_state = || OdsCellState {
-                            row, col, cell_type, val_attr, bool_attr, text: String::new(),
+                            row,
+                            col,
+                            cell_type,
+                            val_attr,
+                            bool_attr,
+                            text: String::new(),
                         };
                         if matches!(ev, Ev::SelfClose(_, _)) {
                             emit_ods_cell(&mut sheets, make_state());
@@ -1014,14 +1119,18 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             pending_cell = Some(make_state());
                         }
                     }
-                    "p" if in_sheet => { in_text_p = true; }
+                    "p" if in_sheet => {
+                        in_text_p = true;
+                    }
                     _ => {}
                 }
             }
             Ev::Close(tag) => {
                 let local = tag.split(':').next_back().unwrap_or(tag.as_str());
                 match local {
-                    "table" => { in_sheet = false; }
+                    "table" => {
+                        in_sheet = false;
+                    }
                     "table-cell" | "covered-table-cell" if in_sheet => {
                         if let Some(ref mut state) = pending_cell {
                             state.text.clone_from(&cell_text);
@@ -1031,7 +1140,9 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                         }
                         in_text_p = false;
                     }
-                    "p" => { in_text_p = false; }
+                    "p" => {
+                        in_text_p = false;
+                    }
                     _ => {}
                 }
             }
@@ -1046,12 +1157,19 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
 }
 
 struct OdsCellState {
-    row: u32, col: u32,
-    cell_type: String, val_attr: String, bool_attr: String, text: String,
+    row: u32,
+    col: u32,
+    cell_type: String,
+    val_attr: String,
+    bool_attr: String,
+    text: String,
 }
 
 fn emit_ods_cell(sheets: &mut [WorkbookSheet], state: OdsCellState) {
-    let sheet = match sheets.last_mut() { Some(s) => s, None => return };
+    let sheet = match sheets.last_mut() {
+        Some(s) => s,
+        None => return,
+    };
     let cell = ods_make_cell(&state);
     if let Some(c) = cell {
         // Only write the first column for repeated cells (the rest are assumed identical/empty)
@@ -1067,11 +1185,13 @@ fn ods_make_cell(s: &OdsCellState) -> Option<SheetCell> {
             Some(num_to_cell(f))
         }
         "string" => {
-            if s.text.is_empty() { None } else { Some(SheetCell::Str(s.text.clone())) }
+            if s.text.is_empty() {
+                None
+            } else {
+                Some(SheetCell::Str(s.text.clone()))
+            }
         }
-        "boolean" => {
-            Some(SheetCell::Bool(s.bool_attr == "true"))
-        }
+        "boolean" => Some(SheetCell::Bool(s.bool_attr == "true")),
         _ => None, // empty / formula result not available / etc.
     }
 }
@@ -1324,7 +1444,10 @@ mod merge_tests {
     #[test]
     fn xml_unescape_leaves_an_unterminated_ampersand_literal() {
         assert_eq!(xml_unescape("a & b"), "a & b");
-        assert_eq!(xml_unescape("a &notarealentity forever"), "a &notarealentity forever");
+        assert_eq!(
+            xml_unescape("a &notarealentity forever"),
+            "a &notarealentity forever"
+        );
     }
 
     // ── read() item 1: empty-string cell fix ────────────────────────────────
@@ -1359,11 +1482,17 @@ mod merge_tests {
         let data = xlsx_sheet_cells(xml, &[], &[]);
         match data.cells.get(&(1, 1)) {
             Some(SheetCell::Str(s)) => assert_eq!(s, "  padded  "),
-            other => panic!("expected Str(\"  padded  \") at A1, got {:?}", other.is_some()),
+            other => panic!(
+                "expected Str(\"  padded  \") at A1, got {:?}",
+                other.is_some()
+            ),
         }
         match data.cells.get(&(1, 2)) {
             Some(SheetCell::Str(s)) => assert_eq!(s, "not preserved"),
-            other => panic!("expected Str(\"not preserved\") at B1, got {:?}", other.is_some()),
+            other => panic!(
+                "expected Str(\"not preserved\") at B1, got {:?}",
+                other.is_some()
+            ),
         }
     }
 
@@ -1441,7 +1570,10 @@ mod merge_tests {
 <row r="1"><c r="A1"><f>SUM(B1:B2)</f><v>3</v></c></row>
 </sheetData></worksheet>"#;
         let data = xlsx_sheet_cells(xml, &[], &[]);
-        assert_eq!(data.formulas.get(&(1, 1)).map(String::as_str), Some("SUM(B1:B2)"));
+        assert_eq!(
+            data.formulas.get(&(1, 1)).map(String::as_str),
+            Some("SUM(B1:B2)")
+        );
         match data.cells.get(&(1, 1)) {
             Some(SheetCell::Integer(v)) => assert_eq!(*v, 3),
             other => panic!("expected Integer(3) at A1, got {:?}", other.is_some()),
@@ -1470,7 +1602,10 @@ mod merge_tests {
 <row r="1"><c r="A1"><f>A1&amp;"x"</f><v>1</v></c></row>
 </sheetData></worksheet>"#;
         let data = xlsx_sheet_cells(xml, &[], &[]);
-        assert_eq!(data.formulas.get(&(1, 1)).map(String::as_str), Some(r#"A1&"x""#));
+        assert_eq!(
+            data.formulas.get(&(1, 1)).map(String::as_str),
+            Some(r#"A1&"x""#)
+        );
     }
 
     // ── read() item 6: styles.xml (numFmts/cellXfs), date1904 ──────────────
@@ -1486,7 +1621,10 @@ mod merge_tests {
 </cellXfs>
 </styleSheet>"#;
         let styles = xlsx_styles(xml);
-        assert_eq!(styles.number_formats.get(&164).map(String::as_str), Some(r#"0.00"kg""#));
+        assert_eq!(
+            styles.number_formats.get(&164).map(String::as_str),
+            Some(r#"0.00"kg""#)
+        );
         assert_eq!(styles.cell_xfs, vec![Some(0), Some(2), Some(164)]);
     }
 
@@ -1566,7 +1704,9 @@ mod from_bytes_tests {
     // buffer-input alternative to read_workbook(path), not a second implementation with
     // its own drift (see docs/xlsx-architecture.md's "reader.rs buffer-API resolution").
     fn cell_map_eq(a: &HashMap<(u32, u32), SheetCell>, b: &HashMap<(u32, u32), SheetCell>) -> bool {
-        if a.len() != b.len() { return false; }
+        if a.len() != b.len() {
+            return false;
+        }
         a.iter().all(|(k, v)| match (v, b.get(k)) {
             (SheetCell::Integer(x), Some(SheetCell::Integer(y))) => x == y,
             (SheetCell::Float(x), Some(SheetCell::Float(y))) => x == y,
@@ -1578,10 +1718,14 @@ mod from_bytes_tests {
 
     #[test]
     fn read_workbook_from_bytes_matches_read_workbook_on_a_real_xlsx_fixture() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/e2e/source.xlsx");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/e2e/source.xlsx"
+        );
         let from_path = read_workbook(path).expect("read_workbook(path) should succeed");
         let bytes = std::fs::read(path).expect("fixture should be readable");
-        let from_bytes = read_workbook_from_bytes(&bytes).expect("read_workbook_from_bytes should succeed");
+        let from_bytes =
+            read_workbook_from_bytes(&bytes).expect("read_workbook_from_bytes should succeed");
 
         assert_eq!(from_path.len(), from_bytes.sheets.len());
         for (a, bs) in from_path.iter().zip(from_bytes.sheets.iter()) {

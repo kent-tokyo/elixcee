@@ -317,7 +317,10 @@ fn multi_area_to_single_area_paste_reports_the_completion_condition() {
     );
     let (ok, v) = run_json(&macro_bas, &workbook, "Run");
     assert!(!ok, "{:?}", v);
-    assert_eq!(v["root_causes"][0]["code"], "MULTI_AREA_TO_SINGLE_AREA_PASTE");
+    assert_eq!(
+        v["root_causes"][0]["code"],
+        "MULTI_AREA_TO_SINGLE_AREA_PASTE"
+    );
     assert_eq!(v["root_causes"][0]["certainty"], "definite");
     assert_eq!(
         v["root_causes"][0]["source_areas"],
@@ -351,8 +354,20 @@ fn multi_area_count_mismatch_reports_a_root_cause() {
     let (ok, v) = run_json(&macro_bas, &workbook, "Run");
     assert!(!ok, "{:?}", v);
     assert_eq!(v["root_causes"][0]["code"], "MULTI_AREA_COUNT_MISMATCH");
-    assert_eq!(v["root_causes"][0]["source_areas"].as_array().unwrap().len(), 3);
-    assert_eq!(v["root_causes"][0]["destination_areas"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        v["root_causes"][0]["source_areas"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        v["root_causes"][0]["destination_areas"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]

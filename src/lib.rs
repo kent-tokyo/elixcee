@@ -15,16 +15,16 @@ pub mod vm;
 /// resolve without every call site needing to know it's an external crate.
 pub use elixcee_types as types;
 
-use vm::{Variant, Vm};
 #[cfg(any(feature = "python", test))]
 use vm::CellContent;
+use vm::{Variant, Vm};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
 use pyo3::types::PyDict;
 #[cfg(feature = "python")]
-use vm::{serial_to_display, ExcelError};
+use vm::{ExcelError, serial_to_display};
 
 // ── ExcelError Python class ───────────────────────────────────────────────────
 
@@ -44,11 +44,21 @@ pub struct PyExcelError {
 #[pymethods]
 impl PyExcelError {
     #[new]
-    fn new(code: String) -> Self { PyExcelError { code } }
-    fn __repr__(&self) -> String { format!("ExcelError('{}')", self.code) }
-    fn __str__(&self)  -> String { self.code.clone() }
-    fn __eq__(&self, other: &PyExcelError) -> bool { self.code == other.code }
-    fn __hash__(&self) -> isize { self.code.len() as isize }
+    fn new(code: String) -> Self {
+        PyExcelError { code }
+    }
+    fn __repr__(&self) -> String {
+        format!("ExcelError('{}')", self.code)
+    }
+    fn __str__(&self) -> String {
+        self.code.clone()
+    }
+    fn __eq__(&self, other: &PyExcelError) -> bool {
+        self.code == other.code
+    }
+    fn __hash__(&self) -> isize {
+        self.code.len() as isize
+    }
 }
 
 // ── Variant ↔ Python conversion ───────────────────────────────────────────────
@@ -57,8 +67,8 @@ impl PyExcelError {
 fn variant_to_py(py: Python<'_>, v: &Variant) -> Py<PyAny> {
     match v {
         Variant::Integer(n) => (*n).into_pyobject(py).unwrap().into_any().unbind(),
-        Variant::Float(f)   => (*f).into_pyobject(py).unwrap().into_any().unbind(),
-        Variant::Str(s)     => s.as_str().into_pyobject(py).unwrap().into_any().unbind(),
+        Variant::Float(f) => (*f).into_pyobject(py).unwrap().into_any().unbind(),
+        Variant::Str(s) => s.as_str().into_pyobject(py).unwrap().into_any().unbind(),
         Variant::Boolean(b) => {
             let borrowed = (*b).into_pyobject(py).unwrap();
             <pyo3::Bound<'_, pyo3::types::PyBool> as Clone>::clone(&borrowed)
@@ -69,18 +79,30 @@ fn variant_to_py(py: Python<'_>, v: &Variant) -> Py<PyAny> {
             let (y, m, d) = crate::types::serial_to_ymd(*s);
             pyo3::types::PyDate::new(py, y, m as u8, d as u8)
                 .map(|dt| dt.into_any().unbind())
-                .unwrap_or_else(|_| serial_to_display(*s).into_pyobject(py).unwrap().into_any().unbind())
+                .unwrap_or_else(|_| {
+                    serial_to_display(*s)
+                        .into_pyobject(py)
+                        .unwrap()
+                        .into_any()
+                        .unbind()
+                })
         }
-        Variant::Error(e) => PyExcelError { code: e.as_str().to_string() }
-            .into_pyobject(py).unwrap().into_any().unbind(),
+        Variant::Error(e) => PyExcelError {
+            code: e.as_str().to_string(),
+        }
+        .into_pyobject(py)
+        .unwrap()
+        .into_any()
+        .unbind(),
         // VBA's `Null` crosses into Python as `None`, exactly as `Empty`
         // already does — neither has a Python value, and giving Null its own
         // Python representation would be a bindings-contract change. The
         // Empty-vs-Null distinction is observable through the VBA language
         // (`IsNull`, `TypeName`, `VarType`), not across this boundary.
         Variant::Empty | Variant::Null => py.None(),
-        Variant::Array(a)   => {
-            let list = pyo3::types::PyList::new(py, a.iter().map(|x| variant_to_py(py, x))).unwrap();
+        Variant::Array(a) => {
+            let list =
+                pyo3::types::PyList::new(py, a.iter().map(|x| variant_to_py(py, x))).unwrap();
             list.into_any().unbind()
         }
         Variant::VbaArray(a) => vba_array_to_py(py, a, &mut Vec::new()),
@@ -113,30 +135,45 @@ fn vba_array_to_py(py: Python<'_>, arr: &vm::VbaArray, prefix: &mut Vec<i64>) ->
         prefix.pop();
         i += 1;
     }
-    pyo3::types::PyList::new(py, items).unwrap().into_any().unbind()
+    pyo3::types::PyList::new(py, items)
+        .unwrap()
+        .into_any()
+        .unbind()
 }
 
 #[cfg(feature = "python")]
 fn py_to_variant(obj: &Bound<'_, PyAny>) -> PyResult<Variant> {
-    if obj.is_none() { return Ok(Variant::Empty); }
+    if obj.is_none() {
+        return Ok(Variant::Empty);
+    }
     // bool must come before int (Python bool is a subclass of int)
-    if let Ok(b) = obj.extract::<bool>()   { return Ok(Variant::Boolean(b)); }
-    if let Ok(n) = obj.extract::<i64>()    { return Ok(Variant::Integer(n)); }
-    if let Ok(f) = obj.extract::<f64>()    { return Ok(Variant::Float(f)); }
-    if let Ok(s) = obj.extract::<String>() { return Ok(Variant::Str(s)); }
+    if let Ok(b) = obj.extract::<bool>() {
+        return Ok(Variant::Boolean(b));
+    }
+    if let Ok(n) = obj.extract::<i64>() {
+        return Ok(Variant::Integer(n));
+    }
+    if let Ok(f) = obj.extract::<f64>() {
+        return Ok(Variant::Float(f));
+    }
+    if let Ok(s) = obj.extract::<String>() {
+        return Ok(Variant::Str(s));
+    }
     if let Ok(e) = obj.extract::<PyExcelError>() {
         return Ok(Variant::Error(match e.code.as_str() {
             "#DIV/0!" => ExcelError::DivZero,
-            "#N/A"    => ExcelError::NA,
+            "#N/A" => ExcelError::NA,
             "#VALUE!" => ExcelError::Value,
-            "#REF!"   => ExcelError::Ref,
-            "#NAME?"  => ExcelError::Name,
-            "#NUM!"   => ExcelError::Num,
-            "#NULL!"  => ExcelError::Null,
-            _         => ExcelError::Value,
+            "#REF!" => ExcelError::Ref,
+            "#NAME?" => ExcelError::Name,
+            "#NUM!" => ExcelError::Num,
+            "#NULL!" => ExcelError::Null,
+            _ => ExcelError::Value,
         }));
     }
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>("Unsupported cell value type"))
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "Unsupported cell value type",
+    ))
 }
 
 // ── PyVm class ────────────────────────────────────────────────────────────────
@@ -162,18 +199,23 @@ impl PyVm {
 
     /// Parse and execute *vba_code*, running the Sub named *macro_name*.
     fn run(&mut self, vba_code: &str, macro_name: &str) -> PyResult<()> {
-        let prog = parser::parse(vba_code).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string())
-        })?;
-        self.inner.run_sub(&prog, macro_name).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e)
-        })
+        let prog = parser::parse(vba_code)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
+        self.inner
+            .run_sub(&prog, macro_name)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     }
 
     /// Write a value into a cell. ``row`` and ``col`` are 1-based (VBA convention).
     fn set_cell(&mut self, row: u32, col: u32, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let v = py_to_variant(value)?;
-        self.inner.cells_mut().insert((row, col), CellContent { formula: None, value: v });
+        self.inner.cells_mut().insert(
+            (row, col),
+            CellContent {
+                formula: None,
+                value: v,
+            },
+        );
         Ok(())
     }
 
@@ -206,29 +248,32 @@ impl PyVm {
     /// Store a formula string (e.g. ``"=SUM(A1:A3)"``) on a cell and evaluate it
     /// immediately against the current cell state.
     fn set_cell_formula(&mut self, row: u32, col: u32, formula: &str) -> PyResult<()> {
-        self.inner.set_cell_formula(row, col, formula).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
-        })
+        self.inner
+            .set_cell_formula(row, col, formula)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))
     }
 
     /// Re-evaluate all cells that have a stored formula.
     fn recalculate(&mut self) -> PyResult<()> {
-        self.inner.recalculate_all().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e)
-        })
+        self.inner
+            .recalculate_all()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     }
 
     /// Set multiple cell formulas at once.
     /// ``formulas`` should be a dict mapping ``(row, col)`` tuples (1-based) to formula strings.
     fn set_cell_formula_batch(&mut self, formulas: &Bound<'_, PyDict>) -> PyResult<()> {
         for (key, val) in formulas.iter() {
-            let (row, col): (u32, u32) = key.extract()
-                .map_err(|_| PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                    "keys must be (row, col) tuples of integers"))?;
-            let formula: String = val.extract()
-                .map_err(|_| PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                    "values must be formula strings"))?;
-            self.inner.set_cell_formula(row, col, &formula)
+            let (row, col): (u32, u32) = key.extract().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                    "keys must be (row, col) tuples of integers",
+                )
+            })?;
+            let formula: String = val.extract().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyTypeError, _>("values must be formula strings")
+            })?;
+            self.inner
+                .set_cell_formula(row, col, &formula)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         }
         Ok(())
@@ -267,8 +312,7 @@ impl PyVm {
 
     /// Save all sheets to an .xlsx file. ``path`` should end with ``.xlsx``.
     fn save_workbook(&self, path: &str) -> PyResult<()> {
-        save_workbook_impl(&self.inner, path)
-            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
+        save_workbook_impl(&self.inner, path).map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
     }
 
     /// Return the active sheet's non-empty cells as a **pandas DataFrame**.
@@ -287,7 +331,10 @@ impl PyVm {
 
         let cells = self.inner.cells();
         if cells.is_empty() {
-            return pd.getattr("DataFrame")?.call0().map(|df| df.into_any().unbind());
+            return pd
+                .getattr("DataFrame")?
+                .call0()
+                .map(|df| df.into_any().unbind());
         }
 
         let max_row = cells.keys().map(|(r, _)| *r).max().unwrap_or(1);
@@ -364,12 +411,13 @@ fn run_macro(
 #[pyfunction]
 #[pyo3(signature = (path, sheet = None, on_msgbox = "skip"))]
 fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<PyVm> {
-    let sheets = reader::read_workbook(path).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyIOError, _>(e)
-    })?;
+    let sheets =
+        reader::read_workbook(path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e))?;
 
     if sheets.is_empty() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Workbook has no sheets"));
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Workbook has no sheets",
+        ));
     }
 
     let mut vm = Vm::new();
@@ -378,9 +426,8 @@ fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<P
     vm.loaded_workbook_path = Some(path.to_string());
 
     if let Some(s) = sheet {
-        vm.set_active_sheet(&s.to_lowercase()).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
-        })?;
+        vm.set_active_sheet(&s.to_lowercase())
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
     }
 
     Ok(PyVm { inner: vm })
@@ -429,10 +476,10 @@ fn is_writer_owned_part(name: &str) -> bool {
 }
 
 fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
-    use zip::write::ZipWriter;
-    use zip::CompressionMethod;
-    use std::io::{Write, Cursor};
     use std::collections::HashMap;
+    use std::io::{Cursor, Write};
+    use zip::CompressionMethod;
+    use zip::write::ZipWriter;
 
     let sheet_names = vm.sheet_names();
 
@@ -445,7 +492,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             sorted.sort();
             for key in sorted {
                 let s = match &cells[key].value {
-                    Variant::Str(s)  => s.as_str().to_string(),
+                    Variant::Str(s) => s.as_str().to_string(),
                     Variant::Error(e) => e.as_str().to_string(),
                     _ => continue,
                 };
@@ -519,7 +566,10 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
                     if ext == "xml" || ext == "rels" {
                         None
                     } else {
-                        defaults.iter().find(|(e, _)| e == ext).map(|(_, ct)| ct.clone())
+                        defaults
+                            .iter()
+                            .find(|(e, _)| e == ext)
+                            .map(|(_, ct)| ct.clone())
                     }
                 })
                 .or_else(|| {
@@ -544,34 +594,53 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
     let cursor = Cursor::new(Vec::<u8>::new());
     let mut zip = ZipWriter::new(cursor);
-    let deflated = zip::write::SimpleFileOptions::default()
-        .compression_method(CompressionMethod::Deflated);
+    let deflated =
+        zip::write::SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
-    zip.start_file("[Content_Types].xml", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_content_types(&sheet_names, has_vba, &carried_overrides).as_bytes()).map_err(|e| e.to_string())?;
+    zip.start_file("[Content_Types].xml", deflated)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(build_xlsx_content_types(&sheet_names, has_vba, &carried_overrides).as_bytes())
+        .map_err(|e| e.to_string())?;
 
-    zip.start_file("_rels/.rels", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(XLSX_ROOT_RELS.as_bytes()).map_err(|e| e.to_string())?;
+    zip.start_file("_rels/.rels", deflated)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(XLSX_ROOT_RELS.as_bytes())
+        .map_err(|e| e.to_string())?;
 
-    zip.start_file("xl/workbook.xml", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_workbook(&sheet_names).as_bytes()).map_err(|e| e.to_string())?;
+    zip.start_file("xl/workbook.xml", deflated)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(build_xlsx_workbook(&sheet_names).as_bytes())
+        .map_err(|e| e.to_string())?;
 
-    zip.start_file("xl/_rels/workbook.xml.rels", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_workbook_rels(&sheet_names, has_vba).as_bytes()).map_err(|e| e.to_string())?;
+    zip.start_file("xl/_rels/workbook.xml.rels", deflated)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(build_xlsx_workbook_rels(&sheet_names, has_vba).as_bytes())
+        .map_err(|e| e.to_string())?;
 
     for (i, sheet_name) in sheet_names.iter().enumerate() {
-        zip.start_file(format!("xl/worksheets/sheet{}.xml", i + 1), deflated).map_err(|e| e.to_string())?;
-        zip.write_all(build_xlsx_sheet(vm, sheet_name, &str_index).as_bytes()).map_err(|e| e.to_string())?;
+        zip.start_file(format!("xl/worksheets/sheet{}.xml", i + 1), deflated)
+            .map_err(|e| e.to_string())?;
+        zip.write_all(build_xlsx_sheet(vm, sheet_name, &str_index).as_bytes())
+            .map_err(|e| e.to_string())?;
     }
 
-    zip.start_file("xl/sharedStrings.xml", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_shared_strings(&shared_strings).as_bytes()).map_err(|e| e.to_string())?;
+    zip.start_file("xl/sharedStrings.xml", deflated)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(build_xlsx_shared_strings(&shared_strings).as_bytes())
+        .map_err(|e| e.to_string())?;
 
-    zip.start_file("xl/styles.xml", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(passthrough_styles.as_deref().unwrap_or_else(|| XLSX_STYLES.as_bytes())).map_err(|e| e.to_string())?;
+    zip.start_file("xl/styles.xml", deflated)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(
+        passthrough_styles
+            .as_deref()
+            .unwrap_or_else(|| XLSX_STYLES.as_bytes()),
+    )
+    .map_err(|e| e.to_string())?;
 
     for (name, bytes) in &passthrough {
-        zip.start_file(name.as_str(), deflated).map_err(|e| e.to_string())?;
+        zip.start_file(name.as_str(), deflated)
+            .map_err(|e| e.to_string())?;
         zip.write_all(bytes).map_err(|e| e.to_string())?;
     }
 
@@ -584,8 +653,8 @@ const XLSX_ROOT_RELS: &str = concat!(
     "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
     "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
     "<Relationship Id=\"rId1\" ",
-      "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" ",
-      "Target=\"xl/workbook.xml\"/>\n",
+    "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" ",
+    "Target=\"xl/workbook.xml\"/>\n",
     "</Relationships>\n",
 );
 
@@ -600,7 +669,11 @@ const XLSX_STYLES: &str = concat!(
     "</styleSheet>\n",
 );
 
-fn build_xlsx_content_types(sheet_names: &[String], has_vba: bool, carried_overrides: &[(String, String)]) -> String {
+fn build_xlsx_content_types(
+    sheet_names: &[String],
+    has_vba: bool,
+    carried_overrides: &[(String, String)],
+) -> String {
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\n",
@@ -632,7 +705,8 @@ fn build_xlsx_content_types(sheet_names: &[String], has_vba: bool, carried_overr
     for (part_name, ct) in carried_overrides {
         out.push_str(&format!(
             "<Override PartName=\"{}\" ContentType=\"{}\"/>\n",
-            xml_escape(part_name), xml_escape(ct)
+            xml_escape(part_name),
+            xml_escape(ct)
         ));
     }
     out.push_str("</Types>\n");
@@ -643,14 +717,16 @@ fn build_xlsx_workbook(sheet_names: &[String]) -> String {
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
-          "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
         "<sheets>\n",
     ));
     for (i, name) in sheet_names.iter().enumerate() {
         let n = i + 1;
         out.push_str(&format!(
             "<sheet name=\"{}\" sheetId=\"{}\" r:id=\"rId{}\"/>\n",
-            xml_escape(name), n, n
+            xml_escape(name),
+            n,
+            n
         ));
     }
     out.push_str("</sheets>\n</workbook>\n");
@@ -698,7 +774,11 @@ fn build_xlsx_workbook_rels(sheet_names: &[String], has_vba: bool) -> String {
     out
 }
 
-fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::HashMap<String, usize>) -> String {
+fn build_xlsx_sheet(
+    vm: &Vm,
+    sheet_name: &str,
+    str_index: &std::collections::HashMap<String, usize>,
+) -> String {
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
@@ -707,7 +787,9 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
     let sheet_key = sheet_name.to_lowercase();
     let style_indices = vm.cell_style_indices.get(&sheet_key);
     let visibility = vm.sheet_visibility.get(&sheet_key);
-    let hidden_columns = visibility.map(|v| v.hidden_columns.as_slice()).unwrap_or(&[]);
+    let hidden_columns = visibility
+        .map(|v| v.hidden_columns.as_slice())
+        .unwrap_or(&[]);
     let hidden_rows = visibility.map(|v| v.hidden_rows.as_slice()).unwrap_or(&[]);
 
     // <cols> — schema-ordered before <sheetData>. <col> natively supports a
@@ -716,7 +798,10 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
     if !hidden_columns.is_empty() {
         out.push_str("<cols>\n");
         for iv in hidden_columns {
-            out.push_str(&format!("<col min=\"{}\" max=\"{}\" hidden=\"1\"/>\n", iv.start, iv.end));
+            out.push_str(&format!(
+                "<col min=\"{}\" max=\"{}\" hidden=\"1\"/>\n",
+                iv.start, iv.end
+            ));
         }
         out.push_str("</cols>\n");
     }
@@ -727,7 +812,9 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
         // Group by row first to avoid O(max_row × total_cells) scanning.
         let mut by_row: std::collections::BTreeMap<u32, Vec<_>> = std::collections::BTreeMap::new();
         for (k @ &(r, c), v) in cells.iter() {
-            if r > 0 && c > 0 { by_row.entry(r).or_default().push((k, v)); }
+            if r > 0 && c > 0 {
+                by_row.entry(r).or_default().push((k, v));
+            }
         }
         // A hidden row with no cell data still needs its own <row hidden="1"/>
         // element to actually appear hidden to a real reader — hidden-ness is
@@ -741,7 +828,9 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
         }
         for (row, mut row_cells) in by_row {
             row_cells.sort_by_key(|&(&(_, c), _)| c);
-            let row_hidden = hidden_rows.iter().any(|iv| iv.start <= row && row <= iv.end);
+            let row_hidden = hidden_rows
+                .iter()
+                .any(|iv| iv.start <= row && row <= iv.end);
             let hidden_attr = if row_hidden { " hidden=\"1\"" } else { "" };
 
             out.push_str(&format!("<row r=\"{}\"{}>\n", row, hidden_attr));
@@ -761,16 +850,20 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
 
     // <mergeCells> — schema-ordered after <sheetData>.
     if let Some(merges) = vm.merged_ranges.get(&sheet_key)
-        && !merges.is_empty() {
-            out.push_str(&format!("<mergeCells count=\"{}\">\n", merges.len()));
-            for &((r1, c1), (r2, c2)) in merges {
-                out.push_str(&format!(
-                    "<mergeCell ref=\"{}{}:{}{}\"/>\n",
-                    xlsx_col_letters(c1), r1, xlsx_col_letters(c2), r2
-                ));
-            }
-            out.push_str("</mergeCells>\n");
+        && !merges.is_empty()
+    {
+        out.push_str(&format!("<mergeCells count=\"{}\">\n", merges.len()));
+        for &((r1, c1), (r2, c2)) in merges {
+            out.push_str(&format!(
+                "<mergeCell ref=\"{}{}:{}{}\"/>\n",
+                xlsx_col_letters(c1),
+                r1,
+                xlsx_col_letters(c2),
+                r2
+            ));
         }
+        out.push_str("</mergeCells>\n");
+    }
 
     out.push_str("</worksheet>\n");
     out
@@ -781,24 +874,44 @@ fn build_xlsx_sheet(vm: &Vm, sheet_name: &str, str_index: &std::collections::Has
 // source (see `Vm::cell_style_indices`), `None` for a cell built purely in-VBA.
 // Always safe to re-emit unchanged: no VBA statement in this VM ever mutates a
 // cell's style (see `Vm::cell_style_indices`'s own doc comment).
-fn xlsx_cell_xml(cell_ref: &str, v: &Variant, str_index: &std::collections::HashMap<String, usize>, style_idx: Option<u32>) -> Option<String> {
-    let s_attr = style_idx.map(|idx| format!(" s=\"{}\"", idx)).unwrap_or_default();
+fn xlsx_cell_xml(
+    cell_ref: &str,
+    v: &Variant,
+    str_index: &std::collections::HashMap<String, usize>,
+    style_idx: Option<u32>,
+) -> Option<String> {
+    let s_attr = style_idx
+        .map(|idx| format!(" s=\"{}\"", idx))
+        .unwrap_or_default();
     match v {
         Variant::Integer(n) => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, n)),
-        Variant::Float(f)   => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, f)),
-        Variant::Date(s)    => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, s)),
+        Variant::Float(f) => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, f)),
+        Variant::Date(s) => Some(format!("<c r=\"{}\"{}><v>{}</v></c>", cell_ref, s_attr, s)),
         Variant::Str(s) => {
             let idx = str_index[s.as_str()];
-            Some(format!("<c r=\"{}\"{} t=\"s\"><v>{}</v></c>", cell_ref, s_attr, idx))
+            Some(format!(
+                "<c r=\"{}\"{} t=\"s\"><v>{}</v></c>",
+                cell_ref, s_attr, idx
+            ))
         }
         Variant::Error(e) => {
             let idx = str_index[e.as_str()];
-            Some(format!("<c r=\"{}\"{} t=\"s\"><v>{}</v></c>", cell_ref, s_attr, idx))
+            Some(format!(
+                "<c r=\"{}\"{} t=\"s\"><v>{}</v></c>",
+                cell_ref, s_attr, idx
+            ))
         }
         Variant::Boolean(b) => Some(format!(
-            "<c r=\"{}\"{} t=\"b\"><v>{}</v></c>", cell_ref, s_attr, if *b { 1 } else { 0 }
+            "<c r=\"{}\"{} t=\"b\"><v>{}</v></c>",
+            cell_ref,
+            s_attr,
+            if *b { 1 } else { 0 }
         )),
-        Variant::Empty | Variant::Null | Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => None,
+        Variant::Empty
+        | Variant::Null
+        | Variant::Array(_)
+        | Variant::VbaArray(_)
+        | Variant::Record(_) => None,
     }
 }
 
@@ -830,31 +943,36 @@ fn xlsx_col_letters(mut col: u32) -> String {
 // ── ODS write ────────────────────────────────────────────────────────────────
 
 fn save_ods_impl(vm: &Vm, path: &str) -> Result<(), String> {
-    use zip::write::ZipWriter;
+    use std::io::{Cursor, Write};
     use zip::CompressionMethod;
-    use std::io::{Write, Cursor};
+    use zip::write::ZipWriter;
 
     let cursor = Cursor::new(Vec::<u8>::new());
     let mut zip = ZipWriter::new(cursor);
-    let stored = zip::write::SimpleFileOptions::default()
-        .compression_method(CompressionMethod::Stored);
-    let deflated = zip::write::SimpleFileOptions::default()
-        .compression_method(CompressionMethod::Deflated);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated =
+        zip::write::SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
     // 1. mimetype (must be STORE and first entry per ODF spec)
-    zip.start_file("mimetype", stored).map_err(|e| e.to_string())?;
+    zip.start_file("mimetype", stored)
+        .map_err(|e| e.to_string())?;
     zip.write_all(b"application/vnd.oasis.opendocument.spreadsheet")
         .map_err(|e| e.to_string())?;
 
     // 2. META-INF/manifest.xml
     let manifest = build_ods_manifest(vm);
-    zip.start_file("META-INF/manifest.xml", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(manifest.as_bytes()).map_err(|e| e.to_string())?;
+    zip.start_file("META-INF/manifest.xml", deflated)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(manifest.as_bytes())
+        .map_err(|e| e.to_string())?;
 
     // 3. content.xml
     let content = build_ods_content(vm);
-    zip.start_file("content.xml", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+    zip.start_file("content.xml", deflated)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(content.as_bytes())
+        .map_err(|e| e.to_string())?;
 
     let data = zip.finish().map_err(|e| e.to_string())?.into_inner();
     std::fs::write(path, data).map_err(|e| e.to_string())?;
@@ -863,10 +981,14 @@ fn save_ods_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
 fn build_ods_manifest(_vm: &Vm) -> String {
     let mut m = String::from(concat!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>"#, "\n",
-        r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">"#, "\n",
-        r#" <manifest:file-entry manifest:media-type="application/vnd.oasis.opendocument.spreadsheet" manifest:version="1.2" manifest:full-path="/"/>"#, "\n",
-        r#" <manifest:file-entry manifest:media-type="text/xml" manifest:full-path="content.xml"/>"#, "\n",
+        r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+        "\n",
+        r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">"#,
+        "\n",
+        r#" <manifest:file-entry manifest:media-type="application/vnd.oasis.opendocument.spreadsheet" manifest:version="1.2" manifest:full-path="/"/>"#,
+        "\n",
+        r#" <manifest:file-entry manifest:media-type="text/xml" manifest:full-path="content.xml"/>"#,
+        "\n",
     ));
     m.push_str("</manifest:manifest>\n");
     m
@@ -874,13 +996,16 @@ fn build_ods_manifest(_vm: &Vm) -> String {
 
 fn build_ods_content(vm: &Vm) -> String {
     let mut out = String::from(concat!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>"#, "\n",
+        r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+        "\n",
         r#"<office:document-content"#,
         r#" xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0""#,
         r#" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0""#,
         r#" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0""#,
-        r#" office:version="1.2">"#, "\n",
-        r#"<office:body><office:spreadsheet>"#, "\n",
+        r#" office:version="1.2">"#,
+        "\n",
+        r#"<office:body><office:spreadsheet>"#,
+        "\n",
     ));
 
     for sheet_name in vm.sheet_names() {
@@ -888,24 +1013,27 @@ fn build_ods_content(vm: &Vm) -> String {
         out.push_str(&format!("<table:table table:name=\"{}\">\n", escaped));
 
         if let Some(cells) = vm.get_sheet_cells(&sheet_name)
-            && !cells.is_empty() {
-                let max_row = cells.keys().map(|(r,_)| *r).max().unwrap_or(0);
-                let max_col = cells.keys().map(|(_,c)| *c).max().unwrap_or(0);
+            && !cells.is_empty()
+        {
+            let max_row = cells.keys().map(|(r, _)| *r).max().unwrap_or(0);
+            let max_col = cells.keys().map(|(_, c)| *c).max().unwrap_or(0);
 
-                for r in 1..=max_row {
-                    out.push_str("<table:table-row>");
-                    for c in 1..=max_col {
-                        let cell_xml = match cells.get(&(r, c)) {
-                            None | Some(vm::CellContent { value: Variant::Empty, .. }) => {
-                                "<table:table-cell/>".to_string()
-                            }
-                            Some(content) => ods_cell_xml(&content.value),
-                        };
-                        out.push_str(&cell_xml);
-                    }
-                    out.push_str("</table:table-row>\n");
+            for r in 1..=max_row {
+                out.push_str("<table:table-row>");
+                for c in 1..=max_col {
+                    let cell_xml = match cells.get(&(r, c)) {
+                        None
+                        | Some(vm::CellContent {
+                            value: Variant::Empty,
+                            ..
+                        }) => "<table:table-cell/>".to_string(),
+                        Some(content) => ods_cell_xml(&content.value),
+                    };
+                    out.push_str(&cell_xml);
                 }
+                out.push_str("</table:table-row>\n");
             }
+        }
 
         out.push_str("</table:table>\n");
     }
@@ -932,7 +1060,8 @@ fn ods_cell_xml(v: &Variant) -> String {
             let bv = if *b { "true" } else { "false" };
             format!(
                 r#"<table:table-cell office:value-type="boolean" office:boolean-value="{}"><text:p>{}</text:p></table:table-cell>"#,
-                bv, if *b { "TRUE" } else { "FALSE" }
+                bv,
+                if *b { "TRUE" } else { "FALSE" }
             )
         }
         Variant::Date(s) => format!(
@@ -943,16 +1072,20 @@ fn ods_cell_xml(v: &Variant) -> String {
             r#"<table:table-cell office:value-type="string"><text:p>{}</text:p></table:table-cell>"#,
             xml_escape(e.as_str())
         ),
-        Variant::Empty | Variant::Null | Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => "<table:table-cell/>".to_string(),
+        Variant::Empty
+        | Variant::Null
+        | Variant::Array(_)
+        | Variant::VbaArray(_)
+        | Variant::Record(_) => "<table:table-cell/>".to_string(),
     }
 }
 
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
-     .replace('\'', "&apos;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 // ── Module ────────────────────────────────────────────────────────────────────
@@ -961,21 +1094,45 @@ fn xml_escape(s: &str) -> String {
 #[pymodule]
 mod elixcee {
     #[pymodule_export]
-    use super::{hello, run_macro, load_workbook, PyVm, PyExcelError};
+    use super::{PyExcelError, PyVm, hello, load_workbook, run_macro};
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use calamine::{open_workbook, Reader, Xlsx};
+    use calamine::{Reader, Xlsx, open_workbook};
 
     #[test]
     fn test_save_workbook_roundtrip() {
         let mut vm = Vm::new();
-        vm.cells_mut().insert((1, 1), CellContent { formula: None, value: Variant::Integer(42) });
-        vm.cells_mut().insert((2, 1), CellContent { formula: None, value: Variant::Str("hello".into()) });
-        vm.cells_mut().insert((3, 1), CellContent { formula: None, value: Variant::Float(3.14) });
-        vm.cells_mut().insert((4, 1), CellContent { formula: None, value: Variant::Boolean(true) });
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Str("hello".into()),
+            },
+        );
+        vm.cells_mut().insert(
+            (3, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Float(3.14),
+            },
+        );
+        vm.cells_mut().insert(
+            (4, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Boolean(true),
+            },
+        );
 
         let path = "/tmp/elixcee_test_roundtrip.xlsx";
         save_workbook_impl(&vm, path).expect("save should succeed");
@@ -989,12 +1146,30 @@ mod tests {
 
     #[test]
     fn test_save_ods_roundtrip() {
-        use calamine::{open_workbook_auto, Reader};
+        use calamine::{Reader, open_workbook_auto};
 
         let mut vm = Vm::new();
-        vm.cells_mut().insert((1, 1), CellContent { formula: None, value: Variant::Integer(42) });
-        vm.cells_mut().insert((1, 2), CellContent { formula: None, value: Variant::Str("hello".into()) });
-        vm.cells_mut().insert((2, 1), CellContent { formula: None, value: Variant::Boolean(true) });
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        vm.cells_mut().insert(
+            (1, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Str("hello".into()),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Boolean(true),
+            },
+        );
 
         let path = "/tmp/elixcee_test_ods.ods";
         save_workbook_impl(&vm, path).expect("ODS save should succeed");
@@ -1009,11 +1184,23 @@ mod tests {
     #[test]
     fn test_save_workbook_multi_sheet() {
         let mut vm = Vm::new();
-        vm.cells_mut().insert((1, 1), CellContent { formula: None, value: Variant::Integer(1) });
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
         vm.ensure_sheet("sheet2");
         let prev = vm.active_sheet.clone();
         vm.active_sheet = "sheet2".into();
-        vm.cells_mut().insert((1, 1), CellContent { formula: None, value: Variant::Integer(2) });
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(2),
+            },
+        );
         vm.active_sheet = prev;
 
         let path = "/tmp/elixcee_test_multisheet.xlsx";
@@ -1029,8 +1216,8 @@ mod tests {
 #[cfg(test)]
 mod diff_reader_tests {
     use super::*;
-    use calamine::{Data, Reader, open_workbook, open_workbook_auto, Xlsx};
-    use crate::reader::{read_workbook as rd, SheetCell};
+    use crate::reader::{SheetCell, read_workbook as rd};
+    use calamine::{Data, Reader, Xlsx, open_workbook, open_workbook_auto};
 
     fn calamine_cell_to_variant(d: &Data) -> Option<Variant> {
         match d {
@@ -1050,44 +1237,62 @@ mod diff_reader_tests {
     fn rd_cell_to_variant(c: &SheetCell) -> Variant {
         match c {
             SheetCell::Integer(n) => Variant::Integer(*n),
-            SheetCell::Float(f)   => Variant::Float(*f),
-            SheetCell::Str(s)     => Variant::Str(s.clone()),
-            SheetCell::Bool(b)    => Variant::Boolean(*b),
+            SheetCell::Float(f) => Variant::Float(*f),
+            SheetCell::Str(s) => Variant::Str(s.clone()),
+            SheetCell::Bool(b) => Variant::Boolean(*b),
         }
     }
 
-    fn calamine_xlsx_cells(path: &str, sheet: &str) -> std::collections::HashMap<(u32,u32), Variant> {
+    fn calamine_xlsx_cells(
+        path: &str,
+        sheet: &str,
+    ) -> std::collections::HashMap<(u32, u32), Variant> {
         let mut wb: Xlsx<_> = open_workbook(path).unwrap();
         let range = wb.worksheet_range(sheet).unwrap();
         let (sr, sc) = range.start().unwrap_or((0, 0));
-        range.cells()
-            .filter_map(|(r, c, d)| calamine_cell_to_variant(d)
-                .map(|v| ((r as u32 + sr + 1, c as u32 + sc + 1), v)))
+        range
+            .cells()
+            .filter_map(|(r, c, d)| {
+                calamine_cell_to_variant(d).map(|v| ((r as u32 + sr + 1, c as u32 + sc + 1), v))
+            })
             .collect()
     }
 
-    fn rd_xlsx_cells(path: &str, sheet: &str) -> std::collections::HashMap<(u32,u32), Variant> {
-        rd(path).unwrap().into_iter()
-            .find(|s| s.name == sheet).unwrap()
-            .cells.iter()
+    fn rd_xlsx_cells(path: &str, sheet: &str) -> std::collections::HashMap<(u32, u32), Variant> {
+        rd(path)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == sheet)
+            .unwrap()
+            .cells
+            .iter()
             .map(|(&k, v)| (k, rd_cell_to_variant(v)))
             .collect()
     }
 
-    fn calamine_ods_cells(path: &str, sheet: &str) -> std::collections::HashMap<(u32,u32), Variant> {
+    fn calamine_ods_cells(
+        path: &str,
+        sheet: &str,
+    ) -> std::collections::HashMap<(u32, u32), Variant> {
         let mut wb = open_workbook_auto(path).unwrap();
         let range = wb.worksheet_range(sheet).unwrap();
         let (sr, sc) = range.start().unwrap_or((0, 0));
-        range.cells()
-            .filter_map(|(r, c, d)| calamine_cell_to_variant(d)
-                .map(|v| ((r as u32 + sr + 1, c as u32 + sc + 1), v)))
+        range
+            .cells()
+            .filter_map(|(r, c, d)| {
+                calamine_cell_to_variant(d).map(|v| ((r as u32 + sr + 1, c as u32 + sc + 1), v))
+            })
             .collect()
     }
 
-    fn rd_ods_cells(path: &str, sheet: &str) -> std::collections::HashMap<(u32,u32), Variant> {
-        rd(path).unwrap().into_iter()
-            .find(|s| s.name == sheet).unwrap()
-            .cells.iter()
+    fn rd_ods_cells(path: &str, sheet: &str) -> std::collections::HashMap<(u32, u32), Variant> {
+        rd(path)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == sheet)
+            .unwrap()
+            .cells
+            .iter()
             .map(|(&k, v)| (k, rd_cell_to_variant(v)))
             .collect()
     }
@@ -1095,11 +1300,41 @@ mod diff_reader_tests {
     #[test]
     fn diff_xlsx_all_types() {
         let mut vm = Vm::new();
-        vm.cells_mut().insert((1, 1), CellContent { formula: None, value: Variant::Integer(42) });
-        vm.cells_mut().insert((2, 1), CellContent { formula: None, value: Variant::Str("hello".into()) });
-        vm.cells_mut().insert((3, 1), CellContent { formula: None, value: Variant::Float(3.14) });
-        vm.cells_mut().insert((4, 1), CellContent { formula: None, value: Variant::Boolean(true) });
-        vm.cells_mut().insert((5, 1), CellContent { formula: None, value: Variant::Str(" leading and trailing ".into()) });
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Str("hello".into()),
+            },
+        );
+        vm.cells_mut().insert(
+            (3, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Float(3.14),
+            },
+        );
+        vm.cells_mut().insert(
+            (4, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Boolean(true),
+            },
+        );
+        vm.cells_mut().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Str(" leading and trailing ".into()),
+            },
+        );
 
         let path = "/tmp/elixcee_diff_xlsx.xlsx";
         save_workbook_impl(&vm, path).unwrap();
@@ -1112,11 +1347,23 @@ mod diff_reader_tests {
     #[test]
     fn diff_xlsx_multi_sheet() {
         let mut vm = Vm::new();
-        vm.cells_mut().insert((1, 1), CellContent { formula: None, value: Variant::Integer(1) });
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
         vm.ensure_sheet("sheet2");
         let prev = vm.active_sheet.clone();
         vm.active_sheet = "sheet2".into();
-        vm.cells_mut().insert((2, 3), CellContent { formula: None, value: Variant::Str("s2".into()) });
+        vm.cells_mut().insert(
+            (2, 3),
+            CellContent {
+                formula: None,
+                value: Variant::Str("s2".into()),
+            },
+        );
         vm.active_sheet = prev;
 
         let path = "/tmp/elixcee_diff_multi.xlsx";
@@ -1162,7 +1409,10 @@ mod diff_reader_tests {
             Some(&Variant::Str("unicode: café ★ 日本語".into())),
             "multi-run <si> (split across two <r><t> runs by a real producer) must concatenate"
         );
-        assert!(!mine.contains_key(&(4, 1)), "row 4 is blank and dropped entirely from <sheetData> by the real producer");
+        assert!(
+            !mine.contains_key(&(4, 1)),
+            "row 4 is blank and dropped entirely from <sheetData> by the real producer"
+        );
         assert_eq!(
             mine.get(&(5, 4)),
             Some(&Variant::Str("after-column-gap".into())),
@@ -1200,11 +1450,41 @@ mod diff_reader_tests {
     #[test]
     fn diff_ods_all_types() {
         let mut vm = Vm::new();
-        vm.cells_mut().insert((1, 1), CellContent { formula: None, value: Variant::Integer(42) });
-        vm.cells_mut().insert((1, 2), CellContent { formula: None, value: Variant::Str("hello".into()) });
-        vm.cells_mut().insert((2, 1), CellContent { formula: None, value: Variant::Boolean(true) });
-        vm.cells_mut().insert((3, 1), CellContent { formula: None, value: Variant::Float(1.5) });
-        vm.cells_mut().insert((4, 1), CellContent { formula: None, value: Variant::Str(" padded ".into()) });
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        vm.cells_mut().insert(
+            (1, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Str("hello".into()),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Boolean(true),
+            },
+        );
+        vm.cells_mut().insert(
+            (3, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Float(1.5),
+            },
+        );
+        vm.cells_mut().insert(
+            (4, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Str(" padded ".into()),
+            },
+        );
 
         let path = "/tmp/elixcee_diff_ods.ods";
         save_workbook_impl(&vm, path).unwrap();

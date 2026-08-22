@@ -20,10 +20,18 @@ pub struct SpannedStmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum XlDir { Up, Down, Left, Right }
+pub enum XlDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum XlEndProp { Row, Column }
+pub enum XlEndProp {
+    Row,
+    Column,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -32,16 +40,42 @@ pub enum Expr {
     Str(String),
     Bool(bool),
     Var(String),
-    BinOp { op: VbaBinOp, lhs: Box<Expr>, rhs: Box<Expr> },
+    BinOp {
+        op: VbaBinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
     UnaryMinus(Box<Expr>),
     UnaryNot(Box<Expr>),
-    CellRead { row: Box<Expr>, col: Box<Expr> },
-    FuncCall { name: String, args: Vec<Expr> },
-    RangeRead { addr: String },
-    RangeOffsetRead { addr: String, row_off: Box<Expr>, col_off: Box<Expr> },
-    CellsFind { what: Box<Expr>, find_row: bool },
-    SheetCellRead { sheet: Box<Expr>, row: Box<Expr>, col: Box<Expr> },
-    SheetRangeRead { sheet: Box<Expr>, addr: String },
+    CellRead {
+        row: Box<Expr>,
+        col: Box<Expr>,
+    },
+    FuncCall {
+        name: String,
+        args: Vec<Expr>,
+    },
+    RangeRead {
+        addr: String,
+    },
+    RangeOffsetRead {
+        addr: String,
+        row_off: Box<Expr>,
+        col_off: Box<Expr>,
+    },
+    CellsFind {
+        what: Box<Expr>,
+        find_row: bool,
+    },
+    SheetCellRead {
+        sheet: Box<Expr>,
+        row: Box<Expr>,
+        col: Box<Expr>,
+    },
+    SheetRangeRead {
+        sheet: Box<Expr>,
+        addr: String,
+    },
     /// `Workbooks(workbook).Worksheets(sheet)` / `Workbooks(workbook).Sheets(sheet)`
     /// — wraps a plain sheet key (name or 1-based index) with a workbook
     /// identity to check first. elixcee only ever loads one workbook at a
@@ -56,7 +90,12 @@ pub enum Expr {
     },
     RowsCount,
     ColsCount,
-    CellsEndProp { row: Box<Expr>, col: Box<Expr>, dir: XlDir, prop: XlEndProp },
+    CellsEndProp {
+        row: Box<Expr>,
+        col: Box<Expr>,
+        dir: XlDir,
+        prop: XlEndProp,
+    },
     /// `ActiveSheet` used as a sheet qualifier (Milestone B7c item 6) —
     /// e.g. `ActiveSheet.Range("A1").Value`. Valid wherever a plain sheet
     /// `Expr` is (see `WorkbookQualifiedSheet`'s doc for the list); resolved
@@ -94,9 +133,19 @@ pub enum Expr {
     /// side of `.Value = .Value + 1`. Same runtime resolution as
     /// `Stmt::WithDot`, and likewise valid at any nesting depth.
     WithDot(Vec<String>),
-    RecordGet       { var: String, field: String },           // p.x
-    RecordGetNested { var: String, fields: Vec<String> },    // p.a.b.c
-    ArrayRecordGet  { name: String, indices: Vec<Expr>, field: String }, // arr(i).f
+    RecordGet {
+        var: String,
+        field: String,
+    }, // p.x
+    RecordGetNested {
+        var: String,
+        fields: Vec<String>,
+    }, // p.a.b.c
+    ArrayRecordGet {
+        name: String,
+        indices: Vec<Expr>,
+        field: String,
+    }, // arr(i).f
     /// `Err.Number` — real VBA's runtime error number of the most recent
     /// error caught by `On Error Resume Next`/`On Error GoTo`, or raised by
     /// `Err.Raise`; 0 if none since the start of this Sub/Function call or
@@ -117,7 +166,10 @@ pub enum Expr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum VbaBinOp {
-    Add, Sub, Mul, Div,
+    Add,
+    Sub,
+    Mul,
+    Div,
     /// `Mod` — modulus. Result sign follows the dividend (left operand),
     /// same convention as Rust's `%`.
     Mod,
@@ -126,13 +178,23 @@ pub enum VbaBinOp {
     IntDiv,
     /// `^` — exponentiation.
     Pow,
-    Eq, Ne, Lt, Le, Gt, Ge,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
     Concat,
-    And, Or, Xor,
+    And,
+    Or,
+    Xor,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum CalcModeValue { Automatic, Manual }
+pub enum CalcModeValue {
+    Automatic,
+    Manual,
+}
 
 /// A reference-typed expression (Milestone B7c) — evaluates to an object
 /// reference (currently only `Range`, possibly multi-area), never a plain
@@ -203,7 +265,11 @@ pub enum WithMember {
     /// `.Value` / `.Formula` / `.a.b.c`
     Fields(Vec<String>),
     /// `.Cells(r, c).Value`
-    Cells { row: Box<Expr>, col: Box<Expr>, fields: Vec<String> },
+    Cells {
+        row: Box<Expr>,
+        col: Box<Expr>,
+        fields: Vec<String>,
+    },
     /// `.Range("A1").Value`
     Range { addr: String, fields: Vec<String> },
 }
@@ -227,37 +293,66 @@ pub struct ArrayDim {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Assignment { var: String, value: Expr },
-    CellWrite { row: Expr, col: Expr, value: Expr },
+    Assignment {
+        var: String,
+        value: Expr,
+    },
+    CellWrite {
+        row: Expr,
+        col: Expr,
+        value: Expr,
+    },
     SetCalcMode(CalcModeValue),
-    SetAppProp { prop: String, value: Expr },
-    RangeWrite { addr: String, is_formula: bool, value: Expr },
+    SetAppProp {
+        prop: String,
+        value: Expr,
+    },
+    RangeWrite {
+        addr: String,
+        is_formula: bool,
+        value: Expr,
+    },
     /// `dst` is `None` for a bare `Range(src).Copy` (populates the VM's
     /// clipboard only); `Some(addr)` for `Range(src).Copy
     /// Destination:=Range(addr)` (also writes `addr` immediately).
-    RangeCopy  { src: String, dst: Option<String> },
+    RangeCopy {
+        src: String,
+        dst: Option<String>,
+    },
     /// `<var>.Copy` / `<var>.Copy Destination:=Range(addr)` (Milestone
     /// B7c) — the object-variable sibling of `RangeCopy`, for a source
     /// produced by `Set` (a `Range("...")` reference, or a `Union`/
     /// `.Areas(n)`/`.SpecialCells(...)` result). `dst` stays a literal
     /// address, same convention as `RangeCopy.dst` — pasting *into* an
     /// object-variable destination isn't modeled.
-    RangeObjectCopy { var: String, dst: Option<String> },
+    RangeObjectCopy {
+        var: String,
+        dst: Option<String>,
+    },
     /// `Set <var> = <value>` (Milestone B7c item 1) — VBA's object-
     /// assignment statement. Distinct from `Assignment` (plain `=`)
     /// because object variables live in `Vm::object_variables`, a
     /// namespace separate from `Vm::variables`, matching real VBA's own
     /// requirement that object references be assigned via `Set`.
-    Set { var: String, value: ObjectExpr },
+    Set {
+        var: String,
+        value: ObjectExpr,
+    },
     /// `Range(dest_addr).Paste` / `Range(dest_addr).PasteSpecial
     /// [Transpose:=<expr>]` (Milestone B6b) — pastes the VM's clipboard
     /// contents into `dest_addr`. Real VBA only exposes `Transpose:=` on
     /// `.PasteSpecial`, not plain `.Paste`, so the parser only ever
     /// produces `Some(_)` for a `.PasteSpecial` statement.
-    RangePaste { dest_addr: String, transpose: Option<Expr> },
+    RangePaste {
+        dest_addr: String,
+        transpose: Option<Expr>,
+    },
     /// `Worksheets(sheet).Paste Destination:=Range(dest_addr)` (Milestone
     /// B6b). No `Transpose:=` here, matching real VBA's `Worksheet.Paste`.
-    SheetRangePaste { sheet: Expr, dest_addr: String },
+    SheetRangePaste {
+        sheet: Expr,
+        dest_addr: String,
+    },
     /// `Sheets(sheet).Protect` (`protect: true`) / `.Unprotect`
     /// (`protect: false`) (Milestone B6c) — one variant with a bool flag,
     /// same convention as `Stmt::OnError { resume_next: bool }`.
@@ -269,19 +364,57 @@ pub enum Stmt {
         protect: bool,
         ui_only: Option<Expr>,
     },
-    RangeClear { addr: String, contents_only: bool },
-    RangeOffsetWrite { addr: String, row_off: Expr, col_off: Expr, value: Expr },
-    RangeDelete { addr: String },
-    RangeInsert { addr: String },
-    RangeSort { addr: String, key_col: u32, descending: bool },
-    RangeName { addr: String, name: String },  // Range("A1:B3").Name = "MyRange"
-    SheetCellWrite { sheet: Expr, row: Expr, col: Expr, value: Expr },
-    SheetRangeWrite { sheet: Expr, addr: String, is_formula: bool, value: Expr },
-    WithSheet { sheet_name: String, body: Vec<SpannedStmt> },
+    RangeClear {
+        addr: String,
+        contents_only: bool,
+    },
+    RangeOffsetWrite {
+        addr: String,
+        row_off: Expr,
+        col_off: Expr,
+        value: Expr,
+    },
+    RangeDelete {
+        addr: String,
+    },
+    RangeInsert {
+        addr: String,
+    },
+    RangeSort {
+        addr: String,
+        key_col: u32,
+        descending: bool,
+    },
+    RangeName {
+        addr: String,
+        name: String,
+    }, // Range("A1:B3").Name = "MyRange"
+    SheetCellWrite {
+        sheet: Expr,
+        row: Expr,
+        col: Expr,
+        value: Expr,
+    },
+    SheetRangeWrite {
+        sheet: Expr,
+        addr: String,
+        is_formula: bool,
+        value: Expr,
+    },
+    WithSheet {
+        sheet_name: String,
+        body: Vec<SpannedStmt>,
+    },
     SheetsAdd,
-    SheetsDelete { sheet: Expr },
+    SheetsDelete {
+        sheet: Expr,
+    },
     For {
-        var: String, from: Expr, to: Expr, step: Option<Expr>, body: Vec<SpannedStmt>,
+        var: String,
+        from: Expr,
+        to: Expr,
+        step: Option<Expr>,
+        body: Vec<SpannedStmt>,
     },
     ForEach {
         var: String,
@@ -289,10 +422,14 @@ pub enum Stmt {
         body: Vec<SpannedStmt>,
     },
     If {
-        condition: Expr, then_body: Vec<SpannedStmt>, else_body: Vec<SpannedStmt>,
+        condition: Expr,
+        then_body: Vec<SpannedStmt>,
+        else_body: Vec<SpannedStmt>,
     },
     DoLoop {
-        pre_cond: Option<(bool, Expr)>, post_cond: Option<(bool, Expr)>, body: Vec<SpannedStmt>,
+        pre_cond: Option<(bool, Expr)>,
+        post_cond: Option<(bool, Expr)>,
+        body: Vec<SpannedStmt>,
     },
     SelectCase {
         expr: Expr,
@@ -303,8 +440,10 @@ pub enum Stmt {
     ExitDo,
     ExitSub,
     ExitFunction,
-    OnError { resume_next: bool },     // On Error Resume Next (true) / GoTo 0 (false)
-    OnErrorGoTo(String),               // On Error GoTo <label>
+    OnError {
+        resume_next: bool,
+    }, // On Error Resume Next (true) / GoTo 0 (false)
+    OnErrorGoTo(String), // On Error GoTo <label>
     /// `Err.Clear` — resets every `Err` property (`Number`, `Description`,
     /// `Source`, `HelpFile`, `HelpContext`) back to its zero value.
     ErrClear,
@@ -319,10 +458,15 @@ pub enum Stmt {
         help_file: Option<Expr>,
         help_context: Option<Expr>,
     },
-    Label(String),                     // <name>:  — marks a jump target
-    GoTo(String),                      // GoTo <label>
-    Resume { next: bool },             // Resume (false) / Resume Next (true)
-    CallSub { name: String, args: Vec<Expr> },
+    Label(String), // <name>:  — marks a jump target
+    GoTo(String),  // GoTo <label>
+    Resume {
+        next: bool,
+    }, // Resume (false) / Resume Next (true)
+    CallSub {
+        name: String,
+        args: Vec<Expr>,
+    },
     /// A truly no-op `Dim`-shaped statement: reached only when no variable
     /// name was actually available to record (a modifier — `Static`/
     /// `Friend` — followed by neither `Dim` nor `Const`, or a malformed
@@ -334,46 +478,91 @@ pub enum Stmt {
     /// is `True` right after this runs, not an "undefined variable" error
     /// — this variant is what makes that possible; the old bare `Dim`
     /// never recorded the name at all).
-    DimBare { var: String },
-    DimArray { name: String, sizes: Vec<ArrayDim> },
-    ReDim { name: String, sizes: Vec<ArrayDim>, preserve: bool },
-    ArrayWrite { name: String, indices: Vec<Expr>, value: Expr },
+    DimBare {
+        var: String,
+    },
+    DimArray {
+        name: String,
+        sizes: Vec<ArrayDim>,
+    },
+    ReDim {
+        name: String,
+        sizes: Vec<ArrayDim>,
+        preserve: bool,
+    },
+    ArrayWrite {
+        name: String,
+        indices: Vec<Expr>,
+        value: Expr,
+    },
     /// `Erase <name>` on a fixed-size array resets every element back to
     /// its default (`Empty`, since every array here is Variant-typed) in
     /// place — bounds/lower-bound are untouched, unlike `ReDim` without
     /// `Preserve`, which also reallocates. Real VBA's comma-separated
     /// `Erase a, b` form and the "deallocates a dynamic array entirely"
     /// behavior (vs. a fixed one) aren't modeled — no case needs either.
-    Erase { name: String },
+    Erase {
+        name: String,
+    },
     /// `With <target> ... End With`. `target` is resolved once at runtime on
     /// block entry and pushed onto the VM's With stack; every bare-`.member`
     /// statement/expression in `body` (at any nesting depth) resolves
     /// against the innermost entry. Replaces the old `WithRecord` variant
     /// too — a bare-identifier target is `WithTarget::Var`, disambiguated at
     /// runtime rather than at parse time.
-    With { target: WithTarget, body: Vec<SpannedStmt> },
+    With {
+        target: WithTarget,
+        body: Vec<SpannedStmt>,
+    },
     /// A statement beginning with a bare `.` inside a `With` body, e.g.
     /// `.Value = 1` / `.Cells(i, 1).Value = i` / `.a.b = 2`. Valid wherever
     /// a statement is; resolving it against the innermost active With target
     /// is the VM's job, not the parser's.
-    WithDot { member: WithMember, value: Expr },
-    MsgBox { message: Expr },
-    RecordSet { var: String, field: String, value: Expr }, // p.x = val
-    DimRecord      { var: String, type_name: String },      // Dim p As PersonType
-    DimArrayRecord { name: String, sizes: Vec<Expr>, type_name: String }, // Dim arr(10) As MyType
+    WithDot {
+        member: WithMember,
+        value: Expr,
+    },
+    MsgBox {
+        message: Expr,
+    },
+    RecordSet {
+        var: String,
+        field: String,
+        value: Expr,
+    }, // p.x = val
+    DimRecord {
+        var: String,
+        type_name: String,
+    }, // Dim p As PersonType
+    DimArrayRecord {
+        name: String,
+        sizes: Vec<Expr>,
+        type_name: String,
+    }, // Dim arr(10) As MyType
     /// `Dim a As Integer, b As Range, c(3) As MyType` — a comma-separated
     /// multi-declarator `Dim`. Each element is exactly what a single-
     /// declarator `Dim` would have produced on its own (`Dim`/`DimRecord`/
     /// `DimArray`/`DimArrayRecord`); the VM just runs them in order.
     DimMulti(Vec<Stmt>),
-    RecordSetNested { var: String, fields: Vec<String>, value: Expr },    // p.a.b = val
-    ArrayRecordSet  { name: String, indices: Vec<Expr>, field: String, value: Expr }, // arr(i).f=v
+    RecordSetNested {
+        var: String,
+        fields: Vec<String>,
+        value: Expr,
+    }, // p.a.b = val
+    ArrayRecordSet {
+        name: String,
+        indices: Vec<Expr>,
+        field: String,
+        value: Expr,
+    }, // arr(i).f=v
     /// A no-op the parser inserted because the construct on this line isn't
     /// recognized/implemented (as opposed to `Dim`, which is intentionally
     /// a no-op by design). Executes as a true no-op in the VM, same as
     /// `Dim` — this variant only exists so `check` can surface *why* a line
     /// silently did nothing.
-    Unsupported { reason: String },
+    Unsupported {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -396,14 +585,14 @@ pub type TypeField = (String, String);
 /// A `Type ... End Type` definition.
 #[derive(Debug, Clone)]
 pub struct TypeDef {
-    pub name:   String,          // lowercase type name
-    pub fields: Vec<TypeField>,  // (field_name, vba_type) in declaration order
+    pub name: String,           // lowercase type name
+    pub fields: Vec<TypeField>, // (field_name, vba_type) in declaration order
 }
 
 #[derive(Debug, Clone)]
 pub struct Program {
-    pub subs:      Vec<SubDef>,
-    pub funcs:     Vec<FuncDef>,
+    pub subs: Vec<SubDef>,
+    pub funcs: Vec<FuncDef>,
     pub type_defs: Vec<TypeDef>,
     /// Module-level lines that are unsupported/unevaluated (e.g. a
     /// module-level `Const`, which never actually sets its value —
