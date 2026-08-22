@@ -484,6 +484,84 @@ already uses for `read()`, including the `type: 'base64'` output path (a hand-wr
 `btoa`-based chunked encoder, since plain `Uint8Array` has no `.toString('base64')` the
 way a Node `Buffer` does).
 
+## Root-crate writer: regenerate vs. preserve-and-merge (Milestone "safe round-trip")
+
+Everything above this section is about `@elixcee/xlsx` (the separate npm package, pure
+JS/XML/ZIP, no VBA execution). This section is about the **root `elixcee` crate's own
+writer** — `save_xlsx_impl` (`src/lib.rs`), wired to CLI `--output` and the PyO3
+`save_workbook()` method — which is a completely different codepath and, until this
+milestone, had a completely different (undocumented) limitation: it discarded the entire
+original file and regenerated a brand-new minimal workbook from scratch on every save.
+Nothing the reader didn't parse survived — most damagingly, `xl/vbaProject.bin`. Loading a
+`.xlsm`, running a macro, and saving with `--output foo.xlsm` produced a non-macro-enabled
+`.xlsx`-shaped file under an `.xlsm` name.
+
+**Decision: preserve-and-merge, not regenerate-from-scratch — but only the first slice of
+it.** `save_xlsx_impl` now merges two kinds of ZIP entry into its output:
+
+- **Writer-owned parts**, always regenerated from current `Vm` state, exactly as before:
+  `[Content_Types].xml`, `_rels/.rels`, `xl/workbook.xml`, `xl/_rels/workbook.xml.rels`,
+  `xl/sharedStrings.xml`, `xl/styles.xml`, and every `xl/worksheets/*.xml` part (matched by
+  *pattern*, not by an enumerated list of this writer's own `sheet{i+1}.xml` names — a real
+  workbook can have non-sequential surviving sheet parts after sheets are deleted, e.g.
+  `sheet2.xml`/`sheet3.xml` with no `sheet1.xml`; keying exclusion off this writer's own
+  sequential naming would leave such a part as an orphaned extra, invisible under any
+  fixture that happens to use sequential names).
+- **Everything else**, copied through byte-for-byte from the source file, re-opened via
+  `Vm::loaded_workbook_path` (set at load time by `load_workbook_file`/PyO3's
+  `load_workbook()`) at *save* time — not cached at load time, so read-only paths
+  (`check`/`snapshot`/`diagnose`/`test-workbook`, which never call `save_workbook`) never
+  pay this re-read cost.
+
+Passthrough only activates when the loaded source was `.xlsx`/`.xlsm` (never `.ods` — its
+parts would be meaningless, and wrong, inside an OOXML package). `xl/vbaProject*` parts are
+dropped from the passthrough set when the *output* path isn't `.xlsm`, mirroring Excel's
+own "Save As .xlsx strips the VBA project" behavior — a macro project must never survive
+into a file declared non-macro-enabled.
+
+**Sheets are always fully regenerated from `Vm` state, never diffed against the original —
+a deliberate simplification for this slice**, not an oversight. The flagship scenario (a
+macro edits one cell) round-trips correctly through full regeneration regardless; true
+per-sheet diff-and-skip is a later concern.
+
+**Content-Types correctness for passed-through parts.** A from-scratch `[Content_Types].xml`
+generator only knows about the parts it itself always writes — every passthrough part
+(`docProps/core.xml`, `xl/theme/theme1.xml`, `xl/vbaProject.bin`, etc.) needs a resolvable
+declaration in the *output's own* `[Content_Types].xml` or the result is an invalid OPC
+package. `.xml`-extension parts are accidentally rescued by the baseline `<Default
+Extension="xml">` this writer always emits, but non-`.xml` parts (`.bin` in particular) have
+none without an explicit fix. Fix: `save_xlsx_impl` parses the *source's own*
+`[Content_Types].xml` (`reader::content_type_decls`) and, for each passthrough part, resolves
+its real declared content type — exact `Override` match first, then extension `Default` —
+carrying it over into the output as an `Override`, rather than guessing one. A hardcoded
+`xl/vbaProject.bin` → `application/vnd.ms-office.vbaProject` `Override` exists only as a
+defensive fallback for a malformed/incomplete source that lacks the declaration entirely —
+deliberately an `Override`, not a blanket `<Default Extension="bin">`, since that would also
+mis-declare an unrelated sibling part like `xl/printerSettings/printerSettings1.bin`.
+
+**Load-bearing ordering invariant, must not regress:** the output ZIP is built entirely in
+memory (`Cursor<Vec<u8>>`) and written to disk only as the very last step
+(`zip.finish()...into_inner()` then `std::fs::write(path, data)`). This is what makes
+`--file foo.xlsm --output foo.xlsm` (in-place overwrite — the realistic CLI usage) safe:
+`read_raw_zip_entries(source_path)` fully completes and is held in memory *before* the
+truncating write touches the same path. A future streaming refactor of this writer would
+silently corrupt the source mid-read if this ordering is broken.
+
+**Explicitly out of scope for this slice** (none of it requires re-architecting the
+regenerate/passthrough split above — these are additive follow-ups): named ranges
+(`<definedNames>`), tables/hyperlinks/comments/data-validation/freeze-panes *embedded inside
+worksheet XML* (separate-part tables like `xl/tables/*.xml` already pass through today;
+anything embedded in a regenerated `xl/worksheets/sheetN.xml` does not survive, since that
+part is always fully regenerated), styles beyond the existing numFmt handling, charts/images/
+external-link consistency after a structural sheet change, streaming/large-file handling,
+`.ods` passthrough, and any change to `@elixcee/xlsx` or `crates/elixcee-wasm` (untouched).
+
+**Verification status:** structural/self-consistency only, against hand-built synthetic
+fixtures (`tests/xlsx_roundtrip.rs`) — no real Microsoft-Excel-authored `.xlsm` exists in
+this repo yet, so "does real Excel open the round-tripped output without a repair prompt"
+remains unverified. See `tests/fixtures/xlsm_roundtrip/README.md` for where a real file
+slots in.
+
 ## Consequences
 
 Once the formula/VM split and the buffer-API extraction land, `elixcee-xlsx` can exist as

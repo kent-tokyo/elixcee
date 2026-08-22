@@ -8,17 +8,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-`@elixcee/xlsx` only — independently-versioned, still unpublished (`0.0.0-development`/
-`private: true`, no `publishConfig`; see its own two entries below for exactly what's
-implemented). Nothing here touches the root `elixcee`/`elixcee-types`/`elixcee-wasm`
-crates, which this round's other work moved to `[0.7.0]` below. Since the two entries
-below were written: `compat/differential/xlsx-write.test.mjs` (36 MATCH + 1 disclosed
+Two independent, unrelated items since `[0.7.0]`: (1) `@elixcee/xlsx` CI/docs polish (still
+unpublished, `0.0.0-development`/`private: true`, no `publishConfig`) and (2) the root
+`elixcee` crate's first "safe round-trip" milestone — no version bumped yet for either.
+
+`@elixcee/xlsx`: `compat/differential/xlsx-write.test.mjs` (36 MATCH + 1 disclosed
 `UNSUPPORTED`, unchanged) is now wired into CI's `node-js` job alongside the read-side
 differential suites — it existed and passed locally from the start but wasn't CI-gated
 until now (new `differential:write` script in `compat/package.json`). `writeFileAsync`
 (not implemented — only `writeFile`/`writeFileSync` are exported) is now named explicitly
 in `packages/xlsx/README.md`'s "What's not implemented" list, rather than only covered by
 that list's general not-exported-means-not-supported policy statement.
+
+### Root crate: safe round-trip, milestone 1 — unknown-part passthrough + `xl/vbaProject.bin` preservation
+
+First slice of a longer "read an existing workbook, run/modify it, write it back without
+destroying anything Excel put there" direction (see `ROADMAP.md`'s new gap 13 and
+`docs/xlsx-architecture.md`'s new "Root-crate writer: regenerate vs. preserve-and-merge"
+section for the full design). Until now, `save_xlsx_impl` (CLI `--output`, PyO3
+`save_workbook()`) discarded the entire original file and regenerated a brand-new minimal
+workbook from scratch on every save — most damagingly, `--output foo.xlsm` silently
+produced a non-macro-enabled `.xlsx`-shaped file, losing `xl/vbaProject.bin` outright.
+
+- **New `reader::read_raw_zip_entries`/`reader::content_type_decls`** (`src/reader.rs`) —
+  read a source file's raw ZIP entries and its `[Content_Types].xml` declarations at save
+  time only (not cached at load time, so `check`/`snapshot`/`diagnose`/`test-workbook`,
+  which never save, pay zero extra cost).
+- **`save_xlsx_impl`** (`src/lib.rs`) now merges writer-owned parts (still regenerated from
+  `Vm` state exactly as before — `[Content_Types].xml`, workbook/rels/sharedStrings/styles,
+  every `xl/worksheets/*.xml` matched by pattern, not a name list, so non-sequential
+  surviving sheet parts don't leak through as stale orphans) with everything else copied
+  through byte-for-byte from the source, including `xl/vbaProject.bin` when the output is
+  `.xlsm` (dropped when it isn't, mirroring Excel's own Save-As-`.xlsx` behavior).
+  `[Content_Types].xml`'s declarations for passed-through parts are carried over from the
+  source's own declarations (exact `Override` match, then extension `Default`), not
+  guessed — a hardcoded `Default Extension="bin"` would have mis-declared sibling parts
+  like `xl/printerSettings/printerSettings1.bin` as a VBA project.
+- **New `Vm::loaded_workbook_path`** field, set by `load_workbook_file` and PyO3's
+  `load_workbook()`, is what makes the source re-readable at save time.
+- **Deliberately not done in this slice** (see the docs section above for the full list):
+  sheets are always fully regenerated, never diffed against the original; named ranges,
+  tables/hyperlinks/comments/data-validation/freeze-panes embedded in worksheet XML,
+  styles beyond existing numFmt handling, charts/images, streaming, and `.ods` passthrough
+  all remain out of scope. `@elixcee/xlsx` and `crates/elixcee-wasm` untouched.
+- **Tests**: new `tests/xlsx_roundtrip.rs`, 3 tests against hand-built synthetic `.xlsm`/
+  `.xlsx` fixtures (no real Excel-authored `.xlsm` exists in this repo yet — see
+  `tests/fixtures/xlsm_roundtrip/README.md` for the documented slot to add one later) plus
+  a manual CLI smoke test of the realistic in-place `--file foo.xlsm --output foo.xlsm`
+  overwrite case. `cargo test --workspace` 955/955 (up from 952).
 
 ### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
 

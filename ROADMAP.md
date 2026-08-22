@@ -100,11 +100,15 @@ recorded as exhausted: no further candidates were found by either method as of t
    for Excel's. No Windows/Excel environment has ever been available in this project's
    toolchain. This is the single largest gap blocking a 90+ claim. The
    `compat/oracle-excel-com/CONTRACT.md` adapter is written and waiting for one.
+   **Also applies to item 13's "safe round-trip" work below**: its own tests are
+   structural/synthetic-fixture-only, for the same reason — no real Excel-authored file
+   or working Excel/LibreOffice oracle exists to verify against yet.
 2. **LibreOffice headless oracle is broken for most of the VBA corpus.** 578/581 scenarios
    are `ORACLE_UNAVAILABLE` — headless UNO hangs on any `Range`/`Cells` access. Root-caused,
    not fixed (explicitly ruled out twice already: fixing it doesn't raise elixcee's own
    product value, only this one oracle's usability — revisit only if the corpus itself
-   becomes the bottleneck rather than VBA coverage).
+   becomes the bottleneck rather than VBA coverage). Consistent with, not contradicted by,
+   item 13's own structural-only verification below.
 3. **Multi-area Paste** only executes for the matching-shape case; every other combination
    (count/shape mismatch, single↔multi either direction) stays diagnose-only. Extending this
    correctly needs a real oracle to verify against (LibreOffice's is broken, Excel's doesn't
@@ -137,7 +141,13 @@ recorded as exhausted: no further candidates were found by either method as of t
    `tasks/todo.md`'s "`@elixcee/xlsx` 0.1.0-alpha.1 準備" section), `bookType: "xlsx"`
    only, no ODS. Turned out not to need a Rust writer at all — pure JS/XML/ZIP generation,
    verified against `src/reader.rs`'s own parsing so "own write -> own read" is a
-   meaningful round trip. This makes the "npm/JS/WASM findings" section's speculation below
+   meaningful round trip. **This finding is scoped strictly to `@elixcee/xlsx` — a
+   separate, independently-versioned npm package.** It does NOT apply to the root
+   `elixcee` crate's own writer (`save_xlsx_impl`, `src/lib.rs`, wired to CLI `--output`
+   and PyO3's `save_workbook()`), which — as of the "safe round-trip" milestone (item 13
+   below) — turned out to need real work: until then it silently discarded every original
+   ZIP part it didn't parse on every save (`xl/vbaProject.bin` included), and `.xlsm`
+   output declared the wrong (non-macro-enabled) content type outright. This makes the "npm/JS/WASM findings" section's speculation below
    ("write/writeFile/writeFileSync need a genuinely new Rust writer module... whether the
    `zip` crate... supports writing under wasm32") moot for the actually-chosen approach —
    left in place below as a record of what was considered, not corrected in place.
@@ -257,6 +267,24 @@ recorded as exhausted: no further candidates were found by either method as of t
     line) still swallows the rest of that physical line, colons included. Statement-level
     skipping (`skip_to_stmt_end`) correctly stops at a `:`. No known real-world macro hits
     the difference; recorded so a future reader doesn't rediscover it as a surprise.
+13. **Root-crate `save_xlsx_impl` regenerated every `.xlsx`/`.xlsm` save entirely from
+    scratch — fixed for a first, deliberately narrow slice ("safe round-trip" milestone,
+    see `docs/xlsx-architecture.md`'s "Root-crate writer: regenerate vs. preserve-and-merge"
+    section).** Two things only: (a) general unknown-OOXML-part passthrough — any ZIP entry
+    in the loaded source that this writer doesn't itself regenerate is now copied through
+    byte-for-byte; (b) `xl/vbaProject.bin` preservation specifically, including a correctly
+    carried-over macro-enabled `[Content_Types].xml`/`.rels` declaration (previously
+    `--output foo.xlsm` silently produced a non-macro-enabled `.xlsx`-shaped file). Verified
+    via `tests/xlsx_roundtrip.rs` (3 tests, hand-built synthetic fixtures — no real `.xlsm`
+    exists in this repo yet, see `tests/fixtures/xlsm_roundtrip/README.md`) plus a manual CLI
+    smoke test (in-place `--file foo.xlsm --output foo.xlsm` overwrite, inspected by hand).
+    Still genuinely out of scope, not a rearchitecture blocker for any of it later: named
+    ranges, tables/hyperlinks/comments/data-validation/freeze-panes embedded inside worksheet
+    XML (sheets are always fully regenerated, never diffed against the original — a stated
+    simplification), styles beyond existing numFmt handling, charts/images/external-link
+    consistency after a structural sheet change, streaming/large-file handling, `.ods`
+    passthrough, and `@elixcee/xlsx`/`crates/elixcee-wasm` (both untouched by this milestone,
+    by design — see item 6 above for why they're a separate, unrelated codepath).
 
 ## npm/JS/WASM findings (from a dedicated investigation this round — see git history for the
 full report; this is a summary)

@@ -22,7 +22,7 @@ fn usage() -> ! {
          Options:\n\
            --file <path>    Load cell data from spreadsheet (.xlsx / .xlsm / .ods)\n\
            --sheet <name>   Active sheet name (default: first sheet in --file)\n\
-           --output <path>  Save result cells to spreadsheet (.xlsx / .ods)\n\
+           --output <path>  Save result cells to spreadsheet (.xlsx / .xlsm / .ods)\n\
            --json           Emit a single JSON object (result or error) instead of plain text\n\
          \n\
          Subcommands:\n\

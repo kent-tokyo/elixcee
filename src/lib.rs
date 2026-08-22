@@ -375,6 +375,7 @@ fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<P
     let mut vm = Vm::new();
     vm.error_on_msgbox = on_msgbox == "error";
     vm.populate_from_sheets(sheets);
+    vm.loaded_workbook_path = Some(path.to_string());
 
     if let Some(s) = sheet {
         vm.set_active_sheet(&s.to_lowercase()).map_err(|e| {
@@ -403,6 +404,28 @@ fn save_workbook_impl(vm: &Vm, path: &str) -> Result<(), String> {
         return save_ods_impl(vm, path);
     }
     save_xlsx_impl(vm, path)
+}
+
+/// Parts this writer always regenerates from `Vm` state — everything else read
+/// from a passthrough source is copied through byte-for-byte (Milestone: safe
+/// round-trip). Pattern-matched rather than checking against `sheet{i+1}.xml`
+/// for `i in 0..sheet_names.len()`: a real workbook can have non-sequential
+/// worksheet part names (e.g. sheets deleted, leaving `sheet2.xml`/
+/// `sheet3.xml` as survivors) — keying exclusion off *this writer's own*
+/// sequential naming would leave such a stale original part sitting alongside
+/// the freshly-regenerated `sheet1.xml`. See `docs/xlsx-architecture.md`.
+fn is_writer_owned_part(name: &str) -> bool {
+    matches!(
+        name,
+        "[Content_Types].xml"
+            | "_rels/.rels"
+            | "xl/workbook.xml"
+            | "xl/_rels/workbook.xml.rels"
+            | "xl/sharedStrings.xml"
+            | "xl/styles.xml"
+    ) || (name.starts_with("xl/worksheets/")
+        && name.ends_with(".xml")
+        && !name["xl/worksheets/".len()..].contains('/'))
 }
 
 fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
@@ -434,13 +457,87 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         }
     }
 
+    // ── Unknown-part passthrough (Milestone: safe round-trip) ───────────────
+    // Only activates for an .xlsx/.xlsm source — never .ods, whose parts would
+    // be meaningless (and wrong) inside an OOXML package. Re-reads the source
+    // file fully into memory here, at save time, rather than caching it at
+    // load time, so read-only paths (`check`/`snapshot`/`diagnose`) never pay
+    // this cost. See `docs/xlsx-architecture.md`.
+    let passthrough_source = vm.loaded_workbook_path.as_deref().filter(|p| {
+        let l = p.to_lowercase();
+        l.ends_with(".xlsx") || l.ends_with(".xlsm")
+    });
+    let is_xlsm_output = path.to_lowercase().ends_with(".xlsm");
+
+    let mut passthrough: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut has_vba = false;
+    let mut carried_overrides: Vec<(String, String)> = Vec::new();
+
+    if let Some(source_path) = passthrough_source {
+        let raw_entries = reader::read_raw_zip_entries(source_path)?;
+        has_vba = is_xlsm_output && raw_entries.keys().any(|n| n.starts_with("xl/vbaProject"));
+
+        let (defaults, overrides) = raw_entries
+            .get("[Content_Types].xml")
+            .and_then(|b| String::from_utf8(b.clone()).ok())
+            .map(|xml| reader::content_type_decls(&xml))
+            .unwrap_or_default();
+
+        for (name, bytes) in &raw_entries {
+            if is_writer_owned_part(name) {
+                continue;
+            }
+            // Excel's own "Save As .xlsx" behavior: a macro project never
+            // survives into a workbook declared non-macro-enabled.
+            if !is_xlsm_output && name.starts_with("xl/vbaProject") {
+                continue;
+            }
+            passthrough.push((name.clone(), bytes.clone()));
+
+            // Resolve this part's real declared content type from the source's
+            // own [Content_Types].xml — exact Override first, then extension
+            // Default — instead of guessing. xml/rels extensions are already
+            // covered by this writer's own baseline <Default> entries below.
+            let part_name = format!("/{}", name);
+            let resolved = overrides
+                .iter()
+                .find(|(p, _)| p == &part_name)
+                .map(|(_, ct)| ct.clone())
+                .or_else(|| {
+                    let ext = name.rsplit('.').next().unwrap_or("");
+                    if ext == "xml" || ext == "rels" {
+                        None
+                    } else {
+                        defaults.iter().find(|(e, _)| e == ext).map(|(_, ct)| ct.clone())
+                    }
+                })
+                .or_else(|| {
+                    // Defensive fallback for a malformed/incomplete source —
+                    // an Override, not a blanket <Default Extension="bin">,
+                    // which would also mis-declare a sibling part like
+                    // xl/printerSettings/printerSettings1.bin.
+                    if name.starts_with("xl/vbaProject") {
+                        Some("application/vnd.ms-office.vbaProject".to_string())
+                    } else {
+                        None
+                    }
+                });
+            if let Some(ct) = resolved {
+                carried_overrides.push((part_name, ct));
+            }
+        }
+        // Deterministic, reviewable output order.
+        passthrough.sort_by(|a, b| a.0.cmp(&b.0));
+        carried_overrides.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+
     let cursor = Cursor::new(Vec::<u8>::new());
     let mut zip = ZipWriter::new(cursor);
     let deflated = zip::write::SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated);
 
     zip.start_file("[Content_Types].xml", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_content_types(&sheet_names).as_bytes()).map_err(|e| e.to_string())?;
+    zip.write_all(build_xlsx_content_types(&sheet_names, has_vba, &carried_overrides).as_bytes()).map_err(|e| e.to_string())?;
 
     zip.start_file("_rels/.rels", deflated).map_err(|e| e.to_string())?;
     zip.write_all(XLSX_ROOT_RELS.as_bytes()).map_err(|e| e.to_string())?;
@@ -449,7 +546,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     zip.write_all(build_xlsx_workbook(&sheet_names).as_bytes()).map_err(|e| e.to_string())?;
 
     zip.start_file("xl/_rels/workbook.xml.rels", deflated).map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_workbook_rels(&sheet_names).as_bytes()).map_err(|e| e.to_string())?;
+    zip.write_all(build_xlsx_workbook_rels(&sheet_names, has_vba).as_bytes()).map_err(|e| e.to_string())?;
 
     for (i, sheet_name) in sheet_names.iter().enumerate() {
         zip.start_file(format!("xl/worksheets/sheet{}.xml", i + 1), deflated).map_err(|e| e.to_string())?;
@@ -461,6 +558,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
     zip.start_file("xl/styles.xml", deflated).map_err(|e| e.to_string())?;
     zip.write_all(XLSX_STYLES.as_bytes()).map_err(|e| e.to_string())?;
+
+    for (name, bytes) in &passthrough {
+        zip.start_file(name.as_str(), deflated).map_err(|e| e.to_string())?;
+        zip.write_all(bytes).map_err(|e| e.to_string())?;
+    }
 
     let data = zip.finish().map_err(|e| e.to_string())?.into_inner();
     std::fs::write(path, data).map_err(|e| e.to_string())?;
@@ -487,14 +589,21 @@ const XLSX_STYLES: &str = concat!(
     "</styleSheet>\n",
 );
 
-fn build_xlsx_content_types(sheet_names: &[String]) -> String {
+fn build_xlsx_content_types(sheet_names: &[String], has_vba: bool, carried_overrides: &[(String, String)]) -> String {
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\n",
         "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\n",
         "<Default Extension=\"xml\" ContentType=\"application/xml\"/>\n",
-        "<Override PartName=\"/xl/workbook.xml\" ",
-          "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>\n",
+    ));
+    let workbook_ct = if has_vba {
+        "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
+    } else {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+    };
+    out.push_str(&format!(
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"{}\"/>\n",
+        workbook_ct
     ));
     for (i, _) in sheet_names.iter().enumerate() {
         out.push_str(&format!(
@@ -508,8 +617,14 @@ fn build_xlsx_content_types(sheet_names: &[String]) -> String {
           "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>\n",
         "<Override PartName=\"/xl/styles.xml\" ",
           "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>\n",
-        "</Types>\n",
     ));
+    for (part_name, ct) in carried_overrides {
+        out.push_str(&format!(
+            "<Override PartName=\"{}\" ContentType=\"{}\"/>\n",
+            xml_escape(part_name), xml_escape(ct)
+        ));
+    }
+    out.push_str("</Types>\n");
     out
 }
 
@@ -531,7 +646,7 @@ fn build_xlsx_workbook(sheet_names: &[String]) -> String {
     out
 }
 
-fn build_xlsx_workbook_rels(sheet_names: &[String]) -> String {
+fn build_xlsx_workbook_rels(sheet_names: &[String], has_vba: bool) -> String {
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
@@ -559,6 +674,15 @@ fn build_xlsx_workbook_rels(sheet_names: &[String]) -> String {
          Target=\"styles.xml\"/>\n",
         styles_id
     ));
+    if has_vba {
+        let vba_id = sheet_names.len() + 3;
+        out.push_str(&format!(
+            "<Relationship Id=\"rId{}\" \
+             Type=\"http://schemas.microsoft.com/office/2006/relationships/vbaProject\" \
+             Target=\"vbaProject.bin\"/>\n",
+            vba_id
+        ));
+    }
     out.push_str("</Relationships>\n");
     out
 }

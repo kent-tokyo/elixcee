@@ -590,6 +590,12 @@ pub struct Vm {
     /// reference that doesn't match it (Milestone B6a), not to model real
     /// multi-workbook switching.
     loaded_workbook_name: Option<String>,
+    /// Full path of the file loaded via `load_workbook_file` (or, for the
+    /// Python bindings, the module-level `load_workbook()` free function), if
+    /// any. Used only by `save_xlsx_impl` (`src/lib.rs`) to re-open the
+    /// original ZIP for unknown-part passthrough at save time — internal
+    /// plumbing between `vm` and `lib.rs`, not a public API.
+    pub(crate) loaded_workbook_path: Option<String>,
     /// The clipboard populated by `.Copy` and consumed by
     /// `.Paste`/`.PasteSpecial` (Milestone B6b). `None` initially, and
     /// whenever `Application.CutCopyMode` is set to `False`.
@@ -695,6 +701,7 @@ impl Vm {
             strict_resolution: false,
             last_resolution_failure: None,
             loaded_workbook_name: None,
+            loaded_workbook_path: None,
             clipboard: None,
             protected_sheets: HashSet::new(),
             merged_ranges: HashMap::new(),
@@ -1866,6 +1873,7 @@ impl Vm {
         self.loaded_workbook_name = std::path::Path::new(path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string());
+        self.loaded_workbook_path = Some(path.to_string());
         let sheets =
             reader::read_workbook(path).map_err(|e| format!("cannot read '{}': {}", path, e))?;
         if sheets.is_empty() {

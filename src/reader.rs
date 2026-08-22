@@ -353,6 +353,61 @@ fn zip_read_text<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Res
     Ok(s)
 }
 
+// ── Raw ZIP passthrough (Milestone: safe round-trip) ───────────────────────────
+
+/// Every ZIP entry's decompressed bytes, keyed by entry name — used only by
+/// `save_xlsx_impl` (`src/lib.rs`) at save time, to pass through OOXML parts this
+/// reader doesn't parse (`xl/vbaProject.bin`, tables, named ranges, full styles,
+/// etc.) unchanged instead of losing them on every save. Not called from any
+/// read-only path (`check`/`snapshot`/`diagnose`/`test-workbook` never write a
+/// workbook back out), so those paths never pay this cost — see
+/// `docs/xlsx-architecture.md`.
+pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>>, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut out = HashMap::new();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().to_string();
+        let mut buf = Vec::new();
+        entry.by_ref().take(ZIP_ENTRY_MAX_BYTES).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        out.insert(name, buf);
+    }
+    Ok(out)
+}
+
+/// Parses `[Content_Types].xml`'s `Default`/`Override` declarations, in document
+/// order — `(extension, content_type)` for `Default`, `(part_name, content_type)`
+/// for `Override`. Used by `save_xlsx_impl` to carry over a passed-through part's
+/// real declared content type instead of guessing one.
+pub(crate) fn content_type_decls(xml: &str) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let mut defaults = vec![];
+    let mut overrides = vec![];
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev {
+            let local = tag.split(':').next_back().unwrap_or(tag);
+            match local {
+                "Default" => {
+                    if let (Some(ext), Some(ct)) = (attr_get(attrs, "Extension"), attr_get(attrs, "ContentType")) {
+                        defaults.push((ext.to_string(), ct.to_string()));
+                    }
+                }
+                "Override" => {
+                    if let (Some(part), Some(ct)) = (attr_get(attrs, "PartName"), attr_get(attrs, "ContentType")) {
+                        overrides.push((part.to_string(), ct.to_string()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (defaults, overrides)
+}
+
 // ── XLSX reader ───────────────────────────────────────────────────────────────
 
 fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
