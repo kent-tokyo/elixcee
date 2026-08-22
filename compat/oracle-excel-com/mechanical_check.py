@@ -26,6 +26,7 @@ from xml.etree import ElementTree as ET
 
 CT_NS = "{http://schemas.openxmlformats.org/package/2006/content-types}"
 REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+SML_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
 VBA_ROOT_CONTENT_TYPE = "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
 
@@ -217,6 +218,84 @@ def check_roundtrip(original_path, output_path, edited_parts=None):
     return {"violations": violations, "structural_verdict": verdict}
 
 
+def _sheet_name_to_part(entries):
+    """{sheet name: worksheet part path} for a workbook's zip entries -- resolved via
+    workbook.xml's <sheet name=... r:id=...> and workbook.xml.rels, NOT by assuming a
+    fixed part-name pattern, since elixcee's writer renumbers worksheet parts sequentially
+    on every save (sheet3.xml in the original can become sheet1.xml in the output) --
+    comparing by physical part name would silently skip every sheet after a rename."""
+    if "xl/workbook.xml" not in entries or "xl/_rels/workbook.xml.rels" not in entries:
+        return {}
+    rels_root = ET.fromstring(entries["xl/_rels/workbook.xml.rels"])
+    rid_to_target = {
+        rel.get("Id"): rel.get("Target") for rel in rels_root.findall(f"{REL_NS}Relationship")
+    }
+    wb_root = ET.fromstring(entries["xl/workbook.xml"])
+    R_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    result = {}
+    for sheet_el in wb_root.findall(f"{SML_NS}sheets/{SML_NS}sheet"):
+        rid = sheet_el.get(f"{R_NS}id")
+        target = rid_to_target.get(rid)
+        if target is None:
+            continue
+        part = _normalize_part_path(("xl/" + target) if not target.startswith("/") else target[1:])
+        result[sheet_el.get("name")] = part
+    return result
+
+
+def _formula_cells(sheet_xml_bytes):
+    """{cell_ref: formula text} for every <c> with inline <f> text in one worksheet part.
+    Shared-formula follower cells (<f t="shared" si="N"/>, no inline text) are skipped --
+    reader.rs doesn't resolve those either (see WorkbookSheet.formulas' doc comment), so
+    they're not something elixcee could have preserved in the first place; flagging them
+    here would be a false positive against a pre-existing, documented limitation."""
+    root = ET.fromstring(sheet_xml_bytes)
+    out = {}
+    for c in root.findall(f".//{SML_NS}c"):
+        f_el = c.find(f"{SML_NS}f")
+        if f_el is not None and f_el.text:
+            out[c.get("r")] = f_el.text
+    return out
+
+
+def check_formula_preservation(original_path, output_path):
+    """Semantic check the structural pass above CANNOT do: worksheet XML is writer-owned
+    (always regenerated), so a formula silently flattened to a bare cached value produces
+    zero structural violations -- this is exactly the bug found authoring elixcee's first
+    real-Excel round-trip fixture (A2*2 in A3 survived as a stale literal `20` with no <f>
+    at all). Returns {"violations": [...], "formula_verdict": "CLEAN"|"ELIXCEE_DATA_LOSS"}.
+    """
+    violations = []
+    try:
+        original = _read_zip_entries(original_path)
+        output = _read_zip_entries(output_path)
+    except (zipfile.BadZipFile, FileNotFoundError) as e:
+        return {"violations": [f"unreadable: {e}"], "formula_verdict": "ORACLE_FAILURE"}
+
+    orig_sheets = _sheet_name_to_part(original)
+    # elixcee's writer always lowercases sheet names on save (Vm::active_sheet's own
+    # documented invariant, see populate_from_sheets) -- match case-insensitively so that
+    # normal, expected renaming doesn't read as "sheet missing, formulas lost".
+    out_sheets = {name.lower(): part for name, part in _sheet_name_to_part(output).items()}
+    for name, orig_part in orig_sheets.items():
+        if orig_part not in original:
+            continue
+        orig_formulas = _formula_cells(original[orig_part])
+        if not orig_formulas:
+            continue
+        out_part = out_sheets.get(name.lower())
+        out_formulas = _formula_cells(output[out_part]) if out_part and out_part in output else {}
+        for cell_ref, formula in orig_formulas.items():
+            if cell_ref not in out_formulas:
+                violations.append(
+                    f"sheet '{name}' cell {cell_ref}: formula '{formula}' present in original, "
+                    f"missing (flattened to a bare value, or cell dropped) in output"
+                )
+
+    verdict = "ELIXCEE_DATA_LOSS" if violations else "CLEAN"
+    return {"violations": violations, "formula_verdict": verdict}
+
+
 def self_test():
     """Negative calibration: corrupt two copies, assert this checker actually catches
     both, PLUS assert a genuinely clean pass-through reports clean. Run before trusting
@@ -236,6 +315,7 @@ def self_test():
                 '<Default Extension="xml" ContentType="application/xml"/>'
                 f'<Override PartName="/xl/workbook.xml" ContentType="{VBA_ROOT_CONTENT_TYPE}"/>'
                 '<Override PartName="/xl/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
                 "</Types>",
             )
             zf.writestr(
@@ -248,9 +328,22 @@ def self_test():
                 "xl/_rels/workbook.xml.rels",
                 f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vbaProject" Target="vbaProject.bin"/>'
+                '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
                 "</Relationships>",
             )
-            zf.writestr("xl/workbook.xml", '<?xml version="1.0"?><workbook/>')
+            R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            zf.writestr(
+                "xl/workbook.xml",
+                f'<?xml version="1.0"?><workbook xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+                '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId2"/></sheets></workbook>',
+            )
+            zf.writestr(
+                "xl/worksheets/sheet1.xml",
+                f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}"><sheetData>'
+                '<row r="1"><c r="A1"><v>10</v></c>'
+                '<c r="A2"><f>A1*2</f><v>20</v></c></row>'
+                "</sheetData></worksheet>",
+            )
             zf.writestr("xl/vbaProject.bin", b"\xd0\xcf\x11\xe0" + b"\x42" * 200)  # OLE magic + fill
 
         # --- Case A: clean passthrough copy (only workbook.xml "edited") -> must be clean.
@@ -300,7 +393,29 @@ def self_test():
         assert result["structural_verdict"] == "ELIXCEE_RELATIONSHIP_BREAK", result
         assert any("resolves to" in v for v in result["violations"]), result["violations"]
 
-    print("self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling target all caught)")
+        # --- Case E: formula preservation. This is the exact bug found authoring elixcee's
+        # first real-Excel fixture: worksheet XML is writer-owned, so a stripped <f> is
+        # structurally invisible (Case A's own STRUCTURALLY_CLEAN copy has an intact
+        # formula, but a naive structural pass wouldn't notice if it didn't). Confirm the
+        # clean copy reports CLEAN, then confirm a copy with <f> stripped is caught.
+        clean_formula_result = check_formula_preservation(orig_path, clean_path)
+        assert clean_formula_result["formula_verdict"] == "CLEAN", clean_formula_result
+
+        flattened_path = os.path.join(tmp, "flattened.xlsm")
+        with zipfile.ZipFile(orig_path) as src, zipfile.ZipFile(flattened_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    data = data.replace(b"<f>A1*2</f>", b"")
+                dst.writestr(item, data)
+        result = check_formula_preservation(orig_path, flattened_path)
+        assert result["formula_verdict"] == "ELIXCEE_DATA_LOSS", result
+        assert any("A2" in v and "formula" in v for v in result["violations"]), result["violations"]
+
+    print(
+        "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
+        "target, and stripped-formula all caught)"
+    )
 
 
 if __name__ == "__main__":
@@ -310,6 +425,8 @@ if __name__ == "__main__":
     if len(sys.argv) != 3:
         print("usage: mechanical_check.py <original.xlsm> <output.xlsm>  (or --self-test)", file=sys.stderr)
         sys.exit(2)
-    result = check_roundtrip(sys.argv[1], sys.argv[2])
-    print(json.dumps(result, indent=2))
-    sys.exit(0 if result["structural_verdict"] == "STRUCTURALLY_CLEAN" else 1)
+    structural = check_roundtrip(sys.argv[1], sys.argv[2])
+    formulas = check_formula_preservation(sys.argv[1], sys.argv[2])
+    print(json.dumps({"structural": structural, "formulas": formulas}, indent=2))
+    ok = structural["structural_verdict"] == "STRUCTURALLY_CLEAN" and formulas["formula_verdict"] == "CLEAN"
+    sys.exit(0 if ok else 1)

@@ -23,3 +23,8 @@ node_modules/
 # LibreOffice lock files left behind when compat/corpus/run-libreoffice.mjs opens a
 # workbook fixture (created next to the file being edited, e.g. .~lock.numeric_grid.xlsx#)
 .~lock.*#
+
+# Throwaway per-run copies mechanical_check.py's callers edit/save into -- the pristine/
+# fixtures beside this dir are the committed, read-only originals (see
+# compat/oracle-excel-com/fixtures/README.md).
+compat/oracle-excel-com/fixtures/work/
