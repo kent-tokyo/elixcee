@@ -8,14 +8,21 @@ fn run(flag: &str) -> String {
         .arg(flag)
         .output()
         .expect("run elixcee binary");
-    assert!(output.status.success(), "elixcee {flag} exited non-zero: {:?}", output);
+    assert!(
+        output.status.success(),
+        "elixcee {flag} exited non-zero: {:?}",
+        output
+    );
     String::from_utf8(output.stdout).expect("utf8 stdout")
 }
 
 #[test]
 fn version_flag_prints_the_crate_version() {
     let stdout = run("--version");
-    assert_eq!(stdout.trim(), format!("elixcee {}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        stdout.trim(),
+        format!("elixcee {}", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]
