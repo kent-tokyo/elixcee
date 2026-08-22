@@ -44,11 +44,23 @@ Test suite as of `0.8.0`: `cargo test --workspace` 955/955 (up from 872 at `0.6.
 10 below), `compat/corpus` 581 scenarios (0 `UNEXPLAINED`, 0 `MISMATCH`), every GitHub Actions
 job green on `master`.
 
-**Not validated against Microsoft Excel itself, anywhere, including the safe-round-trip work
-above** — the VBA-vs-Excel axis has never been exercised (item 1 below), and `0.8.0`'s own
-round-trip tests are structural/synthetic-fixture-only (`tests/xlsx_roundtrip.rs`; no real
-Excel-authored `.xlsm` exists in this repo yet, see `tests/fixtures/xlsm_roundtrip/README.md`).
-Closing this gap for real is `0.9.0`'s entire purpose — see the roadmap below.
+**`0.9.0`'s real-Excel validation is underway (`0.9.0-A`, in progress — not yet released as
+`0.9.0`)**: 5 real Microsoft-Excel-for-Mac-authored `.xlsm` fixtures (values/formula/style/
+merge/hidden rows-cols; VBA project + macro; table/data validation/conditional formatting;
+hyperlink/comment/defined name; chart/image/print area), each edited via elixcee, saved both
+ways (save-as and in-place), and reopened in real Excel — 0 repair warnings, 0 `vbaProject`
+loss, 0 relationship breakage, 0 in-place-save failures, across all 5. Found and fixed three
+real bugs the synthetic fixtures never exercised (formula flattening, orphaned relationships,
+wrong `.xlsm` content type for a non-macro workbook — the last one made Excel refuse to open
+the file outright). See `CHANGELOG.md`'s `[Unreleased]` and
+`compat/oracle-excel-com/results/0.9.0-A_summary.md` for full detail, including two open items
+neither fixed nor newly discovered: worksheet-embedded features (tables/validation/
+conditional-formatting/hyperlinks/defined-names/charts/images) are silently dropped on any
+save — already disclosed in `0.8.0`'s own Non-goals, confirmed live here, in `0.10.0`'s scope
+to fix, not `0.9.0`'s — and macro *execution* verification is blocked by a Mac Excel/VBA
+environment issue unrelated to elixcee. Not yet done: the 10-consecutive-cycle exit criterion
+(only 1 cycle per fixture per save mode so far) and the VBA-semantics-vs-Excel axis (`0.9.0-B`,
+paused — see the roadmap below).
 
 ## Known gaps
 
@@ -313,29 +325,62 @@ xlwings, and is lighter to embed than LibreOffice.
 **Goal**: move from "looks correct against synthetic fixtures" to "confirmed not to break in
 real Microsoft Excel." This is the shortest path from 95 to 96.
 
-**A same-day live spike into Mac Excel (not Windows) as a possible alternative automation
-surface** — see `compat/oracle-excel-com/MACOS_APPLESCRIPT_EXPLORATION.md` for the full,
-honest writeup. Confirmed: real Mac Excel automatable via AppleScript, and a VBA
-self-modification trick (VBA's own `VBComponents.Add`/`CodeModule.AddFromString`, cross-
-platform, triggered via AppleScript's `run VB macro` with a string argument) can dynamically
-inject and run arbitrary VBA source — proven twice, end to end. Not confirmed: reliable
-repeated use, and specifically how an intentionally-failing scenario (the corpus has ~8 of
-these) reports back without hanging Excel's automation bridge. Paused, not resumed — a fresh
-attempt in a dedicated session is the recommended next step if this path is pursued further,
-rather than continuing to layer fixes on the spike's own leftover state.
+**Split into two independent tracks, `0.9.0-A` and `0.9.0-B`** (decided mid-milestone, once
+it became clear file-preservation and VBA-semantics-vs-Excel needed very different
+verification strategies and failure-handling): `0.9.0-A` is **file-preservation round-trip
+only** (open in Excel → elixcee edits a value/formula, never intentionally-erroring VBA →
+save → reopen in Excel → compare) — no dynamic code injection, no VBA execution required at
+all beyond a pre-existing macro someone already wrote. `0.9.0-B` is the VBA-semantics-vs-Excel
+oracle (rerunning macros, including error scenarios) and stays paused.
+
+**`0.9.0-A` status: in progress, real progress made, not released.** Using Mac Excel (16.108),
+not Windows — the originally-planned Windows+Excel environment (item 1 below) was never set
+up; Mac was available and sufficient for pure file-preservation checks (no COM, but
+AppleScript covers open/save/reopen/cell-read/`has vb project` cleanly). 5 real Excel-authored
+`.xlsm` fixtures (not yet 10), each round-tripped through elixcee (save-as and in-place) and
+reopened in Excel: 0 repair warnings, 0 `vbaProject` loss, 0 relationship breakage, 0
+in-place-save failures. Found and fixed 3 real bugs (formula flattening, orphaned
+relationships, wrong `.xlsm` content type — see `CHANGELOG.md`). Confirmed, not newly
+discovered: worksheet-embedded features (tables/validation/conditional-formatting/
+hyperlinks/defined-names/charts/images) are silently dropped on every save — this is `0.10.0`'s
+job, not `0.9.0`'s, and was already disclosed as a `0.8.0` Non-goal. Not done: the
+10-consecutive-cycle requirement (item 5 below, only 1 cycle so far), and macro-*execution*
+verification specifically (blocked by a Mac Excel/VBA "license information not found" error
+that reproduces on an untouched file from Excel's own UI — an environment issue on this
+machine, not an elixcee defect, and not chased further this round). Full results:
+`compat/oracle-excel-com/results/0.9.0-A_{results.json,summary.md}`.
+
+**The earlier same-day live spike into Mac Excel AppleScript automation** (VBA's own
+`VBComponents.Add`/`CodeModule.AddFromString` self-modification trick, triggered via
+AppleScript's `run VB macro` with a string argument, to dynamically inject and run arbitrary
+VBA source) — see `compat/oracle-excel-com/MACOS_APPLESCRIPT_EXPLORATION.md` — remains paused
+and unresolved (VBE hangs on an injected runtime error; a `-50` parameter error that didn't
+un-break on revert). `0.9.0-A` deliberately did **not** need this mechanism at all: no dynamic
+injection, no intentionally-failing VBA, only reading/writing cell values, comparing
+`has vb project`, and running a macro that already existed in the saved file (a materially
+easier, and so far reliable, case). Also newly confirmed empirically this round: Mac Excel's
+AppleScript dictionary *documents* `make new list object`/`add data validation`/`make new
+format condition`/`make new chart object`, but none of them actually work (`-50` parameter
+errors against a live instance) — table/data-validation/conditional-formatting/hyperlink/chart
+content for fixtures 3–5 had to be authored manually in Excel's UI, not automated.
 
 1. **A real Windows+Excel verification environment.** Actually run
    `compat/oracle-excel-com`, not just keep its `CONTRACT.md` waiting. Record, per run: Excel
    version, 32/64-bit, Windows version, locale, workbook calculation mode, macro security
-   setting, and the run's own timestamp.
+   setting, and the run's own timestamp. *Not done — Mac Excel was used instead for `0.9.0-A`;
+   still open for `0.9.0-B`'s VBA-semantics-vs-Excel work.*
 2. **Real Excel-authored fixtures — at least 10.** Suggested mix: 5+ `.xlsm`, 3+ `.xlsx`, 2+
    with a chart/image/table, 2+ with data validation/conditional formatting, 2+ with
    comments/hyperlinks/defined names. All self-authored, containing no personal or
-   confidential data.
+   confidential data. *5 done (all `.xlsm`, all self-authored, no personal/confidential data;
+   see `0.9.0-A`'s fixture list above) — not yet 10.*
 3. **Real round-trip procedure**, automated or semi-automated, per fixture: create in Excel →
    run the VBA to record its initial result → edit a cell value or formula via elixcee → save
    in the same format → reopen in Excel → check for a repair-warning dialog → rerun the VBA →
-   compare the edited cell, the untouched cells, and overall workbook structure.
+   compare the edited cell, the untouched cells, and overall workbook structure. *Done for
+   value/formula edits and repair-warning checks, all 5 fixtures, both save modes; VBA rerun
+   only exercised for the one fixture with a pre-existing macro, and blocked there by the
+   environment issue noted above.*
 4. **Classify results, not just pass/fail**: `EXACT_MATCH`, `SEMANTIC_MATCH`,
    `EXPECTED_REWRITE`, `UNSUPPORTED_PRESERVED`, `ELIXCEE_DATA_LOSS`,
    `ELIXCEE_RELATIONSHIP_BREAK`, `EXCEL_REPAIR_REQUIRED`, `ORACLE_FAILURE`,
@@ -343,7 +388,11 @@ rather than continuing to layer fixes on the spike's own leftover state.
    (`compat/differential/classify.mjs`).
 5. **Hard gates, all zero**: Excel repair-warning dialogs; `xl/vbaProject.bin` loss; silent
    loss of any property elixcee claims to support; a changed result on VBA rerun; a wrong
-   value in an edited cell; loss of any unknown ZIP part.
+   value in an edited cell; loss of any unknown ZIP part. *All zero across the 5 fixtures
+   done so far — including "loss of any unknown ZIP part," now that bugs 2/3 above are
+   fixed. Worksheet-embedded features (tables/validation/etc.) don't count against this gate:
+   elixcee has never claimed to support preserving those (see `0.8.0`'s Non-goals), so their
+   loss isn't a broken claim — it's `0.10.0`'s open scope.*
 
 **Explicitly not this round**: a large batch of new VBA language features, an ODS writer,
 new chart generation, full `PivotTable` support, or `@elixcee/xlsx` stable npm publish.
@@ -352,7 +401,9 @@ new chart generation, full `PivotTable` support, or `@elixcee/xlsx` stable npm p
 rerun succeeds on every fixture, every failure gets a reproduction fixture and a real fix
 (not a downgraded gate), results recorded as machine-readable JSON, README states the
 "Microsoft Excel validated" scope precisely (which fixtures, which properties) rather than
-as a blanket claim.
+as a blanket claim. *Not yet met: 5 of 10 fixtures, 1 of 10+ cycles per fixture/mode, macro
+rerun verified on only 1 of 5 fixtures (blocked there, see above). README not yet updated —
+premature before the fixture count and cycle count are both met.*
 
 ### 0.10.0 — Lossless Worksheet Preservation
 

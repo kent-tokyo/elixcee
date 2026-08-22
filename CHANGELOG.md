@@ -8,9 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Two independent items: `@elixcee/xlsx` (still unpublished, `0.0.0-development`/
+Two independent tracks: `@elixcee/xlsx` (still unpublished, `0.0.0-development`/
 `private: true`, no `publishConfig`; see its own two entries below for exactly what's
-implemented) and two small root-crate fixes below.
+implemented) and the root-crate items below, including three real-Excel-round-trip bugs
+found and fixed during `0.9.0`'s validation work (see `ROADMAP.md`).
 
 ### CLI: `elixcee --version`/`-V`
 
@@ -34,6 +35,61 @@ rewrite). Fixed: `parse_call_stmt` now checks for `(` before consuming it, the s
 this parser already uses for other optional constructs, defaulting to an empty argument list
 when absent. Two new tests (zero-argument parenless call; a parenless call followed by
 another statement, guarding against over/under-consuming the line).
+
+### Root crate: safe round-trip, milestone 4 — three bugs found opening real-Excel output in real Excel
+
+`0.8.0`'s safe-round-trip work (milestones 1–3) was only ever verified against hand-built
+synthetic fixtures. `0.9.0`'s real-Excel validation (see `ROADMAP.md`) authored the first
+genuinely Excel-produced `.xlsm` round-trip fixture and found three bugs none of the
+synthetic fixtures happened to exercise — the third made Microsoft Excel refuse to open
+the saved file outright, not even a repair prompt.
+
+1. **Formula flattening.** `WorkbookSheet` (the struct backing the CLI `--file` path and
+   PyO3 `load_workbook()`) had no field for per-cell formula text at all — `read_xlsx`
+   already extracted it via the shared `xlsx_sheet_cells` parser, but discarded that half
+   converting down from the buffer-API's `BufferSheet`. Every load flattened every
+   formula cell to its last cached value; every subsequent save wrote that stale literal
+   back with no `<f>` element, silently and permanently — editing any one cell dropped
+   every *other* cell's formula on save. Fixed: `WorkbookSheet.formulas` (new field)
+   threads the formula text through to `Vm::CellContent.formula` on load (keeping the
+   file's own cached value, not recomputing — elixcee's formula engine doesn't cover
+   Excel's full function surface) and `xlsx_cell_xml` now emits `<f>` before `<v>` when
+   present. Shared-formula follower cells (`<f t="shared" si="N"/>`, no inline text) are
+   a pre-existing, documented `reader.rs` limitation, unchanged by this fix.
+2. **Orphaned relationships.** `xl/_rels/workbook.xml.rels` and `_rels/.rels` are both
+   writer-owned (fully regenerated from a fixed template) — the template only ever
+   emitted the relationships it already knew about (worksheet/sharedStrings/styles/
+   vbaProject, officeDocument), with no mechanism to carry over any other kind.
+   `xl/theme/theme1.xml` and `docProps/{app,core}.xml` passed through byte-identical but
+   lost their relationships, becoming orphaned parts. Fixed: new `carry_over_rels()`
+   parses the source's own rels files (`reader::workbook_rels_decls`, new) and re-emits
+   any relationship whose target survived as a passthrough part, skipping types the
+   writer already owns.
+3. **Wrong content type for a non-macro `.xlsm`.** `build_xlsx_content_types` chose
+   `workbook.xml`'s content type from whether the *source* had a VBA project, not from
+   the *output* extension. A real Excel-authored `.xlsm` with zero VBA content still
+   declares `application/vnd.ms-excel.sheet.macroEnabled.main+xml` — the macro-enabled
+   type is a property of the file format, not current content. Any `.xlsm` output with no
+   VBA project (the common case) declared the plain type instead, which Excel treats as a
+   fatal extension/format mismatch. Now driven by the output path's own extension.
+
+All three fixed and covered by new `tests/xlsx_roundtrip.rs` regression tests. New
+`compat/oracle-excel-com/mechanical_check.py` — a pure-stdlib structural OOXML validator
+(content-types, relationship completeness in both directions, formula preservation,
+vbaProject byte-identity) that's the fast, Excel-independent primary signal for this and
+future real-Excel validation rounds; its own self-test deliberately corrupts 7 different
+ways before trusting any real result. Five real Microsoft-Excel-authored `.xlsm` fixtures
+added under `compat/oracle-excel-com/fixtures/pristine/`. Full validation results in
+`compat/oracle-excel-com/results/0.9.0-A_{results.json,summary.md}`.
+
+### CI: WASM artifact size observability
+
+`packages/xlsx`'s WASM bridge size was already measured (`scripts/wasm-smoke.mjs` step 5)
+but only printed to the console, with no baseline to compare against. Now diffed against a
+committed baseline (`crates/elixcee-wasm/wasm-size-baseline.json`, updated by hand when a
+size change is intentional) and written to the CI step summary; the vendored WASM bridge
+build is also uploaded as a CI artifact. Observation only — no pass/fail threshold yet;
+that needs a few normal builds' worth of data first.
 
 ### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
 

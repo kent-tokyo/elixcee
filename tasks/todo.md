@@ -263,3 +263,22 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 - [x] **VBA自身の`VBProject.VBComponents.Add`/`CodeModule.AddFromString`（Windows/Mac共通API）を、AppleScriptの`run VB macro`経由で文字列引数として動的コードを渡し実行させる**というブートストラップ方式を考案・**2回、完全に成功**（`A1=42`、`A1=100/B1="hello"`）
 - [ ] **未解決**: (1) 注入したコードがVBAランタイムエラーを起こすと、Bootstrap側の`On Error GoTo`が捕捉できずVBEのブレークモードに落ちてAppleScript呼び出し全体がハングする（人間の手動介入でしか回復できない）。(2) その回復後、同一ワークブックでは（Excel完全再起動を挟んでも）それまで成功していた同じ呼び出しが`パラメータエラー(-50)`で一貫して失敗するようになった。(3) inject/runを2つの独立したAppleScript呼び出しに分離すると、追加したモジュールが正しく存在するにもかかわらず外部から見つからず無音でno-opする（追加した側のVBAコード内部から`Application.Run`で呼ぶ場合のみ機能する模様）。いずれも根本原因は未特定。
 - ユーザーの判断で本日はここで保留。次回は同じワークブックの残留状態を引き継がず、まっさらな`.xlsm`で最小構成（分離せず単一呼び出し）から再検証するのが推奨。
+
+## `0.9.0-A`: 実Excel round-trip検証（5フィクスチャ完走、実バグ3件発見・修正）
+
+ユーザーから「0.9.0を0.9.0-A（ファイル保存互換性のみ・VBA意味論oracleは含まない）と0.9.0-B（保留のまま）に分割し、0.9.0-Aだけ最小スコープで開始せよ」という詳細な指示を受けて着手。前回のMac Excel spikeが抱えていた「VBAランタイムエラーでVBEブレークモードにハング」問題を、意図的なエラーを一切含めない設計にすることで正面から回避する方針。
+
+- [x] **メカニカル検証ハーネス** `compat/oracle-excel-com/mechanical_check.py`（新規、Pythonの標準ライブラリのみ）。ZIP/relationship/content-type整合性をExcel不要で検証——advisorから「合格条件が全部ゼロという仕様は、検出できないチェッカーでも同じ結果になる」という指摘を受け、7パターンの意図的な破損データ（VBA切り詰め・relationships破損・danglingターゲット・formula消失・orphaned part）を先に検出できることを確認する`self_test()`を実装してから実フィクスチャに使用。
+- [x] **fixture 1**（値・数式・書式・結合セル・非表示行列、VBAなし）をAppleScriptで完全自動生成——`compat/oracle-excel-com/fixtures/pristine/`に格納。elixceeで編集→保存（save-as・in-place）→実Excel再オープンまで完走し、その過程で**実際にExcelが開けなくなる、または壊れたrelationshipを生む重大バグを3件発見・修正**：
+  1. **数式の消失**（commit `de2ee3f`）：CLI/PyO3が使う`read_workbook`の`WorkbookSheet`構造体に数式テキストを運ぶフィールドが存在せず、保存のたびに触っていない数式セルまで静かに固定値へ変換されていた。
+  2. **孤立したrelationship**（commit `1ea4066`）：`xl/_rels/workbook.xml.rels`と`_rels/.rels`が固定テンプレートから完全に再生成される設計で、テンプレートが知らない種類のrelationship（theme・calcChain・docProps）を一切引き継いでいなかった——対象パーツ自体はバイト単位で正しくpassthroughされるのに、それを指すrelationshipだけが消えるという、地味だが実Excelには致命的な不整合。
+  3. **`.xlsm`のcontent-type誤り**（commit `1ea4066`、最も深刻）：`workbook.xml`のcontent-typeを「ソースに実際にVBAプロジェクトがあるか」で決めていたため、VBAなしの`.xlsm`出力（このfixtureのような一般的なケース）が拡張子と矛盾する非マクロ型content-typeを宣言してしまい、**Excelが修復警告すら出さずファイルを開くこと自体を拒否**していた。
+- [x] AppleScriptでテーブル・データ検証・条件付き書式・ハイパーリンク・グラフの**作成**が一切できないことを実機で確認（`make new`系が軒並み`-50`パラメータエラー、`add data validation`は「メッセージを認識できない」——sdefに載っているが未実装）。ユーザーが手動でfixture 2〜5を作成、Desktopで受け渡し。
+- [x] **fixture 2〜5**を同じ手順で完走（`compat/oracle-excel-com/fixtures/pristine/`に格納）：
+  - fixture 2（VBAマクロ）：ファイル保存自体は問題なし（`has_vb_project`正しく`true`、修復警告なし）。ただし**マクロの実行検証は不能**——elixcee未編集のオリジナルファイルをExcel自身のマクロダイアログ（⌥F8）から実行しても「このコンポーネントのライセンス情報が見つかりません」というVBAランタイム側のエラーが再現し、elixceeとは無関係なこのMac環境固有の問題と判明（前回spikeで未解明だった`-50`系の不安定さと同系統の可能性）。
+  - fixture 3（テーブル・データ検証・条件付き書式）／fixture 4（ハイパーリンク・コメント・定義名）／fixture 5（グラフ・画像・印刷範囲）：いずれも保存は問題なし（修復警告なし）が、**対象の機能が全て静かに消失**することを実機で確認。原因は`build_xlsx_sheet`/`build_xlsx_workbook`がシート・ワークブックXMLを毎回まるごと再生成し、これらの機能を一切モデル化していないため——ただし0.8.0マイルストーンの時点でNon-goalsとして既に開示済みの制約であり、今回新たに見つかったバグではない（ROADMAP.mdの0.10.0「Lossless Worksheet Preservation」の対象）。
+- [x] 発見した3バグはいずれも`tests/xlsx_roundtrip.rs`へ回帰テスト追加、`mechanical_check.py`のself_testにも各バグ用のnegative caseを追加。`cargo test --workspace` 828+件（テストファイル分割後の集計、旧959件相当から純増）グリーン、`cargo fmt --all --check`クリーン。
+- [x] `CHANGELOG.md`の`[Unreleased]`・`ROADMAP.md`の`Current state`と`0.9.0`セクションを実態に同期（`/greenlane`）。
+- [ ] **未完了**：10回連続open/save/reopenサイクル要件（現状は各fixture・各保存モード1回のみ）。fixture 2のマクロ実行検証（環境要因でブロック）。0.9.0-B（VBA意味論oracle）は引き続き保留。
+
+結果は`compat/oracle-excel-com/results/0.9.0-A_results.json`（機械可読）と`0.9.0-A_summary.md`に保存。version bump・push・tag・publishは一切実施していない。
