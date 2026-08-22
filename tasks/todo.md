@@ -322,3 +322,14 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 - [x] `wasm32-unknown-unknown`ターゲットでの`cargo clippy -p elixcee-wasm --target wasm32-unknown-unknown -- -D warnings`、プレーンな`cargo build --workspace --all-targets`（clippy無し、素のrustc警告のみ）もあわせて確認——いずれもクリーン。
 
 いずれの修正も`cargo test --workspace`（828+件）・`cargo fmt --all --check`に影響なし（lint抑制とdocコメント文言のみの変更、挙動変更ゼロ）。
+
+## `/greenlane`セッション続き：CI恒久化（`rust-quality` job）、`cargo audit`初回実行と発見バグの修正
+
+ユーザーからの明示的な後続タスク指定（push承認時に併記）に基づき、上記2ラウンドで見つかった`--all-targets`clippy／`cargo doc`／fmtをCIへ恒久的に組み込んだ。その後、独自にGreen項目として`cargo audit`（ローカルにインストール済みだがこのプロジェクトで一度も未使用）を実行し、実際の脆弱性を発見・修正した。
+
+- [x] **`.github/workflows/ci.yml`に新規`rust-quality` job追加**（commit `2554958`）：`cargo fmt --all --check`／`cargo clippy --workspace --all-targets -- -D warnings`（python feature有無両方）／`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features python --document-private-items`。`continue-on-error`なし、広範な`#[allow]`なし、rustdoc警告も無視しない、既存`test` jobとの重複なし、python feature有無両方カバー——ユーザー指定の制約を全て満たす形で実装。既存`wasm` jobにも`cargo clippy -p elixcee-wasm --target wasm32-unknown-unknown -- -D warnings`ステップを追加（新規toolchainを増やさず既存jobのwasm32セットアップを再利用）。`actionlint`・YAML構文チェック・ローカルでの同一コマンド実行、いずれも問題なしを確認してからpush、CI全job green確認済み。
+- [x] **`cargo audit`初回実行**（commit `fe84c44`）：3件のRustSec勧告を発見。`RUSTSEC-2026-0204`（crossbeam-epoch、bench専用の`criterion`→`rayon`経由）は`cargo update -p crossbeam-epoch`のみで解消（Cargo.toml変更不要）。`RUSTSEC-2026-0195`/`RUSTSEC-2026-0194`（quick-xml、severity 7.5×2件——メモリ枯渇DoS・二次時間DoS）は`calamine`（`[dev-dependencies]`のみ、`src/reader.rs`のコメント通りランタイム非依存の差分テスト用oracleと確認済み）経由——`calamine 0.24`→`0.36`へ更新しquick-xml 0.41を取り込んで解消。
+- [x] **calamineバンプで発覚した既存の実バグを修正**（同commit `fe84c44`）：`diff_xlsx_all_types`が失敗——`xml:space="preserve"`が無い共有文字列`<t>`要素の前後空白を、calamine 0.36が0.24と異なりtrimするようになったため。oracleの回帰として回避するのではなく、実際にelixcee自身が書き出した生XMLを確認した結果、**elixcee側のwriterの実バグ**と判明：`build_xlsx_shared_strings`が前後空白を持つ文字列に対して一度も`xml:space="preserve"`を付与しておらず、real Excel含むどんな厳格なXMLコンシューマに対しても前後空白の保持が保証されない状態だった。`<v>`セルの読み取り側で既に修正済みの`xml:space="preserve"`対応（過去のreader修正）の、writer側の対となる欠落。前後空白を持つ文字列にのみ`xml:space="preserve"`を付与する形で修正し、直接検証する単体テストも追加（commit `6659e76`）。
+- [x] `cargo audit`が0件・`cargo test --workspace`（828+件）・`cargo fmt --all --check`・`cargo clippy --workspace --all-targets`（python feature有無両方）・`cargo doc --document-private-items`、いずれもクリーンを確認。
+
+このcalamine関連の発見は、「セキュリティ修正のための依存関係バンプが、無関係に見えて実は本物のwriterバグを暴いた」という事例——oracle側の挙動変化に安易に「非elixceeの問題」と結論せず、実際に生成された生XMLまで遡って検証したことで見つかった。
