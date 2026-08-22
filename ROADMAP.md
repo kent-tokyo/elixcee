@@ -313,6 +313,17 @@ xlwings, and is lighter to embed than LibreOffice.
 **Goal**: move from "looks correct against synthetic fixtures" to "confirmed not to break in
 real Microsoft Excel." This is the shortest path from 95 to 96.
 
+**A same-day live spike into Mac Excel (not Windows) as a possible alternative automation
+surface** — see `compat/oracle-excel-com/MACOS_APPLESCRIPT_EXPLORATION.md` for the full,
+honest writeup. Confirmed: real Mac Excel automatable via AppleScript, and a VBA
+self-modification trick (VBA's own `VBComponents.Add`/`CodeModule.AddFromString`, cross-
+platform, triggered via AppleScript's `run VB macro` with a string argument) can dynamically
+inject and run arbitrary VBA source — proven twice, end to end. Not confirmed: reliable
+repeated use, and specifically how an intentionally-failing scenario (the corpus has ~8 of
+these) reports back without hanging Excel's automation bridge. Paused, not resumed — a fresh
+attempt in a dedicated session is the recommended next step if this path is pursued further,
+rather than continuing to layer fixes on the spike's own leftover state.
+
 1. **A real Windows+Excel verification environment.** Actually run
    `compat/oracle-excel-com`, not just keep its `CONTRACT.md` waiting. Record, per run: Excel
    version, 32/64-bit, Windows version, locale, workbook calculation mode, macro security

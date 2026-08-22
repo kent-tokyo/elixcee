@@ -251,3 +251,13 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 ## `Call <Sub名>`括弧省略構文の修正（`/greenlane`セッション、commit `f30dce5`）
 
 上記「Phase C/D の公開」セクションで0.7.0リリース検証中に発見・開示のみだった`Call <Sub名>`（引数なし・括弧省略）のパースエラーを修正。`parse_call_stmt`が`LParen`を無条件必須としていたのを、他の任意括弧構文と同じ`if *self.peek() == Tok::LParen`パターンに変更し、括弧省略時は空引数リストとして扱うよう対応。新規テスト2件（`test_call_stmt_no_parens_zero_args`/`test_call_stmt_no_parens_followed_by_another_statement`）。`cargo test --workspace` 959/959、`compat/corpus`（581件・0 UNEXPLAINED/0 MISMATCH）・`compat/vba-semantics`（386件・0 BUG/0 UNCLASSIFIED・KNOWN_LIMITATION 14件で変化なし）とも回帰なしを実release binaryで確認。
+
+## Mac Excelでの実automation調査（保留、`compat/oracle-excel-com/MACOS_APPLESCRIPT_EXPLORATION.md`）
+
+ユーザーのMacに実際にMicrosoft Excel（16.108、ライセンス有効）が使えることが判明し、0.9.0の実Excel検証環境として使えないか同日中にライブ調査した。詳細な経緯・全ての実行結果は`MACOS_APPLESCRIPT_EXPLORATION.md`に記録済み。要点のみ:
+
+- [x] AppleScriptからMac Excelの基本操作（ワークブック作成・保存・セル読み書き）が可能なことを確認
+- [x] `Excel.sdef`（8000行超）を実際に読み、AppleScript側にVBAプロジェクト操作機能が一切存在しない（`has vb project`という読み取り専用bool 1つのみ）ことを確認
+- [x] **VBA自身の`VBProject.VBComponents.Add`/`CodeModule.AddFromString`（Windows/Mac共通API）を、AppleScriptの`run VB macro`経由で文字列引数として動的コードを渡し実行させる**というブートストラップ方式を考案・**2回、完全に成功**（`A1=42`、`A1=100/B1="hello"`）
+- [ ] **未解決**: (1) 注入したコードがVBAランタイムエラーを起こすと、Bootstrap側の`On Error GoTo`が捕捉できずVBEのブレークモードに落ちてAppleScript呼び出し全体がハングする（人間の手動介入でしか回復できない）。(2) その回復後、同一ワークブックでは（Excel完全再起動を挟んでも）それまで成功していた同じ呼び出しが`パラメータエラー(-50)`で一貫して失敗するようになった。(3) inject/runを2つの独立したAppleScript呼び出しに分離すると、追加したモジュールが正しく存在するにもかかわらず外部から見つからず無音でno-opする（追加した側のVBAコード内部から`Application.Run`で呼ぶ場合のみ機能する模様）。いずれも根本原因は未特定。
+- ユーザーの判断で本日はここで保留。次回は同じワークブックの残留状態を引き継がず、まっさらな`.xlsm`で最小構成（分離せず単一呼び出し）から再検証するのが推奨。
