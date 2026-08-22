@@ -31,8 +31,13 @@ use vm::{ExcelError, serial_to_display};
 /// Represents an Excel cell error value (#N/A, #VALUE!, #DIV/0!, etc.).
 /// Returned by ``get_cell`` and ``cells()`` for error cells, and accepted by
 /// ``set_cell`` to store an error value.
+// `from_py_object` opts in explicitly to the auto-derived `FromPyObject` impl pyo3 is
+// deprecating as implicit-by-default for `Clone` pyclasses -- kept, not dropped, because
+// `python_to_variant` (below) does `obj.extract::<PyExcelError>()` to accept an ExcelError
+// a Python caller passes back into `set_cell`; `skip_from_py_object` would silently break
+// that real, documented round-trip.
 #[cfg(feature = "python")]
-#[pyclass(name = "ExcelError")]
+#[pyclass(name = "ExcelError", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyExcelError {
     /// The error string, e.g. ``"#N/A"``, ``"#VALUE!"``, ``"#DIV/0!"``.
@@ -203,7 +208,7 @@ impl PyVm {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
         self.inner
             .run_sub(&prog, macro_name)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     /// Write a value into a cell. ``row`` and ``col`` are 1-based (VBA convention).
@@ -250,14 +255,14 @@ impl PyVm {
     fn set_cell_formula(&mut self, row: u32, col: u32, formula: &str) -> PyResult<()> {
         self.inner
             .set_cell_formula(row, col, formula)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
     /// Re-evaluate all cells that have a stored formula.
     fn recalculate(&mut self) -> PyResult<()> {
         self.inner
             .recalculate_all()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     /// Set multiple cell formulas at once.
@@ -412,7 +417,7 @@ fn run_macro(
 #[pyo3(signature = (path, sheet = None, on_msgbox = "skip"))]
 fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<PyVm> {
     let sheets =
-        reader::read_workbook(path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e))?;
+        reader::read_workbook(path).map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
 
     if sheets.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -427,7 +432,7 @@ fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<P
 
     if let Some(s) = sheet {
         vm.set_active_sheet(&s.to_lowercase())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     }
 
     Ok(PyVm { inner: vm })
