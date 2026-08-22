@@ -498,7 +498,7 @@ fn eval_func(
 
 // ── Arithmetic ────────────────────────────────────────────────────────────────
 
-/// Collect numeric values from a single Range argument without allocating Vec<Variant>.
+/// Collect numeric values from a single Range argument without allocating `Vec<Variant>`.
 /// Falls back to collect_all for non-Range args or multiple args.
 macro_rules! range_nums_fast {
     ($args:expr, $cells:expr) => {{
@@ -4339,7 +4339,7 @@ fn compare_element(op: &BinOpKind, l: &Variant, r: &Variant) -> bool {
     }
 }
 
-/// Evaluate a formula expression to a Vec<bool>:
+/// Evaluate a formula expression to a `Vec<bool>`:
 /// - Range → truthy check on each cell
 /// - BinOp with a Range lhs → element-wise comparison
 /// - Scalar → single-element vec

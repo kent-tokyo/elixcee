@@ -560,7 +560,7 @@ pub struct Vm {
     /// "Sub not found" failure happens before this is ever set).
     current_span: Option<SourceSpan>,
     pub exit_flag: Option<ExitKind>,
-    /// Pending unconditional jump target (GoTo <label>).
+    /// Pending unconditional jump target (`GoTo <label>`).
     pending_goto: Option<String>,
     /// One frame per currently-executing Sub/Function call, innermost last —
     /// pushed/popped around every `call_sub_def`/`call_func_def` invocation
