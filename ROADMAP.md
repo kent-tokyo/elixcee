@@ -7,15 +7,16 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 ## Current state
 
-`elixcee` **0.8.0** (Rust crate + Python package), `elixcee-types` **0.3.0**, `elixcee-wasm`
+`elixcee` **0.9.0** (Rust crate + Python package), `elixcee-types` **0.3.0**, `elixcee-wasm`
 **0.1.0** (never published to crates.io by design — `publish = false`) — all confirmed live
-via crates.io's/PyPI's own APIs, not assumed from local files. `bin-v0.8.0`'s GitHub Release
-carries all three CLI platform binaries (macOS aarch64, Windows x86_64, Linux x86_64).
-`@elixcee/xlsx` is unchanged: `read()`/`readFile()`/`readFileSync()` and
-`write()`/`writeFile()`/`writeFileSync()` are both implemented and differential-tested, but
-the package is still `0.0.0-development`/`private: true`/unpublished — no `npm publish` has
-happened (confirmed live: `registry.npmjs.org/@elixcee/xlsx` 404s), and `@elixcee` scope
-ownership itself is unconfirmed (item 9 below).
+via crates.io's/PyPI's own APIs, not assumed from local files. `bin-v0.9.0`'s GitHub Release
+carries all three CLI platform binaries (macOS aarch64, Windows x86_64, Linux x86_64),
+`--version` confirmed live against the downloaded macOS binary. `@elixcee/xlsx` is unchanged:
+`read()`/`readFile()`/`readFileSync()` and `write()`/`writeFile()`/`writeFileSync()` are both
+implemented and differential-tested, but the package is still
+`0.0.0-development`/`private: true`/unpublished — no `npm publish` has happened (confirmed
+live: `registry.npmjs.org/@elixcee/xlsx` 404s), and `@elixcee` scope ownership itself is
+unconfirmed (item 9 below).
 
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
@@ -44,15 +45,15 @@ Test suite as of `0.8.0`: `cargo test --workspace` 955/955 (up from 872 at `0.6.
 10 below), `compat/corpus` 581 scenarios (0 `UNEXPLAINED`, 0 `MISMATCH`), every GitHub Actions
 job green on `master`.
 
-**`0.9.0`'s real-Excel validation is underway (`0.9.0-A`, in progress — not yet released as
-`0.9.0`)**: 5 real Microsoft-Excel-for-Mac-authored `.xlsm` fixtures (values/formula/style/
-merge/hidden rows-cols; VBA project + macro; table/data validation/conditional formatting;
+**`0.9.0` shipped `0.9.0-A`: the first real-Excel-validated round trip.** 5 real
+Microsoft-Excel-for-Mac-authored `.xlsm` fixtures (values/formula/style/merge/hidden
+rows-cols; VBA project + macro; table/data validation/conditional formatting;
 hyperlink/comment/defined name; chart/image/print area), each edited via elixcee, saved both
 ways (save-as and in-place), and reopened in real Excel — 0 repair warnings, 0 `vbaProject`
 loss, 0 relationship breakage, 0 in-place-save failures, across all 5. Found and fixed three
 real bugs the synthetic fixtures never exercised (formula flattening, orphaned relationships,
 wrong `.xlsm` content type for a non-macro workbook — the last one made Excel refuse to open
-the file outright). See `CHANGELOG.md`'s `[Unreleased]` and
+the file outright). See `CHANGELOG.md`'s `[0.9.0]` and
 `compat/oracle-excel-com/results/0.9.0-A_summary.md` for full detail, including two open items
 neither fixed nor newly discovered: worksheet-embedded features (tables/validation/
 conditional-formatting/hyperlinks/defined-names/charts/images) are silently dropped on any
@@ -61,32 +62,45 @@ to fix, not `0.9.0`'s. **Excel-authored `.xlsm` save/reopen/structural preservat
 verified against real Excel. Macro re-execution after a save is NOT verified** — a Mac
 Excel environment VBA license error blocks running any macro at all, reproduced on the
 untouched original file before elixcee ever touched it; this is neither a pass nor a fail
-for elixcee's own round-trip, it's simply unevaluated. Do not describe this round as having
-verified macro compatibility or confirmed VBA still works post-save. The 10-consecutive-cycle
-exit criterion is superseded, not met: a 5-cycle chained in-place stress test on the same
-file (harder than 5 independent cycles — any accumulating corruption would compound) stayed
-clean through real Excel reopen, judged sufficient evidence in place of the full 10. The
-VBA-semantics-vs-Excel axis (`0.9.0-B`) stays paused — see the roadmap below.
+for elixcee's own round-trip, it's simply unevaluated. Do not describe this release as having
+verified macro compatibility or confirmed VBA still works post-save — `README.md`/
+`README_ja.md`/`README_zh.md`'s own "Microsoft Excel round-trip validation" section states
+this precisely. The 10-consecutive-cycle exit criterion is superseded, not met: a 5-cycle
+chained in-place stress test on the same file (harder than 5 independent cycles — any
+accumulating corruption would compound) stayed clean through real Excel reopen, judged
+sufficient evidence in place of the full 10. The VBA-semantics-vs-Excel axis (`0.9.0-B`)
+stays paused — see the roadmap below.
+
+`cargo test --workspace` 961/961 (up from 955 at `0.8.0`), `compat/vba-semantics` 386 cases
+(0 `BUG`, 0 `UNCLASSIFIED`, 14 `KNOWN_LIMITATION`, unchanged from `0.8.0`), `compat/corpus`
+581 scenarios (0 `UNEXPLAINED`, 0 `MISMATCH`), every GitHub Actions job green on `master`
+before this release.
 
 ## Known gaps
 
-1. **No Microsoft Excel validation, at all.** Every VBA differential result to date is
-   against LibreOffice, not Excel — and LibreOffice's own VBA layer is not a verified proxy
-   for Excel's. No Windows/Excel environment has ever been available in this project's
-   toolchain. This is the single largest gap blocking a 90+ claim. The
-   `compat/oracle-excel-com/CONTRACT.md` adapter is written and waiting for one.
-   **Also applies to item 13's "safe round-trip" work (shipped as `0.8.0`)**: its own tests
-   are structural/synthetic-fixture-only, for the same reason — no real Excel-authored file
-   or working Excel/LibreOffice oracle exists to verify against yet. Closing this gap for
-   real, with a real Windows+Excel environment and real Excel-authored fixtures, is `0.9.0`'s
-   entire purpose — see the roadmap below.
+1. **VBA semantic differential results are still validated against LibreOffice only, not
+   Excel — narrower than it used to be, not closed.** Every VBA differential result (the
+   386-case `compat/vba-semantics` suite, the 581-scenario `compat/corpus`) is still checked
+   against LibreOffice, not Excel, and LibreOffice's own VBA layer is not a verified proxy
+   for Excel's — no Windows/Excel environment has ever been available in this project's
+   toolchain, and the `compat/oracle-excel-com/CONTRACT.md` adapter is still written and
+   waiting for one. **What changed as of `0.9.0`**: the separate "does elixcee's own
+   round-trip save path corrupt a real Excel-authored file" question — item 13's "safe
+   round-trip" work (shipped as `0.8.0`, structural/synthetic-fixture-only at the time) — is
+   now validated against real Microsoft Excel (5 fixtures, `0.9.0-A`, see the roadmap below
+   and `CHANGELOG.md`'s `[0.9.0]`). Macro *re-execution* after a save is a further, separate,
+   still-unvalidated question (blocked by a Mac Excel environment issue, see below) — do not
+   conflate "file-preservation validated" with "VBA-vs-Excel semantics validated" or "macro
+   execution after save validated." Closing the semantic-differential gap for real needs a
+   real Windows+Excel environment; that work is `0.9.0-B`, paused — see the roadmap below.
 
 2. **LibreOffice headless oracle is broken for most of the VBA corpus.** 578/581 scenarios
    are `ORACLE_UNAVAILABLE` — headless UNO hangs on any `Range`/`Cells` access. Root-caused,
    not fixed (explicitly ruled out twice already: fixing it doesn't raise elixcee's own
    product value, only this one oracle's usability — revisit only if the corpus itself
-   becomes the bottleneck rather than VBA coverage). Consistent with, not contradicted by,
-   item 13's own structural-only verification below.
+   becomes the bottleneck rather than VBA coverage). Unrelated to item 13's own real-Excel
+   round-trip validation below (this gap is about VBA *semantic* differential testing, a
+   different axis from file-preservation round-tripping).
 3. **Multi-area Paste** only executes for the matching-shape case; every other combination
    (count/shape mismatch, single↔multi either direction) stays diagnose-only. Extending this
    correctly needs a real oracle to verify against (LibreOffice's is broken, Excel's doesn't
@@ -290,9 +304,13 @@ VBA-semantics-vs-Excel axis (`0.9.0-B`) stays paused — see the roadmap below.
     `crates/elixcee-wasm` (both untouched by this milestone, by design — see item 6 above for
     why they're a separate, unrelated codepath).
 
-    **Shipped as `elixcee` `0.8.0`** (confirmed live on crates.io/PyPI). Validating it
-    against a real Microsoft-Excel-authored `.xlsm` — not just the synthetic fixtures in
-    `tests/xlsx_roundtrip.rs` — is `0.9.0`'s job; see the roadmap below.
+    **Shipped as `elixcee` `0.8.0`** (confirmed live on crates.io/PyPI). **Validated against
+    5 real Microsoft-Excel-authored `.xlsm` fixtures as of `0.9.0`** (`0.9.0-A`, see the
+    roadmap below) — not just the synthetic fixtures in `tests/xlsx_roundtrip.rs`, which
+    remain as a fast regression guard alongside the real fixtures now under
+    `compat/oracle-excel-com/fixtures/pristine/`. Three real bugs this real-Excel validation
+    found and fixed (formula flattening, orphaned relationships, wrong `.xlsm` content type)
+    are in `CHANGELOG.md`'s `[0.9.0]`.
 
 ## npm/JS/WASM: still-open gaps
 
@@ -326,10 +344,19 @@ better than each of them at this specific intersection: writes more than calamin
 unlike SheetJS, is more Rust/WASM/diagnostics-native than openpyxl, doesn't need Excel unlike
 xlwings, and is lighter to embed than LibreOffice.
 
-### 0.9.0 — Excel-Validated Round Trip
+### 0.9.0 — Excel-Validated Round Trip — **shipped**
 
 **Goal**: move from "looks correct against synthetic fixtures" to "confirmed not to break in
 real Microsoft Excel." This is the shortest path from 95 to 96.
+
+**Released.** `0.9.0-A`'s scope (file-preservation round trip only, detailed below) shipped
+as `elixcee` `0.9.0` — confirmed live on crates.io and PyPI, `bin-v0.9.0` CLI binaries
+published, a fresh venv/fresh Cargo project/downloaded binary all independently re-verified
+post-publish. Shipped as a **deliberately partial** win, same pattern as `0.8.0`: the
+10-fixture and 10-cycle targets below were not literally met (superseded by alternate
+evidence — see the item-by-item status notes), and macro-execution verification stayed
+open, not silently absorbed into a broader "Excel compatibility validated" claim. `0.9.0-B`
+(VBA-semantics-vs-Excel) remains a separate, still-paused track.
 
 **Split into two independent tracks, `0.9.0-A` and `0.9.0-B`** (decided mid-milestone, once
 it became clear file-preservation and VBA-semantics-vs-Excel needed very different

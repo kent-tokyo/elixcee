@@ -288,3 +288,17 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 - [x] fixture 1に対し、同一ファイルへの**5回連続in-place保存**（毎回新規コピーではなく累積編集）を実施——反復によるXML/ZIP構造の劣化・style/merge/formulaの累積消失・2回目以降だけ発生する非冪等な破損を検査する、単発試験より厳しいテスト。5サイクル全てmechanical checker clean、5サイクル後の実Excel再オープンでも値・数式（再計算されて1110）・結合セル全て正常を確認。
 - [x] ユーザー判定：**10サイクルへの追加反復は不要**——5-cycle chained testを代替証拠として採用し、ROADMAP.md/結果ファイルには「10-cycle達成」ではなく「superseded」と正確に明記。マクロ実行の未評価扱いも同様に、elixceeの成功・失敗どちらにも分類しないよう全ドキュメントの表現を修正。
 - [x] 今回の9ローカルコミット（`2b87ef2`〜`b74bfbd`）をユーザー承認の上`origin/master`へpush。push後GitHub Actions全job確認、機密情報混入チェック、versionが0.8.0のまま変更されていないことを確認——詳細はCI確認結果として別途記録。
+- [x] **push前スキャンで実際にPIIが混入していたことを発見・修正**（commit `a1f869d`）：全5 fixtureの`docProps/core.xml`（本名）・`xl/workbook.xml`（`x15ac:absPath`のローカルパス）、fixture4の`xl/persons/person.xml`（本名＋userIdトークン）。elixceeのwriterが一切読み書きしないメタデータと確認した上でサニタイズし、mechanical_check再実行と実Excel再オープンで機能への影響がないことを確認。ユーザーが追加で発見した`tests/xlsx_roundtrip.rs`内の残留ローカルパス（既存originに公開済み、履歴改変はせず現状のtreeのみ修正）も併せて対応。
+
+## `elixcee` 0.9.0 正式リリース
+
+`0.9.0-A`検証ラウンド完了・CI全job green確認後、ユーザーから0.9.0正式公開の承認を受けて実施。
+
+- [x] **README.md/README_ja.md/README_zh.md**へ「Microsoft Excel round-trip validation」節を追加（commit `fb29267`）。検証済み範囲（save-as/in-place・修復警告なし・formula/style/merge/hidden/VBAバイト/未知パーツ/relationship保持）と未検証範囲（マクロ再実行・worksheet埋め込み機能）を明記し、「Excel互換性検証済み」のような包括的表現は避けた。
+- [x] **version bump**（commit `f810774`）：`Cargo.toml`/`pyproject.toml` 0.8.0→0.9.0、`Cargo.lock`再生成（`elixcee-types`は0.3.0のまま、diffはversion行のみ）。`CHANGELOG.md`を`[Unreleased]`（`@elixcee/xlsx`のみ残す）と新規`[0.9.0] - 2026-08-22`（root crateの3バグ修正等）へ分割——0.8.0リリース時と同じ「2トラック分離」方式を踏襲。
+- [x] **リリース前検証**：`cargo fmt --all --check`／`cargo test --workspace`（961/961）／`cargo build --release --workspace`／`cargo check --features python --lib`（ローカルの別クローンを指す古い`VIRTUAL_ENV`環境変数が干渉、`PYO3_PYTHON`明示で解消——コード側の問題ではない）／`./scripts/check-versions.sh`（OK 0.9.0）／`compat/vba-semantics`386件（0 BUG/0 UNCLASSIFIED）／`compat/corpus`581件（0 UNEXPLAINED/0 MISMATCH）／`mechanical_check.py --self-test`／5 pristine fixture全てにmechanical_check実行／`packages/xlsx`differential各種／npm packed consumer／WASM Node smoke／real Chrome smoke——全てgreen。リポジトリ全体PIIスキャン（`/Users/`・`/home/`・`C:\Users\`・メール・`dc:creator`等）で新規リークなしを確認。
+- [x] **公開**：crates.io（`elixcee-types`→`elixcee`の順、`workflow_dispatch`で`f810774`のSHAを指定）→実API確認→`v0.9.0`タグをpush（PyPI自動発火）→wheel27種+sdist実API確認→fresh venv `pip install elixcee==0.9.0`→fresh Rust project `elixcee = "0.9.0"`で`cargo check`/`cargo run`→`bin-v0.9.0`タグpush→Windows/Linux/macOS 3バイナリ確認→ダウンロードしたmacOSバイナリで`--version`が`elixcee 0.9.0`を確認。
+- [x] **fresh-install smokeテスト**（fresh venv上で実施）：formula付きfixtureのload→編集→save→`<f>A2*2</f>`残存を確認／`.xlsm`保存後のcontent typeが`macroEnabled.main+xml`のまま／`mechanical_check.py`がstructural・formula両方CLEAN／多次元配列（`arr(2,0)`≠`arr(2,1)`・両次元の`UBound`正しい）／caller/callee間`Err.Raise`の`On Error`捕捉。
+- [x] `ROADMAP.md`の`Current state`と`0.9.0`セクションを実際のリリース状態に同期（`/greenlane`）：「0.9.0-A進行中・未リリース」という記述を「0.9.0として出荷済み」へ更新、Known gaps item 1（旧「実Excel検証皆無」）とitem 13（旧「合成fixtureのみ検証」）を実態に合わせて書き換え。
+
+`elixcee-types` 0.3.0、`elixcee-wasm` 0.1.0、`@elixcee/xlsx` `0.0.0-development`/`private:true`はいずれも今回変更なし。ユーザー評価：96/100点（0.7.0:94→0.8.0:95→0.9.0:96）。
