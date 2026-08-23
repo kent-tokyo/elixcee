@@ -1537,6 +1537,140 @@ fn surviving_sheets_keep_their_own_origin_part_name_after_an_earlier_sheet_is_de
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// 0.10.0-D4: deleting a sheet must prune its EXCLUSIVELY-reachable target parts (its own
+/// worksheet `.rels`, and whatever only IT points at) while leaving anything SHARED with a
+/// surviving sheet alone. Sheet1 (survives) and Sheet2 (deleted) both reference the same
+/// `xl/tables/shared_table.xml` via their own `<tableParts>`; Sheet2 additionally
+/// references `xl/drawings/exclusive_drawing1.xml`, which nothing else points at.
+#[test]
+fn deleting_a_sheet_prunes_its_exclusive_targets_but_keeps_shared_ones() {
+    const WORKBOOK_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheets>\n",
+        "<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/>\n",
+        "<sheet name=\"Sheet2\" sheetId=\"2\" r:id=\"rId2\"/>\n",
+        "</sheets>\n</workbook>\n",
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const SHEET1_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n",
+        "<tableParts count=\"1\"><tablePart r:id=\"rId1\"/></tableParts>\n</worksheet>\n",
+    );
+    const SHEET1_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\" Target=\"../tables/shared_table.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const SHEET2_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>2</v></c></row></sheetData>\n",
+        "<tableParts count=\"1\"><tablePart r:id=\"rId1\"/></tableParts>\n",
+        "<drawing r:id=\"rId2\"/>\n</worksheet>\n",
+    );
+    const SHEET2_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\" Target=\"../tables/shared_table.xml\"/>\n",
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing\" Target=\"../drawings/exclusive_drawing1.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const DRAWING_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"/>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(&mut zip, "xl/worksheets/sheet1.xml", SHEET1_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/worksheets/_rels/sheet1.xml.rels",
+        SHEET1_RELS.as_bytes(),
+    );
+    zip_add(&mut zip, "xl/worksheets/sheet2.xml", SHEET2_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/worksheets/_rels/sheet2.xml.rels",
+        SHEET2_RELS.as_bytes(),
+    );
+    zip_add(&mut zip, "xl/tables/shared_table.xml", TABLE_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/drawings/exclusive_drawing1.xml",
+        DRAWING_XML.as_bytes(),
+    );
+    let fixture_bytes = zip.finish().unwrap().into_inner();
+
+    let source_path = tmp_path("source_d4_prune.xlsx");
+    let output_path = tmp_path("output_d4_prune.xlsx");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    let prog =
+        parser::parse("Sub DeleteSheet2()\n    Sheets(\"Sheet2\").Delete\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "DeleteSheet2").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+
+    assert!(
+        !output_entries.contains_key("xl/worksheets/sheet2.xml"),
+        "sheet2.xml must not exist -- Sheet2 was deleted"
+    );
+    assert!(
+        !output_entries.contains_key("xl/worksheets/_rels/sheet2.xml.rels"),
+        "Sheet2's own .rels is exclusively reachable from the deleted sheet and must be \
+         pruned, not left behind as an orphan (ROADMAP.md Known gaps item 15)"
+    );
+    assert!(
+        !output_entries.contains_key("xl/drawings/exclusive_drawing1.xml"),
+        "exclusive_drawing1.xml is reachable ONLY via Sheet2's own .rels and must be \
+         pruned along with it"
+    );
+    assert!(
+        output_entries.contains_key("xl/tables/shared_table.xml"),
+        "shared_table.xml is also referenced by surviving Sheet1 and must NOT be pruned \
+         just because one of its two referencing sheets is gone"
+    );
+    assert!(
+        output_entries.contains_key("xl/worksheets/_rels/sheet1.xml.rels"),
+        "Sheet1's own .rels must survive untouched -- it isn't reachable from the \
+         deleted sheet at all"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// 0.10.0-B slice 4 (B4): internal (location=, relationship-free) hyperlinks.
 /// fixture6_internal_hyperlink.xlsm has exactly one, no r:id.
 #[test]

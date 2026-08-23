@@ -514,10 +514,13 @@ fn parse_sheet_part_number(name: &str) -> Option<u32> {
         .ok()
 }
 
-/// `xl/worksheets/sheetN.xml` -> `xl/worksheets/_rels/sheetN.xml.rels`, the fixed
-/// relative-path rule every OOXML part's own `.rels` file follows (a `_rels` sibling
-/// directory of the part, named `<part-filename>.rels`).
-fn worksheet_rels_name(part_name: &str) -> String {
+/// `part` -> its own `_rels/<file>.rels` sibling path, the fixed relative-path rule every
+/// OOXML part's own `.rels` file follows (a `_rels` sibling directory of the part, named
+/// `<part-filename>.rels`) -- a `.rels` file is never itself a relationship TARGET, it's
+/// discovered by this naming convention. Used both for a worksheet's own output rels name
+/// (0.10.0-D1) and, generically, by `deleted_sheet_prunable_parts`'s reachability walk
+/// (0.10.0-D4) -- the name predates the second use but the logic needed no change.
+fn part_rels_name(part_name: &str) -> String {
     match part_name.rsplit_once('/') {
         Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
         None => format!("_rels/{part_name}.rels"),
@@ -583,11 +586,139 @@ fn plan_worksheet_output(
                 display_name,
                 sheet_id,
                 workbook_rel_id: format!("rId{}", i + 1),
-                output_rels_name: worksheet_rels_name(&output_part_name),
+                output_rels_name: part_rels_name(&output_part_name),
                 is_existing: origin.and_then(|o| o.original_part_name.as_ref()).is_some(),
                 output_part_name,
             }
         })
+        .collect()
+}
+
+/// The directory a `.rels` file's own relative `Target` attributes are resolved against
+/// -- e.g. `"xl/worksheets/_rels/sheet1.xml.rels"` -> `"xl/worksheets/"`, `"_rels/.rels"`
+/// (the package root's own rels, no owning part) -> `""`. Mirrors
+/// `compat/oracle-excel-com/mechanical_check.py`'s `_rels_target_dir`.
+fn rels_target_dir(rels_name: &str) -> &str {
+    match rels_name.rfind("/_rels/") {
+        Some(idx) => &rels_name[..idx + 1],
+        None => "",
+    }
+}
+
+/// One-hop internal relationship targets declared by the `.rels` part named `rels_name`,
+/// resolved to normalized part paths. Empty if `rels_name` is absent from `raw_entries`
+/// or not valid UTF-8. Doesn't filter `TargetMode="External"` (the raw
+/// `reader::workbook_rels_decls` parse doesn't carry that attribute at all) -- harmless
+/// here, same as in `carry_over_rels`'s existing use of the same parse: an external
+/// target (a URL, not a part path) never matches any real `raw_entries` key, so it just
+/// never affects set membership against real parts.
+fn direct_rel_targets(
+    raw_entries: &std::collections::HashMap<String, Vec<u8>>,
+    rels_name: &str,
+) -> std::collections::HashSet<String> {
+    let Some(text) = raw_entries
+        .get(rels_name)
+        .and_then(|b| String::from_utf8(b.clone()).ok())
+    else {
+        return Default::default();
+    };
+    let base = rels_target_dir(rels_name);
+    reader::workbook_rels_decls(&text)
+        .into_iter()
+        .map(|(_, target)| normalize_part_path(&format!("{base}{target}")))
+        .collect()
+}
+
+/// BFS over `raw_entries`' package relationship graph, starting from `roots` (each
+/// reached via its own `part_rels_name()` sibling, per OPC convention). Returns every
+/// part transitively reachable, INCLUDING the roots themselves and every `.rels` file
+/// walked along the way -- a `.rels` file isn't a relationship target, but "belongs to"
+/// the part that owns it for pruning purposes (see `deleted_sheet_prunable_parts`).
+///
+/// `exclude` is filtered at EVERY hop, not just the roots: a deleted sheet's own
+/// worksheet part can be re-discovered via more than one path in the source's graph (its
+/// own edge in `xl/_rels/workbook.xml.rels`, but also indirectly via `_rels/.rels` ->
+/// `xl/workbook.xml` -> that same unfiltered `.rels`) -- filtering only the seed set
+/// stops the first path but not the second, silently reintroducing the deleted sheet (and
+/// everything reachable from it) as "reachable elsewhere". Mirrors
+/// `compat/oracle-excel-com/mechanical_check.py`'s `_reachable_closure` exactly (verified
+/// independently in Python before this was written -- see that file's Case N self-test,
+/// which caught this exact bug first).
+fn reachable_closure(
+    raw_entries: &std::collections::HashMap<String, Vec<u8>>,
+    roots: impl IntoIterator<Item = String>,
+    exclude: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<String> {
+    let mut seen: std::collections::HashSet<String> =
+        roots.into_iter().filter(|p| !exclude.contains(p)).collect();
+    let mut queue: Vec<String> = seen.iter().cloned().collect();
+    while let Some(part) = queue.pop() {
+        let rels_name = part_rels_name(&part);
+        if raw_entries.contains_key(&rels_name) {
+            seen.insert(rels_name.clone());
+            for target in direct_rel_targets(raw_entries, &rels_name) {
+                if exclude.contains(&target) || seen.contains(&target) {
+                    continue;
+                }
+                seen.insert(target.clone());
+                queue.push(target);
+            }
+        }
+    }
+    seen
+}
+
+/// 0.10.0-D4: the set of `raw_entries` part names that should be pruned from output
+/// because they are reachable ONLY from a sheet no longer present in `sheet_order` --
+/// computed purely from the source's own relationship graph, independent of anything
+/// already decided about `passthrough`. Empty if no sheet was deleted.
+///
+/// A part reachable from a deleted sheet AND from anything else (a surviving sheet, or a
+/// workbook-level relationship via `xl/_rels/workbook.xml.rels` or the root
+/// `_rels/.rels`) is never included -- shared parts must survive regardless of how many
+/// referencing sheets are gone. Closes ROADMAP.md Known gaps item 15: before this, a
+/// deleted sheet's own `.rels` (and whatever it exclusively pointed at) survived as an
+/// orphan, invisible to `mechanical_check.py`'s structural checks alone -- see
+/// `compat/oracle-excel-com/mechanical_check.py`'s `check_deleted_sheet_cleanup`, the
+/// dedicated checker written and self-test-verified before this function, per this
+/// project's fixture/design-doc-recorded hard gate.
+fn deleted_sheet_prunable_parts(
+    raw_entries: &std::collections::HashMap<String, Vec<u8>>,
+    worksheet_origins: &std::collections::HashMap<String, WorksheetOrigin>,
+    sheet_order: &[String],
+) -> std::collections::HashSet<String> {
+    let deleted_parts: std::collections::HashSet<String> = worksheet_origins
+        .iter()
+        .filter(|(key, _)| !sheet_order.iter().any(|s| s == *key))
+        .filter_map(|(_, origin)| origin.original_part_name.clone())
+        .collect();
+    if deleted_parts.is_empty() {
+        return Default::default();
+    }
+    let surviving_parts: std::collections::HashSet<String> = worksheet_origins
+        .iter()
+        .filter(|(key, _)| sheet_order.iter().any(|s| s == *key))
+        .filter_map(|(_, origin)| origin.original_part_name.clone())
+        .collect();
+
+    let mut elsewhere_roots: Vec<String> = surviving_parts.into_iter().collect();
+    elsewhere_roots.extend(direct_rel_targets(
+        raw_entries,
+        "xl/_rels/workbook.xml.rels",
+    ));
+    elsewhere_roots.extend(direct_rel_targets(raw_entries, "_rels/.rels"));
+    let reachable_elsewhere = reachable_closure(raw_entries, elsewhere_roots, &deleted_parts);
+
+    let reachable_from_deleted = reachable_closure(
+        raw_entries,
+        deleted_parts.iter().cloned(),
+        &Default::default(),
+    );
+
+    reachable_from_deleted
+        .difference(&reachable_elsewhere)
+        .filter(|p| raw_entries.contains_key(p.as_str()))
+        .cloned()
         .collect()
 }
 
@@ -735,9 +866,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     // Every "xl/worksheets/sheetN.xml" part number that ever existed in the SOURCE file
     // -- not just the sheets that survived to this save. A fresh worksheet part name
     // (0.10.0-D's WorksheetOutputPlan, see below) must never collide with one of these,
-    // including a deleted sheet's original number: that part's own `.rels` passthrough
-    // entry (and whatever it points at) can still be sitting in this same output ZIP
-    // under its original name until 0.10.0-D's later slices clean it up.
+    // including a deleted sheet's original number -- a deliberate, permanent policy
+    // (never reuse a freed number), not merely a stopgap made moot by D4's pruning below:
+    // reuse would let a stale, not-yet-understood future reference collide with a
+    // brand-new sheet, which pruning's own "reachable elsewhere" analysis cannot rule out
+    // for parts this writer has never modeled at all.
     let mut reserved_sheet_part_numbers: Vec<u32> = Vec::new();
 
     if let Some(source_path) = passthrough_source {
@@ -767,6 +900,15 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             .map(|xml| reader::content_type_decls(&xml))
             .unwrap_or_default();
 
+        // 0.10.0-D4: a deleted sheet's exclusively-reachable parts (its own worksheet
+        // .rels, and whatever THAT points at, transitively) must never enter
+        // `passthrough` at all -- computed here, before the loop below, so both this
+        // loop's `carried_overrides` and the `carry_over_rels` calls after it (which
+        // filter to targets present `&passthrough`) automatically treat a pruned part as
+        // gone, with no separate cleanup pass needed.
+        let prunable_parts =
+            deleted_sheet_prunable_parts(&raw_entries, &vm.worksheet_origins, &sheet_names);
+
         for (name, bytes) in &raw_entries {
             if is_writer_owned_part(name) {
                 continue;
@@ -774,6 +916,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             // Excel's own "Save As .xlsx" behavior: a macro project never
             // survives into a workbook declared non-macro-enabled.
             if !is_xlsm_output && name.starts_with("xl/vbaProject") {
+                continue;
+            }
+            if prunable_parts.contains(name) {
                 continue;
             }
             passthrough.push((name.clone(), bytes.clone()));
