@@ -878,18 +878,36 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     D3側の欠落だった。generic passthroughは0.9.0からworksheet `.rels`をbyte-identicalで
     運んでおり、D1がpart名の共存置を正しくしたことで、この目標は既に満たされていた。
     別コミットとしての実装は発生しなかった。
-  - **D3（tableParts分だけ完了）**: `<tableParts>`・external `<hyperlinks>`・`<drawing>`・
-    `<legacyDrawing>`・`<pageSetup r:id>`をtype-awareに復元する（4節の対応表通り）。
-    advisorレビューの指摘（B同様、1要素1コミットで進める）に従い、fixtureの実証がある
-    `<tableParts>`（fixture3のみ）から着手し、完了。実装は7節(b)のopaque-fragment
-    passthrough機構をそのまま再利用——`pageMargins`の直後（8節の実XSD順序で
-    `pageMargins`と`tableParts`の間に他要素が未実装のため、現状はこの位置が正しい）へ
-    生の`tableParts` XML片を挿入するだけで済んだ。`rels_survived`ゲート（`is_existing`
-    かつ該当`.rels`が実際にこのsaveのpassthrough集合に存在するか）を新設し、`.rels`が
-    生き残らなかった場合にdangling r:idを絶対に出力しないことをnegative testで確認
-    （ゲートを一時的に外してテストが実際に落ちることも確認済み）。`<drawing>`・
-    `<legacyDrawing>`・`<hyperlinks>`（B4の既存filter実装の書き換えが必要——最後に回す）・
-    `<pageSetup r:id>`（実証fixtureが無ければ着手しない）は未着手。
+  - **D3（`<pageSetup r:id>`以外は完了）**: `<tableParts>`・external `<hyperlinks>`・
+    `<drawing>`・`<legacyDrawing>`・`<pageSetup r:id>`をtype-awareに復元する
+    （4節の対応表通り）。advisorレビューの指摘（B同様、1要素1コミットで進める）に
+    従い、fixtureの実証がある要素から着手し、fixture証拠の強い順に3コミットで完了。
+    - `<tableParts>`（fixture3のみ）：7節(b)のopaque-fragment passthrough機構を
+      そのまま再利用——`pageMargins`の直後（8節の実XSD順序で`pageMargins`と
+      `tableParts`の間に他要素が未実装のため、現状はこの位置が正しい）へ生の
+      `tableParts` XML片を挿入するだけで済んだ。`rels_survived`ゲート（`is_existing`
+      かつ該当`.rels`が実際にこのsaveのpassthrough集合に存在するか）を新設し、
+      `.rels`が生き残らなかった場合にdangling r:idを絶対に出力しないことを
+      negative testで確認（ゲートを一時的に外してテストが実際に落ちることも
+      確認済み）。
+    - `<drawing>`（fixture5のみ）・`<legacyDrawing>`（fixture4のみ）：同じ機構・
+      同じ`rels_survived`ゲートをそのまま再利用。fixture5は`check_source_references()`
+      がfixture3に続き2件目のCLEANに。fixture4は`<legacyDrawing>`だけ解消し、
+      同fixtureの外部hyperlink（r:id付き）分がまだ残っていたためこの時点では
+      引き続きSOURCE_REFERENCE_LOSS。
+    - `<hyperlinks>`のr:id付き子要素（fixture4のみ）：0.10.0-B4の既存実装
+      （`extract_relationship_free_hyperlinks`——r:id付き子要素を無条件除外）の
+      書き換え。`extract_hyperlinks(xml, include_relationship_backed: bool)`に
+      改名し、location-only子要素は常に保持（B4と不変）、r:id付き子要素は
+      `rels_survived`が真の場合のみ保持するよう変更。fixture4のhyperlinkは
+      外部URL（`TargetMode="External"`）でr:id付き——B4自身のnegative test
+      （「全r:id構成では`<hyperlinks>`ごと省略」）が想定していた形そのもの
+      だったため、そのテストを「復元される」方向へ書き換えた。この変更で
+      fixture4の最後のSOURCE_REFERENCE_LOSS違反が解消——**実fixture7件全てが
+      `source_references: CLEAN`に到達**（`mechanical_check.py`の全カテゴリで
+      7件ともCLEAN）。実Excel再オープン検証はtableParts/drawing/legacyDrawing/
+      hyperlinksいずれもまだ未実施。
+    - `<pageSetup r:id>`（実証fixtureが無ければ着手しない）は引き続き未着手。
   - **D4**: sheet rename／reorder／deletion／新規追加／非連番part名／shared・exclusive
     targetのreachability——実fixtureとnegative testで固める。
 

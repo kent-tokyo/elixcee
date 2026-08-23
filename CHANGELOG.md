@@ -210,6 +210,32 @@ relationship-free-only filtering, not a new addition), `<pageSetup r:id>` (only 
 fixture actually has one), and `D4` (rename/reorder/delete/add + reachability-based
 deleted-part cleanup) remain not started, in that fixture-evidence order.
 
+**`<drawing>`/`<legacyDrawing>` restored, same mechanism and `rels_survived` gate as
+`<tableParts>`.** `fixture5_chart_image_freeze_print.xlsm`'s only worksheet-level
+relationship is its `<drawing r:id>` — `check_source_references()` now reports `CLEAN`
+for this fixture too. `fixture4_hyperlink_comment_name.xlsm`'s `<legacyDrawing r:id>`
+(VML comment shapes) is restored as well, though that fixture's `.rels` also carries an
+r:id-backed hyperlink, left unrestored at this point — `SOURCE_REFERENCE_LOSS` remained
+on `fixture4` until the next change.
+
+**`<hyperlinks>` r:id children restored — all 7 real fixtures now `CLEAN`, the last
+`SOURCE_REFERENCE_LOSS` gap closed.** This one is a rewrite of `0.10.0-B4`'s shipped
+behavior, not a new addition: B4 unconditionally excluded every r:id-bearing
+`<hyperlink>` child (no relationship-graph reconnection existed at the time). Now that
+`rels_survived` exists, `reader::extract_hyperlinks(xml, include_relationship_backed:
+bool)` keeps location-only children unconditionally (unchanged from B4) and r:id-backed
+ones only when `rels_survived` is true. `fixture4`'s hyperlink is r:id-backed (external
+URL, `TargetMode="External"`) — exactly the shape B4's own negative test asserted must
+NOT survive; that test is rewritten to assert the opposite (`fixture4` is now fully
+`CLEAN`, its last violation cleared). `SOURCE_REFERENCE_LOSS` is eliminated from the
+entire current fixture set: all 7 fixtures report `CLEAN` across every
+`mechanical_check.py` category.
+
+Real-Excel reopen verification not yet done for `tableParts`/`drawing`/`legacyDrawing`/
+`hyperlinks`. `<pageSetup r:id>` (no fixture has one with an `r:id` yet) and `D4`
+(rename/reorder/delete/add + reachability-based deleted-part cleanup, including
+`ROADMAP.md`'s Known gaps item 15) remain not started.
+
 ### CI: WASM artifact size observability
 
 `packages/xlsx`'s WASM bridge size was already measured (`scripts/wasm-smoke.mjs` step 5)

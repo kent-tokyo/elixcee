@@ -407,3 +407,17 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] `ROADMAP.md`・`CHANGELOG.md`・design doc（§10、D2不要判明の経緯・D3のtableParts分完了を記録）・`tasks/todo.md`を同期。
 
 次のスライス候補（fixture証拠の強い順）：`<drawing>`／`<legacyDrawing>`（どのfixtureが何を持つか要確認）、`<hyperlinks>`（0.10.0-B4の既存filter実装の書き換えが必要、最後に回す方針）、`<pageSetup r:id>`（実証fixtureが無ければ着手しない）。実Excel再オープン検証はこのスライスではまだ未実施。push未承認、ローカルコミットのみ（3コミット：`9d6373d`・`17d1ace`・`c7a2fe1`、+ドキュメント同期コミット）。
+
+## `<drawing>`／`<legacyDrawing>`／`<hyperlinks>` r:id復元、実fixture7件全てCLEAN到達（`/greenlane`継続）
+
+ユーザーから「fix next (drawing/legacyDrawing/hyperlinks)」という短い指示を受け、前回スライスと同じ`rels_survived`機構で残り3要素を実装。fixture4/5の実データを先に確認し、fixture証拠の強い順（drawing・legacyDrawing→hyperlinks）で2コミットに分割。
+
+- [x] **fixture証拠の事前確認**：fixture5は`<drawing r:id="rId1"/>`のみ（単一の`.rels`エントリ、`xl/drawings/drawing1.xml`ターゲット）。fixture4は`<legacyDrawing r:id="rId2"/>`（`vmlDrawing1.vml`ターゲット）と`<hyperlinks>`内のr:id付きexternal hyperlink（`TargetMode="External"`、`https://yahoo.co.jp/`）の2種類を保有——きれいに分離された実証データ。
+- [x] **`<drawing>`／`<legacyDrawing>`復元実装**（commit `d1e2404`）：前回`<tableParts>`と全く同じopaque-fragment機構・同じ`rels_survived`ゲートを再利用、`pageMargins`と`tableParts`の間（実XSD順序上、間の要素は未実装のためこの位置が正しい）へ挿入。fixture5は`check_source_references()`がCLEANに（2件目）。fixture4は`legacyDrawing`分のみ解消、hyperlink分がまだ残っていたため引き続きSOURCE_REFERENCE_LOSS。新規テスト2件（`real_excel_drawing_survives_a_save`・`real_excel_legacy_drawing_survives_a_save`）、既存テストへの影響なし（drawing/legacyDrawingの不在を前提にしたテストは無かったため）。
+- [x] **`<hyperlinks>` r:id付き子要素復元実装**（commit `ef54d9a`）：0.10.0-B4の既存実装（r:id付き子要素を無条件除外する`extract_relationship_free_hyperlinks`）を`extract_hyperlinks(xml, include_relationship_backed: bool)`へ改名・書き換え——location-only子要素は常に保持（B4と不変）、r:id付き子要素は`rels_survived`が真の場合のみ保持。`OpaqueWorksheetFragments`の`internal_hyperlinks`フィールドも`hyperlinks`へリネーム（もはやinternal限定ではないため）。B4の既存テスト（reader.rs側）を全て拡張し`include_relationship_backed`両方の値で検証、mixed containerでフラグがchild単位で効くことを確認するテストも新設。
+- [x] **B4のnegative testが逆転したことを確認・書き換え**：`real_excel_external_only_hyperlink_omits_the_hyperlinks_container_entirely`（fixture4の全r:id構成では`<hyperlinks>`ごと省略、と主張していた）が新実装で実際に失敗することを確認してから、`real_excel_external_hyperlink_survives_a_save`（復元される、と主張）へ書き換え。
+- [x] **実fixture7件全てが全カテゴリCLEANに到達**：`mechanical_check.py`を全fixtureに対して実行し、`source_references`を含む全7カテゴリで7fixture全てCLEANであることを確認——SOURCE_REFERENCE_LOSSが現行fixtureセットから完全に解消。
+- [x] `cargo fmt --all --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（847 lib + 19 xlsx_roundtrip）／`mechanical_check.py --self-test`／`compat/corpus`（581件、0 UNEXPLAINED/0 MISMATCH）／`compat/vba-semantics`（386件、0 BUG/0 UNCLASSIFIED）、各コミット後にいずれもクリーン・既存ベースラインから無回帰を確認。
+- [x] `ROADMAP.md`・`CHANGELOG.md`・design doc（§10、D3のdrawing/legacyDrawing/hyperlinks完了・fixture7件全CLEAN到達を記録）・`tasks/todo.md`を同期。
+
+残作業：`<pageSetup r:id>`（実証fixtureが無いため未着手）、D4（rename／reorder／deletion／新規追加／reachability、Known gaps項目15のorphan `.rels`形状の解消含む）。tableParts/drawing/legacyDrawing/hyperlinksいずれも実Excel再オープン検証はまだ未実施——次に価値が高いのはここだと思われるが、ユーザー判断待ち。push未承認、ローカルコミットのみ（5コミット：`9d6373d`・`17d1ace`・`c7a2fe1`・`d1e2404`・`ef54d9a`、+ドキュメント同期コミット）。

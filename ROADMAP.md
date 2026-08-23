@@ -85,9 +85,13 @@ mechanical-check-verified, and real-Excel reopen-verified (0 repair warnings; `f
 defined name and `fixture5`'s print area both confirmed byte-for-byte in Excel's own Name
 Manager/print preview). `0.10.0-D` (relationship-backed features, the actual fix for
 `SOURCE_REFERENCE_LOSS`) has a decided design (origin-based worksheet part naming — see the
-roadmap entry below); `D1` (the `WorksheetOutputPlan` output plan itself) is done, and the
-first relationship-backed element, `<tableParts>`, is now restored — `fixture3`'s
-`check_source_references()` verdict is `CLEAN` for the first time. Three independent, pre-existing correctness
+roadmap entry below); `D1` (the `WorksheetOutputPlan` output plan itself) is done, and every
+relationship-backed element with real fixture evidence — `<tableParts>`, `<drawing>`,
+`<legacyDrawing>`, `<hyperlinks>` (including r:id-backed ones, a rewrite of `0.10.0-B4`'s
+prior relationship-free-only scope) — is now restored. All 7 real fixtures report `CLEAN`
+across every `mechanical_check.py` category, including `source_references`:
+`SOURCE_REFERENCE_LOSS` is eliminated from the entire current fixture set,
+mechanical-check-verified but not yet real-Excel reopen-verified. Three independent, pre-existing correctness
 bugs found and fixed along the way, all affecting every released version: a save's sheet
 tab order silently followed an alphabetical sort instead of the source order, a sheet's
 display-name letter case was silently lowercased on every save, and `Sheets.Add` could
@@ -564,9 +568,10 @@ table would have appeared instead), 0 repair warnings across all 3 output files
 (`fixture4` save-as, `fixture4` in-place, `fixture5` save-as).
 
 **0.10.0-D (relationship-backed features, including the actual fix for
-`SOURCE_REFERENCE_LOSS`)**: design decided; `D1` done, `<tableParts>` restored (first
-relationship-backed element), `<drawing>`/`<legacyDrawing>`/`<hyperlinks>`/`<pageSetup
-r:id>`/`D4` not started. Worksheet
+`SOURCE_REFERENCE_LOSS`)**: design decided; `D1` done, every relationship-backed element
+with real fixture evidence (`<tableParts>`, `<drawing>`, `<legacyDrawing>`, `<hyperlinks>`)
+restored — all 7 real fixtures now `CLEAN` on `source_references`. `<pageSetup r:id>` (no
+fixture has one yet) and `D4` not started. Worksheet
 parts were previously named `sheet{i+1}.xml` by output position, while a worksheet's
 `.rels` file (and whatever it points at — tables, drawings, comments) survived keyed by
 the *original* part path. That was self-consistent only because nothing carried
@@ -618,6 +623,38 @@ still report `SOURCE_REFERENCE_LOSS` for hyperlink/vmlDrawing/drawing `r:id`s, u
 `<hyperlinks>` last (a rewrite of `0.10.0-B4`'s existing filtering, not a new addition),
 `<pageSetup r:id>` only if a fixture ever has one. Real-Excel reopen verification not yet
 done for this slice.
+
+**`<drawing>`/`<legacyDrawing>` restored (done).** Same opaque-fragment mechanism and
+`rels_survived` gate as `<tableParts>`, spliced right after it in the same
+`pageMargins`-then-`drawing`-then-`legacyDrawing`-then-`tableParts` block (schema order
+confirmed against §8's real-XSD sequence — `pageSetup` through `smartTags` aren't emitted
+yet, so `drawing`'s correct position is still simply "right after `pageMargins`").
+`fixture5_chart_image_freeze_print.xlsm`'s only worksheet-level relationship is its
+`<drawing r:id>`, so `check_source_references()` now reports `CLEAN` for this fixture too
+— the second real fixture (after `fixture3`) to reach that state.
+`fixture4_hyperlink_comment_name.xlsm`'s `<legacyDrawing r:id>` (VML comment shapes) is
+restored as well, though that fixture's `.rels` also carries an r:id-backed hyperlink,
+left unrestored at this point — `SOURCE_REFERENCE_LOSS` remained on `fixture4` until the
+next change.
+
+**`<hyperlinks>` r:id children restored (done) — all 7 real fixtures now `CLEAN`, the
+last `SOURCE_REFERENCE_LOSS` gap closed.** A rewrite of `0.10.0-B4`'s shipped behavior,
+not a new addition: B4's `extract_relationship_free_hyperlinks` unconditionally excluded
+every r:id-bearing `<hyperlink>` child, since restoring one required the relationship-graph
+reconnection that didn't exist at the time. Renamed to `extract_hyperlinks(xml,
+include_relationship_backed: bool)`: location-only children are always kept (unchanged
+from B4); r:id-bearing children are kept only when `save_xlsx_impl` passes
+`rels_survived` as the flag. `fixture4`'s hyperlink is r:id-backed (external URL,
+`TargetMode="External"`) — exactly the shape B4's own negative test asserted must NOT
+survive; that test (`real_excel_external_only_hyperlink_omits_the_hyperlinks_container_entirely`)
+is rewritten to `real_excel_external_hyperlink_survives_a_save`, asserting the opposite.
+`fixture4` is now fully `CLEAN`, its last violation cleared. `SOURCE_REFERENCE_LOSS` is
+eliminated from the entire current fixture set: all 7 real fixtures report `CLEAN` across
+every `mechanical_check.py` category. Real-Excel reopen verification not yet done for
+`tableParts`/`drawing`/`legacyDrawing`/`hyperlinks`. Remaining 0.10.0-D work:
+`<pageSetup r:id>` (no fixture has one with an `r:id` yet) and `D4` (rename/reorder/
+delete/add + reachability-based deleted-part cleanup, including Known gaps item 15's
+orphaned-`.rels` shape).
 
 **Exit criteria** (unchanged from the original sketch, still the target): every untouched
 unsupported XML node preserved byte- or semantically-equivalent, 0 Excel repair warnings, 0
