@@ -333,3 +333,21 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 - [x] `cargo audit`が0件・`cargo test --workspace`（828+件）・`cargo fmt --all --check`・`cargo clippy --workspace --all-targets`（python feature有無両方）・`cargo doc --document-private-items`、いずれもクリーンを確認。
 
 このcalamine関連の発見は、「セキュリティ修正のための依存関係バンプが、無関係に見えて実は本物のwriterバグを暴いた」という事例——oracle側の挙動変化に安易に「非elixceeの問題」と結論せず、実際に生成された生XMLまで遡って検証したことで見つかった。
+
+## `elixcee` 0.10.0「Lossless Worksheet Preservation」設計・0.10.0-A・0.10.0-B進行中
+
+ユーザー指定で0.10.0の設計調査（`docs/xlsx-worksheet-preservation-0.10.0-design.md`、commit `bdea107`）を実施後、実装フェーズへ着手。0.9.0-Aと同じ「fixture→checker→writer」の順序、および`No writer code for an element until a fixture exists, its XML is recorded, the XSD sequence is confirmed, and mechanical_check has a negative test`というhard gateを一貫して踏襲している。
+
+- [x] **0.10.0-A（`c3f0b0b`）**：`mechanical_check.py`に`check_source_references()`と新違反分類`SOURCE_REFERENCE_LOSS`を追加——worksheet-levelのrelationship（`.rels`＋対象part）は生き残るが、regenerateされた`sheetN.xml`側がそのrIdを一切参照しなくなる、という既存検査（`check_roundtrip`）が見逃す失敗モードを検出。実fixture3/4/5全てで再現を確認。
+- [x] **0.10.0-A（`ae030b7`）**：`WorksheetOrigin`（`original_sheet_id`/`original_workbook_rel_id`/`original_part_name`）を`reader::WorkbookSheet`→`Vm.worksheet_origins`→`build_xlsx_workbook`まで実装、既存シートの`sheetId`を保存のたびに位置ベースで振り直していた既存バグを修正（`snapshot.rs`の`stable_id`が前提としていた「sheetIdはcross-save-stable」という約束を初めて満たした）。
+- [x] **フィクスチャ追加（`26f42f9`）**：ユーザー提供の実Excelファイルから`fixture6_internal_hyperlink.xlsm`（location-only hyperlink）・`fixture7_freeze_pane.xlsm`（実freeze pane）を追加。PIIスキャンで作成者名・ローカルパスの混入を発見しscrub（既存fixtureと同じ慣行）。
+- [x] **発見バグ修正（`9945e61`）**：`Vm::new()`のデフォルト`"sheet1"`を`populate_from_sheets`がクリアしていなかったため、`Sheet1`という名前のシートを持たないワークブックは保存のたびに空シートが1枚混入していた。5つの実Excelフィクスチャが偶然全て`Sheet1`を含んでいたため検出されていなかった。`WorksheetOrigin`実装の実CLI検証中に発見。
+- [x] **0.10.0-B slice 1〜4（`bf9cbb8`〜`aa450d4`）**：worksheet-XML内のrelationship非依存要素をopaque-fragment passthrough方式で保存するworkを、要素ごとに独立した小さなスライスへ分割し、各スライスをchecker先行実装→実fixtureでの事前確認→writer実装→実fixtureでの事後確認→実Excel検証（ユーザー確認）の順で反復。
+  - slice 1: `<sheetViews>`（`<pane>`＝freeze pane・`<selection>`）＋ルート`<worksheet>`タグの属性文字列引き継ぎ。実Excel検証済み（修復警告なし・freeze pane復元・編集セル正常）。
+  - slice 2: `<sheetPr>`・`<sheetFormatPr>`・`<phoneticPr>`・`<dataValidations>`。実Excel検証済み（データ入力規則ドロップダウン復元確認）。
+  - slice 3: `<pageMargins>`。writer実装・実fixture検証まで完了（実Excel検証はユーザー確認待ち、`/greenlane`によりparkして継続中）。
+  - slice 4: internal hyperlinkの`location`属性——`<hyperlinks>`は他スライスと異なり子要素単位のfiltering（`r:id`保持要素を除外）が必要と判明、専用の`check_internal_hyperlinks()`とXSD確認済み`minOccurs="1"`制約（全部r:id形式なら`<hyperlinks>`ごと省略必須）を踏まえて実装。fixture6（location-only）・fixture4（r:id-only）の両端点で実データ確認、混在ケースはsynthetic self-testのみ（正直に記録済み）。実Excel検証は未着手。
+  - `reader.rs`に`extract_root_attrs`/`extract_raw_element`/`extract_relationship_free_hyperlinks`（+共有primitive`find_next_open_tag`）を新規実装、単体テスト計18件。
+- [ ] **未完了**：slice 3・4の実Excel検証（ユーザー確認待ち）。B5（`<autoFilter>`——実fixtureにstandalone要素としての実例なし、fixture新規待ち／行・列プロパティ——width等の属性はfixture1のhidden columnに実例ありだが、既存の`build_xlsx_sheet`のcols/row生成ロジックとの統合方法が未設計、Yellow判断で保留）は未着手。0.10.0-C（workbook-level）・0.10.0-D（relationship-backed機能そのものの復元、`SOURCE_REFERENCE_LOSS`の実修正）も未着手。
+
+version bump・push（各コミットは`/greenlane`実行前に個別push・CI確認済み。以降のcommitは本セッション終了時点でローカルのみ）・tag・publishは一切実施していない。
