@@ -1080,6 +1080,17 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "dataValidations"));
         let page_margins =
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "pageMargins"));
+        // <pageSetup> is unlike every other opaque fragment above: CT_PageSetup genuinely
+        // CAN carry an r:id (referencing a printerSettings part) per the real XSD, even
+        // though no fixture in this repo has ever shown that shape. A plain (no r:id)
+        // pageSetup has no relationship dependency at all and is always safe to restore
+        // verbatim, regardless of rels_survived; one WITH r:id is left unrestored until a
+        // real fixture justifies wiring up the same rels_survived gate the elements below
+        // use (this project's own hard gate: no writer code for a shape without fixture
+        // evidence).
+        let page_setup = source_xml
+            .and_then(|xml| reader::extract_raw_element(xml, "pageSetup"))
+            .filter(|el| !reader::root_tag_has_rid(el));
         // A relationship-backed element may only be restored when this sheet's own
         // .rels genuinely survived into THIS output -- `is_existing` alone only means
         // the sheet HAD an origin, not that its `.rels` specifically made it into
@@ -1114,6 +1125,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             data_validations: data_validations.as_deref(),
             hyperlinks: &hyperlinks,
             page_margins: page_margins.as_deref(),
+            page_setup: page_setup.as_deref(),
             table_parts: table_parts.as_deref(),
             drawing: drawing.as_deref(),
             legacy_drawing: legacy_drawing.as_deref(),
@@ -1438,6 +1450,10 @@ struct OpaqueWorksheetFragments<'a> {
     /// than emitted as `<hyperlinks/>`.
     hyperlinks: &'a [String],
     page_margins: Option<&'a str>,
+    /// Only ever `Some` for a `<pageSetup>` with NO `r:id` -- unlike `page_margins` above,
+    /// `CT_PageSetup` genuinely can be relationship-backed, so the caller (`save_xlsx_impl`)
+    /// filters those out via `reader::root_tag_has_rid` before this is ever populated.
+    page_setup: Option<&'a str>,
     /// `<tableParts><tablePart r:id="..."/></tableParts>`, `<drawing r:id="..."/>`, and
     /// `<legacyDrawing r:id="..."/>` -- 0.10.0-D relationship-backed elements. Unlike every
     /// fragment above, the caller must only pass `Some` for these when the sheet's own
@@ -1606,12 +1622,17 @@ fn build_xlsx_sheet(
         out.push('\n');
     }
 
+    if let Some(ps) = fragments.page_setup {
+        out.push_str(ps);
+        out.push('\n');
+    }
+
     // CT_Worksheet order (§8): ... pageMargins, pageSetup, headerFooter, rowBreaks,
     // colBreaks, customProperties, cellWatches, ignoredErrors, smartTags, drawing,
     // legacyDrawing, legacyDrawingHF, drawingHF, picture, oleObjects, controls,
-    // webPublishItems, tableParts, extLst. pageSetup..smartTags aren't emitted yet, so
+    // webPublishItems, tableParts, extLst. headerFooter..smartTags aren't emitted yet, so
     // drawing/legacyDrawing's schema-correct position is still simply "right after
-    // pageMargins" until one of those unemitted slots is restored too.
+    // pageSetup" until one of those unemitted slots is restored too.
     if let Some(d) = fragments.drawing {
         out.push_str(d);
         out.push('\n');

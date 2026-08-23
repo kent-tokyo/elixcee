@@ -1150,6 +1150,131 @@ fn real_excel_drawing_survives_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// Plain (relationship-free) `<pageSetup>` -- fixture5's real shape (`paperSize`/
+/// `orientation`/`horizontalDpi`/`verticalDpi`, no `r:id`). Unlike every other 0.10.0-D
+/// element in this file, this one is NOT relationship-backed and needs no `rels_survived`
+/// gate to restore safely -- `CT_PageSetup` genuinely CAN carry an `r:id` per the real
+/// XSD, but this fixture's copy doesn't, so plain opaque-fragment passthrough (same
+/// mechanism as `<pageMargins>`) is correct and safe here.
+#[test]
+fn real_excel_page_setup_survives_a_save() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_sheet1 =
+        String::from_utf8(fixture_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        source_sheet1.contains(
+            r#"<pageSetup paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0"/>"#
+        ),
+        "fixture no longer contains the expected pageSetup shape -- test needs updating: {source_sheet1}"
+    );
+
+    let output_path = tmp_path("page_setup_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditA1()\n    Range(\"A1\").Value = 42\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditA1").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(
+            r#"<pageSetup paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0"/>"#
+        ),
+        "pageSetup must survive a save verbatim: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// Synthetic negative guard: `CT_PageSetup` genuinely can carry an `r:id` per the real
+/// XSD even though no real fixture in this repo shows it -- an r:id-backed `<pageSetup>`
+/// must NOT be restored (no `rels_survived` gate is wired up for it yet, so restoring one
+/// would risk a dangling reference the moment a real fixture with this shape exists).
+#[test]
+fn page_setup_with_an_rid_is_not_restored() {
+    const WORKBOOK_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheets>\n<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/>\n</sheets>\n</workbook>\n",
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const SHEET1_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n",
+        "<pageSetup paperSize=\"9\" r:id=\"rId1\"/>\n</worksheet>\n",
+    );
+    const SHEET1_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/printerSettings\" Target=\"../printerSettings/printerSettings1.bin\"/>\n",
+        "</Relationships>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(&mut zip, "xl/worksheets/sheet1.xml", SHEET1_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/worksheets/_rels/sheet1.xml.rels",
+        SHEET1_RELS.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/printerSettings/printerSettings1.bin",
+        b"not-real-printer-settings",
+    );
+    let fixture_bytes = zip.finish().unwrap().into_inner();
+
+    let source_path = tmp_path("source_page_setup_rid.xlsx");
+    let output_path = tmp_path("output_page_setup_rid.xlsx");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    let prog = parser::parse("Sub NoOp()\n    n = 1\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "NoOp").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        !out_sheet1.contains("pageSetup"),
+        "must never emit an r:id-backed pageSetup reference -- no rels_survived gate is \
+         wired up for it yet: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// 0.10.0-D: `<legacyDrawing r:id>` (VML comment shapes). fixture4's `.rels` also
 /// carries an r:id-backed hyperlink -- deliberately left un-asserted here, still out of
 /// scope (0.10.0-D's hyperlinks slice, not yet done).
