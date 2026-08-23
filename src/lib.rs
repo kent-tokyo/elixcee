@@ -898,16 +898,23 @@ fn build_xlsx_workbook(
     let mut next_fresh_id = max_original_id;
     for (i, name) in sheet_names.iter().enumerate() {
         let rid_n = i + 1;
-        let sheet_id = match origins.get(name).and_then(|o| o.original_sheet_id.clone()) {
+        let origin = origins.get(name);
+        let sheet_id = match origin.and_then(|o| o.original_sheet_id.clone()) {
             Some(id) => id,
             None => {
                 next_fresh_id += 1;
                 next_fresh_id.to_string()
             }
         };
+        // Original case, not the lowercased lookup key -- `name` is only
+        // ever lowercase (every per-sheet `Vm` map's key space), so without
+        // this a save silently retitled every tab (`Sheet1` -> `sheet1`).
+        let display_name = origin
+            .and_then(|o| o.original_display_name.as_deref())
+            .unwrap_or(name);
         out.push_str(&format!(
             "<sheet name=\"{}\" sheetId=\"{}\" r:id=\"rId{}\"/>\n",
-            xml_escape(name),
+            xml_escape(display_name),
             sheet_id,
             rid_n
         ));
@@ -1584,6 +1591,7 @@ mod tests {
                 original_sheet_id: Some("7".to_string()),
                 original_workbook_rel_id: Some("rId3".to_string()),
                 original_part_name: Some("xl/worksheets/sheet2.xml".to_string()),
+                original_display_name: Some("Sheet1".to_string()),
             },
         );
         origins.insert(
@@ -1592,6 +1600,7 @@ mod tests {
                 original_sheet_id: Some("2".to_string()),
                 original_workbook_rel_id: None,
                 original_part_name: None,
+                original_display_name: None,
             },
         );
         // "newsheet" is deliberately absent from `origins` -- a sheet created purely
@@ -1606,12 +1615,12 @@ mod tests {
         );
 
         assert!(
-            xml.contains("<sheet name=\"sheet1\" sheetId=\"7\" r:id=\"rId1\"/>"),
-            "expected sheet1 to keep its original sheetId 7: {xml}"
+            xml.contains("<sheet name=\"Sheet1\" sheetId=\"7\" r:id=\"rId1\"/>"),
+            "expected sheet1 to keep its original sheetId 7 and original-case display name: {xml}"
         );
         assert!(
             xml.contains("<sheet name=\"sheet2\" sheetId=\"2\" r:id=\"rId2\"/>"),
-            "expected sheet2 to keep its original sheetId 2: {xml}"
+            "expected sheet2 (no display name recorded) to fall back to its lookup key: {xml}"
         );
         // Fresh id must not collide with any preserved original id (max is 7) --
         // asserting it's strictly greater than 7 rather than a specific number, since

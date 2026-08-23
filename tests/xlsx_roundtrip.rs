@@ -327,7 +327,7 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     let sheets = reader::read_workbook(&output_path).expect("output should be readable");
     let sheet = sheets
         .iter()
-        .find(|s| s.name == "sheet1")
+        .find(|s| s.name.to_lowercase() == "sheet1")
         .expect("sheet1 present");
     match sheet.cells.get(&(1, 1)) {
         Some(reader::SheetCell::Integer(999)) => {}
@@ -539,7 +539,10 @@ fn xlsm_roundtrip_in_place_save_preserves_vba_project() {
     );
 
     let sheets = reader::read_workbook(&path).unwrap();
-    let sheet = sheets.iter().find(|s| s.name == "sheet1").unwrap();
+    let sheet = sheets
+        .iter()
+        .find(|s| s.name.to_lowercase() == "sheet1")
+        .unwrap();
     assert!(matches!(
         sheet.cells.get(&(1, 1)),
         Some(reader::SheetCell::Integer(7))
@@ -677,17 +680,19 @@ fn passthrough_part_referenced_only_by_a_non_writer_owned_relationship_type_keep
 }
 
 /// A workbook's saved sheet order must match its *source* order, not an
-/// alphabetical sort. Found via a hand-built two-sheet fixture named
-/// "Zebra" (first) / "Alpha" (second): `save_xlsx_impl` used to derive its
-/// entire sheet-iteration order from `Vm::sheet_names()`, which sorts —
-/// so every save of this fixture silently swapped the tab order to
-/// "Alpha"/"Zebra", with no macro touching sheets at all. Every prior
-/// round-trip fixture happened to already be alphabetical (Sheet1/2/3), so
-/// nothing caught this before. Root-caused to `Vm::sheet_order` (new,
-/// insertion-ordered) not existing at all; `sheet_names()` itself is left
-/// alphabetical on purpose -- see its doc comment.
+/// alphabetical sort, and each tab's original letter case must survive too.
+/// Found via a hand-built two-sheet fixture named "Zebra" (first) / "Alpha"
+/// (second): `save_xlsx_impl` used to derive its entire sheet-iteration
+/// order from `Vm::sheet_names()`, which sorts and lowercases — so every
+/// save of this fixture silently swapped the tab order to "Alpha"/"Zebra"
+/// and relabeled both tabs lowercase, with no macro touching sheets at all.
+/// Every prior round-trip fixture happened to already be alphabetical
+/// (Sheet1/2/3), so nothing caught either bug before. Root-caused to
+/// `Vm::sheet_order` (new, insertion-ordered) and `WorksheetOrigin`'s new
+/// `original_display_name` not existing at all; `sheet_names()` itself is
+/// left alphabetical/lowercased on purpose -- see its doc comment.
 #[test]
-fn sheet_order_survives_a_save_even_when_source_names_are_not_alphabetical() {
+fn sheet_order_and_display_case_survive_a_save_even_when_source_names_are_not_alphabetical() {
     const WORKBOOK_XML: &str = concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
@@ -758,8 +763,9 @@ fn sheet_order_survives_a_save_even_when_source_names_are_not_alphabetical() {
         .collect();
     assert_eq!(
         names,
-        vec!["zebra".to_string(), "alpha".to_string()],
-        "sheet order must match the source file, not an alphabetical sort: {wb_xml}"
+        vec!["Zebra".to_string(), "Alpha".to_string()],
+        "sheet order must match the source file (not an alphabetical sort) and each name's \
+         original case must survive (not get lowercased): {wb_xml}"
     );
 
     let ids: Vec<String> = wb_xml
@@ -1035,7 +1041,10 @@ fn check_real_fixture_output(
 
     // (i) edited and unedited cells
     let sheets = reader::read_workbook(output_path).expect("output should be readable");
-    let sheet = sheets.iter().find(|s| s.name == "sheet1").unwrap();
+    let sheet = sheets
+        .iter()
+        .find(|s| s.name.to_lowercase() == "sheet1")
+        .unwrap();
     assert!(
         matches!(
             sheet.cells.get(&(1, 2)),

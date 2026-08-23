@@ -395,6 +395,17 @@ pub struct WorksheetOrigin {
     pub original_sheet_id: Option<String>,
     pub original_workbook_rel_id: Option<String>,
     pub original_part_name: Option<String>,
+    /// The sheet's name exactly as written in the source `<sheet name="...">`
+    /// (not lowercased) -- every other per-sheet `Vm` map, including this
+    /// struct's own home (`Vm.worksheet_origins`), is keyed by the
+    /// lowercased name, so without this field a save had no way to recover
+    /// the original casing: `Sheet1` round-tripped as `sheet1`, a visible
+    /// tab-label change on every save with zero macro involvement (same
+    /// class of bug as `Vm::sheet_order`, found via the same fixture).
+    /// `None` for a sheet with no origin (created purely in-VBA via
+    /// `Sheets.Add`) -- its lowercased key is already the only name it
+    /// ever had.
+    pub original_display_name: Option<String>,
 }
 
 /// Evidence for the `RANGE_CONTAINS_HIDDEN_CELLS` observation (Milestone
@@ -2159,6 +2170,7 @@ impl Vm {
                     original_sheet_id: sheet_data.sheet_id.clone(),
                     original_workbook_rel_id: sheet_data.workbook_rel_id.clone(),
                     original_part_name: sheet_data.source_part_name.clone(),
+                    original_display_name: Some(sheet_data.name.clone()),
                 },
             );
             names.push(key);

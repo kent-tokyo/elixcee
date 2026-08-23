@@ -98,6 +98,14 @@ that `save_xlsx_impl` now reads instead. `Vm::sheet_names()` itself is left unch
 VBA runtime, a separate, already-documented fidelity gap (`docs/agent-contract.md`) this fix
 does not touch.
 
+**A second, related bug found in the same pass: sheet display-name case wasn't preserved
+either.** `build_xlsx_workbook` wrote sheet names straight from their lowercased `Vm` lookup
+key (the only key space every per-sheet map uses), so `Sheet1` silently round-tripped as
+`sheet1` — a visible tab-label change on every save, again with no macro involvement. Fixed
+by adding `WorksheetOrigin.original_display_name` (the name exactly as written in the
+source, alongside the existing `original_sheet_id`/`original_workbook_rel_id`/
+`original_part_name`), which the writer now prefers over the lowercased key.
+
 `0.10.0-C` (workbook-level preservation) and `0.10.0-D` (relationship-backed features,
 including the actual fix for `SOURCE_REFERENCE_LOSS`) are not started.
 
