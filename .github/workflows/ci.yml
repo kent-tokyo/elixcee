@@ -15,6 +15,29 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./scripts/check-versions.sh
 
+  # compat/oracle-excel-com/mechanical_check.py's own self-test (--self-test) -- a
+  # checker that can't fail is worthless (see the module's own docstring), so this is
+  # the calibration every real-fixture check in this file depends on, yet had no CI
+  # signal at all before this job existed despite growing substantially across the
+  # 0.9.0-A and 0.10.0-A/B rounds (structural round-trip, formula preservation,
+  # SOURCE_REFERENCE_LOSS, INLINE_ELEMENT_LOSS, INTERNAL_HYPERLINK_LOSS). Pure Python
+  # stdlib (zipfile, xml.etree, no third-party packages, no elixcee binary, no Node) --
+  # builds its own synthetic fixtures in-memory and runs in well under a second, so this
+  # is deliberately its own minimal job rather than folded into `compat-vba` (which
+  # needs a release Rust build first) or `node-js` (which needs npm).
+  mechanical-check-self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: mechanical_check.py --self-test
+        working-directory: compat/oracle-excel-com
+        run: python3 mechanical_check.py --self-test
+
   test:
     runs-on: ubuntu-latest
     steps:
