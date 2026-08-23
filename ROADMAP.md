@@ -80,11 +80,12 @@ before this release.
 (`docs/xlsx-worksheet-preservation-0.10.0-design.md`); `0.10.0-A` (foundation), `0.10.0-B`
 (inline worksheet elements: freeze panes/selection, sheetPr/sheetFormatPr/phoneticPr/
 dataValidations, pageMargins, internal hyperlinks minus `<autoFilter>`/row-col style), and
-`0.10.0-C` (workbook-level: workbookPr/bookViews/calcPr/extLst/definedNames) are all done and
-mechanical-check-verified; real-Excel reopen verification for `0.10.0-C` specifically is still
-pending (A and most of B already confirmed 0 repair warnings). `0.10.0-D` (relationship-backed
-features, the actual fix for `SOURCE_REFERENCE_LOSS`) is not started — needs a worksheet-part-
-naming design decision first (see the roadmap entry below). Two independent, pre-existing
+`0.10.0-C` (workbook-level: workbookPr/bookViews/calcPr/extLst/definedNames) are all done,
+mechanical-check-verified, and real-Excel reopen-verified (0 repair warnings; `fixture4`'s
+defined name and `fixture5`'s print area both confirmed byte-for-byte in Excel's own Name
+Manager/print preview). `0.10.0-D` (relationship-backed features, the actual fix for
+`SOURCE_REFERENCE_LOSS`) has a decided design (origin-based worksheet part naming — see the
+roadmap entry below) but no implementation yet. Two independent, pre-existing
 correctness bugs found and fixed along the way, both affecting every released version: a
 save's sheet tab order silently followed an alphabetical sort instead of the source order, and
 a sheet's display-name letter case was silently lowercased on every save.
@@ -325,6 +326,19 @@ a sheet's display-name letter case was silently lowercased on every save.
     found and fixed (formula flattening, orphaned relationships, wrong `.xlsm` content type)
     are in `CHANGELOG.md`'s `[0.9.0]`.
 
+14. **A cell holding a real Excel error value (`t="e"` in the source XML, e.g. `#VALUE!`)
+    round-trips as a plain text string, not an error.** `src/reader.rs`'s `SheetCell` enum
+    (`Integer`/`Float`/`Str`/`Bool` — no `Error` variant) treats `t="e"` the same as `t="str"`:
+    both become `SheetCell::Str(v.to_string())`. On save, that text goes into
+    `xl/sharedStrings.xml` as an ordinary string (`t="s"`), so the cell displays the same text
+    in Excel but is no longer actually an error-typed cell underneath. Found live during
+    `0.10.0-C`'s real-Excel verification (fixture5's `D8`, unrelated to anything `0.10.0-C`
+    touches) — confirmed pre-existing via `git blame` (`72b5cc38`, 2026-06-21, well before
+    `0.10.0` started). This is a general file-round-trip gap, not scoped to any current
+    milestone; fixing it needs a `SheetCell::Error(String)` variant threaded through
+    `WorkbookSheet`/`Vm`/the writer the same way `Variant::Error` already is at the VBA-runtime
+    level (see `src/lib.rs`'s `PyExcelError`/`python_to_variant`), not attempted yet.
+
 ## npm/JS/WASM: still-open gaps
 
 CI wiring, browser/WASM smoke coverage, and package-size measurement are all done (see
@@ -523,20 +537,31 @@ fixture evidence, so it's carried verbatim only when no sheet has been deleted s
 and dropped entirely otherwise, rather than risk a stale reference; per-name `localSheetId`
 remapping for the delete case is left as documented future work). New `WORKBOOK_ELEMENT_LOSS`
 category (plus a dedicated `check_defined_names()` for C3's delete-dependent correctness) in
-`mechanical_check.py`, all 7 fixtures confirmed CLEAN. Real-Excel reopen verification is
-still pending (structurally, `mechanical_check.py` cannot substitute for actually reopening
-the file in Excel).
+`mechanical_check.py`, all 7 fixtures confirmed CLEAN. **Real-Excel reopen verification
+done**: `fixture4` (defined name `test`, workbook-scope, `=Sheet1!$F$5`, comment
+`test desu!!!`) and `fixture5` (`_xlnm.Print_Area`, `Sheet1!$E$3`) both confirmed live in
+Mac Excel — Name Manager shows every field byte-for-byte matching the source, Print_Area's
+print preview shows exactly the (empty) `E3` cell rather than the sheet's real data table (a
+positive control: had `Print_Area` broken and fallen back to "print everything," the data
+table would have appeared instead), 0 repair warnings across all 3 output files
+(`fixture4` save-as, `fixture4` in-place, `fixture5` save-as).
 
 **0.10.0-D (relationship-backed features, including the actual fix for
-`SOURCE_REFERENCE_LOSS`)**: not started. Blocked on a real design decision, not yet made:
-worksheet parts are currently named `sheet{i+1}.xml` by output position, while a worksheet's
-`.rels` file (and whatever it points at — tables, drawings, comments) survives keyed by the
-*original* part path. That's self-consistent today only because nothing carries
-worksheet-level relationships forward yet; `0.10.0-D` reconnecting the relationship graph
-changes that, and needs to decide whether output part names become origin-stable (derived
-from `WorksheetOrigin.original_part_name`, with new-sheet collision handling) or stay
-positional with relationships remapped at write time instead. Both are defensible; this is a
-product decision, not an implementation detail.
+`SOURCE_REFERENCE_LOSS`)**: design decided, implementation not started. Worksheet parts are
+currently named `sheet{i+1}.xml` by output position, while a worksheet's `.rels` file (and
+whatever it points at — tables, drawings, comments) survives keyed by the *original* part
+path. That's self-consistent today only because nothing carries worksheet-level
+relationships forward yet; `0.10.0-D` reconnecting the relationship graph changes that.
+**Decided: origin-based part naming** — an existing sheet's output part name stays
+`WorksheetOrigin.original_part_name` regardless of save-time position, a new sheet gets
+`max(existing sheetN) + 1` (never reusing a freed number), and a deleted sheet's exclusively-
+reachable target parts (not shared with a surviving sheet) are removed via package
+reachability rather than blind deletion. Positional renumbering with `.rels` remapped at
+write time was considered and rejected — Open XML discovers parts via the relationship
+graph, not sequential naming, so leaving existing part URIs untouched is safer than
+rewriting every reference. Full design (the `WorksheetOutputPlan` sketch, D1–D4 commit
+breakdown, required test case table) in
+`docs/xlsx-worksheet-preservation-0.10.0-design.md` §10.
 
 **Exit criteria** (unchanged from the original sketch, still the target): every untouched
 unsupported XML node preserved byte- or semantically-equivalent, 0 Excel repair warnings, 0

@@ -143,9 +143,26 @@ correct answer differs depending on whether a sheet was deleted, checked by comp
 against a real CLI round-trip of a synthetic two-sheet fixture with a
 `Sheets(...).Delete` macro.
 
+**`0.10.0-C` real-Excel verified.** `fixture4`/`fixture5`, save-as and in-place, reopened in
+Mac Excel: 0 repair warnings across all 3 output files. `fixture4`'s defined name (`test`,
+workbook scope, `=Sheet1!$F$5`, comment `test desu!!!`) and `fixture5`'s `_xlnm.Print_Area`
+(`Sheet1!$E$3`) both confirmed byte-for-byte correct in Excel's own Name Manager;
+`Print_Area`'s print preview showed exactly the (empty) `E3` cell rather than the sheet's
+real data table, confirming the print area is actually functioning, not just present as
+inert XML. `0.10.0-C` is complete — mechanical-check-verified and real-Excel-verified.
+
+One independent, pre-existing bug found during this verification (unrelated to `0.10.0-C`,
+not fixed): a cell holding a real Excel error value (`t="e"`, e.g. `#VALUE!`) round-trips as
+plain text, not an error — `SheetCell` (the file reader's cell type) has no `Error` variant,
+so `t="e"` is read the same as `t="str"`. Confirmed pre-existing via `git blame`
+(`72b5cc38`, 2026-06-21, well before `0.10.0` started). See `ROADMAP.md`'s Known gaps item
+14.
+
 `0.10.0-D` (relationship-backed features, including the actual fix for
-`SOURCE_REFERENCE_LOSS`) is not started. `0.10.0-C` itself is now feature-complete for
-its originally-scoped elements.
+`SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing
+sheet's output part name stays `WorksheetOrigin.original_part_name` rather than being
+renumbered by position; see `docs/xlsx-worksheet-preservation-0.10.0-design.md` §10 for the
+full `WorksheetOutputPlan` design and D1–D4 breakdown), implementation not started.
 
 ### CI: WASM artifact size observability
 

@@ -738,8 +738,9 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     `WORKBOOK_ELEMENT_LOSS`カテゴリを追加（`INLINE_ELEMENT_LOSS`とは別カテゴリ——
     こちらはworkbook.xmlという単一の固定パスpartが対象で、
     `_sheet_name_to_part`によるシート名マッチングが不要）。fixture1〜7全てで
-    実装前`WORKBOOK_ELEMENT_LOSS`確認→実装後`CLEAN`確認済み。実Excel再オープンでの
-    repair警告確認はユーザーによる確認待ち。
+    実装前`WORKBOOK_ELEMENT_LOSS`確認→実装後`CLEAN`確認済み。
+    **実Excel検証済み（ユーザー確認、2026-08-23）**: 詳細はC3の項目末尾にまとめて記載
+    （C1〜C3は同じ2fixture・3出力ファイルで一括検証したため）。
   - **C2（完了）**: `<bookViews>`。**訂正（当初案からの変更）**: 当初はadd/delete
     発生時に備えてシート順・シート数の一致を条件にverbatim持ち越しをgateする設計を
     検討したが、fixture1〜7全てを確認した結果、どのfixtureの`<workbookView>`も
@@ -785,6 +786,27 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     のためこのテストでは削除分岐を再現できない）と、シート削除分岐専用の
     合成fixture（2シート、`Sheets(...).Delete`マクロ）の両方で実CLI経由の
     動作を確認済み。
+
+  **C1〜C3、実Excel検証済み（ユーザー確認、2026-08-23、Mac Excel）**: fixture4/fixture5を
+  コード`571df1e`でsave-as・in-place両経路で保存し（fixture4は両方、fixture5はsave-asのみ
+  ——ユーザー判断で十分と確認）、実Excelで再オープン。3出力ファイル全てで修復警告0件。
+  fixture4: 「名前の管理」で`test`（参照先`=Sheet1!$F$5`・範囲=ブック・コメント
+  `test desu!!!`）を実際に開いて全フィールド一致を確認、編集セルA1=12345も確認。
+  fixture5: 「名前の管理」で`_xlnm.Print_Area`（参照先`=Sheet1!$E$3`・範囲=Sheet1）を確認、
+  さらに印刷プレビュー（⌘+P）で実際の印刷範囲が空セルE3のみになっている（データ表
+  A〜C列が印刷対象に含まれていない）ことを確認——print areaが実効的に機能している
+  positive controlとして機能した。**0.10.0-Cはmechanical_check・実Excel検証の両方が
+  完了し、正式に完了とする**（ユーザー判定、2026-08-23）。
+
+  **この過程で発見した別件のバグ（0.10.0-Cとは無関係、既存の挙動）**:
+  fixture5のD8セル（`t="e"`、`#VALUE!`エラー値）が、elixceeの保存後は`t="s"`
+  （共有文字列）の平文テキスト`"#VALUE!"`に変わっていた。`git blame`で
+  `src/reader.rs:1292`が`72b5cc38`（2026-06-21）由来と確認——`SheetCell` enumが
+  そもそもError variantを持たず（`Integer`/`Float`/`Str`/`Bool`のみ）、`t="e"`を
+  `t="str"`と同様に文字列として読んでいるため。今回のC1〜C3のどのコミットも
+  触っていない箇所であり、C判定には影響しないと判断（ユーザー承認）。
+  `ROADMAP.md`のKnown gaps item 14として別途記録済み、対応は未着手。
+
   - ~~元の`sheetId`の保持（2節/6節、位置ベース再生成の是正）~~ ——**訂正（stale
     cross-reference）**: 初稿ではここに挙げていたが、実際には0.10.0-Aで
     `WorksheetOrigin`実装の一部として既に完了済み（10節の0.10.0-Aチェックリスト
@@ -871,9 +893,10 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
   | `.rels`だけ削除 | `DANGLING_RELATIONSHIP`または対応分類 |
   | target partだけ削除 | `DANGLING_RELATIONSHIP` |
 
-  **着手条件**: 0.10.0-Cの実Excel確認（fixture4の名前付き範囲・fixture5の印刷範囲、
-  修復警告0件）が完了するまで、D1を含め一切のコード実装に着手しない——B/C/Dを混ぜると
-  実Excelで問題が起きた際に原因の切り分けができなくなるため（ユーザー指示）。
+  **着手条件（満たされた、2026-08-23）**: 0.10.0-Cの実Excel確認が完了するまでD1を
+  含め一切のコード実装に着手しない、という条件を設けていた——B/C/Dを混ぜると実Excelで
+  問題が起きた際に原因の切り分けができなくなるため（ユーザー指示）。C1〜C3の実Excel
+  検証がユーザー確認済み（上記C3末尾参照）となったため、D1着手可能。
 
 各milestoneの完了条件は0.9.0-Aと同じ形式（実Excel再オープンでrepair警告0件、
 mechanical_check clean、既存回帰テスト無変化）を踏襲することを推奨する。

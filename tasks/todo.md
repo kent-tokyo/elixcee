@@ -366,6 +366,15 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 
 `cargo test --workspace`（846+件）・fmt・clippy・`mechanical_check.py --self-test`・`compat/corpus`（581件）・`compat/vba-semantics`（386件、0 BUG/0 UNCLASSIFIED）、いずれもクリーン・無回帰を確認。`ROADMAP.md`の0.10.0節も実態に同期。
 
-**未完了**：0.10.0-C全体の実Excel再オープン検証（ユーザー確認待ち）。0.10.0-D（relationship-backed機能そのものの復元、`SOURCE_REFERENCE_LOSS`の実修正）は未着手——worksheet partの命名を`WorksheetOrigin.original_part_name`基準の安定命名に切り替えるか、位置ベースのまま`.rels`側を都度re-mapするかという製品方針判断が必要で、advisorレビューでも「ここは自律的に決めず保留すべき」と指摘されている。
-
 version bump・push（各コミットは`/greenlane`実行前に個別push・CI確認済み。以降のcommitは本セッション終了時点でローカルのみ）・tag・publishは一切実施していない。
+
+## ユーザーによる0.10.0-C実Excel検証完了、0.10.0-D方針決定・設計記録
+
+8コミット（`e207dce`〜`7b75f49`）push承認・push実施、CI全9job green確認（compat/corpus 581件0 UNEXPLAINED/0 MISMATCH、compat/vba-semantics 386件0 BUG/0 UNCLASSIFIED・14 KNOWN_LIMITATION、rust-quality・cargo audit（129 crate・advisory該当なし）・mechanical-check-self-test・node-js 20/22・wasm・fuzz、いずれもsuccess）。
+
+- [x] **0.10.0-C実Excel検証完了**（ユーザー確認、Mac Excel）：fixture4（save-as・in-place両方）・fixture5（save-as）の3出力ファイル、修復警告0件。fixture4の名前付き範囲`test`（参照先`=Sheet1!$F$5`・範囲=ブック・コメント`test desu!!!`）を「名前の編集」ダイアログで全フィールド一致確認。fixture5の`_xlnm.Print_Area`（`=Sheet1!$E$3`）をネームマネージャーで確認、さらに印刷プレビュー（⌘+P）で実際の印刷対象が空セルE3のみ（データ表A〜C列が含まれない）であることを確認——print areaが実効的に機能しているpositive control。ユーザー判定により**0.10.0-Cを実Excel検証込みで完了**とした。
+- [x] **別件バグ発見・記録**（対応は未着手）：fixture5のD8セル（`t="e"`エラー値）が保存後`t="s"`（共有文字列の平文テキスト）に変わっていた。`git blame`で`src/reader.rs:1292`が`72b5cc38`（2026-06-21）由来、`SheetCell` enumにError variantが存在しないことが原因と特定。0.10.0-Cとは無関係な既存の挙動と確認、`ROADMAP.md`のKnown gaps item 14として記録。
+- [x] **0.10.0-D方針決定**（ユーザー承認）：worksheet part命名はorigin-based（`WorksheetOrigin.original_part_name`維持）を採用、位置ベース全面renumber+rels remap方式は不採用。`WorksheetOutputPlan`設計スケッチ・D1〜D4のコミット分割・必須テストケース表を設計書に記録（コミット`571df1e`、push承認済み・push実施）。
+- [x] `ROADMAP.md`・`CHANGELOG.md`・design docを実Excel検証結果・0.10.0-D方針決定・D8バグ発見に同期。
+
+D1（`WorksheetOutputPlan`導入）着手条件（0.10.0-Cの実Excel確認完了）が満たされたため、D1実装に着手。
