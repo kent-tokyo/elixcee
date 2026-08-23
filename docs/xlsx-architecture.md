@@ -729,12 +729,15 @@ schema position, never parse or reconstruct it) implemented one element at a tim
 hard gate — no writer code until a real Excel-authored fixture demonstrates the element,
 its XSD sequence is confirmed against the real ECMA-376 schema, and
 `mechanical_check.py` has a negative test for its loss. As of this writing: `0.10.0-A`
-(foundation — `WorksheetOrigin`, the new `SOURCE_REFERENCE_LOSS` checker category) done;
-`0.10.0-B` (inline elements) landed `<sheetViews>`/`<sheetPr>`/`<sheetFormatPr>`/
-`<phoneticPr>`/`<dataValidations>`/`<pageMargins>`/internal hyperlinks; `0.10.0-C`
-(workbook-level) and `0.10.0-D` (relationship-backed features, including the actual fix for
-`SOURCE_REFERENCE_LOSS`) not started. See `CHANGELOG.md`'s `[Unreleased]` for current
-per-slice detail.
+(foundation — `WorksheetOrigin`, the new `SOURCE_REFERENCE_LOSS` checker category),
+`0.10.0-B` (inline worksheet elements — `<sheetViews>`/`<sheetPr>`/`<sheetFormatPr>`/
+`<phoneticPr>`/`<dataValidations>`/`<pageMargins>`/internal hyperlinks), and `0.10.0-C`
+(workbook-level — `<workbookPr>`/`<bookViews>`/`<calcPr>`/`<extLst>`/`<definedNames>`) are
+all done; `0.10.0-D` (relationship-backed features, including the actual fix for
+`SOURCE_REFERENCE_LOSS`) is not started, pending a worksheet-part-naming design decision
+(stable, origin-derived names vs. positional names with relationships remapped at write
+time — see `ROADMAP.md`'s `0.10.0-D` entry). See `CHANGELOG.md`'s `[Unreleased]` for
+current per-slice detail.
 
 ## Consequences
 

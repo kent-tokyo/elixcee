@@ -345,9 +345,27 @@ ROADMAP.mdをTask Sourceとして自律的に作業。0.9.0の中核（実Window
 - [x] **0.10.0-B slice 1〜4（`bf9cbb8`〜`aa450d4`）**：worksheet-XML内のrelationship非依存要素をopaque-fragment passthrough方式で保存するworkを、要素ごとに独立した小さなスライスへ分割し、各スライスをchecker先行実装→実fixtureでの事前確認→writer実装→実fixtureでの事後確認→実Excel検証（ユーザー確認）の順で反復。
   - slice 1: `<sheetViews>`（`<pane>`＝freeze pane・`<selection>`）＋ルート`<worksheet>`タグの属性文字列引き継ぎ。実Excel検証済み（修復警告なし・freeze pane復元・編集セル正常）。
   - slice 2: `<sheetPr>`・`<sheetFormatPr>`・`<phoneticPr>`・`<dataValidations>`。実Excel検証済み（データ入力規則ドロップダウン復元確認）。
-  - slice 3: `<pageMargins>`。writer実装・実fixture検証まで完了（実Excel検証はユーザー確認待ち、`/greenlane`によりparkして継続中）。
-  - slice 4: internal hyperlinkの`location`属性——`<hyperlinks>`は他スライスと異なり子要素単位のfiltering（`r:id`保持要素を除外）が必要と判明、専用の`check_internal_hyperlinks()`とXSD確認済み`minOccurs="1"`制約（全部r:id形式なら`<hyperlinks>`ごと省略必須）を踏まえて実装。fixture6（location-only）・fixture4（r:id-only）の両端点で実データ確認、混在ケースはsynthetic self-testのみ（正直に記録済み）。実Excel検証は未着手。
+  - slice 3: `<pageMargins>`。実Excel検証済み（ユーザー確認：修復警告なし・ページ設定の値が保持・freeze pane/A1=12345にも影響なし）。
+  - slice 4: internal hyperlinkの`location`属性——`<hyperlinks>`は他スライスと異なり子要素単位のfiltering（`r:id`保持要素を除外）が必要と判明、専用の`check_internal_hyperlinks()`とXSD確認済み`minOccurs="1"`制約（全部r:id形式なら`<hyperlinks>`ごと省略必須）を踏まえて実装。fixture6（location-only）・fixture4（r:id-only）の両端点で実データ確認、混在ケースはsynthetic self-testのみ（正直に記録済み）。実Excel検証は未着手（後続セッションでも未確認のまま）。
   - `reader.rs`に`extract_root_attrs`/`extract_raw_element`/`extract_relationship_free_hyperlinks`（+共有primitive`find_next_open_tag`）を新規実装、単体テスト計18件。
-- [ ] **未完了**：slice 3・4の実Excel検証（ユーザー確認待ち）。B5（`<autoFilter>`——実fixtureにstandalone要素としての実例なし、fixture新規待ち／行・列プロパティ——width等の属性はfixture1のhidden columnに実例ありだが、既存の`build_xlsx_sheet`のcols/row生成ロジックとの統合方法が未設計、Yellow判断で保留）は未着手。0.10.0-C（workbook-level）・0.10.0-D（relationship-backed機能そのものの復元、`SOURCE_REFERENCE_LOSS`の実修正）も未着手。
+- B5（`<autoFilter>`——実fixtureにstandalone要素としての実例なし、fixture新規待ち／行・列プロパティ——width等の属性はfixture1のhidden columnに実例ありだが、既存の`build_xlsx_sheet`のcols/row生成ロジックとの統合方法が未設計）は設計書に投資判断を記録した上で保留のまま、後続セッションでも未着手。
+
+## `elixcee` 0.10.0-C実装完了、0.10.0-A/Bの独立バグ2件を追加発見・修正（`/greenlane`）
+
+0.10.0-C（workbook-level preservation）投資判断依頼を受け着手する前段階で、実CLIでの実験的検証（Zebra/Alphaという名前の2シートを持つ合成fixtureを保存させる）を通じて、0.10.0-Cの前提を崩しかねない独立した既存バグを2件発見し、それぞれ別コミットとして即座に修正——advisorレビューで指摘された内容で、いずれも「マクロが何もしなくても、保存するだけで壊れる」という重大度の高いもの。
+
+- [x] **シート保存順アルファベットソートバグ（`e207dce`）**：`save_xlsx_impl`がworksheet part命名・`<sheets>`要素順・`sheetId`割り当ての全てを`Vm::sheet_names()`（アルファベット順ソート）から導出していた。既存fixture全てが偶然アルファベット順（Sheet1/2/3）だったため未発覚。新設`Vm::sheet_order`（挿入順、`ensure_sheet`/`Sheets(...).Delete`で`sheets`と同期）に切り替えて修正。`sheet_names()`自体は`Sheets(i)`ランタイム解決にも使われる別の既知ギャップのため意図的に未変更。
+- [x] **シート表示名の大文字小文字ロストバグ（`fa51421`）**：同じ調査の中で発見。`build_xlsx_workbook`がシート名を小文字化済みのlookup keyからそのまま出力しており、「Sheet1」が保存のたびに「sheet1」へ変わっていた。`WorksheetOrigin.original_display_name`を新設して修正。
+
+続けて0.10.0-Cを3スライスに分割し、0.10.0-B同様のhard gate（実fixture確認→XSD確認→checker→writer→実fixture事後確認）で実装・全完了。
+
+- [x] **C1（`154a40d`）**：`<workbookPr>`・`<calcPr>`・`<extLst>`、root `<workbook>`タグ自身のnamespace宣言。位置非依存の3要素、fixture1〜7全てに実データあり。`mechanical_check.py`に`check_workbook_elements()`と`WORKBOOK_ELEMENT_LOSS`カテゴリを追加。
+- [x] **C2（`b029318`）**：`<bookViews>`。`activeTab`/`firstSheet`はシート位置依存の属性だが、fixture1〜7全てを確認した結果いずれも非デフォルト値を持たないと判明——実証されていないハザードへのgating機構を先回りして作らず、plain verbatim copyとして実装（hard gateの一貫した適用）。
+- [x] **C3（`eb77914`）**：`<definedNames>`（print area含む）。`localSheetId`はfixture5に実例あり（C2と違い実証済みハザード）——per-name remappingという精密だが実装コストの高い案は見送り、「ロード後に一度でもシート削除が起きたら`<definedNames>`を丸ごと省略、起きていなければverbatim持ち越し」という簡略版ルールを採用。専用`check_defined_names()`を新設（`WORKBOOK_ELEMENT_LOSS`の単純な有無チェックとは異なり、削除有無で正解が変わる非対称判定が必要なため）。実fixture（単一シートのため削除分岐は再現不可）と、削除分岐専用の合成fixture（2シート＋`Sheets(...).Delete`マクロ、実CLI経由）の両方で検証。
+- [x] `b4df6c8`：advisorレビュー指摘によるテストコメント補強（機能変更なし、`extract_raw_element`のbyte-exact再検証も実施しfixture1〜7全件で問題なしを確認）。
+
+`cargo test --workspace`（846+件）・fmt・clippy・`mechanical_check.py --self-test`・`compat/corpus`（581件）・`compat/vba-semantics`（386件、0 BUG/0 UNCLASSIFIED）、いずれもクリーン・無回帰を確認。`ROADMAP.md`の0.10.0節も実態に同期。
+
+**未完了**：0.10.0-C全体の実Excel再オープン検証（ユーザー確認待ち）。0.10.0-D（relationship-backed機能そのものの復元、`SOURCE_REFERENCE_LOSS`の実修正）は未着手——worksheet partの命名を`WorksheetOrigin.original_part_name`基準の安定命名に切り替えるか、位置ベースのまま`.rels`側を都度re-mapするかという製品方針判断が必要で、advisorレビューでも「ここは自律的に決めず保留すべき」と指摘されている。
 
 version bump・push（各コミットは`/greenlane`実行前に個別push・CI確認済み。以降のcommitは本セッション終了時点でローカルのみ）・tag・publishは一切実施していない。

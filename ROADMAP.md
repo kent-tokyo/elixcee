@@ -77,10 +77,17 @@ stays paused — see the roadmap below.
 before this release.
 
 **`0.10.0` (Lossless Worksheet Preservation) is in progress, not released** — design done
-(`docs/xlsx-worksheet-preservation-0.10.0-design.md`), `0.10.0-A` (foundation) done, `0.10.0-B`
+(`docs/xlsx-worksheet-preservation-0.10.0-design.md`); `0.10.0-A` (foundation), `0.10.0-B`
 (inline worksheet elements: freeze panes/selection, sheetPr/sheetFormatPr/phoneticPr/
-dataValidations, pageMargins, internal hyperlinks) landing slice by slice, each real-Excel
-reopen-verified as it ships. See the roadmap entry below for current status and what's left.
+dataValidations, pageMargins, internal hyperlinks minus `<autoFilter>`/row-col style), and
+`0.10.0-C` (workbook-level: workbookPr/bookViews/calcPr/extLst/definedNames) are all done and
+mechanical-check-verified; real-Excel reopen verification for `0.10.0-C` specifically is still
+pending (A and most of B already confirmed 0 repair warnings). `0.10.0-D` (relationship-backed
+features, the actual fix for `SOURCE_REFERENCE_LOSS`) is not started — needs a worksheet-part-
+naming design decision first (see the roadmap entry below). Two independent, pre-existing
+correctness bugs found and fixed along the way, both affecting every released version: a
+save's sheet tab order silently followed an alphabetical sort instead of the source order, and
+a sheet's display-name letter case was silently lowercased on every save.
 
 ## Known gaps
 
@@ -491,21 +498,45 @@ freeze pane — neither existed in the repo before). One real, independent bug f
 along the way: a workbook whose sheets are never literally named "Sheet1" gained a spurious
 extra empty sheet on every save (`Vm::new()`'s default sheet leaking past load).
 
-**0.10.0-B (inline worksheet preservation, in progress)** — relationship-free elements
+**0.10.0-B (inline worksheet preservation, functionally done)** — relationship-free elements
 *inside* `<worksheet>`, via an opaque-fragment mechanism (capture the source's raw XML for an
 element, splice it back at the correct schema position, don't parse/reconstruct it). 4 slices
-shipped so far, each independently fixture-verified and 2 real-Excel-reopened (repair
-warnings: 0): `<sheetViews>` (freeze panes, selection), `<sheetPr>`/`<sheetFormatPr>`/
-`<phoneticPr>`/`<dataValidations>`, `<pageMargins>`, and internal (`location=`) hyperlinks —
-the last one structurally different from the rest, since a `<hyperlinks>` container can mix
+shipped, each independently fixture-verified and 2 real-Excel-reopened (repair warnings: 0):
+`<sheetViews>` (freeze panes, selection), `<sheetPr>`/`<sheetFormatPr>`/`<phoneticPr>`/
+`<dataValidations>`, `<pageMargins>`, and internal (`location=`) hyperlinks — the last one
+structurally different from the rest, since a `<hyperlinks>` container can mix
 relationship-free children with `r:id`-backed ones that stay out of scope until `0.10.0-D`,
-so it's reconstructed from filtered children rather than byte-copied whole. Remaining:
-`<autoFilter>` (no fixture has it as a standalone worksheet element yet — the only real
-example lives inside a table part) and row/column style properties beyond hidden state (real
-fixture evidence exists but needs its own design pass, not yet started).
+so it's reconstructed from filtered children rather than byte-copied whole. Deliberately left
+out (not blocking): `<autoFilter>` (no fixture has it as a standalone worksheet element yet —
+the only real example lives inside a table part) and row/column style properties beyond
+hidden state (real fixture evidence exists but needs its own design pass).
 
-**0.10.0-C (workbook-level preservation) and 0.10.0-D (relationship-backed features,
-including the actual fix for `SOURCE_REFERENCE_LOSS`)**: not started.
+**0.10.0-C (workbook-level preservation, done)** — the same opaque-fragment mechanism as B,
+applied to `xl/workbook.xml`'s own direct children, split into 3 slices by position-
+dependence: C1 (`<workbookPr>`/`<calcPr>`/`<extLst>`, plus the root tag's own namespace
+declarations — position-independent, plain verbatim copy), C2 (`<bookViews>` — its
+`<workbookView>` can in principle carry sheet-position `activeTab`/`firstSheet` attributes,
+but all 7 real fixtures were checked and none sets either, so this ships as plain verbatim
+too rather than building unvalidated gating logic for a hazard with zero fixture evidence),
+and C3 (`<definedNames>`, including print area/titles — `localSheetId` DOES have real
+fixture evidence, so it's carried verbatim only when no sheet has been deleted since load,
+and dropped entirely otherwise, rather than risk a stale reference; per-name `localSheetId`
+remapping for the delete case is left as documented future work). New `WORKBOOK_ELEMENT_LOSS`
+category (plus a dedicated `check_defined_names()` for C3's delete-dependent correctness) in
+`mechanical_check.py`, all 7 fixtures confirmed CLEAN. Real-Excel reopen verification is
+still pending (structurally, `mechanical_check.py` cannot substitute for actually reopening
+the file in Excel).
+
+**0.10.0-D (relationship-backed features, including the actual fix for
+`SOURCE_REFERENCE_LOSS`)**: not started. Blocked on a real design decision, not yet made:
+worksheet parts are currently named `sheet{i+1}.xml` by output position, while a worksheet's
+`.rels` file (and whatever it points at — tables, drawings, comments) survives keyed by the
+*original* part path. That's self-consistent today only because nothing carries
+worksheet-level relationships forward yet; `0.10.0-D` reconnecting the relationship graph
+changes that, and needs to decide whether output part names become origin-stable (derived
+from `WorksheetOrigin.original_part_name`, with new-sheet collision handling) or stay
+positional with relationships remapped at write time instead. Both are defensible; this is a
+product decision, not an implementation detail.
 
 **Exit criteria** (unchanged from the original sketch, still the target): every untouched
 unsupported XML node preserved byte- or semantically-equivalent, 0 Excel repair warnings, 0
