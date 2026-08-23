@@ -85,10 +85,12 @@ mechanical-check-verified, and real-Excel reopen-verified (0 repair warnings; `f
 defined name and `fixture5`'s print area both confirmed byte-for-byte in Excel's own Name
 Manager/print preview). `0.10.0-D` (relationship-backed features, the actual fix for
 `SOURCE_REFERENCE_LOSS`) has a decided design (origin-based worksheet part naming — see the
-roadmap entry below) but no implementation yet. Two independent, pre-existing
-correctness bugs found and fixed along the way, both affecting every released version: a
-save's sheet tab order silently followed an alphabetical sort instead of the source order, and
-a sheet's display-name letter case was silently lowercased on every save.
+roadmap entry below); its first slice, `D1` (the `WorksheetOutputPlan` output plan itself,
+no relationship restoration yet), is done. Three independent, pre-existing correctness
+bugs found and fixed along the way, all affecting every released version: a save's sheet
+tab order silently followed an alphabetical sort instead of the source order, a sheet's
+display-name letter case was silently lowercased on every save, and `Sheets.Add` could
+silently no-op (no new sheet, no error) whenever the sheet set had a numbering gap.
 
 ## Known gaps
 
@@ -339,6 +341,20 @@ a sheet's display-name letter case was silently lowercased on every save.
     `WorkbookSheet`/`Vm`/the writer the same way `Variant::Error` already is at the VBA-runtime
     level (see `src/lib.rs`'s `PyExcelError`/`python_to_variant`), not attempted yet.
 
+15. **`mechanical_check.py`'s structural checks don't catch an orphaned worksheet `.rels`
+    file when the sheet it belongs to is the one deleted.** `check_roundtrip`'s orphan check
+    (#2b) only flags a *worksheet part* that survives unreferenced; it never asks "does a
+    surviving `.rels` file still have a sibling part it implicitly belongs to" (OPC's
+    filename-convention pairing, not an explicit relationship). Deleting a sheet that has its
+    own `.rels` (e.g. a real hyperlink target) leaves `xl/worksheets/_rels/sheetN.xml.rels`
+    passed through with no `sheetN.xml` beside it in the output — invisible to every existing
+    verdict category. Found and confirmed via a synthetic-fixture CLI run while verifying
+    `0.10.0-D1`; harmless to Excel in practice (nothing ever points to the stray `.rels`, so
+    Excel has no reason to open it) and not newly introduced by `D1` — the same shape existed
+    pre-`D1` under a different stale filename. `0.10.0-D4`'s reachability-based deleted-part
+    cleanup removes the file itself; a dedicated checker case for this specific orphan shape
+    is still open and not yet written.
+
 ## npm/JS/WASM: still-open gaps
 
 CI wiring, browser/WASM smoke coverage, and package-size measurement are all done (see
@@ -547,11 +563,11 @@ table would have appeared instead), 0 repair warnings across all 3 output files
 (`fixture4` save-as, `fixture4` in-place, `fixture5` save-as).
 
 **0.10.0-D (relationship-backed features, including the actual fix for
-`SOURCE_REFERENCE_LOSS`)**: design decided, implementation not started. Worksheet parts are
-currently named `sheet{i+1}.xml` by output position, while a worksheet's `.rels` file (and
-whatever it points at — tables, drawings, comments) survives keyed by the *original* part
-path. That's self-consistent today only because nothing carries worksheet-level
-relationships forward yet; `0.10.0-D` reconnecting the relationship graph changes that.
+`SOURCE_REFERENCE_LOSS`)**: design decided; `D1` done, `D2`/`D3`/`D4` not started. Worksheet
+parts were previously named `sheet{i+1}.xml` by output position, while a worksheet's
+`.rels` file (and whatever it points at — tables, drawings, comments) survived keyed by
+the *original* part path. That was self-consistent only because nothing carried
+worksheet-level relationships forward yet; `0.10.0-D` reconnects the relationship graph.
 **Decided: origin-based part naming** — an existing sheet's output part name stays
 `WorksheetOrigin.original_part_name` regardless of save-time position, a new sheet gets
 `max(existing sheetN) + 1` (never reusing a freed number), and a deleted sheet's exclusively-
@@ -562,6 +578,20 @@ graph, not sequential naming, so leaving existing part URIs untouched is safer t
 rewriting every reference. Full design (the `WorksheetOutputPlan` sketch, D1–D4 commit
 breakdown, required test case table) in
 `docs/xlsx-worksheet-preservation-0.10.0-design.md` §10.
+
+**`D1` (output plan + tests, done).** `WorksheetOutputPlan` + `plan_worksheet_output` now
+drive every writer call site that used to independently re-derive `sheet{i+1}.xml`/
+`sheetId`/`r:id`. Confirmed as a real bug fix (not just a rename) via a git-stash A/B
+comparison: a surviving sheet's content used to land at a position-derived part name while
+its passthrough `.rels` file stayed at the original name, so deleting an earlier sheet
+could orphan a later sheet's relationship file. Deliberately does not yet restore
+relationship-backed references (`SOURCE_REFERENCE_LOSS` itself, `D2`/`D3`'s job). One
+known, currently-uncaught checker gap surfaced while verifying D1: when the sheet with its
+own `.rels` file is the one deleted, the orphaned `_rels/sheetN.xml.rels` that results
+isn't flagged by any existing `mechanical_check.py` category (`ORPHANED_PART`/
+`DANGLING_RELATIONSHIP` both check different shapes) — harmless to Excel in practice
+(nothing references it), pre-existing under a different stale filename before D1, and
+slated to be closed by `D4`'s reachability-based cleanup.
 
 **Exit criteria** (unchanged from the original sketch, still the target): every untouched
 unsupported XML node preserved byte- or semantically-equivalent, 0 Excel repair warnings, 0

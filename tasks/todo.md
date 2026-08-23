@@ -378,3 +378,18 @@ version bump・push（各コミットは`/greenlane`実行前に個別push・CI�
 - [x] `ROADMAP.md`・`CHANGELOG.md`・design docを実Excel検証結果・0.10.0-D方針決定・D8バグ発見に同期。
 
 D1（`WorksheetOutputPlan`導入）着手条件（0.10.0-Cの実Excel確認完了）が満たされたため、D1実装に着手。
+
+## 0.10.0-D1実装完了、独立バグ1件追加発見・修正（`/greenlane`継続）
+
+D1（`WorksheetOutputPlan`＋テストのみ、relationship復元は含まない、というユーザー指定スコープ）を実装。コミット前にadvisorレビューを実施、2点の未検証事項（合成fixture止まりでmechanical_check.pyのCLI実行を経ていない／新規sheetのfresh part名割当がunit testでしか通っていない）を指摘され、両方とも実CLIシナリオで追加検証してから確定した。
+
+- [x] **`WorksheetOutputPlan`＋`plan_worksheet_output`実装**（commit `17d1ace`）：既存シートは`WorksheetOrigin.original_part_name`をそのまま維持、新規シートは`max(既存sheetN番号)+1`（削除済みシートの番号も含めた予約集合から算出、欠番の再利用なし）。`build_xlsx_content_types`／`build_xlsx_workbook`／`build_xlsx_workbook_rels`／per-sheet書き込みループを全てこの計画一本に統一。
+- [x] **git-stash A/B比較で実バグ修正であることを確認**：3シート合成fixture（Sheet3が実hyperlink `.rels`を持つ）でSheet2を削除するシナリオを、修正前後のコードそれぞれに対して実行し直接比較。修正前は生存Sheet3の内容が位置ベースpart名（`sheet2.xml`）に書かれる一方、`.rels`は元のpart名（`sheet3.xml`）のままで、内容と`.rels`が不整合を起こしていたことを確認。
+- [x] **advisor指摘によるCLI検証1：relationship持ちシート自体を削除するシナリオ**：先の`git stash`比較はrelationship無しのSheet2削除だったため、逆にSheet3（`.rels`持ち）を削除して`mechanical_check.py`のフルチェックを実行。`STRUCTURALLY_CLEAN`が返ったが、ソース読解の結果これは「本当に無害」ではなく「`check_roundtrip`のどのチェックもこの孤立`.rels`の形を検出できない」ことによる見逃しと判明（実Excelには無害、D1で新規発生したものでもない）。`ROADMAP.md`のKnown gaps項目15として記録、D4のreachability清掃で実体除去予定、checker側のnegative testは未着手。
+- [x] **advisor指摘によるCLI検証2：新規sheetのfresh part名割当をend-to-endで確認**：`sheet1.xml`／`sheet3.xml`（欠番2）を持つ合成fixtureで`Sheets.Add`を実行しようとしたところ、**別の独立したバグ**を発見——`Stmt::SheetsAdd`が`self.sheets.len() + 1`のみで新規sheet名を決めており衝突チェックが無いため、番号に欠番がある状態（典型例：中間シート削除後の`Add`）では既存シートと名前が衝突し、`ensure_sheet`が黙って何もしない（エラーなし、新規シートも作られない）。
+- [x] **`Sheets.Add`衝突バグ修正**（commit `9d6373d`、D1より先に独立コミット）：衝突する名前から1ずつ増やして空き名を探すよう修正。修正前後で同一マクロ（3シート→中間シート削除→Add）を実行し、修正前は本当に沈黙して失敗すること（`sheet_order`が2要素のまま）を確認してから修正・再確認。`72b5cc38`（2026-06-21）由来、0.10.0とは無関係の既存バグ。
+- [x] 修正後に検証2のシナリオを再実行、新規sheetが`sheet4.xml`（`max(1,3)+1`）に正しく割り当てられ、`[Content_Types].xml`のOverrideと`workbook.xml.rels`のTargetが両方とも同じpart名を指すことを確認。
+- [x] `cargo fmt --all --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（847 lib + 15 xlsx_roundtrip）／`mechanical_check.py --self-test`／`compat/corpus`（581件、0 UNEXPLAINED/0 MISMATCH）／`compat/vba-semantics`（386件、0 BUG/0 UNCLASSIFIED）、いずれもクリーン・既存ベースラインから無回帰を確認。
+- [x] `ROADMAP.md`（Current state・0.10.0-Dエントリ・Known gaps項目15新設）・`CHANGELOG.md`（Unreleased 0.10.0-D節）・design doc（§10 D1完了記録、`sheet2.xml`/`sheet7.xml`並べ替えテストケースが現状到達不能である旨の申し送り）を同期。
+
+D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で引き継ぐ）以降は、ユーザー指定のD1スコープ限定方針により未着手のまま。push未承認、ローカルコミットのみ（2コミット：`9d6373d`・`17d1ace`）。

@@ -162,7 +162,35 @@ so `t="e"` is read the same as `t="str"`. Confirmed pre-existing via `git blame`
 `SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing
 sheet's output part name stays `WorksheetOrigin.original_part_name` rather than being
 renumbered by position; see `docs/xlsx-worksheet-preservation-0.10.0-design.md` §10 for the
-full `WorksheetOutputPlan` design and D1–D4 breakdown), implementation not started.
+full `WorksheetOutputPlan` design and D1–D4 breakdown).
+
+**`D1` (output plan + tests, done).** New `WorksheetOutputPlan` +
+`plan_worksheet_output(sheet_names, origins, reserved_part_numbers)`: an existing sheet
+keeps its own `original_part_name` verbatim regardless of save-time position; a new sheet
+gets `max(reserved) + 1`, where `reserved` is every `sheetN.xml` number that ever existed
+in the source (including a deleted sheet's number, scanned from the raw passthrough ZIP
+entries) — never reusing a freed number. `build_xlsx_content_types` /
+`build_xlsx_workbook` / `build_xlsx_workbook_rels` and the per-sheet write loop all now
+consume `&[WorksheetOutputPlan]` instead of separately re-deriving `sheet{i+1}.xml` /
+`sheetId` / `r:id` at each call site. This is a real bug fix, not just a rename: before
+this change, a surviving sheet's content was written to a position-derived part name
+while its own passthrough `.rels` file stayed at its original name, so deleting an
+earlier sheet could orphan a later sheet's relationship file — confirmed via a git-stash
+A/B comparison against the pre-fix code, not just inferred. No relationship-backed
+restoration yet (`r:id` references / `SOURCE_REFERENCE_LOSS` itself are still `D2`/`D3`),
+per the approved D1 scope boundary.
+
+One independent bug found and fixed while building end-to-end coverage for D1's
+fresh-part-name branch: `Stmt::SheetsAdd` named a new sheet from `self.sheets.len() + 1`
+alone, with no collision check — any workbook with a gap in sheet numbering (most
+commonly: delete a middle sheet, then `Sheets.Add`) computed a name that collided with a
+later surviving sheet, and `ensure_sheet()` no-ops on an existing key, so the `Add`
+silently produced nothing. Fixed by probing upward until a free name is found. Confirmed
+pre-existing via `git blame` (`72b5cc38`, 2026-06-21), unrelated to `0.10.0`.
+
+`D2` (worksheet `.rels` / `r:id` preservation), `D3` (type-aware source-reference
+restoration for tableParts/hyperlinks/drawing/legacyDrawing/pageSetup), and `D4`
+(rename/reorder/delete/add + reachability-based deleted-part cleanup) remain not started.
 
 ### CI: WASM artifact size observability
 

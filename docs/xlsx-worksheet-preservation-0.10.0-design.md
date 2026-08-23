@@ -868,7 +868,7 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     誤って消す危険があり、無条件保持はorphan partを増やす）。
 
   **実装分割（D1〜D4、1コミットずつ）**:
-  - **D1**: `WorksheetOutputPlan`の導入と、`workbook.xml`／`workbook.xml.rels`／
+  - **D1（完了）**: `WorksheetOutputPlan`の導入と、`workbook.xml`／`workbook.xml.rels`／
     `[Content_Types].xml`をこの計画に基づいて出力するように切り替える。この段階では
     worksheet-level `.rels`の機能復元（relationship-backed要素の実復元）はまだ行わない。
   - **D2**: 生存sheetの元`.rels`をoriginal part名のままrelationship ID不変で引き継ぐ。
@@ -897,6 +897,50 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
   含め一切のコード実装に着手しない、という条件を設けていた——B/C/Dを混ぜると実Excelで
   問題が起きた際に原因の切り分けができなくなるため（ユーザー指示）。C1〜C3の実Excel
   検証がユーザー確認済み（上記C3末尾参照）となったため、D1着手可能。
+
+  **D1実装済み（2026-08-23、ユーザーへの実Excel確認依頼はまだ行っていない）**:
+  `WorksheetOutputPlan`と`plan_worksheet_output`を実装し、`build_xlsx_content_types`／
+  `build_xlsx_workbook`／`build_xlsx_workbook_rels`／per-sheet書き込みループの全てを
+  この計画一本に統一した。D1で許可されたスコープ（出力計画とテストのみ）を厳密に守り、
+  relationship復元（D2/D3の担当）には一切着手していない。
+
+  スタブや仮説ではなく実バグ修正であることを確認済み: 修正前は生存sheetの内容が
+  位置ベースのpart名に書かれる一方、そのsheet自身のpassthrough `.rels`は元のpart名の
+  ままだったため、より前のsheetが削除されて位置がずれると、内容と`.rels`が食い違い、
+  `.rels`が孤立していた。`git stash`／`git stash pop`で修正前後のコードを同一シナリオ
+  （3シート合成fixture、Sheet3が実hyperlink `.rels`を持つ、Sheet2を削除）に対して
+  実行して直接比較し、修正前は本当にこの不整合が起きることを確認した。
+
+  さらに2つの独立した検証を追加で実施した（advisor指摘を受けて）:
+  1. **relationship持ちシート自体を削除するCLIシナリオ**（先の`git stash`比較は
+     relationship無しのSheet2を削除していたため、これとは異なる形）——Sheet3
+     （`_rels/sheet3.xml.rels`を持つ）を削除して`mechanical_check.py`のフル
+     チェックを通したところ、`structural_verdict: STRUCTURALLY_CLEAN`が返った。
+     しかしこれは「本当に問題がない」ことを意味しない——`_rels/sheet3.xml.rels`は
+     対応する`sheet3.xml`が無いまま出力に生き残る（orphan）が、`check_roundtrip`の
+     どのチェックもこの形の孤立を検出できないことをソース読解で確認した（2b節は
+     「partが参照されているか」しか見ず、「`.rels`ファイル自身がOPC命名規則上
+     結び付くはずのpartが実在するか」は見ない）。実Excelには無害（何も参照しない
+     ためExcelが開く理由がない）で、D1で新規発生したものではない（D1以前も別の
+     stale part名で同じ形の孤立が起きていた）が、checker側の既知の穴として
+     ROADMAP.md Known gaps項目15に記録した。D4のreachability清掃で実体は消える
+     見込みだが、checker専用のnegative testはまだ書いていない。
+  2. **`sheet1.xml`／`sheet3.xml`（欠番2）を持つ合成fixtureに対する`Sheets.Add`の
+     end-to-endシナリオ**——新規part割当分岐（`next_fresh_part_n`相当）が
+     unit testでしか検証されていなかったため、実際にCLIを通して確認した。
+     この過程で`Stmt::SheetsAdd`自体の独立したバグ（`self.sheets.len() + 1`のみで
+     衝突チェックが無く、番号に欠番がある状態で`Add`すると既存sheetと衝突して
+     `ensure_sheet`が黙って何もしないバグ——`72b5cc38`由来、0.10.0とは無関係）を
+     発見し、別コミットで先に修正した。修正後に同じCLIシナリオを再実行し、
+     新規sheetが`sheet4.xml`（`max(1,3)+1`、欠番2の再利用なし）に正しく割り当てられ、
+     `[Content_Types].xml`のOverrideと`workbook.xml.rels`のTargetが両方とも同じ
+     part名を指していることを確認した。
+
+  **未解決事項（D4への申し送り）**: 上記「必須テストケース」表の「`sheet2.xml`／
+  `sheet7.xml`を持つ2シートを並べ替え」は、このVMに現状シートの並べ替え・rename
+  primitiveが存在しない（`sheet_order`はsource順のまま、`Sheets.Add`/`Delete`しか
+  無い）ため、現時点では到達不能なテストケースである。D4着手時に並べ替えprimitiveを
+  実装するか、このテストケースを別の到達可能な形に置き換えるか判断が必要。
 
 各milestoneの完了条件は0.9.0-Aと同じ形式（実Excel再オープンでrepair警告0件、
 mechanical_check clean、既存回帰テスト無変化）を踏襲することを推奨する。
