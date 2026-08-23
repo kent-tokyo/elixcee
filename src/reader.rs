@@ -680,6 +680,25 @@ pub(crate) fn extract_hyperlinks(xml: &str, include_relationship_backed: bool) -
     out
 }
 
+/// True iff `element_xml`'s own root tag (as returned by `extract_raw_element` -- the
+/// element's opening `<` at byte 0) carries an `r:id` attribute. Used to gate restoring a
+/// single element that COULD be relationship-backed but usually isn't (`<pageSetup>`,
+/// unlike e.g. `<pageMargins>`, genuinely has an optional `r:id` per the real
+/// `CT_PageSetup` XSD, referencing a `printerSettings` part): a plain `<pageSetup>` with
+/// no `r:id` is always safe to restore verbatim (no relationship dependency at all); one
+/// WITH `r:id` needs the same `rels_survived` gate 0.10.0-D's other relationship-backed
+/// elements use, which isn't wired up here yet -- no real fixture has ever shown that
+/// shape (see `fixtures/pristine/INVENTORY.md`'s "confirmed absent" list). `attr_get(&attrs,
+/// "id")`, same precise (not string-match) technique as `extract_hyperlinks` above.
+pub(crate) fn root_tag_has_rid(element_xml: &str) -> bool {
+    let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(element_xml, 0) else {
+        return false;
+    };
+    let name_end = tag_start + 1 + full_name.len();
+    let attrs = parse_attrs(&element_xml[name_end..name_end + tag_close_rel]);
+    attr_get(&attrs, "id").is_some()
+}
+
 #[cfg(test)]
 mod opaque_fragment_tests {
     use super::*;
@@ -913,6 +932,19 @@ mod opaque_fragment_tests {
         ];
         assert_eq!(extract_hyperlinks(xml, false), expected);
         assert_eq!(extract_hyperlinks(xml, true), expected);
+    }
+
+    #[test]
+    fn root_tag_has_rid_false_for_a_relationship_free_page_setup() {
+        // fixture5_chart_image_freeze_print.xlsm's real shape.
+        let xml = r#"<pageSetup paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0"/>"#;
+        assert!(!root_tag_has_rid(xml));
+    }
+
+    #[test]
+    fn root_tag_has_rid_true_for_an_rid_bearing_page_setup() {
+        let xml = r#"<pageSetup paperSize="9" r:id="rId1"/>"#;
+        assert!(root_tag_has_rid(xml));
     }
 }
 
