@@ -490,15 +490,15 @@ struct WorksheetOutputPlan {
     /// comment on this point, predating this struct).
     workbook_rel_id: String,
     output_part_name: String,
-    // Computed now (D1) but not yet consumed -- D2 restores a surviving sheet's own
-    // `.rels` relationships at `output_rels_name`, and D4 uses `is_existing` to decide
-    // whether a deleted sheet's exclusively-reachable target parts need cleaning up.
-    // Keeping both on the plan now avoids re-deriving them a second time once D2/D4
-    // land, and this is not speculative: both are already-specified next steps in the
-    // same D1-D4 sequence, not a hypothetical future use.
-    #[allow(dead_code)]
+    /// The sheet's own `_rels/sheetN.xml.rels` path, derived from `output_part_name`.
+    /// `save_xlsx_impl`'s `rels_survived` check uses this to confirm the `.rels` actually
+    /// made it into `passthrough` before splicing any relationship-backed element back —
+    /// see `OpaqueWorksheetFragments::table_parts`'s doc comment.
     output_rels_name: String,
-    #[allow(dead_code)]
+    /// Has a `WorksheetOrigin` with a real `original_part_name` — false for a sheet
+    /// created purely in-VBA (`Sheets.Add`), which can never have relationship-backed
+    /// content to restore. `D4` will also use this to decide whether a deleted sheet's
+    /// exclusively-reachable target parts need cleaning up.
     is_existing: bool,
 }
 
@@ -938,6 +938,22 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         let internal_hyperlinks = source_xml
             .map(|xml| reader::extract_relationship_free_hyperlinks(xml))
             .unwrap_or_default();
+        // A relationship-backed element may only be restored when this sheet's own
+        // .rels genuinely survived into THIS output -- `is_existing` alone only means
+        // the sheet HAD an origin, not that its `.rels` specifically made it into
+        // `passthrough` (worksheet-level `.rels` files are ordinary passthrough parts,
+        // not writer-owned -- see `is_writer_owned_part`'s own doc comment). Splicing a
+        // relationship-backed element back over a `.rels` that didn't survive would emit
+        // a dangling `r:id`, a real Excel repair warning.
+        let rels_survived = plan.is_existing
+            && passthrough
+                .iter()
+                .any(|(name, _)| name == &plan.output_rels_name);
+        let table_parts = if rels_survived {
+            source_xml.and_then(|xml| reader::extract_raw_element(xml, "tableParts"))
+        } else {
+            None
+        };
         let fragments = OpaqueWorksheetFragments {
             root_attrs: root_attrs.as_deref(),
             sheet_pr: sheet_pr.as_deref(),
@@ -947,6 +963,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             data_validations: data_validations.as_deref(),
             internal_hyperlinks: &internal_hyperlinks,
             page_margins: page_margins.as_deref(),
+            table_parts: table_parts.as_deref(),
         };
 
         zip.start_file(plan.output_part_name.as_str(), deflated)
@@ -1267,6 +1284,14 @@ struct OpaqueWorksheetFragments<'a> {
     /// rather than emitted as `<hyperlinks/>`.
     internal_hyperlinks: &'a [String],
     page_margins: Option<&'a str>,
+    /// `<tableParts><tablePart r:id="..."/></tableParts>` -- the first 0.10.0-D relationship-
+    /// backed element restored. Unlike every fragment above, the caller must only pass
+    /// `Some` when the sheet's own `xl/worksheets/_rels/sheetN.xml.rels` genuinely survived
+    /// into THIS save's output (see `save_xlsx_impl`'s `rels_survived` check) -- splicing
+    /// this back over a `.rels` that didn't pass through would emit a dangling `r:id`
+    /// reference, a real Excel repair warning and strictly worse than the prior silent
+    /// inertness `check_source_references()`'s `SOURCE_REFERENCE_LOSS` was built to catch.
+    table_parts: Option<&'a str>,
 }
 
 fn build_xlsx_sheet(
@@ -1421,6 +1446,17 @@ fn build_xlsx_sheet(
 
     if let Some(pm) = fragments.page_margins {
         out.push_str(pm);
+        out.push('\n');
+    }
+
+    // CT_Worksheet order (§8): ... pageMargins, pageSetup, headerFooter, rowBreaks,
+    // colBreaks, customProperties, cellWatches, ignoredErrors, smartTags, drawing,
+    // legacyDrawing, legacyDrawingHF, drawingHF, picture, oleObjects, controls,
+    // webPublishItems, tableParts, extLst. None of the slots between pageMargins and
+    // tableParts are emitted yet, so tableParts's schema-correct position is still
+    // simply "right after pageMargins" until one of them is restored too.
+    if let Some(tp) = fragments.table_parts {
+        out.push_str(tp);
         out.push('\n');
     }
 
