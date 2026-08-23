@@ -908,23 +908,53 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
       7件ともCLEAN）。実Excel再オープン検証はtableParts/drawing/legacyDrawing/
       hyperlinksいずれもまだ未実施。
     - `<pageSetup r:id>`（実証fixtureが無ければ着手しない）は引き続き未着手。
-  - **D4**: sheet rename／reorder／deletion／新規追加／非連番part名／shared・exclusive
-    targetのreachability——実fixtureとnegative testで固める。
+  - **D4（reachability清掃分は完了、rename/reorderは意図的に対象外）**: sheet
+    rename／reorder／deletion／新規追加／非連番part名／shared・exclusive target
+    のreachability——実fixtureとnegative testで固める。advisor相談の結果、
+    rename／reorderはこのVMに未実装のprimitiveを新規追加する話であり、
+    「実装済みでないVBA機能をtest tableの行のために追加する」のはhard gateの
+    趣旨に反すると判断——追加せず、下表の該当2行はN/Aとして記録した
+    （deletion／新規追加／非連番part名／reachabilityは全て別途到達可能で、
+    このVMの既存primitiveだけで検証できる）。
+
+    実装は`compat/oracle-excel-com/mechanical_check.py`の
+    `check_deleted_sheet_cleanup()`（checker）を先に書いて自己テストで固め、
+    それに対して`src/lib.rs`の`deleted_sheet_prunable_parts`（writer、Pythonと
+    同一アルゴリズムの移植）を実装、という順序（このmilestone一貫のhard gate）
+    で進めた。削除されたシートの`.rels`から到達可能なpart集合と、生存シート・
+    workbook-level relationship（`xl/_rels/workbook.xml.rels`・`_rels/.rels`）
+    から到達可能なpart集合の差分——前者にのみ含まれるpartだけをpruning対象と
+    する。実装中に2つの独立したバグを発見・修正（Python側で先に発見、Rust側は
+    同じ設計で最初から正しく実装）: `xl/workbook.xml`自体を「reachable
+    elsewhere」のrootにすると、`original`のworkbook.xml.rels（削除されたシートも
+    まだ列挙されたまま）を素通しで辿ってしまい、削除シートの`.rels`から到達可能な
+    partが全て誤って「他からも到達可能」と判定される。`_rels/.rels`→
+    `xl/workbook.xml`という別経路からも同じ問題が起きるため、`exclude`集合を
+    BFSの初期rootだけでなく全hopでフィルタする形に修正して解消。
+
+    実Excel検証済みの実例で確認: 本セッション前半で作った`d1_reorder_test.xlsx`
+    （Sheet3が実hyperlink `.rels`を持つ）でSheet3を削除するシナリオを再実行——
+    D4実装前は`_rels/sheet3.xml.rels`がorphanとして生き残っていたが（Known gaps
+    項目15の実例そのもの）、D4実装後は正しく消え、`check_deleted_sheet_cleanup()`
+    と`check_roundtrip()`双方がCLEANを報告することを確認。さらに新規の
+    shared-target合成fixture（2シート、共有table target 1つ・排他的drawing
+    target 1つ）をCLI経由で実行し、排他的target（`.rels`・drawing）のみが消え、
+    共有target（table）は生存することを実データで確認。
 
   **必須テストケース**（D4完了条件の一部）:
 
-  | ケース | 期待結果 |
-  |---|---|
-  | `sheet5.xml`を持つ1シートを保存 | `sheet5.xml`のまま |
-  | `sheet2.xml`／`sheet7.xml`を持つ2シートを並べ替え | part名は不変、表示順だけ変更 |
-  | シートrename（このVMには未実装だが将来に備え） | part名と`.rels`名は不変 |
-  | 新規シート追加 | 未使用の新part名 |
-  | relationship付きシート削除 | worksheet・`.rels`・exclusive targetが消える |
-  | shared targetを持つシート削除 | shared targetは残る |
-  | table／drawing／external hyperlink | checkerがCLEAN |
-  | source参照だけ削除 | `SOURCE_REFERENCE_LOSS` |
-  | `.rels`だけ削除 | `DANGLING_RELATIONSHIP`または対応分類 |
-  | target partだけ削除 | `DANGLING_RELATIONSHIP` |
+  | ケース | 期待結果 | 状態 |
+  |---|---|---|
+  | `sheet5.xml`を持つ1シートを保存 | `sheet5.xml`のまま | 済（D1のnon-sequential naming testで確認済み） |
+  | `sheet2.xml`／`sheet7.xml`を持つ2シートを並べ替え | part名は不変、表示順だけ変更 | **N/A**——このVMに並べ替えprimitiveが無いため到達不能。新規追加せずhard gateの範囲外とした |
+  | シートrename（このVMには未実装だが将来に備え） | part名と`.rels`名は不変 | **N/A**——同上、rename primitiveが無い |
+  | 新規シート追加 | 未使用の新part名 | 済（D1の`sheet4.xml`割当testで確認済み） |
+  | relationship付きシート削除 | worksheet・`.rels`・exclusive targetが消える | 済（D4新規test、CLIでも確認） |
+  | shared targetを持つシート削除 | shared targetは残る | 済（D4新規test、CLIでも確認） |
+  | table／drawing／external hyperlink | checkerがCLEAN | 済（実fixture7件全てCLEAN） |
+  | source参照だけ削除 | `SOURCE_REFERENCE_LOSS` | 済（0.10.0-A self-test Case Hで既存カバー） |
+  | `.rels`だけ削除 | `DANGLING_RELATIONSHIP`または対応分類 | 未検証——checkerの対adversarial-input堅牢性テストで、今回のD4スコープでは着手せず |
+  | target partだけ削除 | `DANGLING_RELATIONSHIP` | 済（0.10.0-A self-test Case Dで既存カバー） |
 
   **着手条件（満たされた、2026-08-23）**: 0.10.0-Cの実Excel確認が完了するまでD1を
   含め一切のコード実装に着手しない、という条件を設けていた——B/C/Dを混ぜると実Excelで
@@ -969,11 +999,9 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
      `[Content_Types].xml`のOverrideと`workbook.xml.rels`のTargetが両方とも同じ
      part名を指していることを確認した。
 
-  **未解決事項（D4への申し送り）**: 上記「必須テストケース」表の「`sheet2.xml`／
-  `sheet7.xml`を持つ2シートを並べ替え」は、このVMに現状シートの並べ替え・rename
-  primitiveが存在しない（`sheet_order`はsource順のまま、`Sheets.Add`/`Delete`しか
-  無い）ため、現時点では到達不能なテストケースである。D4着手時に並べ替えprimitiveを
-  実装するか、このテストケースを別の到達可能な形に置き換えるか判断が必要。
+  **解決済み**: 上記「未解決事項」で申し送っていた並べ替え・rename2行は、D4着手時に
+  advisor相談の上でN/Aとして記録することに決定（上記D4セクション参照）——このVMに
+  存在しないVBA機能を、test tableの行を埋めるためだけに新規実装するのは見送った。
 
 各milestoneの完了条件は0.9.0-Aと同じ形式（実Excel再オープンでrepair警告0件、
 mechanical_check clean、既存回帰テスト無変化）を踏襲することを推奨する。

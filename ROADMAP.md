@@ -90,7 +90,12 @@ relationship-backed element with real fixture evidence — `<tableParts>`, `<dra
 `<legacyDrawing>`, `<hyperlinks>` (including r:id-backed ones, a rewrite of `0.10.0-B4`'s
 prior relationship-free-only scope) — is now restored. All 7 real fixtures report `CLEAN`
 across every `mechanical_check.py` category, including `source_references`:
-`SOURCE_REFERENCE_LOSS` is eliminated from the entire current fixture set,
+`SOURCE_REFERENCE_LOSS` is eliminated from the entire current fixture set. `D4`
+(reachability-based cleanup of a deleted sheet's exclusively-reachable parts) is also
+done, closing Known gaps item 15; sheet rename/reorder are marked N/A rather than
+implemented (this `Vm` has no such primitive, and adding one purely to fill a test-table
+row would invert this milestone's own hard gate). `0.10.0-D`'s only remaining open item
+is `<pageSetup r:id>` (no fixture has one). Everything above is
 mechanical-check-verified but not yet real-Excel reopen-verified. Three independent, pre-existing correctness
 bugs found and fixed along the way, all affecting every released version: a save's sheet
 tab order silently followed an alphabetical sort instead of the source order, a sheet's
@@ -346,19 +351,16 @@ silently no-op (no new sheet, no error) whenever the sheet set had a numbering g
     `WorkbookSheet`/`Vm`/the writer the same way `Variant::Error` already is at the VBA-runtime
     level (see `src/lib.rs`'s `PyExcelError`/`python_to_variant`), not attempted yet.
 
-15. **`mechanical_check.py`'s structural checks don't catch an orphaned worksheet `.rels`
-    file when the sheet it belongs to is the one deleted.** `check_roundtrip`'s orphan check
+15. ~~`mechanical_check.py`'s structural checks don't catch an orphaned worksheet `.rels`
+    file when the sheet it belongs to is the one deleted. `check_roundtrip`'s orphan check
     (#2b) only flags a *worksheet part* that survives unreferenced; it never asks "does a
-    surviving `.rels` file still have a sibling part it implicitly belongs to" (OPC's
-    filename-convention pairing, not an explicit relationship). Deleting a sheet that has its
-    own `.rels` (e.g. a real hyperlink target) leaves `xl/worksheets/_rels/sheetN.xml.rels`
-    passed through with no `sheetN.xml` beside it in the output — invisible to every existing
-    verdict category. Found and confirmed via a synthetic-fixture CLI run while verifying
-    `0.10.0-D1`; harmless to Excel in practice (nothing ever points to the stray `.rels`, so
-    Excel has no reason to open it) and not newly introduced by `D1` — the same shape existed
-    pre-`D1` under a different stale filename. `0.10.0-D4`'s reachability-based deleted-part
-    cleanup removes the file itself; a dedicated checker case for this specific orphan shape
-    is still open and not yet written.
+    surviving `.rels` file still have a sibling part it implicitly belongs to"~~ — **fixed**
+    by `0.10.0-D4`: `check_deleted_sheet_cleanup()` (a dedicated package-reachability check,
+    written and self-test-verified first) now catches this shape, and the writer's
+    `deleted_sheet_prunable_parts` prunes the orphan itself, transitively, rather than
+    leaving it behind. Verified against the exact real scenario that first exposed this gap
+    (a fixture with a relationship-bearing sheet deleted) — the orphaned `.rels` is now
+    genuinely absent. See the `0.10.0-D4` roadmap entry above for the full account.
 
 ## npm/JS/WASM: still-open gaps
 
@@ -594,12 +596,11 @@ comparison: a surviving sheet's content used to land at a position-derived part 
 its passthrough `.rels` file stayed at the original name, so deleting an earlier sheet
 could orphan a later sheet's relationship file. Deliberately does not yet restore
 relationship-backed references (`SOURCE_REFERENCE_LOSS` itself, `D2`/`D3`'s job). One
-known, currently-uncaught checker gap surfaced while verifying D1: when the sheet with its
-own `.rels` file is the one deleted, the orphaned `_rels/sheetN.xml.rels` that results
-isn't flagged by any existing `mechanical_check.py` category (`ORPHANED_PART`/
-`DANGLING_RELATIONSHIP` both check different shapes) — harmless to Excel in practice
-(nothing references it), pre-existing under a different stale filename before D1, and
-slated to be closed by `D4`'s reachability-based cleanup.
+known checker gap surfaced while verifying D1 (Known gaps item 15): when the sheet with
+its own `.rels` file is the one deleted, the orphaned `_rels/sheetN.xml.rels` that
+resulted wasn't flagged by any `mechanical_check.py` category that existed at the time —
+harmless to Excel in practice (nothing references it), pre-existing under a different
+stale filename before D1. Closed by `D4`'s reachability-based cleanup, below.
 
 **`<tableParts>` restored (first relationship-backed element, done).** D1's own doc
 comment described a separate `D2` slice ("carry a surviving sheet's `.rels` through at
@@ -651,10 +652,40 @@ is rewritten to `real_excel_external_hyperlink_survives_a_save`, asserting the o
 `fixture4` is now fully `CLEAN`, its last violation cleared. `SOURCE_REFERENCE_LOSS` is
 eliminated from the entire current fixture set: all 7 real fixtures report `CLEAN` across
 every `mechanical_check.py` category. Real-Excel reopen verification not yet done for
-`tableParts`/`drawing`/`legacyDrawing`/`hyperlinks`. Remaining 0.10.0-D work:
-`<pageSetup r:id>` (no fixture has one with an `r:id` yet) and `D4` (rename/reorder/
-delete/add + reachability-based deleted-part cleanup, including Known gaps item 15's
-orphaned-`.rels` shape).
+`tableParts`/`drawing`/`legacyDrawing`/`hyperlinks`.
+
+**`D4` (deleted-sheet reachability cleanup, done) — closes Known gaps item 15.** A
+deleted sheet's own worksheet-level `.rels` (and whatever it exclusively pointed at)
+used to survive a save as an orphan — byte-identical, but unreferenced by anything in the
+output, invisible to `check_roundtrip()`'s structural checks alone. Fixture→checker→writer,
+this milestone's own hard gate: `check_deleted_sheet_cleanup()` (a package-reachability
+BFS over the source's own relationship graph, independent of what the writer actually
+does) was written and self-test-verified first; the Rust writer's
+`deleted_sheet_prunable_parts` is a direct port of the same algorithm, wired into the
+existing passthrough-building loop so a prunable part never enters `passthrough` — no
+separate cleanup pass needed, since `carried_overrides` and both `carry_over_rels` calls
+already only keep what's still present after that. A part shared between the deleted
+sheet and anything else (a surviving sheet, or a workbook-level relationship) is correctly
+kept; a part exclusively reachable from the deleted sheet is correctly pruned,
+transitively. Two real bugs in the reachability computation were found and fixed on the
+Python checker side before the Rust port even started: naively using `xl/workbook.xml`
+itself as a "reachable elsewhere" root walks its own unfiltered `.rels`, which in the
+source still lists the deleted sheet, silently reintroducing everything reachable from it
+— fixed by threading an `exclude` set through every hop of the BFS, not just the initial
+roots. Verified against the exact real scenario that exposed item 15 earlier this
+session: the orphaned `.rels` is now genuinely absent, both `check_roundtrip()` (no false
+positive) and the new checker report `CLEAN`. A dedicated shared-vs-exclusive-target
+scenario was also run end to end through the CLI, confirming the exclusive target is
+pruned while the shared one survives.
+
+Two rows in the design doc's required test-case table (sheet rename, sheet reorder) are
+deliberately marked N/A rather than implemented: this `Vm` has no rename/reorder
+primitive, and adding VBA statement support purely to make a test-table row reachable
+would invert this project's own hard gate.
+
+`0.10.0-D`'s only remaining open item: `<pageSetup r:id>` (no fixture has one with an
+`r:id` yet). Real-Excel reopen verification remains not done for `tableParts`/`drawing`/
+`legacyDrawing`/`hyperlinks`/`D4`.
 
 **Exit criteria** (unchanged from the original sketch, still the target): every untouched
 unsupported XML node preserved byte- or semantically-equivalent, 0 Excel repair warnings, 0

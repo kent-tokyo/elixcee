@@ -231,10 +231,39 @@ NOT survive; that test is rewritten to assert the opposite (`fixture4` is now fu
 entire current fixture set: all 7 fixtures report `CLEAN` across every
 `mechanical_check.py` category.
 
+**`D4` (deleted-sheet reachability cleanup, done) — closes Known gaps item 15.** A
+deleted sheet's own worksheet-level `.rels` (and whatever it exclusively pointed at —
+tables, drawings, comments) used to survive a save as an orphan: byte-identical, but
+unreferenced by anything in the output, invisible to `check_roundtrip()`'s structural
+checks alone. Fixture→checker→writer, as always: `check_deleted_sheet_cleanup()` (a
+package-reachability BFS over the source's own relationship graph, computed independently
+of whatever the writer actually did) was written and self-test-verified first; the Rust
+writer's `deleted_sheet_prunable_parts` is a direct port of the same algorithm, wired into
+the existing passthrough-building loop so a prunable part never enters `passthrough` in
+the first place — no separate cleanup pass needed, since `carried_overrides` and both
+`carry_over_rels` calls already only keep what's still present. A part shared between the
+deleted sheet and anything else (a surviving sheet, or a workbook-level relationship) is
+correctly kept; a part exclusively reachable from the deleted sheet is correctly pruned,
+transitively (its own `.rels`, and one level further for whatever that points at). Two
+real bugs in the reachability computation were found and fixed on the Python checker side
+before the Rust port even started: naively using `xl/workbook.xml` as a "reachable
+elsewhere" root walks its own unfiltered `.rels`, which in the source still lists the
+deleted sheet, silently reintroducing everything reachable from it — fixed by threading an
+`exclude` set through every hop of the BFS, not just the initial roots. Verified against
+the exact real scenario that exposed item 15 earlier this session (a fixture with a
+relationship-bearing sheet deleted): the orphaned `.rels` is now genuinely absent, both
+`check_roundtrip()` (no false positive) and the new checker report `CLEAN`. A dedicated
+shared-vs-exclusive-target scenario was also run end to end through the CLI.
+
+Sheet rename/reorder — two rows in the design doc's required test-case table — are
+deliberately marked N/A: this `Vm` has no rename/reorder primitive (only `Sheets.Add`/
+`Delete`), and adding VBA statement support purely to make a test-table row reachable
+would invert this project's own hard gate (`src/vm/mod.rs`'s own stated position: "building
+it now would be validated by nothing").
+
 Real-Excel reopen verification not yet done for `tableParts`/`drawing`/`legacyDrawing`/
-`hyperlinks`. `<pageSetup r:id>` (no fixture has one with an `r:id` yet) and `D4`
-(rename/reorder/delete/add + reachability-based deleted-part cleanup, including
-`ROADMAP.md`'s Known gaps item 15) remain not started.
+`hyperlinks`/`D4`. `<pageSetup r:id>` (no fixture has one with an `r:id` yet) remains not
+started — the only piece of `0.10.0-D`'s original scope still open.
 
 ### CI: WASM artifact size observability
 

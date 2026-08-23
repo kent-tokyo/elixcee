@@ -421,3 +421,19 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] `ROADMAP.md`・`CHANGELOG.md`・design doc（§10、D3のdrawing/legacyDrawing/hyperlinks完了・fixture7件全CLEAN到達を記録）・`tasks/todo.md`を同期。
 
 残作業：`<pageSetup r:id>`（実証fixtureが無いため未着手）、D4（rename／reorder／deletion／新規追加／reachability、Known gaps項目15のorphan `.rels`形状の解消含む）。tableParts/drawing/legacyDrawing/hyperlinksいずれも実Excel再オープン検証はまだ未実施——次に価値が高いのはここだと思われるが、ユーザー判断待ち。push未承認、ローカルコミットのみ（5コミット：`9d6373d`・`17d1ace`・`c7a2fe1`・`d1e2404`・`ef54d9a`、+ドキュメント同期コミット）。
+
+## D4（削除シートのreachability清掃）実装完了、Known gaps項目15解消（`/greenlane`継続）
+
+ユーザーから「D4に進む」という短い指示を受け、着手前にadvisorへ相談。D4の本来スコープ（sheet rename／reorder／deletion／新規追加／非連番part名／shared・exclusive targetのreachability）のうち、rename／reorderはこのVMに未実装のprimitiveであり、「test tableの行を埋めるためだけに新規VBA機能を実装する」のはhard gateの趣旨に反するとの助言を受け、追加せずN/Aとして記録する方針で合意。実質のD4スコープは「削除されたシートの排他的到達partのreachability清掃」に絞られた。
+
+- [x] **checker先行実装**（commit `9c1b3d3`）：`compat/oracle-excel-com/mechanical_check.py`に`check_deleted_sheet_cleanup()`と支援関数（`_part_rels_name`・`_direct_targets`・`_reachable_closure`・`_deleted_sheet_prunable_parts`）を追加。削除されたシートの`.rels`から到達可能なpart集合と、生存シート・workbook-level relationshipから到達可能なpart集合の差分を計算し、前者にのみ含まれるpartをprunable扱いとする。`check_roundtrip()`の`edited_parts`デフォルトにもこの集合を自動的に合流させ、正しいpruningを誤検知しないよう修正。
+- [x] **checker実装中に2つの独立したreachability計算バグを発見・修正**：(1) `xl/workbook.xml`自体を「reachable elsewhere」のrootにすると、`original`のworkbook.xml.relsが削除シートもまだ列挙したままなので素通しで辿ってしまい、削除シートの`.rels`から到達可能な全partが誤って「他からも到達可能」と判定される。(2) `_rels/.rels`→`xl/workbook.xml`という別経路からも同じ問題が起きる。`exclude`集合をBFSの初期rootだけでなく全hopでフィルタする形に修正して解消——self-testで実際にバグを再現・確認してから修正。
+- [x] **self-test Case N追加**：2シート合成fixture（Sheet1が生存・共有table targetを持つ、Sheet2が削除・共有table target＋排他的drawing targetを持つ）で3方向を検証——正しいpruning（CLEAN、かつ`check_roundtrip()`が誤検知しないことも確認）、under-pruning（orphan残存、Known gaps項目15の実例形状）、over-pruning（共有targetの誤削除）。
+- [x] **実データでの事前検証**：先行して`check_deleted_sheet_cleanup()`を、本セッション前半で作った`d1_reorder_test.xlsx`（Sheet3削除、D4実装前のelixcee出力）に対して実行し、`_rels/sheet3.xml.rels`のorphan残存を正しく検出できることを確認——Known gaps項目15の実例そのもの。
+- [x] **writer実装**（commit `cd2e2af`）：`src/lib.rs`に`deleted_sheet_prunable_parts`（Python版と同一アルゴリズムの移植、同じ2バグ対策込み）・`part_rels_name`（`worksheet_rels_name`から改名、非worksheet partにも汎用利用）・`rels_target_dir`・`direct_rel_targets`・`reachable_closure`を追加。`save_xlsx_impl`の既存passthroughループへ組み込み——prunable partは`passthrough`へ入る前にスキップされるため、`carried_overrides`や`carry_over_rels`側の追加クリーンアップは不要（既存の「`&passthrough`に存在するtargetのみ残す」ロジックがそのまま機能する）。
+- [x] **実CLIでの事後検証（2件）**：(1) `d1_reorder_test.xlsx`でSheet3削除を再実行、`_rels/sheet3.xml.rels`が今度こそ消え、`check_deleted_sheet_cleanup()`・`check_roundtrip()`双方がCLEANを報告することを確認。(2) 新規のshared-target合成fixture（2シート、共有table・排他的drawing）をCLI経由で実行し、排他的target（`.rels`・drawing）のみ消え、共有target（table）が生存することを確認。
+- [x] **Rust側regression test追加**：`deleting_a_sheet_prunes_its_exclusive_targets_but_keeps_shared_ones`——pruning無効化で実際にテストが落ちることを確認してから復元。
+- [x] `cargo fmt --all --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（847 lib + 20 xlsx_roundtrip）／`mechanical_check.py --self-test`／実fixture7件（無回帰）／`compat/corpus`（581件）／`compat/vba-semantics`（386件）、いずれもクリーン・既存ベースラインから無回帰を確認。
+- [x] `ROADMAP.md`（Known gaps項目15を解決済みとして取り消し線化・0.10.0-DエントリにD4完了を記録）・`CHANGELOG.md`・design doc（§10、D4完了・test table各行のstatus記録・N/A判断の経緯）・`tasks/todo.md`を同期。
+
+0.10.0-Dの残作業は`<pageSetup r:id>`（実証fixtureが無いため未着手）のみ。tableParts/drawing/legacyDrawing/hyperlinks/D4いずれも実Excel再オープン検証はまだ未実施。push未承認、ローカルコミットのみ（7コミット：`9d6373d`・`17d1ace`・`c7a2fe1`・`d1e2404`・`ef54d9a`・`9c1b3d3`・`cd2e2af`、+ドキュメント同期コミット）。
