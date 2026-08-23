@@ -1088,6 +1088,14 @@ fn real_excel_defined_names_survive_a_save_when_no_sheet_is_deleted() {
 /// pointing at the sheet that gets deleted), matching this file's established pattern
 /// for shapes no real fixture demonstrates (see e.g.
 /// `passthrough_part_referenced_only_by_a_non_writer_owned_relationship_type_keeps_its_relationship`).
+///
+/// Deletes "Sheet2", not "Sheet1" -- `load_workbook_file` sets the *first* sheet
+/// (Sheet1) active, and `Stmt::SheetsDelete`'s handler silently no-ops when the target
+/// is the active sheet (`if key != self.active_sheet`). Deleting Sheet1 here would
+/// still make this test pass (no-op delete -> defined_names correctly survives -- a
+/// coincidentally-right result reached for the wrong reason), so it would silently stop
+/// exercising the actual drop path this test exists to cover. Keep the target off the
+/// active sheet if this ever changes.
 #[test]
 fn defined_names_are_dropped_entirely_once_a_sheet_is_deleted() {
     const WORKBOOK_XML: &str = concat!(
