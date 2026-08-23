@@ -732,6 +732,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "dataValidations"));
         let page_margins =
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "pageMargins"));
+        let internal_hyperlinks = source_xml
+            .map(|xml| reader::extract_relationship_free_hyperlinks(xml))
+            .unwrap_or_default();
         let fragments = OpaqueWorksheetFragments {
             root_attrs: root_attrs.as_deref(),
             sheet_pr: sheet_pr.as_deref(),
@@ -739,6 +742,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             sheet_format_pr: sheet_format_pr.as_deref(),
             phonetic_pr: phonetic_pr.as_deref(),
             data_validations: data_validations.as_deref(),
+            internal_hyperlinks: &internal_hyperlinks,
             page_margins: page_margins.as_deref(),
         };
 
@@ -1000,6 +1004,14 @@ struct OpaqueWorksheetFragments<'a> {
     sheet_format_pr: Option<&'a str>,
     phonetic_pr: Option<&'a str>,
     data_validations: Option<&'a str>,
+    /// Raw `<hyperlink .../>` spans with no `r:id` (see
+    /// `reader::extract_relationship_free_hyperlinks`) — NOT the whole source
+    /// `<hyperlinks>` container. `build_xlsx_sheet` synthesizes the
+    /// `<hyperlinks>`/`</hyperlinks>` wrapper itself, based on whether this list is
+    /// empty: `CT_Hyperlinks`' `<hyperlink>` child is `minOccurs="1"` (confirmed against
+    /// the real XSD), so an empty container is invalid XML and must be omitted entirely
+    /// rather than emitted as `<hyperlinks/>`.
+    internal_hyperlinks: &'a [String],
     page_margins: Option<&'a str>,
 }
 
@@ -1126,22 +1138,35 @@ fn build_xlsx_sheet(
 
     // CT_Worksheet order (§8): mergeCells, phoneticPr, conditionalFormatting,
     // dataValidations, hyperlinks, printOptions, pageMargins, ... —
-    // conditionalFormatting/hyperlinks/printOptions are deliberately never emitted here.
+    // conditionalFormatting/printOptions are deliberately never emitted here.
     // conditionalFormatting can reference xl/styles.xml's <dxfs> via dxfId, so it needs
     // separate consideration before being treated as a pure relationship-free opaque
     // fragment (still covered by check_source_references()'s coarser structural checks).
-    // hyperlinks needs per-child r:id filtering, not whole-container passthrough (a
-    // future slice, check_internal_hyperlinks()). printOptions has no fixture evidence
-    // yet.
-    for fragment in [
-        fragments.phonetic_pr,
-        fragments.data_validations,
-        fragments.page_margins,
-    ]
-    .into_iter()
-    .flatten()
+    // printOptions has no fixture evidence yet.
+    for fragment in [fragments.phonetic_pr, fragments.data_validations]
+        .into_iter()
+        .flatten()
     {
         out.push_str(fragment);
+        out.push('\n');
+    }
+
+    // <hyperlinks> — reconstructed from filtered children, not a single opaque blob
+    // (unlike every other fragment above/below). `CT_Hyperlinks`' own `<hyperlink>`
+    // child is `minOccurs="1"` (confirmed against the real XSD): if every hyperlink was
+    // r:id-backed and got filtered out, the container itself must be omitted entirely --
+    // an empty `<hyperlinks/>` would be invalid XML, not merely "nothing to show".
+    if !fragments.internal_hyperlinks.is_empty() {
+        out.push_str("<hyperlinks>\n");
+        for hyperlink in fragments.internal_hyperlinks {
+            out.push_str(hyperlink);
+            out.push('\n');
+        }
+        out.push_str("</hyperlinks>\n");
+    }
+
+    if let Some(pm) = fragments.page_margins {
+        out.push_str(pm);
         out.push('\n');
     }
 

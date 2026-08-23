@@ -570,6 +570,47 @@ fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize
     }
 }
 
+/// Extracts the raw, byte-for-byte `<hyperlink .../>` spans inside `xml`'s
+/// `<hyperlinks>...</hyperlinks>` container that carry NO `r:id` attribute —
+/// same-workbook, relationship-free `location=` hyperlinks only. `r:id`-bearing
+/// children are excluded: carrying those through requires reconnecting the worksheet
+/// `.rels` relationship graph (0.10.0-D, not yet built), not just re-emitting text.
+/// Empty if `<hyperlinks>` is absent from `xml`, or if every child has `r:id`.
+///
+/// Unlike `extract_raw_element`, this does NOT return the source bytes verbatim as one
+/// blob — the container is reconstructed by the caller from a filtered child subset, so
+/// each child's raw span is preserved individually rather than the whole container being
+/// byte-copied. `attr_get(&attrs, "id")` (not a literal `"r:id"` string match) is reused
+/// deliberately: `CT_Hyperlink`'s own XSD definition has exactly one id-shaped attribute
+/// (`r:id`, namespace-prefixed) and no bare `id`, so this is precise, not a shortcut.
+///
+/// `CT_Hyperlink` has no child elements (only attributes, confirmed against the real
+/// ECMA-376 XSD) — every real `<hyperlink>` is self-closing, so this doesn't attempt to
+/// handle a non-self-closing form.
+pub(crate) fn extract_relationship_free_hyperlinks(xml: &str) -> Vec<String> {
+    let Some(container) = extract_raw_element(xml, "hyperlinks") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut search_from = 0;
+    while let Some((tag_start, tag_close_rel, full_name)) =
+        find_next_open_tag(&container, search_from)
+    {
+        if full_name.rsplit(':').next().unwrap_or(&full_name) != "hyperlink" {
+            search_from = tag_start + 1;
+            continue;
+        }
+        let name_end = tag_start + 1 + full_name.len();
+        let start_tag_end = name_end + tag_close_rel + 1;
+        let attrs = parse_attrs(&container[name_end..name_end + tag_close_rel]);
+        if attr_get(&attrs, "id").is_none() {
+            out.push(container[tag_start..start_tag_end].to_string());
+        }
+        search_from = start_tag_end;
+    }
+    out
+}
+
 #[cfg(test)]
 mod opaque_fragment_tests {
     use super::*;
@@ -658,6 +699,85 @@ mod opaque_fragment_tests {
         assert_eq!(
             extract_raw_element(xml, "sheetViews"),
             Some("<x:sheetViews><x:sheetView/></x:sheetViews>".to_string())
+        );
+    }
+
+    #[test]
+    fn relationship_free_hyperlinks_returns_none_when_hyperlinks_absent() {
+        let xml = "<worksheet><sheetData/></worksheet>";
+        assert_eq!(
+            extract_relationship_free_hyperlinks(xml),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn relationship_free_hyperlinks_all_location_form_all_kept() {
+        // fixture6_internal_hyperlink.xlsm's real shape: a single location-only hyperlink.
+        let xml = concat!(
+            "<worksheet><sheetData/>",
+            "<hyperlinks><hyperlink ref=\"A1\" location=\"Sheet2!B2\" display=\"Sheet2!B2\" ",
+            "xr:uid=\"{7239724E-8623-EB4C-A548-F5CFD578FC11}\"/></hyperlinks>",
+            "</worksheet>",
+        );
+        assert_eq!(
+            extract_relationship_free_hyperlinks(xml),
+            vec![
+                "<hyperlink ref=\"A1\" location=\"Sheet2!B2\" display=\"Sheet2!B2\" \
+                 xr:uid=\"{7239724E-8623-EB4C-A548-F5CFD578FC11}\"/>"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn relationship_free_hyperlinks_all_rid_form_returns_empty() {
+        // fixture4_hyperlink_comment_name.xlsm's real shape: a single r:id (external URL)
+        // hyperlink -- must be entirely excluded, not passed through.
+        let xml = concat!(
+            "<worksheet xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">",
+            "<sheetData/><hyperlinks><hyperlink ref=\"D6\" r:id=\"rId1\"/></hyperlinks>",
+            "</worksheet>",
+        );
+        assert_eq!(
+            extract_relationship_free_hyperlinks(xml),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn relationship_free_hyperlinks_mixed_container_keeps_only_location_only_children() {
+        // Synthetic -- no real fixture has a mixed <hyperlinks> container yet (see
+        // docs/xlsx-worksheet-preservation-0.10.0-design.md's B4 entry). Two r:id-bearing
+        // hyperlinks sandwich one location-only hyperlink to prove position doesn't matter.
+        let xml = concat!(
+            "<worksheet xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">",
+            "<sheetData/><hyperlinks>",
+            "<hyperlink ref=\"A1\" r:id=\"rId1\"/>",
+            "<hyperlink ref=\"B1\" location=\"Sheet2!A1\"/>",
+            "<hyperlink ref=\"C1\" r:id=\"rId2\"/>",
+            "</hyperlinks></worksheet>",
+        );
+        assert_eq!(
+            extract_relationship_free_hyperlinks(xml),
+            vec!["<hyperlink ref=\"B1\" location=\"Sheet2!A1\"/>".to_string()]
+        );
+    }
+
+    #[test]
+    fn relationship_free_hyperlinks_returns_multiple_in_document_order() {
+        let xml = concat!(
+            "<worksheet><sheetData/><hyperlinks>",
+            "<hyperlink ref=\"A1\" location=\"Sheet2!A1\"/>",
+            "<hyperlink ref=\"B1\" location=\"Sheet3!A1\"/>",
+            "</hyperlinks></worksheet>",
+        );
+        assert_eq!(
+            extract_relationship_free_hyperlinks(xml),
+            vec![
+                "<hyperlink ref=\"A1\" location=\"Sheet2!A1\"/>".to_string(),
+                "<hyperlink ref=\"B1\" location=\"Sheet3!A1\"/>".to_string(),
+            ]
         );
     }
 }

@@ -861,6 +861,65 @@ fn real_excel_sheetpr_and_data_validations_survive_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// 0.10.0-B slice 4 (B4): internal (location=, relationship-free) hyperlinks.
+/// fixture6_internal_hyperlink.xlsm has exactly one, no r:id.
+#[test]
+fn real_excel_internal_hyperlink_survives_a_save() {
+    let source_path = real_fixture("fixture6_internal_hyperlink.xlsm");
+    let output_path = tmp_path("internal_hyperlink_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditA1()\n    Range(\"A1\").Value = 42\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditA1").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(
+            r#"<hyperlink ref="A1" location="Sheet2!B2" display="Sheet2!B2" xr:uid="{7239724E-8623-EB4C-A548-F5CFD578FC11}"/>"#
+        ),
+        "internal hyperlink must survive a save verbatim: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains("<hyperlinks>") && out_sheet1.contains("</hyperlinks>"),
+        "hyperlinks container must be present: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// Negative guard, same slice: fixture4's only hyperlink is r:id-backed (external URL,
+/// out of scope until 0.10.0-D) -- the output must NOT contain any `<hyperlinks>` element
+/// at all, not an empty `<hyperlinks/>` (CT_Hyperlinks' <hyperlink> child is
+/// minOccurs="1" -- an empty container would be invalid XML).
+#[test]
+fn real_excel_external_only_hyperlink_omits_the_hyperlinks_container_entirely() {
+    let source_path = real_fixture("fixture4_hyperlink_comment_name.xlsm");
+    let output_path = tmp_path("external_only_hyperlink_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditB1()\n    Cells(1, 2).Value = 999\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditB1").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        !out_sheet1.contains("<hyperlinks"),
+        "an all-r:id source must omit <hyperlinks> entirely, not emit an empty \
+         container: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 fn check_real_fixture_output(
     fixture_entries: &HashMap<String, Vec<u8>>,
     vba_bytes: &[u8],
