@@ -17,7 +17,7 @@ pub use elixcee_types as types;
 
 #[cfg(any(feature = "python", test))]
 use vm::CellContent;
-use vm::{Variant, Vm};
+use vm::{Variant, Vm, WorksheetOrigin};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
@@ -695,7 +695,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
     zip.start_file("xl/workbook.xml", deflated)
         .map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_workbook(&sheet_names).as_bytes())
+    zip.write_all(build_xlsx_workbook(&sheet_names, &vm.worksheet_origins).as_bytes())
         .map_err(|e| e.to_string())?;
 
     zip.start_file("xl/_rels/workbook.xml.rels", deflated)
@@ -817,20 +817,51 @@ fn build_xlsx_content_types(
     out
 }
 
-fn build_xlsx_workbook(sheet_names: &[String]) -> String {
+/// `origins` (0.10.0-A, `Vm::worksheet_origins`) lets a surviving sheet keep its
+/// original `sheetId` across a save instead of always renumbering by current position --
+/// see `vm::WorksheetOrigin`'s own doc comment for why (it's the one identifier
+/// `snapshot.rs`'s `stable_id` already treats as cross-save-stable, and this writer was
+/// the reason that promise didn't actually hold). `r:id="rIdN"` numbering stays purely
+/// positional either way -- it's entirely internal to this writer's own
+/// workbook.xml/workbook.xml.rels pair (see `build_xlsx_workbook_rels`), unrelated to a
+/// sheet's `sheetId` identity, so it doesn't need to track a sheet's origin at all.
+fn build_xlsx_workbook(
+    sheet_names: &[String],
+    origins: &std::collections::HashMap<String, WorksheetOrigin>,
+) -> String {
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
         "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
         "<sheets>\n",
     ));
+    // Original sheetIds are only ever reused, never reassigned to a different sheet, so
+    // a fresh id for a sheet with no known origin (newly created purely in-VBA, or from
+    // an .ods source with no sheetId concept) just needs to start above every reused
+    // id -- never needs to search for a gap, since nothing below that start point is
+    // ever handed out here.
+    let max_original_id: u32 = sheet_names
+        .iter()
+        .filter_map(|name| origins.get(name))
+        .filter_map(|o| o.original_sheet_id.as_deref())
+        .filter_map(|id| id.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    let mut next_fresh_id = max_original_id;
     for (i, name) in sheet_names.iter().enumerate() {
-        let n = i + 1;
+        let rid_n = i + 1;
+        let sheet_id = match origins.get(name).and_then(|o| o.original_sheet_id.clone()) {
+            Some(id) => id,
+            None => {
+                next_fresh_id += 1;
+                next_fresh_id.to_string()
+            }
+        };
         out.push_str(&format!(
             "<sheet name=\"{}\" sheetId=\"{}\" r:id=\"rId{}\"/>\n",
             xml_escape(name),
-            n,
-            n
+            sheet_id,
+            rid_n
         ));
     }
     out.push_str("</sheets>\n</workbook>\n");
@@ -1401,6 +1432,83 @@ mod tests {
         let mut wb: Xlsx<_> = open_workbook(path).expect("open should succeed");
         assert!(wb.worksheet_range("sheet1").is_ok(), "sheet1 should exist");
         assert!(wb.worksheet_range("sheet2").is_ok(), "sheet2 should exist");
+    }
+
+    // 0.10.0-A: build_xlsx_workbook must preserve a surviving sheet's original sheetId
+    // (see WorksheetOrigin's own doc comment for why -- this is the one identifier
+    // snapshot.rs's stable_id already treats as cross-save-stable) instead of always
+    // renumbering positionally, while a sheet with no known origin still gets a fresh,
+    // non-colliding id.
+    #[test]
+    fn build_xlsx_workbook_preserves_original_sheet_ids_and_assigns_fresh_ones_for_new_sheets() {
+        let mut origins = std::collections::HashMap::new();
+        origins.insert(
+            "sheet1".to_string(),
+            WorksheetOrigin {
+                original_sheet_id: Some("7".to_string()),
+                original_workbook_rel_id: Some("rId3".to_string()),
+                original_part_name: Some("xl/worksheets/sheet2.xml".to_string()),
+            },
+        );
+        origins.insert(
+            "sheet2".to_string(),
+            WorksheetOrigin {
+                original_sheet_id: Some("2".to_string()),
+                original_workbook_rel_id: None,
+                original_part_name: None,
+            },
+        );
+        // "newsheet" is deliberately absent from `origins` -- a sheet created purely
+        // in-VBA, or one populate_from_sheets never saw.
+        let xml = build_xlsx_workbook(
+            &[
+                "sheet1".to_string(),
+                "sheet2".to_string(),
+                "newsheet".to_string(),
+            ],
+            &origins,
+        );
+
+        assert!(
+            xml.contains("<sheet name=\"sheet1\" sheetId=\"7\" r:id=\"rId1\"/>"),
+            "expected sheet1 to keep its original sheetId 7: {xml}"
+        );
+        assert!(
+            xml.contains("<sheet name=\"sheet2\" sheetId=\"2\" r:id=\"rId2\"/>"),
+            "expected sheet2 to keep its original sheetId 2: {xml}"
+        );
+        // Fresh id must not collide with any preserved original id (max is 7) --
+        // asserting it's strictly greater than 7 rather than a specific number, since
+        // the exact fresh value is an implementation detail this test shouldn't pin down.
+        let newsheet_id: u32 = xml
+            .lines()
+            .find(|l| l.contains("name=\"newsheet\""))
+            .and_then(|l| l.split("sheetId=\"").nth(1))
+            .and_then(|rest| rest.split('"').next())
+            .and_then(|id| id.parse().ok())
+            .expect("newsheet should have a numeric sheetId");
+        assert!(
+            newsheet_id > 7,
+            "fresh sheetId {newsheet_id} must not collide with the highest preserved original id (7)"
+        );
+        assert!(
+            xml.contains("r:id=\"rId3\""),
+            "newsheet's r:id must still be positional: {xml}"
+        );
+    }
+
+    #[test]
+    fn build_xlsx_workbook_assigns_sequential_ids_when_no_sheet_has_a_known_origin() {
+        let origins = std::collections::HashMap::new();
+        let xml = build_xlsx_workbook(&["a".to_string(), "b".to_string()], &origins);
+        assert!(
+            xml.contains("<sheet name=\"a\" sheetId=\"1\" r:id=\"rId1\"/>"),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("<sheet name=\"b\" sheetId=\"2\" r:id=\"rId2\"/>"),
+            "{xml}"
+        );
     }
 }
 

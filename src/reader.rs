@@ -22,6 +22,21 @@ pub struct WorkbookSheet {
     /// if the attribute was missing. Not VBA's `CodeName` (that lives in
     /// `vbaProject.bin`, an OLE binary format this reader doesn't parse).
     pub sheet_id: Option<String>,
+    /// The XLSX `xl/_rels/workbook.xml.rels` relationship id (`<sheet r:id="...">` in
+    /// `xl/workbook.xml`) that resolved to this sheet's own part — `None` for `.ods` (no
+    /// relationship-id concept) or if the attribute was missing. Currently computed and
+    /// then discarded in `read_workbook_from_archive` (used only transiently to resolve
+    /// `source_part_name` below); captured here instead so a future writer can preserve a
+    /// sheet's original identity across a save rather than always renumbering positionally
+    /// — see `docs/xlsx-worksheet-preservation-0.10.0-design.md` §6 (`WorksheetOrigin`).
+    pub workbook_rel_id: Option<String>,
+    /// The zip entry path this sheet's XML was actually read from (e.g.
+    /// `"xl/worksheets/sheet3.xml"`) — `None` for `.ods`. The single most unstable of the
+    /// three origin fields on this struct: `save_xlsx_impl` (`src/lib.rs`) renumbers
+    /// worksheet parts sequentially by current position on every save, so this reflects
+    /// the SOURCE file's naming, not necessarily what a prior elixcee save produced. See
+    /// `workbook_rel_id`'s doc comment for why this is captured at all.
+    pub source_part_name: Option<String>,
     /// Merged cell ranges, 1-based inclusive (Milestone B6c2) — from XLSX's
     /// `<mergeCells><mergeCell ref="..."/>` or ODS's
     /// `table:number-columns-spanned`/`table:number-rows-spanned` on the
@@ -555,6 +570,8 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 name,
                 cells: sheet_data.cells,
                 sheet_id,
+                workbook_rel_id: Some(rid),
+                source_part_name: Some(zip_path.clone()),
                 merged_ranges: sheet_data.merged_ranges,
                 hidden_rows: sheet_data.hidden_rows,
                 hidden_columns: sheet_data.hidden_columns,
@@ -1081,6 +1098,8 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             name,
                             cells: HashMap::new(),
                             sheet_id: None,
+                            workbook_rel_id: None,
+                            source_part_name: None,
                             merged_ranges: Vec::new(),
                             hidden_rows: Vec::new(),
                             hidden_columns: Vec::new(),

@@ -242,18 +242,24 @@ struct WorksheetOrigin {
     original_sheet_id: Option<String>,       // <sheet sheetId="..">（workbook.xml側）
     original_workbook_rel_id: Option<String>, // workbook.xml.rels側のrId（workbook→sheet part）
     original_part_name: Option<String>,       // 例: "xl/worksheets/sheet3.xml"
-    // rename後も変わらない、VM内部でのみ使う識別子。elixcee側で新規発行してもよいし、
-    // 上記3つのどれかが安定して使えるならそれをそのまま採用してもよい——ロード時に
-    // 一度だけ決定し、以後そのシートの寿命が尽きるまで変えない、という制約が本質。
-    stable_key: SheetKey,
 }
 ```
+
+**実装時の修正（0.10.0-A）**: 初稿にあった`stable_key: SheetKey`（rename後も変わらない
+VM内部識別子）フィールドは実装しなかった。`src/vm/mod.rs`・`src/parser/`を`grep`した
+結果、**このVMにはシートをリネームするVBA機能が現状一切存在しない**ことを確認——
+今のところ、全ての per-sheet `Vm`マップ（`merged_ranges`・`sheet_visibility`・
+`cell_style_indices`、そして`worksheet_origins`自身）は既にシート名（小文字化）を
+キーにしており、rename機能がない以上これは既に安定したキーとして機能している。
+検証されない抽象化を先回りして作るのは過剰設計と判断し、rename-safeな識別子は
+sheet-rename VBA機能が実装される時まで見送ることにした。
 
 役割を明確に分ける: シート名（ユーザーに見える可変値）／`sheetId`（workbook内の識別子、
 `.ods`など`sheetId`を持たないソースではNone）／workbook.xmlの`r:id`（workbook.xmlから
 worksheet partへの関係）／worksheet part path（`xl/worksheets/sheetN.xml`という文字列、
-現状は位置から再生成されているため最も不安定）／VM内部identity（renameを跨いで安定させる
-必要がある唯一の値）——**5つは別々の軸であり、どれか1つだけで代用しようとしない。**
+現状は位置から再生成されているため最も不安定）——**この4つは別々の軸であり、どれか1つ
+だけで代用しようとしない**（VM内部identityは上記の通り、現時点ではシート名自身がその
+役割を兼ねる）。
 
 特にrelationship carry-overでは、`sheetId`単独よりも**「元worksheet part path＋元workbook
 relationship＋VM内部identity」の組み合わせで追跡する方が安全**——`sheetId`が欠落・重複
@@ -496,12 +502,30 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
   - [x] 実fixtureへの適用——`fixture1`〜`5`全てで実際に確認した結果、`fixture3`/`4`/
     `5`（worksheet-level relationshipを持つ全fixture）で`SOURCE_REFERENCE_LOSS`を
     確認、`fixture1`/`2`は`CLEAN`。当初の「1実例」から「体系的な欠落」へ確度が上がった。
-  - [ ] `WorksheetOrigin`のidentity設計（6節）の実装——**この回では着手しない**
-    （ユーザー指示: 最初の実装commitはchecker、writerではない）。
+  - [x] `WorksheetOrigin`のidentity設計（6節）の実装——`reader::WorkbookSheet`に
+    `workbook_rel_id`/`source_part_name`を追加（`rid`/`zip_path`は元々`read_workbook_from_archive`
+    内で計算されていたが破棄されていた値）、`vm::WorksheetOrigin`
+    （`original_sheet_id`/`original_workbook_rel_id`/`original_part_name`、6節の初稿から
+    `stable_key`フィールドは削除——VBAにsheet rename機能が現状ゼロと確認済みのため、
+    rename-safeな別identityは時期尚早と判断）、`Vm.worksheet_origins`
+    （`merged_ranges`等と同じsheet名キーのHashMap）を実装。`build_xlsx_workbook`
+    （`src/lib.rs`）を修正し、既存シートは元の`sheetId`をそのまま再利用、新規シートのみ
+    既存の最大idを超える新しいidを割り当てるよう変更——`snapshot.rs`の`stable_id`が
+    前提としていた「`sheetId`はcross-save-stable」という約束を、writer側が実際に
+    満たしていなかった問題を修正。`r:id="rIdN"`の位置ベース採番はwriter内部で
+    自己完結しているため変更していない。
+  - [x] 実データでの確認——2シート・非連番`sheetId`（5・9）を持つ合成`.xlsx`を実際に
+    elixceeでロード→1セル編集→保存し、出力`workbook.xml`で両シートとも元の`sheetId`が
+    保持され、ロード元に存在しない3つ目のシート（`Vm::new()`のデフォルト`"sheet1"`が
+    ロード時に上書きされず残ったもの——本タスクとは無関係の既存動作、別途「発見事項」
+    として報告のみ）には衝突しない新規id(10)が振られることを確認。
   - [ ] internal hyperlink（`location`属性）のfixture新規作成——現状ゼロ（3節）、未着手。
   - [ ] freeze paneのfixture新規作成——現状ゼロ（3節）、未着手。
-  - 検証: 既存5 fixtureへの適用は上記の通り実施済み。`WorksheetOrigin`／writer側の
-    変更は伴わないため、回帰対象はcheckerとdocsのみ。
+  - 検証: `cargo test --workspace`（831件）・`cargo fmt --check`・
+    `cargo clippy --all-targets`（python feature有無両方）・`cargo doc
+    --document-private-items`、いずれもクリーン。`compat/corpus`（581件、0
+    UNEXPLAINED/0 MISMATCH）・`compat/vba-semantics`（386件、0 BUG/0 UNCLASSIFIED）とも
+    無変化を確認。
 - **0.10.0-B — Inline worksheet preservation**（relationship非依存、7節(b)の
   opaque-fragment機構をworksheet-XML側へ適用）
   - `<sheetViews>`（`<selection>`・`<pane>`＝freeze pane含む）・`<sheetPr>`・

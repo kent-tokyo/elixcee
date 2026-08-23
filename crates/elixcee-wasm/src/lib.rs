@@ -254,6 +254,8 @@ mod tests {
                 name: name.to_string(),
                 cells: cells.into_iter().collect::<HashMap<_, _>>(),
                 sheet_id: None,
+                workbook_rel_id: None,
+                source_part_name: None,
                 merged_ranges: vec![],
                 hidden_rows: vec![],
                 hidden_columns: vec![],

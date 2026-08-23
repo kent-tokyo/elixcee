@@ -374,6 +374,29 @@ pub struct SheetVisibility {
     pub hidden_columns: Vec<Interval>,
 }
 
+/// A loaded sheet's origin facts from its source file (0.10.0-A) — threaded from
+/// `reader::WorkbookSheet`'s own `sheet_id`/`workbook_rel_id`/`source_part_name` fields
+/// (see their doc comments) the same way `merged_ranges`/`SheetVisibility` already are,
+/// via `Vm.worksheet_origins`. Exists so `save_xlsx_impl` (`src/lib.rs`) can preserve a
+/// sheet's original `sheetId` on save instead of unconditionally renumbering it from
+/// current position — see `docs/xlsx-worksheet-preservation-0.10.0-design.md` §2/§6 for
+/// why that matters (it's the same `sheetId` `snapshot.rs`'s `stable_id` already treats
+/// as the one cross-save-stable identifier a real `.xlsx` can offer).
+///
+/// Deliberately has no separate rename-stable "VM internal identity" field: nothing in
+/// this VM currently renames a loaded sheet (grep-confirmed against this file and
+/// `src/parser/`), so the sheet's own lowercased name is, today, already the stable key
+/// every other per-sheet `Vm` map (`merged_ranges`, `sheet_visibility`,
+/// `cell_style_indices`, and this one) is keyed by. Add a rename-proof identity only if
+/// and when sheet-rename VBA support is implemented — building it now would be validated
+/// by nothing.
+#[derive(Debug, Clone, Default)]
+pub struct WorksheetOrigin {
+    pub original_sheet_id: Option<String>,
+    pub original_workbook_rel_id: Option<String>,
+    pub original_part_name: Option<String>,
+}
+
 /// Evidence for the `RANGE_CONTAINS_HIDDEN_CELLS` observation (Milestone
 /// B7b) — computed on demand by `Vm::hidden_cells_observation`, not stored
 /// as a side channel. `hidden_rows`/`hidden_columns` are already clipped to
@@ -653,6 +676,17 @@ pub struct Vm {
     /// are explicit no-ops, see the tests of those same names below). Empty
     /// for any sheet built purely in-VBA.
     pub(crate) cell_style_indices: HashMap<String, HashMap<(u32, u32), u32>>,
+    /// Per-sheet origin facts (0.10.0-A), keyed the same way as `merged_ranges`.
+    /// Populated unconditionally by `populate_from_sheets` for every sheet that came from
+    /// a real `WorkbookSheet` (unlike `merged_ranges`/`sheet_visibility`/
+    /// `cell_style_indices`, which only get an entry when there's non-empty data to
+    /// store) — an all-`None` `WorksheetOrigin` is itself meaningful here (e.g. an `.ods`
+    /// source has no `sheetId` concept at all, distinct from "never loaded"). A sheet
+    /// with no entry at all was created purely in-VBA and has no source-file identity to
+    /// preserve. `pub(crate)`: read directly by `save_xlsx_impl` (`src/lib.rs`) to
+    /// preserve a sheet's original `sheetId` on save instead of renumbering it — see
+    /// `WorksheetOrigin`'s own doc comment above.
+    pub(crate) worksheet_origins: HashMap<String, WorksheetOrigin>,
     /// `Set`-assigned object variables (Milestone B7c) — lowercase name →
     /// `ObjectRef`, a namespace deliberately separate from `Vm::variables`
     /// (`Variant`s), matching VBA's own distinction between plain `=` and
@@ -743,6 +777,7 @@ impl Vm {
             merged_ranges: HashMap::new(),
             sheet_visibility: HashMap::new(),
             cell_style_indices: HashMap::new(),
+            worksheet_origins: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
             err_number: 0,
@@ -2080,6 +2115,14 @@ impl Vm {
                     },
                 );
             }
+            self.worksheet_origins.insert(
+                key.clone(),
+                WorksheetOrigin {
+                    original_sheet_id: sheet_data.sheet_id.clone(),
+                    original_workbook_rel_id: sheet_data.workbook_rel_id.clone(),
+                    original_part_name: sheet_data.source_part_name.clone(),
+                },
+            );
             names.push(key);
         }
         let first = names[0].clone();
@@ -8588,6 +8631,8 @@ mod tests {
             name: "Input".to_string(),
             cells,
             sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
             merged_ranges: Vec::new(),
             hidden_rows: Vec::new(),
             hidden_columns: Vec::new(),
@@ -9482,6 +9527,8 @@ mod tests {
             name: "Input".to_string(),
             cells,
             sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
             merged_ranges: vec![((1, 2), (1, 4))],
             hidden_rows: Vec::new(),
             hidden_columns: Vec::new(),
@@ -9517,6 +9564,8 @@ mod tests {
             name: "Input".to_string(),
             cells,
             sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
             merged_ranges: Vec::new(),
             hidden_rows: vec![(3, 5)],
             hidden_columns: vec![(2, 2)],
@@ -9551,6 +9600,8 @@ mod tests {
             name: "Sheet1".to_string(),
             cells,
             sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
             merged_ranges: Vec::new(),
             hidden_rows: vec![(3, 5)],
             hidden_columns: Vec::new(),
@@ -9574,6 +9625,8 @@ mod tests {
             name: "Sheet1".to_string(),
             cells,
             sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
             merged_ranges: Vec::new(),
             hidden_rows: vec![(50, 60)],
             hidden_columns: Vec::new(),
