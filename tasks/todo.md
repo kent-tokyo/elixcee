@@ -393,3 +393,17 @@ D1（`WorksheetOutputPlan`＋テストのみ、relationship復元は含まない
 - [x] `ROADMAP.md`（Current state・0.10.0-Dエントリ・Known gaps項目15新設）・`CHANGELOG.md`（Unreleased 0.10.0-D節）・design doc（§10 D1完了記録、`sheet2.xml`/`sheet7.xml`並べ替えテストケースが現状到達不能である旨の申し送り）を同期。
 
 D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で引き継ぐ）以降は、ユーザー指定のD1スコープ限定方針により未着手のまま。push未承認、ローカルコミットのみ（2コミット：`9d6373d`・`17d1ace`）。
+
+## `<tableParts>` r:id復元、0.10.0-Dの最初のrelationship-backed要素修正（`/greenlane`継続）
+
+ユーザーから「relationship復元（r:id/SOURCE_REFERENCE_LOSSの実修正）」という短い指示を受け、着手前にadvisorへ相談。D2として設計書に書かれていた「生存sheetの`.rels`をoriginal part名のまま引き継ぐ」という目標自体は、D1完了時点で既に満たされている可能性が高いとの指摘を受け、実装前にfixture3で`check_source_references()`を実行して確認した。
+
+- [x] **D2は不要と判明**：D1のbinaryでfixture3を保存し`check_source_references()`を実行した結果、違反は全て「`sheet1.xml`がrIdを参照していない」というものだけで、「`.rels`が元と異なる」という違反は0件だった——generic passthroughが0.9.0からworksheet `.rels`をbyte-identicalで運んでおり、D1がpart名の共存置を正しくしたことで、D2の目標は既に満たされていたと確認。別コミットとしてのD2実装は発生せず。
+- [x] **`<tableParts>` r:id復元実装**（commit `c7a2fe1`）：advisor指摘に従い、0.10.0-B同様「1要素1コミット」の方針で、fixture実証がある`<tableParts>`（fixture3のみ）から着手。既存のopaque-fragment機構（7節(b)）をそのまま再利用し、実XSD確認済みの順序（`pageMargins`の直後——間に他要素が未実装のためこの位置が現状正しい）へ挿入。ルート`<worksheet>`タグの`xmlns:r`宣言は0.10.0-B1の`root_attrs`引き継ぎで既に対応済みのため追加作業不要だった。
+- [x] **`rels_survived`安全ゲート新設**：`is_existing`かつ該当sheetの`.rels`が実際にこのsaveのpassthrough集合に存在する場合のみ復元——`.rels`が生き残らなかった場合にdangling r:id（実Excelの修復警告相当、復元前の静かな無効化より悪い）を絶対に出力しないため。`WorksheetOutputPlan`の`output_rels_name`/`is_existing`フィールドの`#[allow(dead_code)]`を撤去（D1時点では未消費だったが、今回で正当に使用される）。
+- [x] **ゲートの実効性を検証**：新設したnegative test（`.rels`が存在しない合成fixtureで`<tableParts>`が復元されないことを確認）を、ゲートを一時的に無効化した状態で実行し、実際にテストが落ちることを確認してから元に戻した。
+- [x] fixture1〜7全件で`mechanical_check.py`を実行、fixture3のみ`source_references: CLEAN`に変化（他は無回帰）。fixture4/5は引き続き`SOURCE_REFERENCE_LOSS`（hyperlink/vmlDrawing/drawing、次のスライス対象、未着手）。
+- [x] `cargo fmt --all --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（847 lib + 17 xlsx_roundtrip、新規テスト2件追加）／`mechanical_check.py --self-test`／`compat/corpus`（581件、0 UNEXPLAINED/0 MISMATCH）／`compat/vba-semantics`（386件、0 BUG/0 UNCLASSIFIED）、いずれもクリーン・既存ベースラインから無回帰を確認。
+- [x] `ROADMAP.md`・`CHANGELOG.md`・design doc（§10、D2不要判明の経緯・D3のtableParts分完了を記録）・`tasks/todo.md`を同期。
+
+次のスライス候補（fixture証拠の強い順）：`<drawing>`／`<legacyDrawing>`（どのfixtureが何を持つか要確認）、`<hyperlinks>`（0.10.0-B4の既存filter実装の書き換えが必要、最後に回す方針）、`<pageSetup r:id>`（実証fixtureが無ければ着手しない）。実Excel再オープン検証はこのスライスではまだ未実施。push未承認、ローカルコミットのみ（3コミット：`9d6373d`・`17d1ace`・`c7a2fe1`、+ドキュメント同期コミット）。

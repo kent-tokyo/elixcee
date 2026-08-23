@@ -188,9 +188,27 @@ later surviving sheet, and `ensure_sheet()` no-ops on an existing key, so the `A
 silently produced nothing. Fixed by probing upward until a free name is found. Confirmed
 pre-existing via `git blame` (`72b5cc38`, 2026-06-21), unrelated to `0.10.0`.
 
-`D2` (worksheet `.rels` / `r:id` preservation), `D3` (type-aware source-reference
-restoration for tableParts/hyperlinks/drawing/legacyDrawing/pageSetup), and `D4`
-(rename/reorder/delete/add + reachability-based deleted-part cleanup) remain not started.
+**`<tableParts>` restored (first `SOURCE_REFERENCE_LOSS` fix, done).** Turned out D1 had
+already satisfied `D2`'s stated goal ("carry a surviving sheet's `.rels` through at the
+original part name with `r:id`s unchanged") as a side effect: the generic passthrough
+loop has copied worksheet `.rels` files byte-identical since `0.9.0`, and D1 made them
+land at the correct co-located part name — confirmed by running
+`check_source_references()` against `fixture3` and finding every violation was "the
+sheet doesn't reference the rId", never "the `.rels` differs from the original". So there
+was no separate D2 slice to implement; the whole remaining gap was splicing the reference
+itself back into the regenerated worksheet — that's what this does, for `<tableParts>`
+specifically (schema position confirmed: right after `<pageMargins>`, since nothing
+between the two is emitted yet). Gated on `rels_survived` (the sheet `is_existing` AND
+its own `.rels` genuinely present in this save's passthrough set) — splicing a reference
+whose `.rels` didn't survive would emit a dangling `r:id`, a real Excel repair warning
+strictly worse than the prior silent inertness. `fixture3`'s `check_source_references()`
+verdict is now `CLEAN`; `fixture4`/`fixture5` still report `SOURCE_REFERENCE_LOSS` for
+hyperlink/vmlDrawing/drawing `r:id`s — unaffected, next slices.
+
+`<drawing>`/`<legacyDrawing>`, `<hyperlinks>` (a rewrite of `0.10.0-B4`'s existing
+relationship-free-only filtering, not a new addition), `<pageSetup r:id>` (only if a
+fixture actually has one), and `D4` (rename/reorder/delete/add + reachability-based
+deleted-part cleanup) remain not started, in that fixture-evidence order.
 
 ### CI: WASM artifact size observability
 

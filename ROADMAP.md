@@ -85,8 +85,9 @@ mechanical-check-verified, and real-Excel reopen-verified (0 repair warnings; `f
 defined name and `fixture5`'s print area both confirmed byte-for-byte in Excel's own Name
 Manager/print preview). `0.10.0-D` (relationship-backed features, the actual fix for
 `SOURCE_REFERENCE_LOSS`) has a decided design (origin-based worksheet part naming — see the
-roadmap entry below); its first slice, `D1` (the `WorksheetOutputPlan` output plan itself,
-no relationship restoration yet), is done. Three independent, pre-existing correctness
+roadmap entry below); `D1` (the `WorksheetOutputPlan` output plan itself) is done, and the
+first relationship-backed element, `<tableParts>`, is now restored — `fixture3`'s
+`check_source_references()` verdict is `CLEAN` for the first time. Three independent, pre-existing correctness
 bugs found and fixed along the way, all affecting every released version: a save's sheet
 tab order silently followed an alphabetical sort instead of the source order, a sheet's
 display-name letter case was silently lowercased on every save, and `Sheets.Add` could
@@ -563,7 +564,9 @@ table would have appeared instead), 0 repair warnings across all 3 output files
 (`fixture4` save-as, `fixture4` in-place, `fixture5` save-as).
 
 **0.10.0-D (relationship-backed features, including the actual fix for
-`SOURCE_REFERENCE_LOSS`)**: design decided; `D1` done, `D2`/`D3`/`D4` not started. Worksheet
+`SOURCE_REFERENCE_LOSS`)**: design decided; `D1` done, `<tableParts>` restored (first
+relationship-backed element), `<drawing>`/`<legacyDrawing>`/`<hyperlinks>`/`<pageSetup
+r:id>`/`D4` not started. Worksheet
 parts were previously named `sheet{i+1}.xml` by output position, while a worksheet's
 `.rels` file (and whatever it points at — tables, drawings, comments) survived keyed by
 the *original* part path. That was self-consistent only because nothing carried
@@ -592,6 +595,29 @@ isn't flagged by any existing `mechanical_check.py` category (`ORPHANED_PART`/
 `DANGLING_RELATIONSHIP` both check different shapes) — harmless to Excel in practice
 (nothing references it), pre-existing under a different stale filename before D1, and
 slated to be closed by `D4`'s reachability-based cleanup.
+
+**`<tableParts>` restored (first relationship-backed element, done).** D1's own doc
+comment described a separate `D2` slice ("carry a surviving sheet's `.rels` through at
+the original part name with `r:id`s unchanged") as the precondition for restoring any
+reference. Verified that precondition before writing any splice code: running
+`check_source_references()` against `fixture3` with the D1 binary showed every violation
+was "the sheet doesn't reference the rId", never "the `.rels` differs from the original"
+— the generic passthrough loop has copied worksheet `.rels` byte-identical since `0.9.0`,
+and D1 already made it land at the correct co-located part name. There was no separate D2
+implementation needed; the whole remaining gap was the splice itself. Restored via the
+same opaque-fragment mechanism `0.10.0-B` established, spliced right after
+`<pageMargins>` (confirmed schema position: nothing between `pageMargins` and
+`tableParts` is emitted yet). Gated on `rels_survived` (`is_existing` AND the sheet's own
+`.rels` actually present in this save's passthrough set) — restoring a reference whose
+`.rels` didn't survive would emit a dangling `r:id`, a real Excel repair warning strictly
+worse than the prior silent inertness; a dedicated negative test confirms the gate
+actually fires (verified by temporarily removing it and watching the test fail).
+`fixture3`'s `check_source_references()` verdict is now `CLEAN`; `fixture4`/`fixture5`
+still report `SOURCE_REFERENCE_LOSS` for hyperlink/vmlDrawing/drawing `r:id`s, unaffected
+— next slices, in fixture-evidence order: `<drawing>`/`<legacyDrawing>` next,
+`<hyperlinks>` last (a rewrite of `0.10.0-B4`'s existing filtering, not a new addition),
+`<pageSetup r:id>` only if a fixture ever has one. Real-Excel reopen verification not yet
+done for this slice.
 
 **Exit criteria** (unchanged from the original sketch, still the target): every untouched
 unsupported XML node preserved byte- or semantically-equivalent, 0 Excel repair warnings, 0

@@ -871,10 +871,25 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
   - **D1（完了）**: `WorksheetOutputPlan`の導入と、`workbook.xml`／`workbook.xml.rels`／
     `[Content_Types].xml`をこの計画に基づいて出力するように切り替える。この段階では
     worksheet-level `.rels`の機能復元（relationship-backed要素の実復元）はまだ行わない。
-  - **D2**: 生存sheetの元`.rels`をoriginal part名のままrelationship ID不変で引き継ぐ。
-    これが`check_source_references()`の`SOURCE_REFERENCE_LOSS`が解消される前提を作る。
-  - **D3**: `<tableParts>`・external `<hyperlinks>`・`<drawing>`・`<legacyDrawing>`・
-    `<pageSetup r:id>`をtype-awareに復元する（4節の対応表通り）。
+  - **D2（不要と判明——D1で既に満たされていた）**: 生存sheetの元`.rels`をoriginal part名の
+    ままrelationship ID不変で引き継ぐ、という目標自体は、D1完了時点のbinaryで
+    `check_source_references()`をfixture3に対して実行し確認した——`.rels`ファイル自体が
+    差分として検出された違反は0件で、全て「`sheet1.xml`がrIdを参照していない」という
+    D3側の欠落だった。generic passthroughは0.9.0からworksheet `.rels`をbyte-identicalで
+    運んでおり、D1がpart名の共存置を正しくしたことで、この目標は既に満たされていた。
+    別コミットとしての実装は発生しなかった。
+  - **D3（tableParts分だけ完了）**: `<tableParts>`・external `<hyperlinks>`・`<drawing>`・
+    `<legacyDrawing>`・`<pageSetup r:id>`をtype-awareに復元する（4節の対応表通り）。
+    advisorレビューの指摘（B同様、1要素1コミットで進める）に従い、fixtureの実証がある
+    `<tableParts>`（fixture3のみ）から着手し、完了。実装は7節(b)のopaque-fragment
+    passthrough機構をそのまま再利用——`pageMargins`の直後（8節の実XSD順序で
+    `pageMargins`と`tableParts`の間に他要素が未実装のため、現状はこの位置が正しい）へ
+    生の`tableParts` XML片を挿入するだけで済んだ。`rels_survived`ゲート（`is_existing`
+    かつ該当`.rels`が実際にこのsaveのpassthrough集合に存在するか）を新設し、`.rels`が
+    生き残らなかった場合にdangling r:idを絶対に出力しないことをnegative testで確認
+    （ゲートを一時的に外してテストが実際に落ちることも確認済み）。`<drawing>`・
+    `<legacyDrawing>`・`<hyperlinks>`（B4の既存filter実装の書き換えが必要——最後に回す）・
+    `<pageSetup r:id>`（実証fixtureが無ければ着手しない）は未着手。
   - **D4**: sheet rename／reorder／deletion／新規追加／非連番part名／shared・exclusive
     targetのreachability——実fixtureとnegative testで固める。
 
