@@ -14,6 +14,18 @@ breakage 0, ...) is a zero. A checker that structurally cannot detect a failure 
 zeros whether or not elixcee is actually correct. See self_test() below, which deliberately
 corrupts two copies and asserts this checker catches both, BEFORE trusting any real result.
 Run standalone (`python3 mechanical_check.py --self-test`) to execute just that check.
+
+check_source_references() (0.10.0-A) closes a blind spot found while investigating
+0.10.0's design: a worksheet-level relationship's `.rels` entry and target part can both
+survive a save byte-identical, while the regenerated worksheet XML no longer contains the
+r:id reference that activates it -- check_roundtrip() above cannot see this (its orphan
+check only walks the .rels graph, never asks whether worksheet CONTENT still points at a
+relationship). Confirmed as a real, not hypothetical, gap: running elixcee's own save
+against fixture3/4/5 under `fixtures/pristine/` (every fixture with a worksheet-level
+relationship at all) reproduces SOURCE_REFERENCE_LOSS in every one of them, while
+check_roundtrip() reports STRUCTURALLY_CLEAN on all three -- see
+docs/xlsx-worksheet-preservation-0.10.0-design.md §4/§9 and
+fixtures/pristine/INVENTORY.md for the full account.
 """
 from __future__ import annotations
 
@@ -337,6 +349,144 @@ def check_formula_preservation(original_path, output_path):
     return {"violations": violations, "formula_verdict": verdict}
 
 
+R_ID_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+
+# Relationship types whose worksheet-side activation is a specific r:id-bearing element
+# in the SAME worksheet part's own content -- each entry maps a relationship Type URI to
+# the XPath (relative to the worksheet's root <worksheet> element) of the element shape
+# that carries the reference. Confirmed two ways before being added here: (1) against a
+# real fixture's actual XML (see fixtures/pristine/INVENTORY.md) and (2) against the real
+# ECMA-376 sml.xsd (OfficeOpenXML-XMLSchema-Transitional/sml.xsd -- CT_TablePart/
+# CT_Drawing/CT_Hyperlink/CT_LegacyDrawing all declare r:id directly), not assumed from
+# memory -- see docs/xlsx-worksheet-preservation-0.10.0-design.md §8's own account of why
+# memory-only schema recall isn't trusted in this project.
+#
+# Deliberately does NOT include http://.../comments or .../threadedComment: confirmed
+# empirically (fixture4_hyperlink_comment_name.xlsm) that neither relationship is
+# referenced by any r:id anywhere in xl/worksheets/sheet1.xml -- both are located purely
+# by relationship Type within the sheet's own .rels file. A same-shaped check for them
+# would either always report nothing (nothing to find) or, worse, have to special-case an
+# exception, so their loss is left to the existing ORPHANED_PART check (check_roundtrip's
+# #2b above), which already covers it correctly.
+#
+# printerSettings/oleObject/control are confirmed via the real XSD to need an r:id
+# reference too (<pageSetup r:id>, <oleObjects><oleObject r:id>, <controls><control
+# r:id>), but no fixture in this repo exercises any of them yet (see INVENTORY.md's
+# "confirmed absent" list) -- deliberately left out of this table until one does, rather
+# than shipping a checker path that has never run against real data.
+_WORKSHEET_RID_ELEMENT_XPATHS = {
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table": (
+        f"{SML_NS}tableParts/{SML_NS}tablePart"
+    ),
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing": f"{SML_NS}drawing",
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink": (
+        f"{SML_NS}hyperlinks/{SML_NS}hyperlink"
+    ),
+    # legacyDrawingHF (header/footer VML) shares the same CT_LegacyDrawing shape and
+    # could in principle carry a vmlDrawing relationship too, but no fixture here
+    # exercises it -- only <legacyDrawing> (not <legacyDrawingHF>) is checked until one
+    # does, matching this table's own stated policy of fixture-confirmed rows only.
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing": f"{SML_NS}legacyDrawing",
+}
+
+
+def _rid_referenced_as_type(sheet_root, rel_type, rid):
+    """True iff `rid` is referenced by the SPECIFIC element shape
+    _WORKSHEET_RID_ELEMENT_XPATHS maps `rel_type` to -- not "referenced by any mapped
+    shape at all". Type-aware on purpose: rId strings are only unique within one .rels
+    file, so a flat union across all types would let a table relationship's rId "count"
+    as satisfied merely because some unrelated drawing element happens to reuse the same
+    string, mislabeling (or silently swallowing) a real SOURCE_REFERENCE_LOSS. See
+    self_test()'s Case H "type confusion" case, which exists specifically to catch a
+    regression back to the flat-union form."""
+    xpath = _WORKSHEET_RID_ELEMENT_XPATHS.get(rel_type)
+    if xpath is None:
+        return None  # unmapped type -- caller's job to skip, not this function's
+    return any(el.get(R_ID_ATTR) == rid for el in sheet_root.findall(xpath))
+
+
+def check_source_references(original_path, output_path):
+    """Detects SOURCE_REFERENCE_LOSS: a worksheet-level relationship (and its target
+    part) survives byte-for-byte in the output's own `_rels/sheetN.xml.rels`, but the
+    regenerated worksheet XML no longer contains the r:id reference that activates it.
+    Structurally different from ORPHANED_PART (nothing in any .rels graph references the
+    part) and DANGLING_RELATIONSHIP (a .rels entry's target doesn't exist as a zip entry)
+    -- both of those are covered by check_roundtrip() above. Here the .rels entry AND its
+    target both exist and are individually valid; nothing in the CONSUMING XML content
+    points at the relationship any more, so the feature it backs (table/hyperlink/
+    drawing/legacyDrawing) is silently inert. Confirmed as a real, previously-undetected
+    gap by actually running elixcee against fixture3_table_validation_conditional.xlsm and
+    observing check_roundtrip() report STRUCTURALLY_CLEAN on a table whose <tableParts>
+    reference had vanished -- see docs/xlsx-worksheet-preservation-0.10.0-design.md §4/§9.
+
+    A worksheet-level `.rels` file is only ever checked when it survives BYTE-IDENTICAL
+    into the output: elixcee's writer today never emits its own worksheet-level
+    relationships (see is_writer_owned_part() in src/lib.rs -- xl/worksheets/_rels/*.rels
+    never matches its writer-owned pattern), so any worksheet .rels present in a real
+    elixcee output is, by construction, a passthrough copy of the source's own. **A
+    mismatch here is itself reported as a violation, never silently skipped** -- an
+    earlier version of this function treated a changed `.rels` as merely "out of scope"
+    and moved on, which meant the day this assumption stops holding (e.g. a future
+    0.10.0-D writer change that regenerates or renumbers worksheet-level relationships),
+    this check would go quiet on exactly the files it exists to guard, reporting CLEAN
+    because it stopped looking rather than because the bug is fixed -- the same failure
+    shape this whole function was written to catch in check_roundtrip(). Flagging it loud
+    instead means a genuinely new, deliberate writer behavior here requires this check to
+    be updated to understand it, not silently bypassed.
+
+    Returns {"violations": [...], "source_reference_verdict": "CLEAN"|"SOURCE_REFERENCE_LOSS"}.
+    """
+    violations = []
+    try:
+        original = _read_zip_entries(original_path)
+        output = _read_zip_entries(output_path)
+    except (zipfile.BadZipFile, FileNotFoundError) as e:
+        return {"violations": [f"unreadable: {e}"], "source_reference_verdict": "ORACLE_FAILURE"}
+
+    for rels_name, rels_bytes in output.items():
+        if not re.match(r"^xl/worksheets/_rels/[^/]+\.rels$", rels_name):
+            continue
+        if original.get(rels_name) != rels_bytes:
+            violations.append(
+                f"'{rels_name}' differs from the original (or is new) -- elixcee's writer "
+                f"has never been observed to touch a worksheet-level .rels file, so this "
+                f"check doesn't know how to verify one that changed; treat this as "
+                f"requiring investigation, not as passing"
+            )
+            continue
+
+        sheet_part = re.sub(r"_rels/([^/]+)\.rels$", r"\1", rels_name)
+        if sheet_part not in output:
+            continue  # a different, already-covered failure (missing worksheet part)
+
+        try:
+            sheet_root = ET.fromstring(output[sheet_part])
+        except ET.ParseError as e:
+            violations.append(f"'{sheet_part}' is not well-formed XML: {e}")
+            continue
+
+        try:
+            rels_root = ET.fromstring(rels_bytes)
+        except ET.ParseError as e:
+            violations.append(f"'{rels_name}' is not well-formed XML: {e}")
+            continue
+        for rel in rels_root.findall(f"{REL_NS}Relationship"):
+            rel_type = rel.get("Type", "")
+            rid = rel.get("Id")
+            referenced = _rid_referenced_as_type(sheet_root, rel_type, rid)
+            if referenced is None:
+                continue  # unmapped type (comments/threadedComment/unknown) -- not this check's job
+            if not referenced:
+                violations.append(
+                    f"'{rels_name}': relationship Id={rid} Type='{rel_type}' survived "
+                    f"into the output, but '{sheet_part}' no longer contains any element "
+                    f"referencing it as that type (SOURCE_REFERENCE_LOSS)"
+                )
+
+    verdict = "SOURCE_REFERENCE_LOSS" if violations else "CLEAN"
+    return {"violations": violations, "source_reference_verdict": verdict}
+
+
 def self_test():
     """Negative calibration: corrupt two copies, assert this checker actually catches
     both, PLUS assert a genuinely clean pass-through reports clean. Run before trusting
@@ -474,9 +624,142 @@ def self_test():
         assert result["structural_verdict"] != "STRUCTURALLY_CLEAN", "failed to detect an orphaned part"
         assert any("orphaned" in v for v in result["violations"]), result["violations"]
 
+        # --- Case H: SOURCE_REFERENCE_LOSS (0.10.0-A). A second, dedicated fixture with a
+        # worksheet-level .rels carrying all four r:id-mapped relationship types
+        # (table/drawing/hyperlink/vmlDrawing) PLUS a fifth, unmapped comments
+        # relationship (rId5) -- deliberately included so this test also locks in that
+        # comments is correctly out of scope (see _WORKSHEET_RID_ELEMENT_XPATHS' own
+        # comment for why). Built separately from `orig_path` above rather than extending
+        # it, so this test can't accidentally interact with the formula/VBA/theme cases.
+        rr_path = os.path.join(tmp, "relref_orig.xlsm")
+        SHEET1_RELREF_XML = (
+            f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+            '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>'
+            '<hyperlinks><hyperlink ref="A1" r:id="rId3"/></hyperlinks>'
+            '<drawing r:id="rId2"/>'
+            '<legacyDrawing r:id="rId4"/>'
+            '<tableParts count="1"><tablePart r:id="rId1"/></tableParts>'
+            "</worksheet>"
+        ).encode()
+        with zipfile.ZipFile(rr_path, "w") as zf:
+            zf.writestr(
+                "[Content_Types].xml",
+                f'<?xml version="1.0"?><Types xmlns="{CT_NS[1:-1]}">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                "</Types>",
+            )
+            zf.writestr(
+                "xl/workbook.xml",
+                f'<?xml version="1.0"?><workbook xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+                '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+            )
+            zf.writestr(
+                "xl/_rels/workbook.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr("xl/worksheets/sheet1.xml", SHEET1_RELREF_XML)
+            zf.writestr(
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>'
+                '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>'
+                '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/" TargetMode="External"/>'
+                '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>'
+                '<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr("xl/tables/table1.xml", f'<?xml version="1.0"?><table xmlns="{SML_NS[1:-1]}" id="1" name="Table1" displayName="Table1" ref="A1:A1"/>')
+            zf.writestr("xl/drawings/drawing1.xml", '<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>')
+            zf.writestr("xl/drawings/vmlDrawing1.vml", '<xml/>')
+            zf.writestr("xl/comments1.xml", f'<?xml version="1.0"?><comments xmlns="{SML_NS[1:-1]}"><authors/><commentList/></comments>')
+
+        # Clean passthrough (only workbook.xml "edited") -- must report CLEAN, including
+        # for the unmapped comments relationship (rId5), which nothing in sheet1.xml ever
+        # references by design (see _WORKSHEET_RID_ELEMENT_XPATHS).
+        rr_clean_path = os.path.join(tmp, "relref_clean.xlsm")
+        shutil.copyfile(rr_path, rr_clean_path)
+        result = check_source_references(rr_path, rr_clean_path)
+        assert result["source_reference_verdict"] == "CLEAN", result
+
+        # Four independent mutations, one per mapped relationship type: strip ONLY the
+        # worksheet-XML-side r:id reference, leave the .rels file and target part
+        # untouched -- exactly the shape of the real bug found against fixture3
+        # (tableParts stripped from a regenerated sheet1.xml while
+        # _rels/sheet1.xml.rels and tables/table1.xml both survive byte-identical).
+        _RELREF_MUTATIONS = {
+            "table": (b'<tableParts count="1"><tablePart r:id="rId1"/></tableParts>', b""),
+            "drawing": (b'<drawing r:id="rId2"/>', b""),
+            "hyperlink": (b'<hyperlinks><hyperlink ref="A1" r:id="rId3"/></hyperlinks>', b""),
+            "vmlDrawing": (b'<legacyDrawing r:id="rId4"/>', b""),
+        }
+        for label, (needle, replacement) in _RELREF_MUTATIONS.items():
+            assert needle in SHEET1_RELREF_XML, f"self-test fixture bug: {label} needle not found"
+            mutated_path = os.path.join(tmp, f"relref_missing_{label}.xlsm")
+            with zipfile.ZipFile(rr_path) as src, zipfile.ZipFile(mutated_path, "w") as dst:
+                for item in src.infolist():
+                    data = src.read(item.filename)
+                    if item.filename == "xl/worksheets/sheet1.xml":
+                        data = data.replace(needle, replacement)
+                    dst.writestr(item, data)
+            result = check_source_references(rr_path, mutated_path)
+            assert result["source_reference_verdict"] == "SOURCE_REFERENCE_LOSS", (
+                f"failed to detect missing {label} reference: {result}"
+            )
+            assert any(f"Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/{label}'" in v for v in result["violations"]), (
+                label,
+                result["violations"],
+            )
+
+        # An unexpected change to the worksheet-level .rels itself (elixcee's writer has
+        # never been observed to do this) must be flagged, not silently treated as
+        # out-of-scope -- regression guard for exactly the bug an earlier version of
+        # check_source_references had (see that function's own docstring).
+        rels_changed_path = os.path.join(tmp, "relref_rels_changed.xlsm")
+        with zipfile.ZipFile(rr_path) as src, zipfile.ZipFile(rels_changed_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/worksheets/_rels/sheet1.xml.rels":
+                    data = data.replace(b'Id="rId1"', b'Id="rId9"')
+                dst.writestr(item, data)
+        result = check_source_references(rr_path, rels_changed_path)
+        assert result["source_reference_verdict"] == "SOURCE_REFERENCE_LOSS", (
+            f"an unexpectedly-mutated worksheet .rels must not be silently treated as clean: {result}"
+        )
+        assert any("differs from the original" in v for v in result["violations"]), result["violations"]
+
+        # Type confusion: table's rId1 is removed from <tableParts>, but the SAME string
+        # "rId1" is then reused on <drawing> (a different relationship type, rId2's own
+        # slot in this fixture, left untouched). A flat union of "any r:id referenced
+        # anywhere" would see "rId1" in the drawing element and wrongly call the table
+        # relationship satisfied. The type-aware check must still catch the table loss.
+        confused_path = os.path.join(tmp, "relref_type_confusion.xlsm")
+        with zipfile.ZipFile(rr_path) as src, zipfile.ZipFile(confused_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    data = data.replace(
+                        b'<tableParts count="1"><tablePart r:id="rId1"/></tableParts>', b""
+                    ).replace(b'<drawing r:id="rId2"/>', b'<drawing r:id="rId1"/>')
+                dst.writestr(item, data)
+        result = check_source_references(rr_path, confused_path)
+        assert result["source_reference_verdict"] == "SOURCE_REFERENCE_LOSS", (
+            f"type confusion must not mask a real table-relationship loss: {result}"
+        )
+        assert any(
+            "Id=rId1" in v and "Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/table'" in v
+            for v in result["violations"]
+        ), result["violations"]
+
     print(
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
-        "target, stripped-formula, and orphaned part all caught)"
+        "target, stripped-formula, orphaned part, all 4 SOURCE_REFERENCE_LOSS shapes, "
+        "unexpected .rels mutation, and cross-type rId confusion all caught; comments "
+        "correctly out of SOURCE_REFERENCE_LOSS scope)"
     )
 
 
@@ -489,6 +772,11 @@ if __name__ == "__main__":
         sys.exit(2)
     structural = check_roundtrip(sys.argv[1], sys.argv[2])
     formulas = check_formula_preservation(sys.argv[1], sys.argv[2])
-    print(json.dumps({"structural": structural, "formulas": formulas}, indent=2))
-    ok = structural["structural_verdict"] == "STRUCTURALLY_CLEAN" and formulas["formula_verdict"] == "CLEAN"
+    source_references = check_source_references(sys.argv[1], sys.argv[2])
+    print(json.dumps({"structural": structural, "formulas": formulas, "source_references": source_references}, indent=2))
+    ok = (
+        structural["structural_verdict"] == "STRUCTURALLY_CLEAN"
+        and formulas["formula_verdict"] == "CLEAN"
+        and source_references["source_reference_verdict"] == "CLEAN"
+    )
     sys.exit(0 if ok else 1)

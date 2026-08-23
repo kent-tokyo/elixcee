@@ -10,7 +10,14 @@
       "path": "compat/oracle-excel-com/fixtures/pristine/fixture1_values_styles_merge_hidden.xlsm",
       "authored_by": "live AppleScript automation against Microsoft Excel for Mac 16.108",
       "has_vba_project": false,
-      "content": ["values", "formula", "number_format", "merged_range", "hidden_column", "hidden_row"],
+      "content": [
+        "values",
+        "formula",
+        "number_format",
+        "merged_range",
+        "hidden_column",
+        "hidden_row"
+      ],
       "runs_summary": "save-as and in-place, 1 cycle each: no repair warning, no cannot-open error, values/formula(recalculated live to 1110)/number-format/merge/hidden-row/hidden-column all EXACT_MATCH or SEMANTIC_MATCH, has_vb_project correctly false.",
       "cycles_completed_per_mode": 1,
       "cycles_required_per_mode": 10,
@@ -25,7 +32,10 @@
       "path": "compat/oracle-excel-com/fixtures/pristine/fixture2_vba_macro.xlsm",
       "authored_by": "user, manually, in Microsoft Excel for Mac 16.108 (VBA authoring has no AppleScript surface -- see MACOS_APPLESCRIPT_EXPLORATION.md)",
       "has_vba_project": true,
-      "content": ["values", "vba_macro (Sheet1 code-behind, not a standard module)"],
+      "content": [
+        "values",
+        "vba_macro (Sheet1 code-behind, not a standard module)"
+      ],
       "runs_summary": "save-as and in-place: mechanical check clean, no repair warning, has_vb_project correctly true, edited/unedited cells correct.",
       "cycles_completed_per_mode": 1,
       "cycles_required_per_mode": 10,
@@ -41,7 +51,11 @@
       "authored_by": "user, manually (AppleScript's make-new-based creation for list objects/data validation/conditional formatting all failed with -50 parameter errors, confirmed empirically against a live Excel instance -- documented in the sdef but not actually implemented)",
       "has_vba_project": true,
       "has_vba_project_note": "Present but unintentional/empty -- carried over from the authoring session's Excel state, not something this fixture set out to test (fixture 2 covers VBA specifically). Not a problem: exercises vbaProject.bin passthrough as a bonus.",
-      "content": ["table (ListObject)", "data_validation (list, 'Yes,No,Maybe')", "conditional_formatting (cellIs greaterThan 700)"],
+      "content": [
+        "table (ListObject)",
+        "data_validation (list, 'Yes,No,Maybe')",
+        "conditional_formatting (cellIs greaterThan 700)"
+      ],
       "runs_summary": "save-as and in-place: mechanical check clean, no repair warning, edited cell correct. Table/data-validation/conditional-formatting are ALL SILENTLY DROPPED -- see known_gap below.",
       "cycles_completed_per_mode": 1,
       "cycles_required_per_mode": 10,
@@ -58,7 +72,12 @@
       "authored_by": "user, manually (hyperlink creation has no AppleScript command at all; only 'follow hyperlink' and 'clear hyperlinks' are exposed)",
       "has_vba_project": true,
       "has_vba_project_note": "Same as fixture 3 -- unintentional but harmless bonus coverage.",
-      "content": ["hyperlink", "threaded_comment + legacy VML comment drawing", "defined_name", "conditional_formatting (also present, unintentionally)"],
+      "content": [
+        "hyperlink",
+        "threaded_comment + legacy VML comment drawing",
+        "defined_name",
+        "conditional_formatting (also present, unintentionally)"
+      ],
       "runs_summary": "save-as and in-place: mechanical check clean, no repair warning, edited/unedited cells (including the hyperlink's own display text) correct, has_vb_project correctly true.",
       "cycles_completed_per_mode": 1,
       "cycles_required_per_mode": 10,
@@ -74,7 +93,12 @@
       "path": "compat/oracle-excel-com/fixtures/pristine/fixture5_chart_image_freeze_print.xlsm",
       "authored_by": "user, manually (chart creation via AppleScript's make-new also failed with -50, same pattern as tables)",
       "has_vba_project": false,
-      "content": ["chart", "image (xl/media/image1.png, ~1.28MB)", "print_area (_xlnm.Print_Area defined name)", "richData parts (unintentional -- from an accidental rich-value cell, #VALUE! at D8)"],
+      "content": [
+        "chart",
+        "image (xl/media/image1.png, ~1.28MB)",
+        "print_area (_xlnm.Print_Area defined name)",
+        "richData parts (unintentional -- from an accidental rich-value cell, #VALUE! at D8)"
+      ],
       "content_note": "Freeze panes did NOT end up in this fixture (no <pane> element in the authored file) -- not evaluated this round.",
       "runs_summary": "save-as and in-place: mechanical check clean, no repair warning, edited cell correct.",
       "cycles_completed_per_mode": 1,
@@ -85,7 +109,9 @@
         "same_root_cause_as": "fixture3_table_validation_conditional",
         "summary": "Chart/image/drawing parts survive as passthrough bytes but <drawing r:id=.../> is gone from the regenerated sheet, orphaning the whole chain. Confirmed live: 0 chart objects, 0 shapes after an elixcee save. No repair warning. Print area's <definedNames> also dropped (workbook.xml is fully regenerated, same as fixture 4's defined name)."
       },
-      "not_evaluated": ["freeze_panes (not present in the authored fixture)"]
+      "not_evaluated": [
+        "freeze_panes (not present in the authored fixture)"
+      ]
     }
   ],
   "bugs_found_and_fixed_this_round": [
@@ -116,9 +142,19 @@
       "id": "worksheet-embedded-features-not-preserved",
       "found_via": "fixtures 3, 4, 5",
       "already_documented_in": "0.8.0 safe-round-trip milestone's own Non-goals section",
-      "affects": ["tables (ListObject)", "data validation", "conditional formatting", "hyperlinks", "defined names", "comments/threaded comments (orphaned, not deleted)", "charts/images/drawings (orphaned, not deleted)", "print area"],
+      "affects": [
+        "tables (ListObject)",
+        "data validation",
+        "conditional formatting",
+        "hyperlinks",
+        "defined names",
+        "comments/threaded comments (orphaned, not deleted)",
+        "charts/images/drawings (orphaned, not deleted)",
+        "print area"
+      ],
       "not_affected": "None of these ever cause a repair warning -- Excel silently drops the feature, confirmed for every case above.",
-      "recommendation": "Real feature work (re-inject known elements into the regenerated worksheet, or move to diff/merge instead of full regeneration), not attempted this round -- matches the scope of a planned future milestone."
+      "recommendation": "Real feature work (re-inject known elements into the regenerated worksheet, or move to diff/merge instead of full regeneration), not attempted this round -- matches the scope of a planned future milestone.",
+      "addendum_2026-08-23": "0.10.0-A design/checker work added a new automated check, mechanical_check.py check_source_references(), which formalizes exactly this gap for the r:id-bearing subset (table/drawing/hyperlink/vmlDrawing) as a named verdict, SOURCE_REFERENCE_LOSS, distinct from the pre-existing ORPHANED_PART/DANGLING_RELATIONSHIP verdicts. Re-running this checker against fixtures 3, 4, and 5 reproduces SOURCE_REFERENCE_LOSS in all three (fixtures 1/2, which have no worksheet-level relationships, report CLEAN) -- this is not a new bug and not a change in elixcee behavior since this file was written, only a more precise, automated restatement of what this entry already disclosed in prose. See docs/xlsx-worksheet-preservation-0.10.0-design.md and fixtures/pristine/INVENTORY.md for the full design."
     },
     {
       "id": "macro-execution-not-evaluated",

@@ -304,17 +304,17 @@ FreezePanes・Comment・FormatCondition・Validation・definedNameを**VBAオブ
 
 ## 8. XML順序・namespace・relationship IDを壊さない設計
 
-**重要な注記（provenance）**: 以下のうち`fixture3`の実データで**実際に位置関係を確認した**の
-は`sheetPr, dimension, sheetViews, sheetFormatPr, [cols,] sheetData, [mergeCells,] phoneticPr,
-conditionalFormatting, dataValidations, pageMargins, tableParts`の10〜12要素分の並びのみ
-（`cols`/`mergeCells`は現行writerが既に正しい位置に出力できていることを既存コードから
-確認、fixture3自体には含まれていなかった）。残りの位置は**ECMA-376/ISO 29500の
-`CT_Worksheet`スキーマ定義をこちらの記憶から再構成したもので、実XSDと突き合わせて
-検証していない**。0.10.0-Aの実装着手時には、この表を鵜呑みにせず、
-`sml.xsd`（`CT_Worksheet`の`xsd:sequence`定義）を一次情報として直接参照し直すこと
-——万一この表の並びを1箇所でも間違えたまま実装すると、real Excelがファイルを
-repair対象にする、というこのプロジェクトが実際に0.9.0で繰り返し踏んだ失敗パターンを
-再現する。
+**更新（0.10.0-A、実XSDで確認済み）**: 初稿時点では下記の並びは記憶からの再構成で
+未検証だった。0.10.0-A着手時に実際のECMA-376第5版XSD
+（`OfficeOpenXML-XMLSchema-Transitional/sml.xsd`、`QtExcel/ecma-376-5th`のGitHubミラー経由
+で取得——real-world Excelファイルはtransitional schemaに従う。strict schemaは実質使われ
+ないため対象外）の`CT_Worksheet`定義を直接取得して突き合わせた。**結果、記憶ベースの並びは
+`drawingHF`（`legacyDrawingHF`と`picture`の間、`CT_DrawingHF`型）が1つ丸ごと抜け落ちていた
+以外は完全に一致**——「記憶を信用しない」というhard gate自体が実際に1つの間違いを
+検出した、という結果になった。以下は実XSDで確認済みの並び（`fixture3`の実データで
+直接位置関係を確認できたのは`sheetPr, dimension, sheetViews, sheetFormatPr, [cols,]
+sheetData, [mergeCells,] phoneticPr, conditionalFormatting, dataValidations, pageMargins,
+tableParts`の10〜12要素のみで、残りはXSD一次情報での確認）。
 
 ```
 sheetPr, dimension, sheetViews, sheetFormatPr, cols, sheetData, sheetCalcPr,
@@ -323,8 +323,17 @@ dataConsolidate, customSheetViews, mergeCells, phoneticPr,
 conditionalFormatting, dataValidations, hyperlinks, printOptions,
 pageMargins, pageSetup, headerFooter, rowBreaks, colBreaks,
 customProperties, cellWatches, ignoredErrors, smartTags, drawing,
-legacyDrawing, legacyDrawingHF, picture, oleObjects, controls,
+legacyDrawing, legacyDrawingHF, drawingHF, picture, oleObjects, controls,
 webPublishItems, tableParts, extLst
+```
+
+参考までに`CT_Workbook`（`xl/workbook.xml`、0.10.0-C対象）の並びも同じXSDで確認済み:
+
+```
+fileVersion, fileSharing, workbookPr, workbookProtection, bookViews, sheets,
+functionGroups, externalReferences, definedNames, calcPr, oleSize,
+customWorkbookViews, pivotCaches, smartTagPr, smartTagTypes, webPublishing,
+fileRecoveryPr, webPublishObjects, extLst
 ```
 
 7節(b)を採用する場合、各opaque fragmentにはこの列内での**スキーマ位置スロット名**を
@@ -382,20 +391,36 @@ worksheet側での参照のされ方が異なるため、文字列一致だけ�
 worksheet側のどの要素のどの属性が参照元になり得るかを明示的に対応させる**
 （type-aware mapping）:
 
-| relationship type | worksheet側の参照元 |
-|---|---|
-| table | `<tableParts><tablePart r:id="..">` |
-| drawing | `<drawing r:id="..">` |
-| hyperlink（external） | `<hyperlinks><hyperlink r:id="..">` |
-| vmlDrawing | `<legacyDrawing r:id="..">` |
-| printerSettings | `<pageSetup r:id="..">`（`xl/printerSettings/printerSettingsN.bin`を指す） |
-| oleObject | `<oleObjects><oleObject r:id="..">` |
+**実装済み（0.10.0-A）**: 以下の表は`compat/oracle-excel-com/mechanical_check.py`の
+`_WORKSHEET_RID_ELEMENT_XPATHS`として既に実装され、`check_source_references()`
+（新関数）がこの表を使って`SOURCE_REFERENCE_LOSS`を検出する。実fixture（`fixture3`/
+`4`/`5`）とECMA-376実XSD（8節参照）の両方で裏取りした4種のみを実装し、fixtureが
+存在しない行は実装しなかった——「分かっている範囲を正しく書く」の実践。
 
-comments・threadedComments・拡張機能系（richData等）は関係の張り方がworksheet直下の
-単純な`r:id`属性1つに収まらない場合がある（`fixture4`では`legacyDrawing`経由の間接参照と
-`comments1.xml`への直接relationshipが併存している）ため、この対応表に機械的に含めず、
-**実fixtureとXSDを個別に確認してから**表に追加することを推奨する——分かっている範囲を
-正しく書く方が、分かっていない範囲まで表に含めて誤った安心感を与えるより安全。
+| relationship type | worksheet側の参照元 | 根拠 |
+|---|---|---|
+| table | `<tableParts><tablePart r:id="..">`（`r:id` required） | fixture3実データ＋`CT_TablePart`実XSD |
+| drawing | `<drawing r:id="..">`（`r:id` required） | fixture5実データ＋`CT_Drawing`実XSD |
+| hyperlink（`r:id`形式） | `<hyperlinks><hyperlink r:id="..">`（`r:id` optional、`location`と排他ではない） | fixture4実データ＋`CT_Hyperlink`実XSD |
+| vmlDrawing | `<legacyDrawing r:id="..">`（`r:id` required。`legacyDrawingHF`も同型だが未実装fixtureのため対象外） | fixture4実データ＋`CT_LegacyDrawing`実XSD |
+
+**実装しなかった行（fixtureなし、XSDのみ確認済み）**: printerSettings →
+`<pageSetup r:id="..">`（`CT_PageSetup`の`r:id`は`optional`属性）／oleObject →
+`<oleObjects><oleObject r:id="..">`（**訂正**: `r:id`は`<oleObject>`要素自身に直接
+付く`optional`属性——初稿では入れ子の`<objectPr>`側についていると誤って想定していたが、
+実XSD確認で訂正）／control → `<controls><control r:id="..">`（`r:id`は`<control>`
+自身に`required`）。いずれも実fixtureが存在するまで実装しない（10節のhard gate通り）。
+
+**comments・threadedComments（実測で確定、初稿の「個別確認が必要」を解消）**:
+`fixture4`の`xl/worksheets/_rels/sheet1.xml.rels`が持つ4つの関係
+（table…ではなくhyperlink=rId1／vmlDrawing=rId2／comments=rId3／threadedComment=rId4）
+のうち、`sheet1.xml`本文が実際に`r:id`として参照しているのは`rId1`と`rId2`だけ——
+**`rId3`（comments）と`rId4`（threadedComment）はsheet1.xml本文のどこにも一切現れない**
+ことを`grep`で直接確認した。つまりcomments/threadedCommentsはworksheet content側の
+`r:id`参照を一切必要とせず、`.rels`ファイル自身のType属性だけで存在が決まる
+——この2種類は`SOURCE_REFERENCE_LOSS`検査の対象外とし（対応表に含めない）、
+既存の`ORPHANED_PART`検査（`.rels`グラフレベルの参照有無のみを見る）がそのまま
+正しくカバーする、という結論で確定した。
 
 **新しい違反分類を追加する**（既存の`ORPHANED_PART`/`DANGLING_RELATIONSHIP`とは別カテゴリ
 として区別する——今回見つかったのはどちらでもなく、3つ目の新しい種類の壊れ方）:
@@ -406,14 +431,25 @@ comments・threadedComments・拡張機能系（richData等）は関係の張り
 - `ORPHANED_PART` — 既存（partが存在するがどの`.rels`からも参照されていない、Milestone 4で
   発見済み）。
 
-**self-testに追加すべき破壊ケース**（`mechanical_check.py --self-test`が確実にこれらを
-検出できることを、新検査を信用する前に必ず確認する——0.9.0-Aの教訓「検出できない
-checkerはゼロ違反を返すだけで正しさの証拠にならない」を踏襲）: 元の`.rels`と対象partを
-そのまま残した状態で、worksheet側の参照要素だけを個別に取り除いたケースを7種
-（`<tableParts>`削除・`<drawing>`削除・external hyperlinkの`r:id`属性削除・
-`<legacyDrawing>`削除・`<pageSetup r:id>`のid属性のみ削除、を最低ラインとし、上記表が
-確定した時点で追加する）用意し、いずれも`SOURCE_REFERENCE_LOSS`として検出されることを
-確認してから、実fixtureへの適用を信用する。
+**実装済み（0.10.0-A）**: `mechanical_check.py --self-test`のCase Hとして、実装した4種
+（table/drawing/hyperlink/vmlDrawing）それぞれについて、元の`.rels`と対象partを
+そのまま残した状態でworksheet側の参照要素だけを個別に取り除いた破壊fixtureを用意し、
+全て`SOURCE_REFERENCE_LOSS`として検出されることを確認済み。同じCase Hで、
+comments relationship（`rId5`、対応表に含まれない未マップtype）を持つがsheet1.xml
+から一切参照されないケースが正しく`CLEAN`と判定される（誤検知しない）ことも
+併せて確認——「comments/threadedCommentsをこの検査の対象外とする」という設計判断
+そのものを固定するregression guardになっている。printerSettings/oleObject/control
+は表自体を実装していないため、対応する破壊ケースも実装していない（fixture確保が
+先——10節のhard gate通り）。
+
+**実fixtureへの適用（0.10.0-A、実測で確定）**: self-testが通った後、実際に
+`fixture1`〜`5`それぞれをelixceeでロード→1セル編集→保存→`check_source_references()`
+を実行した。`fixture1`/`fixture2`（worksheet-level relationshipを一切持たない）は
+`CLEAN`。**worksheet-level relationshipを持つ`fixture3`/`4`/`5`は全て
+`SOURCE_REFERENCE_LOSS`を検出**——`fixture3`（table）・`fixture4`
+（hyperlink・vmlDrawingの両方が同一保存で同時に消失）・`fixture5`（drawing）。
+これは当初4節で確認した「1つの実例」ではなく、**worksheet-level relationshipを持つ
+実fixtureの100%で再現する、体系的な欠落**であることが確定した。
 
 これは0.9.0-Aの「macro実行結果はNOT_EVALUATEDと書く、擁護的な言い回しをしない」という
 標準方針、および`compat/differential/classify.mjs`のORACLE_AMBIGUITY/NONDETERMINISTIC
@@ -439,16 +475,33 @@ checkerはゼロ違反を返すだけで正しさの証拠にならない」を�
 > 4. mechanical_check has a negative test for its loss.
 
 - **0.10.0-A — Foundation**（新機能ゼロ、writer機能を増やさない）
-  - `WorksheetOrigin`のidentity設計（6節）の実装
-  - CT_Worksheet/CT_WorkbookのXML/XSD順序の確定（8節、記憶ベースの表を実XSDで裏取り）
-  - source-reference graph checker（type-aware mapping、9節）
-  - `mechanical_check.py`のnegative self-test追加（9節、7種の破壊ケース）
-  - fixture inventory の棚卸し（既存5 fixtureが実際に何を含み何を含まないかの一覧化、
-    3節で発覚した「fixture5に実はfreeze paneがない」のような食い違いを潰す）
-  - internal hyperlink（`location`属性）のfixture新規作成——現状ゼロ（3節）
-  - freeze paneのfixture新規作成——現状ゼロ（3節）
-  - relationship type → worksheet側source element 対応表の確定（9節）
-  - 検証: 既存5 fixtureの構造/mechanical_check再確認、新規機能なし（回帰ゲート）
+  - [x] fixture inventoryの棚卸し（`fixtures/pristine/INVENTORY.md`、新規）——既存5
+    fixtureが実際に何を含み何を含まないかをスクリプトで一覧化、3節で発覚した
+    「fixture5に実はfreeze paneがない」を含め、filenameを信用しない棚卸しを確定した。
+    副産物として`fixture5`に`_xlnm.Print_Area`（builtin defined name）があることも
+    新規発見（0.10.0-C対象）。
+  - [x] relationship type → worksheet側source element 対応表の確定（9節）——実装した
+    4種（table/drawing/hyperlink/vmlDrawing）はfixture実データ＋実XSD両方で裏取り、
+    printerSettings/oleObject/controlはXSDのみ確認しfixture不在のため未実装、
+    comments/threadedCommentsは「worksheet content側に`r:id`参照が一切ない」ことを
+    実測で確定し対応表から除外。
+  - [x] CT_Worksheet/CT_WorkbookのXML/XSD順序の確定（8節）——実際の ECMA-376第5版XSD
+    （`sml.xsd`、`QtExcel/ecma-376-5th`経由）を取得し突き合わせ。記憶ベースの並びは
+    `drawingHF`が1要素欠落していた以外は正しかった——hard gate自体が実際に1件の
+    誤りを検出した。
+  - [x] `mechanical_check.py`への`check_source_references()`実装と
+    `SOURCE_REFERENCE_LOSS`違反分類の追加（9節）。
+  - [x] negative self-testの追加（`self_test()`のCase H、4種の破壊ケース＋comments
+    誤検知なしの確認）——`--self-test`で全green。
+  - [x] 実fixtureへの適用——`fixture1`〜`5`全てで実際に確認した結果、`fixture3`/`4`/
+    `5`（worksheet-level relationshipを持つ全fixture）で`SOURCE_REFERENCE_LOSS`を
+    確認、`fixture1`/`2`は`CLEAN`。当初の「1実例」から「体系的な欠落」へ確度が上がった。
+  - [ ] `WorksheetOrigin`のidentity設計（6節）の実装——**この回では着手しない**
+    （ユーザー指示: 最初の実装commitはchecker、writerではない）。
+  - [ ] internal hyperlink（`location`属性）のfixture新規作成——現状ゼロ（3節）、未着手。
+  - [ ] freeze paneのfixture新規作成——現状ゼロ（3節）、未着手。
+  - 検証: 既存5 fixtureへの適用は上記の通り実施済み。`WorksheetOrigin`／writer側の
+    変更は伴わないため、回帰対象はcheckerとdocsのみ。
 - **0.10.0-B — Inline worksheet preservation**（relationship非依存、7節(b)の
   opaque-fragment機構をworksheet-XML側へ適用）
   - `<sheetViews>`（`<selection>`・`<pane>`＝freeze pane含む）・`<sheetPr>`・
