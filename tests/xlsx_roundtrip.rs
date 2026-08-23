@@ -742,7 +742,8 @@ fn real_excel_xlsm_roundtrip_preserves_vba_project_and_relationships() {
 /// exact `<pane .../>` the source contains survives byte-for-byte, plus the
 /// root `<worksheet>` tag now carries the source's own namespace declarations
 /// (needed for other, later 0.10.0-B slices that use prefixed attributes)
-/// instead of the old hardcoded minimal one.
+/// instead of the old hardcoded minimal one. Also covers slice 3
+/// (`<pageMargins>`), present in this same fixture.
 #[test]
 fn real_excel_freeze_pane_sheetviews_survive_a_save() {
     let source_path = real_fixture("fixture7_freeze_pane.xlsm");
@@ -785,6 +786,13 @@ fn real_excel_freeze_pane_sheetviews_survive_a_save() {
     assert!(
         out_sheet1.contains("<c r=\"A1\""),
         "edited cell A1 must still be present: {out_sheet1}"
+    );
+    // 0.10.0-B slice 3: pageMargins.
+    assert!(
+        out_sheet1.contains(
+            r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>"#
+        ),
+        "pageMargins must survive a save verbatim: {out_sheet1}"
     );
 
     let _ = std::fs::remove_file(&output_path);

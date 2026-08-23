@@ -730,6 +730,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         let phonetic_pr = source_xml.and_then(|xml| reader::extract_raw_element(xml, "phoneticPr"));
         let data_validations =
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "dataValidations"));
+        let page_margins =
+            source_xml.and_then(|xml| reader::extract_raw_element(xml, "pageMargins"));
         let fragments = OpaqueWorksheetFragments {
             root_attrs: root_attrs.as_deref(),
             sheet_pr: sheet_pr.as_deref(),
@@ -737,6 +739,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             sheet_format_pr: sheet_format_pr.as_deref(),
             phonetic_pr: phonetic_pr.as_deref(),
             data_validations: data_validations.as_deref(),
+            page_margins: page_margins.as_deref(),
         };
 
         zip.start_file(format!("xl/worksheets/sheet{}.xml", i + 1), deflated)
@@ -997,6 +1000,7 @@ struct OpaqueWorksheetFragments<'a> {
     sheet_format_pr: Option<&'a str>,
     phonetic_pr: Option<&'a str>,
     data_validations: Option<&'a str>,
+    page_margins: Option<&'a str>,
 }
 
 fn build_xlsx_sheet(
@@ -1121,13 +1125,21 @@ fn build_xlsx_sheet(
     }
 
     // CT_Worksheet order (§8): mergeCells, phoneticPr, conditionalFormatting,
-    // dataValidations, ... — conditionalFormatting is deliberately never emitted here
-    // (design doc: it can reference xl/styles.xml's <dxfs> via dxfId, so it needs
+    // dataValidations, hyperlinks, printOptions, pageMargins, ... —
+    // conditionalFormatting/hyperlinks/printOptions are deliberately never emitted here.
+    // conditionalFormatting can reference xl/styles.xml's <dxfs> via dxfId, so it needs
     // separate consideration before being treated as a pure relationship-free opaque
-    // fragment; still covered by check_source_references()'s coarser structural checks).
-    for fragment in [fragments.phonetic_pr, fragments.data_validations]
-        .into_iter()
-        .flatten()
+    // fragment (still covered by check_source_references()'s coarser structural checks).
+    // hyperlinks needs per-child r:id filtering, not whole-container passthrough (a
+    // future slice, check_internal_hyperlinks()). printOptions has no fixture evidence
+    // yet.
+    for fragment in [
+        fragments.phonetic_pr,
+        fragments.data_validations,
+        fragments.page_margins,
+    ]
+    .into_iter()
+    .flatten()
     {
         out.push_str(fragment);
         out.push('\n');

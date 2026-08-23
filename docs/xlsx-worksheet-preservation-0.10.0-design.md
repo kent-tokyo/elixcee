@@ -630,15 +630,43 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
       (2) E1セルのデータ入力規則ドロップダウン（Yes/No/Maybe）が復元されている、
       (3) B2が999、の3点を確認済み。0.9.0-Aと同じ完了条件をB2も満たした
       ——**B2は実装・実Excel検証ともに完了**。
-  - **B3以降（未着手）**: internal hyperlinkの`location`属性（advisor指摘:
-    `<hyperlinks>`はB1/B2と同じまるごとpassthroughができない——`r:id`を持つ
+  - **B3（実装済み）— `<pageMargins>`**
+    - [x] checker先行実装: `_INLINE_WORKSHEET_ELEMENTS`に追加、self-testの
+      Case Jの合成fixture・mutation dictへ組み込み。writer未着手の時点で
+      実fixture7種に適用し、体系的な欠落を実測確定——全7fixtureで`pageMargins`
+      のみが検出され、slice 1/2で直した要素は引き続きCLEANであることも確認。
+    - [x] `OpaqueWorksheetFragments`へ`page_margins`フィールドを追加。XSD順序
+      （8節：`dataValidations, hyperlinks, printOptions, pageMargins`）通り、
+      `phoneticPr`→`dataValidations`の直後・`</worksheet>`直前に挿入
+      （`hyperlinks`/`printOptions`は未実装のためスキップ）。
+    - [x] 実fixture7種全てに対する事後確認——全シートで`inline_elements`が
+      `CLEAN`。`structural`・`formulas`・`source_references`は無変化。
+    - [x] `tests/xlsx_roundtrip.rs`の`real_excel_freeze_pane_sheetviews_survive_a_save`
+      （fixture7）へ`pageMargins`のassertionを追加。
+    - 検証: `cargo test --workspace`（841件）・`cargo fmt --check`・
+      `cargo clippy --all-targets`（python feature有無両方）・`cargo doc
+      --document-private-items`、いずれもクリーン。`compat/corpus`（581件）・
+      `compat/vba-semantics`（386件）とも無変化。
+  - **B4以降（未着手）**: internal hyperlinkの`location`属性（advisor指摘:
+    `<hyperlinks>`はB1〜B3と同じまるごとpassthroughができない——`r:id`を持つ
     子要素とlocation-onlyの子要素が混在しうるため、子要素単位でのfilteringが
-    必要。かつ`CT_Hyperlinks`の`<hyperlink>`の`minOccurs`を実XSDで確認し、
-    「全部r:id形式だった場合は`<hyperlinks>`ごと省略する」のか「空の
-    `<hyperlinks/>`を出力してよいのか」を実装前に確定する必要がある）・
-    `<autoFilter>`（実fixtureにstandalone要素としての実例が現状なし、
-    fixture新規待ち）・`<pageMargins>`・行/列プロパティ（`<cols>`/`<row>`の
-    幅・スタイル等、hidden以外の属性）。
+    必要。**実XSD確認済み（`CT_Hyperlinks`）: `<hyperlink>`は`minOccurs="1"`**
+    ——全部r:id形式だった場合は`<hyperlinks>`ごと省略必須、空`<hyperlinks/>`は
+    不正なXML。実fixtureで確認できているのは両端（fixture6=全location-only、
+    fixture4=全r:id-only）のみで、混在ケースは実fixture上の実例がまだない
+    ——実装するとしても「2つの確認済み端点＋実XSDのminOccurs制約からの一般化」
+    であり、混在ケース自体はsynthetic self-testのみで検証することになる旨を
+    明記する。またchecker側は`_INLINE_WORKSHEET_ELEMENTS`への単純追加では
+    fixture4を誤検知する（`<hyperlinks>`がsourceにはあり、正しい出力では
+    無いのが正しい——present/absentの単純比較と相性が悪い）ため、専用の
+    `check_internal_hyperlinks()`（子要素単位でref照合）が別途必要。
+    さらに、抽出も`extract_raw_element`の「まるごとバイト列を返す」だけでは
+    足りない——子要素を選別して再構成する必要があるため、各`<hyperlink>`子要素
+    個別の生バイト列を保持したまま組み立てる実装が要る（container全体を
+    右から左へバイトコピーするB1〜B3とは異なるパターン）。
+    ・`<autoFilter>`（実fixtureにstandalone要素としての実例が現状なし、
+    fixture新規待ち）・行/列プロパティ（`<cols>`/`<row>`の幅・スタイル等、
+    hidden以外の属性）。
   - **`<conditionalFormatting>`は要注意——`dxfId`（`xl/styles.xml`の`<dxfs>`）や
     `<extLst>`拡張を参照する場合があり、完全な参照非依存とは言い切れない。** 最初は
     「参照先の妥当性検証はせず、生のsubtreeをそのまま保存する」raw subtree preservation
