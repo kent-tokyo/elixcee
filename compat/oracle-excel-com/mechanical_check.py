@@ -1024,6 +1024,80 @@ def check_internal_hyperlinks(original_path, output_path):
     return {"violations": violations, "internal_hyperlink_verdict": verdict}
 
 
+def check_page_setup(original_path, output_path):
+    """Detects PAGE_SETUP_LOSS: a relationship-free (no r:id) `<pageSetup>` present in the
+    original worksheet XML is missing from the output, its attributes changed, or it
+    unexpectedly gained an r:id.
+
+    Deliberately NOT folded into check_inline_worksheet_elements()/
+    _INLINE_WORKSHEET_ELEMENTS, same reasoning as check_internal_hyperlinks() above:
+    unlike sheetViews/pageMargins/etc, `CT_PageSetup` genuinely CAN carry an `r:id`
+    (referencing a `printerSettings` part) per the real XSD -- no fixture in this repo has
+    ever shown that shape (`fixtures/pristine/INVENTORY.md`'s "confirmed absent" list), and
+    the writer correctly refuses to restore one until it does (the same `rels_survived`
+    gate 0.10.0-D's other relationship-backed elements use). A blanket present/absent
+    check would false-positive the day such a fixture shows up: an r:id-backed
+    `<pageSetup>`'s CORRECT absence from the output would look identical to a real loss.
+    This check only ever looks at an r:id-FREE original `<pageSetup>`, matched by sheet
+    name (not physical part path, since elixcee's writer can renumber worksheet parts).
+
+    Confirmed as a real, current gap before any writer code for this element was written:
+    fixture5_chart_image_freeze_print.xlsm's plain `<pageSetup paperSize="9"
+    orientation="portrait" horizontalDpi="0" verticalDpi="0"/>` (no r:id) is silently lost
+    on every save today -- `pageSetup` was never in `_INLINE_WORKSHEET_ELEMENTS`, so
+    nothing previously caught this.
+
+    Returns {"violations": [...], "page_setup_verdict": "CLEAN"|"PAGE_SETUP_LOSS"}.
+    """
+    violations = []
+    try:
+        original = _read_zip_entries(original_path)
+        output = _read_zip_entries(output_path)
+    except (zipfile.BadZipFile, FileNotFoundError) as e:
+        return {"violations": [f"unreadable: {e}"], "page_setup_verdict": "ORACLE_FAILURE"}
+
+    orig_sheets = _sheet_name_to_part(original)
+    out_sheets = {name.lower(): part for name, part in _sheet_name_to_part(output).items()}
+    for name, orig_part in orig_sheets.items():
+        if orig_part not in original:
+            continue
+        try:
+            orig_root = ET.fromstring(original[orig_part])
+        except ET.ParseError:
+            continue
+        orig_ps = orig_root.find(f"{SML_NS}pageSetup")
+        if orig_ps is None or orig_ps.get(R_ID_ATTR) is not None:
+            continue  # absent, or r:id-backed -- out of this check's scope either way
+
+        out_part = out_sheets.get(name.lower())
+        out_root = None
+        if out_part and out_part in output:
+            try:
+                out_root = ET.fromstring(output[out_part])
+            except ET.ParseError:
+                pass
+        out_ps = out_root.find(f"{SML_NS}pageSetup") if out_root is not None else None
+
+        if out_ps is None:
+            violations.append(
+                f"sheet '{name}': relationship-free <pageSetup> present in original, "
+                f"missing from output (PAGE_SETUP_LOSS)"
+            )
+        elif out_ps.get(R_ID_ATTR) is not None:
+            violations.append(
+                f"sheet '{name}': relationship-free <pageSetup> survived but unexpectedly "
+                f"gained an r:id it didn't originally have"
+            )
+        elif out_ps.attrib != orig_ps.attrib:
+            violations.append(
+                f"sheet '{name}': <pageSetup> attributes changed from {orig_ps.attrib!r} "
+                f"to {out_ps.attrib!r}"
+            )
+
+    verdict = "PAGE_SETUP_LOSS" if violations else "CLEAN"
+    return {"violations": violations, "page_setup_verdict": verdict}
+
+
 def self_test():
     """Negative calibration: corrupt two copies, assert this checker actually catches
     both, PLUS assert a genuinely clean pass-through reports clean. Run before trusting
@@ -1822,6 +1896,114 @@ def self_test():
             f"check_roundtrip() must still catch a shared target wrongly removed: {rt_result}"
         )
 
+        # --- Case O: PAGE_SETUP_LOSS. A relationship-free <pageSetup> (fixture5's real
+        # shape) sits alongside a SEPARATE sheet whose <pageSetup> IS r:id-backed (no real
+        # fixture has this second shape yet -- synthetic, generalized from the real XSD,
+        # same honesty convention as Case K's mixed hyperlinks container).
+        ps_path = os.path.join(tmp, "pagesetup_orig.xlsm")
+        SHEET1_PS_XML = (
+            f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}">'
+            '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>'
+            '<pageSetup paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0"/>'
+            "</worksheet>"
+        ).encode()
+        SHEET2_PS_XML = (
+            f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+            '<sheetData><row r="1"><c r="A1"><v>2</v></c></row></sheetData>'
+            '<pageSetup paperSize="9" r:id="rId1"/>'
+            "</worksheet>"
+        ).encode()
+        with zipfile.ZipFile(ps_path, "w") as zf:
+            zf.writestr(
+                "[Content_Types].xml",
+                f'<?xml version="1.0"?><Types xmlns="{CT_NS[1:-1]}">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                "</Types>",
+            )
+            zf.writestr(
+                "xl/workbook.xml",
+                f'<?xml version="1.0"?><workbook xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+                '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/>'
+                '<sheet name="Sheet2" sheetId="2" r:id="rId2"/></sheets></workbook>',
+            )
+            zf.writestr(
+                "xl/_rels/workbook.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr("xl/worksheets/sheet1.xml", SHEET1_PS_XML)
+            zf.writestr("xl/worksheets/sheet2.xml", SHEET2_PS_XML)
+            zf.writestr(
+                "xl/worksheets/_rels/sheet2.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/printerSettings" Target="../printerSettings/printerSettings1.bin"/>'
+                "</Relationships>",
+            )
+
+        # Clean passthrough -- must report CLEAN. Sheet2's r:id-backed pageSetup being
+        # entirely absent from a "clean" copy would normally look wrong, but this check
+        # must never even look at it -- confirmed by copying the fixture byte-for-byte
+        # (so it's trivially still there) and asserting CLEAN, not by constructing an
+        # already-stripped copy that would pass for the wrong reason.
+        ps_clean_path = os.path.join(tmp, "pagesetup_clean.xlsm")
+        shutil.copyfile(ps_path, ps_clean_path)
+        result = check_page_setup(ps_path, ps_clean_path)
+        assert result["page_setup_verdict"] == "CLEAN", result
+
+        # Strip Sheet1's relationship-free pageSetup entirely -- must be caught, and
+        # Sheet2's r:id-backed one (still present, untouched) must never be mentioned.
+        ps_stripped_path = os.path.join(tmp, "pagesetup_stripped.xlsm")
+        with zipfile.ZipFile(ps_path) as src, zipfile.ZipFile(ps_stripped_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    needle = b'<pageSetup paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0"/>'
+                    assert needle in data, "self-test fixture bug: pageSetup needle not found"
+                    data = data.replace(needle, b"")
+                dst.writestr(item, data)
+        result = check_page_setup(ps_path, ps_stripped_path)
+        assert result["page_setup_verdict"] == "PAGE_SETUP_LOSS", result
+        assert any("'Sheet1'" in v for v in result["violations"]), result["violations"]
+        assert not any("Sheet2" in v for v in result["violations"]), (
+            f"the r:id-backed pageSetup (Sheet2) is out of this check's scope and must "
+            f"never be flagged, regardless of what happens to it: {result['violations']}"
+        )
+
+        # Sheet1's pageSetup survives but unexpectedly gains an r:id it never had --
+        # must be flagged as a distinct violation from plain loss.
+        ps_gained_rid_path = os.path.join(tmp, "pagesetup_gained_rid.xlsm")
+        with zipfile.ZipFile(ps_path) as src, zipfile.ZipFile(ps_gained_rid_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    data = data.replace(
+                        b'<pageSetup paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0"/>',
+                        f'<pageSetup paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0" r:id="rId9" xmlns:r="{R_NS}"/>'.encode(),
+                    )
+                dst.writestr(item, data)
+        result = check_page_setup(ps_path, ps_gained_rid_path)
+        assert result["page_setup_verdict"] == "PAGE_SETUP_LOSS", result
+        assert any("unexpectedly gained an r:id" in v for v in result["violations"]), result["violations"]
+
+        # An attribute value changed (paperSize 9 -> 1) -- must be flagged as a distinct
+        # violation from plain loss.
+        ps_changed_path = os.path.join(tmp, "pagesetup_changed.xlsm")
+        with zipfile.ZipFile(ps_path) as src, zipfile.ZipFile(ps_changed_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    data = data.replace(b'paperSize="9"', b'paperSize="1"', 1)
+                dst.writestr(item, data)
+        result = check_page_setup(ps_path, ps_changed_path)
+        assert result["page_setup_verdict"] == "PAGE_SETUP_LOSS", result
+        assert any("attributes changed" in v for v in result["violations"]), result["violations"]
+
     print(
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
         "target, stripped-formula, orphaned part, all 4 SOURCE_REFERENCE_LOSS shapes, "
@@ -1834,7 +2016,10 @@ def self_test():
         "was, both directions checked) and DELETED_SHEET_REACHABILITY_LOSS (0.10.0-D4: "
         "correct pruning verified CLEAN with no check_roundtrip() false positive, "
         "under-pruning/orphan-left-behind caught, over-pruning of a shared target "
-        "caught by both checks) all caught; comments correctly "
+        "caught by both checks) and PAGE_SETUP_LOSS (relationship-free loss caught, "
+        "r:id-backed sibling never flagged regardless of what happens to it, "
+        "unexpected r:id gain and attribute change each caught distinctly) "
+        "all caught; comments correctly "
         "out of SOURCE_REFERENCE_LOSS scope)"
     )
 
@@ -1854,6 +2039,7 @@ if __name__ == "__main__":
     workbook_elements = check_workbook_elements(sys.argv[1], sys.argv[2])
     defined_names = check_defined_names(sys.argv[1], sys.argv[2])
     deleted_sheet_cleanup = check_deleted_sheet_cleanup(sys.argv[1], sys.argv[2])
+    page_setup = check_page_setup(sys.argv[1], sys.argv[2])
     print(json.dumps({
         "structural": structural,
         "formulas": formulas,
@@ -1863,6 +2049,7 @@ if __name__ == "__main__":
         "workbook_elements": workbook_elements,
         "defined_names": defined_names,
         "deleted_sheet_cleanup": deleted_sheet_cleanup,
+        "page_setup": page_setup,
     }, indent=2))
     ok = (
         structural["structural_verdict"] == "STRUCTURALLY_CLEAN"
@@ -1873,5 +2060,6 @@ if __name__ == "__main__":
         and workbook_elements["workbook_element_verdict"] == "CLEAN"
         and defined_names["defined_names_verdict"] == "CLEAN"
         and deleted_sheet_cleanup["deleted_sheet_cleanup_verdict"] == "CLEAN"
+        and page_setup["page_setup_verdict"] == "CLEAN"
     )
     sys.exit(0 if ok else 1)
