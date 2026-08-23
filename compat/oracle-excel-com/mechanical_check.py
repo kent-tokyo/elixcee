@@ -598,6 +598,70 @@ def check_inline_worksheet_elements(original_path, output_path):
     return {"violations": violations, "inline_element_verdict": verdict}
 
 
+_WORKBOOK_ELEMENTS = [
+    "workbookPr",
+    "calcPr",
+    "extLst",
+]
+
+
+def check_workbook_elements(original_path, output_path):
+    """Detects WORKBOOK_ELEMENT_LOSS: a direct child of the root <workbook> in
+    _WORKBOOK_ELEMENTS is present in the original xl/workbook.xml but absent from the
+    output's. Distinct from check_inline_worksheet_elements() (that one is per-worksheet,
+    matched by sheet name since worksheet parts get renumbered on every save; workbook.xml
+    is a single, fixed-path part, so no name-matching is needed here) and from
+    check_source_references() (r:id-bearing worksheet relationships, not workbook-level
+    metadata). 0.10.0-C, slice C1.
+
+    <bookViews> is deliberately NOT in _WORKBOOK_ELEMENTS yet: its <workbookView>
+    activeTab/firstSheet attributes are sheet-position indices, which needs its own
+    slice (C2) and its own carry-over design, not a blind opaque-fragment copy.
+    <definedNames> is also deliberately excluded -- its <definedName> text can embed a
+    sheet name (e.g. "Sheet1!$F$5") and localSheetId is a position index too, both
+    needing the C3 design the same way.
+
+    Confirmed as a real, current gap before any 0.10.0-C writer code was written: running
+    elixcee's own save against every one of fixture1-7 under fixtures/pristine/ reproduces
+    WORKBOOK_ELEMENT_LOSS on workbookPr/calcPr/extLst on every fixture -- build_xlsx_workbook
+    emits none of them today, only <sheets>.
+
+    Returns {"violations": [...], "workbook_element_verdict": "CLEAN"|"WORKBOOK_ELEMENT_LOSS"}.
+    """
+    violations = []
+    try:
+        original = _read_zip_entries(original_path)
+        output = _read_zip_entries(output_path)
+    except (zipfile.BadZipFile, FileNotFoundError) as e:
+        return {"violations": [f"unreadable: {e}"], "workbook_element_verdict": "ORACLE_FAILURE"}
+
+    if "xl/workbook.xml" not in original:
+        return {"violations": [], "workbook_element_verdict": "CLEAN"}
+    try:
+        orig_root = ET.fromstring(original["xl/workbook.xml"])
+    except ET.ParseError:
+        return {"violations": [], "workbook_element_verdict": "CLEAN"}
+    present = [tag for tag in _WORKBOOK_ELEMENTS if orig_root.find(f"{SML_NS}{tag}") is not None]
+    if not present:
+        return {"violations": [], "workbook_element_verdict": "CLEAN"}
+
+    out_root = None
+    if "xl/workbook.xml" in output:
+        try:
+            out_root = ET.fromstring(output["xl/workbook.xml"])
+        except ET.ParseError:
+            pass
+    for tag in present:
+        if out_root is None or out_root.find(f"{SML_NS}{tag}") is None:
+            violations.append(
+                f"<{tag}> present in original xl/workbook.xml, missing from the output "
+                f"(WORKBOOK_ELEMENT_LOSS)"
+            )
+
+    verdict = "WORKBOOK_ELEMENT_LOSS" if violations else "CLEAN"
+    return {"violations": violations, "workbook_element_verdict": verdict}
+
+
 def check_internal_hyperlinks(original_path, output_path):
     """Detects INTERNAL_HYPERLINK_LOSS: a relationship-free ("location=", no "r:id")
     <hyperlink> child present in the original worksheet XML is missing from the output,
@@ -1161,13 +1225,89 @@ def self_test():
         assert result["internal_hyperlink_verdict"] == "INTERNAL_HYPERLINK_LOSS", result
         assert any("zero <hyperlink> children" in v for v in result["violations"]), result["violations"]
 
+        # --- Case L: WORKBOOK_ELEMENT_LOSS (0.10.0-C, C1). workbookPr/calcPr/extLst as
+        # direct children of the root <workbook>, mirroring fixture4's real relative
+        # order (workbookPr before <sheets>, calcPr/extLst after -- design doc §8's
+        # CT_Workbook sequence). bookViews/definedNames deliberately absent from this
+        # fixture -- they're C2/C3, not C1's scope.
+        WORKBOOK_C1_XML = (
+            f'<?xml version="1.0"?><workbook xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+            '<workbookPr codeName="ThisWorkbook" defaultThemeVersion="202300"/>'
+            '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>'
+            '<calcPr calcId="181029"/>'
+            '<extLst><ext uri="{140A7094-0E35-4892-8432-C4D2E57EDEB5}">'
+            '<x15:workbookPr xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" '
+            'chartTrackingRefBase="1"/></ext></extLst>'
+            "</workbook>"
+        ).encode()
+        wb_path = os.path.join(tmp, "workbook_elements_orig.xlsm")
+        with zipfile.ZipFile(wb_path, "w") as zf:
+            zf.writestr(
+                "[Content_Types].xml",
+                f'<?xml version="1.0"?><Types xmlns="{CT_NS[1:-1]}">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                "</Types>",
+            )
+            zf.writestr("xl/workbook.xml", WORKBOOK_C1_XML)
+            zf.writestr(
+                "xl/_rels/workbook.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr(
+                "xl/worksheets/sheet1.xml",
+                f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}">'
+                '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>',
+            )
+
+        wb_clean_path = os.path.join(tmp, "workbook_elements_clean.xlsm")
+        shutil.copyfile(wb_path, wb_clean_path)
+        result = check_workbook_elements(wb_path, wb_clean_path)
+        assert result["workbook_element_verdict"] == "CLEAN", result
+        assert result["violations"] == [], result
+
+        _WORKBOOK_ELEMENT_MUTATIONS = {
+            "workbookPr": (b'<workbookPr codeName="ThisWorkbook" defaultThemeVersion="202300"/>', b""),
+            "calcPr": (b'<calcPr calcId="181029"/>', b""),
+            "extLst": (
+                b'<extLst><ext uri="{140A7094-0E35-4892-8432-C4D2E57EDEB5}">'
+                b'<x15:workbookPr xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" '
+                b'chartTrackingRefBase="1"/></ext></extLst>',
+                b"",
+            ),
+        }
+        for label, (needle, replacement) in _WORKBOOK_ELEMENT_MUTATIONS.items():
+            assert needle in WORKBOOK_C1_XML, f"self-test fixture bug: {label} needle not found"
+            mutated_path = os.path.join(tmp, f"workbook_elements_missing_{label}.xlsm")
+            with zipfile.ZipFile(wb_path) as src, zipfile.ZipFile(mutated_path, "w") as dst:
+                for item in src.infolist():
+                    data = src.read(item.filename)
+                    if item.filename == "xl/workbook.xml":
+                        data = data.replace(needle, replacement)
+                    dst.writestr(item, data)
+            result = check_workbook_elements(wb_path, mutated_path)
+            assert result["workbook_element_verdict"] == "WORKBOOK_ELEMENT_LOSS", (
+                f"failed to detect missing {label}: {result}"
+            )
+            assert any(label in v for v in result["violations"]), (label, result["violations"])
+            for other in _WORKBOOK_ELEMENTS:
+                if other != label:
+                    assert not any(f"<{other}>" in v for v in result["violations"]), (
+                        f"stripping {label} must not also flag unrelated {other}: {result['violations']}"
+                    )
+
     print(
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
         "target, stripped-formula, orphaned part, all 4 SOURCE_REFERENCE_LOSS shapes, "
         "unexpected .rels mutation, cross-type rId confusion, INLINE_ELEMENT_LOSS "
-        "(sheetViews + 5 slice-2/3 elements, independently), and INTERNAL_HYPERLINK_LOSS "
+        "(sheetViews + 5 slice-2/3 elements, independently), INTERNAL_HYPERLINK_LOSS "
         "(mixed container: location-only loss detected, r:id sibling never falsely "
-        "flagged, empty-container invalidity detected) all caught; comments correctly "
+        "flagged, empty-container invalidity detected), and WORKBOOK_ELEMENT_LOSS "
+        "(workbookPr/calcPr/extLst, independently) all caught; comments correctly "
         "out of SOURCE_REFERENCE_LOSS scope)"
     )
 
@@ -1184,12 +1324,14 @@ if __name__ == "__main__":
     source_references = check_source_references(sys.argv[1], sys.argv[2])
     inline_elements = check_inline_worksheet_elements(sys.argv[1], sys.argv[2])
     internal_hyperlinks = check_internal_hyperlinks(sys.argv[1], sys.argv[2])
+    workbook_elements = check_workbook_elements(sys.argv[1], sys.argv[2])
     print(json.dumps({
         "structural": structural,
         "formulas": formulas,
         "source_references": source_references,
         "inline_elements": inline_elements,
         "internal_hyperlinks": internal_hyperlinks,
+        "workbook_elements": workbook_elements,
     }, indent=2))
     ok = (
         structural["structural_verdict"] == "STRUCTURALLY_CLEAN"
@@ -1197,5 +1339,6 @@ if __name__ == "__main__":
         and source_references["source_reference_verdict"] == "CLEAN"
         and inline_elements["inline_element_verdict"] == "CLEAN"
         and internal_hyperlinks["internal_hyperlink_verdict"] == "CLEAN"
+        and workbook_elements["workbook_element_verdict"] == "CLEAN"
     )
     sys.exit(0 if ok else 1)

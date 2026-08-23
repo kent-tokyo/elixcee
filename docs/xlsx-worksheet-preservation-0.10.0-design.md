@@ -728,23 +728,41 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     書き込んだ場合はsource値をそのまま出すと逆に古い情報を確定的に出してしまう。
     やるならcurrent cellsから再計算する別種の作業になるため、0.10.0-Bには含めない。
 - **0.10.0-C — Workbook-level preservation**（worksheet XMLではなくworkbook.xml側、
-  1節の指摘通りスコープを混ぜない）
-  - `<definedNames>`（6節のシートリネーム時dangling注意、9節の診断で対応）
-  - print area・print titles（`<definedNames>`内の特殊named range、`_xlnm.Print_Area`等）
-  - workbook metadata（`<bookViews>`・`<calcPr>`・`<workbookPr>`）——**追記**: `<bookViews>`の
-    `activeTab`/`firstSheet`はシート位置のインデックス値なので、6節の追記の通り
-    `save_xlsx_impl`の出力シート順が正しいこと（`Vm::sheet_order`、修正済み）が
-    このbulletの前提条件。前提は満たされたが、`Sheets.Add`/`Sheets(...).Delete`と
-    組み合わさった場合に`activeTab`が指す位置がずれる可能性自体は未検証・未対応の
-    まま残っている——opaque-fragment passthroughで単純にverbatim持ち越すのではなく、
-    add/delete発生時にどう扱うかの設計判断がこのbulletの実装前に必要
+  1節の指摘通りスコープを混ぜない）。sliceに分割し、位置非依存の要素から先に着手
+  （C1）、位置依存の要素は個別に設計してから着手（C2/C3）——0.10.0-B同様、hard gate
+  （実fixture確認→XSD確認→checker→writer）を1要素ずつ通す。
+  - **C1（完了）**: `<workbookPr>`・`<calcPr>`・`<extLst>`、およびroot`<workbook>`タグ
+    自身のnamespace宣言（opaque root_attrs passthrough、0.10.0-B同様の仕組み）。
+    3要素とも位置非依存（シート順・シート数と無関係）で、fixture1〜7全てに
+    fixture実データがある。`mechanical_check.py`に`check_workbook_elements()`と
+    `WORKBOOK_ELEMENT_LOSS`カテゴリを追加（`INLINE_ELEMENT_LOSS`とは別カテゴリ——
+    こちらはworkbook.xmlという単一の固定パスpartが対象で、
+    `_sheet_name_to_part`によるシート名マッチングが不要）。fixture1〜7全てで
+    実装前`WORKBOOK_ELEMENT_LOSS`確認→実装後`CLEAN`確認済み。実Excel再オープンでの
+    repair警告確認はユーザーによる確認待ち。
+  - **C2（未着手）**: `<bookViews>`（`<workbookView>`のactiveTab/firstSheetはシート
+    位置のインデックス値）。**訂正（当初案からの変更）**: 当初はadd/delete発生時に
+    備えてシート順・シート数の一致を条件にverbatim持ち越しをgateする設計を検討したが、
+    fixture1〜7全てを確認した結果、どのfixtureの`<workbookView>`も`activeTab`/
+    `firstSheet`属性を一切持たない（両方ともXSD規定のデフォルト値0）——つまり
+    「位置がずれて壊れる」という具体的なfixture実例が現状ゼロであり、
+    実証されていないハザードに備えたgating機構を先回りして作るのは0.10.0が
+    一貫して掲げる「hard gate（実fixture確認前にwriterコードを書かない）」
+    そのものに反する過剰設計と判断し、この案は採用しない。C2の実装自体は
+    6節の追記の通り`Vm::sheet_order`（修正済み）が前提として満たされているため
+    いつでも着手可能——`checker`側にactiveTab/firstSheetが実際に非デフォルト値を
+    持つfixtureが将来追加された場合に検知できる仕組みを用意しておき、その時点で
+    carry-over設計を確定させる方が安全。
+  - **C3（未着手）**: `<definedNames>`（6節のシートリネーム時dangling注意、9節の
+    診断で対応）・print area・print titles（`<definedNames>`内の特殊named range、
+    `_xlnm.Print_Area`等——fixture5に実例あり、`localSheetId`という別のシート
+    位置依存値を持つ）。
   - ~~元の`sheetId`の保持（2節/6節、位置ベース再生成の是正）~~ ——**訂正（stale
     cross-reference）**: 初稿ではここに挙げていたが、実際には0.10.0-Aで
     `WorksheetOrigin`実装の一部として既に完了済み（10節の0.10.0-Aチェックリスト
     参照、commit `ae030b7`）。0.10.0-Cが対象とする残りのworkbook-level要素とは
     別軸（sheetIdはworksheet identityの一部として6節で扱われ、A段階で先に
     片付いた）——ここから削除。
-  - workbook-levelの`<extLst>`拡張ノード
 - **0.10.0-D — Relationship-backed features**（relationship graphの再接続そのものが
   主目的、4節の穴を実際に塞ぐmilestone）
   - 前提: 0.10.0-Aの`WorksheetOrigin`と source-reference graph checker

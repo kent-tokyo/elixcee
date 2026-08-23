@@ -595,11 +595,18 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     // entry; a new sheet (no origin) or an .ods source (no `raw_entries` at all)
     // falls back to `build_xlsx_sheet`'s hardcoded minimal defaults.
     let mut sheet_source_xml: HashMap<String, String> = HashMap::new();
+    // Original xl/workbook.xml text -- the source for 0.10.0-C's opaque-fragment
+    // passthrough (see `OpaqueWorkbookFragments`), same mechanism as `sheet_source_xml`
+    // above but for the single, fixed-path workbook part rather than per-sheet parts.
+    let mut workbook_source_xml: Option<String> = None;
 
     if let Some(source_path) = passthrough_source {
         let raw_entries = reader::read_raw_zip_entries(source_path)?;
         has_vba = is_xlsm_output && raw_entries.keys().any(|n| n.starts_with("xl/vbaProject"));
         passthrough_styles = raw_entries.get("xl/styles.xml").cloned();
+        workbook_source_xml = raw_entries
+            .get("xl/workbook.xml")
+            .and_then(|bytes| String::from_utf8(bytes.clone()).ok());
 
         for (sheet_key, origin) in &vm.worksheet_origins {
             if let Some(part) = &origin.original_part_name
@@ -716,10 +723,31 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     zip.write_all(build_xlsx_root_rels(&carried_root_rels).as_bytes())
         .map_err(|e| e.to_string())?;
 
+    let workbook_root_attrs = workbook_source_xml
+        .as_deref()
+        .and_then(|xml| reader::extract_root_attrs(xml, "workbook"));
+    let workbook_pr = workbook_source_xml
+        .as_deref()
+        .and_then(|xml| reader::extract_raw_element(xml, "workbookPr"));
+    let calc_pr = workbook_source_xml
+        .as_deref()
+        .and_then(|xml| reader::extract_raw_element(xml, "calcPr"));
+    let ext_lst = workbook_source_xml
+        .as_deref()
+        .and_then(|xml| reader::extract_raw_element(xml, "extLst"));
+    let workbook_fragments = OpaqueWorkbookFragments {
+        root_attrs: workbook_root_attrs.as_deref(),
+        workbook_pr: workbook_pr.as_deref(),
+        calc_pr: calc_pr.as_deref(),
+        ext_lst: ext_lst.as_deref(),
+    };
+
     zip.start_file("xl/workbook.xml", deflated)
         .map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_workbook(&sheet_names, &vm.worksheet_origins).as_bytes())
-        .map_err(|e| e.to_string())?;
+    zip.write_all(
+        build_xlsx_workbook(&sheet_names, &vm.worksheet_origins, &workbook_fragments).as_bytes(),
+    )
+    .map_err(|e| e.to_string())?;
 
     zip.start_file("xl/_rels/workbook.xml.rels", deflated)
         .map_err(|e| e.to_string())?;
@@ -873,16 +901,53 @@ fn build_xlsx_content_types(
 /// positional either way -- it's entirely internal to this writer's own
 /// workbook.xml/workbook.xml.rels pair (see `build_xlsx_workbook_rels`), unrelated to a
 /// sheet's `sheetId` identity, so it doesn't need to track a sheet's origin at all.
+/// 0.10.0-C's opaque-fragment passthrough bundle for `xl/workbook.xml`, slice C1: raw
+/// text captured from the SOURCE workbook XML (see `save_xlsx_impl`'s
+/// `workbook_source_xml`), re-emitted verbatim at the correct `CT_Workbook` schema
+/// position (§8) rather than reconstructed. `None` for every field when there's no
+/// passthrough source (new-from-scratch `Vm`, or an `.ods` source).
+///
+/// `<bookViews>`/`<definedNames>` are deliberately NOT here yet -- both carry
+/// sheet-position-dependent state (`activeTab`/`firstSheet`, `localSheetId`) that needs
+/// its own carry-over design (C2/C3), not a blind opaque-fragment copy. See
+/// docs/xlsx-worksheet-preservation-0.10.0-design.md §10.
+#[derive(Default)]
+struct OpaqueWorkbookFragments<'a> {
+    /// Source's root `<workbook ...>` tag's raw attribute string (namespace
+    /// declarations, `mc:Ignorable`, ...) — replaces the hardcoded minimal
+    /// `xmlns=".."`/`xmlns:r=".."` root tag when available. Always carries `xmlns:r`
+    /// itself (every real Excel-authored root tag does, since `<sheet r:id="..">`
+    /// requires it), so this never breaks the writer's own `r:id` emission below.
+    root_attrs: Option<&'a str>,
+    workbook_pr: Option<&'a str>,
+    calc_pr: Option<&'a str>,
+    ext_lst: Option<&'a str>,
+}
+
 fn build_xlsx_workbook(
     sheet_names: &[String],
     origins: &std::collections::HashMap<String, WorksheetOrigin>,
+    fragments: &OpaqueWorkbookFragments,
 ) -> String {
-    let mut out = String::from(concat!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
-        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
-        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
-        "<sheets>\n",
-    ));
+    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
+    match fragments.root_attrs {
+        Some(attrs) => {
+            out.push_str("<workbook ");
+            out.push_str(attrs);
+            out.push_str(">\n");
+        }
+        None => out.push_str(concat!(
+            "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        )),
+    }
+    // CT_Workbook order (§8): fileVersion, fileSharing, workbookPr, workbookProtection,
+    // bookViews, sheets, functionGroups, externalReferences, definedNames, calcPr, ...
+    if let Some(workbook_pr) = fragments.workbook_pr {
+        out.push_str(workbook_pr);
+        out.push('\n');
+    }
+    out.push_str("<sheets>\n");
     // Original sheetIds are only ever reused, never reassigned to a different sheet, so
     // a fresh id for a sheet with no known origin (newly created purely in-VBA, or from
     // an .ods source with no sheetId concept) just needs to start above every reused
@@ -919,7 +984,14 @@ fn build_xlsx_workbook(
             rid_n
         ));
     }
-    out.push_str("</sheets>\n</workbook>\n");
+    out.push_str("</sheets>\n");
+    // definedNames (C3, not yet implemented) would go here, between </sheets> and
+    // calcPr, per the same CT_Workbook order.
+    for fragment in [fragments.calc_pr, fragments.ext_lst].into_iter().flatten() {
+        out.push_str(fragment);
+        out.push('\n');
+    }
+    out.push_str("</workbook>\n");
     out
 }
 
@@ -1612,6 +1684,7 @@ mod tests {
                 "newsheet".to_string(),
             ],
             &origins,
+            &OpaqueWorkbookFragments::default(),
         );
 
         assert!(
@@ -1645,7 +1718,11 @@ mod tests {
     #[test]
     fn build_xlsx_workbook_assigns_sequential_ids_when_no_sheet_has_a_known_origin() {
         let origins = std::collections::HashMap::new();
-        let xml = build_xlsx_workbook(&["a".to_string(), "b".to_string()], &origins);
+        let xml = build_xlsx_workbook(
+            &["a".to_string(), "b".to_string()],
+            &origins,
+            &OpaqueWorkbookFragments::default(),
+        );
         assert!(
             xml.contains("<sheet name=\"a\" sheetId=\"1\" r:id=\"rId1\"/>"),
             "{xml}"

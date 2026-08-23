@@ -971,6 +971,66 @@ fn real_excel_sheetpr_and_data_validations_survive_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// 0.10.0-C slice 1 (C1): workbook-level `<workbookPr>`/`<calcPr>`/`<extLst>`, plus the
+/// root `<workbook>` tag's own namespace declarations (needed for `extLst`'s `x15:`/
+/// `xcalcf:`/`xlwcv:`-prefixed children, though those also carry their own inline
+/// `xmlns:` redeclarations so this isn't strictly load-bearing for THIS fixture -- see
+/// `real_excel_sheetpr_and_data_validations_survive_a_save`'s `xr:uid` case for an
+/// element that genuinely needs the root declaration). `<bookViews>`/`<definedNames>`/
+/// `<xr:revisionPtr>` are deliberately NOT asserted here -- still lost, correctly out of
+/// C1's scope (C2/C3, or never-in-scope for revisionPtr).
+#[test]
+fn real_excel_workbook_metadata_survives_a_save() {
+    let source_path = real_fixture("fixture4_hyperlink_comment_name.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_wb = String::from_utf8(fixture_entries["xl/workbook.xml"].clone()).unwrap();
+    for needle in [
+        r#"<workbookPr codeName="ThisWorkbook" defaultThemeVersion="202300"/>"#,
+        r#"<calcPr calcId="181029"/>"#,
+        "<extLst>",
+        "x15:workbookPr chartTrackingRefBase=\"1\"",
+    ] {
+        assert!(
+            source_wb.contains(needle),
+            "fixture no longer contains {needle:?} -- test needs updating: {source_wb}"
+        );
+    }
+
+    let output_path = tmp_path("workbook_metadata_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditCell()\n    Cells(1, 1).Value = 42\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditCell").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+
+    for needle in [
+        r#"<workbookPr codeName="ThisWorkbook" defaultThemeVersion="202300"/>"#,
+        r#"<calcPr calcId="181029"/>"#,
+        "x15:workbookPr chartTrackingRefBase=\"1\"",
+        "xcalcf:calcFeatures",
+        "xlwcv:version setVersion=\"2\"",
+    ] {
+        assert!(
+            out_wb.contains(needle),
+            "{needle:?} must survive a save verbatim: {out_wb}"
+        );
+    }
+    assert!(
+        out_wb.contains(
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+        ),
+        "root <workbook> tag must still declare xmlns:r -- <sheet r:id=...> depends on it: {out_wb}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// 0.10.0-B slice 4 (B4): internal (location=, relationship-free) hyperlinks.
 /// fixture6_internal_hyperlink.xlsm has exactly one, no r:id.
 #[test]

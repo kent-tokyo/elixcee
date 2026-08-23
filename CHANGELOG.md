@@ -106,8 +106,23 @@ by adding `WorksheetOrigin.original_display_name` (the name exactly as written i
 source, alongside the existing `original_sheet_id`/`original_workbook_rel_id`/
 `original_part_name`), which the writer now prefers over the lowercased key.
 
-`0.10.0-C` (workbook-level preservation) and `0.10.0-D` (relationship-backed features,
-including the actual fix for `SOURCE_REFERENCE_LOSS`) are not started.
+**`0.10.0-C` (workbook-level preservation, in progress).** Split into slices by
+position-dependence, same discipline as `0.10.0-B`. **C1 (done):** `<workbookPr>`,
+`<calcPr>`, `<extLst>`, and the root `<workbook>` tag's own namespace declarations —
+all position-independent (no dependency on sheet order/count), opaque-fragment
+passthrough, same mechanism as `0.10.0-B`. New `check_workbook_elements()` and
+`WORKBOOK_ELEMENT_LOSS` category in `mechanical_check.py` (a workbook.xml-level check,
+distinct from `INLINE_ELEMENT_LOSS`'s per-sheet-name matching — workbook.xml is a
+single, fixed-path part). All 7 fixtures confirmed `WORKBOOK_ELEMENT_LOSS` before the
+writer change, `CLEAN` after. **C2/C3 (not started):** `<bookViews>` (`activeTab`/
+`firstSheet` are sheet-position indices) and `<definedNames>`/print area (`localSheetId`
+is also position-dependent) both need their own carry-over design before any writer
+code, per the hard gate — checked all 7 fixtures first and found none of them actually
+exercises a non-default `activeTab`/`firstSheet` value, so no speculative gating
+machinery was built ahead of real evidence.
+
+`0.10.0-D` (relationship-backed features, including the actual fix for
+`SOURCE_REFERENCE_LOSS`) is not started.
 
 ### CI: WASM artifact size observability
 
