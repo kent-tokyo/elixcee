@@ -76,6 +76,12 @@ stays paused — see the roadmap below.
 581 scenarios (0 `UNEXPLAINED`, 0 `MISMATCH`), every GitHub Actions job green on `master`
 before this release.
 
+**`0.10.0` (Lossless Worksheet Preservation) is in progress, not released** — design done
+(`docs/xlsx-worksheet-preservation-0.10.0-design.md`), `0.10.0-A` (foundation) done, `0.10.0-B`
+(inline worksheet elements: freeze panes/selection, sheetPr/sheetFormatPr/phoneticPr/
+dataValidations, pageMargins, internal hyperlinks) landing slice by slice, each real-Excel
+reopen-verified as it ships. See the roadmap entry below for current status and what's left.
+
 ## Known gaps
 
 1. **VBA semantic differential results are still validated against LibreOffice only, not
@@ -453,33 +459,61 @@ Results recorded as machine-readable JSON:
 "Microsoft Excel validated" scope — premature while macro rerun is unverified and the
 fixture count is short of 10; this is a separate, later review, not part of this round.*
 
-### 0.10.0 — Lossless Worksheet Preservation
+### 0.10.0 — Lossless Worksheet Preservation — **in progress**
 
 **Goal**: `0.8.0` already preserves unknown ZIP parts, `xl/vbaProject.bin`, style
 definitions, merges, and hidden rows/columns — but worksheet XML itself is still always
 fully regenerated (`build_xlsx_sheet`), so anything elixcee doesn't understand that lives
 *inside* a `<worksheet>` element (not a separate part) is still lost. `0.10.0` closes that.
 
-**In priority order**: defined names, tables, hyperlinks, comments/notes, data validation,
-conditional formatting, freeze panes, autofilter, print area/print titles, page margins/page
-setup, row/column dimensions, richer workbook properties.
+**Design done, split into 4 milestones (A/B/C/D), not this flat priority list.** The
+architecture below (preserve-and-merge, relationship-graph validation) was the right
+direction but not the actual implementation plan — see
+`docs/xlsx-worksheet-preservation-0.10.0-design.md` for the real one, produced from grounded
+evidence (real fixture inspection + one empirical elixcee-save-and-check run, not
+assumption), reviewed and revised twice. Key departures from this section's original sketch:
+milestones are split by "does it touch the relationship graph" (not by feature name), a new
+`WorksheetOrigin` identity struct threads a sheet's original `sheetId`/`workbook.xml`
+`r:id`/part-name through save so cross-save identity is stable, and a hard gate governs every
+element — **no writer code until a real Excel-authored fixture demonstrates it, its XSD
+sequence is confirmed against the actual ECMA-376 schema (not memory), and
+`mechanical_check.py` has a negative test for its loss.**
 
-**Architecture — recommended: preserve-and-merge.** Read the original worksheet XML, update
-only the elements elixcee itself owns, keep unknown elements/attributes verbatim, keep
-relationship IDs stable, and only remove something when a change explicitly calls for
-removing it. This needs to be namespace- and OOXML-element-order-aware — not a blind string
-substitution — matching `0.8.0`'s own schema-ordering discipline for `<cols>`/`<sheetData>`/
-`<mergeCells>`.
+**0.10.0-A (foundation, done)** — zero new writer features. `WorksheetOrigin` implemented
+end-to-end (closes a real, previously-disclosed gap: `snapshot.rs`'s `stable_id` wasn't
+actually stable across a save+resave cycle before this). `mechanical_check.py` gained
+`check_source_references()` and a new `SOURCE_REFERENCE_LOSS` violation category — a
+worksheet-level relationship's `.rels`/target part survive a save byte-identical, but the
+regenerated worksheet XML no longer references the `r:id` that activates it; confirmed
+systemic across every fixture with a worksheet-level relationship at all (not yet fixed —
+that's `0.10.0-D`'s job). Two new real Excel-authored fixtures added (internal hyperlink,
+freeze pane — neither existed in the repo before). One real, independent bug found and fixed
+along the way: a workbook whose sheets are never literally named "Sheet1" gained a spurious
+extra empty sheet on every save (`Vm::new()`'s default sheet leaking past load).
 
-**Relationship-graph validation.** Model and check `worksheet → table`, `worksheet →
-drawing`, `drawing → image`, `worksheet → comments`, `worksheet → hyperlink`, `workbook →
-worksheet`, and `content-types → part` as a graph: every reference resolves, no orphan parts,
-no duplicate IDs, no path traversal.
+**0.10.0-B (inline worksheet preservation, in progress)** — relationship-free elements
+*inside* `<worksheet>`, via an opaque-fragment mechanism (capture the source's raw XML for an
+element, splice it back at the correct schema position, don't parse/reconstruct it). 4 slices
+shipped so far, each independently fixture-verified and 2 real-Excel-reopened (repair
+warnings: 0): `<sheetViews>` (freeze panes, selection), `<sheetPr>`/`<sheetFormatPr>`/
+`<phoneticPr>`/`<dataValidations>`, `<pageMargins>`, and internal (`location=`) hyperlinks —
+the last one structurally different from the rest, since a `<hyperlinks>` container can mix
+relationship-free children with `r:id`-backed ones that stay out of scope until `0.10.0-D`,
+so it's reconstructed from filtered children rather than byte-copied whole. Remaining:
+`<autoFilter>` (no fixture has it as a standalone worksheet element yet — the only real
+example lives inside a table part) and row/column style properties beyond hidden state (real
+fixture evidence exists but needs its own design pass, not yet started).
 
-**Exit criteria**: 20+ Excel-authored fixtures covering these features, every untouched
+**0.10.0-C (workbook-level preservation) and 0.10.0-D (relationship-backed features,
+including the actual fix for `SOURCE_REFERENCE_LOSS`)**: not started.
+
+**Exit criteria** (unchanged from the original sketch, still the target): every untouched
 unsupported XML node preserved byte- or semantically-equivalent, 0 Excel repair warnings, 0
 loss of tables/validation/comments/etc., 0 broken chart/image relationships, successful
-in-place save.
+in-place save. The original "20+ fixtures" figure was aspirational, not load-bearing — actual
+progress is gated by real fixture availability per element (7 fixtures total as of
+`0.10.0-B` slice 4), consistent with `0.9.0-A`'s own precedent of shipping partial, honestly-scoped
+wins rather than blocking on a headline number.
 
 ### 0.11.0 — VBA Semantic Closure
 
