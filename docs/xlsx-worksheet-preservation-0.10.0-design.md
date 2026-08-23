@@ -708,7 +708,12 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
   - `<definedNames>`（6節のシートリネーム時dangling注意、9節の診断で対応）
   - print area・print titles（`<definedNames>`内の特殊named range、`_xlnm.Print_Area`等）
   - workbook metadata（`<bookViews>`・`<calcPr>`・`<workbookPr>`）
-  - 元の`sheetId`の保持（2節/6節、位置ベース再生成の是正）
+  - ~~元の`sheetId`の保持（2節/6節、位置ベース再生成の是正）~~ ——**訂正（stale
+    cross-reference）**: 初稿ではここに挙げていたが、実際には0.10.0-Aで
+    `WorksheetOrigin`実装の一部として既に完了済み（10節の0.10.0-Aチェックリスト
+    参照、commit `ae030b7`）。0.10.0-Cが対象とする残りのworkbook-level要素とは
+    別軸（sheetIdはworksheet identityの一部として6節で扱われ、A段階で先に
+    片付いた）——ここから削除。
   - workbook-levelの`<extLst>`拡張ノード
 - **0.10.0-D — Relationship-backed features**（relationship graphの再接続そのものが
   主目的、4節の穴を実際に塞ぐmilestone）
