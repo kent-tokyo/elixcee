@@ -1891,10 +1891,14 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             && passthrough
                 .iter()
                 .any(|(name, _)| name == &plan.output_rels_name);
-        let table_parts = if rels_survived {
-            source_xml.and_then(|xml| reader::extract_raw_element(xml, "tableParts"))
+        let (table_parts, drawing, legacy_drawing) = if rels_survived {
+            (
+                source_xml.and_then(|xml| reader::extract_raw_element(xml, "tableParts")),
+                source_xml.and_then(|xml| reader::extract_raw_element(xml, "drawing")),
+                source_xml.and_then(|xml| reader::extract_raw_element(xml, "legacyDrawing")),
+            )
         } else {
-            None
+            (None, None, None)
         };
         let fragments = OpaqueWorksheetFragments {
             root_attrs: root_attrs.as_deref(),
@@ -1906,6 +1910,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             internal_hyperlinks: &internal_hyperlinks,
             page_margins: page_margins.as_deref(),
             table_parts: table_parts.as_deref(),
+            drawing: drawing.as_deref(),
+            legacy_drawing: legacy_drawing.as_deref(),
         };
 
         zip.start_file(plan.output_part_name.as_str(), deflated)
@@ -2230,14 +2236,17 @@ struct OpaqueWorksheetFragments<'a> {
     /// rather than emitted as `<hyperlinks/>`.
     internal_hyperlinks: &'a [String],
     page_margins: Option<&'a str>,
-    /// `<tableParts><tablePart r:id="..."/></tableParts>` -- the first 0.10.0-D relationship-
-    /// backed element restored. Unlike every fragment above, the caller must only pass
-    /// `Some` when the sheet's own `xl/worksheets/_rels/sheetN.xml.rels` genuinely survived
-    /// into THIS save's output (see `save_xlsx_impl`'s `rels_survived` check) -- splicing
-    /// this back over a `.rels` that didn't pass through would emit a dangling `r:id`
-    /// reference, a real Excel repair warning and strictly worse than the prior silent
-    /// inertness `check_source_references()`'s `SOURCE_REFERENCE_LOSS` was built to catch.
+    /// `<tableParts><tablePart r:id="..."/></tableParts>`, `<drawing r:id="..."/>`, and
+    /// `<legacyDrawing r:id="..."/>` -- 0.10.0-D relationship-backed elements. Unlike every
+    /// fragment above, the caller must only pass `Some` for these when the sheet's own
+    /// `xl/worksheets/_rels/sheetN.xml.rels` genuinely survived into THIS save's output
+    /// (see `save_xlsx_impl`'s `rels_survived` check) -- splicing one back over a `.rels`
+    /// that didn't pass through would emit a dangling `r:id` reference, a real Excel
+    /// repair warning and strictly worse than the prior silent inertness
+    /// `check_source_references()`'s `SOURCE_REFERENCE_LOSS` was built to catch.
     table_parts: Option<&'a str>,
+    drawing: Option<&'a str>,
+    legacy_drawing: Option<&'a str>,
 }
 
 fn build_xlsx_sheet(
@@ -2395,9 +2404,18 @@ fn build_xlsx_sheet(
     // CT_Worksheet order (§8): ... pageMargins, pageSetup, headerFooter, rowBreaks,
     // colBreaks, customProperties, cellWatches, ignoredErrors, smartTags, drawing,
     // legacyDrawing, legacyDrawingHF, drawingHF, picture, oleObjects, controls,
-    // webPublishItems, tableParts, extLst. None of the slots between pageMargins and
-    // tableParts are emitted yet, so tableParts's schema-correct position is still
-    // simply "right after pageMargins" until one of them is restored too.
+    // webPublishItems, tableParts, extLst. pageSetup..smartTags aren't emitted yet, so
+    // drawing/legacyDrawing's schema-correct position is still simply "right after
+    // pageMargins" until one of those unemitted slots is restored too.
+    if let Some(d) = fragments.drawing {
+        out.push_str(d);
+        out.push('\n');
+    }
+    if let Some(ld) = fragments.legacy_drawing {
+        out.push_str(ld);
+        out.push('\n');
+    }
+
     if let Some(tp) = fragments.table_parts {
         out.push_str(tp);
         out.push('\n');
