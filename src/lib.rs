@@ -723,21 +723,26 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     for (i, sheet_name) in sheet_names.iter().enumerate() {
         let source_xml = sheet_source_xml.get(&sheet_name.to_lowercase());
         let root_attrs = source_xml.and_then(|xml| reader::extract_root_attrs(xml, "worksheet"));
+        let sheet_pr = source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetPr"));
         let sheet_views = source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetViews"));
+        let sheet_format_pr =
+            source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetFormatPr"));
+        let phonetic_pr = source_xml.and_then(|xml| reader::extract_raw_element(xml, "phoneticPr"));
+        let data_validations =
+            source_xml.and_then(|xml| reader::extract_raw_element(xml, "dataValidations"));
+        let fragments = OpaqueWorksheetFragments {
+            root_attrs: root_attrs.as_deref(),
+            sheet_pr: sheet_pr.as_deref(),
+            sheet_views: sheet_views.as_deref(),
+            sheet_format_pr: sheet_format_pr.as_deref(),
+            phonetic_pr: phonetic_pr.as_deref(),
+            data_validations: data_validations.as_deref(),
+        };
 
         zip.start_file(format!("xl/worksheets/sheet{}.xml", i + 1), deflated)
             .map_err(|e| e.to_string())?;
-        zip.write_all(
-            build_xlsx_sheet(
-                vm,
-                sheet_name,
-                &str_index,
-                root_attrs.as_deref(),
-                sheet_views.as_deref(),
-            )
-            .as_bytes(),
-        )
-        .map_err(|e| e.to_string())?;
+        zip.write_all(build_xlsx_sheet(vm, sheet_name, &str_index, &fragments).as_bytes())
+            .map_err(|e| e.to_string())?;
     }
 
     zip.start_file("xl/sharedStrings.xml", deflated)
@@ -973,27 +978,35 @@ fn build_xlsx_workbook_rels(
     out
 }
 
-/// `root_attrs`/`sheet_views` are 0.10.0-B's opaque-fragment passthrough: raw text
-/// captured from the SOURCE worksheet XML (see `save_xlsx_impl`'s `sheet_source_xml`),
-/// re-emitted verbatim rather than reconstructed. `root_attrs` replaces the hardcoded
-/// minimal `xmlns=".."` root tag with the source's own full attribute string (namespace
-/// declarations, `mc:Ignorable`, `xr:uid`, ...) when available — see
-/// docs/xlsx-worksheet-preservation-0.10.0-design.md §8. `sheet_views` is the raw
-/// `<sheetViews>...</sheetViews>` subtree (freeze panes via `<pane>`, active-cell
-/// `<selection>`), spliced in immediately after the root tag — the correct CT_Worksheet
-/// schema position (`sheetPr, dimension, sheetViews, sheetFormatPr, cols, sheetData, ...`,
-/// §8), since nothing else in this function currently emits `sheetPr`/`dimension`. Both
-/// are `None` for a sheet with no known `WorksheetOrigin` (new sheet, or an `.ods`
-/// source), in which case behavior is unchanged from before 0.10.0-B.
+/// 0.10.0-B's opaque-fragment passthrough bundle for one worksheet: raw text captured
+/// from the SOURCE worksheet XML (see `save_xlsx_impl`'s `sheet_source_xml`), re-emitted
+/// verbatim at the correct `CT_Worksheet` schema position (§8) rather than reconstructed.
+/// Every field is `None` for a sheet with no known `WorksheetOrigin` (new sheet, or an
+/// `.ods` source), in which case `build_xlsx_sheet`'s behavior is unchanged from before
+/// 0.10.0-B.
+#[derive(Default)]
+struct OpaqueWorksheetFragments<'a> {
+    /// Source's root `<worksheet ...>` tag's raw attribute string (namespace
+    /// declarations, `mc:Ignorable`, `xr:uid`, ...) — replaces the hardcoded minimal
+    /// `xmlns=".."` root tag when available. See
+    /// docs/xlsx-worksheet-preservation-0.10.0-design.md §8.
+    root_attrs: Option<&'a str>,
+    sheet_pr: Option<&'a str>,
+    /// `<sheetViews>` (freeze panes via `<pane>`, active-cell `<selection>`).
+    sheet_views: Option<&'a str>,
+    sheet_format_pr: Option<&'a str>,
+    phonetic_pr: Option<&'a str>,
+    data_validations: Option<&'a str>,
+}
+
 fn build_xlsx_sheet(
     vm: &Vm,
     sheet_name: &str,
     str_index: &std::collections::HashMap<String, usize>,
-    root_attrs: Option<&str>,
-    sheet_views: Option<&str>,
+    fragments: &OpaqueWorksheetFragments,
 ) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
-    match root_attrs {
+    match fragments.root_attrs {
         Some(attrs) => {
             out.push_str("<worksheet ");
             out.push_str(attrs);
@@ -1003,8 +1016,20 @@ fn build_xlsx_sheet(
             "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
         ),
     }
-    if let Some(sv) = sheet_views {
-        out.push_str(sv);
+    // CT_Worksheet order (§8): sheetPr, dimension, sheetViews, sheetFormatPr, cols,
+    // sheetData, ... — dimension is deliberately never emitted here (see design doc's
+    // "dropped from 0.10.0-B's scope" note: it's derived from cell data, not opaque view
+    // state, so carrying the source's stale value verbatim would be actively wrong after
+    // a macro writes outside the original range).
+    for fragment in [
+        fragments.sheet_pr,
+        fragments.sheet_views,
+        fragments.sheet_format_pr,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        out.push_str(fragment);
         out.push('\n');
     }
 
@@ -1093,6 +1118,19 @@ fn build_xlsx_sheet(
             ));
         }
         out.push_str("</mergeCells>\n");
+    }
+
+    // CT_Worksheet order (§8): mergeCells, phoneticPr, conditionalFormatting,
+    // dataValidations, ... — conditionalFormatting is deliberately never emitted here
+    // (design doc: it can reference xl/styles.xml's <dxfs> via dxfId, so it needs
+    // separate consideration before being treated as a pure relationship-free opaque
+    // fragment; still covered by check_source_references()'s coarser structural checks).
+    for fragment in [fragments.phonetic_pr, fragments.data_validations]
+        .into_iter()
+        .flatten()
+    {
+        out.push_str(fragment);
+        out.push('\n');
     }
 
     out.push_str("</worksheet>\n");

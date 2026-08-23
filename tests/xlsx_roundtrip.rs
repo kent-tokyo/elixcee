@@ -790,6 +790,69 @@ fn real_excel_freeze_pane_sheetviews_survive_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// 0.10.0-B slice 2: sheetPr/sheetFormatPr/phoneticPr/dataValidations opaque-fragment
+/// passthrough. fixture3_table_validation_conditional.xlsm is the only real fixture that
+/// carries all four (see INVENTORY.md) -- fixture7's freeze-pane test above only proves
+/// sheetViews/sheetFormatPr/phoneticPr survive, not sheetPr/dataValidations, since fixture7
+/// has neither.
+#[test]
+fn real_excel_sheetpr_and_data_validations_survive_a_save() {
+    let source_path = real_fixture("fixture3_table_validation_conditional.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_sheet1 =
+        String::from_utf8(fixture_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    for needle in [
+        r#"<sheetPr codeName="Sheet1"/>"#,
+        r#"<sheetFormatPr baseColWidth="10" defaultRowHeight="20"/>"#,
+        r#"<phoneticPr fontId="1"/>"#,
+    ] {
+        assert!(
+            source_sheet1.contains(needle),
+            "fixture no longer contains {needle:?} -- test needs updating: {source_sheet1}"
+        );
+    }
+
+    let output_path = tmp_path("sheetpr_dataval_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditB2()\n    Cells(2, 2).Value = 999\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditB2").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    for needle in [
+        r#"<sheetPr codeName="Sheet1"/>"#,
+        r#"<sheetFormatPr baseColWidth="10" defaultRowHeight="20"/>"#,
+        r#"<phoneticPr fontId="1"/>"#,
+    ] {
+        assert!(
+            out_sheet1.contains(needle),
+            "{needle:?} must survive a save verbatim: {out_sheet1}"
+        );
+    }
+    // dataValidations' <dataValidation> child carries an xr:uid attribute -- only valid
+    // if the root <worksheet> tag also declares the xr namespace, which root_attrs
+    // passthrough (slice 1) already provides. Assert the whole thing survives together,
+    // not just the container tag, so a namespace-declaration regression would fail here.
+    assert!(
+        out_sheet1.contains(
+            r#"<dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="E1" xr:uid="{BF4C2CDE-5B18-5247-880B-6E29EFBEE104}"><formula1>"Yes,No,Maybe"</formula1></dataValidation></dataValidations>"#
+        ),
+        "dataValidations (with its xr:uid-bearing child) must survive verbatim: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains("<c r=\"B2\""),
+        "edited cell B2 must still be present: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 fn check_real_fixture_output(
     fixture_entries: &HashMap<String, Vec<u8>>,
     vba_bytes: &[u8],
