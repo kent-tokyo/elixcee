@@ -693,6 +693,16 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
   - **B5以降（未着手）**: `<autoFilter>`（実fixtureにstandalone要素としての
     実例が現状なし、fixture新規待ち）・行/列プロパティ（`<cols>`/`<row>`の
     幅・スタイル等、hidden以外の属性）。
+    - **調査メモ（B4完了後の`/greenlane`ラウンドで発見、未実装）**: `width`属性の
+      実証拠は実際に存在する——`fixture1_values_styles_merge_hidden.xlsm`の隠し列が
+      `<col min="4" max="4" width="0" hidden="1" customWidth="1"/>`を持つ。ただし
+      これはB1〜B4のopaque-fragment機構（未知の要素をまるごと切り出して差し込むだけ）
+      とは性質が異なる——`<col>`自体は既にB1以前から`hidden_columns`（Vm state）
+      駆動でwriterが生成している既存要素であり、`width`/`customWidth`はその
+      **既存の生成ロジックに追加attributeを持ち込む**形になる。source側の`<col
+      min max>`範囲と、Vmが持つ`hidden_columns`の範囲が常に1:1で対応する保証は
+      ない（macroが隠し列を追加/変更した場合の扱いが未設計）ため、B1〜B4と同じ
+      「引き継ぐだけ」では済まず、方針決定が必要——実装せず保留する。
   - **`<conditionalFormatting>`は要注意——`dxfId`（`xl/styles.xml`の`<dxfs>`）や
     `<extLst>`拡張を参照する場合があり、完全な参照非依存とは言い切れない。** 最初は
     「参照先の妥当性検証はせず、生のsubtreeをそのまま保存する」raw subtree preservation
