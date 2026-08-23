@@ -625,6 +625,11 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
       `cargo clippy --all-targets`（python feature有無両方）・`cargo doc
       --document-private-items`、いずれもクリーン。`compat/corpus`（581件）・
       `compat/vba-semantics`（386件）とも無変化。
+    - [x] **実Excel検証済み（ユーザー確認、2026-08-23）**: `elixcee_datavalidation_check.xlsm`
+      （fixture3をload→B2編集→save）を実際にExcelで開き、(1)修復警告なし、
+      (2) E1セルのデータ入力規則ドロップダウン（Yes/No/Maybe）が復元されている、
+      (3) B2が999、の3点を確認済み。0.9.0-Aと同じ完了条件をB2も満たした
+      ——**B2は実装・実Excel検証ともに完了**。
   - **B3以降（未着手）**: internal hyperlinkの`location`属性（advisor指摘:
     `<hyperlinks>`はB1/B2と同じまるごとpassthroughができない——`r:id`を持つ
     子要素とlocation-onlyの子要素が混在しうるため、子要素単位でのfilteringが
