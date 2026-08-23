@@ -587,14 +587,14 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
       byte-for-byteで生き残ること、ルートタグがsource由来のnamespace宣言を持つことを
       直接assert。既存の合成fixture（`<sheetViews>`を持たない）ベースのテストは
       無変化で通過を確認（advisor指摘の懸念は実害なしと確認済み）。
-    - [ ] **未確認（advisor指摘）**: `<sheetView workbookViewId="0">`は
-      `xl/workbook.xml`側の`<bookViews>`（0.10.0-C対象、現状writerは一切出力しない）
-      への暗黙の参照。`<bookViews>`なしで`workbookViewId="0"`が実Excelで repair警告
-      なしに開けるかは未検証——このリポジトリでは実Excelを実行できないため、
-      ユーザーに実際にfixture7の保存後ファイルを開いて確認してもらう必要がある。
-      **このタスクが完了するまで、B1は「実装済み」であって「実Excel検証済み」とは
-      言えない**（0.9.0-Aと同じ完了条件——実Excel再オープンでrepair警告0件——を
-      B1はまだ満たしていない）。
+    - [x] **実Excel検証済み（ユーザー確認、2026-08-23）**: `<sheetView
+      workbookViewId="0">`は`xl/workbook.xml`側の`<bookViews>`（0.10.0-C対象、
+      現状writerは一切出力しない）への暗黙の参照だが、`<bookViews>`なしでも実Excelは
+      repair警告なしに開けることを確認——`elixcee_freeze_pane_check.xlsm`
+      （fixture7をload→A1編集→save）を実際にExcelで開き、(1)修復警告なし、
+      (2) freeze pane（1行目・1列目固定）が復元されている、(3) A1が12345、の3点を
+      確認済み。0.9.0-Aと同じ完了条件（実Excel再オープンでrepair警告0件）をB1は
+      満たした——**B1は実装・実Excel検証ともに完了**。
     - 検証: `cargo test --workspace`（841件）・`cargo fmt --check`・
       `cargo clippy --all-targets`（python feature有無両方）・`cargo doc
       --document-private-items`、いずれもクリーン。`compat/corpus`（581件）・
