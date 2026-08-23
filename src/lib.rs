@@ -458,6 +458,139 @@ fn save_workbook_impl(vm: &Vm, path: &str) -> Result<(), String> {
     save_xlsx_impl(vm, path)
 }
 
+/// 0.10.0-D, slice D1: one worksheet's complete set of output identifiers, computed once
+/// per save by `plan_worksheet_output` rather than independently re-derived at each of the
+/// several places that used to compute `sheet{i+1}.xml`/`sheetId`/`r:id` on their own
+/// (`build_xlsx_content_types`, `build_xlsx_workbook`, `build_xlsx_workbook_rels`, and the
+/// per-sheet write loop in `save_xlsx_impl`).
+///
+/// `output_part_name` is the load-bearing field this slice exists for: an EXISTING sheet
+/// (one with a `WorksheetOrigin.original_part_name`) keeps that exact part name regardless
+/// of its position in this save's `<sheets>` order, rather than being renumbered to
+/// `sheet{i+1}.xml` every time. This is what lets a worksheet-level `.rels` file — which
+/// already survives keyed by its ORIGINAL part path via the generic passthrough mechanism,
+/// untouched by this slice — land back next to the worksheet content it actually belongs
+/// to, instead of the two silently drifting apart on any save where sheets aren't in
+/// exactly their original left-to-right order. Restoring the `r:id` REFERENCE inside that
+/// worksheet content (so `check_source_references()`'s `SOURCE_REFERENCE_LOSS` actually
+/// clears) is 0.10.0-D's later slice D2, not this one — D1 only makes sure content and
+/// `.rels` land at the same path again.
+///
+/// A NEW sheet (no origin) gets a freshly allocated `sheetN.xml` that can't collide with
+/// any part name that ever existed in the source file, including a deleted sheet's — see
+/// `plan_worksheet_output`'s own doc comment for why that matters even before deleted-sheet
+/// part cleanup exists (that's a later D slice too).
+struct WorksheetOutputPlan {
+    sheet_key: String,
+    display_name: String,
+    sheet_id: String,
+    /// Positional (`rId{1-based index in this save's sheet order}`) — unrelated to a
+    /// sheet's origin identity, purely internal to this writer's own
+    /// `workbook.xml`/`workbook.xml.rels` pair (see `build_xlsx_workbook`'s original doc
+    /// comment on this point, predating this struct).
+    workbook_rel_id: String,
+    output_part_name: String,
+    // Computed now (D1) but not yet consumed -- D2 restores a surviving sheet's own
+    // `.rels` relationships at `output_rels_name`, and D4 uses `is_existing` to decide
+    // whether a deleted sheet's exclusively-reachable target parts need cleaning up.
+    // Keeping both on the plan now avoids re-deriving them a second time once D2/D4
+    // land, and this is not speculative: both are already-specified next steps in the
+    // same D1-D4 sequence, not a hypothetical future use.
+    #[allow(dead_code)]
+    output_rels_name: String,
+    #[allow(dead_code)]
+    is_existing: bool,
+}
+
+/// Extracts `N` from a `xl/worksheets/sheetN.xml`-shaped part name (any prefix that
+/// literally matches this pattern; a non-standard worksheet part name, which ECMA-376
+/// technically permits but no fixture in this repo has ever shown, simply doesn't
+/// contribute a reserved number — safe, since `plan_worksheet_output`'s existing-sheet
+/// path never re-derives a number from a name at all, only new-sheet allocation does).
+fn parse_sheet_part_number(name: &str) -> Option<u32> {
+    name.strip_prefix("xl/worksheets/sheet")?
+        .strip_suffix(".xml")?
+        .parse()
+        .ok()
+}
+
+/// `xl/worksheets/sheetN.xml` -> `xl/worksheets/_rels/sheetN.xml.rels`, the fixed
+/// relative-path rule every OOXML part's own `.rels` file follows (a `_rels` sibling
+/// directory of the part, named `<part-filename>.rels`).
+fn worksheet_rels_name(part_name: &str) -> String {
+    match part_name.rsplit_once('/') {
+        Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
+        None => format!("_rels/{part_name}.rels"),
+    }
+}
+
+/// Builds one `WorksheetOutputPlan` per sheet in `sheet_names` (this save's real order,
+/// `Vm::sheet_order`). `reserved_part_numbers` is every `sheetN.xml` number that ever
+/// existed in the source file (see `save_xlsx_impl`'s own doc comment on
+/// `reserved_sheet_part_numbers` for why deleted sheets' numbers must be included too) —
+/// empty for a from-scratch `Vm` or an `.ods` source, in which case a new sheet's number
+/// is derived from surviving origins' own part names instead (there's no raw source file
+/// to scan, but existing sheets can still have origins from an earlier load).
+fn plan_worksheet_output(
+    sheet_names: &[String],
+    origins: &std::collections::HashMap<String, WorksheetOrigin>,
+    reserved_part_numbers: &[u32],
+) -> Vec<WorksheetOutputPlan> {
+    let mut reserved: Vec<u32> = reserved_part_numbers.to_vec();
+    if reserved.is_empty() {
+        reserved.extend(
+            origins
+                .values()
+                .filter_map(|o| o.original_part_name.as_deref())
+                .filter_map(parse_sheet_part_number),
+        );
+    }
+    let mut next_fresh_part_n = reserved.into_iter().max().unwrap_or(0);
+
+    let max_original_id: u32 = sheet_names
+        .iter()
+        .filter_map(|name| origins.get(name))
+        .filter_map(|o| o.original_sheet_id.as_deref())
+        .filter_map(|id| id.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    let mut next_fresh_id = max_original_id;
+
+    sheet_names
+        .iter()
+        .enumerate()
+        .map(|(i, sheet_key)| {
+            let origin = origins.get(sheet_key);
+            let output_part_name = match origin.and_then(|o| o.original_part_name.clone()) {
+                Some(part) => part,
+                None => {
+                    next_fresh_part_n += 1;
+                    format!("xl/worksheets/sheet{next_fresh_part_n}.xml")
+                }
+            };
+            let sheet_id = match origin.and_then(|o| o.original_sheet_id.clone()) {
+                Some(id) => id,
+                None => {
+                    next_fresh_id += 1;
+                    next_fresh_id.to_string()
+                }
+            };
+            let display_name = origin
+                .and_then(|o| o.original_display_name.clone())
+                .unwrap_or_else(|| sheet_key.clone());
+            WorksheetOutputPlan {
+                sheet_key: sheet_key.clone(),
+                display_name,
+                sheet_id,
+                workbook_rel_id: format!("rId{}", i + 1),
+                output_rels_name: worksheet_rels_name(&output_part_name),
+                is_existing: origin.and_then(|o| o.original_part_name.as_ref()).is_some(),
+                output_part_name,
+            }
+        })
+        .collect()
+}
+
 /// Parts this writer always regenerates from `Vm` state — everything else read
 /// from a passthrough source is copied through byte-for-byte (Milestone: safe
 /// round-trip). Pattern-matched rather than checking against `sheet{i+1}.xml`
@@ -599,6 +732,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     // passthrough (see `OpaqueWorkbookFragments`), same mechanism as `sheet_source_xml`
     // above but for the single, fixed-path workbook part rather than per-sheet parts.
     let mut workbook_source_xml: Option<String> = None;
+    // Every "xl/worksheets/sheetN.xml" part number that ever existed in the SOURCE file
+    // -- not just the sheets that survived to this save. A fresh worksheet part name
+    // (0.10.0-D's WorksheetOutputPlan, see below) must never collide with one of these,
+    // including a deleted sheet's original number: that part's own `.rels` passthrough
+    // entry (and whatever it points at) can still be sitting in this same output ZIP
+    // under its original name until 0.10.0-D's later slices clean it up.
+    let mut reserved_sheet_part_numbers: Vec<u32> = Vec::new();
 
     if let Some(source_path) = passthrough_source {
         let raw_entries = reader::read_raw_zip_entries(source_path)?;
@@ -607,6 +747,10 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         workbook_source_xml = raw_entries
             .get("xl/workbook.xml")
             .and_then(|bytes| String::from_utf8(bytes.clone()).ok());
+        reserved_sheet_part_numbers = raw_entries
+            .keys()
+            .filter_map(|name| parse_sheet_part_number(name))
+            .collect();
 
         for (sheet_key, origin) in &vm.worksheet_origins {
             if let Some(part) = &origin.original_part_name
@@ -706,6 +850,12 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         carried_root_rels.sort_by(|a, b| a.1.cmp(&b.1));
     }
 
+    let worksheet_plans = plan_worksheet_output(
+        &sheet_names,
+        &vm.worksheet_origins,
+        &reserved_sheet_part_numbers,
+    );
+
     let cursor = Cursor::new(Vec::<u8>::new());
     let mut zip = ZipWriter::new(cursor);
     let deflated =
@@ -714,7 +864,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     zip.start_file("[Content_Types].xml", deflated)
         .map_err(|e| e.to_string())?;
     zip.write_all(
-        build_xlsx_content_types(&sheet_names, is_xlsm_output, &carried_overrides).as_bytes(),
+        build_xlsx_content_types(&worksheet_plans, is_xlsm_output, &carried_overrides).as_bytes(),
     )
     .map_err(|e| e.to_string())?;
 
@@ -764,17 +914,16 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
     zip.start_file("xl/workbook.xml", deflated)
         .map_err(|e| e.to_string())?;
-    zip.write_all(
-        build_xlsx_workbook(&sheet_names, &vm.worksheet_origins, &workbook_fragments).as_bytes(),
-    )
-    .map_err(|e| e.to_string())?;
+    zip.write_all(build_xlsx_workbook(&worksheet_plans, &workbook_fragments).as_bytes())
+        .map_err(|e| e.to_string())?;
 
     zip.start_file("xl/_rels/workbook.xml.rels", deflated)
         .map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_workbook_rels(&sheet_names, has_vba, &carried_rels).as_bytes())
+    zip.write_all(build_xlsx_workbook_rels(&worksheet_plans, has_vba, &carried_rels).as_bytes())
         .map_err(|e| e.to_string())?;
 
-    for (i, sheet_name) in sheet_names.iter().enumerate() {
+    for plan in &worksheet_plans {
+        let sheet_name = &plan.sheet_key;
         let source_xml = sheet_source_xml.get(&sheet_name.to_lowercase());
         let root_attrs = source_xml.and_then(|xml| reader::extract_root_attrs(xml, "worksheet"));
         let sheet_pr = source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetPr"));
@@ -800,7 +949,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             page_margins: page_margins.as_deref(),
         };
 
-        zip.start_file(format!("xl/worksheets/sheet{}.xml", i + 1), deflated)
+        zip.start_file(plan.output_part_name.as_str(), deflated)
             .map_err(|e| e.to_string())?;
         zip.write_all(build_xlsx_sheet(vm, sheet_name, &str_index, &fragments).as_bytes())
             .map_err(|e| e.to_string())?;
@@ -863,7 +1012,7 @@ const XLSX_STYLES: &str = concat!(
 );
 
 fn build_xlsx_content_types(
-    sheet_names: &[String],
+    worksheet_plans: &[WorksheetOutputPlan],
     is_xlsm_output: bool,
     carried_overrides: &[(String, String)],
 ) -> String {
@@ -889,11 +1038,11 @@ fn build_xlsx_content_types(
         "<Override PartName=\"/xl/workbook.xml\" ContentType=\"{}\"/>\n",
         workbook_ct
     ));
-    for (i, _) in sheet_names.iter().enumerate() {
+    for plan in worksheet_plans {
         out.push_str(&format!(
-            "<Override PartName=\"/xl/worksheets/sheet{}.xml\" \
+            "<Override PartName=\"/{}\" \
              ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>\n",
-            i + 1
+            plan.output_part_name
         ));
     }
     out.push_str(concat!(
@@ -959,8 +1108,7 @@ struct OpaqueWorkbookFragments<'a> {
 }
 
 fn build_xlsx_workbook(
-    sheet_names: &[String],
-    origins: &std::collections::HashMap<String, WorksheetOrigin>,
+    worksheet_plans: &[WorksheetOutputPlan],
     fragments: &OpaqueWorkbookFragments,
 ) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
@@ -985,40 +1133,12 @@ fn build_xlsx_workbook(
         out.push('\n');
     }
     out.push_str("<sheets>\n");
-    // Original sheetIds are only ever reused, never reassigned to a different sheet, so
-    // a fresh id for a sheet with no known origin (newly created purely in-VBA, or from
-    // an .ods source with no sheetId concept) just needs to start above every reused
-    // id -- never needs to search for a gap, since nothing below that start point is
-    // ever handed out here.
-    let max_original_id: u32 = sheet_names
-        .iter()
-        .filter_map(|name| origins.get(name))
-        .filter_map(|o| o.original_sheet_id.as_deref())
-        .filter_map(|id| id.parse::<u32>().ok())
-        .max()
-        .unwrap_or(0);
-    let mut next_fresh_id = max_original_id;
-    for (i, name) in sheet_names.iter().enumerate() {
-        let rid_n = i + 1;
-        let origin = origins.get(name);
-        let sheet_id = match origin.and_then(|o| o.original_sheet_id.clone()) {
-            Some(id) => id,
-            None => {
-                next_fresh_id += 1;
-                next_fresh_id.to_string()
-            }
-        };
-        // Original case, not the lowercased lookup key -- `name` is only
-        // ever lowercase (every per-sheet `Vm` map's key space), so without
-        // this a save silently retitled every tab (`Sheet1` -> `sheet1`).
-        let display_name = origin
-            .and_then(|o| o.original_display_name.as_deref())
-            .unwrap_or(name);
+    for plan in worksheet_plans {
         out.push_str(&format!(
-            "<sheet name=\"{}\" sheetId=\"{}\" r:id=\"rId{}\"/>\n",
-            xml_escape(display_name),
-            sheet_id,
-            rid_n
+            "<sheet name=\"{}\" sheetId=\"{}\" r:id=\"{}\"/>\n",
+            xml_escape(&plan.display_name),
+            plan.sheet_id,
+            plan.workbook_rel_id
         ));
     }
     out.push_str("</sheets>\n");
@@ -1060,7 +1180,7 @@ fn normalize_part_path(joined: &str) -> String {
 }
 
 fn build_xlsx_workbook_rels(
-    sheet_names: &[String],
+    worksheet_plans: &[WorksheetOutputPlan],
     has_vba: bool,
     carried_rels: &[(String, String)],
 ) -> String {
@@ -1068,17 +1188,22 @@ fn build_xlsx_workbook_rels(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
         "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
     ));
-    for (i, _) in sheet_names.iter().enumerate() {
-        let n = i + 1;
+    for plan in worksheet_plans {
+        // Target is relative to xl/ (this rels file's own part is xl/_rels/workbook.xml.rels),
+        // matching how every other target below is already written relative to xl/.
+        let target = plan
+            .output_part_name
+            .strip_prefix("xl/")
+            .unwrap_or(&plan.output_part_name);
         out.push_str(&format!(
-            "<Relationship Id=\"rId{}\" \
+            "<Relationship Id=\"{}\" \
              Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" \
-             Target=\"worksheets/sheet{}.xml\"/>\n",
-            n, n
+             Target=\"{}\"/>\n",
+            plan.workbook_rel_id, target
         ));
     }
-    let ss_id = sheet_names.len() + 1;
-    let styles_id = sheet_names.len() + 2;
+    let ss_id = worksheet_plans.len() + 1;
+    let styles_id = worksheet_plans.len() + 2;
     out.push_str(&format!(
         "<Relationship Id=\"rId{}\" \
          Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" \
@@ -1091,7 +1216,7 @@ fn build_xlsx_workbook_rels(
          Target=\"styles.xml\"/>\n",
         styles_id
     ));
-    let mut next_id = sheet_names.len() + 3;
+    let mut next_id = worksheet_plans.len() + 3;
     if has_vba {
         out.push_str(&format!(
             "<Relationship Id=\"rId{}\" \
@@ -1721,15 +1846,16 @@ mod tests {
         );
         // "newsheet" is deliberately absent from `origins` -- a sheet created purely
         // in-VBA, or one populate_from_sheets never saw.
-        let xml = build_xlsx_workbook(
+        let plans = plan_worksheet_output(
             &[
                 "sheet1".to_string(),
                 "sheet2".to_string(),
                 "newsheet".to_string(),
             ],
             &origins,
-            &OpaqueWorkbookFragments::default(),
+            &[],
         );
+        let xml = build_xlsx_workbook(&plans, &OpaqueWorkbookFragments::default());
 
         assert!(
             xml.contains("<sheet name=\"Sheet1\" sheetId=\"7\" r:id=\"rId1\"/>"),
@@ -1757,16 +1883,25 @@ mod tests {
             xml.contains("r:id=\"rId3\""),
             "newsheet's r:id must still be positional: {xml}"
         );
+
+        // 0.10.0-D, D1: sheet1's output part name is its ORIGIN's part name
+        // (sheet2.xml), not a position-derived sheet1.xml.
+        assert_eq!(plans[0].output_part_name, "xl/worksheets/sheet2.xml");
+        assert!(plans[0].is_existing);
+        // sheet2 has a sheetId but no original_part_name (e.g. an .ods-sourced origin) --
+        // treated as needing a fresh part name, same as a brand-new sheet.
+        assert!(!plans[1].is_existing);
+        // newsheet's fresh part name must not collide with sheet1's real original
+        // (sheet2.xml) -- it starts counting from that number, not from 0.
+        assert_ne!(plans[2].output_part_name, "xl/worksheets/sheet2.xml");
+        assert_ne!(plans[1].output_part_name, plans[2].output_part_name);
     }
 
     #[test]
     fn build_xlsx_workbook_assigns_sequential_ids_when_no_sheet_has_a_known_origin() {
         let origins = std::collections::HashMap::new();
-        let xml = build_xlsx_workbook(
-            &["a".to_string(), "b".to_string()],
-            &origins,
-            &OpaqueWorkbookFragments::default(),
-        );
+        let plans = plan_worksheet_output(&["a".to_string(), "b".to_string()], &origins, &[]);
+        let xml = build_xlsx_workbook(&plans, &OpaqueWorkbookFragments::default());
         assert!(
             xml.contains("<sheet name=\"a\" sheetId=\"1\" r:id=\"rId1\"/>"),
             "{xml}"

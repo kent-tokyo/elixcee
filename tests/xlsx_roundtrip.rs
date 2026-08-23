@@ -364,12 +364,18 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
         Some(&table_bytes)
     );
 
-    // (iv) stale non-sequential worksheet part must NOT survive
+    // (iv) 0.10.0-D, D1: the sheet's output part name is its ORIGIN's real part name
+    // (sheet3.xml), not a position-derived sheet1.xml -- this fixture's one sheet was
+    // deliberately given a non-sequential source part name specifically to prove this.
     assert!(
-        !output_entries.contains_key("xl/worksheets/sheet3.xml"),
-        "stale original worksheet part must not appear alongside the regenerated sheet1.xml"
+        output_entries.contains_key("xl/worksheets/sheet3.xml"),
+        "existing sheet's output part name must stay sheet3.xml (its own origin), not be \
+         renumbered to sheet1.xml by position"
     );
-    assert!(output_entries.contains_key("xl/worksheets/sheet1.xml"));
+    assert!(
+        !output_entries.contains_key("xl/worksheets/sheet1.xml"),
+        "no sheet in this fixture originates from sheet1.xml, so it must not appear"
+    );
 
     // (v) + (vi) content-types: macro-enabled root override, vbaProject resolvable,
     // and every part actually present in the output resolves via the output's
@@ -394,7 +400,7 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     }
 
     // Style-index preservation (Milestone: safe round-trip, slice 2).
-    let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet3.xml"].clone()).unwrap();
     let a1_tag = &sheet_xml[sheet_xml.find("<c r=\"A1\"").unwrap()..];
     let a1_tag = &a1_tag[..a1_tag.find('>').unwrap() + 1];
     assert!(
@@ -526,7 +532,8 @@ fn xlsm_roundtrip_in_place_save_preserves_vba_project() {
         Some(&styles_bytes),
         "xl/styles.xml must also survive an in-place overwrite byte-identical"
     );
-    let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    // 0.10.0-D, D1: sheet3.xml (this fixture's real origin part name), not sheet1.xml.
+    let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet3.xml"].clone()).unwrap();
     let a1_tag = &sheet_xml[sheet_xml.find("<c r=\"A1\"").unwrap()..];
     let a1_tag = &a1_tag[..a1_tag.find('>').unwrap() + 1];
     assert!(
@@ -1189,6 +1196,128 @@ fn defined_names_are_dropped_entirely_once_a_sheet_is_deleted() {
     let _ = std::fs::remove_file(&source_path);
     let _ = std::fs::remove_file(&noop_output_path);
     let _ = std::fs::remove_file(&delete_output_path);
+}
+
+/// 0.10.0-D, slice D1: a surviving sheet's output part name stays its own origin
+/// (`WorksheetOrigin.original_part_name`), not renumbered by output position. Three
+/// sheets, no VBA; Sheet3 (last, with a real worksheet-level relationship) is the one
+/// that must NOT get renumbered when Sheet2 -- an earlier, unrelated, relationship-free
+/// sheet -- is deleted, shifting Sheet3 from position 3 to position 2.
+///
+/// This is a real, previously-reproduced bug, not a hypothetical: before D1, the
+/// surviving worksheet content was written to the position-derived `sheet2.xml`, while
+/// `xl/worksheets/_rels/sheet3.xml.rels` (which passes through keyed by its ORIGINAL
+/// path, untouched by this fix) stayed at `sheet3.xml` -- orphaning the `.rels` file and
+/// leaving the real `sheet2.xml` content with no relationship file at all, even though
+/// its original content had one. Confirmed by running this exact scenario against the
+/// pre-D1 code before writing this test.
+#[test]
+fn surviving_sheets_keep_their_own_origin_part_name_after_an_earlier_sheet_is_deleted() {
+    const WORKBOOK_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheets>\n",
+        "<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/>\n",
+        "<sheet name=\"Sheet2\" sheetId=\"2\" r:id=\"rId2\"/>\n",
+        "<sheet name=\"Sheet3\" sheetId=\"3\" r:id=\"rId3\"/>\n",
+        "</sheets>\n</workbook>\n",
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>\n",
+        "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet3.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const PLAIN_SHEET: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n</worksheet>\n",
+    );
+    const SHEET3_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>3</v></c></row></sheetData>\n",
+        "<hyperlinks><hyperlink ref=\"A1\" r:id=\"hlink1\"/></hyperlinks>\n</worksheet>\n",
+    );
+    const SHEET3_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"hlink1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"https://example.com/\" TargetMode=\"External\"/>\n",
+        "</Relationships>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(&mut zip, "xl/worksheets/sheet1.xml", PLAIN_SHEET.as_bytes());
+    zip_add(&mut zip, "xl/worksheets/sheet2.xml", PLAIN_SHEET.as_bytes());
+    zip_add(&mut zip, "xl/worksheets/sheet3.xml", SHEET3_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/worksheets/_rels/sheet3.xml.rels",
+        SHEET3_RELS.as_bytes(),
+    );
+    let fixture_bytes = zip.finish().unwrap().into_inner();
+
+    let source_path = tmp_path("source_d1_reorder.xlsx");
+    let output_path = tmp_path("output_d1_reorder.xlsx");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    let prog =
+        parser::parse("Sub DeleteSheet2()\n    Sheets(\"Sheet2\").Delete\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "DeleteSheet2").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+
+    assert!(
+        output_entries.contains_key("xl/worksheets/sheet3.xml"),
+        "Sheet3's content must stay at its own origin part name, sheet3.xml, even though \
+         it's now the second (not third) sheet in output order"
+    );
+    assert!(
+        !output_entries.contains_key("xl/worksheets/sheet2.xml"),
+        "sheet2.xml must not exist -- Sheet3's content must not be renumbered into it"
+    );
+    assert!(
+        output_entries.contains_key("xl/worksheets/_rels/sheet3.xml.rels"),
+        "the passthrough .rels file must still be at sheet3.xml's own path"
+    );
+    let sheet3_xml = String::from_utf8(output_entries["xl/worksheets/sheet3.xml"].clone()).unwrap();
+    assert!(
+        sheet3_xml.contains("<c r=\"A1\"><v>3</v></c>"),
+        "sheet3.xml must actually contain Sheet3's own cell data, not Sheet1's or an \
+         empty regenerated sheet: {sheet3_xml}"
+    );
+
+    let wb_rels = String::from_utf8(output_entries["xl/_rels/workbook.xml.rels"].clone()).unwrap();
+    assert!(
+        wb_rels.contains("Target=\"worksheets/sheet3.xml\""),
+        "workbook.xml.rels must point the surviving sheet's relationship at sheet3.xml, \
+         not a stale/renumbered target: {wb_rels}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
 }
 
 /// 0.10.0-B slice 4 (B4): internal (location=, relationship-free) hyperlinks.
