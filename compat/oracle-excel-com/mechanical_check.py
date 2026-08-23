@@ -156,8 +156,19 @@ def check_roundtrip(original_path, output_path, edited_parts=None):
     `edited_parts` -- zip entry names (e.g. "xl/worksheets/sheet1.xml") that are EXPECTED
     to differ from the original because elixcee's own writer regenerates them. Everything
     else is expected byte-identical passthrough. Defaults to default_edited_parts(original)
-    (mirrors is_writer_owned_part in src/lib.rs) -- pass an explicit set only if a fixture's
-    macro edits some OTHER part directly, which none do in 0.9.0-A.
+    (mirrors is_writer_owned_part in src/lib.rs) UNIONED with
+    _deleted_sheet_prunable_parts(original, output) (0.10.0-D4) -- a part exclusively
+    reachable from a sheet no longer present in `output` is EXPECTED to be absent, not a
+    violation of the byte-identical passthrough guarantee below. This does not silence a
+    genuine loss: `_deleted_sheet_prunable_parts` is computed purely from `original`'s own
+    relationship graph (never trusts what the writer actually did), so a part the writer
+    over-deletes (still reachable from a surviving sheet or workbook-level relationship)
+    is NOT in this set and still fails the byte-identical check below; and
+    `check_deleted_sheet_cleanup()` separately, positively verifies every part in this set
+    really is absent -- an under-deletion (an orphan left behind) is invisible to THIS
+    function by design (that's the exact blind spot Known gaps item 15 records) but is
+    exactly what that other function exists to catch. Pass an explicit `edited_parts` only
+    if a fixture's macro edits some OTHER part directly, which none do in 0.9.0-A.
 
     Returns a dict: {"violations": [...], "structural_verdict": one of
     "STRUCTURALLY_CLEAN" | "ELIXCEE_RELATIONSHIP_BREAK" | "ELIXCEE_DATA_LOSS"}.
@@ -175,7 +186,7 @@ def check_roundtrip(original_path, output_path, edited_parts=None):
         return {"violations": [f"output not a valid zip: {e}"], "structural_verdict": "ELIXCEE_DATA_LOSS"}
 
     if edited_parts is None:
-        edited_parts = default_edited_parts(original)
+        edited_parts = default_edited_parts(original) | _deleted_sheet_prunable_parts(original, output)
 
     if "[Content_Types].xml" not in output:
         violations.append("output has no [Content_Types].xml")
@@ -302,6 +313,159 @@ def _sheet_name_to_part(entries):
         part = _normalize_part_path(("xl/" + target) if not target.startswith("/") else target[1:])
         result[sheet_el.get("name")] = part
     return result
+
+
+def _part_rels_name(part_name):
+    """`part` -> its own `_rels/<file>.rels` sibling path, per the fixed OPC filename
+    convention (a `.rels` file is never itself a relationship TARGET -- it's discovered by
+    this naming rule, the same convention `worksheet_rels_name()` in src/lib.rs follows).
+    The package root is the one part with no name at all: its `.rels` is `_rels/.rels`,
+    handled by callers directly rather than through this function."""
+    if "/" in part_name:
+        d, f = part_name.rsplit("/", 1)
+        return f"{d}/_rels/{f}.rels"
+    return f"_rels/{part_name}.rels"
+
+
+def _direct_targets(entries, rels_name):
+    """One-hop internal (non-External) relationship targets declared by `rels_name`,
+    resolved to normalized part paths. Empty if `rels_name` is absent or malformed."""
+    data = entries.get(rels_name)
+    if data is None:
+        return set()
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return set()
+    base = _rels_target_dir(rels_name)
+    out = set()
+    for rel in root.findall(f"{REL_NS}Relationship"):
+        if rel.get("TargetMode") == "External":
+            continue
+        out.add(_normalize_part_path(base + rel.get("Target", "")))
+    return out
+
+
+def _reachable_closure(entries, root_parts, exclude=frozenset()):
+    """BFS over `entries`' package relationship graph, starting from `root_parts` (each
+    reached via its own `_part_rels_name()` sibling, per OPC convention). Returns every
+    part transitively reachable, INCLUDING the root parts themselves and every `.rels`
+    file walked along the way -- a `.rels` file isn't a relationship target, but "belongs
+    to" the part that owns it for pruning purposes (see `check_deleted_sheet_cleanup`).
+
+    `exclude` is filtered at EVERY hop, not just the initial roots: a deleted sheet's own
+    worksheet part can be re-discovered via more than one path in `original`'s graph (its
+    own edge in `xl/_rels/workbook.xml.rels`, but ALSO indirectly via `_rels/.rels` ->
+    `xl/workbook.xml` -> that same unfiltered `.rels` file) -- filtering only the seed set
+    stops the first path but not the second, silently reintroducing the deleted sheet (and
+    everything reachable from it) as "reachable elsewhere"."""
+    seen = set(root_parts) - exclude
+    queue = list(seen)
+    while queue:
+        part = queue.pop()
+        rels_name = _part_rels_name(part)
+        if rels_name in entries:
+            seen.add(rels_name)
+            for target in _direct_targets(entries, rels_name):
+                if target in exclude or target in seen:
+                    continue
+                seen.add(target)
+                queue.append(target)
+    return seen
+
+
+def _deleted_sheet_prunable_parts(original, output):
+    """The set of `original` part names that SHOULD be absent from `output` because they
+    are reachable ONLY from a sheet that no longer exists in `output` -- computed purely
+    from `original`'s own relationship graph, independent of whatever the writer actually
+    did, so this can be used both to verify pruning happened (positive direction) and to
+    stop `check_roundtrip()`'s byte-identical check from false-flagging a correct removal
+    (see that function's `edited_parts` default). Empty if no sheet was deleted.
+
+    A part reachable from a deleted sheet AND from anything else (a surviving sheet, or a
+    workbook-level relationship via `xl/_rels/workbook.xml.rels` or the root `_rels/.rels`) is never
+    included -- shared parts must survive regardless of how many referencing sheets are
+    gone. Restricted to the intersection with "parts that could ever be passthrough" (not
+    `default_edited_parts`, i.e. not a writer-owned/fixed part or a worksheet part
+    itself) -- pruning only ever applies to passthrough parts in the real writer."""
+    orig_sheets = _sheet_name_to_part(original)
+    out_names = {name.lower() for name in _sheet_name_to_part(output)}
+    deleted_parts = {part for name, part in orig_sheets.items() if name.lower() not in out_names}
+    if not deleted_parts:
+        return set()
+    surviving_parts = {part for name, part in orig_sheets.items() if name.lower() in out_names}
+
+    # Workbook-level relationship targets (theme, styles, sharedStrings, vbaProject, ...)
+    # count as "reachable elsewhere" too. `exclude=deleted_parts` on the closure below is
+    # what actually keeps a deleted sheet's own worksheet part (and everything reachable
+    # only from it) out of "reachable elsewhere" -- `_rels/.rels` -> `xl/workbook.xml` ->
+    # `xl/_rels/workbook.xml.rels` still lists every original sheet including the deleted
+    # one, so the exclusion has to apply at every hop of the walk, not just here.
+    workbook_level_targets = _direct_targets(original, "xl/_rels/workbook.xml.rels")
+    root_targets = _direct_targets(original, "_rels/.rels")
+    reachable_elsewhere = _reachable_closure(
+        original,
+        surviving_parts | workbook_level_targets | root_targets,
+        exclude=deleted_parts,
+    )
+
+    reachable_from_deleted = _reachable_closure(original, deleted_parts)
+    prunable = reachable_from_deleted - reachable_elsewhere
+    never_passthrough = default_edited_parts(original)
+    return {p for p in prunable if p in original and p not in never_passthrough}
+
+
+def check_deleted_sheet_cleanup(original_path, output_path):
+    """0.10.0-D4: verifies a deleted sheet's exclusively-reachable parts actually get
+    pruned, not just left as orphans (ROADMAP.md Known gaps item 15's exact shape:
+    xl/worksheets/_rels/sheetN.xml.rels surviving with no sheetN.xml beside it once that
+    sheet's the one deleted -- STRUCTURALLY_CLEAN under check_roundtrip() alone, since
+    nothing in that check asks "does a surviving .rels file still have an owning part").
+
+    CLEAN trivially when no sheet was deleted. Otherwise: every part
+    `_deleted_sheet_prunable_parts()` computes must be ABSENT from output (pruning
+    happened); every other original part must still survive byte-identical (no
+    overreach -- a part shared with a surviving sheet or a workbook-level relationship
+    must never be removed just because ONE of its referencing sheets is gone).
+
+    Returns {"violations": [...], "deleted_sheet_cleanup_verdict":
+    "CLEAN"|"DELETED_SHEET_REACHABILITY_LOSS"}.
+    """
+    violations = []
+    try:
+        original = _read_zip_entries(original_path)
+        output = _read_zip_entries(output_path)
+    except (zipfile.BadZipFile, FileNotFoundError) as e:
+        return {"violations": [f"unreadable: {e}"], "deleted_sheet_cleanup_verdict": "ORACLE_FAILURE"}
+
+    prunable = _deleted_sheet_prunable_parts(original, output)
+    if not prunable:
+        return {"violations": [], "deleted_sheet_cleanup_verdict": "CLEAN"}
+
+    for part in prunable:
+        if part in output:
+            violations.append(
+                f"'{part}' is exclusively reachable from a deleted sheet and should have "
+                f"been pruned, but survived into the output (orphaned part left behind)"
+            )
+
+    never_passthrough = default_edited_parts(original)
+    for name, orig_bytes in original.items():
+        if name in prunable or name in never_passthrough or name.startswith("xl/vbaProject"):
+            continue
+        if name not in output:
+            violations.append(
+                f"'{name}' present in original, missing from output, but was NOT "
+                f"exclusively reachable from a deleted sheet (unexpected over-pruning)"
+            )
+        elif output[name] != orig_bytes:
+            violations.append(
+                f"'{name}' changed but was not exclusively reachable from a deleted "
+                f"sheet (passthrough should be byte-identical)"
+            )
+
+    verdict = "CLEAN" if not violations else "DELETED_SHEET_REACHABILITY_LOSS"
+    return {"violations": violations, "deleted_sheet_cleanup_verdict": verdict}
 
 
 def _formula_cells(sheet_xml_bytes):
@@ -1519,6 +1683,145 @@ def self_test():
         assert result["defined_names_verdict"] == "WORKBOOK_ELEMENT_LOSS", result
         assert any("must be dropped entirely" in v for v in result["violations"]), result
 
+        # --- Case N: DELETED_SHEET_REACHABILITY_LOSS (0.10.0-D4). Two sheets: Sheet1
+        # (survives) references a SHARED table target that Sheet2 (deleted) also
+        # references; Sheet2 additionally references an EXCLUSIVE drawing target nothing
+        # else points at. Exercises all three directions: correct pruning (CLEAN),
+        # under-pruning (an orphan left behind -- Known gaps item 15's exact shape,
+        # invisible to check_roundtrip() alone), and over-pruning (the shared target
+        # wrongly removed just because ONE of its referencing sheets is gone).
+        del_path = os.path.join(tmp, "delsheet_orig.xlsm")
+        SHEET1_DEL_XML = (
+            f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+            '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>'
+            '<tableParts count="1"><tablePart r:id="rId1"/></tableParts>'
+            "</worksheet>"
+        ).encode()
+        SHEET2_DEL_XML = (
+            f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+            '<sheetData><row r="1"><c r="A1"><v>2</v></c></row></sheetData>'
+            '<tableParts count="1"><tablePart r:id="rId1"/></tableParts>'
+            '<drawing r:id="rId2"/>'
+            "</worksheet>"
+        ).encode()
+        with zipfile.ZipFile(del_path, "w") as zf:
+            zf.writestr(
+                "[Content_Types].xml",
+                f'<?xml version="1.0"?><Types xmlns="{CT_NS[1:-1]}">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                "</Types>",
+            )
+            zf.writestr(
+                "_rels/.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr(
+                "xl/workbook.xml",
+                f'<?xml version="1.0"?><workbook xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+                '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/>'
+                '<sheet name="Sheet2" sheetId="2" r:id="rId2"/></sheets></workbook>',
+            )
+            zf.writestr(
+                "xl/_rels/workbook.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr("xl/worksheets/sheet1.xml", SHEET1_DEL_XML)
+            zf.writestr(
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/shared_table.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr("xl/worksheets/sheet2.xml", SHEET2_DEL_XML)
+            zf.writestr(
+                "xl/worksheets/_rels/sheet2.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/shared_table.xml"/>'
+                '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/exclusive_drawing1.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr("xl/tables/shared_table.xml", f'<?xml version="1.0"?><table xmlns="{SML_NS[1:-1]}" id="1" name="Shared" displayName="Shared" ref="A1:A1"/>')
+            zf.writestr("xl/drawings/exclusive_drawing1.xml", '<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>')
+
+        def _delete_sheet2(src_path, dst_path, skip_entries=()):
+            """Build a copy of del_path with Sheet2 removed from workbook.xml/.rels and
+            its own worksheet part gone, plus `skip_entries` (additional names to drop,
+            simulating pruning of those specific parts)."""
+            with zipfile.ZipFile(src_path) as src, zipfile.ZipFile(dst_path, "w") as dst:
+                for item in src.infolist():
+                    if item.filename in ("xl/worksheets/sheet2.xml",) or item.filename in skip_entries:
+                        continue
+                    data = src.read(item.filename)
+                    if item.filename == "xl/workbook.xml":
+                        data = data.replace(b'<sheet name="Sheet2" sheetId="2" r:id="rId2"/>', b"")
+                    elif item.filename == "xl/_rels/workbook.xml.rels":
+                        data = data.replace(
+                            b'<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>',
+                            b"",
+                        )
+                    dst.writestr(item.filename, data)
+
+        # (1) Correct pruning: sheet2.xml.rels + exclusive_drawing1.xml gone,
+        # shared_table.xml (still referenced by Sheet1) survives -- must be CLEAN, and
+        # check_roundtrip() itself must NOT false-positive on this (the false-positive
+        # check_roundtrip's own docstring update exists to prevent).
+        del_correct_path = os.path.join(tmp, "delsheet_correct.xlsm")
+        _delete_sheet2(
+            del_path,
+            del_correct_path,
+            skip_entries=("xl/worksheets/_rels/sheet2.xml.rels", "xl/drawings/exclusive_drawing1.xml"),
+        )
+        result = check_deleted_sheet_cleanup(del_path, del_correct_path)
+        assert result["deleted_sheet_cleanup_verdict"] == "CLEAN", result
+        rt_result = check_roundtrip(del_path, del_correct_path)
+        assert rt_result["structural_verdict"] == "STRUCTURALLY_CLEAN", (
+            f"check_roundtrip() must not false-positive on a correctly-pruned deleted "
+            f"sheet's exclusive targets: {rt_result}"
+        )
+
+        # (2) Under-pruning: sheet2.xml.rels + exclusive_drawing1.xml left behind as
+        # orphans (item 15's exact shape -- just the sheet itself deleted, nothing else
+        # cleaned up) -- check_deleted_sheet_cleanup() must catch this even though
+        # check_roundtrip() alone cannot (that's the whole reason this function exists).
+        del_orphan_path = os.path.join(tmp, "delsheet_orphan.xlsm")
+        _delete_sheet2(del_path, del_orphan_path)
+        result = check_deleted_sheet_cleanup(del_path, del_orphan_path)
+        assert result["deleted_sheet_cleanup_verdict"] == "DELETED_SHEET_REACHABILITY_LOSS", result
+        assert any("exclusive_drawing1.xml" in v for v in result["violations"]), result["violations"]
+        assert any("sheet2.xml.rels" in v for v in result["violations"]), result["violations"]
+
+        # (3) Over-pruning: shared_table.xml (still referenced by surviving Sheet1) wrongly
+        # removed too -- must be caught as a genuine loss, not silenced by the
+        # deleted-sheet exception.
+        del_overreach_path = os.path.join(tmp, "delsheet_overreach.xlsm")
+        _delete_sheet2(
+            del_path,
+            del_overreach_path,
+            skip_entries=(
+                "xl/worksheets/_rels/sheet2.xml.rels",
+                "xl/drawings/exclusive_drawing1.xml",
+                "xl/tables/shared_table.xml",
+            ),
+        )
+        result = check_deleted_sheet_cleanup(del_path, del_overreach_path)
+        assert result["deleted_sheet_cleanup_verdict"] == "DELETED_SHEET_REACHABILITY_LOSS", result
+        assert any("shared_table.xml" in v and "NOT exclusively reachable" in v for v in result["violations"]), (
+            result["violations"]
+        )
+        rt_result = check_roundtrip(del_path, del_overreach_path)
+        assert rt_result["structural_verdict"] != "STRUCTURALLY_CLEAN", (
+            f"check_roundtrip() must still catch a shared target wrongly removed: {rt_result}"
+        )
+
     print(
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
         "target, stripped-formula, orphaned part, all 4 SOURCE_REFERENCE_LOSS shapes, "
@@ -1528,7 +1831,10 @@ def self_test():
         "flagged, empty-container invalidity detected), and WORKBOOK_ELEMENT_LOSS "
         "(workbookPr/bookViews/calcPr/extLst, independently) and defined-names loss "
         "(verbatim required when no sheet deleted, must be dropped entirely when one "
-        "was, both directions checked) all caught; comments correctly "
+        "was, both directions checked) and DELETED_SHEET_REACHABILITY_LOSS (0.10.0-D4: "
+        "correct pruning verified CLEAN with no check_roundtrip() false positive, "
+        "under-pruning/orphan-left-behind caught, over-pruning of a shared target "
+        "caught by both checks) all caught; comments correctly "
         "out of SOURCE_REFERENCE_LOSS scope)"
     )
 
@@ -1547,6 +1853,7 @@ if __name__ == "__main__":
     internal_hyperlinks = check_internal_hyperlinks(sys.argv[1], sys.argv[2])
     workbook_elements = check_workbook_elements(sys.argv[1], sys.argv[2])
     defined_names = check_defined_names(sys.argv[1], sys.argv[2])
+    deleted_sheet_cleanup = check_deleted_sheet_cleanup(sys.argv[1], sys.argv[2])
     print(json.dumps({
         "structural": structural,
         "formulas": formulas,
@@ -1555,6 +1862,7 @@ if __name__ == "__main__":
         "internal_hyperlinks": internal_hyperlinks,
         "workbook_elements": workbook_elements,
         "defined_names": defined_names,
+        "deleted_sheet_cleanup": deleted_sheet_cleanup,
     }, indent=2))
     ok = (
         structural["structural_verdict"] == "STRUCTURALLY_CLEAN"
@@ -1564,5 +1872,6 @@ if __name__ == "__main__":
         and internal_hyperlinks["internal_hyperlink_verdict"] == "CLEAN"
         and workbook_elements["workbook_element_verdict"] == "CLEAN"
         and defined_names["defined_names_verdict"] == "CLEAN"
+        and deleted_sheet_cleanup["deleted_sheet_cleanup_verdict"] == "CLEAN"
     )
     sys.exit(0 if ok else 1)
