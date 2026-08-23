@@ -437,3 +437,17 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] `ROADMAP.md`（Known gaps項目15を解決済みとして取り消し線化・0.10.0-DエントリにD4完了を記録）・`CHANGELOG.md`・design doc（§10、D4完了・test table各行のstatus記録・N/A判断の経緯）・`tasks/todo.md`を同期。
 
 0.10.0-Dの残作業は`<pageSetup r:id>`（実証fixtureが無いため未着手）のみ。tableParts/drawing/legacyDrawing/hyperlinks/D4いずれも実Excel再オープン検証はまだ未実施。push未承認、ローカルコミットのみ（7コミット：`9d6373d`・`17d1ace`・`c7a2fe1`・`d1e2404`・`ef54d9a`・`9c1b3d3`・`cd2e2af`、+ドキュメント同期コミット）。
+
+## `<pageSetup r:id>`着手要求 → plain pageSetup修正で実質完了（`/greenlane`継続）
+
+ユーザーから「<pageSetup r:id> 着手」の指示を受けたが、着手前に実fixture7件全てを確認したところ、r:id付きpageSetupを持つfixtureが1件も無いことが判明（fixture5の`<pageSetup>`はr:idを持たない、どのfixtureの`.rels`にもprinterSettings relationshipが無い）。hard gate（実fixture証拠が必須）上、r:id付きpageSetupへの着手はそのままでは不可能なため、AskUserQuestionでユーザーに選択肢を提示。
+
+- [x] **選択肢提示・回答**：「plain pageSetupを先に修正」「r:id付きfixtureの提供を待つ」「0.10.0-Dはここで一旦終了、他へ」の3択を提示し、ユーザーは「plain pageSetupを先に修正」を選択。調査の副産物として、fixture5に実証されているplain（r:id無し）pageSetupが、`_INLINE_WORKSHEET_ELEMENTS`に一度も追加されておらず毎回サイレントに失われている、という別の実バグを発見していたため、これに着手する形に。
+- [x] **checker先行実装**（commit `7357c25`）：`check_page_setup()`を新設。`check_inline_worksheet_elements()`のblanket listには含めず——`check_internal_hyperlinks()`と同じ理由（`CT_PageSetup`は実XSD上r:idを持ちうるため、blanket present/absentチェックは将来r:id付きfixtureが現れた時にfalse-positiveになる）。r:id無しのoriginal pageSetupだけを対象とし、想定外のr:id付与・属性変更も個別に検出。self-test Case Oで、r:id無し／r:id付きの2シート合成fixtureを使い4方向を検証。
+- [x] **writer実装**（commit `b9ae9ec`）：`reader::root_tag_has_rid()`（既に抽出済みのraw element文字列がルートタグにr:idを持つか判定、`extract_hyperlinks`と同じ`attr_get`精密判定を再利用）を新設。r:id無しなら無条件復元（`pageMargins`と同じ機構）、r:id付きなら復元しない。実XSD順序（`pageMargins`の直後）へ挿入。
+- [x] **negative testでゲートの実効性を確認**：`page_setup_with_an_rid_is_not_restored`——`root_tag_has_rid`フィルタを一時的に無効化して実際にテストが落ちることを確認してから復元。
+- [x] fixture5に対する実CLI検証：`<pageSetup>`が復元され、`check_page_setup()`がCLEANを報告することを確認。実fixture7件全てが`mechanical_check.py`の全9カテゴリでCLEANに到達。
+- [x] `cargo fmt --all --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（849 lib + 22 xlsx_roundtrip）／`mechanical_check.py --self-test`／実fixture7件（無回帰）／`compat/corpus`（581件）／`compat/vba-semantics`（386件）、いずれもクリーン・既存ベースラインから無回帰を確認。
+- [x] `ROADMAP.md`・`CHANGELOG.md`・design doc（§10、r:id付きfixture不在の確認経緯・plain pageSetup修正の記録）・`tasks/todo.md`を同期。
+
+0.10.0-Dの残作業は`<pageSetup r:id>`自体（実証fixtureが無い限り着手不可）のみ。tableParts/drawing/legacyDrawing/hyperlinks/D4/plain pageSetupいずれも実Excel再オープン検証はまだ未実施。push未承認、ローカルコミットのみ（9コミット：`9d6373d`・`17d1ace`・`c7a2fe1`・`d1e2404`・`ef54d9a`・`9c1b3d3`・`cd2e2af`・`7357c25`・`b9ae9ec`、+ドキュメント同期コミット）。

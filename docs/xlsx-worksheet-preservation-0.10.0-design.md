@@ -907,7 +907,23 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
       `source_references: CLEAN`に到達**（`mechanical_check.py`の全カテゴリで
       7件ともCLEAN）。実Excel再オープン検証はtableParts/drawing/legacyDrawing/
       hyperlinksいずれもまだ未実施。
-    - `<pageSetup r:id>`（実証fixtureが無ければ着手しない）は引き続き未着手。
+    - `<pageSetup r:id>`（実証fixtureが無ければ着手しない）は引き続き未着手——ユーザー
+      から「<pageSetup r:id> 着手」の指示を受け実fixture7件を全て確認したが、
+      r:id付きpageSetupを持つfixtureは1件も無いことを確認（fixture5の`<pageSetup
+      paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0"/>`は
+      r:idを持たない）。hard gate上着手不可のためユーザーに選択肢を提示し、
+      「plain pageSetupを先に修正」を選択——r:id無しのpageSetup自体が現状
+      `_INLINE_WORKSHEET_ELEMENTS`に未追加のため毎回サイレントに失われている、
+      という別の実バグ（fixture5で実証済み）を修正した。新設`check_page_setup()`
+      は`check_inline_worksheet_elements()`のblanket listには含めず
+      （`check_internal_hyperlinks()`と同じ理由——`CT_PageSetup`は実XSD上
+      r:idを持ちうるため、r:id付きfixtureが将来現れた時にblanket checkが
+      false-positiveになる）、r:id無しのoriginal pageSetupだけを見る専用関数と
+      した。writer側は`reader::root_tag_has_rid()`で対称的にゲート——r:id無し
+      なら無条件復元（`pageMargins`と同じ、relationship依存が無いため安全）、
+      r:id付きなら`rels_survived`ゲートが未配線のため復元しない。実fixture7件
+      全てが`mechanical_check.py`の全カテゴリでCLEANに到達。r:id付き
+      pageSetup自体は実証fixtureが無い限り引き続き着手不可。
   - **D4（reachability清掃分は完了、rename/reorderは意図的に対象外）**: sheet
     rename／reorder／deletion／新規追加／非連番part名／shared・exclusive target
     のreachability——実fixtureとnegative testで固める。advisor相談の結果、

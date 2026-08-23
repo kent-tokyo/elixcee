@@ -261,9 +261,28 @@ deliberately marked N/A: this `Vm` has no rename/reorder primitive (only `Sheets
 would invert this project's own hard gate (`src/vm/mod.rs`'s own stated position: "building
 it now would be validated by nothing").
 
-Real-Excel reopen verification not yet done for `tableParts`/`drawing`/`legacyDrawing`/
-`hyperlinks`/`D4`. `<pageSetup r:id>` (no fixture has one with an `r:id` yet) remains not
-started — the only piece of `0.10.0-D`'s original scope still open.
+**Plain `<pageSetup>` restored (done).** Checked all 7 real fixtures for the `<pageSetup
+r:id>` shape before starting — none has it; `fixture5`'s own `<pageSetup paperSize="9"
+orientation="portrait" horizontalDpi="0" verticalDpi="0"/>` has no `r:id` at all, and no
+fixture's `.rels` declares a `printerSettings` relationship. `r:id`-backed `<pageSetup>`
+stays genuinely blocked on this project's own hard gate (fixture evidence required before
+writer code). But `fixture5`'s plain `pageSetup` was itself a real, previously-uncaught
+bug: never added to `_INLINE_WORKSHEET_ELEMENTS`, so it was silently lost on every save,
+invisible to every existing checker category. New `check_page_setup()` — deliberately not
+folded into `check_inline_worksheet_elements()`, same reasoning as
+`check_internal_hyperlinks()` (already excluded for the identical hazard on
+`<hyperlinks>`): unlike `sheetViews`/`pageMargins`/etc, `CT_PageSetup` genuinely CAN carry
+an `r:id` per the real XSD, so a blanket present/absent check would false-positive the
+day a real `r:id`-backed fixture shows up. This check only ever looks at an `r:id`-free
+original `<pageSetup>`. New `reader::root_tag_has_rid()` gates the writer side the same
+way: a plain `pageSetup` restores unconditionally (no relationship dependency, same as
+`pageMargins`); one with `r:id` is dropped entirely, staying unrestored until a real
+fixture justifies the same `rels_survived` gate every other relationship-backed element
+uses. All 7 real fixtures now report `CLEAN` across every `mechanical_check.py` category.
+
+This closes `0.10.0-D`'s only remaining open item for the current fixture set. Real-Excel
+reopen verification remains not done for `tableParts`/`drawing`/`legacyDrawing`/
+`hyperlinks`/`D4`/plain `pageSetup`.
 
 ### CI: WASM artifact size observability
 

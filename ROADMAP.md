@@ -94,8 +94,11 @@ across every `mechanical_check.py` category, including `source_references`:
 (reachability-based cleanup of a deleted sheet's exclusively-reachable parts) is also
 done, closing Known gaps item 15; sheet rename/reorder are marked N/A rather than
 implemented (this `Vm` has no such primitive, and adding one purely to fill a test-table
-row would invert this milestone's own hard gate). `0.10.0-D`'s only remaining open item
-is `<pageSetup r:id>` (no fixture has one). Everything above is
+row would invert this milestone's own hard gate). Plain (relationship-free) `<pageSetup>`
+is also restored — `fixture5`'s real shape, previously silently lost and uncaught by any
+checker. `r:id`-backed `<pageSetup>` (a `printerSettings` relationship) remains the only
+genuinely open item, blocked on the project's own hard gate: no fixture with that shape
+exists in the repo. Everything above is
 mechanical-check-verified but not yet real-Excel reopen-verified. Three independent, pre-existing correctness
 bugs found and fixed along the way, all affecting every released version: a save's sheet
 tab order silently followed an alphabetical sort instead of the source order, a sheet's
@@ -683,9 +686,25 @@ deliberately marked N/A rather than implemented: this `Vm` has no rename/reorder
 primitive, and adding VBA statement support purely to make a test-table row reachable
 would invert this project's own hard gate.
 
-`0.10.0-D`'s only remaining open item: `<pageSetup r:id>` (no fixture has one with an
-`r:id` yet). Real-Excel reopen verification remains not done for `tableParts`/`drawing`/
-`legacyDrawing`/`hyperlinks`/`D4`.
+**Plain (relationship-free) `<pageSetup>` restored (done).** Checked all 7 real fixtures
+for the `<pageSetup r:id>` shape first — none has it. `fixture5`'s own `<pageSetup
+paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0"/>` has no `r:id`,
+and no fixture's `.rels` declares a `printerSettings` relationship, so the `r:id`-backed
+case remains genuinely blocked on this milestone's own hard gate. But `fixture5`'s plain
+`pageSetup` turned out to be a real, previously-uncaught bug in its own right: `pageSetup`
+was never added to `_INLINE_WORKSHEET_ELEMENTS`, so it was silently lost on every save,
+invisible to every existing checker category. New `check_page_setup()` — kept out of
+`check_inline_worksheet_elements()`'s blanket list for the same reason
+`check_internal_hyperlinks()` already is (the `<hyperlinks>` precedent): `CT_PageSetup`
+genuinely CAN carry an `r:id`, so a blanket check would false-positive the day a real
+`r:id`-backed fixture shows up. New `reader::root_tag_has_rid()` gates the writer
+symmetrically: a plain `pageSetup` restores unconditionally (same mechanism as
+`pageMargins`, no relationship dependency at all); one with `r:id` is dropped entirely
+rather than risk a dangling reference with no `rels_survived` gate wired up for it.
+
+`0.10.0-D`'s only remaining open item: `<pageSetup r:id>` itself (still no fixture with
+that shape). Real-Excel reopen verification remains not done for `tableParts`/`drawing`/
+`legacyDrawing`/`hyperlinks`/`D4`/plain `pageSetup`.
 
 **Exit criteria** (unchanged from the original sketch, still the target): every untouched
 unsupported XML node preserved byte- or semantically-equivalent, 0 Excel repair warnings, 0
