@@ -26,6 +26,14 @@ relationship at all) reproduces SOURCE_REFERENCE_LOSS in every one of them, whil
 check_roundtrip() reports STRUCTURALLY_CLEAN on all three -- see
 docs/xlsx-worksheet-preservation-0.10.0-design.md §4/§9 and
 fixtures/pristine/INVENTORY.md for the full account.
+
+check_inline_worksheet_elements() (0.10.0-B) covers a different, relationship-FREE gap:
+direct children of <worksheet> like <sheetViews> (freeze panes, active-cell selection)
+carry no r:id at all, so check_source_references() has nothing to look for -- yet today's
+writer (before 0.10.0-B) never emits them either, silently dropping view state on every
+save. INLINE_ELEMENT_LOSS is a third, distinct violation category from both
+SOURCE_REFERENCE_LOSS (r:id-bearing) and check_roundtrip()'s structural checks (ZIP-part
+level, not worksheet-content level).
 """
 from __future__ import annotations
 
@@ -487,6 +495,73 @@ def check_source_references(original_path, output_path):
     return {"violations": violations, "source_reference_verdict": verdict}
 
 
+# Direct children of <worksheet> that carry NO r:id/relationship dependency at all --
+# 0.10.0-B's opaque-fragment passthrough targets. Extended one element at a time, in step
+# with 0.10.0-B's own slices (see docs/xlsx-worksheet-preservation-0.10.0-design.md §10):
+# only listed here once a real fixture demonstrates it and this checker has a negative
+# test for its loss (the same hard gate that governs writer code).
+_INLINE_WORKSHEET_ELEMENTS = ["sheetViews"]
+
+
+def check_inline_worksheet_elements(original_path, output_path):
+    """Detects INLINE_ELEMENT_LOSS: a direct child of <worksheet> in
+    _INLINE_WORKSHEET_ELEMENTS is present in the original worksheet XML but absent from
+    the corresponding output worksheet XML. Distinct from check_source_references()
+    (r:id-bearing elements only -- <sheetViews> and friends carry no relationship at all,
+    so that check has nothing to look for) and from check_formula_preservation()
+    (cell-level, not worksheet-level). Sheets are matched by name via _sheet_name_to_part,
+    same as check_formula_preservation -- NOT by physical part path, since elixcee's
+    writer renumbers worksheet parts sequentially on every save.
+
+    Confirmed as a real, current gap (not hypothetical) before any 0.10.0-B writer code
+    was written: running elixcee's own save (load, edit one cell, --output) against every
+    one of fixture1-7 under fixtures/pristine/ reproduces INLINE_ELEMENT_LOSS on every
+    sheet of every fixture -- <sheetViews> is universally present in the source and
+    universally absent from today's writer output (build_xlsx_sheet emits none). This is
+    the pre-fix baseline this check exists to close; 0.10.0-B's writer commit should turn
+    all of fixture1-7 CLEAN under this check without touching SOURCE_REFERENCE_LOSS, which
+    stays unresolved on fixture3/4/5 until 0.10.0-D.
+
+    Returns {"violations": [...], "inline_element_verdict": "CLEAN"|"INLINE_ELEMENT_LOSS"}.
+    """
+    violations = []
+    try:
+        original = _read_zip_entries(original_path)
+        output = _read_zip_entries(output_path)
+    except (zipfile.BadZipFile, FileNotFoundError) as e:
+        return {"violations": [f"unreadable: {e}"], "inline_element_verdict": "ORACLE_FAILURE"}
+
+    orig_sheets = _sheet_name_to_part(original)
+    out_sheets = {name.lower(): part for name, part in _sheet_name_to_part(output).items()}
+    for name, orig_part in orig_sheets.items():
+        if orig_part not in original:
+            continue
+        try:
+            orig_root = ET.fromstring(original[orig_part])
+        except ET.ParseError:
+            continue  # not this check's job -- check_roundtrip() already covers malformed parts
+        present = [tag for tag in _INLINE_WORKSHEET_ELEMENTS if orig_root.find(f"{SML_NS}{tag}") is not None]
+        if not present:
+            continue
+
+        out_part = out_sheets.get(name.lower())
+        out_root = None
+        if out_part and out_part in output:
+            try:
+                out_root = ET.fromstring(output[out_part])
+            except ET.ParseError:
+                pass
+        for tag in present:
+            if out_root is None or out_root.find(f"{SML_NS}{tag}") is None:
+                violations.append(
+                    f"sheet '{name}': <{tag}> present in original worksheet XML, missing "
+                    f"from the output (INLINE_ELEMENT_LOSS)"
+                )
+
+    verdict = "INLINE_ELEMENT_LOSS" if violations else "CLEAN"
+    return {"violations": violations, "inline_element_verdict": verdict}
+
+
 def self_test():
     """Negative calibration: corrupt two copies, assert this checker actually catches
     both, PLUS assert a genuinely clean pass-through reports clean. Run before trusting
@@ -755,11 +830,70 @@ def self_test():
             for v in result["violations"]
         ), result["violations"]
 
+        # --- Case I: INLINE_ELEMENT_LOSS (0.10.0-B). orig_path/clean_path (Case A) have no
+        # <sheetViews> at all, so re-use them first to confirm "nothing to lose" reports
+        # CLEAN, not a false positive -- then build a dedicated fixture that DOES carry
+        # <sheetViews> (freeze pane + selection, mirroring fixture7_freeze_pane.xlsm's real
+        # shape) to confirm both a clean copy and a stripped one are judged correctly.
+        result = check_inline_worksheet_elements(orig_path, clean_path)
+        assert result["inline_element_verdict"] == "CLEAN", result
+        assert result["violations"] == [], result
+
+        sv_path = os.path.join(tmp, "sheetviews_orig.xlsm")
+        SHEET1_SHEETVIEWS_XML = (
+            f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}">'
+            '<sheetViews><sheetView tabSelected="1" workbookViewId="0">'
+            '<pane xSplit="1" ySplit="1" topLeftCell="B2" activePane="bottomRight" state="frozen"/>'
+            '<selection pane="bottomRight" activeCell="B2" sqref="B2"/>'
+            "</sheetView></sheetViews>"
+            '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>'
+            "</worksheet>"
+        ).encode()
+        with zipfile.ZipFile(sv_path, "w") as zf:
+            zf.writestr(
+                "[Content_Types].xml",
+                f'<?xml version="1.0"?><Types xmlns="{CT_NS[1:-1]}">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                "</Types>",
+            )
+            zf.writestr(
+                "xl/workbook.xml",
+                f'<?xml version="1.0"?><workbook xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+                '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+            )
+            zf.writestr(
+                "xl/_rels/workbook.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr("xl/worksheets/sheet1.xml", SHEET1_SHEETVIEWS_XML)
+
+        sv_clean_path = os.path.join(tmp, "sheetviews_clean.xlsm")
+        shutil.copyfile(sv_path, sv_clean_path)
+        result = check_inline_worksheet_elements(sv_path, sv_clean_path)
+        assert result["inline_element_verdict"] == "CLEAN", result
+
+        sv_stripped_path = os.path.join(tmp, "sheetviews_stripped.xlsm")
+        with zipfile.ZipFile(sv_path) as src, zipfile.ZipFile(sv_stripped_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    assert b"<sheetViews>" in data, "self-test fixture bug: sheetViews needle not found"
+                    data = re.sub(rb"<sheetViews>.*?</sheetViews>", b"", data, flags=re.DOTALL)
+                dst.writestr(item, data)
+        result = check_inline_worksheet_elements(sv_path, sv_stripped_path)
+        assert result["inline_element_verdict"] == "INLINE_ELEMENT_LOSS", result
+        assert any("sheetViews" in v for v in result["violations"]), result["violations"]
+
     print(
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
         "target, stripped-formula, orphaned part, all 4 SOURCE_REFERENCE_LOSS shapes, "
-        "unexpected .rels mutation, and cross-type rId confusion all caught; comments "
-        "correctly out of SOURCE_REFERENCE_LOSS scope)"
+        "unexpected .rels mutation, cross-type rId confusion, and INLINE_ELEMENT_LOSS "
+        "(sheetViews) all caught; comments correctly out of SOURCE_REFERENCE_LOSS scope)"
     )
 
 
@@ -773,10 +907,17 @@ if __name__ == "__main__":
     structural = check_roundtrip(sys.argv[1], sys.argv[2])
     formulas = check_formula_preservation(sys.argv[1], sys.argv[2])
     source_references = check_source_references(sys.argv[1], sys.argv[2])
-    print(json.dumps({"structural": structural, "formulas": formulas, "source_references": source_references}, indent=2))
+    inline_elements = check_inline_worksheet_elements(sys.argv[1], sys.argv[2])
+    print(json.dumps({
+        "structural": structural,
+        "formulas": formulas,
+        "source_references": source_references,
+        "inline_elements": inline_elements,
+    }, indent=2))
     ok = (
         structural["structural_verdict"] == "STRUCTURALLY_CLEAN"
         and formulas["formula_verdict"] == "CLEAN"
         and source_references["source_reference_verdict"] == "CLEAN"
+        and inline_elements["inline_element_verdict"] == "CLEAN"
     )
     sys.exit(0 if ok else 1)
