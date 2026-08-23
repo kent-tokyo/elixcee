@@ -504,14 +504,29 @@ def check_source_references(original_path, output_path):
 # slice 1 (sheetViews): fixture1-7 all carry it.
 # slice 2 (sheetPr/sheetFormatPr/phoneticPr/dataValidations): sheetFormatPr and
 # phoneticPr are present in all 7 fixtures; sheetPr in fixture2/3/4 only;
-# dataValidations in fixture3 only -- all real, none synthesized. autoFilter and
-# conditionalFormatting are deliberately NOT here yet: autoFilter has zero fixture
-# evidence as a standalone worksheet element (INVENTORY.md's "confirmed absent" list --
-# fixture3's <autoFilter> lives inside xl/tables/table1.xml, a different part), and
-# conditionalFormatting can reference xl/styles.xml's <dxfs> (dxfId) or <extLst>
-# extensions -- the design doc flags it as needing separate consideration before being
-# treated as a pure relationship-free opaque fragment.
-_INLINE_WORKSHEET_ELEMENTS = ["sheetViews", "sheetPr", "sheetFormatPr", "phoneticPr", "dataValidations"]
+# dataValidations in fixture3 only -- all real, none synthesized.
+# slice 3 (pageMargins): present in all 7 fixtures, same shape as sheetFormatPr/
+# phoneticPr (self-closing, no children, no namespace dependency).
+#
+# autoFilter and conditionalFormatting are deliberately NOT here yet: autoFilter has
+# zero fixture evidence as a standalone worksheet element (INVENTORY.md's "confirmed
+# absent" list -- fixture3's <autoFilter> lives inside xl/tables/table1.xml, a different
+# part), and conditionalFormatting can reference xl/styles.xml's <dxfs> (dxfId) or
+# <extLst> extensions -- the design doc flags it as needing separate consideration
+# before being treated as a pure relationship-free opaque fragment. <hyperlinks> is ALSO
+# deliberately not here, even though relationship-free location-only hyperlinks exist
+# (fixture6) -- a present/absent check on the whole container would false-positive on
+# fixture4, whose <hyperlinks> is correctly ABSENT from a correct output (its only child
+# is r:id-backed, out of this check's scope) despite being present in the source. See
+# check_internal_hyperlinks() below, a dedicated per-child check instead.
+_INLINE_WORKSHEET_ELEMENTS = [
+    "sheetViews",
+    "sheetPr",
+    "sheetFormatPr",
+    "phoneticPr",
+    "dataValidations",
+    "pageMargins",
+]
 
 
 def check_inline_worksheet_elements(original_path, output_path):
@@ -538,6 +553,10 @@ def check_inline_worksheet_elements(original_path, output_path):
     on all 7 fixtures, sheetPr lost on fixture2/3/4 (the only 3 that have it), and
     dataValidations lost on fixture3 (the only one that has it) -- sheetViews itself
     correctly stayed CLEAN everywhere, confirming slice 1's fix wasn't disturbed.
+
+    slice 3 (pageMargins) re-confirmed the same way against the slice-1+2-fixed writer
+    (1494adc): pageMargins lost on all 7 fixtures (present in every one), and it was the
+    ONLY element flagged anywhere -- confirming slices 1 and 2 stayed intact.
 
     Returns {"violations": [...], "inline_element_verdict": "CLEAN"|"INLINE_ELEMENT_LOSS"}.
     """
@@ -874,6 +893,7 @@ def self_test():
             '<phoneticPr fontId="1"/>'
             '<dataValidations count="1"><dataValidation type="list" allowBlank="1" '
             'sqref="E1"><formula1>"Yes,No"</formula1></dataValidation></dataValidations>'
+            '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>'
             "</worksheet>"
         ).encode()
         with zipfile.ZipFile(sv_path, "w") as zf:
@@ -916,9 +936,9 @@ def self_test():
         assert result["inline_element_verdict"] == "INLINE_ELEMENT_LOSS", result
         assert any("sheetViews" in v for v in result["violations"]), result["violations"]
 
-        # --- Case J: INLINE_ELEMENT_LOSS, slice 2 (0.10.0-B). One independent mutation
+        # --- Case J: INLINE_ELEMENT_LOSS, slice 2/3 (0.10.0-B). One independent mutation
         # per element -- strip only that element from sv_path's sheet1.xml, leave the
-        # other 4 intact, confirm each is individually detected (not just "something is
+        # others intact, confirm each is individually detected (not just "something is
         # wrong somewhere"). Mirrors Case H's one-mutation-per-relationship-type shape.
         _SLICE2_MUTATIONS = {
             "sheetPr": (b'<sheetPr codeName="Sheet1"/>', b""),
@@ -927,6 +947,10 @@ def self_test():
             "dataValidations": (
                 b'<dataValidations count="1"><dataValidation type="list" allowBlank="1" '
                 b'sqref="E1"><formula1>"Yes,No"</formula1></dataValidation></dataValidations>',
+                b"",
+            ),
+            "pageMargins": (
+                b'<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>',
                 b"",
             ),
         }
@@ -956,7 +980,7 @@ def self_test():
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
         "target, stripped-formula, orphaned part, all 4 SOURCE_REFERENCE_LOSS shapes, "
         "unexpected .rels mutation, cross-type rId confusion, and INLINE_ELEMENT_LOSS "
-        "(sheetViews + 4 slice-2 elements, independently) all caught; comments correctly "
+        "(sheetViews + 5 slice-2/3 elements, independently) all caught; comments correctly "
         "out of SOURCE_REFERENCE_LOSS scope)"
     )
 
