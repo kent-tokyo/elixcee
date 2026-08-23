@@ -262,6 +262,20 @@ VM内部識別子）フィールドは実装しなかった。`src/vm/mod.rs`・
 検証されない抽象化を先回りして作るのは過剰設計と判断し、rename-safeな識別子は
 sheet-rename VBA機能が実装される時まで見送ることにした。
 
+**追記（0.10.0-C着手時に発覚・修正済み）**: この節冒頭で「位置ベースの命名」と表現していた
+`sheet_names()`は、実際には**アルファベット順ソート**だった——add/delete/renameが一切
+起きない、ロードしたファイルをそのまま保存するだけの最も単純なケースでも、シート名が
+アルファベット順でなければ（例: "Zebra"→"Alpha"の2シート）保存のたびにタブ順が入れ替わる
+という、この節が想定していたより一段階手前のバグだった。全ての既存fixtureが
+たまたまアルファベット順（Sheet1/2/3）だったため発見が遅れた。`Vm::sheet_order`
+（挿入順、`ensure_sheet`/`Sheets(...).Delete`で`sheets`と同期）を新設し、
+`save_xlsx_impl`の並び順ソースをこちらに切り替えて修正済み——ただし`sheet_names()`
+自体は`Sheets(i)`/`Worksheets(i)`のランタイム解決にも使われており、そちらの
+アルファベット順は別の既知ギャップ（`docs/agent-contract.md`）として意図的に
+未変更のまま残した。この節が本来警告していた「add/delete/rename後にworksheet-level
+relsを安全に付け替える」設計（origin基準のcarry-over、0.10.0-D）はこの修正の対象外で、
+引き続き未実装。
+
 役割を明確に分ける: シート名（ユーザーに見える可変値）／`sheetId`（workbook内の識別子、
 `.ods`など`sheetId`を持たないソースではNone）／workbook.xmlの`r:id`（workbook.xmlから
 worksheet partへの関係）／worksheet part path（`xl/worksheets/sheetN.xml`という文字列、
@@ -717,7 +731,13 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
   1節の指摘通りスコープを混ぜない）
   - `<definedNames>`（6節のシートリネーム時dangling注意、9節の診断で対応）
   - print area・print titles（`<definedNames>`内の特殊named range、`_xlnm.Print_Area`等）
-  - workbook metadata（`<bookViews>`・`<calcPr>`・`<workbookPr>`）
+  - workbook metadata（`<bookViews>`・`<calcPr>`・`<workbookPr>`）——**追記**: `<bookViews>`の
+    `activeTab`/`firstSheet`はシート位置のインデックス値なので、6節の追記の通り
+    `save_xlsx_impl`の出力シート順が正しいこと（`Vm::sheet_order`、修正済み）が
+    このbulletの前提条件。前提は満たされたが、`Sheets.Add`/`Sheets(...).Delete`と
+    組み合わさった場合に`activeTab`が指す位置がずれる可能性自体は未検証・未対応の
+    まま残っている——opaque-fragment passthroughで単純にverbatim持ち越すのではなく、
+    add/delete発生時にどう扱うかの設計判断がこのbulletの実装前に必要
   - ~~元の`sheetId`の保持（2節/6節、位置ベース再生成の是正）~~ ——**訂正（stale
     cross-reference）**: 初稿ではここに挙げていたが、実際には0.10.0-Aで
     `WorksheetOrigin`実装の一部として既に完了済み（10節の0.10.0-Aチェックリスト

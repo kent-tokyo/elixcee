@@ -676,6 +676,110 @@ fn passthrough_part_referenced_only_by_a_non_writer_owned_relationship_type_keep
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// A workbook's saved sheet order must match its *source* order, not an
+/// alphabetical sort. Found via a hand-built two-sheet fixture named
+/// "Zebra" (first) / "Alpha" (second): `save_xlsx_impl` used to derive its
+/// entire sheet-iteration order from `Vm::sheet_names()`, which sorts —
+/// so every save of this fixture silently swapped the tab order to
+/// "Alpha"/"Zebra", with no macro touching sheets at all. Every prior
+/// round-trip fixture happened to already be alphabetical (Sheet1/2/3), so
+/// nothing caught this before. Root-caused to `Vm::sheet_order` (new,
+/// insertion-ordered) not existing at all; `sheet_names()` itself is left
+/// alphabetical on purpose -- see its doc comment.
+#[test]
+fn sheet_order_survives_a_save_even_when_source_names_are_not_alphabetical() {
+    const WORKBOOK_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheets>\n",
+        "<sheet name=\"Zebra\" sheetId=\"7\" r:id=\"rId1\"/>\n",
+        "<sheet name=\"Alpha\" sheetId=\"3\" r:id=\"rId2\"/>\n",
+        "</sheets>\n</workbook>\n",
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const MINIMAL_SHEET: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n</worksheet>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet1.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet2.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    let fixture_bytes = zip.finish().unwrap().into_inner();
+
+    let source_path = tmp_path("source_zebra_alpha.xlsx");
+    let output_path = tmp_path("output_zebra_alpha.xlsx");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let wb_xml = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+
+    let names: Vec<String> = wb_xml
+        .match_indices("<sheet ")
+        .map(|(start, _)| {
+            let tag_end = wb_xml[start..].find("/>").unwrap() + start;
+            extract_attr(&wb_xml[start..tag_end], "name").unwrap()
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec!["zebra".to_string(), "alpha".to_string()],
+        "sheet order must match the source file, not an alphabetical sort: {wb_xml}"
+    );
+
+    let ids: Vec<String> = wb_xml
+        .match_indices("<sheet ")
+        .map(|(start, _)| {
+            let tag_end = wb_xml[start..].find("/>").unwrap() + start;
+            extract_attr(&wb_xml[start..tag_end], "sheetId").unwrap()
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["7".to_string(), "3".to_string()],
+        "each sheet's original sheetId must stay attached to its own name, not get \
+         reshuffled along with position: {wb_xml}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// A genuine Microsoft-Excel-for-Mac-authored `.xlsm` (real VBA project, real
 /// `xr:uid`/`calcChain.xml`/`theme1.xml`), not a hand-built stand-in -- see
 /// `compat/oracle-excel-com/results/0.9.0-A_summary.md` for the full real-Excel

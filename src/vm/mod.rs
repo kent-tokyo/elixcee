@@ -563,6 +563,25 @@ fn expect_range_ref(obj: ObjectRef, context: &str) -> Result<RangeRef, String> {
 pub struct Vm {
     /// Per-sheet cell storage. Key is sheet name (lowercase for lookup).
     sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
+    /// Lowercased sheet names in the order they entered this `Vm` — source
+    /// file order for a loaded workbook (`populate_from_sheets`), append
+    /// order for anything created afterward (`ensure_sheet`, the single
+    /// choke point behind every sheet-introducing call site: `Sheets.Add`,
+    /// `Sheets("New").Cells(...) = ...` auto-vivification, `With
+    /// Sheets("New")`). Kept in sync with `sheets`' key set by
+    /// `ensure_sheet` (push on first insert) and `Stmt::SheetsDelete`
+    /// (remove on delete); `populate_from_sheets` clears both together.
+    ///
+    /// This is deliberately a *second* source of sheet order, kept apart
+    /// from `sheet_names()` (which still sorts alphabetically) — real order
+    /// exists so `save_xlsx_impl` can write sheets back in their original
+    /// tab order (0.10.0 "Lossless Worksheet Preservation": found via a
+    /// synthetic "Zebra"/"Alpha" fixture that round-tripped as "Alpha"/
+    /// "Zebra"). `sheet_names()`'s alphabetical order is a separate,
+    /// already-documented VBA-runtime fidelity gap (`Sheets(i)`/
+    /// `Worksheets(i)` numeric indexing, `docs/agent-contract.md`) —
+    /// changing that is a distinct decision, not made here.
+    pub(crate) sheet_order: Vec<String>,
     /// Currently active sheet name (lowercase).
     pub active_sheet: String,
     pub variables: HashMap<String, Variant>,
@@ -749,6 +768,7 @@ impl Vm {
         sheets.insert("sheet1".into(), HashMap::new());
         Vm {
             sheets,
+            sheet_order: vec!["sheet1".into()],
             active_sheet: "sheet1".into(),
             variables: HashMap::new(),
             calc_mode: CalculationMode::Automatic,
@@ -906,7 +926,11 @@ impl Vm {
     }
 
     pub fn ensure_sheet(&mut self, name: &str) {
-        self.sheets.entry(name.to_lowercase()).or_default();
+        let key = name.to_lowercase();
+        if !self.sheets.contains_key(&key) {
+            self.sheet_order.push(key.clone());
+        }
+        self.sheets.entry(key).or_default();
     }
 
     pub fn set_active_sheet(&mut self, name: &str) -> Result<(), String> {
@@ -2074,6 +2098,7 @@ impl Vm {
     /// PyO3 binding), so this is a full replace, not a data-losing merge.
     pub(crate) fn populate_from_sheets(&mut self, sheets: Vec<WorkbookSheet>) -> Vec<String> {
         self.sheets.clear();
+        self.sheet_order.clear();
         let mut names = Vec::with_capacity(sheets.len());
         for sheet_data in &sheets {
             self.ensure_sheet(&sheet_data.name);
@@ -3155,6 +3180,7 @@ impl Vm {
                 self.check_sheet_not_protected(&key, &display)?;
                 if key != self.active_sheet {
                     self.sheets.remove(&key);
+                    self.sheet_order.retain(|n| n != &key);
                 }
             }
             Stmt::SheetProtection {
@@ -7747,6 +7773,12 @@ mod tests {
     fn test_sheets_add() {
         let vm = run("Sub MySub()\n    Sheets.Add\n    n = 1\nEnd Sub\n");
         assert!(vm.sheet_names().len() >= 2);
+        // `sheet_order` (the writer's real-order source, distinct from
+        // `sheet_names()`'s alphabetical sort) must have grown by exactly
+        // one entry too, and the new sheet must land at the end -- it
+        // wasn't present at `Vm::new()` time.
+        assert_eq!(vm.sheet_order.len(), 2);
+        assert!(!vm.sheet_order[..1].contains(&vm.sheet_order[1]));
     }
 
     #[test]
@@ -7755,6 +7787,10 @@ mod tests {
             "Sub MySub()\n    Sheets(\"Sheet2\").Cells(1,1).Value = 5\n    Sheets(\"Sheet2\").Delete\n    n = 1\nEnd Sub\n",
         );
         assert!(!vm.sheet_names().contains(&"sheet2".to_string()));
+        assert!(
+            !vm.sheet_order.contains(&"sheet2".to_string()),
+            "sheet_order must drop a deleted sheet too, or the writer would still emit it"
+        );
     }
 
     // ── Milestone B6a: strict_resolution + resolution-failure evidence ──────

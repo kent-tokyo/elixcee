@@ -82,6 +82,22 @@ omit the container entirely rather than emit an empty `<hyperlinks/>`) instead o
 whole. Remaining in `0.10.0-B`: `<autoFilter>` (no fixture has it as a standalone worksheet
 element yet) and row/column style properties beyond hidden state.
 
+**Sheet order/writer bug found and fixed while scoping `0.10.0-C`.** `save_xlsx_impl` derived
+its entire sheet-iteration order — worksheet part naming (`sheetN.xml`), `<sheets>` element
+order, `sheetId` assignment — from `Vm::sheet_names()`, which sorts alphabetically. Every
+existing fixture happened to already be alphabetical (`Sheet1`/`2`/`3`), so a save silently
+reordering a workbook's tabs (e.g. "Zebra" then "Alpha" round-tripping as "Alpha" then
+"Zebra", with no macro touching sheets at all) had never been caught. This is exactly the
+kind of loss `0.10.0` is chartered to close, and it directly blocked `0.10.0-C`: `<bookViews>`'s
+`activeTab`/`firstSheet` are position indices, so carrying them through opaque-fragment
+passthrough would have been wrong from the first non-alphabetical save. Fixed with a new,
+separate `Vm::sheet_order` (insertion-ordered, kept in sync with `sheets` by `ensure_sheet` —
+the single choke point behind every sheet-introducing call site — and by `Sheets(...).Delete`)
+that `save_xlsx_impl` now reads instead. `Vm::sheet_names()` itself is left unchanged
+(still alphabetical): it also drives `Sheets(i)`/`Worksheets(i)` numeric-index resolution at
+VBA runtime, a separate, already-documented fidelity gap (`docs/agent-contract.md`) this fix
+does not touch.
+
 `0.10.0-C` (workbook-level preservation) and `0.10.0-D` (relationship-backed features,
 including the actual fix for `SOURCE_REFERENCE_LOSS`) are not started.
 

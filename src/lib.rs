@@ -520,7 +520,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     use zip::CompressionMethod;
     use zip::write::ZipWriter;
 
-    let sheet_names = vm.sheet_names();
+    // Real tab order, not `vm.sheet_names()`'s alphabetical order — a
+    // workbook's physical sheet order (part naming, `<sheets>` order,
+    // sheetId assignment) must match the source, not a sort. Found via a
+    // synthetic "Zebra"/"Alpha" fixture that round-tripped as "Alpha"/
+    // "Zebra". `sheet_order` is `Vm`'s parallel, insertion-ordered sheet
+    // list; see its doc comment for how it's kept in sync with `sheets`.
+    let sheet_names = vm.sheet_order.clone();
 
     // Collect shared strings (insertion-ordered, deduplicated)
     let mut str_index: HashMap<String, usize> = HashMap::new();
