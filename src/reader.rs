@@ -571,11 +571,13 @@ fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize
 }
 
 /// Extracts the raw, byte-for-byte `<hyperlink .../>` spans inside `xml`'s
-/// `<hyperlinks>...</hyperlinks>` container that carry NO `r:id` attribute —
-/// same-workbook, relationship-free `location=` hyperlinks only. `r:id`-bearing
-/// children are excluded: carrying those through requires reconnecting the worksheet
-/// `.rels` relationship graph (0.10.0-D, not yet built), not just re-emitting text.
-/// Empty if `<hyperlinks>` is absent from `xml`, or if every child has `r:id`.
+/// `<hyperlinks>...</hyperlinks>` container. Same-workbook, relationship-free
+/// `location=` hyperlinks are always kept. `r:id`-bearing children are only kept when
+/// `include_relationship_backed` is true — the caller's job to pass that only when this
+/// sheet's own worksheet-level `.rels` genuinely survived into the same save's output
+/// (see `save_xlsx_impl`'s `rels_survived`): an r:id-bearing hyperlink is meaningless,
+/// or worse a dangling reference, without its `.rels` entry surviving alongside it.
+/// Empty if `<hyperlinks>` is absent from `xml`, or if every child was excluded.
 ///
 /// Unlike `extract_raw_element`, this does NOT return the source bytes verbatim as one
 /// blob — the container is reconstructed by the caller from a filtered child subset, so
@@ -587,7 +589,7 @@ fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize
 /// `CT_Hyperlink` has no child elements (only attributes, confirmed against the real
 /// ECMA-376 XSD) — every real `<hyperlink>` is self-closing, so this doesn't attempt to
 /// handle a non-self-closing form.
-pub(crate) fn extract_relationship_free_hyperlinks(xml: &str) -> Vec<String> {
+pub(crate) fn extract_hyperlinks(xml: &str, include_relationship_backed: bool) -> Vec<String> {
     let Some(container) = extract_raw_element(xml, "hyperlinks") else {
         return Vec::new();
     };
@@ -603,7 +605,8 @@ pub(crate) fn extract_relationship_free_hyperlinks(xml: &str) -> Vec<String> {
         let name_end = tag_start + 1 + full_name.len();
         let start_tag_end = name_end + tag_close_rel + 1;
         let attrs = parse_attrs(&container[name_end..name_end + tag_close_rel]);
-        if attr_get(&attrs, "id").is_none() {
+        let has_rid = attr_get(&attrs, "id").is_some();
+        if !has_rid || include_relationship_backed {
             out.push(container[tag_start..start_tag_end].to_string());
         }
         search_from = start_tag_end;
@@ -703,16 +706,14 @@ mod opaque_fragment_tests {
     }
 
     #[test]
-    fn relationship_free_hyperlinks_returns_none_when_hyperlinks_absent() {
+    fn hyperlinks_returns_none_when_hyperlinks_absent() {
         let xml = "<worksheet><sheetData/></worksheet>";
-        assert_eq!(
-            extract_relationship_free_hyperlinks(xml),
-            Vec::<String>::new()
-        );
+        assert_eq!(extract_hyperlinks(xml, false), Vec::<String>::new());
+        assert_eq!(extract_hyperlinks(xml, true), Vec::<String>::new());
     }
 
     #[test]
-    fn relationship_free_hyperlinks_all_location_form_all_kept() {
+    fn hyperlinks_all_location_form_all_kept_either_way() {
         // fixture6_internal_hyperlink.xlsm's real shape: a single location-only hyperlink.
         let xml = concat!(
             "<worksheet><sheetData/>",
@@ -720,33 +721,33 @@ mod opaque_fragment_tests {
             "xr:uid=\"{7239724E-8623-EB4C-A548-F5CFD578FC11}\"/></hyperlinks>",
             "</worksheet>",
         );
-        assert_eq!(
-            extract_relationship_free_hyperlinks(xml),
-            vec![
-                "<hyperlink ref=\"A1\" location=\"Sheet2!B2\" display=\"Sheet2!B2\" \
-                 xr:uid=\"{7239724E-8623-EB4C-A548-F5CFD578FC11}\"/>"
-                    .to_string()
-            ]
-        );
+        let expected = vec![
+            "<hyperlink ref=\"A1\" location=\"Sheet2!B2\" display=\"Sheet2!B2\" \
+             xr:uid=\"{7239724E-8623-EB4C-A548-F5CFD578FC11}\"/>"
+                .to_string(),
+        ];
+        assert_eq!(extract_hyperlinks(xml, false), expected);
+        assert_eq!(extract_hyperlinks(xml, true), expected);
     }
 
     #[test]
-    fn relationship_free_hyperlinks_all_rid_form_returns_empty() {
+    fn hyperlinks_all_rid_form_excluded_unless_relationship_backed_requested() {
         // fixture4_hyperlink_comment_name.xlsm's real shape: a single r:id (external URL)
-        // hyperlink -- must be entirely excluded, not passed through.
+        // hyperlink.
         let xml = concat!(
             "<worksheet xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">",
             "<sheetData/><hyperlinks><hyperlink ref=\"D6\" r:id=\"rId1\"/></hyperlinks>",
             "</worksheet>",
         );
+        assert_eq!(extract_hyperlinks(xml, false), Vec::<String>::new());
         assert_eq!(
-            extract_relationship_free_hyperlinks(xml),
-            Vec::<String>::new()
+            extract_hyperlinks(xml, true),
+            vec!["<hyperlink ref=\"D6\" r:id=\"rId1\"/>".to_string()]
         );
     }
 
     #[test]
-    fn relationship_free_hyperlinks_mixed_container_keeps_only_location_only_children() {
+    fn hyperlinks_mixed_container_respects_the_flag_per_child() {
         // Synthetic -- no real fixture has a mixed <hyperlinks> container yet (see
         // docs/xlsx-worksheet-preservation-0.10.0-design.md's B4 entry). Two r:id-bearing
         // hyperlinks sandwich one location-only hyperlink to prove position doesn't matter.
@@ -759,26 +760,33 @@ mod opaque_fragment_tests {
             "</hyperlinks></worksheet>",
         );
         assert_eq!(
-            extract_relationship_free_hyperlinks(xml),
+            extract_hyperlinks(xml, false),
             vec!["<hyperlink ref=\"B1\" location=\"Sheet2!A1\"/>".to_string()]
+        );
+        assert_eq!(
+            extract_hyperlinks(xml, true),
+            vec![
+                "<hyperlink ref=\"A1\" r:id=\"rId1\"/>".to_string(),
+                "<hyperlink ref=\"B1\" location=\"Sheet2!A1\"/>".to_string(),
+                "<hyperlink ref=\"C1\" r:id=\"rId2\"/>".to_string(),
+            ]
         );
     }
 
     #[test]
-    fn relationship_free_hyperlinks_returns_multiple_in_document_order() {
+    fn hyperlinks_returns_multiple_in_document_order() {
         let xml = concat!(
             "<worksheet><sheetData/><hyperlinks>",
             "<hyperlink ref=\"A1\" location=\"Sheet2!A1\"/>",
             "<hyperlink ref=\"B1\" location=\"Sheet3!A1\"/>",
             "</hyperlinks></worksheet>",
         );
-        assert_eq!(
-            extract_relationship_free_hyperlinks(xml),
-            vec![
-                "<hyperlink ref=\"A1\" location=\"Sheet2!A1\"/>".to_string(),
-                "<hyperlink ref=\"B1\" location=\"Sheet3!A1\"/>".to_string(),
-            ]
-        );
+        let expected = vec![
+            "<hyperlink ref=\"A1\" location=\"Sheet2!A1\"/>".to_string(),
+            "<hyperlink ref=\"B1\" location=\"Sheet3!A1\"/>".to_string(),
+        ];
+        assert_eq!(extract_hyperlinks(xml, false), expected);
+        assert_eq!(extract_hyperlinks(xml, true), expected);
     }
 }
 

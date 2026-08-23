@@ -1568,14 +1568,27 @@ fn real_excel_internal_hyperlink_survives_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
-/// Negative guard, same slice: fixture4's only hyperlink is r:id-backed (external URL,
-/// out of scope until 0.10.0-D) -- the output must NOT contain any `<hyperlinks>` element
-/// at all, not an empty `<hyperlinks/>` (CT_Hyperlinks' <hyperlink> child is
-/// minOccurs="1" -- an empty container would be invalid XML).
+/// 0.10.0-D hyperlinks slice: supersedes the old 0.10.0-B4 behavior of this exact
+/// fixture. fixture4's only hyperlink is r:id-backed (external URL) -- B4 deliberately
+/// excluded it (no relationship-graph reconnection existed yet); now that
+/// `rels_survived` gates it, it must round-trip like every other restored r:id
+/// reference. This also clears fixture4's LAST `SOURCE_REFERENCE_LOSS` violation
+/// (legacyDrawing was fixed by the previous commit) -- fixture4 is now fully CLEAN.
 #[test]
-fn real_excel_external_only_hyperlink_omits_the_hyperlinks_container_entirely() {
+fn real_excel_external_hyperlink_survives_a_save() {
     let source_path = real_fixture("fixture4_hyperlink_comment_name.xlsm");
-    let output_path = tmp_path("external_only_hyperlink_output.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_sheet1 =
+        String::from_utf8(fixture_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        source_sheet1.contains(
+            r#"<hyperlink ref="D6" r:id="rId1" xr:uid="{CEF97160-724D-564B-8AAF-8C73BDCBFE82}"/>"#
+        ),
+        "fixture no longer contains the expected hyperlink shape -- test needs updating: {source_sheet1}"
+    );
+
+    let output_path = tmp_path("external_hyperlink_output.xlsm");
     let mut vm = Vm::new();
     vm.load_workbook_file(&source_path)
         .expect("real fixture should load");
@@ -1588,9 +1601,18 @@ fn real_excel_external_only_hyperlink_omits_the_hyperlinks_container_entirely() 
     let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
 
     assert!(
-        !out_sheet1.contains("<hyperlinks"),
-        "an all-r:id source must omit <hyperlinks> entirely, not emit an empty \
-         container: {out_sheet1}"
+        out_sheet1.contains(
+            r#"<hyperlink ref="D6" r:id="rId1" xr:uid="{CEF97160-724D-564B-8AAF-8C73BDCBFE82}"/>"#
+        ),
+        "the r:id-backed hyperlink must survive a save verbatim, referencing the same \
+         rId as the source: {out_sheet1}"
+    );
+    assert_eq!(
+        output_entries.get("xl/worksheets/_rels/sheet1.xml.rels"),
+        fixture_entries.get("xl/worksheets/_rels/sheet1.xml.rels"),
+        "the worksheet .rels the restored r:id points at must still be byte-identical \
+         (TargetMode=\"External\", so no target part to check -- just the relationship \
+         entry itself)"
     );
 
     let _ = std::fs::remove_file(&output_path);
