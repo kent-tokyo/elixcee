@@ -8,10 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Root `elixcee` (Rust crate + Python package): one dependency-security fix plus a writer bug
-it exposed (see below). `@elixcee/xlsx` (still unpublished, `0.0.0-development`/
-`private: true`, no `publishConfig`): see its own two entries below for exactly what's
-implemented, plus a CI observability addition for the shared WASM bridge.
+Root `elixcee` (Rust crate + Python package): a dependency-security fix plus a writer bug it
+exposed, `cargo audit` wired permanently into CI, and `0.10.0` (Lossless Worksheet
+Preservation) design + implementation in progress — see below for current status.
+`@elixcee/xlsx` (still unpublished, `0.0.0-development`/`private: true`, no
+`publishConfig`): see its own two entries below for exactly what's implemented, plus a CI
+observability addition for the shared WASM bridge.
 
 ### Root crate: dev-dependency security fix, plus a real writer bug it uncovered
 
@@ -33,7 +35,55 @@ counterpart of the `xml:space="preserve"`-on-read fix already applied to `<v>` c
 emitting `xml:space="preserve"` on `<t>` whenever a shared string's content differs from its
 own `trim()`, with a direct unit test on the raw XML output.
 
-`cargo audit` now reports zero advisories.
+`cargo audit` now reports zero advisories. It's now wired permanently into CI (`rust-quality`
+job, `cargo audit --version 0.22.1 --locked` after a from-scratch tool install, no
+`continue-on-error`) rather than the one-off local run above — alongside `cargo fmt --all
+--check`, `cargo clippy --workspace --all-targets -- -D warnings` (with and without the
+`python` feature), and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features
+python --document-private-items`, none of which had a CI job of their own before.
+
+### `0.10.0` — Lossless Worksheet Preservation (design done, implementation in progress)
+
+Worksheet XML is still always fully regenerated on save (`build_xlsx_sheet`), so anything
+elixcee doesn't parse that lives *inside* a `<worksheet>` element — as opposed to a separate
+ZIP part, already handled by `0.8.0`'s passthrough — is silently lost. `0.10.0` closes that,
+under a hard gate carried through every step below: no writer code for an element until a
+real Excel-authored fixture demonstrates it, its XSD sequence is confirmed against the actual
+ECMA-376 schema, and `mechanical_check.py` has a negative test for its loss. Full design in
+`docs/xlsx-worksheet-preservation-0.10.0-design.md`; not released, no version bump yet.
+
+**`0.10.0-A` (foundation, done).** `WorksheetOrigin` (original `sheetId`/`workbook.xml`
+`r:id`/part name) now threads from `reader::WorkbookSheet` through `Vm` to the writer, so a
+sheet's original `sheetId` survives a save instead of being renumbered by position every
+time — closing a gap `snapshot.rs`'s own `stable_id` doc comment had already disclosed.
+`mechanical_check.py` gained `check_source_references()` and a new `SOURCE_REFERENCE_LOSS`
+violation category, distinct from the pre-existing `ORPHANED_PART`/`DANGLING_RELATIONSHIP`: a
+worksheet-level relationship's `.rels` entry and target part can both survive a save
+byte-identical while the regenerated worksheet XML no longer references the `r:id` that
+activates it — confirmed systemic across every fixture with a worksheet-level relationship at
+all (not yet fixed; that's `0.10.0-D`). Two new real Excel-authored fixtures added (internal
+`location=` hyperlink, real freeze pane — the repo had neither before). One independent bug
+found and fixed along the way: `Vm::new()`'s default empty `"sheet1"` wasn't cleared before
+loading a real workbook, so any workbook whose sheets are never literally named `"Sheet1"`
+gained a spurious extra empty sheet on every save.
+
+**`0.10.0-B` (inline worksheet elements, in progress).** An opaque-fragment mechanism —
+capture an element's raw source XML, splice it back at the correct schema position, never
+parse or reconstruct it — applied one element at a time, each slice independently checker-
+verified (a new `INLINE_ELEMENT_LOSS`/`INTERNAL_HYPERLINK_LOSS` category per shape), fixture-
+verified, and reopened in real Excel with 0 repair warnings before being called done:
+`<sheetViews>` (freeze panes, active-cell selection), `<sheetPr>`/`<sheetFormatPr>`/
+`<phoneticPr>`/`<dataValidations>`, `<pageMargins>`, and internal hyperlinks. The last one
+needed a different mechanism than the rest: a `<hyperlinks>` container can mix
+relationship-free `location=` children with `r:id`-backed ones that stay out of scope until
+`0.10.0-D`, so it's reconstructed from filtered children (confirmed via the real
+`CT_Hyperlinks` XSD: its `<hyperlink>` child is `minOccurs="1"`, so an all-`r:id` source must
+omit the container entirely rather than emit an empty `<hyperlinks/>`) instead of copied
+whole. Remaining in `0.10.0-B`: `<autoFilter>` (no fixture has it as a standalone worksheet
+element yet) and row/column style properties beyond hidden state.
+
+`0.10.0-C` (workbook-level preservation) and `0.10.0-D` (relationship-backed features,
+including the actual fix for `SOURCE_REFERENCE_LOSS`) are not started.
 
 ### CI: WASM artifact size observability
 
