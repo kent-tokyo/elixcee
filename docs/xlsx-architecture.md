@@ -710,6 +710,32 @@ which runs the same assertions against a real Excel-authored fixture
 (`compat/oracle-excel-com/fixtures/pristine/fixture2_vba_macro.xlsm`) rather than a
 synthetic one.
 
+### `0.10.0`: worksheet-XML content is still always fully regenerated
+
+Everything above (slices 1–3, Milestone 4) is about ZIP-part-level preservation — an
+entire `xl/worksheets/sheetN.xml` either survives byte-identical (passthrough) or is
+regenerated from scratch by `build_xlsx_sheet` (writer-owned). What Milestone 4 didn't
+change: `build_xlsx_sheet` still only ever emits `<cols>`/`<sheetData>`/`<mergeCells>` from
+`Vm` state — any element that lives *inside* a regenerated `<worksheet>` (freeze panes,
+data validation, hyperlinks, comments, charts, ...) that elixcee doesn't itself model is
+silently dropped on every save, same as before Milestone 4. This is `0.10.0`'s own scope,
+not a Milestone-4 regression.
+
+Full design in `docs/xlsx-worksheet-preservation-0.10.0-design.md` (kept separate rather
+than merged into this file — that document alone is comparable in size to this one).
+Summary: an opaque-fragment mechanism (capture an element's raw source XML at save time via
+`WorksheetOrigin`'s `original_part_name`, splice it back at the correct `CT_Worksheet`
+schema position, never parse or reconstruct it) implemented one element at a time under a
+hard gate — no writer code until a real Excel-authored fixture demonstrates the element,
+its XSD sequence is confirmed against the real ECMA-376 schema, and
+`mechanical_check.py` has a negative test for its loss. As of this writing: `0.10.0-A`
+(foundation — `WorksheetOrigin`, the new `SOURCE_REFERENCE_LOSS` checker category) done;
+`0.10.0-B` (inline elements) landed `<sheetViews>`/`<sheetPr>`/`<sheetFormatPr>`/
+`<phoneticPr>`/`<dataValidations>`/`<pageMargins>`/internal hyperlinks; `0.10.0-C`
+(workbook-level) and `0.10.0-D` (relationship-backed features, including the actual fix for
+`SOURCE_REFERENCE_LOSS`) not started. See `CHANGELOG.md`'s `[Unreleased]` for current
+per-slice detail.
+
 ## Consequences
 
 Once the formula/VM split and the buffer-API extraction land, `elixcee-xlsx` can exist as
