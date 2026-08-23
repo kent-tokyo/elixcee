@@ -516,12 +516,26 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     自己完結しているため変更していない。
   - [x] 実データでの確認——2シート・非連番`sheetId`（5・9）を持つ合成`.xlsx`を実際に
     elixceeでロード→1セル編集→保存し、出力`workbook.xml`で両シートとも元の`sheetId`が
-    保持され、ロード元に存在しない3つ目のシート（`Vm::new()`のデフォルト`"sheet1"`が
-    ロード時に上書きされず残ったもの——本タスクとは無関係の既存動作、別途「発見事項」
-    として報告のみ）には衝突しない新規id(10)が振られることを確認。
+    保持されることを確認。この検証中、ロード元に存在しない3つ目のシート
+    （`Vm::new()`のデフォルト`"sheet1"`がロード時に上書きされず残ったもの）が出力に
+    混入する事象を発見——当初は「本タスクとは無関係の既存動作」として報告のみに
+    留めたが、根本原因を追ったところ**再現性のある独立したバグ**と判明したため、
+    別コミットとして修正した（次項）。
+  - [x] **発見事項の修正——`populate_from_sheets`が`Vm::new()`のデフォルト`"sheet1"`を
+    クリアしていなかったバグ**。`Vm::new()`はワークブック未ロード時にもマクロが
+    セルへ書き込めるよう、常に空の`"sheet1"`を`self.sheets`へ事前挿入する。
+    `populate_from_sheets`は実際に読み込んだシートを`ensure_sheet`で*追加*するだけで
+    このデフォルトを削除しないため、**ロードしたワークブックのどのシートも
+    "Sheet1"という名前でない限り、保存のたびに空シートが1枚混入していた**——
+    5つの実Excelフィクスチャで顕在化しなかったのは、たまたま全て`Sheet1`という
+    シートを含んでいたため。`populate_from_sheets`（`src/vm/mod.rs`）の先頭に
+    `self.sheets.clear()`を追加して修正（呼び出しは`Vm::new()`直後・マクロ実行前の
+    一度きりであることを呼び出し元3箇所で確認済みのため、データ消失リスクなし）。
+    回帰テスト3件を追加、および元と同じ合成fixture（"First"/"Second"、`sheetId` 5・9）
+    で実CLIを再実行し、出力シート数が2枚（3枚ではなく）であることを確認。
   - [ ] internal hyperlink（`location`属性）のfixture新規作成——現状ゼロ（3節）、未着手。
   - [ ] freeze paneのfixture新規作成——現状ゼロ（3節）、未着手。
-  - 検証: `cargo test --workspace`（831件）・`cargo fmt --check`・
+  - 検証: `cargo test --workspace`（833件）・`cargo fmt --check`・
     `cargo clippy --all-targets`（python feature有無両方）・`cargo doc
     --document-private-items`、いずれもクリーン。`compat/corpus`（581件、0
     UNEXPLAINED/0 MISMATCH）・`compat/vba-semantics`（386件、0 BUG/0 UNCLASSIFIED）とも

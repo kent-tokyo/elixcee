@@ -2060,7 +2060,20 @@ impl Vm {
     /// mixed-case-sheet-name fix (see below) is unit-testable without going
     /// through a real file, since `save_workbook`-built fixtures always
     /// lowercase sheet names and would never exercise it.
+    ///
+    /// Clears `self.sheets` first: `Vm::new()` pre-seeds an empty `"sheet1"`
+    /// so a macro that writes cells before any workbook is loaded has a
+    /// valid `active_sheet` to land in. Without this clear, that default
+    /// survives untouched into any loaded workbook whose sheets are never
+    /// named `"Sheet1"`, and `sheet_names()`/the writer would carry it
+    /// through as a genuine extra empty sheet on save (found via a
+    /// synthetic two-sheet fixture named "First"/"Second" — the output
+    /// gained a third, unrequested "sheet1"). `populate_from_sheets` is
+    /// only ever called once per `Vm` (right after `Vm::new()`, before any
+    /// macro runs — see `load_workbook_file` and `lib.rs`'s `load_workbook`
+    /// PyO3 binding), so this is a full replace, not a data-losing merge.
     pub(crate) fn populate_from_sheets(&mut self, sheets: Vec<WorkbookSheet>) -> Vec<String> {
+        self.sheets.clear();
         let mut names = Vec::with_capacity(sheets.len());
         for sheet_data in &sheets {
             self.ensure_sheet(&sheet_data.name);
@@ -8646,6 +8659,86 @@ mod tests {
         assert_eq!(names, vec!["input".to_string()]);
         assert_eq!(vm.active_sheet, "input");
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(42));
+        // Regression: `Vm::new()`'s default "sheet1" (pre-seeded so a
+        // macro can write cells before any workbook is loaded) must not
+        // survive into a loaded workbook whose real sheets are never named
+        // "Sheet1" -- else the writer would carry it through as a genuine
+        // extra empty sheet on save.
+        assert!(!vm.sheets.contains_key("sheet1"));
+    }
+
+    #[test]
+    fn populate_from_sheets_does_not_leak_the_default_sheet1_when_absent() {
+        // Found via a real synthetic .xlsx round-trip: a two-sheet workbook
+        // named "First"/"Second" (neither "Sheet1") gained an unrequested
+        // third, empty "sheet1" on save. Root cause: `populate_from_sheets`
+        // used to only ever *add* sheets via `ensure_sheet`, never clearing
+        // `Vm::new()`'s pre-seeded default "sheet1" first.
+        let sheets = vec![
+            WorkbookSheet {
+                name: "First".to_string(),
+                cells: HashMap::new(),
+                sheet_id: Some("5".to_string()),
+                workbook_rel_id: None,
+                source_part_name: None,
+                merged_ranges: Vec::new(),
+                hidden_rows: Vec::new(),
+                hidden_columns: Vec::new(),
+                raw_style_indices: HashMap::new(),
+                formulas: HashMap::new(),
+            },
+            WorkbookSheet {
+                name: "Second".to_string(),
+                cells: HashMap::new(),
+                sheet_id: Some("9".to_string()),
+                workbook_rel_id: None,
+                source_part_name: None,
+                merged_ranges: Vec::new(),
+                hidden_rows: Vec::new(),
+                hidden_columns: Vec::new(),
+                raw_style_indices: HashMap::new(),
+                formulas: HashMap::new(),
+            },
+        ];
+
+        let mut vm = Vm::new();
+        assert!(
+            vm.sheets.contains_key("sheet1"),
+            "sanity: default present before load"
+        );
+        let names = vm.populate_from_sheets(sheets);
+
+        assert_eq!(names, vec!["first".to_string(), "second".to_string()]);
+        assert_eq!(
+            vm.sheet_names(),
+            vec!["first".to_string(), "second".to_string()]
+        );
+        assert!(!vm.sheets.contains_key("sheet1"));
+    }
+
+    #[test]
+    fn populate_from_sheets_keeps_a_real_sheet1_when_present() {
+        // A workbook whose first real sheet actually is "Sheet1" must keep
+        // behaving exactly as before -- `ensure_sheet` re-inserting the same
+        // key is a no-op, not a duplicate.
+        let sheets = vec![WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells: HashMap::new(),
+            sheet_id: Some("1".to_string()),
+            workbook_rel_id: None,
+            source_part_name: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
+        }];
+
+        let mut vm = Vm::new();
+        let names = vm.populate_from_sheets(sheets);
+
+        assert_eq!(names, vec!["sheet1".to_string()]);
+        assert_eq!(vm.sheet_names(), vec!["sheet1".to_string()]);
     }
 
     #[test]
