@@ -123,13 +123,29 @@ machinery was built for the unevidenced case: doing so ahead of a real fixture t
 actually exercises it would be exactly the speculative abstraction this milestone's hard
 gate exists to prevent. Shares C1's `WORKBOOK_ELEMENT_LOSS` category (a whole-element
 copy, same as `workbookPr`/`calcPr`/`extLst` — no dedicated extraction logic needed,
-unlike internal hyperlinks' filtered-children approach). **C3 (not started):**
-`<definedNames>`/print area — `localSheetId` is also position-dependent, and
-`<definedName>` text can embed a sheet name, needing a different mechanism than a blind
-copy (not just presence/absence).
+unlike internal hyperlinks' filtered-children approach). **C3 (done, simplified):**
+`<definedNames>` (print area/print titles included — `_xlnm.Print_Area` is a
+`<definedName>` with a special reserved name, fixture5 has a real example). Unlike C2,
+`localSheetId` (a 0-based index into `<sheets>`) DOES have real fixture evidence
+(fixture5's `_xlnm.Print_Area localSheetId="0"`), so C2's "no evidence, ship verbatim"
+reasoning doesn't apply here — but fixture5 is single-sheet, so the actual failure mode
+(a delete shifting a *surviving* sheet's effective position) isn't fixture-evidenced
+either, only reproducible with a synthetic multi-sheet fixture. Shipped a simplified,
+conservative rule instead of per-name `localSheetId` remapping: `<definedNames>` is
+carried verbatim only when every sheet present at load time is still present at save
+time (`Sheets(...).Delete` never ran); if any sheet was deleted, the whole element is
+dropped rather than risk a stale reference. Sheet *additions* don't affect this — new
+sheets only ever append, so existing positions stay valid. New `check_defined_names()`
+in `mechanical_check.py` (a dedicated function, not folded into
+`check_workbook_elements()`'s plain presence check — this one needs to know the
+correct answer differs depending on whether a sheet was deleted, checked by comparing
+`<sheets>` between original and output). Verified both directions in self-test and
+against a real CLI round-trip of a synthetic two-sheet fixture with a
+`Sheets(...).Delete` macro.
 
 `0.10.0-D` (relationship-backed features, including the actual fix for
-`SOURCE_REFERENCE_LOSS`) is not started.
+`SOURCE_REFERENCE_LOSS`) is not started. `0.10.0-C` itself is now feature-complete for
+its originally-scoped elements.
 
 ### CI: WASM artifact size observability
 

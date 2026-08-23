@@ -675,6 +675,95 @@ def check_workbook_elements(original_path, output_path):
     return {"violations": violations, "workbook_element_verdict": verdict}
 
 
+def _sheet_names_in_workbook(root):
+    """Lowercased <sheet name="..."> values, in document order, from a parsed
+    <workbook> root -- used by check_defined_names() to decide whether every original
+    sheet survived (definedNames must be verbatim) or some were deleted (definedNames
+    may be legitimately dropped -- see that function's docstring)."""
+    sheets = root.find(f"{SML_NS}sheets")
+    if sheets is None:
+        return []
+    return [s.get("name", "").lower() for s in sheets.findall(f"{SML_NS}sheet")]
+
+
+def check_defined_names(original_path, output_path):
+    """Detects WORKBOOK_ELEMENT_LOSS on <definedNames>: NOT a plain presence check like
+    check_workbook_elements() (workbookPr/bookViews/calcPr/extLst), because a
+    <definedName>'s localSheetId is a 0-based index into <sheets> -- if a sheet was
+    deleted since the source loaded, every localSheetId at or past that position is
+    stale, and elixcee's writer deliberately drops <definedNames> ENTIRELY rather than
+    try to remap or selectively prune individual names (see
+    docs/xlsx-worksheet-preservation-0.10.0-design.md §10's C3 entry for why: partial
+    remapping needs its own design, and shipping a blindly-verbatim copy would silently
+    reattach a print area / named range to the wrong sheet -- worse than dropping it).
+
+    So this check has two cases, both keyed off whether every ORIGINAL sheet name is
+    still present in the output (add-only or no-mutation-at-all changes nothing about
+    existing positions; a deletion does):
+    - No sheet missing: <definedNames> must survive byte-for-byte identical (a name can
+      embed a sheet-qualified formula reference like "Sheet1!$F$5" as free text, which
+      this deliberately does NOT try to parse/validate -- only presence+exact content).
+    - A sheet is missing: <definedNames> must be ABSENT from the output. If it's still
+      there, that's a violation too -- the writer failed to apply its own drop rule,
+      which is worse than a plain loss (a stale, wrong reference looks valid).
+
+    Returns {"violations": [...], "defined_names_verdict": "CLEAN"|"WORKBOOK_ELEMENT_LOSS"}.
+    """
+    violations = []
+    try:
+        original = _read_zip_entries(original_path)
+        output = _read_zip_entries(output_path)
+    except (zipfile.BadZipFile, FileNotFoundError) as e:
+        return {"violations": [f"unreadable: {e}"], "defined_names_verdict": "ORACLE_FAILURE"}
+
+    if "xl/workbook.xml" not in original:
+        return {"violations": [], "defined_names_verdict": "CLEAN"}
+    try:
+        orig_root = ET.fromstring(original["xl/workbook.xml"])
+    except ET.ParseError:
+        return {"violations": [], "defined_names_verdict": "CLEAN"}
+    orig_defined_names = orig_root.find(f"{SML_NS}definedNames")
+    if orig_defined_names is None:
+        return {"violations": [], "defined_names_verdict": "CLEAN"}
+
+    out_root = None
+    if "xl/workbook.xml" in output:
+        try:
+            out_root = ET.fromstring(output["xl/workbook.xml"])
+        except ET.ParseError:
+            pass
+
+    orig_sheet_names = set(_sheet_names_in_workbook(orig_root))
+    out_sheet_names = set(_sheet_names_in_workbook(out_root)) if out_root is not None else set()
+    every_sheet_survived = orig_sheet_names <= out_sheet_names
+
+    out_defined_names = out_root.find(f"{SML_NS}definedNames") if out_root is not None else None
+    if every_sheet_survived:
+        if out_defined_names is None:
+            violations.append(
+                "<definedNames> present in original xl/workbook.xml, missing from the "
+                "output even though every original sheet survived (WORKBOOK_ELEMENT_LOSS)"
+            )
+        else:
+            orig_names = [ET.tostring(c, encoding="unicode") for c in orig_defined_names]
+            out_names = [ET.tostring(c, encoding="unicode") for c in out_defined_names]
+            if orig_names != out_names:
+                violations.append(
+                    f"<definedNames> content changed even though every original sheet "
+                    f"survived -- expected byte-identical: {orig_names!r} -> {out_names!r} "
+                    f"(WORKBOOK_ELEMENT_LOSS)"
+                )
+    elif out_defined_names is not None:
+        violations.append(
+            "a source sheet was deleted, but <definedNames> is still present in the "
+            "output -- must be dropped entirely once any localSheetId could be stale "
+            "(WORKBOOK_ELEMENT_LOSS)"
+        )
+
+    verdict = "WORKBOOK_ELEMENT_LOSS" if violations else "CLEAN"
+    return {"violations": violations, "defined_names_verdict": verdict}
+
+
 def check_internal_hyperlinks(original_path, output_path):
     """Detects INTERNAL_HYPERLINK_LOSS: a relationship-free ("location=", no "r:id")
     <hyperlink> child present in the original worksheet XML is missing from the output,
@@ -1323,6 +1412,113 @@ def self_test():
                         f"stripping {label} must not also flag unrelated {other}: {result['violations']}"
                     )
 
+        # --- Case M: WORKBOOK_ELEMENT_LOSS via check_defined_names() (0.10.0-C, C3).
+        # Two sheets so a delete is actually representable; one workbook-scoped name
+        # (no localSheetId) and one sheet-scoped name (localSheetId="1", pointing at
+        # the second sheet) mirroring fixture4 (plain) and fixture5 (_xlnm.Print_Area)
+        # respectively.
+        dn_path = os.path.join(tmp, "defined_names_orig.xlsm")
+        DEFINED_NAMES_XML = (
+            '<definedNames>'
+            '<definedName name="test" comment="test desu!!!">Sheet1!$F$5</definedName>'
+            '<definedName name="_xlnm.Print_Area" localSheetId="1">Sheet2!$E$3</definedName>'
+            "</definedNames>"
+        )
+        WORKBOOK_DN_XML = (
+            f'<?xml version="1.0"?><workbook xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+            '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/>'
+            '<sheet name="Sheet2" sheetId="2" r:id="rId2"/></sheets>'
+            + DEFINED_NAMES_XML +
+            "</workbook>"
+        ).encode()
+        with zipfile.ZipFile(dn_path, "w") as zf:
+            zf.writestr(
+                "[Content_Types].xml",
+                f'<?xml version="1.0"?><Types xmlns="{CT_NS[1:-1]}">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                "</Types>",
+            )
+            zf.writestr("xl/workbook.xml", WORKBOOK_DN_XML)
+            zf.writestr(
+                "xl/_rels/workbook.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+                "</Relationships>",
+            )
+            for n in (1, 2):
+                zf.writestr(
+                    f"xl/worksheets/sheet{n}.xml",
+                    f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}">'
+                    '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>',
+                )
+
+        # (1) No delete: clean passthrough must report CLEAN.
+        dn_clean_path = os.path.join(tmp, "defined_names_clean.xlsm")
+        shutil.copyfile(dn_path, dn_clean_path)
+        result = check_defined_names(dn_path, dn_clean_path)
+        assert result["defined_names_verdict"] == "CLEAN", result
+
+        # (2) No delete, but definedNames dropped anyway -- must be flagged.
+        dn_dropped_path = os.path.join(tmp, "defined_names_dropped.xlsm")
+        with zipfile.ZipFile(dn_path) as src, zipfile.ZipFile(dn_dropped_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/workbook.xml":
+                    assert DEFINED_NAMES_XML.encode() in data
+                    data = data.replace(DEFINED_NAMES_XML.encode(), b"")
+                dst.writestr(item, data)
+        result = check_defined_names(dn_path, dn_dropped_path)
+        assert result["defined_names_verdict"] == "WORKBOOK_ELEMENT_LOSS", result
+        assert any("every original sheet survived" in v for v in result["violations"]), result
+
+        # (3) A sheet is deleted AND definedNames is correctly dropped too -- this is
+        # the writer's required behavior, must report CLEAN (not a loss).
+        dn_deleted_correct_path = os.path.join(tmp, "defined_names_deleted_correct.xlsm")
+        with zipfile.ZipFile(dn_path) as src, zipfile.ZipFile(dn_deleted_correct_path, "w") as dst:
+            for item in src.infolist():
+                if item.filename == "xl/worksheets/sheet2.xml":
+                    continue  # simulate Sheet2 having been deleted
+                data = src.read(item.filename)
+                if item.filename == "xl/workbook.xml":
+                    data = (
+                        data.replace(DEFINED_NAMES_XML.encode(), b"").replace(
+                            b'<sheet name="Sheet2" sheetId="2" r:id="rId2"/>', b""
+                        )
+                    )
+                elif item.filename == "xl/_rels/workbook.xml.rels":
+                    data = data.replace(
+                        b'<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>',
+                        b"",
+                    )
+                dst.writestr(item, data)
+        result = check_defined_names(dn_path, dn_deleted_correct_path)
+        assert result["defined_names_verdict"] == "CLEAN", result
+
+        # (4) A sheet is deleted but definedNames was left in place anyway -- a stale,
+        # dangerous-looking-valid reference is worse than a plain loss, must be flagged.
+        dn_deleted_wrong_path = os.path.join(tmp, "defined_names_deleted_wrong.xlsm")
+        with zipfile.ZipFile(dn_path) as src, zipfile.ZipFile(dn_deleted_wrong_path, "w") as dst:
+            for item in src.infolist():
+                if item.filename == "xl/worksheets/sheet2.xml":
+                    continue
+                data = src.read(item.filename)
+                if item.filename == "xl/workbook.xml":
+                    data = data.replace(b'<sheet name="Sheet2" sheetId="2" r:id="rId2"/>', b"")
+                elif item.filename == "xl/_rels/workbook.xml.rels":
+                    data = data.replace(
+                        b'<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>',
+                        b"",
+                    )
+                dst.writestr(item, data)
+        result = check_defined_names(dn_path, dn_deleted_wrong_path)
+        assert result["defined_names_verdict"] == "WORKBOOK_ELEMENT_LOSS", result
+        assert any("must be dropped entirely" in v for v in result["violations"]), result
+
     print(
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
         "target, stripped-formula, orphaned part, all 4 SOURCE_REFERENCE_LOSS shapes, "
@@ -1330,7 +1526,9 @@ def self_test():
         "(sheetViews + 5 slice-2/3 elements, independently), INTERNAL_HYPERLINK_LOSS "
         "(mixed container: location-only loss detected, r:id sibling never falsely "
         "flagged, empty-container invalidity detected), and WORKBOOK_ELEMENT_LOSS "
-        "(workbookPr/bookViews/calcPr/extLst, independently) all caught; comments correctly "
+        "(workbookPr/bookViews/calcPr/extLst, independently) and defined-names loss "
+        "(verbatim required when no sheet deleted, must be dropped entirely when one "
+        "was, both directions checked) all caught; comments correctly "
         "out of SOURCE_REFERENCE_LOSS scope)"
     )
 
@@ -1348,6 +1546,7 @@ if __name__ == "__main__":
     inline_elements = check_inline_worksheet_elements(sys.argv[1], sys.argv[2])
     internal_hyperlinks = check_internal_hyperlinks(sys.argv[1], sys.argv[2])
     workbook_elements = check_workbook_elements(sys.argv[1], sys.argv[2])
+    defined_names = check_defined_names(sys.argv[1], sys.argv[2])
     print(json.dumps({
         "structural": structural,
         "formulas": formulas,
@@ -1355,6 +1554,7 @@ if __name__ == "__main__":
         "inline_elements": inline_elements,
         "internal_hyperlinks": internal_hyperlinks,
         "workbook_elements": workbook_elements,
+        "defined_names": defined_names,
     }, indent=2))
     ok = (
         structural["structural_verdict"] == "STRUCTURALLY_CLEAN"
@@ -1363,5 +1563,6 @@ if __name__ == "__main__":
         and inline_elements["inline_element_verdict"] == "CLEAN"
         and internal_hyperlinks["internal_hyperlink_verdict"] == "CLEAN"
         and workbook_elements["workbook_element_verdict"] == "CLEAN"
+        and defined_names["defined_names_verdict"] == "CLEAN"
     )
     sys.exit(0 if ok else 1)

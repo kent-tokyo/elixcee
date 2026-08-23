@@ -1040,6 +1040,149 @@ fn real_excel_workbook_metadata_survives_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// 0.10.0-C slice 3 (C3): `<definedNames>` survives verbatim when a plain edit touches
+/// no sheet. fixture5's real print-area defined name (`_xlnm.Print_Area`,
+/// `localSheetId="0"`) is the fixture evidence -- single-sheet, so this test only
+/// exercises the "no delete happened" branch; the delete-triggers-a-drop branch is
+/// covered by `defined_names_are_dropped_entirely_once_a_sheet_is_deleted` below using
+/// a synthetic multi-sheet fixture (fixture5 can't exercise it: deleting its only sheet
+/// isn't representable the same way).
+#[test]
+fn real_excel_defined_names_survive_a_save_when_no_sheet_is_deleted() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_wb = String::from_utf8(fixture_entries["xl/workbook.xml"].clone()).unwrap();
+    let needle =
+        r#"<definedName name="_xlnm.Print_Area" localSheetId="0">Sheet1!$E$3</definedName>"#;
+    assert!(
+        source_wb.contains(needle),
+        "fixture no longer contains {needle:?} -- test needs updating: {source_wb}"
+    );
+
+    let output_path = tmp_path("defined_names_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditCell()\n    Cells(1, 1).Value = 42\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditCell").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        out_wb.contains(needle),
+        "definedNames must survive verbatim when no sheet was deleted: {out_wb}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// The delete-triggers-a-drop branch: a `<definedName>`'s `localSheetId` is a 0-based
+/// index into `<sheets>`, so once `Sheets(...).Delete` runs, every remaining
+/// localSheetId could point at a different sheet than it originally meant --
+/// `<definedNames>` must be dropped entirely rather than carried through stale. No real
+/// fixture has more than one sheet with a defined name, so this is a hand-built
+/// synthetic fixture (two sheets, one workbook-scoped name, one sheet-scoped name
+/// pointing at the sheet that gets deleted), matching this file's established pattern
+/// for shapes no real fixture demonstrates (see e.g.
+/// `passthrough_part_referenced_only_by_a_non_writer_owned_relationship_type_keeps_its_relationship`).
+#[test]
+fn defined_names_are_dropped_entirely_once_a_sheet_is_deleted() {
+    const WORKBOOK_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheets>\n",
+        "<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/>\n",
+        "<sheet name=\"Sheet2\" sheetId=\"2\" r:id=\"rId2\"/>\n",
+        "</sheets>\n",
+        "<definedNames>",
+        "<definedName name=\"test\">Sheet1!$F$5</definedName>",
+        "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"1\">Sheet2!$E$3</definedName>",
+        "</definedNames>\n</workbook>\n",
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const MINIMAL_SHEET: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n</worksheet>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet1.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet2.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    let fixture_bytes = zip.finish().unwrap().into_inner();
+
+    let source_path = tmp_path("source_defined_names_delete.xlsx");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    // (1) No delete: definedNames survives verbatim.
+    let noop_output_path = tmp_path("output_defined_names_noop.xlsx");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    save_workbook(&vm, &noop_output_path).expect("save should succeed");
+    let noop_bytes = std::fs::read(&noop_output_path).unwrap();
+    let noop_entries = read_all_zip_entries(&noop_bytes);
+    let noop_wb = String::from_utf8(noop_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        noop_wb.contains("<definedNames>") && noop_wb.contains("_xlnm.Print_Area"),
+        "definedNames must survive verbatim with no delete: {noop_wb}"
+    );
+
+    // (2) Sheet2 (the one the sheet-scoped defined name points at) gets deleted --
+    // definedNames must be entirely absent from the output, not partially pruned or
+    // carried through stale.
+    let delete_output_path = tmp_path("output_defined_names_deleted.xlsx");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    let prog = parser::parse("Sub DeleteIt()\n    Sheets(\"Sheet2\").Delete\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "DeleteIt").expect("macro should run");
+    save_workbook(&vm, &delete_output_path).expect("save should succeed");
+    let delete_bytes = std::fs::read(&delete_output_path).unwrap();
+    let delete_entries = read_all_zip_entries(&delete_bytes);
+    let delete_wb = String::from_utf8(delete_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        !delete_wb.contains("<definedNames>"),
+        "definedNames must be dropped entirely once a sheet is deleted, not carried \
+         through with a stale localSheetId: {delete_wb}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&noop_output_path);
+    let _ = std::fs::remove_file(&delete_output_path);
+}
+
 /// 0.10.0-B slice 4 (B4): internal (location=, relationship-free) hyperlinks.
 /// fixture6_internal_hyperlink.xlsm has exactly one, no r:id.
 #[test]

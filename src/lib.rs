@@ -738,10 +738,26 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     let ext_lst = workbook_source_xml
         .as_deref()
         .and_then(|xml| reader::extract_raw_element(xml, "extLst"));
+    // A <definedName>'s localSheetId is a 0-based index into <sheets> -- if any sheet
+    // present at load time is gone now (Sheets(...).Delete ran), every remaining
+    // localSheetId could point at the wrong sheet, so the whole element is dropped
+    // rather than carried through stale. See OpaqueWorkbookFragments' doc comment.
+    let no_sheet_was_deleted = vm
+        .worksheet_origins
+        .keys()
+        .all(|original_key| vm.sheet_order.contains(original_key));
+    let defined_names = if no_sheet_was_deleted {
+        workbook_source_xml
+            .as_deref()
+            .and_then(|xml| reader::extract_raw_element(xml, "definedNames"))
+    } else {
+        None
+    };
     let workbook_fragments = OpaqueWorkbookFragments {
         root_attrs: workbook_root_attrs.as_deref(),
         workbook_pr: workbook_pr.as_deref(),
         book_views: book_views.as_deref(),
+        defined_names: defined_names.as_deref(),
         calc_pr: calc_pr.as_deref(),
         ext_lst: ext_lst.as_deref(),
     };
@@ -918,10 +934,15 @@ fn build_xlsx_content_types(
 /// `compat/oracle-excel-com/mechanical_check.py` for the full reasoning on why no
 /// gating logic was built for the unevidenced case.
 ///
-/// `<definedNames>` is deliberately NOT here yet -- its `<definedName>` text can embed
-/// a sheet name and `localSheetId` is a position index too, needing its own carry-over
-/// design (C3), not a blind opaque-fragment copy. See
-/// docs/xlsx-worksheet-preservation-0.10.0-design.md §10.
+/// `defined_names` is `None` whenever ANY sheet present at load time is no longer in
+/// `Vm::sheets` (i.e. `Sheets(...).Delete` ran) -- a `<definedName>`'s `localSheetId` is
+/// a 0-based index into `<sheets>`, so a deletion can leave every remaining
+/// `localSheetId` pointing at a different sheet than it originally meant. Caller
+/// (`save_xlsx_impl`) computes this gate, not `build_xlsx_workbook` itself, since it
+/// needs direct access to `Vm::worksheet_origins`/`Vm::sheets`. Dropping the whole
+/// element rather than remapping or pruning individual names is a deliberate
+/// simplification -- see docs/xlsx-worksheet-preservation-0.10.0-design.md §10's C3
+/// entry for why partial remapping is future work, not this slice's scope.
 #[derive(Default)]
 struct OpaqueWorkbookFragments<'a> {
     /// Source's root `<workbook ...>` tag's raw attribute string (namespace
@@ -932,6 +953,7 @@ struct OpaqueWorkbookFragments<'a> {
     root_attrs: Option<&'a str>,
     workbook_pr: Option<&'a str>,
     book_views: Option<&'a str>,
+    defined_names: Option<&'a str>,
     calc_pr: Option<&'a str>,
     ext_lst: Option<&'a str>,
 }
@@ -1000,9 +1022,16 @@ fn build_xlsx_workbook(
         ));
     }
     out.push_str("</sheets>\n");
-    // definedNames (C3, not yet implemented) would go here, between </sheets> and
-    // calcPr, per the same CT_Workbook order.
-    for fragment in [fragments.calc_pr, fragments.ext_lst].into_iter().flatten() {
+    // CT_Workbook order (§8): ... sheets, functionGroups, externalReferences,
+    // definedNames, calcPr, ...
+    for fragment in [
+        fragments.defined_names,
+        fragments.calc_pr,
+        fragments.ext_lst,
+    ]
+    .into_iter()
+    .flatten()
+    {
         out.push_str(fragment);
         out.push('\n');
     }

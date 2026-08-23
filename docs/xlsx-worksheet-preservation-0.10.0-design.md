@@ -759,10 +759,32 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     形にとどめた（`check_workbook_elements()`のdocstring参照）——それ自体が
     silent lossではなく「まだ正しさが未検証」という別種のリスクなので、
     実装するとしても9節の診断の枠組みで扱うべき将来課題として記録。
-  - **C3（未着手）**: `<definedNames>`（6節のシートリネーム時dangling注意、9節の
-    診断で対応）・print area・print titles（`<definedNames>`内の特殊named range、
-    `_xlnm.Print_Area`等——fixture5に実例あり、`localSheetId`という別のシート
-    位置依存値を持つ）。
+  - **C3（完了、簡略版）**: `<definedNames>`（print area・print titles含む——
+    `_xlnm.Print_Area`等は`<definedNames>`内の特殊named rangeとして表現される、
+    fixture5に実例あり）。C2とは異なり`localSheetId`（sheet位置への0-based
+    インデックス）は実fixtureに実例が存在する（fixture5の
+    `_xlnm.Print_Area localSheetId="0"`）ため、「実証されていないハザードだから
+    先送り」というC2の理屈は使えない——ただしfixture5は単一シートのため、
+    「シート削除でlocalSheetIdがずれる」という具体的な壊れ方自体はfixtureで
+    実証されていない（合成fixtureでのみ再現）。**採用した方針（簡略版、
+    per-name remapping ではない）**: `Vm::worksheet_origins`の全キーが
+    現在の`Vm::sheet_order`にまだ存在するか（＝ロード後にシート削除が一度も
+    起きていないか）だけを見るゲート——1つでもシートが削除されていれば
+    `<definedNames>`全体を丸ごと省略し、削除が一度も起きていなければverbatim
+    でそのまま持ち越す。個別のdefinedName単位でlocalSheetIdを再計算して
+    生存させる（部分的remapping）という、より精密だが実装コストの高い代替案は
+    見送った——シート追加のみ（削除なし）ならlocalSheetIdは不変のままなので、
+    この簡略版でも「よくある操作（読み込み→編集→保存、シート追加のみ）」では
+    100%持ち越され、「シート削除」という比較的まれな操作でのみdefinedNames
+    全体を失う、という設計判断。`mechanical_check.py`に専用の
+    `check_defined_names()`を追加（`_WORKBOOK_ELEMENTS`の単純な有無チェックとは
+    別関数——「削除が起きた場合は省略が正しい」という非対称な判定が必要なため、
+    `check_internal_hyperlinks()`が独自関数になったのと同じ理由）。
+    自己テストで両方向（削除なし→verbatim必須、削除あり→完全省略必須、
+    どちらの逆方向の違反も検知）を確認済み。実fixture（fixture4/5、単一シート
+    のためこのテストでは削除分岐を再現できない）と、シート削除分岐専用の
+    合成fixture（2シート、`Sheets(...).Delete`マクロ）の両方で実CLI経由の
+    動作を確認済み。
   - ~~元の`sheetId`の保持（2節/6節、位置ベース再生成の是正）~~ ——**訂正（stale
     cross-reference）**: 初稿ではここに挙げていたが、実際には0.10.0-Aで
     `WorksheetOrigin`実装の一部として既に完了済み（10節の0.10.0-Aチェックリスト
