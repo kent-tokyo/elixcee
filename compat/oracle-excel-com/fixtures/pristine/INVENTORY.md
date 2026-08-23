@@ -70,10 +70,37 @@ the fixtures, so it can go stale like any other manifest.
 - One cell carries `t="e" vm="1"` — a rich-value-linked error cell (the `richData` feature,
   already declared out of scope in the main design doc's §3).
 
-## What is confirmed absent across all 5 fixtures (not merely unchecked)
+## fixture6_internal_hyperlink.xlsm
 
-- `<pane>` (freeze pane / split view)
-- `<hyperlink location="...">` (same-workbook, relationship-free hyperlink)
+- Parts: workbook.xml, worksheets/sheet1.xml, sheet2.xml, sheet3.xml, theme, styles,
+  sharedStrings. No VBA project (saved macro-free despite the `.xlsm` extension), no
+  worksheet-level `.rels`.
+- Worksheet features present: `<hyperlinks>` on Sheet1 with `location="Sheet2!B2"` and
+  **no `r:id`** — the same-workbook, relationship-free hyperlink confirmed absent from
+  fixtures 1-5 (see below). `<sheetViews>`/`<selection>` only otherwise.
+- No table/validation/conditionalFormatting/drawing/legacyDrawing/pageSetup/pane/
+  definedNames.
+- Added specifically to unblock 0.10.0-B's internal-hyperlink item (design doc §3's hard
+  gate — no writer code for this element until a real fixture exists). `docProps/core.xml`
+  author fields and `xl/workbook.xml`'s `mc:AlternateContent`/`x15ac:absPath` block (which
+  carried a local filesystem path) were scrubbed before commit, matching the convention
+  already used in fixture1-5 (`dc:creator`/`cp:lastModifiedBy` → `elixcee-fixture-author`).
+
+## fixture7_freeze_pane.xlsm
+
+- Parts: workbook.xml, worksheets/sheet1.xml, sheet2.xml, sheet3.xml, theme, styles. No
+  sharedStrings (no text cells), no VBA project, no worksheet-level `.rels`.
+- Worksheet features present: `<pane xSplit="1" ySplit="1" topLeftCell="B2"
+  activePane="bottomRight" state="frozen"/>` inside Sheet1's `<sheetView>`, plus 3
+  per-pane `<selection>` elements — the real freeze-pane fixture fixture5's filename
+  implied but never contained (see below).
+- No table/validation/conditionalFormatting/hyperlinks/drawing/legacyDrawing/pageSetup/
+  definedNames.
+- Added specifically to unblock 0.10.0-B's freeze-pane item (design doc §3's hard gate).
+  Same `docProps`/`x15ac:absPath` scrub as fixture6, same rationale.
+
+## What is confirmed absent across all 7 fixtures (not merely unchecked)
+
 - `xl/printerSettings/*` (printer settings binary + its `<pageSetup r:id>` backing)
 - Any OLE object / ActiveX control part (`xl/embeddings/*`, `<oleObjects>`/`<controls>`)
 - `<dataValidations>` with a source **outside** the current sheet, or a `<dataValidation>`

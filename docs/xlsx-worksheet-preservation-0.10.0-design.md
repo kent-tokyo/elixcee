@@ -121,6 +121,10 @@ relationship不要）の2形態があり、SpreadsheetMLの仕様上は排他で
 ハイパーリンクの実例が現状ない**——3節の他の「実データ未確認」項目（freeze pane）と同様、
 正直に「未実証」として扱う。10節のmilestone分割でこの区別を反映する。
 
+**更新（0.10.0-A中に解消）**: `fixture6_internal_hyperlink.xlsm`をユーザー提供の実Excel
+ファイルから追加、`<hyperlink ref="A1" location="Sheet2!B2" .../>`（`r:id`なし）の実例を
+確認済み。詳細は`fixtures/pristine/INVENTORY.md`。
+
 同fixtureの`xl/workbook.xml`には
 `<definedNames><definedName name="test" comment="test desu!!!">Sheet1!$F$5</definedName></definedNames>`
 （workbook-level、2節参照）。
@@ -133,6 +137,10 @@ relationship不要）の2形態があり、SpreadsheetMLの仕様上は排他で
 新規fixtureで実データを確保する必要がある（正直に記録：机上のOOXMLスキーマ知識のみでの
 実装は、このプロジェクトが再三経験してきた「synthetic fixtureでは検出できないreal-Excel
 特有のバグ」を再現するリスクがある）。
+
+**更新（0.10.0-A中に解消）**: `fixture7_freeze_pane.xlsm`をユーザー提供の実Excelファイルから
+追加、`<pane xSplit="1" ySplit="1" topLeftCell="B2" activePane="bottomRight" state="frozen"/>`
+の実例を確認済み。詳細は`fixtures/pristine/INVENTORY.md`。
 
 まとめると、`build_xlsx_sheet`が一度も出力しない、かつreader.rsも一度もパースしない
 worksheet-XML要素:
@@ -533,8 +541,16 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     一度きりであることを呼び出し元3箇所で確認済みのため、データ消失リスクなし）。
     回帰テスト3件を追加、および元と同じ合成fixture（"First"/"Second"、`sheetId` 5・9）
     で実CLIを再実行し、出力シート数が2枚（3枚ではなく）であることを確認。
-  - [ ] internal hyperlink（`location`属性）のfixture新規作成——現状ゼロ（3節）、未着手。
-  - [ ] freeze paneのfixture新規作成——現状ゼロ（3節）、未着手。
+  - [x] internal hyperlink（`location`属性）のfixture新規作成——ユーザー提供の実Excel
+    ファイル（`fixture6_internal_hyperlink.xlsm`）を`compat/oracle-excel-com/fixtures/pristine/`
+    へ追加。`<hyperlink ref="A1" location="Sheet2!B2" .../>`（`r:id`なし、relationship非依存）
+    を実際に含むことを確認済み。`docProps/core.xml`の作成者名と`xl/workbook.xml`の
+    `x15ac:absPath`（ローカルパス含む）は既存fixtureと同じ慣行でコミット前にscrub済み。
+  - [x] freeze paneのfixture新規作成——同様にユーザー提供の実Excelファイル
+    （`fixture7_freeze_pane.xlsm`）を追加。`<pane xSplit="1" ySplit="1" topLeftCell="B2"
+    activePane="bottomRight" state="frozen"/>`を実際に含むことを確認済み。同じscrubを適用。
+    `INVENTORY.md`を両fixture追加分で更新（「全5fixtureで確認absent」の記述も、この2件が
+    もはや当てはまらないため「全7fixture」へ修正）。
   - 検証: `cargo test --workspace`（833件）・`cargo fmt --check`・
     `cargo clippy --all-targets`（python feature有無両方）・`cargo doc
     --document-private-items`、いずれもクリーン。`compat/corpus`（581件、0
@@ -572,8 +588,11 @@ mechanical_check clean、既存回帰テスト無変化）を踏襲すること�
 
 ## 未解決のまま残す論点（この文書では決めない）
 
-- freeze pane・internal hyperlink（`location`属性）の実データ確保（3節）——どちらも
-  現状このリポジトリに実例がなく、新規fixtureが0.10.0-A着手の前提作業になる。
+- ~~freeze pane・internal hyperlink（`location`属性）の実データ確保（3節）~~ ——
+  0.10.0-A中に解消。ユーザー提供の実Excelファイルから`fixture6_internal_hyperlink.xlsm`・
+  `fixture7_freeze_pane.xlsm`を追加、`INVENTORY.md`更新済み（§10）。0.10.0-Bのwriter実装
+  着手時は、これらのfixtureに対する具体的なXML構造・XSD確認・negative self-test追加が
+  依然として必要な作業として残る。
 - `<conditionalFormatting>`の`dxfId`/`extLst`参照の扱い（10節、0.10.0-B）——raw subtree
   preservationで一旦済ませるか、参照検証まで踏み込むかは実装時に判断。
 - comments/threadedComments/richData等、単純なr:id対応表に収まらない機能の個別確認
