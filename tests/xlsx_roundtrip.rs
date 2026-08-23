@@ -1665,6 +1665,132 @@ fn real_excel_sheetpr_and_data_validations_survive_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// 0.10.0-D: `<tableParts>`, the first relationship-backed element restored --
+/// fixture3_table_validation_conditional.xlsm's `<tableParts count="1">
+/// <tablePart r:id="rId1"/></tableParts>` used to survive structurally
+/// (its `.rels` and `xl/tables/table1.xml` both passed through byte-identical)
+/// while going completely unreferenced from the regenerated `sheet1.xml`,
+/// confirmed as `SOURCE_REFERENCE_LOSS` by `check_source_references()` before
+/// this test existed. Also asserts the sheet's own `.rels` and target table
+/// part still survive byte-identical alongside it -- restoring the reference
+/// without both of those would just move the loss, not fix it.
+#[test]
+fn real_excel_table_parts_survive_a_save() {
+    let source_path = real_fixture("fixture3_table_validation_conditional.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_sheet1 =
+        String::from_utf8(fixture_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        source_sheet1.contains(r#"<tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#),
+        "fixture no longer contains the expected tableParts shape -- test needs updating: {source_sheet1}"
+    );
+
+    let output_path = tmp_path("table_parts_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditB3()\n    Cells(3, 2).Value = 999\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditB3").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(r#"<tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#),
+        "tableParts must survive a save verbatim, referencing the same rId as the source: {out_sheet1}"
+    );
+    assert_eq!(
+        output_entries.get("xl/worksheets/_rels/sheet1.xml.rels"),
+        fixture_entries.get("xl/worksheets/_rels/sheet1.xml.rels"),
+        "the worksheet .rels the restored r:id points at must still be byte-identical"
+    );
+    assert_eq!(
+        output_entries.get("xl/tables/table1.xml"),
+        fixture_entries.get("xl/tables/table1.xml"),
+        "the table part itself must still be byte-identical"
+    );
+    assert!(
+        out_sheet1.contains("<c r=\"B3\""),
+        "edited cell B3 must still be present: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// 0.10.0-D: the `rels_survived` safety gate. A sheet whose source worksheet XML
+/// contains `<tableParts>` but whose own `.rels` file is NOT among the passthrough
+/// parts (a shape that shouldn't happen with a well-formed real fixture, but must
+/// never be trusted blindly) must NOT get `<tableParts>` spliced back -- doing so
+/// would emit a dangling `r:id`, a real Excel repair warning and strictly worse
+/// than the pre-0.10.0-D silent inertness this whole milestone exists to fix.
+#[test]
+fn table_parts_is_not_restored_when_its_own_rels_file_did_not_survive() {
+    const WORKBOOK_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheets>\n<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/>\n</sheets>\n</workbook>\n",
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    // Carries a real <tableParts r:id> reference, but this fixture deliberately
+    // never adds a xl/worksheets/_rels/sheet1.xml.rels entry at all -- simulating
+    // whatever future state could make output_rels_name absent from `passthrough`.
+    const SHEET1_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n",
+        "<tableParts count=\"1\"><tablePart r:id=\"rId1\"/></tableParts>\n</worksheet>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(&mut zip, "xl/worksheets/sheet1.xml", SHEET1_XML.as_bytes());
+    let fixture_bytes = zip.finish().unwrap().into_inner();
+
+    let source_path = tmp_path("source_table_parts_no_rels.xlsx");
+    let output_path = tmp_path("output_table_parts_no_rels.xlsx");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    let prog = parser::parse("Sub NoOp()\n    n = 1\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "NoOp").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        !out_sheet1.contains("tableParts"),
+        "must never emit a tableParts r:id reference whose own .rels file didn't survive: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// 0.10.0-C slices C1+C2: workbook-level `<workbookPr>`/`<bookViews>`/`<calcPr>`/
 /// `<extLst>`, plus the root `<workbook>` tag's own namespace declarations. `bookViews`'
 /// `<workbookView>` carries `xr2:uid`, which genuinely needs the root's `xmlns:xr2`
