@@ -598,6 +598,102 @@ def check_inline_worksheet_elements(original_path, output_path):
     return {"violations": violations, "inline_element_verdict": verdict}
 
 
+def check_internal_hyperlinks(original_path, output_path):
+    """Detects INTERNAL_HYPERLINK_LOSS: a relationship-free ("location=", no "r:id")
+    <hyperlink> child present in the original worksheet XML is missing from the output,
+    or its location= text changed, or it unexpectedly gained an r:id. 0.10.0-B's B4 slice.
+
+    Deliberately NOT folded into check_inline_worksheet_elements()/
+    _INLINE_WORKSHEET_ELEMENTS: a whole-container present/absent check on <hyperlinks>
+    would false-positive on fixture4_hyperlink_comment_name.xlsm, whose <hyperlinks> is
+    correctly ABSENT from a correct output (its only child is r:id-backed, out of scope
+    until 0.10.0-D reconnects the relationship graph) despite being present in the
+    source. This check instead compares per-<hyperlink>-child, matched by `ref` (the cell
+    address each hyperlink is anchored to -- `required` per CT_Hyperlink, unique within
+    one sheet's <hyperlinks>), and only for children that have no r:id in the ORIGINAL.
+
+    Also flags an output <hyperlinks> element with zero <hyperlink> children as itself
+    invalid -- confirmed via CT_Hyperlinks' own XSD (`minOccurs="1"` on its <hyperlink>
+    child, see docs/xlsx-worksheet-preservation-0.10.0-design.md §8/B4): a correct writer
+    must omit <hyperlinks> entirely when nothing survives, never emit an empty
+    <hyperlinks/>, which a validating consumer (or Excel) would reject.
+
+    Confirmed as a real, current gap before any B4 writer code was written: run against
+    fixture4_hyperlink_comment_name.xlsm (all r:id, out of scope) -> CLEAN, no false
+    positive. Run against fixture6_internal_hyperlink.xlsm (one location-only hyperlink)
+    against today's writer output -> INTERNAL_HYPERLINK_LOSS, since build_xlsx_sheet
+    doesn't emit <hyperlinks> at all yet.
+
+    Returns {"violations": [...], "internal_hyperlink_verdict": "CLEAN"|"INTERNAL_HYPERLINK_LOSS"}.
+    """
+    violations = []
+    try:
+        original = _read_zip_entries(original_path)
+        output = _read_zip_entries(output_path)
+    except (zipfile.BadZipFile, FileNotFoundError) as e:
+        return {"violations": [f"unreadable: {e}"], "internal_hyperlink_verdict": "ORACLE_FAILURE"}
+
+    orig_sheets = _sheet_name_to_part(original)
+    out_sheets = {name.lower(): part for name, part in _sheet_name_to_part(output).items()}
+    for name, orig_part in orig_sheets.items():
+        if orig_part not in original:
+            continue
+        try:
+            orig_root = ET.fromstring(original[orig_part])
+        except ET.ParseError:
+            continue
+        location_only = [
+            hl
+            for hl in orig_root.findall(f"{SML_NS}hyperlinks/{SML_NS}hyperlink")
+            if hl.get(R_ID_ATTR) is None
+        ]
+        if not location_only:
+            continue
+
+        out_part = out_sheets.get(name.lower())
+        out_root = None
+        if out_part and out_part in output:
+            try:
+                out_root = ET.fromstring(output[out_part])
+            except ET.ParseError:
+                pass
+
+        out_by_ref = {}
+        if out_root is not None:
+            for hl in out_root.findall(f"{SML_NS}hyperlinks/{SML_NS}hyperlink"):
+                out_by_ref[hl.get("ref")] = hl
+            container = out_root.find(f"{SML_NS}hyperlinks")
+            if container is not None and len(container) == 0:
+                violations.append(
+                    f"sheet '{name}': output <hyperlinks> has zero <hyperlink> children -- "
+                    f"invalid per CT_Hyperlinks (minOccurs=1 on hyperlink); must be omitted "
+                    f"entirely, not emitted empty"
+                )
+
+        for hl in location_only:
+            ref = hl.get("ref")
+            out_hl = out_by_ref.get(ref)
+            if out_hl is None:
+                violations.append(
+                    f"sheet '{name}' ref={ref}: relationship-free hyperlink "
+                    f"(location={hl.get('location')!r}) present in original, missing from "
+                    f"output (INTERNAL_HYPERLINK_LOSS)"
+                )
+            elif out_hl.get(R_ID_ATTR) is not None:
+                violations.append(
+                    f"sheet '{name}' ref={ref}: relationship-free hyperlink survived but "
+                    f"unexpectedly gained an r:id it didn't originally have"
+                )
+            elif out_hl.get("location") != hl.get("location"):
+                violations.append(
+                    f"sheet '{name}' ref={ref}: location changed from "
+                    f"{hl.get('location')!r} to {out_hl.get('location')!r}"
+                )
+
+    verdict = "INTERNAL_HYPERLINK_LOSS" if violations else "CLEAN"
+    return {"violations": violations, "internal_hyperlink_verdict": verdict}
+
+
 def self_test():
     """Negative calibration: corrupt two copies, assert this checker actually catches
     both, PLUS assert a genuinely clean pass-through reports clean. Run before trusting
@@ -976,11 +1072,102 @@ def self_test():
                         f"stripping {label} must not also flag unrelated {other}: {result['violations']}"
                     )
 
+        # --- Case K: INTERNAL_HYPERLINK_LOSS (0.10.0-B, B4). Mixed <hyperlinks> container
+        # -- one r:id-bearing (external) hyperlink, one location-only (internal) hyperlink
+        # -- since no real fixture has both together yet (fixture4=all-r:id,
+        # fixture6=all-location; see design doc's B4 entry, this mixed shape is synthetic,
+        # generalized from the two real endpoints plus CT_Hyperlinks' XSD).
+        hl_path = os.path.join(tmp, "hyperlinks_orig.xlsm")
+        SHEET1_HYPERLINKS_XML = (
+            f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+            '<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row></sheetData>'
+            '<hyperlinks>'
+            '<hyperlink ref="A1" r:id="rId2"/>'
+            '<hyperlink ref="B1" location="Sheet2!A1" display="Sheet2!A1"/>'
+            "</hyperlinks>"
+            "</worksheet>"
+        ).encode()
+        with zipfile.ZipFile(hl_path, "w") as zf:
+            zf.writestr(
+                "[Content_Types].xml",
+                f'<?xml version="1.0"?><Types xmlns="{CT_NS[1:-1]}">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                "</Types>",
+            )
+            zf.writestr(
+                "xl/workbook.xml",
+                f'<?xml version="1.0"?><workbook xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+                '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+            )
+            zf.writestr(
+                "xl/_rels/workbook.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                "</Relationships>",
+            )
+            zf.writestr("xl/worksheets/sheet1.xml", SHEET1_HYPERLINKS_XML)
+            zf.writestr(
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                f'<?xml version="1.0"?><Relationships xmlns="{REL_NS[1:-1]}">'
+                '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/" TargetMode="External"/>'
+                "</Relationships>",
+            )
+
+        # Clean passthrough -- must report CLEAN (the r:id hyperlink is out of this
+        # check's scope entirely; the location-only one survives unchanged).
+        hl_clean_path = os.path.join(tmp, "hyperlinks_clean.xlsm")
+        shutil.copyfile(hl_path, hl_clean_path)
+        result = check_internal_hyperlinks(hl_path, hl_clean_path)
+        assert result["internal_hyperlink_verdict"] == "CLEAN", result
+
+        # Strip ONLY the location-only hyperlink (B1), leaving the r:id one (A1) and the
+        # <hyperlinks> container itself intact -- must be caught, and the r:id hyperlink's
+        # disappearance-from-scope must not mask it or vice versa.
+        hl_stripped_path = os.path.join(tmp, "hyperlinks_stripped.xlsm")
+        with zipfile.ZipFile(hl_path) as src, zipfile.ZipFile(hl_stripped_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    needle = b'<hyperlink ref="B1" location="Sheet2!A1" display="Sheet2!A1"/>'
+                    assert needle in data, "self-test fixture bug: location-only hyperlink needle not found"
+                    data = data.replace(needle, b"")
+                dst.writestr(item, data)
+        result = check_internal_hyperlinks(hl_path, hl_stripped_path)
+        assert result["internal_hyperlink_verdict"] == "INTERNAL_HYPERLINK_LOSS", result
+        assert any("ref=B1" in v for v in result["violations"]), result["violations"]
+        assert not any("ref=A1" in v for v in result["violations"]), (
+            f"the r:id hyperlink (A1) is out of this check's scope and must never be "
+            f"flagged: {result['violations']}"
+        )
+
+        # An output <hyperlinks> with zero <hyperlink> children (both stripped, container
+        # left as an empty shell) must be flagged as itself invalid -- CT_Hyperlinks'
+        # minOccurs=1 on <hyperlink>, not merely "the location-only one is missing".
+        hl_empty_container_path = os.path.join(tmp, "hyperlinks_empty_container.xlsm")
+        with zipfile.ZipFile(hl_path) as src, zipfile.ZipFile(hl_empty_container_path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    data = data.replace(
+                        b'<hyperlinks><hyperlink ref="A1" r:id="rId2"/>'
+                        b'<hyperlink ref="B1" location="Sheet2!A1" display="Sheet2!A1"/></hyperlinks>',
+                        b"<hyperlinks></hyperlinks>",
+                    )
+                dst.writestr(item, data)
+        result = check_internal_hyperlinks(hl_path, hl_empty_container_path)
+        assert result["internal_hyperlink_verdict"] == "INTERNAL_HYPERLINK_LOSS", result
+        assert any("zero <hyperlink> children" in v for v in result["violations"]), result["violations"]
+
     print(
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
         "target, stripped-formula, orphaned part, all 4 SOURCE_REFERENCE_LOSS shapes, "
-        "unexpected .rels mutation, cross-type rId confusion, and INLINE_ELEMENT_LOSS "
-        "(sheetViews + 5 slice-2/3 elements, independently) all caught; comments correctly "
+        "unexpected .rels mutation, cross-type rId confusion, INLINE_ELEMENT_LOSS "
+        "(sheetViews + 5 slice-2/3 elements, independently), and INTERNAL_HYPERLINK_LOSS "
+        "(mixed container: location-only loss detected, r:id sibling never falsely "
+        "flagged, empty-container invalidity detected) all caught; comments correctly "
         "out of SOURCE_REFERENCE_LOSS scope)"
     )
 
@@ -996,16 +1183,19 @@ if __name__ == "__main__":
     formulas = check_formula_preservation(sys.argv[1], sys.argv[2])
     source_references = check_source_references(sys.argv[1], sys.argv[2])
     inline_elements = check_inline_worksheet_elements(sys.argv[1], sys.argv[2])
+    internal_hyperlinks = check_internal_hyperlinks(sys.argv[1], sys.argv[2])
     print(json.dumps({
         "structural": structural,
         "formulas": formulas,
         "source_references": source_references,
         "inline_elements": inline_elements,
+        "internal_hyperlinks": internal_hyperlinks,
     }, indent=2))
     ok = (
         structural["structural_verdict"] == "STRUCTURALLY_CLEAN"
         and formulas["formula_verdict"] == "CLEAN"
         and source_references["source_reference_verdict"] == "CLEAN"
         and inline_elements["inline_element_verdict"] == "CLEAN"
+        and internal_hyperlinks["internal_hyperlink_verdict"] == "CLEAN"
     )
     sys.exit(0 if ok else 1)
