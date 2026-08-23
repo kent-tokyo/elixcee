@@ -800,6 +800,81 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
   - content-type解決自体は5節の通り既に0.9.0で解決済みなので新規作業ではない——
     このmilestoneの主目的は純粋にrelationship graphの接続性（4節）
 
+  **方針決定（ユーザー承認、着手前の設計。実装はまだ開始していない）**:
+  worksheet part命名は**origin-based**（`WorksheetOrigin.original_part_name`を
+  維持）を採用する。現行writerが行っている「毎回`sheet{i+1}.xml`へ位置ベースで
+  付け直し、worksheet-level `.rels`側をremapする」方式は採用しない。
+
+  理由: Open XML packageはpart発見をrelationshipの連鎖に依存しており、
+  worksheet part名が`sheet1.xml`/`sheet2.xml`という連番である必要はない
+  （Microsoft Open XML SDKの最小SpreadsheetML例でも`/xl/worksheets/sheet.xml`
+  という非連番target）。既存part URIを変更しない方が、未知のpartや将来の
+  Excel拡張まで含めた場合に、全参照を書き換えるより安全——lossless
+  preservationという0.10.0全体の目的と直接一致する。
+
+  **出力計画（`WorksheetOutputPlan`、設計スケッチ——実コードではない）**:
+  保存開始時に一度だけ計画を作り、writerの複数箇所が独立に`i + 1`を
+  計算している現状の構造をやめる。
+
+  ```
+  struct WorksheetOutputPlan {
+      sheet_key: String,           // Vm内部のlowercaseキー
+      display_name: String,        // WorksheetOrigin.original_display_name優先
+      sheet_id: String,            // WorksheetOrigin.original_sheet_id優先
+      workbook_rel_id: String,     // workbook.xml.rels側のrId（position-based、既存通り）
+      output_part_name: String,    // 既存シート: original_part_name。新規: 衝突しない新規名
+      output_rels_name: String,    // output_part_nameに対応する_rels/*.xml.rels名
+      is_existing: bool,           // originがあるか（true）／純粋にVBAで作られたか（false）
+  }
+  ```
+
+  - **既存シート**: `output_part_name = WorksheetOrigin.original_part_name`をそのまま使う。
+    シートの表示順序（`Vm::sheet_order`）を変えても、part名自体は変えない——変更するのは
+    `workbook.xml`内`<sheet>`要素の順序と、workbookから各worksheetへのrelationshipのみ。
+    worksheet自身の`.rels`（`xl/worksheets/_rels/sheetN.xml.rels`）はpart名が不変な限り
+    そのまま維持できる。
+  - **新規シート**（`Sheets.Add`）: 既存`sheetN.xml`の最大N + 1を割り当てる。予約済み集合
+    として、生存worksheet part名・削除されたsheetが使っていたpart名・passthrough entry名・
+    同一save中に新規割当済みのpart名、全てを確認してから決定する——削除された番号を
+    即座に再利用すると、古い未知参照（例えば別partに残っているrelationship）が誤って
+    新しいシートに結び付く事故になりうるため、単調増加のみを許可する。
+  - **削除シート**: `xl/worksheets/<original-part>.xml`と対応する`.rels`は出力しない。
+    さらに、削除されたworksheetの`.rels`からのみ到達可能なtarget part（table/drawing/
+    chart/image/comments/VML/printerSettings等）を洗い出し、他のsurviving partからも
+    参照されているものは残し、削除sheetからしか到達できないものだけ削除する
+    （reference counting／package reachability判定。無条件削除は共有image等を
+    誤って消す危険があり、無条件保持はorphan partを増やす）。
+
+  **実装分割（D1〜D4、1コミットずつ）**:
+  - **D1**: `WorksheetOutputPlan`の導入と、`workbook.xml`／`workbook.xml.rels`／
+    `[Content_Types].xml`をこの計画に基づいて出力するように切り替える。この段階では
+    worksheet-level `.rels`の機能復元（relationship-backed要素の実復元）はまだ行わない。
+  - **D2**: 生存sheetの元`.rels`をoriginal part名のままrelationship ID不変で引き継ぐ。
+    これが`check_source_references()`の`SOURCE_REFERENCE_LOSS`が解消される前提を作る。
+  - **D3**: `<tableParts>`・external `<hyperlinks>`・`<drawing>`・`<legacyDrawing>`・
+    `<pageSetup r:id>`をtype-awareに復元する（4節の対応表通り）。
+  - **D4**: sheet rename／reorder／deletion／新規追加／非連番part名／shared・exclusive
+    targetのreachability——実fixtureとnegative testで固める。
+
+  **必須テストケース**（D4完了条件の一部）:
+
+  | ケース | 期待結果 |
+  |---|---|
+  | `sheet5.xml`を持つ1シートを保存 | `sheet5.xml`のまま |
+  | `sheet2.xml`／`sheet7.xml`を持つ2シートを並べ替え | part名は不変、表示順だけ変更 |
+  | シートrename（このVMには未実装だが将来に備え） | part名と`.rels`名は不変 |
+  | 新規シート追加 | 未使用の新part名 |
+  | relationship付きシート削除 | worksheet・`.rels`・exclusive targetが消える |
+  | shared targetを持つシート削除 | shared targetは残る |
+  | table／drawing／external hyperlink | checkerがCLEAN |
+  | source参照だけ削除 | `SOURCE_REFERENCE_LOSS` |
+  | `.rels`だけ削除 | `DANGLING_RELATIONSHIP`または対応分類 |
+  | target partだけ削除 | `DANGLING_RELATIONSHIP` |
+
+  **着手条件**: 0.10.0-Cの実Excel確認（fixture4の名前付き範囲・fixture5の印刷範囲、
+  修復警告0件）が完了するまで、D1を含め一切のコード実装に着手しない——B/C/Dを混ぜると
+  実Excelで問題が起きた際に原因の切り分けができなくなるため（ユーザー指示）。
+
 各milestoneの完了条件は0.9.0-Aと同じ形式（実Excel再オープンでrepair警告0件、
 mechanical_check clean、既存回帰テスト無変化）を踏襲することを推奨する。
 
