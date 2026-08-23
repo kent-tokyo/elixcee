@@ -740,19 +740,25 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     `_sheet_name_to_part`によるシート名マッチングが不要）。fixture1〜7全てで
     実装前`WORKBOOK_ELEMENT_LOSS`確認→実装後`CLEAN`確認済み。実Excel再オープンでの
     repair警告確認はユーザーによる確認待ち。
-  - **C2（未着手）**: `<bookViews>`（`<workbookView>`のactiveTab/firstSheetはシート
-    位置のインデックス値）。**訂正（当初案からの変更）**: 当初はadd/delete発生時に
-    備えてシート順・シート数の一致を条件にverbatim持ち越しをgateする設計を検討したが、
-    fixture1〜7全てを確認した結果、どのfixtureの`<workbookView>`も`activeTab`/
-    `firstSheet`属性を一切持たない（両方ともXSD規定のデフォルト値0）——つまり
-    「位置がずれて壊れる」という具体的なfixture実例が現状ゼロであり、
+  - **C2（完了）**: `<bookViews>`。**訂正（当初案からの変更）**: 当初はadd/delete
+    発生時に備えてシート順・シート数の一致を条件にverbatim持ち越しをgateする設計を
+    検討したが、fixture1〜7全てを確認した結果、どのfixtureの`<workbookView>`も
+    `activeTab`/`firstSheet`属性を一切持たない（両方ともXSD規定のデフォルト値0）——
+    つまり「位置がずれて壊れる」という具体的なfixture実例が現状ゼロであり、
     実証されていないハザードに備えたgating機構を先回りして作るのは0.10.0が
     一貫して掲げる「hard gate（実fixture確認前にwriterコードを書かない）」
-    そのものに反する過剰設計と判断し、この案は採用しない。C2の実装自体は
-    6節の追記の通り`Vm::sheet_order`（修正済み）が前提として満たされているため
-    いつでも着手可能——`checker`側にactiveTab/firstSheetが実際に非デフォルト値を
-    持つfixtureが将来追加された場合に検知できる仕組みを用意しておき、その時点で
-    carry-over設計を確定させる方が安全。
+    そのものに反する過剰設計と判断し、この案は採用しなかった。C1と同じopaque
+    fragment passthroughとして実装し、`_WORKBOOK_ELEMENTS`/
+    `check_workbook_elements()`に`bookViews`を追加（C1と同じ`WORKBOOK_ELEMENT_LOSS`
+    カテゴリを共有——`<hyperlinks>`のような別抽出機構が必要な要素ではなく、
+    workbookPr/calcPr/extLstと同じ「まるごとコピー」で十分なため）。fixture1〜7
+    全てで実装前`WORKBOOK_ELEMENT_LOSS`確認→実装後`CLEAN`確認済み、
+    `xr2:uid`属性（root属性のxmlns:xr2宣言に依存）も含め検証済み。
+    将来activeTab/firstSheetが実際に非デフォルト値を持つfixtureが追加された場合
+    への備えとして、gating機構ではなく`checker`のdocstringに検知方針を明記する
+    形にとどめた（`check_workbook_elements()`のdocstring参照）——それ自体が
+    silent lossではなく「まだ正しさが未検証」という別種のリスクなので、
+    実装するとしても9節の診断の枠組みで扱うべき将来課題として記録。
   - **C3（未着手）**: `<definedNames>`（6節のシートリネーム時dangling注意、9節の
     診断で対応）・print area・print titles（`<definedNames>`内の特殊named range、
     `_xlnm.Print_Area`等——fixture5に実例あり、`localSheetId`という別のシート

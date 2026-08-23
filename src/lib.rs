@@ -729,6 +729,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     let workbook_pr = workbook_source_xml
         .as_deref()
         .and_then(|xml| reader::extract_raw_element(xml, "workbookPr"));
+    let book_views = workbook_source_xml
+        .as_deref()
+        .and_then(|xml| reader::extract_raw_element(xml, "bookViews"));
     let calc_pr = workbook_source_xml
         .as_deref()
         .and_then(|xml| reader::extract_raw_element(xml, "calcPr"));
@@ -738,6 +741,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     let workbook_fragments = OpaqueWorkbookFragments {
         root_attrs: workbook_root_attrs.as_deref(),
         workbook_pr: workbook_pr.as_deref(),
+        book_views: book_views.as_deref(),
         calc_pr: calc_pr.as_deref(),
         ext_lst: ext_lst.as_deref(),
     };
@@ -901,15 +905,22 @@ fn build_xlsx_content_types(
 /// positional either way -- it's entirely internal to this writer's own
 /// workbook.xml/workbook.xml.rels pair (see `build_xlsx_workbook_rels`), unrelated to a
 /// sheet's `sheetId` identity, so it doesn't need to track a sheet's origin at all.
-/// 0.10.0-C's opaque-fragment passthrough bundle for `xl/workbook.xml`, slice C1: raw
-/// text captured from the SOURCE workbook XML (see `save_xlsx_impl`'s
+/// 0.10.0-C's opaque-fragment passthrough bundle for `xl/workbook.xml`, slices C1+C2:
+/// raw text captured from the SOURCE workbook XML (see `save_xlsx_impl`'s
 /// `workbook_source_xml`), re-emitted verbatim at the correct `CT_Workbook` schema
 /// position (§8) rather than reconstructed. `None` for every field when there's no
 /// passthrough source (new-from-scratch `Vm`, or an `.ods` source).
 ///
-/// `<bookViews>`/`<definedNames>` are deliberately NOT here yet -- both carry
-/// sheet-position-dependent state (`activeTab`/`firstSheet`, `localSheetId`) that needs
-/// its own carry-over design (C2/C3), not a blind opaque-fragment copy. See
+/// `book_views`'s `<workbookView>` can carry `activeTab`/`firstSheet` (sheet-position
+/// indices) in principle, but every real fixture checked before adding this field
+/// omits both (XSD default 0) -- a verbatim copy is correct against all currently
+/// known evidence. See `check_workbook_elements()`'s docstring in
+/// `compat/oracle-excel-com/mechanical_check.py` for the full reasoning on why no
+/// gating logic was built for the unevidenced case.
+///
+/// `<definedNames>` is deliberately NOT here yet -- its `<definedName>` text can embed
+/// a sheet name and `localSheetId` is a position index too, needing its own carry-over
+/// design (C3), not a blind opaque-fragment copy. See
 /// docs/xlsx-worksheet-preservation-0.10.0-design.md §10.
 #[derive(Default)]
 struct OpaqueWorkbookFragments<'a> {
@@ -920,6 +931,7 @@ struct OpaqueWorkbookFragments<'a> {
     /// requires it), so this never breaks the writer's own `r:id` emission below.
     root_attrs: Option<&'a str>,
     workbook_pr: Option<&'a str>,
+    book_views: Option<&'a str>,
     calc_pr: Option<&'a str>,
     ext_lst: Option<&'a str>,
 }
@@ -943,8 +955,11 @@ fn build_xlsx_workbook(
     }
     // CT_Workbook order (§8): fileVersion, fileSharing, workbookPr, workbookProtection,
     // bookViews, sheets, functionGroups, externalReferences, definedNames, calcPr, ...
-    if let Some(workbook_pr) = fragments.workbook_pr {
-        out.push_str(workbook_pr);
+    for fragment in [fragments.workbook_pr, fragments.book_views]
+        .into_iter()
+        .flatten()
+    {
+        out.push_str(fragment);
         out.push('\n');
     }
     out.push_str("<sheets>\n");

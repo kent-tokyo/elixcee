@@ -602,6 +602,7 @@ _WORKBOOK_ELEMENTS = [
     "workbookPr",
     "calcPr",
     "extLst",
+    "bookViews",
 ]
 
 
@@ -612,19 +613,31 @@ def check_workbook_elements(original_path, output_path):
     matched by sheet name since worksheet parts get renumbered on every save; workbook.xml
     is a single, fixed-path part, so no name-matching is needed here) and from
     check_source_references() (r:id-bearing worksheet relationships, not workbook-level
-    metadata). 0.10.0-C, slice C1.
+    metadata). 0.10.0-C, slices C1 (workbookPr/calcPr/extLst) and C2 (bookViews).
 
-    <bookViews> is deliberately NOT in _WORKBOOK_ELEMENTS yet: its <workbookView>
-    activeTab/firstSheet attributes are sheet-position indices, which needs its own
-    slice (C2) and its own carry-over design, not a blind opaque-fragment copy.
-    <definedNames> is also deliberately excluded -- its <definedName> text can embed a
-    sheet name (e.g. "Sheet1!$F$5") and localSheetId is a position index too, both
-    needing the C3 design the same way.
+    <bookViews>'s <workbookView> carries activeTab/firstSheet attributes, which are
+    sheet-position indices -- in principle unsafe to carry verbatim if a macro
+    add/deletes sheets and they point at a stale position afterward. Checked all 7 real
+    fixtures under fixtures/pristine/ before adding <bookViews> here: NONE of them
+    actually sets activeTab or firstSheet (both default to 0, confirmed against the real
+    CT_BookView XSD) -- so today, a verbatim copy is correct on every fixture that
+    exists. Building carry-over/gating logic for a hazard with zero fixture evidence
+    would be exactly the speculative, unvalidated machinery this milestone's hard gate
+    exists to prevent (see design doc §7's stated policy against pre-built
+    abstractions with nothing to validate them). If a future fixture DOES carry a
+    non-default activeTab/firstSheet, this check's own "present in original, missing
+    from output" logic still degrades safely -- it would only flag a real loss, not miss
+    one -- but the *correctness* of a non-default value surviving position changes still
+    needs its own design pass at that point; see design doc §10's C2 entry.
+    <definedNames> is deliberately excluded -- its <definedName> text can embed a sheet
+    name (e.g. "Sheet1!$F$5") and localSheetId is a position index too, needing the C3
+    design (a different mechanism than a blind opaque-fragment copy, since a renamed
+    sheet's dangling text reference needs its own handling, not just presence).
 
     Confirmed as a real, current gap before any 0.10.0-C writer code was written: running
     elixcee's own save against every one of fixture1-7 under fixtures/pristine/ reproduces
-    WORKBOOK_ELEMENT_LOSS on workbookPr/calcPr/extLst on every fixture -- build_xlsx_workbook
-    emits none of them today, only <sheets>.
+    WORKBOOK_ELEMENT_LOSS on workbookPr/calcPr/extLst/bookViews on every fixture --
+    build_xlsx_workbook emits none of them today, only <sheets>.
 
     Returns {"violations": [...], "workbook_element_verdict": "CLEAN"|"WORKBOOK_ELEMENT_LOSS"}.
     """
@@ -1225,14 +1238,19 @@ def self_test():
         assert result["internal_hyperlink_verdict"] == "INTERNAL_HYPERLINK_LOSS", result
         assert any("zero <hyperlink> children" in v for v in result["violations"]), result["violations"]
 
-        # --- Case L: WORKBOOK_ELEMENT_LOSS (0.10.0-C, C1). workbookPr/calcPr/extLst as
-        # direct children of the root <workbook>, mirroring fixture4's real relative
-        # order (workbookPr before <sheets>, calcPr/extLst after -- design doc §8's
-        # CT_Workbook sequence). bookViews/definedNames deliberately absent from this
-        # fixture -- they're C2/C3, not C1's scope.
+        # --- Case L: WORKBOOK_ELEMENT_LOSS (0.10.0-C, C1+C2). workbookPr/bookViews/
+        # calcPr/extLst as direct children of the root <workbook>, mirroring fixture4's
+        # real relative order (workbookPr, bookViews before <sheets>; calcPr/extLst
+        # after -- design doc §8's CT_Workbook sequence). definedNames deliberately
+        # absent from this fixture -- that's C3, not C1/C2's scope. The <workbookView>
+        # here carries no activeTab/firstSheet, matching every real fixture (see
+        # check_workbook_elements()'s own docstring for why that's C2's basis for a
+        # plain verbatim copy rather than gated logic).
         WORKBOOK_C1_XML = (
             f'<?xml version="1.0"?><workbook xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
             '<workbookPr codeName="ThisWorkbook" defaultThemeVersion="202300"/>'
+            '<bookViews><workbookView xWindow="540" yWindow="660" windowWidth="28300" '
+            'windowHeight="17160"/></bookViews>'
             '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>'
             '<calcPr calcId="181029"/>'
             '<extLst><ext uri="{140A7094-0E35-4892-8432-C4D2E57EDEB5}">'
@@ -1272,6 +1290,11 @@ def self_test():
 
         _WORKBOOK_ELEMENT_MUTATIONS = {
             "workbookPr": (b'<workbookPr codeName="ThisWorkbook" defaultThemeVersion="202300"/>', b""),
+            "bookViews": (
+                b'<bookViews><workbookView xWindow="540" yWindow="660" windowWidth="28300" '
+                b'windowHeight="17160"/></bookViews>',
+                b"",
+            ),
             "calcPr": (b'<calcPr calcId="181029"/>', b""),
             "extLst": (
                 b'<extLst><ext uri="{140A7094-0E35-4892-8432-C4D2E57EDEB5}">'
@@ -1307,7 +1330,7 @@ def self_test():
         "(sheetViews + 5 slice-2/3 elements, independently), INTERNAL_HYPERLINK_LOSS "
         "(mixed container: location-only loss detected, r:id sibling never falsely "
         "flagged, empty-container invalidity detected), and WORKBOOK_ELEMENT_LOSS "
-        "(workbookPr/calcPr/extLst, independently) all caught; comments correctly "
+        "(workbookPr/bookViews/calcPr/extLst, independently) all caught; comments correctly "
         "out of SOURCE_REFERENCE_LOSS scope)"
     )
 

@@ -114,12 +114,19 @@ passthrough, same mechanism as `0.10.0-B`. New `check_workbook_elements()` and
 `WORKBOOK_ELEMENT_LOSS` category in `mechanical_check.py` (a workbook.xml-level check,
 distinct from `INLINE_ELEMENT_LOSS`'s per-sheet-name matching — workbook.xml is a
 single, fixed-path part). All 7 fixtures confirmed `WORKBOOK_ELEMENT_LOSS` before the
-writer change, `CLEAN` after. **C2/C3 (not started):** `<bookViews>` (`activeTab`/
-`firstSheet` are sheet-position indices) and `<definedNames>`/print area (`localSheetId`
-is also position-dependent) both need their own carry-over design before any writer
-code, per the hard gate — checked all 7 fixtures first and found none of them actually
-exercises a non-default `activeTab`/`firstSheet` value, so no speculative gating
-machinery was built ahead of real evidence.
+writer change, `CLEAN` after. **C2 (done):** `<bookViews>`. `<workbookView>`'s
+`activeTab`/`firstSheet` are sheet-position indices, which in principle need their own
+carry-over design if they ever hold a non-default value — but all 7 fixtures were
+checked first and none of them sets either attribute (both default to 0 per the real
+XSD), so a plain verbatim copy is correct against all current evidence. No gating
+machinery was built for the unevidenced case: doing so ahead of a real fixture that
+actually exercises it would be exactly the speculative abstraction this milestone's hard
+gate exists to prevent. Shares C1's `WORKBOOK_ELEMENT_LOSS` category (a whole-element
+copy, same as `workbookPr`/`calcPr`/`extLst` — no dedicated extraction logic needed,
+unlike internal hyperlinks' filtered-children approach). **C3 (not started):**
+`<definedNames>`/print area — `localSheetId` is also position-dependent, and
+`<definedName>` text can embed a sheet name, needing a different mechanism than a blind
+copy (not just presence/absence).
 
 `0.10.0-D` (relationship-backed features, including the actual fix for
 `SOURCE_REFERENCE_LOSS`) is not started.
