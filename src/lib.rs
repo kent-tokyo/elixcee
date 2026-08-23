@@ -1877,9 +1877,6 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "dataValidations"));
         let page_margins =
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "pageMargins"));
-        let internal_hyperlinks = source_xml
-            .map(|xml| reader::extract_relationship_free_hyperlinks(xml))
-            .unwrap_or_default();
         // A relationship-backed element may only be restored when this sheet's own
         // .rels genuinely survived into THIS output -- `is_existing` alone only means
         // the sheet HAD an origin, not that its `.rels` specifically made it into
@@ -1891,6 +1888,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             && passthrough
                 .iter()
                 .any(|(name, _)| name == &plan.output_rels_name);
+        // Location-only hyperlinks are always kept; r:id-bearing ones only when
+        // rels_survived (see extract_hyperlinks' own doc comment).
+        let hyperlinks = source_xml
+            .map(|xml| reader::extract_hyperlinks(xml, rels_survived))
+            .unwrap_or_default();
         let (table_parts, drawing, legacy_drawing) = if rels_survived {
             (
                 source_xml.and_then(|xml| reader::extract_raw_element(xml, "tableParts")),
@@ -1907,7 +1909,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             sheet_format_pr: sheet_format_pr.as_deref(),
             phonetic_pr: phonetic_pr.as_deref(),
             data_validations: data_validations.as_deref(),
-            internal_hyperlinks: &internal_hyperlinks,
+            hyperlinks: &hyperlinks,
             page_margins: page_margins.as_deref(),
             table_parts: table_parts.as_deref(),
             drawing: drawing.as_deref(),
@@ -2227,14 +2229,15 @@ struct OpaqueWorksheetFragments<'a> {
     sheet_format_pr: Option<&'a str>,
     phonetic_pr: Option<&'a str>,
     data_validations: Option<&'a str>,
-    /// Raw `<hyperlink .../>` spans with no `r:id` (see
-    /// `reader::extract_relationship_free_hyperlinks`) — NOT the whole source
-    /// `<hyperlinks>` container. `build_xlsx_sheet` synthesizes the
-    /// `<hyperlinks>`/`</hyperlinks>` wrapper itself, based on whether this list is
-    /// empty: `CT_Hyperlinks`' `<hyperlink>` child is `minOccurs="1"` (confirmed against
-    /// the real XSD), so an empty container is invalid XML and must be omitted entirely
-    /// rather than emitted as `<hyperlinks/>`.
-    internal_hyperlinks: &'a [String],
+    /// Raw `<hyperlink .../>` spans (see `reader::extract_hyperlinks`) — NOT the whole
+    /// source `<hyperlinks>` container. Location-only children are always included;
+    /// r:id-bearing ones only when the caller passed `rels_survived` to
+    /// `extract_hyperlinks`. `build_xlsx_sheet` synthesizes the `<hyperlinks>`/
+    /// `</hyperlinks>` wrapper itself, based on whether this list is empty:
+    /// `CT_Hyperlinks`' `<hyperlink>` child is `minOccurs="1"` (confirmed against the real
+    /// XSD), so an empty container is invalid XML and must be omitted entirely rather
+    /// than emitted as `<hyperlinks/>`.
+    hyperlinks: &'a [String],
     page_margins: Option<&'a str>,
     /// `<tableParts><tablePart r:id="..."/></tableParts>`, `<drawing r:id="..."/>`, and
     /// `<legacyDrawing r:id="..."/>` -- 0.10.0-D relationship-backed elements. Unlike every
@@ -2387,9 +2390,9 @@ fn build_xlsx_sheet(
     // child is `minOccurs="1"` (confirmed against the real XSD): if every hyperlink was
     // r:id-backed and got filtered out, the container itself must be omitted entirely --
     // an empty `<hyperlinks/>` would be invalid XML, not merely "nothing to show".
-    if !fragments.internal_hyperlinks.is_empty() {
+    if !fragments.hyperlinks.is_empty() {
         out.push_str("<hyperlinks>\n");
-        for hyperlink in fragments.internal_hyperlinks {
+        for hyperlink in fragments.hyperlinks {
             out.push_str(hyperlink);
             out.push('\n');
         }
