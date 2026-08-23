@@ -67,7 +67,7 @@ found and fixed along the way: `Vm::new()`'s default empty `"sheet1"` wasn't cle
 loading a real workbook, so any workbook whose sheets are never literally named `"Sheet1"`
 gained a spurious extra empty sheet on every save.
 
-**`0.10.0-B` (inline worksheet elements, in progress).** An opaque-fragment mechanism —
+**`0.10.0-B` (inline worksheet elements, functionally done).** An opaque-fragment mechanism —
 capture an element's raw source XML, splice it back at the correct schema position, never
 parse or reconstruct it — applied one element at a time, each slice independently checker-
 verified (a new `INLINE_ELEMENT_LOSS`/`INTERNAL_HYPERLINK_LOSS` category per shape), fixture-
@@ -79,8 +79,8 @@ relationship-free `location=` children with `r:id`-backed ones that stay out of 
 `0.10.0-D`, so it's reconstructed from filtered children (confirmed via the real
 `CT_Hyperlinks` XSD: its `<hyperlink>` child is `minOccurs="1"`, so an all-`r:id` source must
 omit the container entirely rather than emit an empty `<hyperlinks/>`) instead of copied
-whole. Remaining in `0.10.0-B`: `<autoFilter>` (no fixture has it as a standalone worksheet
-element yet) and row/column style properties beyond hidden state.
+whole. Deliberately left out (not blocking): `<autoFilter>` (no fixture has it as a
+standalone worksheet element yet) and row/column style properties beyond hidden state.
 
 **Sheet order/writer bug found and fixed while scoping `0.10.0-C`.** `save_xlsx_impl` derived
 its entire sheet-iteration order — worksheet part naming (`sheetN.xml`), `<sheets>` element
@@ -106,7 +106,7 @@ by adding `WorksheetOrigin.original_display_name` (the name exactly as written i
 source, alongside the existing `original_sheet_id`/`original_workbook_rel_id`/
 `original_part_name`), which the writer now prefers over the lowercased key.
 
-**`0.10.0-C` (workbook-level preservation, in progress).** Split into slices by
+**`0.10.0-C` (workbook-level preservation, done).** Split into slices by
 position-dependence, same discipline as `0.10.0-B`. **C1 (done):** `<workbookPr>`,
 `<calcPr>`, `<extLst>`, and the root `<workbook>` tag's own namespace declarations —
 all position-independent (no dependency on sheet order/count), opaque-fragment
