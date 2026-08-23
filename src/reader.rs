@@ -489,6 +489,179 @@ pub(crate) fn content_type_decls(xml: &str) -> ContentTypeDecls {
     (defaults, overrides)
 }
 
+/// Returns `xml`'s root element's raw attribute string (everything between the tag name
+/// and the closing `>`/`/>` of its start tag, trimmed, self-closing `/` stripped) iff the
+/// root element's local name (namespace prefix ignored) matches `local_name`; `None`
+/// otherwise, including when the root has no attributes at all. Used to carry a source
+/// worksheet's `<worksheet xmlns=".." mc:Ignorable=".." xr:uid="..">` namespace
+/// declarations verbatim into a regenerated root tag, rather than reconstructing them
+/// selectively — see docs/xlsx-worksheet-preservation-0.10.0-design.md §8.
+pub(crate) fn extract_root_attrs(xml: &str, local_name: &str) -> Option<String> {
+    let (start, tag_close_rel, full_name) = find_next_open_tag(xml, 0)?;
+    if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
+        return None;
+    }
+    let after_name = &xml[start + 1 + full_name.len()..];
+    let trimmed = after_name[..tag_close_rel].trim();
+    let attrs = trimmed.strip_suffix('/').unwrap_or(trimmed).trim_end();
+    if attrs.is_empty() {
+        None
+    } else {
+        Some(attrs.to_string())
+    }
+}
+
+/// Extracts the raw, byte-for-byte substring of the first `<local_name ..>...</local_name>`
+/// or `<local_name ../>` top-level element found in `xml` (matched by local name, namespace
+/// prefix ignored), including its own start/end tags — `None` if absent. Deliberately not a
+/// full XML parser: opaque-fragment passthrough only needs one element's boundaries and its
+/// untouched bytes, not a parsed tree — see
+/// docs/xlsx-worksheet-preservation-0.10.0-design.md §7(b). The closing-tag search is a
+/// literal string match on `</local_name>`, not tag-depth tracking, so this assumes
+/// `local_name` never nests an element of the same name — true for every 0.10.0-B target
+/// (`sheetViews`, `sheetPr`, `sheetFormatPr`, `dataValidations`, `autoFilter`,
+/// `pageMargins` don't self-nest).
+pub(crate) fn extract_raw_element(xml: &str, local_name: &str) -> Option<String> {
+    let mut search_from = 0;
+    loop {
+        let (tag_start, tag_close_rel, full_name) = find_next_open_tag(xml, search_from)?;
+        if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
+            search_from = tag_start + 1;
+            continue;
+        }
+        let name_end = tag_start + 1 + full_name.len();
+        let start_tag_end = name_end + tag_close_rel + 1;
+        let self_closing = xml[name_end..name_end + tag_close_rel]
+            .trim_end()
+            .ends_with('/');
+        if self_closing {
+            return Some(xml[tag_start..start_tag_end].to_string());
+        }
+        let close_tag = format!("</{}>", full_name);
+        let end_rel = xml[start_tag_end..].find(&close_tag)?;
+        let end = start_tag_end + end_rel + close_tag.len();
+        return Some(xml[tag_start..end].to_string());
+    }
+}
+
+/// Shared scan primitive for `extract_root_attrs`/`extract_raw_element`: finds the next
+/// opening or self-closing tag at or after byte offset `from` (skipping closing tags,
+/// comments, CDATA, and processing instructions/XML declarations), returning
+/// `(tag_start, tag_close_rel, local_name)` — `tag_start` is the byte offset of the tag's
+/// `<`, `tag_close_rel` is the offset of its terminating unquoted `>` relative to just
+/// after the tag name, and `local_name` has any namespace prefix stripped. `None` if no
+/// more tags exist.
+fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize, String)> {
+    loop {
+        let rel = xml[search_from..].find('<')?;
+        let tag_start = search_from + rel;
+        let after_lt = &xml[tag_start + 1..];
+        if after_lt.starts_with(['/', '!', '?']) {
+            search_from = tag_start + 1;
+            continue;
+        }
+        let name_end = after_lt
+            .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+            .unwrap_or(after_lt.len());
+        let full_name = after_lt[..name_end].to_string();
+        let rest = &after_lt[name_end..];
+        let tag_close_rel = find_tag_close(rest);
+        return Some((tag_start, tag_close_rel, full_name));
+    }
+}
+
+#[cfg(test)]
+mod opaque_fragment_tests {
+    use super::*;
+
+    #[test]
+    fn extract_root_attrs_captures_namespaces_and_xr_uid_verbatim() {
+        let xml = concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+            "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" ",
+            "mc:Ignorable=\"x14ac xr xr2 xr3\" xr:uid=\"{ACCE0F6A-5070-C341-A245-A04D433D82F2}\">\n",
+            "<sheetData/></worksheet>",
+        );
+        let attrs = extract_root_attrs(xml, "worksheet").unwrap();
+        assert!(
+            attrs
+                .starts_with("xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"")
+        );
+        assert!(attrs.contains("xr:uid=\"{ACCE0F6A-5070-C341-A245-A04D433D82F2}\""));
+        assert!(
+            !attrs.ends_with('/'),
+            "self-closing slash must not leak in: {attrs:?}"
+        );
+    }
+
+    #[test]
+    fn extract_root_attrs_returns_none_for_a_bare_no_attribute_root() {
+        let xml = "<?xml version=\"1.0\"?><worksheet><sheetData/></worksheet>";
+        assert_eq!(extract_root_attrs(xml, "worksheet"), None);
+    }
+
+    #[test]
+    fn extract_root_attrs_returns_none_on_local_name_mismatch() {
+        let xml = "<?xml version=\"1.0\"?><workbook foo=\"bar\"><sheets/></workbook>";
+        assert_eq!(extract_root_attrs(xml, "worksheet"), None);
+    }
+
+    #[test]
+    fn extract_raw_element_returns_the_full_subtree_verbatim() {
+        let xml = concat!(
+            "<?xml version=\"1.0\"?><worksheet>",
+            "<sheetViews><sheetView tabSelected=\"1\" workbookViewId=\"0\">",
+            "<pane xSplit=\"1\" ySplit=\"1\" topLeftCell=\"B2\" activePane=\"bottomRight\" state=\"frozen\"/>",
+            "<selection pane=\"bottomRight\" activeCell=\"B2\" sqref=\"B2\"/>",
+            "</sheetView></sheetViews>",
+            "<sheetData/></worksheet>",
+        );
+        let frag = extract_raw_element(xml, "sheetViews").unwrap();
+        assert_eq!(
+            frag,
+            concat!(
+                "<sheetViews><sheetView tabSelected=\"1\" workbookViewId=\"0\">",
+                "<pane xSplit=\"1\" ySplit=\"1\" topLeftCell=\"B2\" activePane=\"bottomRight\" state=\"frozen\"/>",
+                "<selection pane=\"bottomRight\" activeCell=\"B2\" sqref=\"B2\"/>",
+                "</sheetView></sheetViews>",
+            )
+        );
+    }
+
+    #[test]
+    fn extract_raw_element_handles_a_self_closing_form() {
+        let xml = "<worksheet><sheetViews/><sheetData/></worksheet>";
+        assert_eq!(
+            extract_raw_element(xml, "sheetViews"),
+            Some("<sheetViews/>".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_raw_element_returns_none_when_absent() {
+        let xml = "<worksheet><sheetData/></worksheet>";
+        assert_eq!(extract_raw_element(xml, "sheetViews"), None);
+    }
+
+    #[test]
+    fn extract_raw_element_does_not_match_a_differently_named_element() {
+        // Regression guard for a naive substring search: "sheetView" (singular, the CHILD
+        // element) must not be matched when asking for "sheetViews" (plural, the container).
+        let xml = "<worksheet><sheetView tabSelected=\"1\"/><sheetData/></worksheet>";
+        assert_eq!(extract_raw_element(xml, "sheetViews"), None);
+    }
+
+    #[test]
+    fn extract_raw_element_ignores_a_namespace_prefix_on_the_target_element() {
+        let xml = "<worksheet><x:sheetViews><x:sheetView/></x:sheetViews></worksheet>";
+        assert_eq!(
+            extract_raw_element(xml, "sheetViews"),
+            Some("<x:sheetViews><x:sheetView/></x:sheetViews>".to_string())
+        );
+    }
+}
+
 /// `xl/_rels/workbook.xml.rels`'s own `<Relationship Type=".." Target=".."/>` entries —
 /// `(Type, Target)` pairs, `Target` exactly as written (relative to `xl/`, no leading `/`).
 /// Ids are dropped: callers assign fresh ones when carrying a relationship into a

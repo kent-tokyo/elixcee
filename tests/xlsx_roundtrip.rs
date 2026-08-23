@@ -733,6 +733,63 @@ fn real_excel_xlsm_roundtrip_preserves_vba_project_and_relationships() {
     let _ = std::fs::remove_file(&inplace_path);
 }
 
+/// 0.10.0-B slice 1: `<sheetViews>` (freeze panes via `<pane>`, active-cell
+/// `<selection>`) opaque-fragment passthrough. Before this slice, every real
+/// fixture lost `<sheetViews>` entirely on a save -- confirmed via
+/// `compat/oracle-excel-com/mechanical_check.py`'s `check_inline_worksheet_elements()`
+/// against all 7 fixtures (see that commit). This is the positive regression
+/// guard: load the real freeze-pane fixture, edit a cell, save, and assert the
+/// exact `<pane .../>` the source contains survives byte-for-byte, plus the
+/// root `<worksheet>` tag now carries the source's own namespace declarations
+/// (needed for other, later 0.10.0-B slices that use prefixed attributes)
+/// instead of the old hardcoded minimal one.
+#[test]
+fn real_excel_freeze_pane_sheetviews_survive_a_save() {
+    let source_path = real_fixture("fixture7_freeze_pane.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_sheet1 =
+        String::from_utf8(fixture_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        source_sheet1.contains(r#"<pane xSplit="1" ySplit="1" topLeftCell="B2" activePane="bottomRight" state="frozen"/>"#),
+        "fixture no longer contains the expected freeze-pane shape -- test needs updating: {source_sheet1}"
+    );
+
+    let output_path = tmp_path("freeze_pane_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditA1()\n    Range(\"A1\").Value = 42\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditA1").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(r#"<pane xSplit="1" ySplit="1" topLeftCell="B2" activePane="bottomRight" state="frozen"/>"#),
+        "freeze pane must survive a save verbatim: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains("<sheetViews>") && out_sheet1.contains("</sheetViews>"),
+        "sheetViews container must survive: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1
+            .contains("xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\""),
+        "root <worksheet> tag should carry the source's own namespace declarations, not the \
+         old hardcoded minimal one: {out_sheet1}"
+    );
+    // Edited cell still round-trips correctly alongside the passthrough fragment.
+    assert!(
+        out_sheet1.contains("<c r=\"A1\""),
+        "edited cell A1 must still be present: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 fn check_real_fixture_output(
     fixture_entries: &HashMap<String, Vec<u8>>,
     vba_bytes: &[u8],

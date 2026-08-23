@@ -581,11 +581,28 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     // every surviving cell's re-emitted `s="N"` index. See
     // `docs/xlsx-architecture.md`.
     let mut passthrough_styles: Option<Vec<u8>> = None;
+    // Original worksheet XML text, keyed by lowercased sheet name (matching
+    // `worksheet_origins`'/`sheet_names()`'s own key space) — the source for
+    // 0.10.0-B's opaque-fragment passthrough (see `build_xlsx_sheet`'s
+    // `root_attrs`/`sheet_views` params). Only populated for sheets with a known
+    // `WorksheetOrigin` whose `original_part_name` resolves to a real passthrough
+    // entry; a new sheet (no origin) or an .ods source (no `raw_entries` at all)
+    // falls back to `build_xlsx_sheet`'s hardcoded minimal defaults.
+    let mut sheet_source_xml: HashMap<String, String> = HashMap::new();
 
     if let Some(source_path) = passthrough_source {
         let raw_entries = reader::read_raw_zip_entries(source_path)?;
         has_vba = is_xlsm_output && raw_entries.keys().any(|n| n.starts_with("xl/vbaProject"));
         passthrough_styles = raw_entries.get("xl/styles.xml").cloned();
+
+        for (sheet_key, origin) in &vm.worksheet_origins {
+            if let Some(part) = &origin.original_part_name
+                && let Some(bytes) = raw_entries.get(part)
+                && let Ok(text) = String::from_utf8(bytes.clone())
+            {
+                sheet_source_xml.insert(sheet_key.clone(), text);
+            }
+        }
 
         let (defaults, overrides) = raw_entries
             .get("[Content_Types].xml")
@@ -704,10 +721,23 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     for (i, sheet_name) in sheet_names.iter().enumerate() {
+        let source_xml = sheet_source_xml.get(&sheet_name.to_lowercase());
+        let root_attrs = source_xml.and_then(|xml| reader::extract_root_attrs(xml, "worksheet"));
+        let sheet_views = source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetViews"));
+
         zip.start_file(format!("xl/worksheets/sheet{}.xml", i + 1), deflated)
             .map_err(|e| e.to_string())?;
-        zip.write_all(build_xlsx_sheet(vm, sheet_name, &str_index).as_bytes())
-            .map_err(|e| e.to_string())?;
+        zip.write_all(
+            build_xlsx_sheet(
+                vm,
+                sheet_name,
+                &str_index,
+                root_attrs.as_deref(),
+                sheet_views.as_deref(),
+            )
+            .as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     zip.start_file("xl/sharedStrings.xml", deflated)
@@ -943,15 +973,40 @@ fn build_xlsx_workbook_rels(
     out
 }
 
+/// `root_attrs`/`sheet_views` are 0.10.0-B's opaque-fragment passthrough: raw text
+/// captured from the SOURCE worksheet XML (see `save_xlsx_impl`'s `sheet_source_xml`),
+/// re-emitted verbatim rather than reconstructed. `root_attrs` replaces the hardcoded
+/// minimal `xmlns=".."` root tag with the source's own full attribute string (namespace
+/// declarations, `mc:Ignorable`, `xr:uid`, ...) when available — see
+/// docs/xlsx-worksheet-preservation-0.10.0-design.md §8. `sheet_views` is the raw
+/// `<sheetViews>...</sheetViews>` subtree (freeze panes via `<pane>`, active-cell
+/// `<selection>`), spliced in immediately after the root tag — the correct CT_Worksheet
+/// schema position (`sheetPr, dimension, sheetViews, sheetFormatPr, cols, sheetData, ...`,
+/// §8), since nothing else in this function currently emits `sheetPr`/`dimension`. Both
+/// are `None` for a sheet with no known `WorksheetOrigin` (new sheet, or an `.ods`
+/// source), in which case behavior is unchanged from before 0.10.0-B.
 fn build_xlsx_sheet(
     vm: &Vm,
     sheet_name: &str,
     str_index: &std::collections::HashMap<String, usize>,
+    root_attrs: Option<&str>,
+    sheet_views: Option<&str>,
 ) -> String {
-    let mut out = String::from(concat!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
-        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
-    ));
+    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
+    match root_attrs {
+        Some(attrs) => {
+            out.push_str("<worksheet ");
+            out.push_str(attrs);
+            out.push_str(">\n");
+        }
+        None => out.push_str(
+            "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        ),
+    }
+    if let Some(sv) = sheet_views {
+        out.push_str(sv);
+        out.push('\n');
+    }
 
     let sheet_key = sheet_name.to_lowercase();
     let style_indices = vm.cell_style_indices.get(&sheet_key);

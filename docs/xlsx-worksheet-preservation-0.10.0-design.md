@@ -557,16 +557,66 @@ comments relationship（`rId5`、対応表に含まれない未マップtype）�
     UNEXPLAINED/0 MISMATCH）・`compat/vba-semantics`（386件、0 BUG/0 UNCLASSIFIED）とも
     無変化を確認。
 - **0.10.0-B — Inline worksheet preservation**（relationship非依存、7節(b)の
-  opaque-fragment機構をworksheet-XML側へ適用）
-  - `<sheetViews>`（`<selection>`・`<pane>`＝freeze pane含む）・`<sheetPr>`・
-    `<sheetFormatPr>`・`<dataValidations>`・internal hyperlinkの`location`属性・
-    `<autoFilter>`・`<pageMargins>`・行/列プロパティ（`<cols>`/`<row>`の幅・スタイル等、
-    hidden以外の属性）
+  opaque-fragment機構をworksheet-XML側へ適用）。1要素ずつ独立にmerge可能なslice単位で
+  進める（0.10.0-Aの`fixture inventory→checker→writer`という順序をslice単位で反復）。
+  - **B1（実装済み）— `<sheetViews>`（`<pane>`＝freeze pane・`<selection>`）＋ルート
+    `<worksheet>`タグの属性文字列引き継ぎ**
+    - [x] checker先行実装: `mechanical_check.py`に`check_inline_worksheet_elements()`
+      （新しい違反分類`INLINE_ELEMENT_LOSS`、`SOURCE_REFERENCE_LOSS`ともcheck_roundtrip
+      とも別軸）を追加、`_INLINE_WORKSHEET_ELEMENTS = ["sheetViews"]`から開始。
+      self-testのCase Iで検出を確認してからwriterへ着手（0.10.0-Aと同じ順序）。
+    - [x] writer未着手の時点で実fixture7種全てに`check_inline_worksheet_elements()`を
+      適用し、全シートで`<sheetViews>`が体系的に失われることを実測確定（pre-fix
+      baseline）——0.10.0-Aの「先にcheckerで実バグを実測してから直す」を踏襲。
+    - [x] `reader.rs`に`extract_root_attrs`/`extract_raw_element`（共有の
+      `find_next_open_tag`スキャン primitive経由）を実装——生バイトをそのまま
+      切り出すopaque-fragment抽出、フルXMLパーサーではない（7節(b)通り）。単体テスト
+      8件（自己閉じタグ・属性なしルート・名前不一致・namespace prefix等の境界値）。
+    - [x] `save_xlsx_impl`に`sheet_source_xml`（sheet名キー、`WorksheetOrigin.
+      original_part_name`経由で`raw_entries`から解決）を追加、`build_xlsx_sheet`へ
+      `root_attrs`/`sheet_views`の2つの`Option<&str>`として橋渡し（advisor助言通り、
+      3つ目のスロットが増えるまで構造体化は見送り）。XSD順序（8節）通り、ルートタグ
+      直後・`<cols>`より前に`<sheetViews>`を挿入。origin不明のシート（新規シート・
+      `.ods`ソース）は従来通りhardcodedのminimalなルートタグにフォールバック。
+    - [x] 実fixture7種全てに対する事後確認——全シートで`check_inline_worksheet_elements`
+      が`CLEAN`に、`check_roundtrip`（`STRUCTURALLY_CLEAN`）・`check_formula_preservation`
+      （`CLEAN`）は不変。`check_source_references`の`SOURCE_REFERENCE_LOSS`は
+      fixture3/4/5で意図通り変化なし（0.10.0-Dの担当、このsliceの回帰ではない）。
+    - [x] `tests/xlsx_roundtrip.rs`に実fixture7（freeze pane）を使った専用テスト
+      `real_excel_freeze_pane_sheetviews_survive_a_save`を追加——`<pane .../>`が
+      byte-for-byteで生き残ること、ルートタグがsource由来のnamespace宣言を持つことを
+      直接assert。既存の合成fixture（`<sheetViews>`を持たない）ベースのテストは
+      無変化で通過を確認（advisor指摘の懸念は実害なしと確認済み）。
+    - [ ] **未確認（advisor指摘）**: `<sheetView workbookViewId="0">`は
+      `xl/workbook.xml`側の`<bookViews>`（0.10.0-C対象、現状writerは一切出力しない）
+      への暗黙の参照。`<bookViews>`なしで`workbookViewId="0"`が実Excelで repair警告
+      なしに開けるかは未検証——このリポジトリでは実Excelを実行できないため、
+      ユーザーに実際にfixture7の保存後ファイルを開いて確認してもらう必要がある。
+      **このタスクが完了するまで、B1は「実装済み」であって「実Excel検証済み」とは
+      言えない**（0.9.0-Aと同じ完了条件——実Excel再オープンでrepair警告0件——を
+      B1はまだ満たしていない）。
+    - 検証: `cargo test --workspace`（841件）・`cargo fmt --check`・
+      `cargo clippy --all-targets`（python feature有無両方）・`cargo doc
+      --document-private-items`、いずれもクリーン。`compat/corpus`（581件）・
+      `compat/vba-semantics`（386件）とも無変化。
+  - **B2以降（未着手）**: `<sheetPr>`・`<sheetFormatPr>`・`<dataValidations>`・
+    internal hyperlinkの`location`属性（advisor指摘: `<hyperlinks>`はB1と同じ
+    まるごとpassthroughができない——`r:id`を持つ子要素とlocation-onlyの子要素が
+    混在しうるため、子要素単位でのfilteringが必要。かつ`CT_Hyperlinks`の
+    `<hyperlink>`の`minOccurs`を実XSDで確認し、「全部r:id形式だった場合は
+    `<hyperlinks>`ごと省略する」のか「空の`<hyperlinks/>`を出力してよいのか」を
+    実装前に確定する必要がある）・`<autoFilter>`・`<pageMargins>`・行/列プロパティ
+    （`<cols>`/`<row>`の幅・スタイル等、hidden以外の属性）。
   - **`<conditionalFormatting>`は要注意——`dxfId`（`xl/styles.xml`の`<dxfs>`）や
     `<extLst>`拡張を参照する場合があり、完全な参照非依存とは言い切れない。** 最初は
     「参照先の妥当性検証はせず、生のsubtreeをそのまま保存する」raw subtree preservation
     として扱い、`dxf`参照の検証・復元は将来の別スライスへ回すことを推奨する。
-  - 0.10.0-Aの機構へスロットを追加するのみ
+  - **`<dimension>`は0.10.0-Bのスコープに含めない（advisor指摘で確定）**——2節で
+    「読んでいるが書き戻していない」として挙げていたが、これはセル値から導出される
+    データであり、view状態のようなopaque-fragment passthrough向きのデータではない。
+    `BufferSheet`止まりで`WorkbookSheet`/`Vm`まで到達しておらず、マクロが元の範囲外へ
+    書き込んだ場合はsource値をそのまま出すと逆に古い情報を確定的に出してしまう。
+    やるならcurrent cellsから再計算する別種の作業になるため、0.10.0-Bには含めない。
 - **0.10.0-C — Workbook-level preservation**（worksheet XMLではなくworkbook.xml側、
   1節の指摘通りスコープを混ぜない）
   - `<definedNames>`（6節のシートリネーム時dangling注意、9節の診断で対応）
