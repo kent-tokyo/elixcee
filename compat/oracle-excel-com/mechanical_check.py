@@ -500,7 +500,18 @@ def check_source_references(original_path, output_path):
 # with 0.10.0-B's own slices (see docs/xlsx-worksheet-preservation-0.10.0-design.md §10):
 # only listed here once a real fixture demonstrates it and this checker has a negative
 # test for its loss (the same hard gate that governs writer code).
-_INLINE_WORKSHEET_ELEMENTS = ["sheetViews"]
+#
+# slice 1 (sheetViews): fixture1-7 all carry it.
+# slice 2 (sheetPr/sheetFormatPr/phoneticPr/dataValidations): sheetFormatPr and
+# phoneticPr are present in all 7 fixtures; sheetPr in fixture2/3/4 only;
+# dataValidations in fixture3 only -- all real, none synthesized. autoFilter and
+# conditionalFormatting are deliberately NOT here yet: autoFilter has zero fixture
+# evidence as a standalone worksheet element (INVENTORY.md's "confirmed absent" list --
+# fixture3's <autoFilter> lives inside xl/tables/table1.xml, a different part), and
+# conditionalFormatting can reference xl/styles.xml's <dxfs> (dxfId) or <extLst>
+# extensions -- the design doc flags it as needing separate consideration before being
+# treated as a pure relationship-free opaque fragment.
+_INLINE_WORKSHEET_ELEMENTS = ["sheetViews", "sheetPr", "sheetFormatPr", "phoneticPr", "dataValidations"]
 
 
 def check_inline_worksheet_elements(original_path, output_path):
@@ -521,6 +532,12 @@ def check_inline_worksheet_elements(original_path, output_path):
     the pre-fix baseline this check exists to close; 0.10.0-B's writer commit should turn
     all of fixture1-7 CLEAN under this check without touching SOURCE_REFERENCE_LOSS, which
     stays unresolved on fixture3/4/5 until 0.10.0-D.
+
+    slice 2 (sheetPr/sheetFormatPr/phoneticPr/dataValidations) re-confirmed the same way
+    against the ALREADY-sheetViews-fixed writer (6a4e596): sheetFormatPr/phoneticPr lost
+    on all 7 fixtures, sheetPr lost on fixture2/3/4 (the only 3 that have it), and
+    dataValidations lost on fixture3 (the only one that has it) -- sheetViews itself
+    correctly stayed CLEAN everywhere, confirming slice 1's fix wasn't disturbed.
 
     Returns {"violations": [...], "inline_element_verdict": "CLEAN"|"INLINE_ELEMENT_LOSS"}.
     """
@@ -840,13 +857,23 @@ def self_test():
         assert result["violations"] == [], result
 
         sv_path = os.path.join(tmp, "sheetviews_orig.xlsm")
+        # XSD order (CT_Worksheet, design doc §8): sheetPr, dimension, sheetViews,
+        # sheetFormatPr, cols, sheetData, ..., mergeCells, phoneticPr,
+        # conditionalFormatting, dataValidations, ... -- this fixture carries all 5
+        # slice-2 targets (sheetViews from slice 1 plus sheetPr/sheetFormatPr/
+        # phoneticPr/dataValidations from slice 2) in that real relative order.
         SHEET1_SHEETVIEWS_XML = (
-            f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}">'
+            f'<?xml version="1.0"?><worksheet xmlns="{SML_NS[1:-1]}" xmlns:r="{R_NS}">'
+            '<sheetPr codeName="Sheet1"/>'
             '<sheetViews><sheetView tabSelected="1" workbookViewId="0">'
             '<pane xSplit="1" ySplit="1" topLeftCell="B2" activePane="bottomRight" state="frozen"/>'
             '<selection pane="bottomRight" activeCell="B2" sqref="B2"/>'
             "</sheetView></sheetViews>"
+            '<sheetFormatPr baseColWidth="10" defaultRowHeight="20"/>'
             '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>'
+            '<phoneticPr fontId="1"/>'
+            '<dataValidations count="1"><dataValidation type="list" allowBlank="1" '
+            'sqref="E1"><formula1>"Yes,No"</formula1></dataValidation></dataValidations>'
             "</worksheet>"
         ).encode()
         with zipfile.ZipFile(sv_path, "w") as zf:
@@ -889,11 +916,48 @@ def self_test():
         assert result["inline_element_verdict"] == "INLINE_ELEMENT_LOSS", result
         assert any("sheetViews" in v for v in result["violations"]), result["violations"]
 
+        # --- Case J: INLINE_ELEMENT_LOSS, slice 2 (0.10.0-B). One independent mutation
+        # per element -- strip only that element from sv_path's sheet1.xml, leave the
+        # other 4 intact, confirm each is individually detected (not just "something is
+        # wrong somewhere"). Mirrors Case H's one-mutation-per-relationship-type shape.
+        _SLICE2_MUTATIONS = {
+            "sheetPr": (b'<sheetPr codeName="Sheet1"/>', b""),
+            "sheetFormatPr": (b'<sheetFormatPr baseColWidth="10" defaultRowHeight="20"/>', b""),
+            "phoneticPr": (b'<phoneticPr fontId="1"/>', b""),
+            "dataValidations": (
+                b'<dataValidations count="1"><dataValidation type="list" allowBlank="1" '
+                b'sqref="E1"><formula1>"Yes,No"</formula1></dataValidation></dataValidations>',
+                b"",
+            ),
+        }
+        for label, (needle, replacement) in _SLICE2_MUTATIONS.items():
+            assert needle in SHEET1_SHEETVIEWS_XML, f"self-test fixture bug: {label} needle not found"
+            mutated_path = os.path.join(tmp, f"sheetviews_missing_{label}.xlsm")
+            with zipfile.ZipFile(sv_path) as src, zipfile.ZipFile(mutated_path, "w") as dst:
+                for item in src.infolist():
+                    data = src.read(item.filename)
+                    if item.filename == "xl/worksheets/sheet1.xml":
+                        data = data.replace(needle, replacement)
+                    dst.writestr(item, data)
+            result = check_inline_worksheet_elements(sv_path, mutated_path)
+            assert result["inline_element_verdict"] == "INLINE_ELEMENT_LOSS", (
+                f"failed to detect missing {label}: {result}"
+            )
+            assert any(label in v for v in result["violations"]), (label, result["violations"])
+            # The other 4 elements must NOT be flagged -- confirms per-element
+            # granularity, not "the whole check fired because something changed".
+            for other in _INLINE_WORKSHEET_ELEMENTS:
+                if other != label:
+                    assert not any(f"<{other}>" in v for v in result["violations"]), (
+                        f"stripping {label} must not also flag unrelated {other}: {result['violations']}"
+                    )
+
     print(
         "self_test: OK (clean pass-through clean; truncated VBA, broken rels, dangling "
         "target, stripped-formula, orphaned part, all 4 SOURCE_REFERENCE_LOSS shapes, "
         "unexpected .rels mutation, cross-type rId confusion, and INLINE_ELEMENT_LOSS "
-        "(sheetViews) all caught; comments correctly out of SOURCE_REFERENCE_LOSS scope)"
+        "(sheetViews + 4 slice-2 elements, independently) all caught; comments correctly "
+        "out of SOURCE_REFERENCE_LOSS scope)"
     )
 
 
