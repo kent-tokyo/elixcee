@@ -1104,6 +1104,97 @@ fn table_parts_is_not_restored_when_its_own_rels_file_did_not_survive() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// 0.10.0-D: `<drawing r:id>` (chart/image anchor). fixture5's only worksheet-level
+/// relationship is its drawing -- `check_source_references()` goes fully `CLEAN` for this
+/// fixture once this restores, the second real fixture (after fixture3's tableParts) to
+/// reach that state.
+#[test]
+fn real_excel_drawing_survives_a_save() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_sheet1 =
+        String::from_utf8(fixture_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        source_sheet1.contains(r#"<drawing r:id="rId1"/>"#),
+        "fixture no longer contains the expected drawing shape -- test needs updating: {source_sheet1}"
+    );
+
+    let output_path = tmp_path("drawing_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditA1()\n    Range(\"A1\").Value = 42\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditA1").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(r#"<drawing r:id="rId1"/>"#),
+        "drawing must survive a save verbatim, referencing the same rId as the source: {out_sheet1}"
+    );
+    assert_eq!(
+        output_entries.get("xl/worksheets/_rels/sheet1.xml.rels"),
+        fixture_entries.get("xl/worksheets/_rels/sheet1.xml.rels"),
+        "the worksheet .rels the restored r:id points at must still be byte-identical"
+    );
+    assert_eq!(
+        output_entries.get("xl/drawings/drawing1.xml"),
+        fixture_entries.get("xl/drawings/drawing1.xml"),
+        "the drawing part itself must still be byte-identical"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// 0.10.0-D: `<legacyDrawing r:id>` (VML comment shapes). fixture4's `.rels` also
+/// carries an r:id-backed hyperlink -- deliberately left un-asserted here, still out of
+/// scope (0.10.0-D's hyperlinks slice, not yet done).
+#[test]
+fn real_excel_legacy_drawing_survives_a_save() {
+    let source_path = real_fixture("fixture4_hyperlink_comment_name.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_sheet1 =
+        String::from_utf8(fixture_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        source_sheet1.contains(r#"<legacyDrawing r:id="rId2"/>"#),
+        "fixture no longer contains the expected legacyDrawing shape -- test needs updating: {source_sheet1}"
+    );
+
+    let output_path = tmp_path("legacy_drawing_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditB1()\n    Cells(1, 2).Value = 999\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditB1").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(r#"<legacyDrawing r:id="rId2"/>"#),
+        "legacyDrawing must survive a save verbatim, referencing the same rId as the source: {out_sheet1}"
+    );
+    assert_eq!(
+        output_entries.get("xl/worksheets/_rels/sheet1.xml.rels"),
+        fixture_entries.get("xl/worksheets/_rels/sheet1.xml.rels"),
+        "the worksheet .rels the restored r:id points at must still be byte-identical"
+    );
+    assert_eq!(
+        output_entries.get("xl/drawings/vmlDrawing1.vml"),
+        fixture_entries.get("xl/drawings/vmlDrawing1.vml"),
+        "the VML drawing part itself must still be byte-identical"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// 0.10.0-C slices C1+C2: workbook-level `<workbookPr>`/`<bookViews>`/`<calcPr>`/
 /// `<extLst>`, plus the root `<workbook>` tag's own namespace declarations. `bookViews`'
 /// `<workbookView>` carries `xr2:uid`, which genuinely needs the root's `xmlns:xr2`
