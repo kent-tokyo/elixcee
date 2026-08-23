@@ -4251,7 +4251,19 @@ impl Vm {
                 result?;
             }
             Stmt::SheetsAdd => {
-                let new_name = format!("sheet{}", self.sheets.len() + 1);
+                // `self.sheets.len() + 1` alone collides whenever the sheet
+                // set has a gap (e.g. Sheet2 was deleted, leaving Sheet1/
+                // Sheet3 -- len()==2 would compute "sheet3", which already
+                // exists). ensure_sheet() no-ops on an existing key, so an
+                // unguarded collision silently drops the Add entirely.
+                // Probe upward from the same starting point until a free
+                // name is found.
+                let mut n = self.sheets.len() + 1;
+                let mut new_name = format!("sheet{n}");
+                while self.sheets.contains_key(&new_name) {
+                    n += 1;
+                    new_name = format!("sheet{n}");
+                }
                 self.ensure_sheet(&new_name);
             }
             Stmt::SheetsDelete { sheet } => {
@@ -9032,6 +9044,38 @@ mod tests {
         // wasn't present at `Vm::new()` time.
         assert_eq!(vm.sheet_order.len(), 2);
         assert!(!vm.sheet_order[..1].contains(&vm.sheet_order[1]));
+    }
+
+    #[test]
+    fn sheets_add_after_deleting_a_middle_sheet_does_not_collide_with_a_later_survivor() {
+        // Regression for a real bug: naming a new sheet purely from
+        // `self.sheets.len() + 1` collides whenever the sheet set has a
+        // gap. sheet1/sheet2/sheet3 -> delete sheet2 -> len()==2 -> the old
+        // code computed "sheet3", which still exists as a survivor, and
+        // ensure_sheet() silently no-ops on a collision -- the Add produced
+        // nothing at all, with no error.
+        let vm = run("Sub MySub()\n    \
+             Sheets.Add\n    \
+             Sheets.Add\n    \
+             Sheets(\"Sheet3\").Cells(1,1).Value = 99\n    \
+             Sheets(\"Sheet2\").Delete\n    \
+             Sheets.Add\n\
+             End Sub\n");
+        assert_eq!(
+            vm.sheet_order,
+            vec!["sheet1", "sheet3", "sheet4"],
+            "the post-delete Add must land on a fresh name, not silently no-op on \
+             the sheet3 collision"
+        );
+        assert_eq!(
+            vm.get_sheet_cells("sheet3")
+                .unwrap()
+                .get(&(1, 1))
+                .map(|c| &c.value),
+            Some(&Variant::Integer(99)),
+            "sheet3's own data must survive untouched by the later Add"
+        );
+        assert!(vm.get_sheet_cells("sheet4").unwrap().is_empty());
     }
 
     #[test]
