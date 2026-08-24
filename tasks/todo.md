@@ -464,3 +464,18 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] `master`へのdocs同期：`CHANGELOG.md`（同じUnreleased→[0.10.0]分割、`master`側のUnreleasedにはD-track全体が残る）・`ROADMAP.md`（Current stateを0.10.0リリース済みに更新、GitHub issue #1解消を明記、詳細0.10.0ロードマップエントリのヘッダーも「A/B/C shipped、D in progress」に更新）・design doc（Status節に2026-08-24更新の要約を追記、旧Draft記述は履歴として保持）・`Cargo.toml`/`pyproject.toml`を`master`側でも0.10.0にbump・`tasks/todo.md`（本エントリ）を同期。
 
 残作業：GitHub issue #1へのコメント投稿・クローズ（別途明示的確認が必要、まだ未実施）。`master`側のdocs同期commitもまだ未実施（この後の作業）。
+
+## `master`のdocs同期完了・push承認・新規重大バグ報告（`r:`名前空間prefix未束縛）の調査・修正・0.10.1準備
+
+`master`側のdocs同期commit（`4d54e2d`）完了後、ユーザーから正確な検証チェックリスト（`origin/master`==ローカルHEAD==`4d54e2d`・作業ツリークリーン・0.10.0のCI全green・タグ変更なし・バージョン再bumpなし）付きでpush承認を得てpush実施（この時点の`origin/master`は16コミット進んで`4d54e2d`）。
+
+同じユーザーメッセージの中で、別セッション（他のClaude Codeターミナル、Windows環境）からのスクリーンショット経由で新規の重大バグ報告を受領：`save_workbook()`が`workbook.xml`に`r:id="rId1"`を使うが`xmlns:r`宣言が無く、`lxml.etree.XMLSyntaxError`でopenpyxl/lxmlから完全に読めなくなる、という報告。
+
+- [x] **初回調査（6シナリオ）**：issue #1の再現コード・新規Vm・複数シート・連続保存・in-place保存の6パターンをローカルビルド＋実PyPI 0.10.0 wheel両方に対して実行——**再現せず**、全ケースで`xmlns:r`は存在。正直に「再現できない」と報告し、スクリーンショットだけで判断せず正確な再現条件を確認するようユーザーに依頼。
+- [x] **ユーザーからの精密な技術診断**：OOXMLの名前空間束縛はURI単位であってprefix文字列単位ではない——`xmlns:rel="..."`+`rel:id="..."`のような非慣習的prefixも完全に有効なOOXML。elixceeのwriterは`build_xlsx_workbook`の`<sheet r:id="...">`で常にリテラルの`r:`prefixをハードコードしているが、sourceのroot属性文字列をverbatimで引き継ぐ際、そのsourceが`r:`以外のprefixを使っていた場合`r:`が一切宣言されない出力になる、という正確な原因説明。合わせて正確な再現レシピ（openpyxl通常ファイル作成→`xl/workbook.xml`のみ`xmlns:r`→`xmlns:rel`・`r:id`→`rel:id`に書き換え→書き換え後ファイル自体がvalidなことを確認→elixcee load→save→openpyxlで再オープン→出力の名前空間宣言とr:id使用箇所を確認）を明示的に指示された。
+- [x] **7件目のシナリオで再現確認**：ユーザー指示のレシピ通りに合成fixtureを作成、ローカルビルド・実PyPI 0.10.0 wheel両方で再現——出力`workbook.xml`が`xmlns:rel`を宣言する一方`r:id="rId1"`を使用、openpyxlが`unbound prefix`エラーで拒否することを確認。予測通りの失敗形状。
+- [x] **修正実装**（commit `1605102`、`master`）：`reader::OFFICE_REL_NS`定数＋`reader::ensure_r_prefix_bound(attrs)`を新設。(a) `xmlns:r`が正しいURIで既に束縛済みなら無変更、(b) `xmlns:r`が単に不在（現実的な「別prefix」ケース）なら正しい束縛を追記（sourceの元のprefix宣言はそのまま無害に残す）、(c) `xmlns:r`が無関係な別URIに束縛済み（実ファイルでは事実上皆無）ならsourceのroot属性を一切再利用せずNoneを返し、呼び出し側はwriter自身の安全なデフォルトへフォールバック。`workbook_root_attrs`（実際に報告されたバグの経路）と、per-sheetの`root_attrs`（`worksheet.xml`、未リリースの0.10.0-D経路——同じ地雷を予防的に修正）の両方の呼び出し箇所に適用。ユニットテスト4件（correct/absent/missing-entirely/wrong-URI）＋統合テスト1件（`workbook_xml_still_binds_the_r_prefix_when_the_source_used_a_different_one`——修正を一時的に無効化して実際にテストが落ちることを確認してから復元、という誠実な検証込み）。フルリグレッションスイープ（853 lib + 23 xlsx_roundtrip・`mechanical_check.py --self-test`・実fixture7件・`compat/corpus` 581件・`compat/vba-semantics` 386件）、全てクリーン・既存ベースラインから無回帰。
+- [x] **`release-0.10.0`ブランチへのport**（`git cherry-pick -n 1605102`、3ファイルとも自動マージでクリーン適用）：`chore: bump elixcee to 0.10.1`commit（`9202e2a`）——`CHANGELOG.md`に`[0.10.1]`セクション追加、`Cargo.toml`/`pyproject.toml`/`Cargo.lock`を0.10.1へbump。この最終状態に対してfmt・clippy・`cargo test --workspace`（850 lib + 全integration suite）・`check-versions.sh`、いずれもクリーンを再確認してからcommit。
+- [x] `CHANGELOG.md`（`master`側`[Unreleased]`に新規`### Root crate: unbound r: namespace prefix on round-trip (critical, fixed)`セクション追加）・`ROADMAP.md`（issue #1パラグラフの直後に本バグの発見・修正・0.10.1化の経緯を追記）・`tasks/todo.md`（本エントリ）を`master`側で同期。
+
+残作業：`release-0.10.0`のpush/tag（`v0.10.1`/`bin-v0.10.1`）/publishはユーザーの明示的承認待ち（未承認）。`master`側の新規commit（`1605102`＋今回のdocs同期commit）のpushも別途承認が必要（未承認、現時点で`origin/master`より1コミット進んだローカルのみ）。承認後、実PyPI 0.10.1 wheelに対する再検証（0.10.0のissue #1修正検証と同じ厳密さで）が必須。GitHub issue #1のコメント投稿・クローズ（別件、テンプレート済み・承認済みだが、ユーザー指定の実行順序により0.10.1出荷後に実施）も未着手。評価記事（スコアカード）は名前空間問題が完全解決するまで保留、というユーザー指示も継続中。

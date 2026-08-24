@@ -141,6 +141,25 @@ This closes `0.10.0-D`'s only remaining open item for the current fixture set. R
 reopen verification remains not done for `tableParts`/`drawing`/`legacyDrawing`/
 `hyperlinks`/`D4`/plain `pageSetup`.
 
+### Root crate: unbound `r:` namespace prefix on round-trip (critical, fixed)
+
+Reported against the published `0.10.0` wheel: a source workbook that binds the OOXML
+relationships namespace to a prefix other than the conventional `r:` (e.g.
+`xmlns:rel="..."` + `rel:id="..."` on `<sheet>` — fully valid OOXML, since namespace
+binding is about the URI, not the prefix spelling) round-tripped through `0.10.0` into a
+file with `r:` used but never bound, rejected outright by any strict XML consumer
+(openpyxl/lxml, Excel itself). `build_xlsx_workbook`'s `<sheet r:id="...">` always
+hardcodes the literal `r:` prefix, but the root `<workbook>` tag's namespace declarations
+were carried through verbatim from the source, with no guarantee the source declared `r:`
+at all. Reproduced by rewriting a real openpyxl-authored file's `xl/workbook.xml`
+(`xmlns:r`→`xmlns:rel`, `r:id`→`rel:id`) and round-tripping it through both a local build
+and the published PyPI `0.10.0` wheel. Fixed by a new `reader::ensure_r_prefix_bound()`,
+applied before a source's root attribute string is reused for either `workbook.xml` or
+(the still-unreleased `0.10.0-D`) `worksheet.xml`. Full details and the complete
+regression-sweep list are in the fix commit; shipping as `0.10.1` on the `release-0.10.0`
+branch (root crate/Python package only — `elixcee-types`/`elixcee-wasm`/`@elixcee/xlsx`
+unaffected).
+
 ### CI: WASM artifact size observability
 
 `packages/xlsx`'s WASM bridge size was already measured (`scripts/wasm-smoke.mjs` step 5)

@@ -94,6 +94,15 @@ numbering gap. This closed
 spurious-extra-sheet bugs, reported against `0.9.0`, already fixed in these same commits
 before the issue was filed).
 
+A separate, more severe regression was then reported against the published `0.10.0` wheel: a
+source workbook binding the OOXML relationships namespace to a non-`r:` prefix (valid OOXML —
+binding is about the URI, not the prefix spelling) round-tripped into a file with `r:` used
+but never bound, rejected outright by any strict XML consumer. Reproduced exactly, root-caused
+(the writer always hardcodes the literal `r:` prefix regardless of what the source used), and
+fixed via `reader::ensure_r_prefix_bound()` — full detail in `CHANGELOG.md`'s `[Unreleased]`.
+The fix is committed on `master` and cherry-picked onto `release-0.10.0`, where it ships as
+`0.10.1` (pending push/tag/publish approval).
+
 `0.10.0-D` (relationship-backed features, the actual fix for `SOURCE_REFERENCE_LOSS`) is
 **not released yet** — see `CHANGELOG.md`'s `[Unreleased]`. It has a decided design
 (origin-based worksheet part naming — see the roadmap entry below); `D1` (the
