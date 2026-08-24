@@ -111,6 +111,41 @@ both fixed at the source**:
   Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
   externalization) and needs a different solution.
 
+## [0.10.1] - 2026-08-24
+
+Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
+bug fix, no new functionality. `elixcee-types`/`elixcee-wasm`/`@elixcee/xlsx` all
+unaffected.
+
+**A workbook whose source binds the OOXML relationships namespace to a prefix other than
+the conventional `r:` (e.g. `xmlns:rel="..."` + `rel:id="..."` on `<sheet>` — fully valid
+OOXML; namespace binding is about the URI, not the prefix spelling) round-tripped through
+`0.10.0` into a file with an unbound `r:` prefix, rejected outright by any strict XML
+consumer (openpyxl/lxml, Excel itself) — not a lossy passthrough, a hard parse failure.**
+`build_xlsx_workbook`'s `<sheet r:id="...">` always hardcodes the literal `r:` prefix, but
+the root `<workbook>` tag's own namespace declarations were carried through verbatim from
+the source, with no guarantee the source declared `r:` at all. Reported against the
+published `0.10.0` wheel; reproduced by rewriting a real openpyxl-authored file's
+`xl/workbook.xml` (`xmlns:r`→`xmlns:rel`, `r:id`→`rel:id`, confirmed the rewritten input
+is itself valid OOXML) and round-tripping it through both a local build and the actual
+PyPI `0.10.0` wheel — output declared `xmlns:rel` but used `r:id="rId1"`, openpyxl raised
+`ParseError: unbound prefix`. Six other scenarios (the original GitHub #1 repro, a
+from-scratch workbook, multi-sheet, chained double-save, in-place save) were checked first
+and found **not** reproducible — this is specifically an alternate-relationships-prefix
+issue, not a broader regression.
+
+Fixed by a new `reader::ensure_r_prefix_bound()`, applied before a source's root attribute
+string is reused: if `xmlns:r` is already correctly bound, nothing changes; if it's
+simply absent (the realistic case), the correct binding is appended; if `r:` is already
+bound to some unrelated URI (essentially never seen in real files), the source's root
+attrs are not reused at all, falling back to the writer's own safe hardcoded default
+rather than risk a wrong rebind.
+
+Full regression sweep clean (see the fix commit for the complete list); all 7 real
+fixtures rerun with no new regressions (`fixture3`/`4`/`5` still show the already-known,
+already-disclosed `SOURCE_REFERENCE_LOSS` gap `0.10.0-D` — unreleased, unrelated — not a
+regression from this fix).
+
 ## [0.10.0] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.9.0` → `0.10.0`. `elixcee-types` stays
