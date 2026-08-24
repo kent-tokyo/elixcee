@@ -511,6 +511,44 @@ pub(crate) fn extract_root_attrs(xml: &str, local_name: &str) -> Option<String> 
     }
 }
 
+/// The OOXML relationships namespace URI -- every hardcoded `r:id="..."` / `r:id=` this
+/// writer emits assumes the `r:` prefix is bound to exactly this URI.
+pub(crate) const OFFICE_REL_NS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+/// Guarantees `attrs` (a captured root tag's raw attribute string, from
+/// `extract_root_attrs`) binds the `r:` prefix to `OFFICE_REL_NS` before it's reused
+/// verbatim as a regenerated root tag's own attributes.
+///
+/// XML namespace binding is about the URI, not the prefix spelling -- a real, fully valid
+/// OOXML producer is free to write `xmlns:rel="<the same URI>"` and `<sheet rel:id="..">`
+/// instead of the conventional `xmlns:r=".."`/`r:id=".."`. Carrying such a source's root
+/// attrs through unchanged while this writer's own worksheet-emission code still
+/// hardcodes the literal `r:` prefix (`build_xlsx_workbook`'s `<sheet r:id="..">`, and
+/// `build_xlsx_sheet`'s future 0.10.0-D r:id-bearing elements) produces `r:id` with `r:`
+/// bound to nothing at all -- an unbound-namespace-prefix XML error every strict consumer
+/// (openpyxl/lxml, Excel itself) rejects outright. Found via a real report against the
+/// released `0.10.0`, reproduced with a synthetic fixture built by renaming a genuine
+/// openpyxl-authored file's `xmlns:r`/`r:id` to `xmlns:rel`/`rel:id` (still valid OOXML on
+/// its own) and round-tripping it through elixcee.
+///
+/// Returns the (possibly appended-to) attrs string when `r:` can be made to resolve
+/// correctly -- unchanged if already correct, with `xmlns:r="<OFFICE_REL_NS>"` appended
+/// if the prefix was simply never declared (the common real-world case: no source ever
+/// uses anything but `r:`, so this is almost always a no-op). Returns `None` only when
+/// `xmlns:r` is already bound to some OTHER, different URI -- rebinding it in place would
+/// require rewriting every other place in `attrs` that might rely on the original
+/// binding, which isn't worth the risk for a shape no real producer has ever been seen to
+/// generate; the caller falls back to the writer's own safe hardcoded root tag instead of
+/// risking a subtly wrong rebind.
+pub(crate) fn ensure_r_prefix_bound(attrs: &str) -> Option<String> {
+    match parse_attrs(attrs).into_iter().find(|a| a.name == "xmlns:r") {
+        Some(a) if a.value == OFFICE_REL_NS => Some(attrs.to_string()),
+        Some(_) => None,
+        None => Some(format!("{attrs} xmlns:r=\"{OFFICE_REL_NS}\"")),
+    }
+}
+
 /// Extracts the raw, byte-for-byte substring of the first `<local_name ..>...</local_name>`
 /// or `<local_name ../>` top-level element found in `xml` (matched by local name, namespace
 /// prefix ignored), including its own start/end tags — `None` if absent. Deliberately not a
@@ -633,6 +671,66 @@ mod opaque_fragment_tests {
         assert!(
             !attrs.ends_with('/'),
             "self-closing slash must not leak in: {attrs:?}"
+        );
+    }
+
+    #[test]
+    fn ensure_r_prefix_bound_leaves_a_correct_binding_untouched() {
+        let attrs = concat!(
+            "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"",
+        );
+        assert_eq!(ensure_r_prefix_bound(attrs), Some(attrs.to_string()));
+    }
+
+    #[test]
+    fn ensure_r_prefix_bound_appends_the_binding_when_absent() {
+        // Real report against the released 0.10.0: a source that binds the
+        // relationships namespace to a different prefix (`rel:`, `rel:id=".."`) is
+        // fully valid OOXML on its own -- XML namespace binding is about the URI, not
+        // the prefix spelling. This writer's own <sheet r:id="..."> always hardcodes
+        // the literal `r:` prefix, so it must be added, not assumed present.
+        let attrs = concat!(
+            "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"",
+        );
+        let result = ensure_r_prefix_bound(attrs).unwrap();
+        assert!(
+            result.starts_with(attrs),
+            "must not disturb the original attrs: {result}"
+        );
+        assert!(
+            result.contains(
+                "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+            ),
+            "must append the r: binding: {result}"
+        );
+    }
+
+    #[test]
+    fn ensure_r_prefix_bound_appends_when_the_relationships_namespace_is_absent_entirely() {
+        let attrs = "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"";
+        let result = ensure_r_prefix_bound(attrs).unwrap();
+        assert!(
+            result.contains(
+                "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+            ),
+            "must append the r: binding even when no relationships namespace was declared \
+             under any prefix: {result}"
+        );
+    }
+
+    #[test]
+    fn ensure_r_prefix_bound_refuses_to_reuse_attrs_when_r_is_bound_to_a_different_uri() {
+        let attrs = concat!(
+            "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "xmlns:r=\"http://example.com/totally-unrelated\"",
+        );
+        assert_eq!(
+            ensure_r_prefix_bound(attrs),
+            None,
+            "must not silently rebind an r: prefix a source is already using for \
+             something else -- caller falls back to the writer's own safe default instead"
         );
     }
 

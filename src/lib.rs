@@ -723,9 +723,16 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     zip.write_all(build_xlsx_root_rels(&carried_root_rels).as_bytes())
         .map_err(|e| e.to_string())?;
 
+    // .and_then(ensure_r_prefix_bound): a source is free to bind the relationships
+    // namespace to any prefix (e.g. `xmlns:rel="..."` + `rel:id="..."`, equally valid
+    // OOXML) -- but build_xlsx_workbook's <sheet r:id="..."> below always hardcodes the
+    // literal `r:` prefix. Carrying such a source's root attrs through unchanged would
+    // leave `r:` unbound in the output, an XML error every strict consumer rejects. See
+    // ensure_r_prefix_bound's own doc comment for the real report this fixes.
     let workbook_root_attrs = workbook_source_xml
         .as_deref()
-        .and_then(|xml| reader::extract_root_attrs(xml, "workbook"));
+        .and_then(|xml| reader::extract_root_attrs(xml, "workbook"))
+        .and_then(|attrs| reader::ensure_r_prefix_bound(&attrs));
     let workbook_pr = workbook_source_xml
         .as_deref()
         .and_then(|xml| reader::extract_raw_element(xml, "workbookPr"));
@@ -776,7 +783,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
     for (i, sheet_name) in sheet_names.iter().enumerate() {
         let source_xml = sheet_source_xml.get(&sheet_name.to_lowercase());
-        let root_attrs = source_xml.and_then(|xml| reader::extract_root_attrs(xml, "worksheet"));
+        // .and_then(ensure_r_prefix_bound): same reasoning as workbook_root_attrs above --
+        // this sheet's own tableParts/drawing/legacyDrawing/hyperlinks r:id restoration
+        // below always hardcodes the literal `r:` prefix, so the source's root attrs must
+        // guarantee that prefix is actually bound before being reused verbatim.
+        let root_attrs = source_xml
+            .and_then(|xml| reader::extract_root_attrs(xml, "worksheet"))
+            .and_then(|attrs| reader::ensure_r_prefix_bound(&attrs));
         let sheet_pr = source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetPr"));
         let sheet_views = source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetViews"));
         let sheet_format_pr =
@@ -947,9 +960,13 @@ fn build_xlsx_content_types(
 struct OpaqueWorkbookFragments<'a> {
     /// Source's root `<workbook ...>` tag's raw attribute string (namespace
     /// declarations, `mc:Ignorable`, ...) — replaces the hardcoded minimal
-    /// `xmlns=".."`/`xmlns:r=".."` root tag when available. Always carries `xmlns:r`
-    /// itself (every real Excel-authored root tag does, since `<sheet r:id="..">`
-    /// requires it), so this never breaks the writer's own `r:id` emission below.
+    /// `xmlns=".."`/`xmlns:r=".."` root tag when available. The caller
+    /// (`save_xlsx_impl`) runs this through `reader::ensure_r_prefix_bound` before
+    /// storing it here, which is what actually guarantees `r:` resolves correctly for
+    /// the writer's own `r:id` emission below — a source binding the relationships
+    /// namespace to some OTHER prefix (fully valid OOXML) is not, on its own, enough to
+    /// guarantee that; see that function's own doc comment for the real report this
+    /// fixed.
     root_attrs: Option<&'a str>,
     workbook_pr: Option<&'a str>,
     book_views: Option<&'a str>,
