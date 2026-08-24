@@ -800,9 +800,12 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             let mut sorted: Vec<_> = cells.keys().collect();
             sorted.sort();
             for key in sorted {
+                // Variant::Error is deliberately excluded: a real error cell is written as
+                // t="e" with its literal error text in <v> (see xlsx_cell_xml below), never
+                // shared-string indexed -- confirmed against real Excel-authored output,
+                // which never puts e.g. "#VALUE!" in xl/sharedStrings.xml either.
                 let s = match &cells[key].value {
                     Variant::Str(s) => s.as_str().to_string(),
-                    Variant::Error(e) => e.as_str().to_string(),
                     _ => continue,
                 };
                 if !str_index.contains_key(&s) {
@@ -1710,13 +1713,17 @@ fn xlsx_cell_xml(
                 cell_ref, s_attr, f_tag, idx
             ))
         }
-        Variant::Error(e) => {
-            let idx = str_index[e.as_str()];
-            Some(format!(
-                "<c r=\"{}\"{} t=\"s\">{}<v>{}</v></c>",
-                cell_ref, s_attr, f_tag, idx
-            ))
-        }
+        // t="e" with the literal error text in <v>, never shared-string indexed -- matches
+        // real Excel's own shape exactly (confirmed against fixture5_chart_image_freeze_
+        // print.xlsm's D8, a real #VALUE! cell). Writing this as t="s" (the pre-fix
+        // behavior) round-tripped the cell as an ordinary string, not an error.
+        Variant::Error(e) => Some(format!(
+            "<c r=\"{}\"{} t=\"e\">{}<v>{}</v></c>",
+            cell_ref,
+            s_attr,
+            f_tag,
+            e.as_str()
+        )),
         Variant::Boolean(b) => Some(format!(
             "<c r=\"{}\"{} t=\"b\">{}<v>{}</v></c>",
             cell_ref,
@@ -2181,6 +2188,7 @@ mod diff_reader_tests {
             SheetCell::Float(f) => Variant::Float(*f),
             SheetCell::Str(s) => Variant::Str(s.clone()),
             SheetCell::Bool(b) => Variant::Boolean(*b),
+            SheetCell::Error(e) => Variant::Error(e.clone()),
         }
     }
 

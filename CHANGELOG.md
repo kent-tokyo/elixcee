@@ -160,6 +160,31 @@ regression-sweep list are in the fix commit; shipping as `0.10.1` on the `releas
 branch (root crate/Python package only — `elixcee-types`/`elixcee-wasm`/`@elixcee/xlsx`
 unaffected).
 
+### Root crate + `@elixcee/xlsx`: error-typed cells (`t="e"`) round-trip as real errors, not strings
+
+ROADMAP.md Known gaps item 14, found live during `0.10.0-C`'s real-Excel verification
+(fixture5's `D8`, a real `#VALUE!` cell) and pre-existing since well before `0.10.0`
+(`git blame`: `72b5cc38`, 2026-06-21). `reader.rs`'s `SheetCell` enum had no `Error`
+variant, so `xlsx_parse_cell` treated `t="e"` identically to `t="str"` — both became
+`SheetCell::Str`. On save the error text was written into `xl/sharedStrings.xml` as an
+ordinary string (`t="s"`), so the cell displayed the same text in Excel but was no longer
+an error-typed cell underneath.
+
+Fixed by threading a new `SheetCell::Error(ExcelError)`/`elixcee_types::ExcelError::FromStr`
+through the reader, `Vm::populate_from_sheets`, and the writer, the same way
+`Variant::Error` already is at the VBA-runtime level: `xlsx_cell_xml` now emits `t="e"`
+with the literal error string in `<v>`, never shared-string indexed — confirmed against
+real Excel's own output, which never puts e.g. `"#VALUE!"` in `sharedStrings.xml` either.
+An unrecognized error string (a newer dynamic-array error like `#SPILL!`) falls back to a
+plain string rather than guessing at a wrong code.
+
+`@elixcee/xlsx`'s `read()` (via `crates/elixcee-wasm`) gets the same fix: error cells now
+come back as `{t:"e", v:<BIFF numeric code>, w:<display string>}`, matching the real
+`xlsx` oracle's own shape exactly (confirmed live: even reading a real Excel-authored
+`t="e"` cell through `XLSX.read()`, the display string only ever appears in `.w`, never
+`.v`). New differential case (`compat/differential/xlsx-read.test.mjs`, all 7 classic
+error codes) — read differential count is now 34/34 MATCH (up from 33/33).
+
 ### CI: WASM artifact size observability
 
 `packages/xlsx`'s WASM bridge size was already measured (`scripts/wasm-smoke.mjs` step 5)

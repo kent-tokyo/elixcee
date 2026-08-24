@@ -1272,6 +1272,59 @@ fn real_excel_page_setup_survives_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// A real Excel-authored error-typed cell (`t="e"`, e.g. `#VALUE!`) round-trips as an
+/// actual error, not a plain string -- ROADMAP.md Known gaps item 14, found live during
+/// 0.10.0-C's real-Excel verification (fixture5's D8), fixed by threading
+/// `SheetCell::Error`/`ExcelError` through the reader/`Vm`/writer the same way
+/// `Variant::Error` already is at the VBA-runtime level. Before this fix, `xlsx_parse_cell`
+/// treated `t="e"` identically to `t="str"` (both became `SheetCell::Str`), so the cell
+/// round-tripped as `t="s"` with the error text as an ordinary shared string -- readable in
+/// Excel, but no longer an error-typed cell underneath.
+#[test]
+fn real_excel_error_cell_survives_a_save_as_a_real_error_not_a_string() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_sheet1 =
+        String::from_utf8(fixture_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        source_sheet1.contains(r#"<c r="D8" t="e" vm="1"><v>#VALUE!</v></c>"#),
+        "fixture no longer contains the expected D8 error-cell shape -- test needs updating: {source_sheet1}"
+    );
+
+    let output_path = tmp_path("error_cell_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse("Sub EditA1()\n    Range(\"A1\").Value = 42\nEnd Sub\n").unwrap();
+    vm.run_sub(&prog, "EditA1").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(r#"<c r="D8" t="e"><v>#VALUE!</v></c>"#),
+        "D8 must round-trip as a real t=\"e\" error cell, literal value (not shared-string \
+         indexed, matching real Excel's own shape -- vm=\"1\", value metadata, is a \
+         disclosed, accepted loss, not restored by this fix): {out_sheet1}"
+    );
+
+    let out_shared_strings = output_entries
+        .get("xl/sharedStrings.xml")
+        .map(|b| String::from_utf8(b.clone()).unwrap())
+        .unwrap_or_default();
+    assert!(
+        !out_shared_strings.contains("#VALUE!"),
+        "an error cell's text must never be shared-string indexed, matching real Excel's \
+         own sharedStrings.xml (confirmed empty of \"#VALUE!\" even in the source fixture): \
+         {out_shared_strings}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// Synthetic negative guard: `CT_PageSetup` genuinely can carry an `r:id` per the real
 /// XSD even though no real fixture in this repo shows it -- an r:id-backed `<pageSetup>`
 /// must NOT be restored (no `rels_survived` gate is wired up for it yet, so restoring one

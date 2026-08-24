@@ -194,6 +194,10 @@ fn cell_json(cell: &SheetCell, formula: Option<&String>, fmt_id: Option<&u32>) -
         SheetCell::Float(v) => format!("{{\"t\":\"n\",\"v\":{}", json_number(*v)),
         SheetCell::Str(v) => format!("{{\"t\":\"s\",\"v\":{}", json_string(v)),
         SheetCell::Bool(v) => format!("{{\"t\":\"b\",\"v\":{}", v),
+        // Numeric BIFF error code, matching the real oracle's own {t:"e", v:<code>} shape
+        // exactly (see ExcelError::biff_code's doc comment) -- shapeCell (read-shape.cjs)
+        // derives .w from it, the same layering already used for .w on every other type.
+        SheetCell::Error(e) => format!("{{\"t\":\"e\",\"v\":{}", e.biff_code()),
     };
     if let Some(f) = formula {
         out.push_str(",\"f\":");

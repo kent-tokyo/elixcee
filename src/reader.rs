@@ -4,6 +4,9 @@
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek};
+use std::str::FromStr;
+
+use elixcee_types::ExcelError;
 use zip::ZipArchive;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -75,6 +78,7 @@ pub enum SheetCell {
     Float(f64),
     Str(String),
     Bool(bool),
+    Error(ExcelError),
 }
 
 /// Read a spreadsheet file into sheets. Supports .xlsx, .xlsm, .ods.
@@ -1427,7 +1431,14 @@ fn xlsx_parse_cell(v: &str, t: &str, shared: &[String]) -> Option<SheetCell> {
             Some(SheetCell::Str(shared.get(idx)?.clone()))
         }
         "b" => Some(SheetCell::Bool(v == "1")),
-        "str" | "e" => Some(SheetCell::Str(v.to_string())),
+        "str" => Some(SheetCell::Str(v.to_string())),
+        // One of the 7 classic error strings -> a real error-typed cell; anything else
+        // (a newer dynamic-array error like #SPILL!, or malformed input) falls back to a
+        // plain string rather than guessing -- see ExcelError::from_str's doc comment.
+        "e" => Some(match ExcelError::from_str(v) {
+            Ok(err) => SheetCell::Error(err),
+            Err(()) => SheetCell::Str(v.to_string()),
+        }),
         _ => {
             // Numeric (default, no type attr)
             let f: f64 = v.parse().ok()?;
@@ -1953,6 +1964,39 @@ mod merge_tests {
     }
 
     #[test]
+    fn xlsx_sheet_cells_reads_a_t_e_cell_as_a_real_error_not_a_string() {
+        // Real shape confirmed live from fixture5_chart_image_freeze_print.xlsm's D8 (see
+        // ROADMAP.md Known gaps item 14): `t="e"` used to be treated identically to
+        // `t="str"`, silently dropping the error type.
+        let xml = r#"<worksheet><sheetData>
+<row r="1"><c r="A1" t="e"><v>#VALUE!</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &[]);
+        match data.cells.get(&(1, 1)) {
+            Some(SheetCell::Error(e)) => assert_eq!(e.as_str(), "#VALUE!"),
+            other => panic!(
+                "expected Error(\"#VALUE!\") at A1, got {:?}",
+                other.is_some()
+            ),
+        }
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_falls_back_to_a_plain_string_for_an_unrecognized_t_e_value() {
+        // A newer dynamic-array error (#SPILL!) or malformed input -- reader.rs only
+        // recognizes the 7 classic error strings (no fixture evidence of any other), so
+        // this must not panic or silently invent a wrong error code.
+        let xml = r#"<worksheet><sheetData>
+<row r="1"><c r="A1" t="e"><v>#SPILL!</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &[]);
+        match data.cells.get(&(1, 1)) {
+            Some(SheetCell::Str(s)) => assert_eq!(s, "#SPILL!"),
+            other => panic!("expected Str(\"#SPILL!\") at A1, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
     fn xlsx_sheet_cells_honors_xml_space_preserve_on_v() {
         // Real shape confirmed live from compat/corpus/workbooks/with_text.xlsx's own raw
         // sheet1.xml (cell A3) — see compat/differential/classify.mjs's now-removed
@@ -2195,6 +2239,7 @@ mod from_bytes_tests {
             (SheetCell::Float(x), Some(SheetCell::Float(y))) => x == y,
             (SheetCell::Str(x), Some(SheetCell::Str(y))) => x == y,
             (SheetCell::Bool(x), Some(SheetCell::Bool(y))) => x == y,
+            (SheetCell::Error(x), Some(SheetCell::Error(y))) => x == y,
             _ => false,
         })
     }
