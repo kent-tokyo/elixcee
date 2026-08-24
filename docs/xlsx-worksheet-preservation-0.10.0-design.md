@@ -2,6 +2,13 @@
 
 ## Status
 
+**更新（2026-08-24）**: A/B/Cは実装完了・実Excel検証済みで`elixcee` `0.10.0`として
+リリース済み（`CHANGELOG.md`の`[0.10.0]`参照）。D（relationship-backed要素の復元）は
+D1〜D4・plain pageSetupまで実装完了だが実Excel再オープン検証がまだで、未リリース
+（`CHANGELOG.md`の`[Unreleased]`参照）——詳細は10節参照。
+
+以下は初稿時点（実装着手前）のStatus記述、履歴として残す:
+
 Draft — 実装未着手。この文書自体もまだcommitしていない（ユーザー指示: 「コード変更、commit、
 pushは行わず、設計上の選択肢と推奨案を報告して停止する」）。`docs/xlsx-architecture.md`の
 「Root-crate writer: regenerate vs. preserve-and-merge」節（0.8.0/0.9.0の既存決定）を前提とし、

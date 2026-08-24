@@ -451,3 +451,16 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] `ROADMAP.md`・`CHANGELOG.md`・design doc（§10、r:id付きfixture不在の確認経緯・plain pageSetup修正の記録）・`tasks/todo.md`を同期。
 
 0.10.0-Dの残作業は`<pageSetup r:id>`自体（実証fixtureが無い限り着手不可）のみ。tableParts/drawing/legacyDrawing/hyperlinks/D4/plain pageSetupいずれも実Excel再オープン検証はまだ未実施。push未承認、ローカルコミットのみ（9コミット：`9d6373d`・`17d1ace`・`c7a2fe1`・`d1e2404`・`ef54d9a`・`9c1b3d3`・`cd2e2af`・`7357c25`・`b9ae9ec`、+ドキュメント同期コミット）。
+
+## GitHub issue #1対応 → `elixcee` 0.10.0リリース（`/plan`）
+
+ユーザーから`/plan`でGitHub issue #1（`save_workbook()`がシート名を小文字化する・余分なシートが追加される、の2件）の解決を依頼された。調査の結果、両方とも今セッション前半の0.10.0-A作業で既に修正済み（commit `9945e61`・`fa51421`、どちらも`origin/master`にpush済み）と判明——issueの再現コードを`maturin develop --release --features python`でビルドした現在の`master`に対して実際に実行し確認（両方とも期待通り）。つまりcode変更は不要で、公開PyPIの最新が0.9.0のまま（この修正を含まない）という「リリースの空白」が実体だった。
+
+- [x] **方針確認**（AskUserQuestion 3ラウンド）：(1) 「解決」の意味＝新リリースを切る（推奨）で合意。(2) リリース範囲＝0.10.0-D（実Excel未検証）は含めず、0.10.0-A/B/Cのみを切り出す方針で合意。(3) バージョン番号＝0.10.0（minor、既存CHANGELOG/ROADMAPの「0.10.0-A/B/C」呼称と整合）で合意、0.9.1（patch）は不採用。
+- [x] **切り出しcommitの訂正**：当初`7b75f49`（0.10.0-B/C完了ラベル修正commit）を候補としたが、実際には0.10.0-Cの実Excel検証記録commit`79e0a3c`がその**後**に来ることを発見——`7b75f49`で切ると実Excel検証済みという主張が事実と食い違う。`79e0a3c`（実Excel検証記録＋t="e"バグ記録を含み、かつD-track実装commitより前）に訂正して`release-0.10.0`ブランチを作り直した。
+- [x] **`release-0.10.0`ブランチ作成**（`79e0a3c`起点）、`chore: bump elixcee to 0.10.0`commit（commit `57cc565`）：`CHANGELOG.md`のUnreleased→[0.10.0]分割（A/B/C＋セキュリティ修正のみ、D-track内容とWASM CI/@elixcee/xlsx記述はUnreleasedに残す）・`Cargo.toml`/`pyproject.toml`/`Cargo.lock`のバージョンbump。`scripts/check-versions.sh`・fmt・clippy・`cargo test --workspace`（846 lib）、いずれもクリーン。
+- [x] **ディスク容量の緊急事態と対応**：検証中に`cargo test --workspace`が`ENOSPC`で失敗、`df -h /`でシステム全体のディスクが実質満杯（228Gi中190Mi空き）と判明——自分のtarget/やscratchpadが原因ではないことを確認した上でユーザーに報告。ユーザーから「不要なファイルは削除していいよ」との許可を得て、`~/.cache/uv`（3.0G）・`~/.npm`（1.9G）等の再生成可能なpackage managerキャッシュのみ削除（Dockerの7.1Gコンテナ領域は稼働中のため触らず）、7.0Gi空きまで回復。
+- [x] **push/tag/publish**（ユーザー承認「push/tag/publish」）：`release-0.10.0`ブランチをpush、`v0.10.0`・`bin-v0.10.0`タグを同一commitに付与しpush——`publish.yml`（PyPI、6job全成功）・`release.yml`（CLIバイナリ3種、GitHub Release作成）が自動発火し両方成功。`gh workflow run crates-publish.yml -f ref=v0.10.0`でcrates.io publishを手動発火（`elixcee-types`は既存0.3.0のためskip、`elixcee`は新規publish）、成功。PyPI・crates.io・GitHub Releaseの3箇所全てで`elixcee` 0.10.0のライブ確認完了。issueの再現コードもインストール済みwheelに対して再実行し、修正が実際に効いていることを最終確認。
+- [x] `master`へのdocs同期：`CHANGELOG.md`（同じUnreleased→[0.10.0]分割、`master`側のUnreleasedにはD-track全体が残る）・`ROADMAP.md`（Current stateを0.10.0リリース済みに更新、GitHub issue #1解消を明記、詳細0.10.0ロードマップエントリのヘッダーも「A/B/C shipped、D in progress」に更新）・design doc（Status節に2026-08-24更新の要約を追記、旧Draft記述は履歴として保持）・`Cargo.toml`/`pyproject.toml`を`master`側でも0.10.0にbump・`tasks/todo.md`（本エントリ）を同期。
+
+残作業：GitHub issue #1へのコメント投稿・クローズ（別途明示的確認が必要、まだ未実施）。`master`側のdocs同期commitもまだ未実施（この後の作業）。

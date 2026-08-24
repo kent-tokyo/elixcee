@@ -7,11 +7,12 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 ## Current state
 
-`elixcee` **0.9.0** (Rust crate + Python package), `elixcee-types` **0.3.0**, `elixcee-wasm`
-**0.1.0** (never published to crates.io by design — `publish = false`) — all confirmed live
-via crates.io's/PyPI's own APIs, not assumed from local files. `bin-v0.9.0`'s GitHub Release
-carries all three CLI platform binaries (macOS aarch64, Windows x86_64, Linux x86_64),
-`--version` confirmed live against the downloaded macOS binary. `@elixcee/xlsx` is unchanged:
+`elixcee` **0.10.0** (Rust crate + Python package), `elixcee-types` **0.3.0** (unchanged),
+`elixcee-wasm` **0.1.0** (never published to crates.io by design — `publish = false`) — all
+confirmed live via crates.io's/PyPI's own APIs, not assumed from local files. `bin-v0.10.0`'s
+GitHub Release carries all three CLI platform binaries (macOS aarch64, Windows x86_64, Linux
+x86_64) — the downloaded macOS binary confirmed runnable (`--help`; the CLI still has no
+`--version` flag, a pre-existing gap). `@elixcee/xlsx` is unchanged:
 `read()`/`readFile()`/`readFileSync()` and `write()`/`writeFile()`/`writeFileSync()` are both
 implemented and differential-tested, but the package is still
 `0.0.0-development`/`private: true`/unpublished — no `npm publish` has happened (confirmed
@@ -76,34 +77,41 @@ stays paused — see the roadmap below.
 581 scenarios (0 `UNEXPLAINED`, 0 `MISMATCH`), every GitHub Actions job green on `master`
 before this release.
 
-**`0.10.0` (Lossless Worksheet Preservation) is in progress, not released** — design done
-(`docs/xlsx-worksheet-preservation-0.10.0-design.md`); `0.10.0-A` (foundation), `0.10.0-B`
-(inline worksheet elements: freeze panes/selection, sheetPr/sheetFormatPr/phoneticPr/
-dataValidations, pageMargins, internal hyperlinks minus `<autoFilter>`/row-col style), and
-`0.10.0-C` (workbook-level: workbookPr/bookViews/calcPr/extLst/definedNames) are all done,
-mechanical-check-verified, and real-Excel reopen-verified (0 repair warnings; `fixture4`'s
-defined name and `fixture5`'s print area both confirmed byte-for-byte in Excel's own Name
-Manager/print preview). `0.10.0-D` (relationship-backed features, the actual fix for
-`SOURCE_REFERENCE_LOSS`) has a decided design (origin-based worksheet part naming — see the
-roadmap entry below); `D1` (the `WorksheetOutputPlan` output plan itself) is done, and every
-relationship-backed element with real fixture evidence — `<tableParts>`, `<drawing>`,
-`<legacyDrawing>`, `<hyperlinks>` (including r:id-backed ones, a rewrite of `0.10.0-B4`'s
-prior relationship-free-only scope) — is now restored. All 7 real fixtures report `CLEAN`
-across every `mechanical_check.py` category, including `source_references`:
-`SOURCE_REFERENCE_LOSS` is eliminated from the entire current fixture set. `D4`
-(reachability-based cleanup of a deleted sheet's exclusively-reachable parts) is also
-done, closing Known gaps item 15; sheet rename/reorder are marked N/A rather than
-implemented (this `Vm` has no such primitive, and adding one purely to fill a test-table
-row would invert this milestone's own hard gate). Plain (relationship-free) `<pageSetup>`
-is also restored — `fixture5`'s real shape, previously silently lost and uncaught by any
-checker. `r:id`-backed `<pageSetup>` (a `printerSettings` relationship) remains the only
-genuinely open item, blocked on the project's own hard gate: no fixture with that shape
-exists in the repo. Everything above is
-mechanical-check-verified but not yet real-Excel reopen-verified. Three independent, pre-existing correctness
-bugs found and fixed along the way, all affecting every released version: a save's sheet
-tab order silently followed an alphabetical sort instead of the source order, a sheet's
-display-name letter case was silently lowercased on every save, and `Sheets.Add` could
-silently no-op (no new sheet, no error) whenever the sheet set had a numbering gap.
+**`0.10.0` shipped the first three slices of Lossless Worksheet Preservation** (design in
+`docs/xlsx-worksheet-preservation-0.10.0-design.md`). `0.10.0-A` (foundation — `WorksheetOrigin`/
+`sheetId` preservation), `0.10.0-B` (inline worksheet elements: freeze panes/selection,
+sheetPr/sheetFormatPr/phoneticPr/dataValidations, pageMargins, internal hyperlinks minus
+`<autoFilter>`/row-col style), and `0.10.0-C` (workbook-level: workbookPr/bookViews/calcPr/
+extLst/definedNames) are all done, mechanical-check-verified, and real-Excel
+reopen-verified (0 repair warnings; `fixture4`'s defined name and `fixture5`'s print area
+both confirmed byte-for-byte in Excel's own Name Manager/print preview). Also fixed: three
+independent, pre-existing correctness bugs affecting every released version before `0.10.0`
+— a save's sheet tab order silently followed an alphabetical sort instead of the source
+order, a sheet's display-name letter case was silently lowercased on every save, and
+`Sheets.Add` could silently no-op (no new sheet, no error) whenever the sheet set had a
+numbering gap. This closed
+[GitHub issue #1](https://github.com/kent-tokyo/elixcee/issues/1) (the display-name-case and
+spurious-extra-sheet bugs, reported against `0.9.0`, already fixed in these same commits
+before the issue was filed).
+
+`0.10.0-D` (relationship-backed features, the actual fix for `SOURCE_REFERENCE_LOSS`) is
+**not released yet** — see `CHANGELOG.md`'s `[Unreleased]`. It has a decided design
+(origin-based worksheet part naming — see the roadmap entry below); `D1` (the
+`WorksheetOutputPlan` output plan itself) is done, and every relationship-backed element
+with real fixture evidence — `<tableParts>`, `<drawing>`, `<legacyDrawing>`, `<hyperlinks>`
+(including r:id-backed ones, a rewrite of `0.10.0-B4`'s prior relationship-free-only scope)
+— is now restored. All 7 real fixtures report `CLEAN` across every `mechanical_check.py`
+category, including `source_references`: `SOURCE_REFERENCE_LOSS` is eliminated from the
+entire current fixture set. `D4` (reachability-based cleanup of a deleted sheet's
+exclusively-reachable parts) is also done, closing Known gaps item 15; sheet rename/reorder
+are marked N/A rather than implemented (this `Vm` has no such primitive, and adding one
+purely to fill a test-table row would invert this milestone's own hard gate). Plain
+(relationship-free) `<pageSetup>` is also restored — `fixture5`'s real shape, previously
+silently lost and uncaught by any checker. `r:id`-backed `<pageSetup>` (a `printerSettings`
+relationship) remains the only genuinely open item, blocked on the project's own hard gate:
+no fixture with that shape exists in the repo. All of `0.10.0-D` above is
+mechanical-check-verified but not yet real-Excel reopen-verified — that verification, plus
+whatever `<pageSetup r:id>` needs, gates the next release.
 
 ## Known gaps
 
@@ -506,7 +514,7 @@ Results recorded as machine-readable JSON:
 "Microsoft Excel validated" scope — premature while macro rerun is unverified and the
 fixture count is short of 10; this is a separate, later review, not part of this round.*
 
-### 0.10.0 — Lossless Worksheet Preservation — **in progress**
+### 0.10.0 — Lossless Worksheet Preservation — **A/B/C shipped as `elixcee` 0.10.0, D in progress**
 
 **Goal**: `0.8.0` already preserves unknown ZIP parts, `xl/vbaProject.bin`, style
 definitions, merges, and hidden rows/columns — but worksheet XML itself is still always

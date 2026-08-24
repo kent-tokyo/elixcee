@@ -8,155 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Root `elixcee` (Rust crate + Python package): a dependency-security fix plus a writer bug it
-exposed, `cargo audit` wired permanently into CI, and `0.10.0` (Lossless Worksheet
-Preservation) design + implementation in progress — see below for current status.
-`@elixcee/xlsx` (still unpublished, `0.0.0-development`/`private: true`, no
-`publishConfig`): see its own two entries below for exactly what's implemented, plus a CI
-observability addition for the shared WASM bridge.
-
-### Root crate: dev-dependency security fix, plus a real writer bug it uncovered
-
-`cargo audit` (run for the first time in this project) found three RustSec advisories in
-`Cargo.lock`: `RUSTSEC-2026-0204` (`crossbeam-epoch`, bench-only via `criterion`/`rayon`,
-fixed with a plain `cargo update`) and two HIGH-severity (7.5) `quick-xml` advisories
-(`RUSTSEC-2026-0195` memory-exhaustion DoS, `RUSTSEC-2026-0194` quadratic-time DoS) reached
-via `calamine` — a `[dev-dependencies]`-only differential-testing oracle, never shipped to
-users (`src/reader.rs`'s own header comment: elixcee's real XLSX/ODS reader "replaces
-calamine as a runtime dependency"). Fixed by bumping `calamine` `0.24` → `0.36`.
-
-That bump changed the oracle's own parsing behavior enough to fail an existing differential
-test — calamine 0.36 trims leading/trailing whitespace on a shared-string `<t>` element that
-lacks `xml:space="preserve"`, where 0.24 didn't. Tracing the raw XML elixcee itself writes
-confirmed this isn't an oracle regression to route around: `build_xlsx_shared_strings` never
-emitted `xml:space="preserve"`, so any string with leading/trailing whitespace round-tripped
-ambiguously through *any* strict XML consumer — real Excel included. This is the writer-side
-counterpart of the `xml:space="preserve"`-on-read fix already applied to `<v>` cells. Fixed by
-emitting `xml:space="preserve"` on `<t>` whenever a shared string's content differs from its
-own `trim()`, with a direct unit test on the raw XML output.
-
-`cargo audit` now reports zero advisories. It's now wired permanently into CI (`rust-quality`
-job, `cargo audit --version 0.22.1 --locked` after a from-scratch tool install, no
-`continue-on-error`) rather than the one-off local run above — alongside `cargo fmt --all
---check`, `cargo clippy --workspace --all-targets -- -D warnings` (with and without the
-`python` feature), and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features
-python --document-private-items`, none of which had a CI job of their own before.
-
-### `0.10.0` — Lossless Worksheet Preservation (design done, implementation in progress)
-
-Worksheet XML is still always fully regenerated on save (`build_xlsx_sheet`), so anything
-elixcee doesn't parse that lives *inside* a `<worksheet>` element — as opposed to a separate
-ZIP part, already handled by `0.8.0`'s passthrough — is silently lost. `0.10.0` closes that,
-under a hard gate carried through every step below: no writer code for an element until a
-real Excel-authored fixture demonstrates it, its XSD sequence is confirmed against the actual
-ECMA-376 schema, and `mechanical_check.py` has a negative test for its loss. Full design in
-`docs/xlsx-worksheet-preservation-0.10.0-design.md`; not released, no version bump yet.
-
-**`0.10.0-A` (foundation, done).** `WorksheetOrigin` (original `sheetId`/`workbook.xml`
-`r:id`/part name) now threads from `reader::WorkbookSheet` through `Vm` to the writer, so a
-sheet's original `sheetId` survives a save instead of being renumbered by position every
-time — closing a gap `snapshot.rs`'s own `stable_id` doc comment had already disclosed.
-`mechanical_check.py` gained `check_source_references()` and a new `SOURCE_REFERENCE_LOSS`
-violation category, distinct from the pre-existing `ORPHANED_PART`/`DANGLING_RELATIONSHIP`: a
-worksheet-level relationship's `.rels` entry and target part can both survive a save
-byte-identical while the regenerated worksheet XML no longer references the `r:id` that
-activates it — confirmed systemic across every fixture with a worksheet-level relationship at
-all (not yet fixed; that's `0.10.0-D`). Two new real Excel-authored fixtures added (internal
-`location=` hyperlink, real freeze pane — the repo had neither before). One independent bug
-found and fixed along the way: `Vm::new()`'s default empty `"sheet1"` wasn't cleared before
-loading a real workbook, so any workbook whose sheets are never literally named `"Sheet1"`
-gained a spurious extra empty sheet on every save.
-
-**`0.10.0-B` (inline worksheet elements, functionally done).** An opaque-fragment mechanism —
-capture an element's raw source XML, splice it back at the correct schema position, never
-parse or reconstruct it — applied one element at a time, each slice independently checker-
-verified (a new `INLINE_ELEMENT_LOSS`/`INTERNAL_HYPERLINK_LOSS` category per shape), fixture-
-verified, and reopened in real Excel with 0 repair warnings before being called done:
-`<sheetViews>` (freeze panes, active-cell selection), `<sheetPr>`/`<sheetFormatPr>`/
-`<phoneticPr>`/`<dataValidations>`, `<pageMargins>`, and internal hyperlinks. The last one
-needed a different mechanism than the rest: a `<hyperlinks>` container can mix
-relationship-free `location=` children with `r:id`-backed ones that stay out of scope until
-`0.10.0-D`, so it's reconstructed from filtered children (confirmed via the real
-`CT_Hyperlinks` XSD: its `<hyperlink>` child is `minOccurs="1"`, so an all-`r:id` source must
-omit the container entirely rather than emit an empty `<hyperlinks/>`) instead of copied
-whole. Deliberately left out (not blocking): `<autoFilter>` (no fixture has it as a
-standalone worksheet element yet) and row/column style properties beyond hidden state.
-
-**Sheet order/writer bug found and fixed while scoping `0.10.0-C`.** `save_xlsx_impl` derived
-its entire sheet-iteration order — worksheet part naming (`sheetN.xml`), `<sheets>` element
-order, `sheetId` assignment — from `Vm::sheet_names()`, which sorts alphabetically. Every
-existing fixture happened to already be alphabetical (`Sheet1`/`2`/`3`), so a save silently
-reordering a workbook's tabs (e.g. "Zebra" then "Alpha" round-tripping as "Alpha" then
-"Zebra", with no macro touching sheets at all) had never been caught. This is exactly the
-kind of loss `0.10.0` is chartered to close, and it directly blocked `0.10.0-C`: `<bookViews>`'s
-`activeTab`/`firstSheet` are position indices, so carrying them through opaque-fragment
-passthrough would have been wrong from the first non-alphabetical save. Fixed with a new,
-separate `Vm::sheet_order` (insertion-ordered, kept in sync with `sheets` by `ensure_sheet` —
-the single choke point behind every sheet-introducing call site — and by `Sheets(...).Delete`)
-that `save_xlsx_impl` now reads instead. `Vm::sheet_names()` itself is left unchanged
-(still alphabetical): it also drives `Sheets(i)`/`Worksheets(i)` numeric-index resolution at
-VBA runtime, a separate, already-documented fidelity gap (`docs/agent-contract.md`) this fix
-does not touch.
-
-**A second, related bug found in the same pass: sheet display-name case wasn't preserved
-either.** `build_xlsx_workbook` wrote sheet names straight from their lowercased `Vm` lookup
-key (the only key space every per-sheet map uses), so `Sheet1` silently round-tripped as
-`sheet1` — a visible tab-label change on every save, again with no macro involvement. Fixed
-by adding `WorksheetOrigin.original_display_name` (the name exactly as written in the
-source, alongside the existing `original_sheet_id`/`original_workbook_rel_id`/
-`original_part_name`), which the writer now prefers over the lowercased key.
-
-**`0.10.0-C` (workbook-level preservation, done).** Split into slices by
-position-dependence, same discipline as `0.10.0-B`. **C1 (done):** `<workbookPr>`,
-`<calcPr>`, `<extLst>`, and the root `<workbook>` tag's own namespace declarations —
-all position-independent (no dependency on sheet order/count), opaque-fragment
-passthrough, same mechanism as `0.10.0-B`. New `check_workbook_elements()` and
-`WORKBOOK_ELEMENT_LOSS` category in `mechanical_check.py` (a workbook.xml-level check,
-distinct from `INLINE_ELEMENT_LOSS`'s per-sheet-name matching — workbook.xml is a
-single, fixed-path part). All 7 fixtures confirmed `WORKBOOK_ELEMENT_LOSS` before the
-writer change, `CLEAN` after. **C2 (done):** `<bookViews>`. `<workbookView>`'s
-`activeTab`/`firstSheet` are sheet-position indices, which in principle need their own
-carry-over design if they ever hold a non-default value — but all 7 fixtures were
-checked first and none of them sets either attribute (both default to 0 per the real
-XSD), so a plain verbatim copy is correct against all current evidence. No gating
-machinery was built for the unevidenced case: doing so ahead of a real fixture that
-actually exercises it would be exactly the speculative abstraction this milestone's hard
-gate exists to prevent. Shares C1's `WORKBOOK_ELEMENT_LOSS` category (a whole-element
-copy, same as `workbookPr`/`calcPr`/`extLst` — no dedicated extraction logic needed,
-unlike internal hyperlinks' filtered-children approach). **C3 (done, simplified):**
-`<definedNames>` (print area/print titles included — `_xlnm.Print_Area` is a
-`<definedName>` with a special reserved name, fixture5 has a real example). Unlike C2,
-`localSheetId` (a 0-based index into `<sheets>`) DOES have real fixture evidence
-(fixture5's `_xlnm.Print_Area localSheetId="0"`), so C2's "no evidence, ship verbatim"
-reasoning doesn't apply here — but fixture5 is single-sheet, so the actual failure mode
-(a delete shifting a *surviving* sheet's effective position) isn't fixture-evidenced
-either, only reproducible with a synthetic multi-sheet fixture. Shipped a simplified,
-conservative rule instead of per-name `localSheetId` remapping: `<definedNames>` is
-carried verbatim only when every sheet present at load time is still present at save
-time (`Sheets(...).Delete` never ran); if any sheet was deleted, the whole element is
-dropped rather than risk a stale reference. Sheet *additions* don't affect this — new
-sheets only ever append, so existing positions stay valid. New `check_defined_names()`
-in `mechanical_check.py` (a dedicated function, not folded into
-`check_workbook_elements()`'s plain presence check — this one needs to know the
-correct answer differs depending on whether a sheet was deleted, checked by comparing
-`<sheets>` between original and output). Verified both directions in self-test and
-against a real CLI round-trip of a synthetic two-sheet fixture with a
-`Sheets(...).Delete` macro.
-
-**`0.10.0-C` real-Excel verified.** `fixture4`/`fixture5`, save-as and in-place, reopened in
-Mac Excel: 0 repair warnings across all 3 output files. `fixture4`'s defined name (`test`,
-workbook scope, `=Sheet1!$F$5`, comment `test desu!!!`) and `fixture5`'s `_xlnm.Print_Area`
-(`Sheet1!$E$3`) both confirmed byte-for-byte correct in Excel's own Name Manager;
-`Print_Area`'s print preview showed exactly the (empty) `E3` cell rather than the sheet's
-real data table, confirming the print area is actually functioning, not just present as
-inert XML. `0.10.0-C` is complete — mechanical-check-verified and real-Excel-verified.
-
-One independent, pre-existing bug found during this verification (unrelated to `0.10.0-C`,
-not fixed): a cell holding a real Excel error value (`t="e"`, e.g. `#VALUE!`) round-trips as
-plain text, not an error — `SheetCell` (the file reader's cell type) has no `Error` variant,
-so `t="e"` is read the same as `t="str"`. Confirmed pre-existing via `git blame`
-(`72b5cc38`, 2026-06-21, well before `0.10.0` started). See `ROADMAP.md`'s Known gaps item
-14.
+Root `elixcee` (Rust crate + Python package): `0.10.0-D`, the last slice of the Lossless
+Worksheet Preservation milestone `[0.10.0]` (below) — the first three slices, plus an
+unrelated dependency-security fix, shipped as `elixcee` `0.10.0`. `@elixcee/xlsx` (still
+unpublished, `0.0.0-development`/`private: true`, no `publishConfig`): see its own two
+entries below for exactly what's implemented, plus a CI observability addition for the
+shared WASM bridge.
 
 `0.10.0-D` (relationship-backed features, including the actual fix for
 `SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing
@@ -374,6 +231,165 @@ both fixed at the source**:
   section documents both bugs, why each fix works, and why bug 2's fix (isolating the
   Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
   externalization) and needs a different solution.
+
+## [0.10.0] - 2026-08-24
+
+Root `elixcee` (Rust crate + Python package) only: `0.9.0` → `0.10.0`. `elixcee-types` stays
+`0.3.0` (no changes this round), `elixcee-wasm` stays `0.1.0` (never published,
+`publish = false`), `@elixcee/xlsx` stays unpublished/`private:true`/`0.0.0-development` —
+none of them have any public-surface change this round; `@elixcee/xlsx`'s own in-progress
+work stays under `[Unreleased]` above, untouched by this release.
+
+This ships the first three slices (`0.10.0-A`/`0.10.0-B`/`0.10.0-C`) of the `0.10.0`
+Lossless Worksheet Preservation milestone, all real-Excel reopen-verified with 0 repair
+warnings. `0.10.0-D` (relationship-backed elements — the actual fix for
+`SOURCE_REFERENCE_LOSS`) remains unreleased; see `[Unreleased]` above.
+
+### Root crate: dev-dependency security fix, plus a real writer bug it uncovered
+
+`cargo audit` (run for the first time in this project) found three RustSec advisories in
+`Cargo.lock`: `RUSTSEC-2026-0204` (`crossbeam-epoch`, bench-only via `criterion`/`rayon`,
+fixed with a plain `cargo update`) and two HIGH-severity (7.5) `quick-xml` advisories
+(`RUSTSEC-2026-0195` memory-exhaustion DoS, `RUSTSEC-2026-0194` quadratic-time DoS) reached
+via `calamine` — a `[dev-dependencies]`-only differential-testing oracle, never shipped to
+users (`src/reader.rs`'s own header comment: elixcee's real XLSX/ODS reader "replaces
+calamine as a runtime dependency"). Fixed by bumping `calamine` `0.24` → `0.36`.
+
+That bump changed the oracle's own parsing behavior enough to fail an existing differential
+test — calamine 0.36 trims leading/trailing whitespace on a shared-string `<t>` element that
+lacks `xml:space="preserve"`, where 0.24 didn't. Tracing the raw XML elixcee itself writes
+confirmed this isn't an oracle regression to route around: `build_xlsx_shared_strings` never
+emitted `xml:space="preserve"`, so any string with leading/trailing whitespace round-tripped
+ambiguously through *any* strict XML consumer — real Excel included. This is the writer-side
+counterpart of the `xml:space="preserve"`-on-read fix already applied to `<v>` cells. Fixed by
+emitting `xml:space="preserve"` on `<t>` whenever a shared string's content differs from its
+own `trim()`, with a direct unit test on the raw XML output.
+
+`cargo audit` now reports zero advisories. It's now wired permanently into CI (`rust-quality`
+job, `cargo audit --version 0.22.1 --locked` after a from-scratch tool install, no
+`continue-on-error`) rather than the one-off local run above — alongside `cargo fmt --all
+--check`, `cargo clippy --workspace --all-targets -- -D warnings` (with and without the
+`python` feature), and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features
+python --document-private-items`, none of which had a CI job of their own before.
+
+### `0.10.0-A`/`0.10.0-B`/`0.10.0-C` — Lossless Worksheet Preservation
+
+Worksheet XML was always fully regenerated on save (`build_xlsx_sheet`), so anything elixcee
+doesn't parse that lives *inside* a `<worksheet>` element — as opposed to a separate ZIP
+part, already handled by `0.8.0`'s passthrough — was silently lost. This closes that for
+worksheet-level and workbook-level elements, under a hard gate carried through every step
+below: no writer code for an element until a real Excel-authored fixture demonstrates it,
+its XSD sequence is confirmed against the actual ECMA-376 schema, and `mechanical_check.py`
+has a negative test for its loss. Full design in
+`docs/xlsx-worksheet-preservation-0.10.0-design.md`. Relationship-backed elements
+(`<tableParts>`/`<drawing>`/`<legacyDrawing>`/r:id-backed `<hyperlinks>`) are `0.10.0-D`,
+not part of this release — see `[Unreleased]` above.
+
+**`0.10.0-A` (foundation, done).** `WorksheetOrigin` (original `sheetId`/`workbook.xml`
+`r:id`/part name) now threads from `reader::WorkbookSheet` through `Vm` to the writer, so a
+sheet's original `sheetId` survives a save instead of being renumbered by position every
+time — closing a gap `snapshot.rs`'s own `stable_id` doc comment had already disclosed.
+`mechanical_check.py` gained `check_source_references()` and a new `SOURCE_REFERENCE_LOSS`
+violation category, distinct from the pre-existing `ORPHANED_PART`/`DANGLING_RELATIONSHIP`: a
+worksheet-level relationship's `.rels` entry and target part can both survive a save
+byte-identical while the regenerated worksheet XML no longer references the `r:id` that
+activates it — confirmed systemic across every fixture with a worksheet-level relationship at
+all (not yet fixed; that's `0.10.0-D`). Two new real Excel-authored fixtures added (internal
+`location=` hyperlink, real freeze pane — the repo had neither before). One independent bug
+found and fixed along the way: `Vm::new()`'s default empty `"sheet1"` wasn't cleared before
+loading a real workbook, so any workbook whose sheets are never literally named `"Sheet1"`
+gained a spurious extra empty sheet on every save.
+
+**`0.10.0-B` (inline worksheet elements, functionally done).** An opaque-fragment mechanism —
+capture an element's raw source XML, splice it back at the correct schema position, never
+parse or reconstruct it — applied one element at a time, each slice independently checker-
+verified (a new `INLINE_ELEMENT_LOSS`/`INTERNAL_HYPERLINK_LOSS` category per shape), fixture-
+verified, and reopened in real Excel with 0 repair warnings before being called done:
+`<sheetViews>` (freeze panes, active-cell selection), `<sheetPr>`/`<sheetFormatPr>`/
+`<phoneticPr>`/`<dataValidations>`, `<pageMargins>`, and internal hyperlinks. The last one
+needed a different mechanism than the rest: a `<hyperlinks>` container can mix
+relationship-free `location=` children with `r:id`-backed ones that stay out of scope until
+`0.10.0-D`, so it's reconstructed from filtered children (confirmed via the real
+`CT_Hyperlinks` XSD: its `<hyperlink>` child is `minOccurs="1"`, so an all-`r:id` source must
+omit the container entirely rather than emit an empty `<hyperlinks/>`) instead of copied
+whole. Deliberately left out (not blocking): `<autoFilter>` (no fixture has it as a
+standalone worksheet element yet) and row/column style properties beyond hidden state.
+
+**Sheet order/writer bug found and fixed while scoping `0.10.0-C`.** `save_xlsx_impl` derived
+its entire sheet-iteration order — worksheet part naming (`sheetN.xml`), `<sheets>` element
+order, `sheetId` assignment — from `Vm::sheet_names()`, which sorts alphabetically. Every
+existing fixture happened to already be alphabetical (`Sheet1`/`2`/`3`), so a save silently
+reordering a workbook's tabs (e.g. "Zebra" then "Alpha" round-tripping as "Alpha" then
+"Zebra", with no macro touching sheets at all) had never been caught. This is exactly the
+kind of loss this milestone is chartered to close, and it directly blocked `0.10.0-C`:
+`<bookViews>`'s `activeTab`/`firstSheet` are position indices, so carrying them through
+opaque-fragment passthrough would have been wrong from the first non-alphabetical save.
+Fixed with a new, separate `Vm::sheet_order` (insertion-ordered, kept in sync with `sheets`
+by `ensure_sheet` — the single choke point behind every sheet-introducing call site — and by
+`Sheets(...).Delete`) that `save_xlsx_impl` now reads instead. `Vm::sheet_names()` itself is
+left unchanged (still alphabetical): it also drives `Sheets(i)`/`Worksheets(i)` numeric-index
+resolution at VBA runtime, a separate, already-documented fidelity gap
+(`docs/agent-contract.md`) this fix does not touch.
+
+**A second, related bug found in the same pass: sheet display-name case wasn't preserved
+either.** `build_xlsx_workbook` wrote sheet names straight from their lowercased `Vm` lookup
+key (the only key space every per-sheet map uses), so `Sheet1` silently round-tripped as
+`sheet1` — a visible tab-label change on every save, again with no macro involvement. Fixed
+by adding `WorksheetOrigin.original_display_name` (the name exactly as written in the
+source, alongside the existing `original_sheet_id`/`original_workbook_rel_id`/
+`original_part_name`), which the writer now prefers over the lowercased key.
+
+**`0.10.0-C` (workbook-level preservation, done).** Split into slices by
+position-dependence, same discipline as `0.10.0-B`. **C1 (done):** `<workbookPr>`,
+`<calcPr>`, `<extLst>`, and the root `<workbook>` tag's own namespace declarations —
+all position-independent (no dependency on sheet order/count), opaque-fragment
+passthrough, same mechanism as `0.10.0-B`. New `check_workbook_elements()` and
+`WORKBOOK_ELEMENT_LOSS` category in `mechanical_check.py` (a workbook.xml-level check,
+distinct from `INLINE_ELEMENT_LOSS`'s per-sheet-name matching — workbook.xml is a
+single, fixed-path part). All 7 fixtures confirmed `WORKBOOK_ELEMENT_LOSS` before the
+writer change, `CLEAN` after. **C2 (done):** `<bookViews>`. `<workbookView>`'s
+`activeTab`/`firstSheet` are sheet-position indices, which in principle need their own
+carry-over design if they ever hold a non-default value — but all 7 fixtures were
+checked first and none of them sets either attribute (both default to 0 per the real
+XSD), so a plain verbatim copy is correct against all current evidence. No gating
+machinery was built for the unevidenced case: doing so ahead of a real fixture that
+actually exercises it would be exactly the speculative abstraction this milestone's hard
+gate exists to prevent. Shares C1's `WORKBOOK_ELEMENT_LOSS` category (a whole-element
+copy, same as `workbookPr`/`calcPr`/`extLst` — no dedicated extraction logic needed,
+unlike internal hyperlinks' filtered-children approach). **C3 (done, simplified):**
+`<definedNames>` (print area/print titles included — `_xlnm.Print_Area` is a
+`<definedName>` with a special reserved name, fixture5 has a real example). Unlike C2,
+`localSheetId` (a 0-based index into `<sheets>`) DOES have real fixture evidence
+(fixture5's `_xlnm.Print_Area localSheetId="0"`), so C2's "no evidence, ship verbatim"
+reasoning doesn't apply here — but fixture5 is single-sheet, so the actual failure mode
+(a delete shifting a *surviving* sheet's effective position) isn't fixture-evidenced
+either, only reproducible with a synthetic multi-sheet fixture. Shipped a simplified,
+conservative rule instead of per-name `localSheetId` remapping: `<definedNames>` is
+carried verbatim only when every sheet present at load time is still present at save
+time (`Sheets(...).Delete` never ran); if any sheet was deleted, the whole element is
+dropped rather than risk a stale reference. Sheet *additions* don't affect this — new
+sheets only ever append, so existing positions stay valid. New `check_defined_names()`
+in `mechanical_check.py` (a dedicated function, not folded into
+`check_workbook_elements()`'s plain presence check — this one needs to know the
+correct answer differs depending on whether a sheet was deleted, checked by comparing
+`<sheets>` between original and output). Verified both directions in self-test and
+against a real CLI round-trip of a synthetic two-sheet fixture with a
+`Sheets(...).Delete` macro.
+
+**`0.10.0-C` real-Excel verified.** `fixture4`/`fixture5`, save-as and in-place, reopened in
+Mac Excel: 0 repair warnings across all 3 output files. `fixture4`'s defined name (`test`,
+workbook scope, `=Sheet1!$F$5`, comment `test desu!!!`) and `fixture5`'s `_xlnm.Print_Area`
+(`Sheet1!$E$3`) both confirmed byte-for-byte correct in Excel's own Name Manager;
+`Print_Area`'s print preview showed exactly the (empty) `E3` cell rather than the sheet's
+real data table, confirming the print area is actually functioning, not just present as
+inert XML. `0.10.0-C` is complete — mechanical-check-verified and real-Excel-verified.
+
+One independent, pre-existing bug found during this verification (unrelated to `0.10.0-C`,
+not fixed): a cell holding a real Excel error value (`t="e"`, e.g. `#VALUE!`) round-trips as
+plain text, not an error — `SheetCell` (the file reader's cell type) has no `Error` variant,
+so `t="e"` is read the same as `t="str"`. Confirmed pre-existing via `git blame`
+(`72b5cc38`, 2026-06-21, well before `0.10.0` started). See `ROADMAP.md`'s Known gaps item
+14.
 
 ## [0.9.0] - 2026-08-22
 
