@@ -79,6 +79,23 @@ function expandHiddenIntervals(intervals) {
 // text is a real but rare oracle feature this does not replicate; every fixture this
 // package's own tests exercise uses the unstyled/default case, so this is an honest
 // omission, not a silently wrong claim of support.
+//
+// Error cells (t="e"): the WASM bridge emits the same numeric BIFF code the oracle's own
+// in-memory model uses for `.v` (see crates/elixcee-wasm's `ExcelError::biff_code` doc
+// comment) — confirmed live against the real oracle reading a real Excel-authored `t="e"`
+// cell (`XLSX.read()` never puts the display string in `.v`, only in `.w`, derived from
+// this exact table). Only the 7 classic codes reader.rs itself recognizes are listed;
+// there is no evidence (real fixture or otherwise) elixcee ever emits any other code.
+const ERROR_CODES = {
+  0x00: '#NULL!',
+  0x07: '#DIV/0!',
+  0x0f: '#VALUE!',
+  0x17: '#REF!',
+  0x1d: '#NAME?',
+  0x24: '#NUM!',
+  0x2a: '#N/A',
+};
+
 function shapeCell(cell, opts, numFmts, date1904) {
   const table = numFmts || {};
   const resolved = resolveFormatString(cell.fmtId || 0, { table });
@@ -90,6 +107,8 @@ function shapeCell(cell, opts, numFmts, date1904) {
     cell.w = cell.v ? 'TRUE' : 'FALSE';
   } else if (cell.t === 'n') {
     cell.w = ssfFormat(resolved, cell.v, { date1904 });
+  } else if (cell.t === 'e') {
+    cell.w = ERROR_CODES[cell.v];
   }
 
   if (opts && (opts.cellNF || opts.cellStyles)) {

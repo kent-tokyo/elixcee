@@ -66,6 +66,7 @@ fn cell_value_json(c: &SheetCell) -> String {
                 "false".into()
             }
         }
+        SheetCell::Error(e) => json_string(e.as_str()),
     }
 }
 
@@ -81,6 +82,7 @@ fn cell_value_display(c: &SheetCell) -> String {
                 "FALSE".into()
             }
         }
+        SheetCell::Error(e) => e.as_str().to_string(),
     }
 }
 

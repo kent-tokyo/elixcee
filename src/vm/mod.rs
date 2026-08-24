@@ -3169,6 +3169,7 @@ impl Vm {
                     SheetCell::Float(f) => Variant::Float(*f),
                     SheetCell::Str(s) => Variant::Str(s.clone()),
                     SheetCell::Bool(b) => Variant::Boolean(*b),
+                    SheetCell::Error(e) => Variant::Error(e.clone()),
                 };
                 self.cells_mut().insert(
                     (row, col),

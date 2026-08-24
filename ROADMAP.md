@@ -517,18 +517,18 @@ human/agent to remember it explicitly rather than relying on CI.
     found and fixed (formula flattening, orphaned relationships, wrong `.xlsm` content type)
     are in `CHANGELOG.md`'s `[0.9.0]`.
 
-14. **A cell holding a real Excel error value (`t="e"` in the source XML, e.g. `#VALUE!`)
-    round-trips as a plain text string, not an error.** `src/reader.rs`'s `SheetCell` enum
-    (`Integer`/`Float`/`Str`/`Bool` — no `Error` variant) treats `t="e"` the same as `t="str"`:
-    both become `SheetCell::Str(v.to_string())`. On save, that text goes into
-    `xl/sharedStrings.xml` as an ordinary string (`t="s"`), so the cell displays the same text
-    in Excel but is no longer actually an error-typed cell underneath. Found live during
-    `0.10.0-C`'s real-Excel verification (fixture5's `D8`, unrelated to anything `0.10.0-C`
-    touches) — confirmed pre-existing via `git blame` (`72b5cc38`, 2026-06-21, well before
-    `0.10.0` started). This is a general file-round-trip gap, not scoped to any current
-    milestone; fixing it needs a `SheetCell::Error(String)` variant threaded through
-    `WorkbookSheet`/`Vm`/the writer the same way `Variant::Error` already is at the VBA-runtime
-    level (see `src/lib.rs`'s `PyExcelError`/`python_to_variant`), not attempted yet.
+14. ~~A cell holding a real Excel error value (`t="e"` in the source XML, e.g. `#VALUE!`)
+    round-trips as a plain text string, not an error.~~ — **fixed**: `src/reader.rs`'s
+    `SheetCell` enum gained a real `Error(ExcelError)` variant (`elixcee_types::ExcelError`
+    now has a `FromStr` impl, the `as_str()` inverse), threaded through `Vm` and the writer
+    the same way `Variant::Error` already was at the VBA-runtime level. `xlsx_cell_xml` now
+    emits `t="e"` with the literal error text in `<v>`, never shared-string indexed —
+    confirmed against real Excel's own output, which never puts e.g. `"#VALUE!"` in
+    `xl/sharedStrings.xml` either. `@elixcee/xlsx`'s `read()` (`crates/elixcee-wasm`) got
+    the matching fix: error cells now come back as `{t:"e", v:<BIFF code>, w:<string>}`,
+    the real `xlsx` oracle's own shape. Verified against fixture5's real `D8` cell (both
+    the Rust round-trip and a real CLI save) and a new differential case. See
+    `CHANGELOG.md`'s `[Unreleased]` for the full account.
 
 16. **R1's bulk range/row API disclosed, not fixed, two pre-existing gaps and one new
     limitation of its own** — see `docs/openpyxl-gap-audit.md`'s "Implementation notes for

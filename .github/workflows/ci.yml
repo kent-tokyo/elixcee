@@ -227,10 +227,11 @@ jobs:
         working-directory: compat
         run: npm run differential:ssf-format
 
-      # read: 20 MATCH, readFile/readFileSync: 13 MATCH — the xml:space="preserve"
+      # read: 21 MATCH, readFile/readFileSync: 13 MATCH. The xml:space="preserve"
       # reader.rs defect this suite used to disclose here (3 cases across both apis) is
       # fixed; see CHANGELOG.md's "src/reader.rs's xml:space=preserve whitespace defect".
-      - name: compat — XLSX.read()/readFile() differential (33/33 MATCH expected)
+      # read's count grew by one for the t="e" error-cell case (Known gaps item 14 fix).
+      - name: compat — XLSX.read()/readFile() differential (34/34 MATCH expected)
         working-directory: compat
         run: npm run differential:read
 

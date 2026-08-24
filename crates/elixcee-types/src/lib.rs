@@ -26,11 +26,51 @@ impl ExcelError {
             ExcelError::Null => "#NULL!",
         }
     }
+
+    /// The classic BIFF numeric error code SheetJS (and every serious XLSX consumer's
+    /// in-memory model) uses for `t:"e"` cells instead of the display string -- confirmed
+    /// live against the real `xlsx` oracle's own `BErr` table
+    /// (`compat/node_modules/xlsx/xlsx.js`): reading a real Excel-authored `t="e"` cell
+    /// through `XLSX.read()` always comes back as `{t:"e", v:<this code>, w:<as_str()>}`,
+    /// never the display string in `v`. Used by `crates/elixcee-wasm` so `@elixcee/xlsx`'s
+    /// `read()` matches that shape exactly.
+    pub fn biff_code(&self) -> u8 {
+        match self {
+            ExcelError::Null => 0x00,
+            ExcelError::DivZero => 0x07,
+            ExcelError::Value => 0x0F,
+            ExcelError::Ref => 0x17,
+            ExcelError::Name => 0x1D,
+            ExcelError::Num => 0x24,
+            ExcelError::NA => 0x2A,
+        }
+    }
 }
 
 impl std::fmt::Display for ExcelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+/// The `as_str` inverse: parses one of the 7 classic error strings (e.g. from a `t="e"`
+/// cell's `<v>` text). An unrecognized string (a newer dynamic-array error like `#SPILL!`,
+/// or plain malformed input) is `Err(())`, not a panic -- callers fall back to treating the
+/// value as an opaque string rather than guessing at an error code with no fixture evidence.
+impl std::str::FromStr for ExcelError {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "#DIV/0!" => Ok(ExcelError::DivZero),
+            "#N/A" => Ok(ExcelError::NA),
+            "#VALUE!" => Ok(ExcelError::Value),
+            "#REF!" => Ok(ExcelError::Ref),
+            "#NAME?" => Ok(ExcelError::Name),
+            "#NUM!" => Ok(ExcelError::Num),
+            "#NULL!" => Ok(ExcelError::Null),
+            _ => Err(()),
+        }
     }
 }
 
@@ -349,6 +389,40 @@ mod tests {
     #[test]
     fn excel_error_display_matches_as_str() {
         assert_eq!(ExcelError::DivZero.to_string(), "#DIV/0!");
+    }
+
+    #[test]
+    fn excel_error_from_str_is_the_as_str_inverse_for_every_variant() {
+        for e in [
+            ExcelError::DivZero,
+            ExcelError::NA,
+            ExcelError::Value,
+            ExcelError::Ref,
+            ExcelError::Name,
+            ExcelError::Num,
+            ExcelError::Null,
+        ] {
+            assert_eq!(e.as_str().parse::<ExcelError>().as_ref(), Ok(&e));
+        }
+    }
+
+    #[test]
+    fn excel_error_from_str_rejects_an_unrecognized_string() {
+        assert_eq!("#SPILL!".parse::<ExcelError>(), Err(()));
+        assert_eq!("not an error at all".parse::<ExcelError>(), Err(()));
+    }
+
+    #[test]
+    fn excel_error_biff_code_matches_the_real_oracles_own_berr_table() {
+        // Confirmed live against compat/node_modules/xlsx/xlsx.js's BErr table (see
+        // ExcelError::biff_code's doc comment) -- these codes are not invented here.
+        assert_eq!(ExcelError::Null.biff_code(), 0x00);
+        assert_eq!(ExcelError::DivZero.biff_code(), 0x07);
+        assert_eq!(ExcelError::Value.biff_code(), 0x0F);
+        assert_eq!(ExcelError::Ref.biff_code(), 0x17);
+        assert_eq!(ExcelError::Name.biff_code(), 0x1D);
+        assert_eq!(ExcelError::Num.biff_code(), 0x24);
+        assert_eq!(ExcelError::NA.biff_code(), 0x2A);
     }
 
     // ── Variant ──────────────────────────────────────────────────────────

@@ -376,6 +376,23 @@ runReadCase('boundary numeric values (large integer, small float, negative float
   ]],
 ]);
 
+// Real Excel error cells (t="e") -- Known gaps item 14: previously round-tripped through
+// elixcee as a plain string (t="s"), losing the error type entirely (see
+// tests/xlsx_roundtrip.rs's real_excel_error_cell_survives_a_save_as_a_real_error_not_a_string
+// for the Rust-side round-trip fix this differential case verifies from the JS read() side).
+// Object-cell form matches the oracle's own {t,v} shape for error cells verbatim (v is the
+// BIFF numeric error code the oracle's own BErr table uses, not the display string --
+// confirmed live by reading a real Excel-authored t="e" cell through XLSX.read()); the
+// oracle's reader derives .w from it, exactly what elixcee-wasm's cell_json + read-shape.cjs
+// now also do.
+runReadCase('error cells (t="e", all 7 classic error codes)', [
+  ['S1', [
+    [{ t: 'e', v: 0x00 }, { t: 'e', v: 0x07 }, { t: 'e', v: 0x0f }],
+    [{ t: 'e', v: 0x17 }, { t: 'e', v: 0x1d }, { t: 'e', v: 0x24 }],
+    [{ t: 'e', v: 0x2a }, 'not an error', 42],
+  ]],
+]);
+
 // ---- FIXED gap: empty-string cell values ----
 //
 // Found by this test file (originally registered UNSUPPORTED, see git history), now
