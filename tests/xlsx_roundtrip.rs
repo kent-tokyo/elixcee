@@ -793,6 +793,86 @@ fn sheet_order_and_display_case_survive_a_save_even_when_source_names_are_not_al
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// Real report against the released `0.10.0`: a source that binds the relationships
+/// namespace to a prefix OTHER than the conventional `r:` (here `rel:`) is fully valid
+/// OOXML on its own -- XML namespace binding is about the URI, not the prefix spelling.
+/// Carrying such a source's root `<workbook>` attrs through unchanged, while
+/// `build_xlsx_workbook` still hardcodes the literal `r:` prefix on `<sheet r:id="...">`,
+/// used to produce output where `r:` was never bound to anything -- a real XML error
+/// (`lxml`/openpyxl reject it as "unbound prefix"), not just a lossy passthrough. Fixed
+/// by `reader::ensure_r_prefix_bound`.
+#[test]
+fn workbook_xml_still_binds_the_r_prefix_when_the_source_used_a_different_one() {
+    const WORKBOOK_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheets>\n",
+        "<sheet name=\"Sheet1\" sheetId=\"1\" rel:id=\"rId1\"/>\n",
+        "</sheets>\n</workbook>\n",
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const MINIMAL_SHEET: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n</worksheet>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet1.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    let fixture_bytes = zip.finish().unwrap().into_inner();
+
+    let source_path = tmp_path("source_alt_rel_prefix.xlsx");
+    let output_path = tmp_path("output_alt_rel_prefix.xlsx");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let wb_xml = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+
+    assert!(
+        wb_xml.contains(
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+        ),
+        "the writer's own hardcoded r:id usage below must have a real xmlns:r binding, \
+         regardless of what prefix the source used for the same namespace: {wb_xml}"
+    );
+    assert!(
+        wb_xml.contains("r:id=\"rId1\""),
+        "the sheet must still reference its own relationship: {wb_xml}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// A genuine Microsoft-Excel-for-Mac-authored `.xlsm` (real VBA project, real
 /// `xr:uid`/`calcChain.xml`/`theme1.xml`), not a hand-built stand-in -- see
 /// `compat/oracle-excel-com/results/0.9.0-A_summary.md` for the full real-Excel
