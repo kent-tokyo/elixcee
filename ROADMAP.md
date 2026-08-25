@@ -129,6 +129,25 @@ no fixture with that shape exists in the repo. All of `0.10.0-D` above is
 mechanical-check-verified but not yet real-Excel reopen-verified — that verification, plus
 whatever `<pageSetup r:id>` needs, gates the next release.
 
+**Next round: release qualification, not new development — version not decided yet.**
+`0.10.0-D` and the `t="e"` error-cell fix (Known gaps item 14, above) are both merged to
+`master` and both correctly excluded from `0.10.1`'s score (see the `0.10.1` scorecard) —
+neither ships until each clears its own real-Excel check, done by hand against real Excel
+(this `Vm` has no way to drive that itself):
+
+- `0.10.0-D`, per element: a table survives; an external hyperlink still works; a
+  drawing/chart/image still displays; a comment/note survives; plain `<pageSetup>` is
+  still applied; deleting a sheet leaves no orphaned part triggering a repair warning; both
+  save-as and in-place produce zero repair warnings.
+- `t="e"`: the cell is genuinely error-typed in Excel, not just displaying error-looking
+  text — a formula referencing it and `ISERROR()` both need to see it as an error; and the
+  type survives a save → reopen → save cycle, not just the first save.
+
+Whether the next release is `0.10.2` (if `0.10.0-D`'s real-Excel pass turns up only small
+fixes) or `0.11.0` (if it lands as a real new capability, table/drawing/hyperlink
+preservation formally added) is an open question until that verification is done — not
+decided in advance.
+
 ## Known gaps
 
 1. **VBA semantic differential results are still validated against LibreOffice only, not

@@ -512,3 +512,15 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] **`master`のversion metadata同期**（本コミット）：`Cargo.toml`/`pyproject.toml`/`Cargo.lock`を0.10.0→0.10.1へbump。`CHANGELOG.md`：namespace修正を`[Unreleased]`から新設`[0.10.1] - 2026-08-24`セクションへ移動（release-0.10.0ブランチの文言をベースに、実wheel検証・3プラットフォームrelease・issue #1外部クローズの実績を追記）、t="e"エラーセル修正は`[Unreleased]`に残置（0.10.1には含まれていないため）。`ROADMAP.md`：Current stateを0.10.1へ更新（`--version`フラグに関する古い「未実装」記述も、実際には動作することを確認した上で訂正）、issue #1関連パラグラフを外部クローズの事実に合わせて更新。
 
 タグ・publish・0.10.2への変更は本コミットでは一切行わない（ユーザー明示指示通り、version metadata同期のみ）。
+
+## 0.10.1対応ラウンド最終判定、評価記事に日本語要約追加、次ラウンドの優先順位記録
+
+ユーザーから0.10.1対応ラウンドの正式完了判定を受領：名前空間回帰の再現・分離hotfix化・PyPI/crates.io/CLI同時公開・実wheel再検証・報告者自身によるissue #1再検証済みクローズ・masterへのversion同期・t="e"修正の評価根拠除外・0.10.0/0.10.1の別スコア記録、いずれも適切と確認された。このインシデントへの追加作業は不要。
+
+- [x] **評価記事の言語判定**：英語を正式版として維持（crates.io/PyPI/GitHub訪問者という主要読者層に合わせる、将来のversion更新時の二重メンテナンス回避のため）。ユーザー指定の日本語要約（4文）を記事末尾（footer直前）に追加し、同一URLへ再publish——別記事は作成せず、単一ソースファイル内に併記する形とした。
+- [x] **次ラウンドの優先順位をROADMAP.mdへ記録**（0.10.0-Dロードマップエントリの直後）：「次ラウンドはrelease qualificationであり新規開発ではない、versionはまだ決めない」という枠組みと、ユーザー指定の実Excel検証チェックリストを明文化——
+  - 0.10.0-D側：table存続・external hyperlink動作・drawing/chart/image表示・comment/note存続・plain pageSetup維持・シート削除後のorphan part repair警告なし・save-as/in-place両方でrepair警告ゼロ。
+  - t="e"側：表示だけでなく実際にerror型であること・数式/ISERROR()からエラーとして扱われること・save→reopen→resaveでt="e"のまま維持されること。
+  - 0.10.2（小規模修正のみの場合）か0.11.0（table/drawing/hyperlink保存を正式な新機能として追加する場合）かは、実Excel検証完了まで未決定と明記。
+
+コード変更なし、tag/publish/version変更もなし。ドキュメント同期のみ、ローカルコミット（push未承認）。
