@@ -10,10 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Root `elixcee` (Rust crate + Python package): `0.10.0-D`, the last slice of the Lossless
 Worksheet Preservation milestone `[0.10.0]` (below) — the first three slices, plus an
-unrelated dependency-security fix, shipped as `elixcee` `0.10.0`. `@elixcee/xlsx` (still
-unpublished, `0.0.0-development`/`private: true`, no `publishConfig`): see its own two
-entries below for exactly what's implemented, plus a CI observability addition for the
-shared WASM bridge.
+unrelated dependency-security fix, shipped as `elixcee` `0.10.0`; the unbound-`r:`-prefix
+regression that `0.10.0` introduced was fixed and released separately as `[0.10.1]`
+(below). The error-typed-cell fix in this section is a genuinely new, independent fix —
+not yet released in any version. `@elixcee/xlsx` (still unpublished,
+`0.0.0-development`/`private: true`, no `publishConfig`): see its own two entries below
+for exactly what's implemented, plus a CI observability addition for the shared WASM
+bridge.
 
 `0.10.0-D` (relationship-backed features, including the actual fix for
 `SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing
@@ -141,25 +144,6 @@ This closes `0.10.0-D`'s only remaining open item for the current fixture set. R
 reopen verification remains not done for `tableParts`/`drawing`/`legacyDrawing`/
 `hyperlinks`/`D4`/plain `pageSetup`.
 
-### Root crate: unbound `r:` namespace prefix on round-trip (critical, fixed)
-
-Reported against the published `0.10.0` wheel: a source workbook that binds the OOXML
-relationships namespace to a prefix other than the conventional `r:` (e.g.
-`xmlns:rel="..."` + `rel:id="..."` on `<sheet>` — fully valid OOXML, since namespace
-binding is about the URI, not the prefix spelling) round-tripped through `0.10.0` into a
-file with `r:` used but never bound, rejected outright by any strict XML consumer
-(openpyxl/lxml, Excel itself). `build_xlsx_workbook`'s `<sheet r:id="...">` always
-hardcodes the literal `r:` prefix, but the root `<workbook>` tag's namespace declarations
-were carried through verbatim from the source, with no guarantee the source declared `r:`
-at all. Reproduced by rewriting a real openpyxl-authored file's `xl/workbook.xml`
-(`xmlns:r`→`xmlns:rel`, `r:id`→`rel:id`) and round-tripping it through both a local build
-and the published PyPI `0.10.0` wheel. Fixed by a new `reader::ensure_r_prefix_bound()`,
-applied before a source's root attribute string is reused for either `workbook.xml` or
-(the still-unreleased `0.10.0-D`) `worksheet.xml`. Full details and the complete
-regression-sweep list are in the fix commit; shipping as `0.10.1` on the `release-0.10.0`
-branch (root crate/Python package only — `elixcee-types`/`elixcee-wasm`/`@elixcee/xlsx`
-unaffected).
-
 ### Root crate + `@elixcee/xlsx`: error-typed cells (`t="e"`) round-trip as real errors, not strings
 
 ROADMAP.md Known gaps item 14, found live during `0.10.0-C`'s real-Excel verification
@@ -275,6 +259,53 @@ both fixed at the source**:
   section documents both bugs, why each fix works, and why bug 2's fix (isolating the
   Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
   externalization) and needs a different solution.
+
+## [0.10.1] - 2026-08-24
+
+Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
+bug fix, no new functionality. `elixcee-types`/`elixcee-wasm`/`@elixcee/xlsx` all
+unaffected.
+
+**A workbook whose source binds the OOXML relationships namespace to a prefix other than
+the conventional `r:` (e.g. `xmlns:rel="..."` + `rel:id="..."` on `<sheet>` — fully valid
+OOXML; namespace binding is about the URI, not the prefix spelling) round-tripped through
+`0.10.0` into a file with an unbound `r:` prefix, rejected outright by any strict XML
+consumer (openpyxl/lxml, Excel itself) — not a lossy passthrough, a hard parse failure.**
+`build_xlsx_workbook`'s `<sheet r:id="...">` always hardcodes the literal `r:` prefix, but
+the root `<workbook>` tag's own namespace declarations were carried through verbatim from
+the source, with no guarantee the source declared `r:` at all. Reported against the
+published `0.10.0` wheel; reproduced by rewriting a real openpyxl-authored file's
+`xl/workbook.xml` (`xmlns:r`→`xmlns:rel`, `r:id`→`rel:id`, confirmed the rewritten input
+is itself valid OOXML) and round-tripping it through both a local build and the actual
+PyPI `0.10.0` wheel — output declared `xmlns:rel` but used `r:id="rId1"`, openpyxl raised
+`ParseError: unbound prefix`. Six other scenarios (the original GitHub #1 repro, a
+from-scratch workbook, multi-sheet, chained double-save, in-place save) were checked first
+and found **not** reproducible — this is specifically an alternate-relationships-prefix
+issue, not a broader regression.
+
+Fixed by a new `reader::ensure_r_prefix_bound()`, applied before a source's root attribute
+string is reused: if `xmlns:r` is already correctly bound, nothing changes; if it's
+simply absent (the realistic case), the correct binding is appended; if `r:` is already
+bound to some unrelated URI (essentially never seen in real files), the source's root
+attrs are not reused at all, falling back to the writer's own safe hardcoded default
+rather than risk a wrong rebind. In short: arbitrary relationship-namespace prefixes are
+supported; a malformed workbook with no sheet relationship identifier at all (under any
+prefix) is rejected at load time, unrelated to this fix (`<sheet>`'s relationship id is a
+required attribute per the OOXML schema — no real producer omits it).
+
+Full regression sweep clean (see the fix commit for the complete list); all 7 real
+fixtures rerun with no new regressions (`fixture3`/`4`/`5` still show the already-known,
+already-disclosed `SOURCE_REFERENCE_LOSS` gap `0.10.0-D` — unreleased, unrelated — not a
+regression from this fix). Before release, six additional cases were verified end-to-end
+against the real published PyPI `0.10.1` wheel and a real `cargo check` against the live
+crates.io `0.10.1`: the standard-prefix case; the alternate-prefix case; `xmlns:r` already
+correctly bound (no spurious growth); `xmlns:r` bound to an unrelated URI (falls back
+without ever producing a duplicate `xmlns:r` declaration — confirmed via direct XML
+inspection, not just successful parsing); and save-as/in-place/two-consecutive-saves, all
+reopening cleanly in openpyxl. Released as `elixcee` `0.10.1` on PyPI, crates.io, and as a
+GitHub Release (`bin-v0.10.1`, 3 platform binaries), all from the same commit. The
+original reporter independently re-verified both of GitHub issue #1's fixes plus this
+namespace fix against the published `0.10.1` wheel and closed the issue themselves.
 
 ## [0.10.0] - 2026-08-24
 

@@ -7,12 +7,15 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 ## Current state
 
-`elixcee` **0.10.0** (Rust crate + Python package), `elixcee-types` **0.3.0** (unchanged),
+`elixcee` **0.10.1** (Rust crate + Python package), `elixcee-types` **0.3.0** (unchanged),
 `elixcee-wasm` **0.1.0** (never published to crates.io by design — `publish = false`) — all
-confirmed live via crates.io's/PyPI's own APIs, not assumed from local files. `bin-v0.10.0`'s
-GitHub Release carries all three CLI platform binaries (macOS aarch64, Windows x86_64, Linux
-x86_64) — the downloaded macOS binary confirmed runnable (`--help`; the CLI still has no
-`--version` flag, a pre-existing gap). `@elixcee/xlsx` is unchanged:
+confirmed live via crates.io's/PyPI's own APIs, not assumed from local files. `0.10.1` is a
+single targeted patch over `0.10.0`, fixing a critical unbound-`r:`-namespace-prefix
+regression (see `CHANGELOG.md`'s `[0.10.1]`) — released from the same commit across PyPI,
+crates.io, and a GitHub Release (`bin-v0.10.1`, 3 platform binaries), each independently
+re-verified against the live published artifact, not just a local build. The downloaded
+macOS CLI binary confirmed runnable and reports `elixcee 0.10.1` via `--version`.
+`@elixcee/xlsx` is unchanged:
 `read()`/`readFile()`/`readFileSync()` and `write()`/`writeFile()`/`writeFileSync()` are both
 implemented and differential-tested, but the package is still
 `0.0.0-development`/`private: true`/unpublished — no `npm publish` has happened (confirmed
@@ -99,9 +102,13 @@ source workbook binding the OOXML relationships namespace to a non-`r:` prefix (
 binding is about the URI, not the prefix spelling) round-tripped into a file with `r:` used
 but never bound, rejected outright by any strict XML consumer. Reproduced exactly, root-caused
 (the writer always hardcodes the literal `r:` prefix regardless of what the source used), and
-fixed via `reader::ensure_r_prefix_bound()` — full detail in `CHANGELOG.md`'s `[Unreleased]`.
-The fix is committed on `master` and cherry-picked onto `release-0.10.0`, where it ships as
-`0.10.1` (pending push/tag/publish approval).
+fixed via `reader::ensure_r_prefix_bound()` — full detail in `CHANGELOG.md`'s `[0.10.1]`.
+Released as `elixcee` `0.10.1` (PyPI/crates.io/GitHub Release, same commit), verified against
+the published `0.10.1` wheel (standard prefix, alternate prefix, already-correct `xmlns:r`,
+`xmlns:r` bound to a wrong URI, save-as/in-place/two-consecutive-saves — all reopening
+cleanly). The original reporter independently re-verified this fix plus both of issue #1's
+fixes against the published wheel and closed issue #1 themselves — no action needed on this
+repo's side.
 
 `0.10.0-D` (relationship-backed features, the actual fix for `SOURCE_REFERENCE_LOSS`) is
 **not released yet** — see `CHANGELOG.md`'s `[Unreleased]`. It has a decided design

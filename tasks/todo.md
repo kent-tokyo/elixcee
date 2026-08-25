@@ -494,3 +494,21 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] `ROADMAP.md`（item 14をitem 15と同じ取り消し線＋fixedスタイルで更新）・`CHANGELOG.md`（`master`側`[Unreleased]`に新規セクション追加）・`tasks/todo.md`（本エントリ）を同期。
 
 このタスクは0.10.1のpush/tag/publish承認待ちとは独立した`master`上の作業（`0.10.0-D`関連ではなく、0.9.0-C発見の一般的な既存バグ修正）。push未承認、ローカルコミットのみ。
+
+## `elixcee` 0.10.1リリース完了、`master`のversion metadata同期
+
+前エントリの承認待ち3項目（masterの3コミットpush・0.10.1リリース承認・t="e"修正のスコープ確定）全てユーザー判定を受け、実行完了。
+
+- [x] **masterの3コミットpush**：`git push origin master`実施。事前指定の検証チェックリスト（`origin/master`==local HEAD==`cf243df`・作業ツリークリーン・version不変・新規tagなし）を全て確認後にpush、push後もCI全9job green（cargo audit: 129 crate・advisory 0件、compat/corpus 581件0 UNEXPLAINED/0 MISMATCH、compat/vba-semantics 386件0 BUG/0 UNCLASSIFIED、mechanical-check-self-test green）を確認。
+- [x] **0.10.1公開前の最終ゲート（ユーザー指定A〜F）**：`release-0.10.0`ブランチ（namespace修正のみ、t="e"修正は含めず）から実際にPythonエクステンションをビルドし、6ケースをopenpyxl+lxmlで直接検証。
+  - A（標準xmlns:r）・B（alternate prefix xmlns:rel）・D（既に正しいxmlns:r、成長なし）・E（xmlns:rが誤ったURIに束縛——**重複xmlns:r宣言が生成されないことをXML実パースで確認**、安全なデフォルトへフォールバック）・F（save-as/in-place/連続2回保存、alternate-prefixケースで全パターン）——全てPASS。
+  - C（r:id自体が完全に不在）：`ValueError: Workbook has no sheets`——これは今回の修正（`ensure_r_prefix_bound`、保存時のみ動作）とは無関係な、読み込み時の`<sheet>`→worksheet part解決ロジックの既存挙動と判明。`r:id`はCT_Sheetの必須属性（実プロデューサーは省略しない）なため、0.10.1のスコープ外、新規issueも0.10.2も不要とユーザー判定。
+- [x] **crates.io publish**（`gh workflow run crates-publish.yml -f ref=<40桁フルSHA>`）：短縮SHA（`9202e2a`）では`actions/checkout@v4`の`git fetch +refs/heads/9202e2a*`が失敗することを発見——フルSHAで再実行し成功。crates.io API で`elixcee`のmax_version/newest_version=0.10.1を確認。
+- [x] **`v0.10.1`タグ作成・push**（commit `9202e2a908bbaccc579894b28e6f542a5228bcd5`）→ PyPI publish workflow自動発火、sdist・25 wheel（Linux/macOS/Windows、cp39〜cp315+free-threaded）・publish全job success。
+- [x] **実PyPI 0.10.1 wheelでの最終ゲート再検証**：fresh venvで`pip install elixcee==0.10.1`（初回はPyPIインデックス伝播待ちで数十秒リトライ）、A〜Fを再実行し、ローカルbuildと同一結果を確認。
+- [x] **fresh Rust projectで`elixcee = "0.10.1"`の`cargo check`**：crates.io経由で正常に解決・コンパイル。
+- [x] **`bin-v0.10.1`タグ作成・push** → Windows/Linux/macOS 3プラットフォームbuild全success、GitHub Release公開確認。macOSバイナリをダウンロードし`--version`で`elixcee 0.10.1`を確認。
+- [x] **GitHub issue #1**：報告者自身が0.10.1で元の2ケース（大文字小文字維持・余計なsheet1不追加）に加え、namespace修正（`xmlns:r`存在・strict XML parserで開ける）も自ら再現・確認し、コメント投稿の上completedとしてクローズ済みと判明。こちらからの追加コメント・クローズ操作は不要（ユーザー判定）。第三者による外部再検証という強い証拠。
+- [x] **`master`のversion metadata同期**（本コミット）：`Cargo.toml`/`pyproject.toml`/`Cargo.lock`を0.10.0→0.10.1へbump。`CHANGELOG.md`：namespace修正を`[Unreleased]`から新設`[0.10.1] - 2026-08-24`セクションへ移動（release-0.10.0ブランチの文言をベースに、実wheel検証・3プラットフォームrelease・issue #1外部クローズの実績を追記）、t="e"エラーセル修正は`[Unreleased]`に残置（0.10.1には含まれていないため）。`ROADMAP.md`：Current stateを0.10.1へ更新（`--version`フラグに関する古い「未実装」記述も、実際には動作することを確認した上で訂正）、issue #1関連パラグラフを外部クローズの事実に合わせて更新。
+
+タグ・publish・0.10.2への変更は本コミットでは一切行わない（ユーザー明示指示通り、version metadata同期のみ）。
