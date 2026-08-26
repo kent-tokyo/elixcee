@@ -63,6 +63,22 @@ oversized address here writes real geometry into the saved file, unlike `get_ran
 `iter_rows`'s disclosed unbounded-allocation gap, item 16 below). See `CHANGELOG.md`'s
 `[Unreleased]` section for the full method-by-method account; no version bump this round.
 
+**P2, first slice: hidden row/col read/write, merged to `master`, not yet released.** The
+first item off `docs/openpyxl-gap-audit.md`'s P2 list (category 3). Four new Python
+methods: `hidden_rows(sheet=None)`/`hidden_columns(sheet=None)` (sorted, flattened 1-based
+row/column numbers) and `set_row_hidden(row, hidden=True, sheet=None)`/`set_column_hidden`
+(hide or unhide a single row/column). Reading and hiding needed no new algorithmic work —
+`Vm.sheet_visibility`'s existing interval storage and the writer's already-mechanical
+`hidden="1"` emission (Milestone B7b) made both close to free, matching this doc's own
+table prediction. Unhiding did not: splitting whatever interval currently covers a single
+unhidden unit (dropped, shrunk, or split into two) needed a genuinely new
+`remove_unit_from_intervals` function, since the existing `visible_runs` helper computes
+visible gaps across a whole range and discards which specific hidden interval produced
+each one — see the gap-audit doc's "Implementation notes for P2: hidden row/col" for the
+full account, including why hiding an already-hidden unit is a no-op (not a duplicate
+interval) and unhiding an already-visible unit creates no stray `sheet_visibility` entry,
+both following `merge_cells`'s own established convention. No version bump this round.
+
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
 `arr(1,2)`, `UBound(arr, dimension)` honors its argument for real, `ReDim Preserve` enforces
@@ -537,6 +553,17 @@ all), so this needs a human/agent to remember it explicitly rather than relying 
     `ValueError` instead. See `docs/openpyxl-gap-audit.md`'s "Implementation notes for P1
     remainder" for the full account, including why extracting `sort_range_on_sheet` in the
     first place was more work than the gap-audit doc's own "thin wrapper" framing implied.
+
+23. **`hidden_rows`/`hidden_columns` have no guard against a pathological full-sheet hide**
+    (e.g. a source with `<col min="1" max="16384" hidden="1">`, Excel's own shape for
+    "hide all columns," or the row equivalent) — flattening such an interval into
+    individual numbers would eagerly materialize up to 1,048,576/16,384 entries. Not
+    implemented absent concrete fixture evidence anyone actually does this, matching R1's
+    own unbounded-`get_range`/`iter_rows`-address precedent (item 16 above). See
+    `docs/openpyxl-gap-audit.md`'s "Implementation notes for P2: hidden row/col" for the
+    full account, including why unhiding a single row/column (not reading or hiding one)
+    was this slice's real new work — the same undersold-cost pattern items 19/22 above
+    already flagged for `rename_sheet`/`sort_range`.
 
 ## npm/JS/WASM: still-open gaps
 

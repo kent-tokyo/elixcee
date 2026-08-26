@@ -522,6 +522,11 @@ vm.sort_range("A2:B10", key_col=1, sheet="Data")
 vm.merge_cells("D1:E1", sheet="Data")
 vm.unmerge_cells("B1:C1", sheet="Data")
 
+# Hide/unhide rows and columns
+vm.set_row_hidden(5, sheet="Data")
+vm.set_column_hidden(4, hidden=False, sheet="Data")
+print(vm.hidden_rows(sheet="Data"))  # e.g. [5]
+
 # Control MsgBox behavior
 vm = elixcee.Vm(on_msgbox="skip")   # silently ignore MsgBox calls (default)
 vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
@@ -560,6 +565,8 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | Insert/delete columns (same caveat as rows). |
 | `vm.merged_cells(sheet=None)` | List a sheet's merged ranges as A1 strings, e.g. `["B1:C1"]`. |
 | `vm.merge_cells(addr, sheet=None)` / `vm.unmerge_cells(addr, sheet=None)` | Create/remove a merge. |
+| `vm.hidden_rows(sheet=None)` / `vm.hidden_columns(sheet=None)` | Sorted list of hidden row/column numbers. |
+| `vm.set_row_hidden(row, hidden=True, sheet=None)` / `vm.set_column_hidden(col, ...)` | Hide or unhide a single row/column. |
 | `vm.save_workbook(path)` | Save all sheets to `.xlsx` or `.ods`. |
 | `vm.cells_df()` | Return the active sheet as a **pandas DataFrame** (requires pandas). |
 | `elixcee.run_macro(vba, name)` | One-shot: run a macro and return `{(row, col): value}`. |

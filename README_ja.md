@@ -444,6 +444,11 @@ vm.sort_range("A2:B10", key_col=1, sheet="Data")
 vm.merge_cells("D1:E1", sheet="Data")
 vm.unmerge_cells("B1:C1", sheet="Data")
 
+# 行・列の非表示/再表示
+vm.set_row_hidden(5, sheet="Data")
+vm.set_column_hidden(4, hidden=False, sheet="Data")
+print(vm.hidden_rows(sheet="Data"))  # 例: [5]
+
 # MsgBox の動作を制御
 vm = elixcee.Vm(on_msgbox="skip")   # MsgBox を無視（デフォルト）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
@@ -482,6 +487,8 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | 列の挿入・削除（行と同じ制約）。 |
 | `vm.merged_cells(sheet=None)` | シートの結合範囲をA1形式の文字列リストで返す（例: `["B1:C1"]`）。 |
 | `vm.merge_cells(addr, sheet=None)` / `vm.unmerge_cells(addr, sheet=None)` | セルの結合を作成・解除する。 |
+| `vm.hidden_rows(sheet=None)` / `vm.hidden_columns(sheet=None)` | 非表示の行・列番号をソート済みリストで返す。 |
+| `vm.set_row_hidden(row, hidden=True, sheet=None)` / `vm.set_column_hidden(col, ...)` | 1行/1列を非表示・再表示する。 |
 | `vm.save_workbook(path)` | 全シートを `.xlsx` または `.ods` に保存。 |
 | `vm.cells_df()` | アクティブシートを **pandas DataFrame** として返す（pandas 要インストール）。 |
 | `elixcee.run_macro(vba, name)` | 一発実行: マクロを実行して `{(row, col): value}` を返す。 |

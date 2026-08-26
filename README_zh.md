@@ -443,6 +443,11 @@ vm.sort_range("A2:B10", key_col=1, sheet="Data")
 vm.merge_cells("D1:E1", sheet="Data")
 vm.unmerge_cells("B1:C1", sheet="Data")
 
+# 隐藏/取消隐藏行与列
+vm.set_row_hidden(5, sheet="Data")
+vm.set_column_hidden(4, hidden=False, sheet="Data")
+print(vm.hidden_rows(sheet="Data"))  # 例如 [5]
+
 # 控制 MsgBox 行为
 vm = elixcee.Vm(on_msgbox="skip")   # 静默忽略 MsgBox（默认）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 时抛出 RuntimeError
@@ -481,6 +486,8 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 时抛出 RuntimeError
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | 插入/删除列（与行相同的限制）。 |
 | `vm.merged_cells(sheet=None)` | 以 A1 格式字符串列表返回工作表的合并区域，例如 `["B1:C1"]`。 |
 | `vm.merge_cells(addr, sheet=None)` / `vm.unmerge_cells(addr, sheet=None)` | 创建/取消一个合并区域。 |
+| `vm.hidden_rows(sheet=None)` / `vm.hidden_columns(sheet=None)` | 以排序列表返回隐藏的行/列编号。 |
+| `vm.set_row_hidden(row, hidden=True, sheet=None)` / `vm.set_column_hidden(col, ...)` | 隐藏或取消隐藏单行/单列。 |
 | `vm.save_workbook(path)` | 将所有工作表保存为 `.xlsx` 或 `.ods`。 |
 | `vm.cells_df()` | 将活动工作表作为 **pandas DataFrame** 返回（需安装 pandas）。 |
 | `elixcee.run_macro(vba, name)` | 一次性执行：运行宏并返回 `{(row, col): value}`。 |

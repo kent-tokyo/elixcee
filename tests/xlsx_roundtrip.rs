@@ -1236,6 +1236,78 @@ fn sort_range_on_sheet_survives_a_save_and_does_not_disturb_unrelated_state() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// P2: `set_row_hidden`/`set_column_hidden` exercised end-to-end -- hiding a
+/// new row/column must round-trip alongside the fixture's pre-existing hidden
+/// row 5/column D, and unhiding that pre-existing row must actually remove its
+/// `hidden="1"` marker (not just fail to add a redundant one) while leaving
+/// unrelated state (the B1:C1 merge, the still-hidden column D) untouched.
+#[test]
+fn set_row_hidden_and_set_column_hidden_round_trip_on_the_real_fixture() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path_1 = tmp_path("hidden_output_1.xlsm");
+    let output_path_2 = tmp_path("hidden_output_2.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let key = vm.resolve_sheet_key(None).unwrap();
+
+    vm.set_row_hidden_on_sheet(&key, 20, true);
+    vm.set_column_hidden_on_sheet(&key, 6, true); // column F
+    save_workbook(&vm, &output_path_1).expect("save-as should succeed");
+
+    let output_bytes_1 = std::fs::read(&output_path_1).unwrap();
+    let output_entries_1 = read_all_zip_entries(&output_bytes_1);
+    let out_sheet1_1 =
+        String::from_utf8(output_entries_1["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        out_sheet1_1.contains(r#"<row r="5" hidden="1">"#)
+            || out_sheet1_1.contains(r#"<row r="5" hidden="1"/>"#),
+        "the fixture's pre-existing hidden row 5 must survive: {out_sheet1_1}"
+    );
+    assert!(
+        out_sheet1_1.contains(r#"<row r="20" hidden="1">"#)
+            || out_sheet1_1.contains(r#"<row r="20" hidden="1"/>"#),
+        "the newly-hidden row 20 must be saved: {out_sheet1_1}"
+    );
+    assert!(
+        out_sheet1_1.contains(r#"min="4" max="4" hidden="1""#),
+        "the fixture's pre-existing hidden column D must survive: {out_sheet1_1}"
+    );
+    assert!(
+        out_sheet1_1.contains(r#"min="6" max="6" hidden="1""#),
+        "the newly-hidden column F must be saved: {out_sheet1_1}"
+    );
+
+    vm.set_row_hidden_on_sheet(&key, 5, false); // unhide the fixture's pre-existing hidden row
+    save_workbook(&vm, &output_path_2).expect("save-as should succeed");
+
+    let output_bytes_2 = std::fs::read(&output_path_2).unwrap();
+    let output_entries_2 = read_all_zip_entries(&output_bytes_2);
+    let out_sheet1_2 =
+        String::from_utf8(output_entries_2["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        !out_sheet1_2.contains(r#"<row r="5" hidden="1">"#)
+            && !out_sheet1_2.contains(r#"<row r="5" hidden="1"/>"#),
+        "row 5 must actually be unhidden, not just fail to gain a duplicate marker: {out_sheet1_2}"
+    );
+    assert!(
+        out_sheet1_2.contains(r#"<row r="20" hidden="1">"#)
+            || out_sheet1_2.contains(r#"<row r="20" hidden="1"/>"#),
+        "the unrelated newly-hidden row 20 must remain hidden: {out_sheet1_2}"
+    );
+    assert!(
+        out_sheet1_2.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "the fixture's pre-existing B1:C1 merge must survive unhiding an unrelated row: {out_sheet1_2}"
+    );
+    assert!(
+        out_sheet1_2.contains(r#"min="4" max="4" hidden="1""#),
+        "the fixture's pre-existing hidden column D must survive unhiding an unrelated row: {out_sheet1_2}"
+    );
+
+    let _ = std::fs::remove_file(&output_path_1);
+    let _ = std::fs::remove_file(&output_path_2);
+}
 
 /// Real report against the released `0.10.0`: a source that binds the relationships
 /// namespace to a prefix OTHER than the conventional `r:` (here `rel:`) is fully valid

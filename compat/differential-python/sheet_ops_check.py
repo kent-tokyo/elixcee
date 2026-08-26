@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Differential check: elixcee's sheet management API (P1 core 3 + remainder)
-vs. openpyxl.
+"""Differential check: elixcee's sheet management API (P1 core 3 + remainder +
+P2 hidden row/col) vs. openpyxl.
 
 openpyxl is used PURELY as a test-only oracle here -- never a runtime dependency
 of the shipped `elixcee` package (see pyproject.toml, which declares none).
@@ -9,11 +9,13 @@ Requires a `maturin develop --features python` build of elixcee and
 README.md for the one-time setup.
 
 Compares rename_sheet()/move_sheet()/merged_cells()/merge_cells()/
-unmerge_cells() against openpyxl's own read of the same real fixture after a
-save/reload round trip. Must build from FIXTURE via elixcee.load_workbook,
-not a bare elixcee.Vm() -- a from-scratch VM's minimal styles.xml emits a
-bare <fill/> that openpyxl's own reader rejects on reopen (a real,
-pre-existing, unrelated bug -- see ROADMAP.md's known gaps).
+unmerge_cells()/hidden_rows()/hidden_columns()/set_row_hidden()/
+set_column_hidden() against openpyxl's own read of the same real fixture
+after a save/reload round trip. Must build from FIXTURE via
+elixcee.load_workbook, not a bare elixcee.Vm() -- a from-scratch VM's
+minimal styles.xml emits a bare <fill/> that openpyxl's own reader rejects
+on reopen (a real, pre-existing, unrelated bug -- see ROADMAP.md's known
+gaps).
 
 Row/col insert-delete is deliberately given NO differential coverage here:
 the disclosed fidelity gap (merges/hidden markers/styles/formats not shifted)
@@ -126,6 +128,61 @@ class MergeCellsAndUnmergeCellsAgreeWithOpenpyxl(unittest.TestCase):
             ws = wb.active
             self.assertEqual(reloaded_vm.merged_cells(), [])
             self.assertEqual(list(ws.merged_cells.ranges), [])
+
+
+class HiddenRowsAndColumnsAgreeWithOpenpyxl(unittest.TestCase):
+    # openpyxl's ws.row_dimensions/column_dimensions are sparse dicts,
+    # populated only for rows/columns it actually parsed a <row>/<col>
+    # element for -- these tests check agreement on the fixture's known
+    # hidden units specifically, not an assumption that openpyxl reports
+    # every hidden row/column elixcee does.
+    def test_the_fixtures_pre_existing_hidden_row_and_column_match_openpyxl(self):
+        vm = elixcee.load_workbook(FIXTURE)
+        wb = openpyxl.load_workbook(FIXTURE)
+        ws = wb.active
+
+        self.assertIn(5, vm.hidden_rows())
+        self.assertTrue(ws.row_dimensions[5].hidden)
+
+        self.assertIn(4, vm.hidden_columns())  # column D
+        self.assertTrue(ws.column_dimensions["D"].hidden)
+
+    def test_a_newly_hidden_row_and_column_match_openpyxl_after_a_round_trip(self):
+        vm = elixcee.load_workbook(FIXTURE)
+        vm.set_row_hidden(20)
+        vm.set_column_hidden(6)  # column F
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "out.xlsx")
+            vm.save_workbook(path)
+
+            reloaded_vm = elixcee.load_workbook(path)
+            wb = openpyxl.load_workbook(path)
+            ws = wb.active
+
+            self.assertIn(20, reloaded_vm.hidden_rows())
+            self.assertTrue(ws.row_dimensions[20].hidden)
+
+            self.assertIn(6, reloaded_vm.hidden_columns())
+            self.assertTrue(ws.column_dimensions["F"].hidden)
+
+    def test_unhiding_the_fixtures_pre_existing_hidden_row_matches_openpyxl(self):
+        vm = elixcee.load_workbook(FIXTURE)
+        vm.set_row_hidden(5, hidden=False)
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "out.xlsx")
+            vm.save_workbook(path)
+
+            reloaded_vm = elixcee.load_workbook(path)
+            wb = openpyxl.load_workbook(path)
+            ws = wb.active
+
+            self.assertNotIn(5, reloaded_vm.hidden_rows())
+            # A <row> element with no hidden attribute at all is possible
+            # (the row still exists for its cell data), so check the
+            # attribute's truthiness rather than the row's mere presence.
+            self.assertFalse(bool(ws.row_dimensions[5].hidden))
 
 
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):

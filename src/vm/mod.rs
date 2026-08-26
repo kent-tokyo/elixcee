@@ -364,6 +364,60 @@ fn visible_runs(lo: u32, hi: u32, hidden: &[Interval]) -> Vec<Interval> {
     runs
 }
 
+/// `true` iff `unit` falls inside any interval in `intervals` (not
+/// necessarily sorted or non-overlapping). Used by `set_row_hidden_on_sheet`/
+/// `set_column_hidden_on_sheet` to make hiding an already-hidden unit a
+/// no-op rather than pushing a redundant single-unit interval alongside the
+/// interval that already covers it.
+fn interval_list_contains(intervals: &[Interval], unit: u32) -> bool {
+    intervals
+        .iter()
+        .any(|iv| iv.start <= unit && unit <= iv.end)
+}
+
+/// Removes a single 1-based `unit` from `intervals`, splitting any interval
+/// that covers it as needed: dropped entirely (a single-unit interval),
+/// shrunk from whichever end `unit` sits at, or split into two flanking
+/// intervals if `unit` is strictly interior. Intervals that don't cover
+/// `unit` pass through unchanged. Used by `set_row_hidden_on_sheet`/
+/// `set_column_hidden_on_sheet`'s unhide path -- `visible_runs` (above)
+/// computes visible gaps for a *range* and discards hidden-interval
+/// identity, so it isn't reusable for this single-unit, identity-preserving
+/// removal.
+fn remove_unit_from_intervals(intervals: &[Interval], unit: u32) -> Vec<Interval> {
+    intervals
+        .iter()
+        .flat_map(|iv| {
+            if unit < iv.start || unit > iv.end {
+                vec![*iv]
+            } else if iv.start == iv.end {
+                vec![]
+            } else if unit == iv.start {
+                vec![Interval {
+                    start: unit + 1,
+                    end: iv.end,
+                }]
+            } else if unit == iv.end {
+                vec![Interval {
+                    start: iv.start,
+                    end: unit - 1,
+                }]
+            } else {
+                vec![
+                    Interval {
+                        start: iv.start,
+                        end: unit - 1,
+                    },
+                    Interval {
+                        start: unit + 1,
+                        end: iv.end,
+                    },
+                ]
+            }
+        })
+        .collect()
+}
+
 /// Which rows/columns are hidden on one sheet (Milestone B7b), read from
 /// XLSX's `<row hidden="1">`/`<col min=".." max=".." hidden="1">` (ODS is
 /// deferred — see `docs/agent-contract.md`). Threaded into
@@ -1448,6 +1502,73 @@ impl Vm {
             ));
         }
         Ok(())
+    }
+
+    /// Every hidden row number on `key`, flattened from `hidden_rows`'
+    /// interval-run storage into individual 1-based row numbers, sorted and
+    /// deduplicated. Expanded, not interval-form -- a pathological
+    /// full-sheet hide (e.g. Excel's own `<row min="1" max="1048576"
+    /// hidden="1">` shape for "hide all rows") would eagerly materialize
+    /// 1,048,576 numbers; not guarded against, same disclosed-not-fixed
+    /// precedent as R1's unbounded `get_range`/`iter_rows` addresses (no
+    /// fixture evidence anyone actually does this).
+    pub fn hidden_rows_on_sheet(&self, key: &str) -> Vec<u32> {
+        let mut set = std::collections::BTreeSet::new();
+        if let Some(vis) = self.sheet_visibility.get(key) {
+            for iv in &vis.hidden_rows {
+                set.extend(iv.start..=iv.end);
+            }
+        }
+        set.into_iter().collect()
+    }
+
+    /// Column-axis mirror of `hidden_rows_on_sheet`.
+    pub fn hidden_columns_on_sheet(&self, key: &str) -> Vec<u32> {
+        let mut set = std::collections::BTreeSet::new();
+        if let Some(vis) = self.sheet_visibility.get(key) {
+            for iv in &vis.hidden_columns {
+                set.extend(iv.start..=iv.end);
+            }
+        }
+        set.into_iter().collect()
+    }
+
+    /// Hides or unhides a single row on `key`. Hiding an already-hidden row
+    /// is a no-op (does not push a duplicate single-unit interval alongside
+    /// the interval that already covers it). Unhiding splits the covering
+    /// interval as needed (dropped entirely, shrunk from one end, or split
+    /// into two) via `remove_unit_from_intervals`; unhiding an already-
+    /// visible row, or a row on a sheet with no `sheet_visibility` entry at
+    /// all, is a no-op that does **not** create a stray empty entry --
+    /// matches `merge_cells`' own "validate/check before mutating the map"
+    /// convention.
+    pub fn set_row_hidden_on_sheet(&mut self, key: &str, row: u32, hidden: bool) {
+        if hidden {
+            let vis = self.sheet_visibility.entry(key.to_string()).or_default();
+            if !interval_list_contains(&vis.hidden_rows, row) {
+                vis.hidden_rows.push(Interval {
+                    start: row,
+                    end: row,
+                });
+            }
+        } else if let Some(vis) = self.sheet_visibility.get_mut(key) {
+            vis.hidden_rows = remove_unit_from_intervals(&vis.hidden_rows, row);
+        }
+    }
+
+    /// Column-axis mirror of `set_row_hidden_on_sheet`.
+    pub fn set_column_hidden_on_sheet(&mut self, key: &str, col: u32, hidden: bool) {
+        if hidden {
+            let vis = self.sheet_visibility.entry(key.to_string()).or_default();
+            if !interval_list_contains(&vis.hidden_columns, col) {
+                vis.hidden_columns.push(Interval {
+                    start: col,
+                    end: col,
+                });
+            }
+        } else if let Some(vis) = self.sheet_visibility.get_mut(key) {
+            vis.hidden_columns = remove_unit_from_intervals(&vis.hidden_columns, col);
+        }
     }
 
     /// `true` iff `requested` identifies the one workbook `load_workbook_file`
@@ -11190,6 +11311,166 @@ mod tests {
     #[test]
     fn hidden_cells_observation_is_none_when_nothing_was_copied() {
         assert_eq!(Vm::new().hidden_cells_observation(), None);
+    }
+
+    // ── P2: hidden row/col read/write ────────────────────────────────────────
+
+    fn vm_with_hidden_rows(sheet: &str, hidden_rows: Vec<Interval>) -> Vm {
+        let mut vm = Vm::new();
+        vm.sheet_visibility.insert(
+            sheet.to_string(),
+            SheetVisibility {
+                hidden_rows,
+                hidden_columns: Vec::new(),
+            },
+        );
+        vm
+    }
+
+    fn vm_with_hidden_columns(sheet: &str, hidden_columns: Vec<Interval>) -> Vm {
+        let mut vm = Vm::new();
+        vm.sheet_visibility.insert(
+            sheet.to_string(),
+            SheetVisibility {
+                hidden_rows: Vec::new(),
+                hidden_columns,
+            },
+        );
+        vm
+    }
+
+    #[test]
+    fn hidden_rows_on_sheet_is_empty_for_a_sheet_with_no_hidden_rows() {
+        assert_eq!(Vm::new().hidden_rows_on_sheet("sheet1"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn hidden_rows_on_sheet_flattens_intervals_into_sorted_individual_row_numbers() {
+        let vm = vm_with_hidden_rows(
+            "sheet1",
+            vec![Interval { start: 7, end: 7 }, Interval { start: 1, end: 3 }],
+        );
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![1, 2, 3, 7]);
+    }
+
+    #[test]
+    fn set_row_hidden_true_on_an_unhidden_row_adds_a_new_single_unit_interval() {
+        let mut vm = Vm::new();
+        vm.set_row_hidden_on_sheet("sheet1", 5, true);
+        assert_eq!(
+            vm.sheet_visibility.get("sheet1").unwrap().hidden_rows,
+            vec![Interval { start: 5, end: 5 }]
+        );
+    }
+
+    #[test]
+    fn set_row_hidden_true_on_an_already_hidden_row_is_a_no_op_not_a_duplicate() {
+        let mut vm = vm_with_hidden_rows("sheet1", vec![Interval { start: 1, end: 10 }]);
+        vm.set_row_hidden_on_sheet("sheet1", 5, true);
+        assert_eq!(
+            vm.sheet_visibility.get("sheet1").unwrap().hidden_rows,
+            vec![Interval { start: 1, end: 10 }]
+        );
+    }
+
+    #[test]
+    fn set_row_hidden_false_removes_a_single_unit_interval_entirely() {
+        let mut vm = vm_with_hidden_rows("sheet1", vec![Interval { start: 5, end: 5 }]);
+        vm.set_row_hidden_on_sheet("sheet1", 5, false);
+        assert_eq!(
+            vm.sheet_visibility.get("sheet1").unwrap().hidden_rows,
+            vec![]
+        );
+    }
+
+    #[test]
+    fn set_row_hidden_false_splits_a_multi_unit_interval_at_the_start() {
+        let mut vm = vm_with_hidden_rows("sheet1", vec![Interval { start: 1, end: 10 }]);
+        vm.set_row_hidden_on_sheet("sheet1", 1, false);
+        assert_eq!(
+            vm.sheet_visibility.get("sheet1").unwrap().hidden_rows,
+            vec![Interval { start: 2, end: 10 }]
+        );
+    }
+
+    #[test]
+    fn set_row_hidden_false_splits_a_multi_unit_interval_at_the_end() {
+        let mut vm = vm_with_hidden_rows("sheet1", vec![Interval { start: 1, end: 10 }]);
+        vm.set_row_hidden_on_sheet("sheet1", 10, false);
+        assert_eq!(
+            vm.sheet_visibility.get("sheet1").unwrap().hidden_rows,
+            vec![Interval { start: 1, end: 9 }]
+        );
+    }
+
+    #[test]
+    fn set_row_hidden_false_splits_a_multi_unit_interval_in_the_middle() {
+        let mut vm = vm_with_hidden_rows("sheet1", vec![Interval { start: 1, end: 10 }]);
+        vm.set_row_hidden_on_sheet("sheet1", 5, false);
+        assert_eq!(
+            vm.sheet_visibility.get("sheet1").unwrap().hidden_rows,
+            vec![
+                Interval { start: 1, end: 4 },
+                Interval { start: 6, end: 10 }
+            ]
+        );
+    }
+
+    #[test]
+    fn set_row_hidden_false_on_an_already_visible_row_does_not_create_a_stray_sheet_visibility_entry()
+     {
+        let mut vm = Vm::new();
+        vm.set_row_hidden_on_sheet("sheet1", 5, false);
+        assert!(!vm.sheet_visibility.contains_key("sheet1"));
+    }
+
+    #[test]
+    fn set_row_hidden_on_sheet_does_not_affect_a_different_sheet_or_change_active_sheet() {
+        let mut vm = Vm::new(); // active sheet is "sheet1"
+        vm.set_row_hidden_on_sheet("other", 5, true);
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert!(!vm.sheet_visibility.contains_key("sheet1"));
+        assert_eq!(vm.hidden_rows_on_sheet("other"), vec![5]);
+    }
+
+    #[test]
+    fn hidden_columns_on_sheet_flattens_intervals_into_sorted_individual_col_numbers() {
+        let vm = vm_with_hidden_columns(
+            "sheet1",
+            vec![Interval { start: 7, end: 7 }, Interval { start: 1, end: 3 }],
+        );
+        assert_eq!(vm.hidden_columns_on_sheet("sheet1"), vec![1, 2, 3, 7]);
+    }
+
+    #[test]
+    fn set_column_hidden_true_on_an_already_hidden_column_is_a_no_op_not_a_duplicate() {
+        let mut vm = vm_with_hidden_columns("sheet1", vec![Interval { start: 1, end: 10 }]);
+        vm.set_column_hidden_on_sheet("sheet1", 5, true);
+        assert_eq!(
+            vm.sheet_visibility.get("sheet1").unwrap().hidden_columns,
+            vec![Interval { start: 1, end: 10 }]
+        );
+    }
+
+    #[test]
+    fn set_column_hidden_false_splits_a_multi_unit_interval_in_the_middle() {
+        let mut vm = vm_with_hidden_columns("sheet1", vec![Interval { start: 1, end: 10 }]);
+        vm.set_column_hidden_on_sheet("sheet1", 5, false);
+        assert_eq!(
+            vm.sheet_visibility.get("sheet1").unwrap().hidden_columns,
+            vec![
+                Interval { start: 1, end: 4 },
+                Interval { start: 6, end: 10 }
+            ]
+        );
+    }
+
+    #[test]
+    fn set_column_hidden_false_on_an_already_visible_column_does_not_create_a_stray_sheet_visibility_entry()
+     {
+        let mut vm = Vm::new();
+        vm.set_column_hidden_on_sheet("sheet1", 5, false);
+        assert!(!vm.sheet_visibility.contains_key("sheet1"));
     }
 
     // ── Phase 2C: Mod / \ / ^ / infix And Or Xor Not ─────────────────────────

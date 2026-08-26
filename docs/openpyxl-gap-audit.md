@@ -89,7 +89,7 @@ value contract (plain Python values, not wrapper objects) for every consumer of
 |---|---|---|---|---|---|---|---|---|
 | Insert/delete rows/cols (Python-native) | 3 | 3 | 4 | 2 | 1 | n/a | yes (`Vm::delete_rows`/`insert_rows`/`delete_cols`/`insert_cols`) | **Shipped** (`*_on_sheet` + PyVm glue, P1 core 3) |
 | Row height / column width (read/write) | 2 | 2 | 3 | 3 | 3 | no | no | **P2** |
-| Hidden row/col (read/write, Python-native) | 2 | 2 | 4 | 2 | 2 | yes | yes (`sheet_visibility`) | **P2** |
+| Hidden row/col (read/write, Python-native) | 2 | 2 | 4 | 2 | 2 | yes | yes (`sheet_visibility`) | **Shipped** (`hidden_rows`/`hidden_columns`/`set_row_hidden`/`set_column_hidden`, P2) |
 | Outline/grouping level | 1 | 1 | 2 | 3 | 3 | no | no | **Not planned** |
 
 Row/column insert-delete already had a full, tested implementation at the VBA-execution
@@ -102,6 +102,17 @@ It does **not** shift `merged_ranges`/`sheet_visibility`/`cell_style_indices`/
 Python-reachable (see "Implementation notes for P1 core 3" below). Row height/column
 width have no internal representation at all today (not read, not stored, not written) —
 real new surface area, not glue, hence still P2.
+
+Hidden row/col (read/write) shipped as the first P2 slice, and this row's "primitive
+reuse: yes" framing held up on the read side but undersold the write side, a smaller
+version of the same pattern `rename_sheet`/`sort_range` hit before it: `sheet_visibility`'s
+existing `Interval`-run storage and the writer's already-mechanical `<row hidden="1">`/
+`<col hidden="1">` emission made *reading* and *hiding* genuinely close to free, but
+*unhiding* a single row/column needs to split whatever interval currently covers it — code
+that didn't exist anywhere in the codebase (the existing `visible_runs` helper computes
+visible gaps for a whole range and discards which specific hidden interval produced them,
+not reusable for identity-preserving single-unit removal). See "Implementation notes for
+P2: hidden row/col" below.
 Grouping/outline levels have no evidence of demand and touch a genuinely unexplored part
 of the schema — not planned absent a concrete request.
 
@@ -286,13 +297,21 @@ reproposed later without this context.
    see "Implementation notes for P1 remainder" below), and merge create/remove (category 6,
    re-scoped back to P1 from the P2 landing it got when P1 core 3 stayed read-only —
    turned out meaningfully *less* new writer surface than that P2 re-scoping assumed).
-4. **P2**: sheet copy/visibility (category 1), hidden row/col + width/height (category 3),
-   number-format-only writing (category 5, the narrowest possible slice of the style
-   engine), defined-name read/write (category 7), Python-native AutoFilter (category 8),
-   hyperlink read/write (category 10).
-5. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
+4. **P2, first slice (shipped)**: hidden row/col read/write (category 3). Reading and
+   hiding were genuinely close to free as this row's table predicted (`sheet_visibility`'s
+   existing storage, the writer's already-mechanical `hidden="1"` emission); unhiding a
+   single row/column needed genuinely new interval-splitting logic the table's score didn't
+   surface — see "Implementation notes for P2: hidden row/col" below.
+5. **P2, remaining**: sheet copy/visibility (category 1), row height/column width
+   (category 3's other row — no internal representation at all, real new surface, unlike
+   hidden row/col), number-format-only writing (category 5, the narrowest possible slice of
+   the style engine), defined-name read/write (category 7), Python-native AutoFilter
+   (category 8 — flag its own "thin wrapper" framing before taking it at face value, the
+   same optimism this doc's table showed for `rename_sheet`/`sort_range`/hidden-row-write
+   before each one turned out to need more than glue), hyperlink read/write (category 10).
+6. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
    protection exposure (each needs its own follow-up design decision, noted above).
-6. **Not planned**: full style-engine writing, named styles, table/data-validation/
+7. **Not planned**: full style-engine writing, named styles, table/data-validation/
    conditional-formatting *creation*, chart/image authoring, outline/grouping, streaming
    modes, and a wrapper `Cell` object model — each either fights this project's own hard
    gates (no writer code without fixture evidence), fights its product identity (VBA
@@ -473,3 +492,57 @@ Neither method touches cell values in the covered range — this VM's merge geom
 cell values were already orthogonal by design (`write_rect`/`set_range` already permit
 writing into a non-anchor merged cell without error; this round applies the same
 precedent in the other direction).
+
+---
+
+## Implementation notes for P2: hidden row/col
+
+Gaps and deliberate scope boundaries discovered while implementing `hidden_rows`/
+`hidden_columns`/`set_row_hidden`/`set_column_hidden`, the first P2 slice, disclosed here
+rather than silently absorbed or fixed as a side effect of an unrelated feature:
+
+**Reading and hiding were genuinely close to free, as this doc's table predicted; unhiding
+was not, the same undersold-cost pattern `rename_sheet` and `sort_range` hit before it.**
+`Vm.sheet_visibility`'s `hidden_rows`/`hidden_columns: Vec<Interval>` already existed
+(Milestone B7b, built for `SpecialCells(xlCellTypeVisible)`), and the writer already emits
+`<col min=".." max=".." hidden="1">`/`<row r=".." hidden="1">` purely mechanically from
+whatever's in those lists, with no validation — so `hidden_rows_on_sheet`/
+`hidden_columns_on_sheet` (flatten intervals into a sorted `Vec<u32>`) and the *hide* half
+of `set_row_hidden_on_sheet`/`set_column_hidden_on_sheet` (push a new single-unit interval,
+a no-op if the unit's already covered) needed no new algorithmic work at all. *Unhiding* a
+single row/column, though, needs to split whatever interval currently covers it — dropped
+entirely if it's a single-unit interval, shrunk from one end, or split into two flanking
+intervals if the unit sits strictly inside a wider hidden range (e.g. a loaded fixture's
+`Interval{1,10}` becomes `[{1,4},{6,10}]` after unhiding row 5). The existing
+`visible_runs` helper (`src/vm/mod.rs`) computes visible *gaps* across a whole range and
+discards which specific hidden interval produced each gap, so it wasn't reusable for this
+identity-preserving, single-unit removal — a new free function, `remove_unit_from_intervals`,
+was needed.
+
+**Hiding an already-hidden unit is a no-op, not a duplicate interval push, and unhiding an
+already-visible unit (or a unit on a sheet with no `sheet_visibility` entry at all) is a
+no-op that does not create a stray empty entry.** The first was caught before writing any
+code, not after: a naive "always push a new single-unit interval" hide implementation would
+have made `hidden_rows_on_sheet`'s own flattened output correct regardless (a `BTreeSet`
+collapses the duplicate), but would silently leave two overlapping intervals describing the
+same row in `sheet_visibility` itself — harmless today, but exactly the kind of
+easy-to-miss state divergence this project's own house rule (validate/check before
+mutating a map, not after) exists to prevent, the same rule `merge_cells` follows for its
+own overlap check. The second matches `merge_cells`'s identical convention for the same
+reason: `.entry(key).or_default()` on an unhide call would insert an empty
+`SheetVisibility` for a sheet that had no hidden-row state at all, purely from a call that
+changed nothing.
+
+**`hidden_columns()`'s return shape is a real API choice, not an implementation detail.**
+Columns are stored as intervals (mirroring `<col min="..." max="...">`), and openpyxl's own
+`ws.column_dimensions` is keyed by column *letter* (`"D"`), not number. This API returns
+plain, expanded 1-based column numbers (matching `hidden_rows()`'s own shape and the
+setters' own number-based parameters) rather than letters or interval tuples — chosen for
+symmetry with `hidden_rows()` and because every other numeric row/col API in this binding
+(`insert_rows`, `sort_range`'s `key_col`, etc.) already uses plain numbers, not letters.
+
+**No guard against a pathological full-sheet hide** (e.g. Excel's own `<col min="1"
+max="16384" hidden="1">` shape for "hide all columns," or the row equivalent) — flattening
+such an interval into individual numbers would eagerly materialize up to 1,048,576/16,384
+entries. Not implemented in this round absent concrete fixture evidence anyone actually
+does this, matching R1's own precedent for `get_range`/`iter_rows`'s unbounded-address gap.

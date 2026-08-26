@@ -11,9 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 `@elixcee/xlsx` (still unpublished, `0.0.0-development`/`private: true`, no
 `publishConfig`): see its own two entries below for exactly what's implemented, plus a CI
 observability addition for the shared WASM bridge. R1 (bulk worksheet range/row API), P1
-core 3 (sheet rename/move, row/col insert-delete glue, read-only merged-cell access), and
-P1 remainder (`iter_cols`, `sort_range`, merge create/remove) -- all below -- are three
-further, independent additions in this section, unrelated to each other or anything above.
+core 3 (sheet rename/move, row/col insert-delete glue, read-only merged-cell access), P1
+remainder (`iter_cols`, `sort_range`, merge create/remove), and P2's first slice (hidden
+row/col read/write) -- all below -- are four further, independent additions in this
+section, unrelated to each other or anything above.
 
 ### Root crate (Python binding): R1 -- bulk worksheet range/row API
 
@@ -161,6 +162,36 @@ openpyxl's own `ws.iter_cols()`; `sheet_ops_check.py` gained a `merge_cells`/
 (which have no Rust unit test of their own, living in `#[cfg(feature = "python")]` glue
 rather than `Vm`-core logic). `sort_range` gets no differential coverage -- openpyxl has
 no sort primitive to compare against.
+
+### Root crate (Python binding): P2 first slice -- hidden row/col read/write
+
+The first item off `docs/openpyxl-gap-audit.md`'s P2 list. Four new Python methods:
+`hidden_rows(sheet=None)`/`hidden_columns(sheet=None)` (sorted, flattened 1-based row/
+column numbers -- expanded, not interval-form) and `set_row_hidden(row, hidden=True,
+sheet=None)`/`set_column_hidden(col, hidden=True, sheet=None)` (hide or unhide a single
+row/column).
+
+Reading and hiding needed no new algorithmic work: `Vm.sheet_visibility`'s existing
+`Interval`-run storage (Milestone B7b) and the writer's already-mechanical `<col
+hidden="1">`/`<row hidden="1">` emission meant `hidden_rows_on_sheet`/
+`hidden_columns_on_sheet` are a flatten-and-dedup over existing state, and the *hide* half
+of `set_row_hidden_on_sheet`/`set_column_hidden_on_sheet` just pushes a new single-unit
+interval (a no-op if the unit's already covered, so hiding twice never produces a stray
+duplicate). *Unhiding* a single row/column needed genuinely new work: splitting whatever
+interval currently covers it (dropped entirely, shrunk from one end, or split into two
+flanking intervals if the unit sits strictly inside a wider range) via a new
+`remove_unit_from_intervals` free function -- the existing `visible_runs` helper computes
+visible gaps across a whole range and discards which specific hidden interval produced
+each gap, so it wasn't reusable here. Unhiding an already-visible unit, or a unit on a
+sheet with no `sheet_visibility` entry at all, is a no-op that does not create a stray
+empty entry -- matches `merge_cells`' own validate-before-mutating convention. Both
+setters enforce the same 1,048,576-row/16,384-column ceiling `insert_rows`/`sort_range`/
+`merge_cells` already do.
+
+`compat/differential-python/sheet_ops_check.py` gained a `HiddenRowsAndColumnsAgreeWithOpenpyxl`
+class: agreement with openpyxl on the real fixture's pre-existing hidden row 5/column D,
+a newly-hidden row/column round-tripped through a save/reload, and unhiding the fixture's
+pre-existing hidden row.
 
 
 ### CI: WASM artifact size observability
