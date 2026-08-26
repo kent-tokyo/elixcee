@@ -67,15 +67,16 @@ consistently, a bit more surface area, hence still P2.
 | Append a row | 4 | 5 | 5 | 1 | 1 | n/a | yes | **R1** (`append_row`) |
 | Row iteration (values-only) | 4 | 4 | 5 | 1 | 1 | n/a | yes | **R1** (`iter_rows`) |
 | Used-range bounds / dimension string | 4 | 4 | 5 | 1 | 1 | n/a | yes | **R1** (`max_row`/`max_column`/`calculate_dimension`) |
-| Column iteration (`iter_cols`) | 2 | 2 | 4 | 1 | 1 | n/a | yes | **P1** |
+| Column iteration (`iter_cols`) | 2 | 2 | 4 | 1 | 1 | n/a | yes | **Shipped** (`iter_cols`, P1 remainder) |
 | `Cell` object model (style/comment/hyperlink attached to a returned cell) | 2 | 2 | 2 | 4 | 2 | no | no | **Not planned** |
 
 This is the category R1 closes almost entirely — it needs zero writer/OOXML changes (a
 pure in-memory `Vm` cell-map read/write, serialized unchanged by the existing writer),
 which is why it's the lowest-risk category in this whole audit by construction, and why
-it was picked first regardless of what the rest of this table says. `iter_cols` is a
-trivial follow-up (same primitives, transposed) once R1 lands, deferred only because it
-wasn't in the user's original R1 request. A full openpyxl-style `Cell` object (an object
+it was picked first regardless of what the rest of this table says. `iter_cols` turned out
+to be exactly the trivial follow-up this row predicted (same primitives, transposed) — the
+P1 remainder round shipped it as `Vm::iter_cols_values` + `PyVm::iter_cols`. A full
+openpyxl-style `Cell` object (an object
 that carries `.value`/`.number_format`/`.font`/`.comment`/`.hyperlink` all at once) is
 explicitly **not planned** — it would require the full style/comment/hyperlink write
 architecture from categories 5/10 to exist first, and would invert `elixcee`'s existing
@@ -143,17 +144,23 @@ dedicated design round of its own, not a slice of this one.
 | Feature | Value | Freq | Fit | Impl risk | Corrupt risk | Fixture evid. | Primitive reuse | Milestone |
 |---|---|---|---|---|---|---|---|---|
 | Read a sheet's merged ranges | 3 | 3 | 4 | 1 | 1 | yes (`fixture1`) | yes (`merged_ranges`) | **Shipped** (`merged_cells`, P1 core 3) |
-| Create/remove a merge | 3 | 2 | 3 | 2 | 3 | yes | partial | **P2** |
+| Create/remove a merge | 3 | 2 | 3 | 2 | 3 | yes | partial | **Shipped** (`merge_cells`/`unmerge_cells`, P1 remainder) |
 
 `merged_ranges` (`src/vm/mod.rs:693`) was already fully populated from any loaded file and
 already round-tripped on save — there was simply no Python getter for it (not even
 read-only). The P1 core 3 round added a read-only `merged_cells(sheet=None) -> list[str]`,
 genuinely nearly-free glue as this row predicted, identical in spirit to R1's own
-`get_range`. Creating/removing a merge was considered for the same round (an earlier
-draft of this doc floated bundling it in) but the user scoped P1 core 3 to read-only —
-creating a *new* merge needs the writer to correctly emit a `<mergeCell>` for a range that
-didn't have one in the source, real new writer surface, so it's deferred to P2 rather than
-bundled.
+`get_range`. Creating/removing a merge was considered for that round (an earlier draft of
+this doc floated bundling it in) but the user scoped P1 core 3 to read-only, re-scoping
+create/remove to P2 at the time — creating a *new* merge needs the writer to correctly
+emit a `<mergeCell>` for a range that didn't have one in the source, which sounded like
+real new writer surface. The P1 remainder round shipped it anyway, re-scoped back to P1 at
+the user's own request, and it turned out meaningfully de-risked from how this row
+originally framed it: the writer already emits `<mergeCell>` mechanically from whatever's
+in `merged_ranges` with zero validation of its own, so no writer changes were needed at
+all — only `Vm`-side map management (`merge_cells`/`unmerge_cells`), reusing
+`rects_overlap` (Milestone B6c2's Copy/Paste conflict-detection primitive) for overlap
+rejection instead of writing new geometry-math from scratch.
 
 ## 7. Defined names
 
@@ -172,12 +179,18 @@ structure for the first time — real, if modest, new work, hence P2 not P1.
 
 | Feature | Value | Freq | Fit | Impl risk | Corrupt risk | Fixture evid. | Primitive reuse | Milestone |
 |---|---|---|---|---|---|---|---|---|
-| Python-native `.sort_range(...)` | 2 | 2 | 3 | 1 | 1 | n/a | yes (`Vm`'s VBA `RangeSort` handler) | **P1** |
+| Python-native `.sort_range(...)` | 2 | 2 | 3 | 1 | 1 | n/a | yes (`Vm`'s VBA `RangeSort` handler) | **Shipped** (`sort_range`, P1 remainder) |
 | Python-native AutoFilter (VM-effect only, matching `0.11.0`'s VBA scope) | 2 | 2 | 3 | 2 | 2 | n/a | yes | **P2** |
 | Table (`<table>` part) creation | 2 | 2 | 2 | 4 | 4 | no (no fixture has a from-scratch table) | no | **P3 / user's own explicit deferral** |
 
-Sort and AutoFilter already exist as VBA statements (`0.11.0`); a thin Python-native
-wrapper calling the same internal handlers is cheap, matching this audit's general theme
+Sort and AutoFilter already exist as VBA statements (`0.11.0`). This row's "thin wrapper,
+cheap" framing undersold `sort_range`'s actual implementation cost the same way the P1
+core 3 round's `rename_sheet` row did: the entire sort algorithm was inlined directly in
+`Stmt::RangeSort`'s dispatch arm, active-sheet-only, not a standalone method to wrap —
+shipping `sort_range` required first extracting it into a sheet-parameterized
+`Vm::sort_range_on_sheet` (see "Implementation notes for P1 remainder" below). AutoFilter
+remains P2, unaffected by this round; a thin Python-native wrapper calling the same
+internal handlers is still expected to be cheap there, matching this audit's general theme
 of "glue over an existing VBA primitive is cheap, a brand-new OOXML element is not." Table
 *creation* is explicitly on the user's own P3 list and stays there — this project's
 existing hard gate (no writer code for a structural OOXML element without real fixture
@@ -268,14 +281,18 @@ reproposed later without this context.
    `iter_cols` (category 2) and Python-native `.sort_range(...)` (category 8), both also
    tagged P1 in this document's tables, were deliberately deferred out of this round's
    scope, not forgotten.
-3. **P2**: sheet copy/visibility (category 1), hidden row/col + width/height (category 3),
+3. **P1 remainder (shipped)**: `iter_cols` (category 2, genuinely as cheap as predicted),
+   Python-native `.sort_range(...)` (category 8, more implementation cost than predicted —
+   see "Implementation notes for P1 remainder" below), and merge create/remove (category 6,
+   re-scoped back to P1 from the P2 landing it got when P1 core 3 stayed read-only —
+   turned out meaningfully *less* new writer surface than that P2 re-scoping assumed).
+4. **P2**: sheet copy/visibility (category 1), hidden row/col + width/height (category 3),
    number-format-only writing (category 5, the narrowest possible slice of the style
-   engine), merge create/remove (category 6, re-scoped here from an earlier P1 draft —
-   the user kept P1 core 3 read-only), defined-name read/write (category 7), Python-native
-   AutoFilter (category 8), hyperlink read/write (category 10).
-4. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
+   engine), defined-name read/write (category 7), Python-native AutoFilter (category 8),
+   hyperlink read/write (category 10).
+5. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
    protection exposure (each needs its own follow-up design decision, noted above).
-5. **Not planned**: full style-engine writing, named styles, table/data-validation/
+6. **Not planned**: full style-engine writing, named styles, table/data-validation/
    conditional-formatting *creation*, chart/image authoring, outline/grouping, streaming
    modes, and a wrapper `Cell` object model — each either fights this project's own hard
    gates (no writer code without fixture evidence), fights its product identity (VBA
@@ -396,3 +413,63 @@ comparison, which doesn't exist anywhere today. Pinned by
 `move_sheet_drops_defined_names_that_would_have_stale_positional_indices` and
 `rename_sheet_drops_defined_names_that_would_reference_the_old_name`
 (`tests/xlsx_roundtrip.rs`).
+
+---
+
+## Implementation notes for P1 remainder
+
+Gaps and deliberate scope boundaries discovered while implementing `iter_cols`,
+`sort_range`, and merge create/remove, disclosed here rather than silently absorbed or
+fixed as a side effect of an unrelated feature:
+
+**`sort_range`'s "thin wrapper" framing in this doc's table undersold the real
+implementation cost, the same pattern as `rename_sheet` in the P1 core 3 round.** The
+entire sort algorithm (address resolution, row gathering, comparison, write-back) was
+inlined directly in `Stmt::RangeSort`'s VBA dispatch arm — active-sheet-only, with no
+standalone method underneath it to call from Python. Shipping `sort_range` required first
+extracting that body into a new sheet-parameterized `Vm::sort_range_on_sheet`, built on the
+existing `read_rect`/`write_rect` primitives from R1 rather than the original's manual
+per-cell loops. The VBA dispatch arm now just resolves the address, checks protection, and
+delegates — all 4 pre-existing `test_range_sort_*` tests pass with zero modification,
+confirming the extraction preserved VBA's existing behavior exactly.
+
+**`sort_range`'s Python API deliberately diverges from the VBA path on an out-of-range
+`key_col`, rather than inheriting its silent clamp.** The original inline code computed
+`key_col.saturating_sub(c1)` with no bounds check — a `key_col` below the range's own `c1`
+silently saturates to offset `0` and sorts by the range's first column instead of erroring.
+This is preserved as-is for `Stmt::RangeSort` (an existing, tested VBA behavior this round
+had no mandate to change) and pinned by a dedicated unit test
+(`sort_range_on_sheet_with_an_out_of_range_key_col_clamps_via_saturating_sub`) specifically
+so it can't be "fixed" by accident later without a conscious decision. `PyVm::sort_range`,
+having no prior behavior to preserve, instead raises `ValueError` naming both the bad
+`key_col` and the range's actual column span.
+
+**Neither `sort_range` nor `merge_cells` had an upper-bound guard on the address before
+this round; both got the same 1,048,576-row/16,384-column ceiling `insert_rows`/
+`delete_rows` already enforce (P1 core 3), added at the `PyVm` layer.** R1's own
+`get_range`/`iter_rows` were deliberately left unguarded (see "Implementation notes for
+R1" above) on the reasoning that a pathological address there just costs a large,
+self-inflicted allocation. `sort_range` and `merge_cells` are different: an unbounded
+address doesn't just cost time, it writes real geometry (a bulk value rewrite, or a
+`<mergeCell>` spanning the address) into the file that gets saved — a persisted-corruption
+path, not a transient cost, so the same ceiling other write-shaped methods already use was
+applied here too rather than left as a disclosed gap.
+
+**Merge create/remove turned out to need zero writer changes, contrary to this doc's own
+"real new writer surface" framing when it was P2-scoped after P1 core 3.** `save_xlsx_impl`
+already emits `<mergeCell ref="...">` mechanically from whatever `merged_ranges` holds, with
+no validation of its own — a new create/remove API only needed to correctly manage that
+map. `merge_cells` rejects a single-cell address and any overlap with an existing merge on
+the same sheet, reusing `rects_overlap` (Milestone B6c2's Copy/Paste conflict-detection
+primitive, already sheet-agnostic) rather than the Copy/Paste-specific
+`check_merge_conflicts` (which is `&mut self` and writes a diagnostic side channel, the
+same reasoning R1/P1 core 3 used to justify their own independent resolvers over reusing
+`require_sheet_exists`/`check_sheet_not_protected`). The overlap check runs before
+`merged_ranges` is mutated, so a rejected merge cannot leave a stray empty entry behind for
+a sheet that previously had none. `unmerge_cells` requires an exact rect match and errors
+on a partial/no match rather than silently no-opping, matching `rename_sheet`/`move_sheet`/
+`delete_sheet`'s existing "must not silently no-op on an unknown target" convention.
+Neither method touches cell values in the covered range — this VM's merge geometry and
+cell values were already orthogonal by design (`write_rect`/`set_range` already permit
+writing into a non-anchor merged cell without error; this round applies the same
+precedent in the other direction).

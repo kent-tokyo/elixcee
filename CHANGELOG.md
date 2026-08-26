@@ -96,9 +96,10 @@ regression that `0.10.0` introduced was fixed and released separately as `[0.10.
 not yet released in any version. `@elixcee/xlsx` (still unpublished,
 `0.0.0-development`/`private: true`, no `publishConfig`): see its own two entries below
 for exactly what's implemented, plus a CI observability addition for the shared WASM
-bridge. R1 (bulk worksheet range/row API) and P1 core 3 (sheet rename/move, row/col
-insert-delete glue, read-only merged-cell access) — both below — are two further,
-independent additions in this section, unrelated to each other or anything above.
+bridge. R1 (bulk worksheet range/row API), P1 core 3 (sheet rename/move, row/col
+insert-delete glue, read-only merged-cell access), and P1 remainder (`iter_cols`,
+`sort_range`, merge create/remove) — all below — are three further, independent
+additions in this section, unrelated to each other or anything above.
 
 ### Root crate (Python binding): R1 -- bulk worksheet range/row API
 
@@ -202,6 +203,50 @@ account of this round's disclosed gaps, including two new ones surfaced while
 implementing rename (`remove_sheet`'s own pre-existing 6-map leak on delete, left
 unfixed; the residual `Sheets.Add(before:=...)` `<definedNames>` gap the `move_sheet` fix
 doesn't close).
+
+### Root crate (Python binding): P1 remainder -- iter_cols, sort_range, merge create/remove
+
+The last three items `docs/openpyxl-gap-audit.md` still tagged `P1`. Four new Python
+methods: `iter_cols(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)`
+(column-major values-only iteration, the transposed sibling of `iter_rows`),
+`sort_range(addr, key_col, descending=False, header=False, sheet=None)` (not from
+openpyxl, which has no sort primitive of its own -- exposes the existing VBA
+`Range(addr).Sort` statement's exact behavior to Python), and `merge_cells(addr,
+sheet=None)`/`unmerge_cells(addr, sheet=None)` (create/remove a merge).
+
+`iter_cols` is `Vm::iter_cols_values`, built on the same `read_rect`/`sheet_used_range`
+primitives as `iter_rows_values`, short-circuiting on `max_col`'s explicitness instead of
+`max_row`'s.
+
+`sort_range` required extracting `Stmt::RangeSort`'s previously fully-inlined,
+active-sheet-only sort algorithm into a new sheet-parameterized `Vm::sort_range_on_sheet`
+(built on `read_rect`/`write_rect`) -- the VBA dispatch arm shrinks to resolve-address +
+protection-check + delegate, with all 4 pre-existing `test_range_sort_*` tests passing
+unmodified. `PyVm::sort_range` validates `key_col` against the range's own column span
+explicitly (`ValueError`) rather than inheriting the VBA path's silent `saturating_sub`
+clamp on an out-of-range key column, and enforces the same 1,048,576-row/16,384-column
+ceiling `insert_rows`/`delete_rows` already do -- unlike `get_range`/`iter_rows` (a
+large-but-harmless allocation), an oversized address here writes into the saved file.
+Deliberately does **not** check sheet protection, matching `set_range`'s existing bulk
+cell-value-write precedent.
+
+`merge_cells`/`unmerge_cells` needed zero writer changes -- `save_xlsx_impl` already emits
+`<mergeCell>` mechanically from whatever's in `merged_ranges` with no validation of its
+own, so the new API only manages that map. `merge_cells` rejects a single-cell address and
+any merge that would overlap an existing one on the same sheet, reusing `rects_overlap`
+(Milestone B6c2's Copy/Paste conflict-detection primitive) rather than the Copy/Paste-
+specific `check_merge_conflicts`; the overlap check runs before the map is touched, so a
+rejected merge never leaves a stray empty entry behind. `unmerge_cells` requires an exact
+rect match, erroring rather than silently no-opping (matching `rename_sheet`/`move_sheet`/
+`delete_sheet`'s existing convention). Same address-bounds ceiling as `sort_range`. Does
+**not** touch cell values in the covered range either way.
+
+`compat/differential-python/bulk_range_check.py` gained an `iter_cols` comparison against
+openpyxl's own `ws.iter_cols()`; `sheet_ops_check.py` gained a `merge_cells`/
+`unmerge_cells` round-trip comparison plus direct pins of the PyO3-layer bound checks
+(which have no Rust unit test of their own, living in `#[cfg(feature = "python")]` glue
+rather than `Vm`-core logic). `sort_range` gets no differential coverage -- openpyxl has
+no sort primitive to compare against.
 
 `0.10.0-D` (relationship-backed features, including the actual fix for
 `SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing

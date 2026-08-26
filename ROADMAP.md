@@ -53,6 +53,23 @@ item 21, below — the `rename_sheet` half was missed in a first pass and caught
 and three further disclosed gaps (items 18/19/20). See `CHANGELOG.md`'s `[Unreleased]`
 section for the full method-by-method account; no version bump this round either.
 
+**P1 remainder: `iter_cols`, Python-native `sort_range`, merge create/remove, merged to
+`master`, not yet released.** The last three items `docs/openpyxl-gap-audit.md` still
+tagged P1. Four new Python methods: `iter_cols` (column-major values-only iteration, the
+transposed sibling of `iter_rows`), `sort_range(addr, key_col, descending=False,
+header=False, sheet=None)` (elixcee's own feature, not from openpyxl — exposes the
+existing VBA `Range.Sort` statement's exact behavior), and `merge_cells`/`unmerge_cells`
+(create/remove a merge, `addr`-based). `sort_range` needed the same kind of extraction
+`rename_sheet` did in P1 core 3 — its sort algorithm was fully inlined in the VBA
+statement dispatcher, not a standalone method — see the gap-audit doc's "Implementation
+notes for P1 remainder" for the full account, including why merge create/remove turned
+out to need zero writer changes despite being re-scoped to P2 after P1 core 3 on the
+assumption it would. `sort_range`/`merge_cells`/`unmerge_cells` all enforce the same
+1,048,576-row/16,384-column address ceiling `insert_rows`/`delete_rows` already do (an
+oversized address here writes real geometry into the saved file, unlike `get_range`/
+`iter_rows`'s disclosed unbounded-allocation gap, item 16 below). See `CHANGELOG.md`'s
+`[Unreleased]` section for the full method-by-method account; no version bump this round.
+
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
 `arr(1,2)`, `UBound(arr, dimension)` honors its argument for real, `ReDim Preserve` enforces
@@ -526,6 +543,18 @@ all), so this needs a human/agent to remember it explicitly rather than relying 
     positions without tripping either check, and this predates the round. A real fix needs
     snapshotting the workbook's load-time sheet order for comparison, which doesn't exist
     anywhere today.
+
+22. **VBA's `Range.Sort` silently clamps a `key_col` outside the sorted range's own column
+    span instead of erroring; `sort_range`'s Python API does not inherit this.** The
+    original inline `Stmt::RangeSort` body computed `key_col.saturating_sub(c1)` with no
+    bounds check, so a `key_col` below the range's `c1` silently sorts by the range's first
+    column instead. Preserved as-is for the VBA statement (existing, tested behavior this
+    round had no mandate to change) and pinned by
+    `sort_range_on_sheet_with_an_out_of_range_key_col_clamps_via_saturating_sub`
+    (`src/vm/mod.rs`). `PyVm::sort_range`, with no prior behavior to preserve, raises
+    `ValueError` instead. See `docs/openpyxl-gap-audit.md`'s "Implementation notes for P1
+    remainder" for the full account, including why extracting `sort_range_on_sheet` in the
+    first place was more work than the gap-audit doc's own "thin wrapper" framing implied.
 
 ## npm/JS/WASM: still-open gaps
 

@@ -437,6 +437,12 @@ vm.move_sheet("Summary", 0)          # 移动到第一个标签页
 vm.insert_rows(1, sheet="Summary")   # 整体下移一行
 print(vm.merged_cells(sheet="Data")) # 例如 ["B1:C1"]
 
+# 列迭代、排序与合并单元格的创建/取消
+cols = vm.iter_cols(max_col=3, sheet="Data")  # 按列、仅返回值
+vm.sort_range("A2:B10", key_col=1, sheet="Data")
+vm.merge_cells("D1:E1", sheet="Data")
+vm.unmerge_cells("B1:C1", sheet="Data")
+
 # 控制 MsgBox 行为
 vm = elixcee.Vm(on_msgbox="skip")   # 静默忽略 MsgBox（默认）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 时抛出 RuntimeError
@@ -465,13 +471,16 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 时抛出 RuntimeError
 | `vm.set_range(addr, values, sheet=None)` | 从嵌套列表写入矩形区域。 |
 | `vm.append_row(values, sheet=None)` | 在工作表已用区域之后写入一行，返回写入的行号。 |
 | `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | 仅返回值的矩形区域迭代。 |
+| `vm.iter_cols(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | 按列、仅返回值的迭代（`iter_rows` 的转置版本）。 |
 | `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | 已用区域的最大行/列；空工作表返回 `None`。 |
 | `vm.calculate_dimension(sheet=None)` | 以 A1 格式字符串（如 `"B2:D10"`）返回已用区域；空工作表返回 `None`。 |
+| `vm.sort_range(addr, key_col, descending=False, header=False, sheet=None)` | 按单列关键字原地排序矩形区域。 |
 | `vm.rename_sheet(old_name, new_name)` | 重命名工作表。 |
 | `vm.move_sheet(name, new_index)` | 将工作表移动到绝对位置（从 0 开始）的标签页位置。 |
 | `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | 插入/删除行（仅限数值 -- 不会移动合并单元格或样式）。 |
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | 插入/删除列（与行相同的限制）。 |
-| `vm.merged_cells(sheet=None)` | 以 A1 格式字符串列表返回工作表的合并区域，例如 `["B1:C1"]`。只读。 |
+| `vm.merged_cells(sheet=None)` | 以 A1 格式字符串列表返回工作表的合并区域，例如 `["B1:C1"]`。 |
+| `vm.merge_cells(addr, sheet=None)` / `vm.unmerge_cells(addr, sheet=None)` | 创建/取消一个合并区域。 |
 | `vm.save_workbook(path)` | 将所有工作表保存为 `.xlsx` 或 `.ods`。 |
 | `vm.cells_df()` | 将活动工作表作为 **pandas DataFrame** 返回（需安装 pandas）。 |
 | `elixcee.run_macro(vba, name)` | 一次性执行：运行宏并返回 `{(row, col): value}`。 |

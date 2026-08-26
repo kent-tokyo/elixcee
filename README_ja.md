@@ -438,6 +438,12 @@ vm.move_sheet("Summary", 0)          # 先頭タブへ移動
 vm.insert_rows(1, sheet="Summary")   # 1行分下へシフト
 print(vm.merged_cells(sheet="Data")) # 例: ["B1:C1"]
 
+# 列の反復・並べ替え・セル結合の作成/解除
+cols = vm.iter_cols(max_col=3, sheet="Data")  # 列方向、値のみ
+vm.sort_range("A2:B10", key_col=1, sheet="Data")
+vm.merge_cells("D1:E1", sheet="Data")
+vm.unmerge_cells("B1:C1", sheet="Data")
+
 # MsgBox の動作を制御
 vm = elixcee.Vm(on_msgbox="skip")   # MsgBox を無視（デフォルト）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
@@ -466,13 +472,16 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 | `vm.set_range(addr, values, sheet=None)` | ネストしたリストから矩形範囲へ書き込む。 |
 | `vm.append_row(values, sheet=None)` | シートの使用範囲の直後に1行書き込み、書き込んだ行番号を返す。 |
 | `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | 矩形範囲を値のみで反復。 |
+| `vm.iter_cols(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | 列方向・値のみで反復（`iter_rows` の転置版）。 |
 | `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | 使用範囲の最大行・最大列。空シートは `None`。 |
 | `vm.calculate_dimension(sheet=None)` | 使用範囲をA1形式の文字列（例: `"B2:D10"`）で返す。空シートは `None`。 |
+| `vm.sort_range(addr, key_col, descending=False, header=False, sheet=None)` | 矩形範囲を1列をキーにその場で並べ替える。 |
 | `vm.rename_sheet(old_name, new_name)` | シート名を変更する。 |
 | `vm.move_sheet(name, new_index)` | シートを絶対位置（0始まり）のタブ位置へ移動する。 |
 | `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | 行の挿入・削除（値のみ -- 結合セルやスタイルはシフトされない）。 |
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | 列の挿入・削除（行と同じ制約）。 |
-| `vm.merged_cells(sheet=None)` | シートの結合範囲をA1形式の文字列リストで返す（例: `["B1:C1"]`）。読み取り専用。 |
+| `vm.merged_cells(sheet=None)` | シートの結合範囲をA1形式の文字列リストで返す（例: `["B1:C1"]`）。 |
+| `vm.merge_cells(addr, sheet=None)` / `vm.unmerge_cells(addr, sheet=None)` | セルの結合を作成・解除する。 |
 | `vm.save_workbook(path)` | 全シートを `.xlsx` または `.ods` に保存。 |
 | `vm.cells_df()` | アクティブシートを **pandas DataFrame** として返す（pandas 要インストール）。 |
 | `elixcee.run_macro(vba, name)` | 一発実行: マクロを実行して `{(row, col): value}` を返す。 |
