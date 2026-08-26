@@ -994,6 +994,58 @@ impl PyVm {
             .map(|ranges| ranges.iter().map(merge_rect_to_a1).collect())
             .unwrap_or_default())
     }
+
+    /// Python-native, single-key sort of a rectangular range, in place. Not
+    /// from openpyxl (which has no sort primitive of its own) — this exposes
+    /// the existing VBA ``Range(addr).Sort key:=, order:=, header:=``
+    /// statement's exact behavior to Python.
+    ///
+    /// ``header=True`` excludes *addr*'s first row from the sort; it stays
+    /// exactly where it is. Unlike the VBA statement (which silently clamps
+    /// an out-of-range ``key_col``), this raises ``ValueError`` if *key_col*
+    /// falls outside *addr*'s own column span.
+    ///
+    /// Does **not** check sheet protection — matches ``set_range``'s bulk
+    /// cell-value-write precedent.
+    ///
+    /// Raises ``ValueError`` on a bad address, an out-of-bounds *key_col*, or
+    /// an unknown *sheet* name.
+    #[pyo3(signature = (addr, key_col, descending = false, header = false, sheet = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn sort_range(
+        &mut self,
+        addr: &str,
+        key_col: u32,
+        descending: bool,
+        header: bool,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        const MAX_COL: u32 = 16_384;
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        // Same ceiling as insert_rows/delete_rows -- validate_range_addr only
+        // rejects 0 and reversed spans, not an absurdly large upper bound.
+        // Unlike get_range/iter_rows (a large-but-harmless allocation), an
+        // unbounded address here feeds a real write into the saved file.
+        if r2 > MAX_ROW || c2 > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "range exceeds sheet bounds (max row {MAX_ROW}, max col {MAX_COL}), got row {r2}, col {c2}"
+            )));
+        }
+        if key_col < c1 || key_col > c2 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "key_col {key_col} is outside the range's column span {c1}..={c2}"
+            )));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .sort_range_on_sheet(&key, r1, c1, r2, c2, key_col, descending, header);
+        Ok(())
+    }
 }
 
 /// Shared row-major `Vec<Vec<Variant>>` -> Python nested-list conversion for

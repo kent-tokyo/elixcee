@@ -1334,6 +1334,45 @@ impl Vm {
             .collect()
     }
 
+    /// Sorts a rectangular range on `key`, in place, by a single 1-based absolute
+    /// key column. Extracted from `Stmt::RangeSort`'s formerly-inline body so both
+    /// the VBA statement and PyVm's `sort_range` share one implementation.
+    /// `header` excludes the range's first row from the sort (data starts at
+    /// `r1+1`) without moving it. `key_col` outside `c1..=c2` silently clamps via
+    /// `saturating_sub` -- a pre-existing behavior from the original inline code,
+    /// preserved as-is for the VBA path; PyVm's own `sort_range` validates
+    /// `key_col` explicitly instead of inheriting this silent clamp.
+    ///
+    /// Deliberately does NOT check sheet protection -- matches R1's
+    /// `write_rect`/`set_range` precedent (a bulk cell-value write bypasses
+    /// protection in the Python API even though VBA's own equivalent path does
+    /// check it -- confirmed at `write_range_ref_value`). The VBA
+    /// `Stmt::RangeSort` arm keeps its own protection check before calling
+    /// this, so VBA's existing tested behavior is unaffected.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sort_range_on_sheet(
+        &mut self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+        key_col: u32,
+        descending: bool,
+        header: bool,
+    ) {
+        let data_r1 = if header { r1 + 1 } else { r1 };
+        let key_off = key_col.saturating_sub(c1) as usize;
+        let mut rows = self.read_rect(key, data_r1, c1, r2, c2);
+        rows.sort_by(|a, b| {
+            let va = a.get(key_off).unwrap_or(&Variant::Empty);
+            let vb = b.get(key_off).unwrap_or(&Variant::Empty);
+            let ord = cmp_variants(va, vb);
+            if descending { ord.reverse() } else { ord }
+        });
+        self.write_rect(key, (data_r1, c1), &rows);
+    }
+
     /// `true` iff `requested` identifies the one workbook `load_workbook_file`
     /// loaded (by name, case-insensitively, or by the numeric index `1` —
     /// elixcee never has more than one workbook open, so any other index is
@@ -3502,31 +3541,7 @@ impl Vm {
                 let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeSort: invalid address '{}'", addr))?;
-                // Header:=xlYes -- addr's first row is excluded from the sort and stays
-                // exactly where it is; only data_r1..=r2 gets reordered.
-                let data_r1 = if *header { r1 + 1 } else { r1 };
-                // key_col is 1-based absolute column; convert to 0-based offset within range
-                let key_off = (*key_col).saturating_sub(c1) as usize;
-                let mut rows: Vec<Vec<Variant>> = (data_r1..=r2)
-                    .map(|r| (c1..=c2).map(|c| self.get_cell(r, c)).collect())
-                    .collect();
-                rows.sort_by(|a, b| {
-                    let va = a.get(key_off).unwrap_or(&Variant::Empty);
-                    let vb = b.get(key_off).unwrap_or(&Variant::Empty);
-                    let ord = cmp_variants(va, vb);
-                    if *descending { ord.reverse() } else { ord }
-                });
-                for (ri, row) in rows.iter().enumerate() {
-                    for (ci, val) in row.iter().enumerate() {
-                        self.cells_mut().insert(
-                            (data_r1 + ri as u32, c1 + ci as u32),
-                            CellContent {
-                                formula: None,
-                                value: val.clone(),
-                            },
-                        );
-                    }
-                }
+                self.sort_range_on_sheet(&active, r1, c1, r2, c2, *key_col, *descending, *header);
             }
             Stmt::RangeAutoFilter {
                 addr,
@@ -8966,6 +8981,131 @@ mod tests {
         vm.delete_cols_on_sheet("sheet1", 1, 2);
         assert_eq!(vm.get_cell(1, 10), Variant::Empty);
         assert_eq!(vm.get_cell(1, 8), Variant::Integer(7));
+    }
+
+    // ── P1 remainder: sort_range_on_sheet (extracted from Stmt::RangeSort) ──
+
+    #[test]
+    fn sort_range_on_sheet_does_not_affect_a_different_sheet_or_change_active_sheet() {
+        let mut vm = Vm::new(); // active sheet is "sheet1"
+        vm.ensure_sheet("Other");
+        vm.write_rect(
+            "other",
+            (1, 1),
+            &[
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+            ],
+        );
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(99)]]);
+
+        vm.sort_range_on_sheet("other", 1, 1, 3, 1, 1, false, false);
+
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(99)); // active sheet untouched
+        assert_eq!(
+            vm.iter_rows_values("other", 1, Some(3), 1, Some(1)),
+            vec![
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+                vec![Variant::Integer(3)],
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_range_on_sheet_sorts_ascending_and_descending() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+            ],
+        );
+        vm.sort_range_on_sheet("sheet1", 1, 1, 3, 1, 1, false, false);
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, Some(3), 1, Some(1)),
+            vec![
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+                vec![Variant::Integer(3)],
+            ]
+        );
+
+        let mut vm2 = Vm::new();
+        vm2.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+            ],
+        );
+        vm2.sort_range_on_sheet("sheet1", 1, 1, 3, 1, 1, true, false);
+        assert_eq!(
+            vm2.iter_rows_values("sheet1", 1, Some(3), 1, Some(1)),
+            vec![
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(2)],
+                vec![Variant::Integer(1)],
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_range_on_sheet_excludes_the_header_row() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![Variant::Integer(9)], // header -- must stay at row 1
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+            ],
+        );
+        vm.sort_range_on_sheet("sheet1", 1, 1, 3, 1, 1, false, true);
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, Some(3), 1, Some(1)),
+            vec![
+                vec![Variant::Integer(9)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(3)],
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_range_on_sheet_with_an_out_of_range_key_col_clamps_via_saturating_sub() {
+        // Pins the preserved (not fixed) VBA-path behavior: a key_col below
+        // the range's own c1 saturates to offset 0 instead of erroring, so
+        // it silently sorts by the range's first column. This must not
+        // change without a conscious decision -- PyVm::sort_range validates
+        // key_col explicitly instead of inheriting this clamp.
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 2), // range starts at column 2 (B)
+            &[
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+            ],
+        );
+        vm.sort_range_on_sheet("sheet1", 1, 2, 3, 2, 1, false, false); // key_col=1 < c1=2
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, Some(3), 2, Some(2)),
+            vec![
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+                vec![Variant::Integer(3)],
+            ]
+        );
     }
 
     // ── Milestone B6a: strict_resolution + resolution-failure evidence ──────

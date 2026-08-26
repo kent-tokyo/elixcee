@@ -377,6 +377,29 @@ class Vm:
         """
         ...
 
+    def sort_range(
+        self,
+        addr: str,
+        key_col: int,
+        descending: bool = False,
+        header: bool = False,
+        sheet: str | None = None,
+    ) -> None:
+        """Python-native, single-key sort of a rectangular range, in place.
+
+        Not from openpyxl (which has no sort primitive of its own) — this
+        exposes the existing VBA ``Range(addr).Sort key:=, order:=,
+        header:=`` statement's exact behavior to Python.
+
+        *header=True* excludes *addr*'s first row from the sort; it stays
+        exactly where it is. Does **not** check sheet protection — matches
+        :meth:`set_range`'s bulk cell-value-write precedent.
+
+        Raises ``ValueError`` on a bad or oversized address, a *key_col*
+        outside *addr*'s own column span, or an unknown *sheet* name.
+        """
+        ...
+
     # ── Variables ──────────────────────────────────────────────────────────────
 
     def variables(self) -> dict[str, Any]:
