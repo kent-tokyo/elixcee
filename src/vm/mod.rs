@@ -11337,6 +11337,20 @@ mod tests {
     }
 
     #[test]
+    fn write_rect_invalidates_the_lazy_cell_index_used_by_end_xlup() {
+        // `last_nonempty_row`/`last_nonempty_col` (VBA's `End(xlUp)`/
+        // `End(xlToLeft)`) are backed by a lazily-rebuilt index gated on
+        // `cell_index_dirty`. `write_rect` goes through `sheet_cells_mut`,
+        // which already flips that flag unconditionally -- this test pins
+        // that behavior so a bulk write followed by a VBA-side `End(xlUp)`
+        // in the same `Vm` can't silently see stale data.
+        let mut vm = Vm::new();
+        assert_eq!(vm.last_nonempty_row(1, 100), 1); // builds+caches the index at "empty"
+        vm.write_rect("sheet1", (10, 1), &[vec![Variant::Integer(42)]]);
+        assert_eq!(vm.last_nonempty_row(1, 100), 10);
+    }
+
+    #[test]
     fn iter_rows_values_on_an_empty_sheet_with_no_explicit_max_row_is_empty() {
         let vm = Vm::new();
         assert_eq!(

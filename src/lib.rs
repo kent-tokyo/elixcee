@@ -189,6 +189,9 @@ fn py_to_variant(obj: &Bound<'_, PyAny>) -> PyResult<Variant> {
 // anything, so keeping this pure validation logic ungated is what gives it
 // any automated test coverage at all (via plain `cargo test --workspace`).
 
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
+type RangeBounds = ((u32, u32), (u32, u32));
+
 /// Validates and parses a single-area A1 range address for the bulk-range
 /// Python API (`get_range`/`set_range`). Deliberately NOT a new A1 parser —
 /// delegates to `crate::types::parse_range_addr` for the actual grammar.
@@ -212,9 +215,6 @@ fn py_to_variant(obj: &Bound<'_, PyAny>) -> PyResult<Variant> {
 /// ungated themselves (see the section comment above) — a plain,
 /// feature-less build has no caller for them outside `#[cfg(test)]`, hence
 /// the narrow, conditional `dead_code` allow rather than a broad one.
-#[cfg_attr(not(feature = "python"), allow(dead_code))]
-type RangeBounds = ((u32, u32), (u32, u32));
-
 #[cfg_attr(not(feature = "python"), allow(dead_code))]
 fn validate_range_addr(addr: &str) -> Result<RangeBounds, String> {
     if addr.contains(',') {
