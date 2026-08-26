@@ -18,6 +18,51 @@ implemented and differential-tested, but the package is still
 live: `registry.npmjs.org/@elixcee/xlsx` 404s), and `@elixcee` scope ownership itself is
 unconfirmed (item 9 below).
 
+**R1: bulk worksheet range/row API, merged to `master`, not yet released in any version.**
+Seven new Python methods close the highest-value gap identified against openpyxl (see the
+new `docs/openpyxl-gap-audit.md`): `get_range`/`set_range` (rectangular read/write),
+`append_row` (uses the sheet's true max used row, correct on a sparse sheet), `iter_rows`
+(values-only, defaults to the used range), and `max_row`/`max_column`/`calculate_dimension`
+(all `None`, never `0`/`"A1:A1"`, on a sheet with zero non-empty cells). All take an
+optional `sheet=` keyword that never changes the active sheet. Deliberately does not check
+sheet protection or merged-range membership on write — matches `set_cell`'s existing
+unchecked behavior, see the gap-audit doc's "Implementation notes for R1" for why. See
+`CHANGELOG.md`'s `[Unreleased]` section for the full account; version number for the
+release that eventually includes this is not decided yet (this round only adds the API and
+commits locally, no version bump).
+
+**P1 core 3: sheet rename/move + row/col insert-delete glue + read-only merged-cell
+access, merged to `master`, not yet released.** The next slice of `docs/openpyxl-gap-audit.md`'s
+priority list after R1. Seven new Python methods: `rename_sheet`/`move_sheet` (sheet
+management — `move_sheet`'s `new_index` is an absolute 0-based position, matching
+`set_sheet`'s own convention, not openpyxl's relative-offset `move_sheet(offset)`),
+`insert_rows`/`delete_rows`/`insert_cols`/`delete_cols` (Python glue over the existing
+`0.11.0` VBA-only handlers, `sheet=` keyword, Excel-grid bounds checked), and
+`merged_cells(sheet=None) -> list[str]` (read-only). Rename turned out to need atomically
+re-keying 8 lowercase-keyed per-sheet `Vm` maps, not the 2-3 originally assumed — see the
+gap-audit doc's "Implementation notes for P1 core 3" for the full account, including a
+`<definedNames>`-passthrough fix both `move_sheet` and `rename_sheet` required (Known gaps
+item 21, below — the `rename_sheet` half was missed in a first pass and caught in review)
+and three further disclosed gaps (items 18/19/20). See `CHANGELOG.md`'s `[Unreleased]`
+section for the full method-by-method account; no version bump this round either.
+
+**P1 remainder: `iter_cols`, Python-native `sort_range`, merge create/remove, merged to
+`master`, not yet released.** The last three items `docs/openpyxl-gap-audit.md` still
+tagged P1. Four new Python methods: `iter_cols` (column-major values-only iteration, the
+transposed sibling of `iter_rows`), `sort_range(addr, key_col, descending=False,
+header=False, sheet=None)` (elixcee's own feature, not from openpyxl — exposes the
+existing VBA `Range.Sort` statement's exact behavior), and `merge_cells`/`unmerge_cells`
+(create/remove a merge, `addr`-based). `sort_range` needed the same kind of extraction
+`rename_sheet` did in P1 core 3 — its sort algorithm was fully inlined in the VBA
+statement dispatcher, not a standalone method — see the gap-audit doc's "Implementation
+notes for P1 remainder" for the full account, including why merge create/remove turned
+out to need zero writer changes despite being re-scoped to P2 after P1 core 3 on the
+assumption it would. `sort_range`/`merge_cells`/`unmerge_cells` all enforce the same
+1,048,576-row/16,384-column address ceiling `insert_rows`/`delete_rows` already do (an
+oversized address here writes real geometry into the saved file, unlike `get_range`/
+`iter_rows`'s disclosed unbounded-allocation gap, item 16 below). See `CHANGELOG.md`'s
+`[Unreleased]` section for the full method-by-method account; no version bump this round.
+
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
 `arr(1,2)`, `UBound(arr, dimension)` honors its argument for real, `ReDim Preserve` enforces
@@ -76,19 +121,91 @@ stays paused — see the roadmap below.
 581 scenarios (0 `UNEXPLAINED`, 0 `MISMATCH`), every GitHub Actions job green on `master`
 before this release.
 
-**`0.10.0` (Lossless Worksheet Preservation) is in progress, not released** — design done
-(`docs/xlsx-worksheet-preservation-0.10.0-design.md`); `0.10.0-A` (foundation), `0.10.0-B`
-(inline worksheet elements: freeze panes/selection, sheetPr/sheetFormatPr/phoneticPr/
-dataValidations, pageMargins, internal hyperlinks minus `<autoFilter>`/row-col style), and
-`0.10.0-C` (workbook-level: workbookPr/bookViews/calcPr/extLst/definedNames) are all done,
-mechanical-check-verified, and real-Excel reopen-verified (0 repair warnings; `fixture4`'s
-defined name and `fixture5`'s print area both confirmed byte-for-byte in Excel's own Name
-Manager/print preview). `0.10.0-D` (relationship-backed features, the actual fix for
-`SOURCE_REFERENCE_LOSS`) has a decided design (origin-based worksheet part naming — see the
-roadmap entry below) but no implementation yet. Two independent, pre-existing
-correctness bugs found and fixed along the way, both affecting every released version: a
-save's sheet tab order silently followed an alphabetical sort instead of the source order, and
-a sheet's display-name letter case was silently lowercased on every save.
+**`0.10.0` shipped the first three slices of Lossless Worksheet Preservation** (design in
+`docs/xlsx-worksheet-preservation-0.10.0-design.md`). `0.10.0-A` (foundation — `WorksheetOrigin`/
+`sheetId` preservation), `0.10.0-B` (inline worksheet elements: freeze panes/selection,
+sheetPr/sheetFormatPr/phoneticPr/dataValidations, pageMargins, internal hyperlinks minus
+`<autoFilter>`/row-col style), and `0.10.0-C` (workbook-level: workbookPr/bookViews/calcPr/
+extLst/definedNames) are all done, mechanical-check-verified, and real-Excel
+reopen-verified (0 repair warnings; `fixture4`'s defined name and `fixture5`'s print area
+both confirmed byte-for-byte in Excel's own Name Manager/print preview). Also fixed: three
+independent, pre-existing correctness bugs affecting every released version before `0.10.0`
+— a save's sheet tab order silently followed an alphabetical sort instead of the source
+order, a sheet's display-name letter case was silently lowercased on every save, and
+`Sheets.Add` could silently no-op (no new sheet, no error) whenever the sheet set had a
+numbering gap. This closed
+[GitHub issue #1](https://github.com/kent-tokyo/elixcee/issues/1) (the display-name-case and
+spurious-extra-sheet bugs, reported against `0.9.0`, already fixed in these same commits
+before the issue was filed).
+
+A separate, more severe regression was then reported against the published `0.10.0` wheel: a
+source workbook binding the OOXML relationships namespace to a non-`r:` prefix (valid OOXML —
+binding is about the URI, not the prefix spelling) round-tripped into a file with `r:` used
+but never bound, rejected outright by any strict XML consumer. Reproduced exactly, root-caused
+(the writer always hardcodes the literal `r:` prefix regardless of what the source used), and
+fixed via `reader::ensure_r_prefix_bound()` — full detail in `CHANGELOG.md`'s `[0.10.1]`.
+Released as `elixcee` `0.10.1` (PyPI/crates.io/GitHub Release, same commit), verified against
+the published `0.10.1` wheel (standard prefix, alternate prefix, already-correct `xmlns:r`,
+`xmlns:r` bound to a wrong URI, save-as/in-place/two-consecutive-saves — all reopening
+cleanly). The original reporter independently re-verified this fix plus both of issue #1's
+fixes against the published wheel and closed issue #1 themselves — no action needed on this
+repo's side.
+
+`0.10.0-D` (relationship-backed features, the actual fix for `SOURCE_REFERENCE_LOSS`) is
+**not released yet** — see `CHANGELOG.md`'s `[Unreleased]`. It has a decided design
+(origin-based worksheet part naming — see the roadmap entry below); `D1` (the
+`WorksheetOutputPlan` output plan itself) is done, and every relationship-backed element
+with real fixture evidence — `<tableParts>`, `<drawing>`, `<legacyDrawing>`, `<hyperlinks>`
+(including r:id-backed ones, a rewrite of `0.10.0-B4`'s prior relationship-free-only scope)
+— is now restored. All 7 real fixtures report `CLEAN` across every `mechanical_check.py`
+category, including `source_references`: `SOURCE_REFERENCE_LOSS` is eliminated from the
+entire current fixture set. `D4` (reachability-based cleanup of a deleted sheet's
+exclusively-reachable parts) is also done, closing Known gaps item 15; sheet rename/reorder
+were marked N/A at the time (this `Vm` had no such primitive, and adding one purely to
+fill a test-table row would have inverted this milestone's own hard gate) — both now
+exist as `rename_sheet`/`move_sheet` (P1 core 3, below), added for their own reason, not
+retroactively for this table. Plain
+(relationship-free) `<pageSetup>` is also restored — `fixture5`'s real shape, previously
+silently lost and uncaught by any checker. `r:id`-backed `<pageSetup>` (a `printerSettings`
+relationship) remains the only genuinely open item, blocked on the project's own hard gate:
+no fixture with that shape exists in the repo. All of `0.10.0-D` above is
+mechanical-check-verified but not yet real-Excel reopen-verified — that verification, plus
+whatever `<pageSetup r:id>` needs, gates the next release.
+
+**Next round: release qualification, not new development — version not decided yet.**
+`0.10.0-D` and the `t="e"` error-cell fix (Known gaps item 14, above) are both merged to
+`master` and both correctly excluded from `0.10.1`'s score (see the `0.10.1` scorecard) —
+neither ships until each clears its own real-Excel check, done by hand against real Excel
+(this `Vm` has no way to drive that itself):
+
+- `0.10.0-D`, per element: a table survives; an external hyperlink still works; a
+  drawing/chart/image still displays; a comment/note survives; plain `<pageSetup>` is
+  still applied; deleting a sheet leaves no orphaned part triggering a repair warning; both
+  save-as and in-place produce zero repair warnings.
+- `t="e"`: the cell is genuinely error-typed in Excel, not just displaying error-looking
+  text — a formula referencing it and `ISERROR()` both need to see it as an error; and the
+  type survives a save → reopen → save cycle, not just the first save.
+
+Whether the next release is `0.11.1` (if `0.10.0-D`'s real-Excel pass turns up only small
+fixes) or `0.12.0` (if it lands as a real new capability, table/drawing/hyperlink
+preservation formally added) is an open question until that verification is done — not
+decided in advance. (`0.11.0` itself already shipped, for the unrelated GitHub #2–#8 fix
+round above — cut from a `release-0.10.0`-branch cherry-pick of just that work, not from
+`master`'s tip, precisely so it wouldn't drag in this still-unverified `0.10.0-D`/`t="e"`
+work by accident.)
+
+**Packaging note for whoever ships that release**: `master`'s tip cannot be
+`cargo publish`ed as-is today — `t="e"`'s `ExcelError::FromStr`/`biff_code()` (added to
+`crates/elixcee-types`) were never accompanied by an `elixcee-types` version bump, so the
+copy live on crates.io (`0.3.0`) doesn't have them, and `cargo publish -p elixcee`'s own
+verification build (which resolves `elixcee-types` from the registry, not the local
+workspace path) fails with `error[E0599]: no variant, associated function, or constant
+named 'from_str' found for enum 'ExcelError'`. Confirmed live via the crates.io API
+during `0.11.0`'s release. Bump `crates/elixcee-types/Cargo.toml` and the root
+`Cargo.toml`'s dependency pin to `0.3.1` and publish `elixcee-types` first, in the same
+`crates-publish.yml` run, before this milestone's own release — `scripts/check-versions.sh`
+does not currently catch this class of gap (it doesn't check `elixcee-types`'s version at
+all), so this needs a human/agent to remember it explicitly rather than relying on CI.
 
 ## Known gaps
 
@@ -338,6 +455,88 @@ a sheet's display-name letter case was silently lowercased on every save.
     milestone; fixing it needs a `SheetCell::Error(String)` variant threaded through
     `WorkbookSheet`/`Vm`/the writer the same way `Variant::Error` already is at the VBA-runtime
     level (see `src/lib.rs`'s `PyExcelError`/`python_to_variant`), not attempted yet.
+
+16. **R1's bulk range/row API disclosed, not fixed, two pre-existing gaps and one new
+    limitation of its own** — see `docs/openpyxl-gap-audit.md`'s "Implementation notes for
+    R1" for the full account:
+    - Three `elixcee-types::parse_cell_addr`/`parse_range_addr` gaps (a `$`-prefix `u32`
+      underflow, row/col `0` accepted, a reversed range accepted unnormalized) are closed
+      only for calls made through `get_range`/`set_range`'s own address-validation wrapper
+      — the shared parser itself, used by many other call sites, is untouched.
+    - `cells_df`'s used-range convention (includes `Variant::Empty` map entries) still
+      diverges from `sheet_used_range`'s (excludes them, feeding `get_range`/`iter_rows`/
+      `max_row`/`max_column`/`calculate_dimension`) — pre-existing, not reconciled.
+    - No upper-bound guard on `get_range`/`iter_rows`/`set_range`: a pathological
+      full-column/full-row address (e.g. `"A1:XFD1048576"`, ~2.3 billion cells) will
+      attempt to allocate/iterate that many cells rather than erroring quickly. Not
+      implemented absent concrete evidence anyone actually does this.
+
+17. **A from-scratch `Vm().save_workbook()` (no loaded source file) emits a bare `<fill/>`
+    with no `<patternFill>`/`<gradientFill>` child in its minimal `styles.xml`** —
+    `openpyxl.load_workbook()` rejects this on reopen (`TypeError: expected Fill`), found
+    incidentally while writing R1's `compat/differential-python/` oracle test (which routes
+    around it by loading a real fixture instead — see that test file's own comment). Not
+    reproducible when a real source file's `styles.xml` is preserved via passthrough; only
+    a from-scratch `Vm()`'s own minimal stylesheet hits it. Not investigated further or
+    fixed — unrelated to R1's own scope, recorded here so it isn't rediscovered the hard
+    way.
+
+18. **P1 core 3's row/col insert-delete Python glue (`insert_rows`/`delete_rows`/
+    `insert_cols`/`delete_cols`) does not shift merged ranges, hidden-row/col markers,
+    cell styles/number formats, or formula cell-reference text.** Pre-existing limitation
+    of the underlying VBA engine (`Vm::insert_rows`/`delete_rows`/`insert_cols`/
+    `delete_cols` and their new `*_on_sheet` siblings) — real Excel shifts all of these;
+    `elixcee` doesn't, and didn't before this round either. Making these Python-reachable
+    surfaces the gap to a new audience. Pinned as an executable fact by
+    `insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidden_markers`
+    (`tests/xlsx_roundtrip.rs`). See `docs/openpyxl-gap-audit.md`'s "Implementation notes
+    for P1 core 3" for the full account.
+
+19. **`rename_sheet` doesn't rewrite formula or `<definedName>` text referring to a sheet
+    by its old name, and doesn't validate Excel's real sheet-name rules** (31-char limit,
+    illegal characters, reserved/duplicate-after-truncation names) beyond rejecting an
+    empty/whitespace-only name. The formula-text case can't corrupt anything today —
+    `elixcee`'s formula engine has no cross-sheet cell-reference syntax (`=Sheet2!A1`).
+    The `<definedName>`-text case (a real risk for the file's *next* reader, e.g. Excel)
+    is mitigated, not by rewriting the text, but by `rename_sheet` dropping the whole
+    `<definedNames>` element on save (item 21). The name-validation gap matches
+    `set_sheet`'s pre-existing total lack of validation, not a new regression.
+
+20. **`remove_sheet` leaves stale entries in 6 of 8 per-sheet `Vm` maps on delete**
+    (`merged_ranges`/`sheet_visibility`/`cell_style_indices`/`cell_number_formats`/
+    `worksheet_origins`/`protected_sheets` all keep a dead entry under the deleted sheet's
+    old key — only `sheets`/`sheet_order` are cleaned). Surfaced while designing
+    `rename_sheet`'s own atomic 8-map re-key (P1 core 3); harmless today since the stale
+    key is never looked up again. Deliberately **not** fixed this round — offered as an
+    option (fix this first, share the re-key list with `rename_sheet`) and declined in
+    favor of shipping rename on its own.
+
+21. **`<definedNames>` passthrough is guarded against sheet deletion, `move_sheet`
+    reordering, and `rename_sheet` staleness, but not against VBA's
+    `Sheets.Add(before:=...)` shifting existing sheets' positions.** A `<definedName
+    localSheetId="N">` is a positional index into `<sheets>`; a `<definedName>`'s TEXT can
+    separately reference a sheet by name (e.g. `Sheet1!$F$5`). P1 core 3's `move_sheet` and
+    `rename_sheet` both set a single `Vm::defined_names_may_be_stale` flag, checked
+    alongside the existing deletion guard in `save_xlsx_impl` — the whole element is
+    dropped rather than attempting a `localSheetId` renumbering or a defined-name-text
+    rewrite. (The `rename_sheet` half of this was missed in the first pass and caught in a
+    follow-up review against a fixture with real `<definedNames>` content — the original
+    tests only used fixtures without any.) `Sheets.Add(before:=...)` can still shift
+    positions without tripping either check, and this predates the round. A real fix needs
+    snapshotting the workbook's load-time sheet order for comparison, which doesn't exist
+    anywhere today.
+
+22. **VBA's `Range.Sort` silently clamps a `key_col` outside the sorted range's own column
+    span instead of erroring; `sort_range`'s Python API does not inherit this.** The
+    original inline `Stmt::RangeSort` body computed `key_col.saturating_sub(c1)` with no
+    bounds check, so a `key_col` below the range's `c1` silently sorts by the range's first
+    column instead. Preserved as-is for the VBA statement (existing, tested behavior this
+    round had no mandate to change) and pinned by
+    `sort_range_on_sheet_with_an_out_of_range_key_col_clamps_via_saturating_sub`
+    (`src/vm/mod.rs`). `PyVm::sort_range`, with no prior behavior to preserve, raises
+    `ValueError` instead. See `docs/openpyxl-gap-audit.md`'s "Implementation notes for P1
+    remainder" for the full account, including why extracting `sort_range_on_sheet` in the
+    first place was more work than the gap-audit doc's own "thin wrapper" framing implied.
 
 ## npm/JS/WASM: still-open gaps
 

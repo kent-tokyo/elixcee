@@ -503,6 +503,25 @@ result_cells = vm.cells()   # {(row, col): value, ...}
 vm.set_cell_formula(4, 1, "=SUM(A1:A3)")
 print(vm.get_cell(4, 1))   # sum of rows 1-3 in column A
 
+# Bulk range/row access -- no per-cell round trips needed
+vm = elixcee.load_workbook("input.xlsx")
+rows = vm.get_range("A1:C10", sheet="Data")
+vm.set_range("E1:F2", [[1, 2], [3, 4]], sheet="Result")
+vm.append_row(["Alice", 100], sheet="Result")
+vm.save_workbook("output.xlsx")
+
+# Sheet management and row/column edits
+vm.rename_sheet("Result", "Summary")
+vm.move_sheet("Summary", 0)          # move to the first tab
+vm.insert_rows(1, sheet="Summary")   # shift everything down by one row
+print(vm.merged_cells(sheet="Data")) # e.g. ["B1:C1"]
+
+# Column iteration, sorting, and merge create/remove
+cols = vm.iter_cols(max_col=3, sheet="Data")  # column-major, values only
+vm.sort_range("A2:B10", key_col=1, sheet="Data")
+vm.merge_cells("D1:E1", sheet="Data")
+vm.unmerge_cells("B1:C1", sheet="Data")
+
 # Control MsgBox behavior
 vm = elixcee.Vm(on_msgbox="skip")   # silently ignore MsgBox calls (default)
 vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
@@ -527,6 +546,20 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 | `vm.active_sheet()` | Name of the currently active sheet. |
 | `vm.sheet_names()` | List of all sheet names. |
 | `vm.get_sheet(name)` | Cells of a named sheet as `{(row, col): value}`. |
+| `vm.get_range(addr, sheet=None)` | Read a rectangular range (e.g. `"A1:C5"`) as a nested list. |
+| `vm.set_range(addr, values, sheet=None)` | Write a rectangular range from a nested list. |
+| `vm.append_row(values, sheet=None)` | Write one row just past the sheet's used range; returns the row number. |
+| `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | Values-only iteration over a rectangular region. |
+| `vm.iter_cols(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | Column-major values-only iteration -- the transposed sibling of `iter_rows`. |
+| `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | Highest used row/column, or `None` if the sheet is empty. |
+| `vm.calculate_dimension(sheet=None)` | Used range as an A1-style string (e.g. `"B2:D10"`), or `None` if empty. |
+| `vm.sort_range(addr, key_col, descending=False, header=False, sheet=None)` | Sort a rectangular range in place by one column. |
+| `vm.rename_sheet(old_name, new_name)` | Rename a sheet. |
+| `vm.move_sheet(name, new_index)` | Move a sheet to an absolute 0-based tab position. |
+| `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | Insert/delete rows (values only -- doesn't shift merges/styles). |
+| `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | Insert/delete columns (same caveat as rows). |
+| `vm.merged_cells(sheet=None)` | List a sheet's merged ranges as A1 strings, e.g. `["B1:C1"]`. |
+| `vm.merge_cells(addr, sheet=None)` / `vm.unmerge_cells(addr, sheet=None)` | Create/remove a merge. |
 | `vm.save_workbook(path)` | Save all sheets to `.xlsx` or `.ods`. |
 | `vm.cells_df()` | Return the active sheet as a **pandas DataFrame** (requires pandas). |
 | `elixcee.run_macro(vba, name)` | One-shot: run a macro and return `{(row, col): value}`. |

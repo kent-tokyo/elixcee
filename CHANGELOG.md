@@ -8,17 +8,160 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Root `elixcee` (Rust crate + Python package): `0.10.0-D`, the last slice of the Lossless
-Worksheet Preservation milestone `[0.10.0]` (below) started shipping — the actual fix for
-`SOURCE_REFERENCE_LOSS`, restoring relationship-backed worksheet elements
-(`<tableParts>`/`<drawing>`/`<legacyDrawing>`/r:id-backed `<hyperlinks>`). Design decided
-(origin-based worksheet part naming — an existing sheet's output part name stays
-`WorksheetOrigin.original_part_name` rather than being renumbered by position; see
-`docs/xlsx-worksheet-preservation-0.10.0-design.md` §10 for the full `WorksheetOutputPlan`
-design and D1–D4 breakdown), implementation not started. `@elixcee/xlsx` (still
-unpublished, `0.0.0-development`/`private: true`, no `publishConfig`): see its own two
-entries below for exactly what's implemented, plus a CI observability addition for the
-shared WASM bridge.
+`@elixcee/xlsx` (still unpublished, `0.0.0-development`/`private: true`, no
+`publishConfig`): see its own two entries below for exactly what's implemented, plus a CI
+observability addition for the shared WASM bridge. R1 (bulk worksheet range/row API), P1
+core 3 (sheet rename/move, row/col insert-delete glue, read-only merged-cell access), and
+P1 remainder (`iter_cols`, `sort_range`, merge create/remove) -- all below -- are three
+further, independent additions in this section, unrelated to each other or anything above.
+
+### Root crate (Python binding): R1 -- bulk worksheet range/row API
+
+Seven new Python methods close the highest-value gap identified against openpyxl (see the
+new `docs/openpyxl-gap-audit.md`, which scores openpyxl's full API surface against what
+`elixcee` exposes today and records P1/P2/P3 follow-up candidates): `get_range(addr,
+sheet=None)`/`set_range(addr, values, sheet=None)` (rectangular read/write, 1-based A1
+notation), `append_row(values, sheet=None)` (writes past the sheet's true max used row --
+correct on a sparse sheet, not a populated-row count), `iter_rows(min_row=1, max_row=None,
+min_col=1, max_col=None, sheet=None)` (values-only, defaults to the used range, `[]` on a
+totally empty sheet unless `max_row` is given explicitly), and `max_row`/`max_column`/
+`calculate_dimension` (all `None`, never `0`/`"A1:A1"`, on a sheet with zero non-empty
+cells). Every method takes `sheet` as a keyword; `None` means the active sheet, and an
+explicit sheet name never changes which sheet is active.
+
+New `Vm`-core primitives (`src/vm/mod.rs`, PyO3-agnostic, unit-tested via plain `cargo
+test`): `resolve_sheet_key`, `sheet_used_range` (Empty-exclusion bounding box, matching
+`cells()`/`get_sheet()`'s convention, not `cells_df`'s divergent one), `next_append_row`,
+`read_rect`/`write_rect`, `iter_rows_values`. `set_range`/`append_row` convert and
+shape-validate their entire input into a scratch buffer before writing anything, so a
+validation failure can't partially apply. A literal `"="`-prefixed string is stored as-is,
+never promoted to a formula (`set_cell_formula`/`set_cell_formula_batch` remain the only
+way to set one). Address parsing reuses `elixcee-types::parse_range_addr` as-is; a new,
+ungated `validate_range_addr` wrapper in `src/lib.rs` adds `$`-stripping, multi-area
+rejection, and reversed/zero-row-col rejection as explicit `ValueError`s, closing three
+disclosed shared-parser gaps only for calls made through this API -- the shared parser
+itself is untouched, recorded in the gap-audit doc for whoever picks it up next.
+
+Writing into a non-anchor cell of a merged range, or into a protected sheet, is
+deliberately **not** blocked by `set_range`/`append_row` -- matches `PyVm::set_cell`'s
+existing (equally unchecked) behavior; introducing a stricter Python-only rule with no
+VBA-side precedent was rejected as inconsistent with the rest of the binding. See the
+gap-audit doc's "Implementation notes for R1" for this and two other disclosed,
+out-of-scope gaps (a `cells_df` used-range inconsistency, no upper-bound guard against a
+pathological full-column/full-row address).
+
+New `compat/differential-python/` harness (stdlib `unittest`, `openpyxl` as a test-only
+oracle -- `pyproject.toml` still declares no runtime/test Python dependencies) compares
+`get_range`/`iter_rows`/`append_row` against openpyxl's own read of a real fixture, and
+pins one real, expected divergence rather than silently matching it: a merged range's
+non-anchor cells are excluded from `calculate_dimension`'s bounding box (no value of their
+own), while openpyxl's `dimensions` mirrors the real XLSX `<dimension>` element, which
+Excel widens to the merge's full span regardless.
+
+### Root crate (Python binding): P1 core 3 -- sheet rename/move, row/col insert-delete glue, merged-cell read
+
+The next slice of `docs/openpyxl-gap-audit.md`'s priority list after R1. Seven new Python
+methods: `rename_sheet(old_name, new_name)`, `move_sheet(name, new_index)` (absolute
+0-based position, matching `set_sheet`'s own convention -- not openpyxl's relative-offset
+`Worksheet.move_sheet(offset)`), `insert_rows(idx, amount=1, sheet=None)`/`delete_rows`/
+`insert_cols`/`delete_cols` (Python glue over the existing `0.11.0` VBA-only handlers,
+Excel-grid bounds checked: 1,048,576 rows / 16,384 columns), and `merged_cells(sheet=None)
+-> list[str]` (read-only).
+
+`rename_sheet` atomically re-keys all 8 lowercase-keyed per-sheet `Vm` maps (`sheets`,
+`sheet_order`, `active_sheet`, `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
+`cell_number_formats`, `worksheet_origins`) -- more bookkeeping than initially scoped (see
+the gap-audit doc's "Implementation notes for P1 core 3"), since nothing renamed a sheet
+before this round. Renaming the active sheet is supported (it stays active under the new
+name), not a silent no-op; renaming a protected sheet is rejected outright. `move_sheet`
+is the missing complement to `ensure_sheet_at` (which only positions a newly-created
+sheet) -- reordering an *existing* sheet had no primitive at all before this round.
+
+Because `<definedName localSheetId="N">` is positional, `move_sheet` reordering
+`sheet_order` could otherwise leave a saved workbook's `<definedNames>` pointing at the
+wrong sheet; separately, a `<definedName>`'s own TEXT can reference a sheet by name (e.g.
+`Sheet1!$F$5`), which `rename_sheet` doesn't rewrite, so a rename could leave that text
+dangling too. Both are fixed by extending the existing deletion-only passthrough guard
+(`src/lib.rs`) with a new `Vm::defined_names_may_be_stale` flag, set by both `move_sheet`
+and `rename_sheet`, checked alongside the existing check. The `rename_sheet` half was
+missed in the first pass -- caught in a follow-up review against `fixture4` (the one real
+fixture with genuine `<definedNames>` content; the original tests only used fixtures
+without any) -- and fixed with its own integration test verifying `<definedNames>` is
+actually absent from a real saved output after a rename, not just that an internal flag
+got set.
+
+`insert_rows`/`delete_rows`/`insert_cols`/`delete_cols` are built on new
+`insert_rows_on_sheet`/`delete_rows_on_sheet`/`insert_cols_on_sheet`/`delete_cols_on_sheet`
+`Vm`-core siblings of the existing active-sheet-only private methods, which become
+one-line delegators -- none of their 8 existing VBA call sites needed touching. The delete
+siblings use a single-pass `retain` rather than the original's two-phase
+remove-then-band-delete-then-reinsert; an earlier draft of that collapse used the wrong
+predicate (kept stale data at the pre-shift position while also inserting a shifted copy)
+and was caught and fixed in review, with a regression test pinning the correct one. Does
+**not** shift merged ranges, hidden-row/col markers, cell styles/number formats, or
+formula references -- a pre-existing VBA-engine limitation, now Python-reachable,
+disclosed rather than silently inherited.
+
+`merged_cells` reuses a newly-factored-out `merge_rect_to_a1` helper, now shared with
+`save_xlsx_impl`'s own `<mergeCell ref="...">` writer (previously an inline `format!`,
+duplicated once this method needed the same conversion).
+
+New `compat/differential-python/sheet_ops_check.py`, same stdlib-`unittest`-plus-openpyxl
+structure as `bulk_range_check.py`, compares `rename_sheet`/`move_sheet`/`merged_cells`
+against openpyxl's own read of the same real fixture after a save/reload round trip.
+Row/col insert-delete gets no differential coverage -- the disclosed fidelity gap means an
+openpyxl comparison would correctly fail on exactly the cases worth testing.
+
+See `docs/openpyxl-gap-audit.md`'s "Implementation notes for P1 core 3" for the full
+account of this round's disclosed gaps, including two new ones surfaced while
+implementing rename (`remove_sheet`'s own pre-existing 6-map leak on delete, left
+unfixed; the residual `Sheets.Add(before:=...)` `<definedNames>` gap the `move_sheet` fix
+doesn't close).
+
+### Root crate (Python binding): P1 remainder -- iter_cols, sort_range, merge create/remove
+
+The last three items `docs/openpyxl-gap-audit.md` still tagged `P1`. Four new Python
+methods: `iter_cols(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)`
+(column-major values-only iteration, the transposed sibling of `iter_rows`),
+`sort_range(addr, key_col, descending=False, header=False, sheet=None)` (not from
+openpyxl, which has no sort primitive of its own -- exposes the existing VBA
+`Range(addr).Sort` statement's exact behavior to Python), and `merge_cells(addr,
+sheet=None)`/`unmerge_cells(addr, sheet=None)` (create/remove a merge).
+
+`iter_cols` is `Vm::iter_cols_values`, built on the same `read_rect`/`sheet_used_range`
+primitives as `iter_rows_values`, short-circuiting on `max_col`'s explicitness instead of
+`max_row`'s.
+
+`sort_range` required extracting `Stmt::RangeSort`'s previously fully-inlined,
+active-sheet-only sort algorithm into a new sheet-parameterized `Vm::sort_range_on_sheet`
+(built on `read_rect`/`write_rect`) -- the VBA dispatch arm shrinks to resolve-address +
+protection-check + delegate, with all 4 pre-existing `test_range_sort_*` tests passing
+unmodified. `PyVm::sort_range` validates `key_col` against the range's own column span
+explicitly (`ValueError`) rather than inheriting the VBA path's silent `saturating_sub`
+clamp on an out-of-range key column, and enforces the same 1,048,576-row/16,384-column
+ceiling `insert_rows`/`delete_rows` already do -- unlike `get_range`/`iter_rows` (a
+large-but-harmless allocation), an oversized address here writes into the saved file.
+Deliberately does **not** check sheet protection, matching `set_range`'s existing bulk
+cell-value-write precedent.
+
+`merge_cells`/`unmerge_cells` needed zero writer changes -- `save_xlsx_impl` already emits
+`<mergeCell>` mechanically from whatever's in `merged_ranges` with no validation of its
+own, so the new API only manages that map. `merge_cells` rejects a single-cell address and
+any merge that would overlap an existing one on the same sheet, reusing `rects_overlap`
+(Milestone B6c2's Copy/Paste conflict-detection primitive) rather than the Copy/Paste-
+specific `check_merge_conflicts`; the overlap check runs before the map is touched, so a
+rejected merge never leaves a stray empty entry behind. `unmerge_cells` requires an exact
+rect match, erroring rather than silently no-opping (matching `rename_sheet`/`move_sheet`/
+`delete_sheet`'s existing convention). Same address-bounds ceiling as `sort_range`. Does
+**not** touch cell values in the covered range either way.
+
+`compat/differential-python/bulk_range_check.py` gained an `iter_cols` comparison against
+openpyxl's own `ws.iter_cols()`; `sheet_ops_check.py` gained a `merge_cells`/
+`unmerge_cells` round-trip comparison plus direct pins of the PyO3-layer bound checks
+(which have no Rust unit test of their own, living in `#[cfg(feature = "python")]` glue
+rather than `Vm`-core logic). `sort_range` gets no differential coverage -- openpyxl has
+no sort primitive to compare against.
+
 
 ### CI: WASM artifact size observability
 

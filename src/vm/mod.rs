@@ -383,13 +383,13 @@ pub struct SheetVisibility {
 /// why that matters (it's the same `sheetId` `snapshot.rs`'s `stable_id` already treats
 /// as the one cross-save-stable identifier a real `.xlsx` can offer).
 ///
-/// Deliberately has no separate rename-stable "VM internal identity" field: nothing in
-/// this VM currently renames a loaded sheet (grep-confirmed against this file and
-/// `src/parser/`), so the sheet's own lowercased name is, today, already the stable key
-/// every other per-sheet `Vm` map (`merged_ranges`, `sheet_visibility`,
-/// `cell_style_indices`, and this one) is keyed by. Add a rename-proof identity only if
-/// and when sheet-rename VBA support is implemented — building it now would be validated
-/// by nothing.
+/// Deliberately has no separate rename-stable "VM internal identity" field:
+/// `Vm::rename_sheet` re-keys this map (and every other per-sheet map --
+/// `merged_ranges`, `sheet_visibility`, `cell_style_indices`, `cell_number_formats`,
+/// `protected_sheets`) atomically in one call, including updating this struct's own
+/// `original_display_name` to the new name, so the sheet's lowercased name stays a
+/// valid stable key across a rename -- no separate identity needed because the re-key
+/// is atomic, not because rename doesn't happen.
 #[derive(Debug, Clone, Default)]
 pub struct WorksheetOrigin {
     pub original_sheet_id: Option<String>,
@@ -585,6 +585,9 @@ pub struct Vm {
     /// Sheets("New")`). Kept in sync with `sheets`' key set by
     /// `ensure_sheet` (push on first insert) and `Stmt::SheetsDelete`
     /// (remove on delete); `populate_from_sheets` clears both together.
+    /// `rename_sheet` swaps a slot's value in place (position preserved);
+    /// `move_sheet` removes and re-inserts a slot at a new position (the
+    /// only primitive that actually reorders an existing sheet).
     ///
     /// This is deliberately a *second* source of sheet order, kept apart
     /// from `sheet_names()` (which still sorts alphabetically) — real order
@@ -639,6 +642,19 @@ pub struct Vm {
     row_cols: HashMap<u32, BTreeSet<u32>>,
     /// Set to true whenever cells change; triggers index rebuild on next End query.
     cell_index_dirty: bool,
+    /// Set to true by `move_sheet` and `rename_sheet`; once true, `save_xlsx_impl`
+    /// drops any `<definedNames>` passthrough even if no sheet was deleted. Two
+    /// distinct reasons feed this one flag: a `<definedName localSheetId="N">` is
+    /// positional, so `move_sheet` reordering `sheet_order` can silently invalidate
+    /// it; separately, a `<definedName>`'s TEXT can reference a sheet by name (e.g.
+    /// `Sheet1!$F$5`), so `rename_sheet` can leave that text dangling even though
+    /// nothing about *position* changed. Neither case is worth trying to fix
+    /// surgically (rewriting `localSheetId`s, or parsing and rewriting a sheet name
+    /// out of arbitrary defined-name formula text) -- dropped wholesale instead,
+    /// matching the exact same choice already made for a deleted sheet. Never reset
+    /// -- once a session has reordered or renamed a sheet, that workbook's original
+    /// `<definedNames>` can no longer be trusted for its remaining lifetime.
+    pub(crate) defined_names_may_be_stale: bool,
     /// Wall-clock deadline for loop execution (Milestone B5a's `test-workbook`
     /// timeout guard). `None` (the default) means no limit — every existing
     /// caller (run-mode, `check`, `snapshot`, Python bindings) is unaffected.
@@ -808,6 +824,7 @@ impl Vm {
             col_rows: HashMap::new(),
             row_cols: HashMap::new(),
             cell_index_dirty: true,
+            defined_names_may_be_stale: false,
             deadline: None,
             loop_iters: 0,
             strict_resolution: false,
@@ -926,83 +943,130 @@ impl Vm {
             .expect("active sheet must exist")
     }
 
-    /// Deletes `count` rows starting at 1-based `first` (inclusive), shifting every row
-    /// below the deleted range up by `count`. Shared by `Stmt::RangeDelete`'s `Axis::Row`
-    /// (`Range(addr).Delete`/`EntireRow.Delete`) and `Stmt::RowColDelete` (`Rows(n).Delete`)
-    /// so the two syntactic forms can't drift apart. Mirrored by `delete_cols` below --
-    /// keep the two in sync if either changes.
-    fn delete_rows(&mut self, first: u32, count: u32) {
-        let last = first + count - 1;
+    /// `insert_rows`'s sheet-parameterized sibling (backs Python's
+    /// `insert_rows(..., sheet=None)`). `insert_rows` below just forwards here with
+    /// `key = active_sheet` -- VBA's `RowColInsert`/`RangeInsert` call sites don't
+    /// change at all. Does NOT shift `merged_ranges`/`sheet_visibility`/
+    /// `cell_style_indices`/`cell_number_formats`/formula text -- a pre-existing
+    /// VBA-engine limitation, now Python-reachable; see ROADMAP.md's known gaps.
+    pub fn insert_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         let to_move: Vec<((u32, u32), CellContent)> = self
-            .cells()
-            .iter()
-            .filter(|((r, _), _)| *r > last)
-            .map(|((r, c), v)| ((*r, *c), v.clone()))
-            .collect();
-        for ((r, c), _) in &to_move {
-            self.cells_mut().remove(&(*r, *c));
-        }
-        for r in first..=last {
-            self.cells_mut().retain(|&(row, _), _| row != r);
-        }
-        for ((r, c), v) in to_move {
-            self.cells_mut().insert((r - count, c), v);
-        }
-    }
-
-    /// Inserts `count` blank rows at 1-based `first`, shifting `first` and everything
-    /// below it down by `count`. See `delete_rows`'s doc comment for what shares this.
-    fn insert_rows(&mut self, first: u32, count: u32) {
-        let to_move: Vec<((u32, u32), CellContent)> = self
-            .cells()
-            .iter()
+            .get_sheet_cells(key)
+            .into_iter()
+            .flatten()
             .filter(|((r, _), _)| *r >= first)
             .map(|((r, c), v)| ((*r, *c), v.clone()))
             .collect();
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
         for ((r, c), _) in &to_move {
-            self.cells_mut().remove(&(*r, *c));
+            cells.remove(&(*r, *c));
         }
         for ((r, c), v) in to_move {
-            self.cells_mut().insert((r + count, c), v);
+            cells.insert((r + count, c), v);
+        }
+    }
+
+    /// Inserts `count` blank rows at 1-based `first` on the active sheet, shifting
+    /// `first` and everything below it down by `count`. Shared by
+    /// `Stmt::RangeInsert`'s `Axis::Row` and `Stmt::RowColInsert` (`Rows(n).Insert`).
+    fn insert_rows(&mut self, first: u32, count: u32) {
+        let key = self.active_sheet.clone();
+        self.insert_rows_on_sheet(&key, first, count);
+    }
+
+    /// `delete_rows`'s sheet-parameterized sibling. Single-pass `retain` that drops
+    /// everything at `row >= first` (both the deleted band `[first, last]` *and* the
+    /// cells about to be reinserted shifted) before reinserting `to_move` at its new
+    /// position -- NOT `row < first || row > last`, which would keep the `row > last`
+    /// cells at their stale original position while ALSO inserting a second copy at
+    /// the shifted position, duplicating data. See
+    /// `delete_rows_on_sheet_removes_the_stale_entry_at_the_pre_shift_row` for the
+    /// regression test this exists to keep passing.
+    pub fn delete_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        let last = first + count - 1;
+        let to_move: Vec<((u32, u32), CellContent)> = self
+            .get_sheet_cells(key)
+            .into_iter()
+            .flatten()
+            .filter(|((r, _), _)| *r > last)
+            .map(|((r, c), v)| ((*r, *c), v.clone()))
+            .collect();
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
+        cells.retain(|&(row, _), _| row < first);
+        for ((r, c), v) in to_move {
+            cells.insert((r - count, c), v);
+        }
+    }
+
+    /// Deletes `count` rows starting at 1-based `first` (inclusive) on the active
+    /// sheet, shifting every row below the deleted range up by `count`. Shared by
+    /// `Stmt::RangeDelete`'s `Axis::Row` (`Range(addr).Delete`/`EntireRow.Delete`) and
+    /// `Stmt::RowColDelete` (`Rows(n).Delete`) so the two syntactic forms can't drift
+    /// apart. Mirrored by `delete_cols` below -- keep the two in sync if either changes.
+    fn delete_rows(&mut self, first: u32, count: u32) {
+        let key = self.active_sheet.clone();
+        self.delete_rows_on_sheet(&key, first, count);
+    }
+
+    /// `insert_cols_on_sheet`'s row-axis sibling is `insert_rows_on_sheet` above --
+    /// this is `delete_cols`'s sheet-parameterized version, the column-axis mirror of
+    /// `delete_rows_on_sheet` (same single-pass `retain(col < first)` correctness
+    /// reasoning, on the column instead of the row).
+    pub fn delete_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        let last = first + count - 1;
+        let to_move: Vec<((u32, u32), CellContent)> = self
+            .get_sheet_cells(key)
+            .into_iter()
+            .flatten()
+            .filter(|((_, c), _)| *c > last)
+            .map(|((r, c), v)| ((*r, *c), v.clone()))
+            .collect();
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
+        cells.retain(|&(_, col), _| col < first);
+        for ((r, c), v) in to_move {
+            cells.insert((r, c - count), v);
         }
     }
 
     /// `delete_rows`'s column-axis mirror -- deletes `count` columns starting at 1-based
-    /// `first`, shifting every column to its right left by `count`.
+    /// `first` on the active sheet, shifting every column to its right left by `count`.
     fn delete_cols(&mut self, first: u32, count: u32) {
-        let last = first + count - 1;
+        let key = self.active_sheet.clone();
+        self.delete_cols_on_sheet(&key, first, count);
+    }
+
+    /// `insert_rows_on_sheet`'s column-axis mirror.
+    pub fn insert_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         let to_move: Vec<((u32, u32), CellContent)> = self
-            .cells()
-            .iter()
-            .filter(|((_, c), _)| *c > last)
+            .get_sheet_cells(key)
+            .into_iter()
+            .flatten()
+            .filter(|((_, c), _)| *c >= first)
             .map(|((r, c), v)| ((*r, *c), v.clone()))
             .collect();
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
         for ((r, c), _) in &to_move {
-            self.cells_mut().remove(&(*r, *c));
-        }
-        for c in first..=last {
-            self.cells_mut().retain(|&(_, col), _| col != c);
+            cells.remove(&(*r, *c));
         }
         for ((r, c), v) in to_move {
-            self.cells_mut().insert((r, c - count), v);
+            cells.insert((r, c + count), v);
         }
     }
 
     /// `insert_rows`'s column-axis mirror -- inserts `count` blank columns at 1-based
-    /// `first`, shifting `first` and everything to its right right by `count`.
+    /// `first` on the active sheet, shifting `first` and everything to its right right
+    /// by `count`.
     fn insert_cols(&mut self, first: u32, count: u32) {
-        let to_move: Vec<((u32, u32), CellContent)> = self
-            .cells()
-            .iter()
-            .filter(|((_, c), _)| *c >= first)
-            .map(|((r, c), v)| ((*r, *c), v.clone()))
-            .collect();
-        for ((r, c), _) in &to_move {
-            self.cells_mut().remove(&(*r, *c));
-        }
-        for ((r, c), v) in to_move {
-            self.cells_mut().insert((r, c + count), v);
-        }
+        let key = self.active_sheet.clone();
+        self.insert_cols_on_sheet(&key, first, count);
     }
 
     fn rebuild_cell_index(&mut self) {
@@ -1036,8 +1100,7 @@ impl Vm {
     /// sheet at 0-based position `i` in `sheet_order` (clamped to the current length, so
     /// an out-of-range index appends rather than panicking). Ignored if `name` already
     /// exists -- this only controls where a *newly created* sheet lands, not reordering
-    /// an existing one (this VM has no reorder primitive at all, same N/A noted on
-    /// `WorksheetOrigin`'s own doc comment).
+    /// an existing one; use `move_sheet` to reposition a sheet that already exists.
     pub fn ensure_sheet_at(&mut self, name: &str, index: Option<usize>) {
         let key = name.to_lowercase();
         if !self.sheets.contains_key(&key) {
@@ -1078,6 +1141,313 @@ impl Vm {
 
     pub fn get_sheet_cells(&self, name: &str) -> Option<&HashMap<(u32, u32), CellContent>> {
         self.sheets.get(&name.to_lowercase())
+    }
+
+    /// Resolves `sheet` (`None` = active sheet) to its internal lowercase key,
+    /// for the Python-binding bulk range/row API (`get_range`/`set_range`/
+    /// `append_row`/`iter_rows`/`max_row`/`max_column`/`calculate_dimension`).
+    /// Deliberately does not reuse `require_sheet_exists` (used by
+    /// `delete_sheet`/VBA sheet resolution): that one is `&mut self` and
+    /// records `last_resolution_failure` for the `diagnose` subcommand's
+    /// VBA-side diagnostics -- a side channel Python callers never read.
+    /// `get_sheet_cells` alone isn't enough either: it returns `None` silently
+    /// on an unknown name, and every caller here needs an explicit error.
+    pub fn resolve_sheet_key(&self, sheet: Option<&str>) -> Result<String, String> {
+        match sheet {
+            None => Ok(self.active_sheet.clone()),
+            Some(name) => {
+                let key = name.to_lowercase();
+                if self.sheets.contains_key(&key) {
+                    Ok(key)
+                } else {
+                    Err(format!("Sheet '{name}' not found"))
+                }
+            }
+        }
+    }
+
+    /// The 1-based inclusive bounding box of every non-`Empty` cell in `key`
+    /// (an already-resolved, lowercased sheet key) -- `None` if the sheet has
+    /// no non-empty cells at all. Follows `cells()`/`get_sheet()`'s
+    /// Empty-exclusion convention (the one actually surfaced to Python via
+    /// `get_range`/`iter_rows`/`max_row`/`max_column`/`calculate_dimension`),
+    /// not `cells_df`'s divergent one (`src/lib.rs`'s `cells_df` includes
+    /// `Variant::Empty` map entries in its own max) -- a pre-existing,
+    /// disclosed inconsistency this doesn't reconcile; see
+    /// docs/openpyxl-gap-audit.md.
+    ///
+    /// NOTE: this excludes `Variant::Empty` only, not `Variant::Null` -- a
+    /// `Null`-valued cell (VBA `Null`, distinct from an uninitialized
+    /// `Empty`) counts as "non-empty" here and inflates the bounding box,
+    /// even though it also crosses into Python as `None` (see
+    /// `variant_to_py`). This exactly matches `cells()`/`get_sheet()`'s
+    /// existing behavior; it is not a new inconsistency introduced here, but
+    /// it is a real, disclosed surprise -- see the gap-audit doc.
+    pub fn sheet_used_range(&self, key: &str) -> Option<((u32, u32), (u32, u32))> {
+        let cells = self.get_sheet_cells(key)?;
+        let mut bounds: Option<((u32, u32), (u32, u32))> = None;
+        for (&(r, c), content) in cells {
+            if matches!(content.value, Variant::Empty) {
+                continue;
+            }
+            bounds = Some(match bounds {
+                None => ((r, c), (r, c)),
+                Some(((r1, c1), (r2, c2))) => ((r1.min(r), c1.min(c)), (r2.max(r), c2.max(c))),
+            });
+        }
+        bounds
+    }
+
+    /// The 1-based row `append_row` should write to: one past the sheet's
+    /// current max used row, or row 1 if the sheet is empty/all-empty. Uses
+    /// `sheet_used_range`'s real max, not a populated-row count -- correct on
+    /// a sparse sheet (data only at row 50 appends at row 51).
+    pub fn next_append_row(&self, key: &str) -> u32 {
+        self.sheet_used_range(key)
+            .map_or(1, |(_, (max_r, _))| max_r + 1)
+    }
+
+    /// Reads a rectangular region (1-based inclusive `r1..=r2`, `c1..=c2`) of
+    /// `key` as a row-major grid, `Variant::Empty` for any cell with no
+    /// `CellContent` entry. No validation of `key`'s existence (callers
+    /// resolve via `resolve_sheet_key` first) or of the rect's shape (callers
+    /// guarantee `r1<=r2`, `c1<=c2`, both >=1) -- a pure mechanical read,
+    /// matching the established inline-nested-loop style used throughout this
+    /// file and `src/formula/eval.rs` rather than a new range-iteration
+    /// abstraction.
+    pub fn read_rect(&self, key: &str, r1: u32, c1: u32, r2: u32, c2: u32) -> Vec<Vec<Variant>> {
+        let empty = HashMap::new();
+        let cells = self.get_sheet_cells(key).unwrap_or(&empty);
+        (r1..=r2)
+            .map(|r| {
+                (c1..=c2)
+                    .map(|c| {
+                        cells
+                            .get(&(r, c))
+                            .map(|ct| ct.value.clone())
+                            .unwrap_or(Variant::Empty)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Writes `values` (already validated by the caller: rectangular, exact
+    /// target shape, every element already a `Variant`) at `top_left` in
+    /// `key`. No shape check here -- the PyO3 glue (`set_range`/`append_row`
+    /// in `src/lib.rs`) validates the *entire* input against the target shape
+    /// and converts every value before calling this, so by the time this runs
+    /// there is nothing left that can fail partway through.
+    ///
+    /// Deliberately does NOT call `check_sheet_not_protected` and does NOT
+    /// consult `merged_ranges` -- matches `PyVm::set_cell`'s existing,
+    /// equally unchecked behavior. Sheet protection is a VBA-statement
+    /// concept today (14 call sites, all inside this file's statement
+    /// handlers; `protected_sheets` isn't even reachable from `src/lib.rs`).
+    /// Merge-conflict checking (`check_merge_conflicts`) exists only on the
+    /// VBA Copy/Paste path, matching real Excel's own distinction between
+    /// Paste's stricter semantics and plain `.Value=` assignment, which
+    /// really does store a value on a non-anchor merged cell (just never
+    /// displays it). Adding either restriction here would be a new
+    /// Python-only behavior with no VBA-side precedent -- see
+    /// docs/openpyxl-gap-audit.md.
+    ///
+    /// Never touches `self.active_sheet`.
+    pub fn write_rect(&mut self, key: &str, top_left: (u32, u32), values: &[Vec<Variant>]) {
+        let (r1, c1) = top_left;
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
+        for (i, row) in values.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                cells.insert(
+                    (r1 + i as u32, c1 + j as u32),
+                    CellContent {
+                        formula: None,
+                        value: v.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Core of the Python `iter_rows` API: `max_row`/`max_col` of `None` mean
+    /// "default to the sheet's used range." If the sheet has NO non-empty
+    /// cells at all and the caller didn't pin `max_row` down explicitly,
+    /// there is no used range to iterate -- returns zero rows, not one row of
+    /// `Empty`s. Only `max_row`'s explicitness matters for this
+    /// short-circuit, not `max_col`'s. An explicit `max_row` is always
+    /// honored even on an empty sheet (an explicit ask for N rows of Emptys
+    /// is not the ambiguous case this guards against).
+    pub fn iter_rows_values(
+        &self,
+        key: &str,
+        min_row: u32,
+        max_row: Option<u32>,
+        min_col: u32,
+        max_col: Option<u32>,
+    ) -> Vec<Vec<Variant>> {
+        let bounds = self.sheet_used_range(key);
+        let resolved_max_row = match max_row {
+            Some(r) => r,
+            None => match bounds {
+                Some((_, (r2, _))) => r2,
+                None => return Vec::new(),
+            },
+        };
+        let resolved_max_col = max_col.unwrap_or_else(|| bounds.map_or(min_col, |(_, (_, c2))| c2));
+        if resolved_max_row < min_row || resolved_max_col < min_col {
+            return Vec::new();
+        }
+        self.read_rect(key, min_row, min_col, resolved_max_row, resolved_max_col)
+    }
+
+    /// Core of the Python `iter_cols` API: the column-major transpose of
+    /// `iter_rows_values`. Same short-circuit shape, but keyed off
+    /// `max_col`'s explicitness instead of `max_row`'s -- an empty sheet with
+    /// no explicit `max_col` returns zero columns, while an explicit
+    /// `max_col` always forces N columns even on an empty sheet.
+    pub fn iter_cols_values(
+        &self,
+        key: &str,
+        min_row: u32,
+        max_row: Option<u32>,
+        min_col: u32,
+        max_col: Option<u32>,
+    ) -> Vec<Vec<Variant>> {
+        let bounds = self.sheet_used_range(key);
+        let resolved_max_col = match max_col {
+            Some(c) => c,
+            None => match bounds {
+                Some((_, (_, c2))) => c2,
+                None => return Vec::new(),
+            },
+        };
+        let resolved_max_row = max_row.unwrap_or_else(|| bounds.map_or(min_row, |(_, (r2, _))| r2));
+        if resolved_max_row < min_row || resolved_max_col < min_col {
+            return Vec::new();
+        }
+        let grid = self.read_rect(key, min_row, min_col, resolved_max_row, resolved_max_col);
+        let num_cols = (resolved_max_col - min_col + 1) as usize;
+        (0..num_cols)
+            .map(|ci| grid.iter().map(|row| row[ci].clone()).collect())
+            .collect()
+    }
+
+    /// Sorts a rectangular range on `key`, in place, by a single 1-based absolute
+    /// key column. Extracted from `Stmt::RangeSort`'s formerly-inline body so both
+    /// the VBA statement and PyVm's `sort_range` share one implementation.
+    /// `header` excludes the range's first row from the sort (data starts at
+    /// `r1+1`) without moving it. `key_col` outside `c1..=c2` silently clamps via
+    /// `saturating_sub` -- a pre-existing behavior from the original inline code,
+    /// preserved as-is for the VBA path; PyVm's own `sort_range` validates
+    /// `key_col` explicitly instead of inheriting this silent clamp.
+    ///
+    /// Deliberately does NOT check sheet protection -- matches R1's
+    /// `write_rect`/`set_range` precedent (a bulk cell-value write bypasses
+    /// protection in the Python API even though VBA's own equivalent path does
+    /// check it -- confirmed at `write_range_ref_value`). The VBA
+    /// `Stmt::RangeSort` arm keeps its own protection check before calling
+    /// this, so VBA's existing tested behavior is unaffected.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sort_range_on_sheet(
+        &mut self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+        key_col: u32,
+        descending: bool,
+        header: bool,
+    ) {
+        let data_r1 = if header { r1 + 1 } else { r1 };
+        let key_off = key_col.saturating_sub(c1) as usize;
+        let mut rows = self.read_rect(key, data_r1, c1, r2, c2);
+        rows.sort_by(|a, b| {
+            let va = a.get(key_off).unwrap_or(&Variant::Empty);
+            let vb = b.get(key_off).unwrap_or(&Variant::Empty);
+            let ord = cmp_variants(va, vb);
+            if descending { ord.reverse() } else { ord }
+        });
+        self.write_rect(key, (data_r1, c1), &rows);
+    }
+
+    /// Creates a merge over `(r1,c1)..(r2,c2)` on `key`. Rejects a single-cell
+    /// "merge" (nothing would actually be merged) and rejects any merge that
+    /// would overlap an existing one on the same sheet -- reusing
+    /// `rects_overlap` (Milestone B6c2's Copy/Paste conflict-detection
+    /// primitive, already sheet-agnostic and side-channel-free) rather than
+    /// `check_merge_conflicts` (Copy/Paste-specific: `&mut self`, writes
+    /// `last_resolution_failure`, a diagnostic side channel Python callers
+    /// don't read). Two overlapping `<mergeCell>` elements is genuinely
+    /// invalid OOXML, not just a fidelity gap, so this is a hard error, not a
+    /// disclosed limitation.
+    ///
+    /// Does NOT touch cell values -- whatever is in the covered cells (if
+    /// anything) stays exactly as it was. This VM's merge geometry and cell
+    /// values are already orthogonal by design (`write_rect`/`set_range`
+    /// explicitly allow writing into a non-anchor merged cell without error;
+    /// this is the same precedent applied in the other direction).
+    pub fn merge_cells(
+        &mut self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+    ) -> Result<(), String> {
+        if r1 == r2 && c1 == c2 {
+            return Err("a merge must span at least 2 cells".to_string());
+        }
+        let new_rect = ((r1, c1), (r2, c2));
+        // Check BEFORE touching the map -- `.entry().or_default()` would
+        // insert an empty Vec for `key` even on a rejected merge, a state
+        // mutation on a failure path this project's validate-before-
+        // committing convention rules out.
+        if let Some(existing) = self.merged_ranges.get(key)
+            && let Some(&conflict) = existing.iter().find(|&&m| rects_overlap(m, new_rect))
+        {
+            return Err(format!(
+                "merge {} would overlap an existing merge {}",
+                crate::merge_rect_to_a1(&new_rect),
+                crate::merge_rect_to_a1(&conflict)
+            ));
+        }
+        self.merged_ranges
+            .entry(key.to_string())
+            .or_default()
+            .push(new_rect);
+        Ok(())
+    }
+
+    /// Removes a merge on `key` whose rect exactly matches `(r1,c1)..(r2,c2)`
+    /// -- an inexact/partial match is rejected rather than silently
+    /// no-opping, matching this project's "must not silently no-op on
+    /// failure" house rule (`rename_sheet`/`move_sheet`/`delete_sheet` all
+    /// reject an unknown target the same way).
+    pub fn unmerge_cells(
+        &mut self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+    ) -> Result<(), String> {
+        let target = ((r1, c1), (r2, c2));
+        let before = self.merged_ranges.get(key).map_or(0, |v| v.len());
+        if let Some(merges) = self.merged_ranges.get_mut(key) {
+            merges.retain(|&m| m != target);
+        }
+        let after = self.merged_ranges.get(key).map_or(0, |v| v.len());
+        if after == before {
+            return Err(format!(
+                "no merge found at {} on sheet '{}'",
+                crate::merge_rect_to_a1(&target),
+                key
+            ));
+        }
+        Ok(())
     }
 
     /// `true` iff `requested` identifies the one workbook `load_workbook_file`
@@ -1557,6 +1927,138 @@ impl Vm {
         let key = name.to_lowercase();
         self.require_sheet_exists(name, &key)?;
         self.remove_sheet(&key, name)
+    }
+
+    /// Renames a sheet, atomically re-keying all eight lowercase-keyed per-sheet `Vm`
+    /// maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
+    /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
+    /// `cell_number_formats`, `worksheet_origins`). Each gets one explicit
+    /// remove+insert line rather than a generic "walk every map" helper: the maps
+    /// have different value types, a truly generic helper needs a macro or
+    /// trait-object indirection to cross that, and with exactly one call site a
+    /// helper would save nothing. `remove_sheet`'s own, separate, pre-existing leak
+    /// of 6 of these maps on delete is NOT touched here (see ROADMAP.md's known
+    /// gaps -- left unfixed by deliberate choice, not missed).
+    ///
+    /// `protected_sheets` (a `HashSet`) is NOT re-keyed here -- it doesn't need to
+    /// be. Renaming a protected sheet is rejected outright below, so `old_key` is
+    /// guaranteed absent from `protected_sheets` by the time any re-keying runs; a
+    /// re-key step for it would be unreachable dead code, not a defensive one.
+    ///
+    /// Renaming the ACTIVE sheet is a normal, supported case (updates `active_sheet`
+    /// itself) -- NOT rejected, and NOT the silent no-op `remove_sheet` uses for
+    /// deleting the active sheet: a real rename request must actually rename.
+    /// Skipping `active_sheet` here would leave `cells()`/`cells_mut()`'s
+    /// `.expect("active sheet must exist")` pointing at a key no longer present in
+    /// `sheets`, panicking on the very next cell access.
+    ///
+    /// Does not touch `cell_index_dirty`/`col_rows`/`row_cols`: that lazy index is
+    /// keyed off `sheets[active_sheet]`'s CONTENTS, which are unchanged by a rename
+    /// (same cell map, just re-keyed) -- and `active_sheet` itself is re-pointed in
+    /// the same call, so the index still resolves to the same data.
+    ///
+    /// Renaming to the same name (including a pure-case change, e.g. "Sheet1" ->
+    /// "SHEET1") is allowed and updates `original_display_name`'s casing -- this is
+    /// NOT a collision with itself; the collision check only fires when `new_key`
+    /// names a DIFFERENT existing sheet.
+    ///
+    /// Known, deliberate non-goals (see ROADMAP.md known gaps): does not validate
+    /// Excel's 31-char length limit, illegal characters (`: \ / ? * [ ]`), or
+    /// reserved names -- matches `set_sheet`'s pre-existing total lack of name
+    /// validation. Does not rewrite any formula or `<definedName>` text that refers
+    /// to this sheet by its OLD name -- only the `<sheet name="...">` tab label
+    /// changes.
+    pub fn rename_sheet(&mut self, old_name: &str, new_name: &str) -> Result<(), String> {
+        let old_key = old_name.to_lowercase();
+        if !self.sheets.contains_key(&old_key) {
+            return Err(format!("Sheet '{}' not found", old_name));
+        }
+        if new_name.trim().is_empty() {
+            return Err("Sheet name must not be empty".to_string());
+        }
+        if self.protected_sheets.contains(&old_key) {
+            return Err(format!("Cannot rename: sheet '{}' is protected", old_name));
+        }
+        let new_key = new_name.to_lowercase();
+        if new_key != old_key && self.sheets.contains_key(&new_key) {
+            return Err(format!("Sheet '{}' already exists", new_name));
+        }
+
+        // 1. `sheets` -- the cell map itself.
+        if let Some(cells) = self.sheets.remove(&old_key) {
+            self.sheets.insert(new_key.clone(), cells);
+        }
+        // 2. `sheet_order` -- IN-PLACE value swap, not remove+push, so tab position
+        //    is preserved.
+        if let Some(slot) = self.sheet_order.iter_mut().find(|k| **k == old_key) {
+            *slot = new_key.clone();
+        }
+        // 3. `active_sheet`.
+        if self.active_sheet == old_key {
+            self.active_sheet = new_key.clone();
+        }
+        // 4-7: merged_ranges / sheet_visibility / cell_style_indices / cell_number_formats.
+        if let Some(v) = self.merged_ranges.remove(&old_key) {
+            self.merged_ranges.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.sheet_visibility.remove(&old_key) {
+            self.sheet_visibility.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.cell_style_indices.remove(&old_key) {
+            self.cell_style_indices.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.cell_number_formats.remove(&old_key) {
+            self.cell_number_formats.insert(new_key.clone(), v);
+        }
+        // 8. `worksheet_origins` -- re-key AND update `original_display_name` to the
+        //    NEW name; `save_xlsx_impl` reads this field (not the lowercased key) to
+        //    write `<sheet name="...">` on save.
+        let mut origin = self.worksheet_origins.remove(&old_key).unwrap_or_default();
+        origin.original_display_name = Some(new_name.to_string());
+        self.worksheet_origins.insert(new_key, origin);
+        // `protected_sheets` needs no re-key: the protection check above already
+        // rejected this call if `old_key` were a member, so it's guaranteed absent
+        // here -- a re-key step would be unreachable dead code, not a defensive one.
+        //
+        // A <definedName>'s TEXT can reference a sheet by name (e.g. "Sheet1!$F$5"),
+        // and this rename doesn't rewrite that text -- so any surviving
+        // <definedNames> passthrough could now dangle. Set unconditionally, even for
+        // a same-name/case-only rename, matching this flag's existing coarse-grained
+        // "drop rather than try to prove it's still safe" precedent.
+        self.defined_names_may_be_stale = true;
+        Ok(())
+    }
+
+    /// Repositions an EXISTING sheet in `sheet_order` -- the missing complement to
+    /// `ensure_sheet_at` (which only positions a NEWLY created sheet; no primitive
+    /// reorders an existing one). Touches ONLY `sheet_order`: no other per-sheet map
+    /// is keyed by position, so unlike `rename_sheet` this needs no re-keying
+    /// anywhere else.
+    ///
+    /// `new_index` is an ABSOLUTE 0-based target position (matching `set_sheet`'s
+    /// existing `index` convention), not a relative offset like openpyxl's
+    /// `Worksheet.move_sheet(offset)`. Clamped to `0..=sheet_order.len()`
+    /// post-removal, matching `ensure_sheet_at`'s own clamp -- an out-of-range index
+    /// moves to the nearest end rather than erroring.
+    ///
+    /// Deliberately does NOT check `protected_sheets`: real Excel's per-sheet
+    /// "Protect Sheet" does not gate tab reordering (that's the entirely separate,
+    /// unimplemented "Protect Workbook" structure flag) -- no precedent in this
+    /// codebase to check anything here.
+    ///
+    /// Sets `defined_names_may_be_stale`, which gates `<definedNames>` passthrough
+    /// on save (see `save_xlsx_impl`) -- a `<definedName localSheetId="N">` is
+    /// positional, and reordering can silently invalidate it otherwise.
+    pub fn move_sheet(&mut self, name: &str, new_index: usize) -> Result<(), String> {
+        let key = name.to_lowercase();
+        if !self.sheets.contains_key(&key) {
+            return Err(format!("Sheet '{}' not found", name));
+        }
+        self.sheet_order.retain(|k| k != &key);
+        let idx = new_index.min(self.sheet_order.len());
+        self.sheet_order.insert(idx, key);
+        self.defined_names_may_be_stale = true;
+        Ok(())
     }
 
     /// Evaluates an `ObjectExpr` to the `ObjectRef` it names (Milestone
@@ -3115,31 +3617,7 @@ impl Vm {
                 let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeSort: invalid address '{}'", addr))?;
-                // Header:=xlYes -- addr's first row is excluded from the sort and stays
-                // exactly where it is; only data_r1..=r2 gets reordered.
-                let data_r1 = if *header { r1 + 1 } else { r1 };
-                // key_col is 1-based absolute column; convert to 0-based offset within range
-                let key_off = (*key_col).saturating_sub(c1) as usize;
-                let mut rows: Vec<Vec<Variant>> = (data_r1..=r2)
-                    .map(|r| (c1..=c2).map(|c| self.get_cell(r, c)).collect())
-                    .collect();
-                rows.sort_by(|a, b| {
-                    let va = a.get(key_off).unwrap_or(&Variant::Empty);
-                    let vb = b.get(key_off).unwrap_or(&Variant::Empty);
-                    let ord = cmp_variants(va, vb);
-                    if *descending { ord.reverse() } else { ord }
-                });
-                for (ri, row) in rows.iter().enumerate() {
-                    for (ci, val) in row.iter().enumerate() {
-                        self.cells_mut().insert(
-                            (data_r1 + ri as u32, c1 + ci as u32),
-                            CellContent {
-                                formula: None,
-                                value: val.clone(),
-                            },
-                        );
-                    }
-                }
+                self.sort_range_on_sheet(&active, r1, c1, r2, c2, *key_col, *descending, *header);
             }
             Stmt::RangeAutoFilter {
                 addr,
@@ -8214,6 +8692,454 @@ mod tests {
         assert_eq!(vm.sheet_order, vec!["sheet1", "second"]);
     }
 
+    // ── P1 core 3: Vm::rename_sheet / Vm::move_sheet ─────────────────────────
+
+    #[test]
+    fn rename_sheet_updates_all_eight_per_sheet_maps() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        vm.merged_ranges
+            .insert("sheet1".to_string(), vec![((1, 2), (1, 4))]);
+        vm.sheet_visibility.insert(
+            "sheet1".to_string(),
+            SheetVisibility {
+                hidden_rows: vec![Interval { start: 5, end: 5 }],
+                hidden_columns: vec![],
+            },
+        );
+        vm.cell_style_indices
+            .insert("sheet1".to_string(), HashMap::from([((1, 1), 3u32)]));
+        vm.cell_number_formats.insert(
+            "sheet1".to_string(),
+            HashMap::from([((1, 1), "0.00".to_string())]),
+        );
+
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+
+        assert!(vm.sheets.contains_key("renamed"));
+        assert!(!vm.sheets.contains_key("sheet1"));
+        assert!(vm.merged_ranges.contains_key("renamed"));
+        assert!(!vm.merged_ranges.contains_key("sheet1"));
+        assert!(vm.sheet_visibility.contains_key("renamed"));
+        assert!(!vm.sheet_visibility.contains_key("sheet1"));
+        assert!(vm.cell_style_indices.contains_key("renamed"));
+        assert!(!vm.cell_style_indices.contains_key("sheet1"));
+        assert!(vm.cell_number_formats.contains_key("renamed"));
+        assert!(!vm.cell_number_formats.contains_key("sheet1"));
+        assert!(vm.worksheet_origins.contains_key("renamed"));
+        assert!(!vm.worksheet_origins.contains_key("sheet1"));
+        assert!(vm.sheet_order.contains(&"renamed".to_string()));
+        assert!(!vm.sheet_order.contains(&"sheet1".to_string()));
+    }
+
+    #[test]
+    fn rename_sheet_preserves_tab_position_in_sheet_order() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.ensure_sheet("C");
+        assert_eq!(vm.sheet_order, vec!["sheet1", "b", "c"]);
+        vm.rename_sheet("B", "Renamed").unwrap();
+        assert_eq!(vm.sheet_order, vec!["sheet1", "renamed", "c"]);
+    }
+
+    #[test]
+    fn rename_sheet_updates_active_sheet_when_renaming_the_active_sheet() {
+        let mut vm = Vm::new(); // active sheet is "sheet1"
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+        assert_eq!(vm.active_sheet, "renamed");
+        // Must not panic -- `cells()` unwraps on `self.sheets[active_sheet]`.
+        assert_eq!(vm.cells().len(), 0);
+    }
+
+    #[test]
+    fn rename_sheet_does_not_touch_active_sheet_when_renaming_a_different_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.rename_sheet("Other", "Renamed").unwrap();
+        assert_eq!(vm.active_sheet, "sheet1");
+    }
+
+    #[test]
+    fn rename_sheet_sets_worksheet_origins_display_name_to_the_new_name() {
+        let mut vm = Vm::new();
+        vm.rename_sheet("Sheet1", "NewName").unwrap();
+        assert_eq!(
+            vm.worksheet_origins
+                .get("newname")
+                .and_then(|o| o.original_display_name.clone()),
+            Some("NewName".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_sheet_allows_case_only_rename_of_the_same_sheet() {
+        let mut vm = Vm::new();
+        vm.rename_sheet("Sheet1", "SHEET1").unwrap();
+        assert_eq!(
+            vm.worksheet_origins
+                .get("sheet1")
+                .and_then(|o| o.original_display_name.clone()),
+            Some("SHEET1".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_sheet_errors_if_old_name_not_found() {
+        let mut vm = Vm::new();
+        let err = vm.rename_sheet("Typo", "New").unwrap_err();
+        assert!(err.contains("not found"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rename_sheet_errors_if_new_name_collides_with_a_different_existing_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        let err = vm.rename_sheet("Sheet1", "Other").unwrap_err();
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rename_sheet_errors_on_empty_or_whitespace_new_name() {
+        let mut vm = Vm::new();
+        assert!(vm.rename_sheet("Sheet1", "").is_err());
+        assert!(vm.rename_sheet("Sheet1", "   ").is_err());
+    }
+
+    #[test]
+    fn rename_sheet_errors_if_sheet_is_protected() {
+        let mut vm = Vm::new();
+        vm.protected_sheets.insert("sheet1".to_string());
+        let err = vm.rename_sheet("Sheet1", "New").unwrap_err();
+        assert!(err.contains("protected"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn move_sheet_reorders_sheet_order_without_touching_other_maps() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.ensure_sheet("C");
+        vm.merged_ranges
+            .insert("sheet1".to_string(), vec![((1, 1), (1, 1))]);
+        let active_before = vm.active_sheet.clone();
+
+        vm.move_sheet("C", 0).unwrap();
+
+        assert_eq!(vm.sheet_order, vec!["c", "sheet1", "b"]);
+        assert_eq!(vm.active_sheet, active_before);
+        assert!(vm.merged_ranges.contains_key("sheet1"));
+    }
+
+    #[test]
+    fn move_sheet_clamps_out_of_range_index_to_the_end() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.move_sheet("Sheet1", 999).unwrap();
+        assert_eq!(vm.sheet_order, vec!["b", "sheet1"]);
+    }
+
+    #[test]
+    fn move_sheet_errors_if_sheet_not_found() {
+        let mut vm = Vm::new();
+        let err = vm.move_sheet("Typo", 0).unwrap_err();
+        assert!(err.contains("not found"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn move_sheet_does_not_check_protected_sheets() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.protected_sheets.insert("sheet1".to_string());
+        vm.move_sheet("Sheet1", 1).unwrap();
+        assert_eq!(vm.sheet_order, vec!["b", "sheet1"]);
+    }
+
+    #[test]
+    fn rename_sheet_and_move_sheet_both_flag_defined_names_as_possibly_stale() {
+        // A rename can leave a <definedName>'s TEXT dangling (e.g. "Sheet1!$F$5"
+        // after "Sheet1" is renamed); a reorder can invalidate a positional
+        // localSheetId. Both set the same flag -- caught in review after an
+        // earlier version of this fix only covered move_sheet, missing that
+        // rename_sheet needed to set it too.
+        let mut vm = Vm::new();
+        assert!(!vm.defined_names_may_be_stale);
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+        assert!(vm.defined_names_may_be_stale);
+
+        let mut vm2 = Vm::new();
+        vm2.ensure_sheet("B");
+        assert!(!vm2.defined_names_may_be_stale);
+        vm2.move_sheet("B", 0).unwrap();
+        assert!(vm2.defined_names_may_be_stale);
+    }
+
+    // ── P1 core 3: row/col insert-delete sheet-parameterized siblings ───────
+
+    #[test]
+    fn insert_rows_on_sheet_does_not_affect_a_different_sheet_or_change_active_sheet() {
+        let mut vm = Vm::new(); // active sheet is "sheet1"
+        vm.ensure_sheet("Other");
+        vm.sheet_cells_mut("other").unwrap().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(99),
+            },
+        );
+        vm.cells_mut().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+
+        vm.insert_rows_on_sheet("other", 1, 2);
+
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(5, 1), Variant::Integer(1)); // active sheet untouched
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(7, 1))
+                .unwrap()
+                .value,
+            Variant::Integer(99)
+        ); // shifted down by 2 on the target sheet
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_shifts_only_the_target_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.sheet_cells_mut("other").unwrap().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(99),
+            },
+        );
+        vm.cells_mut().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+
+        vm.delete_rows_on_sheet("other", 1, 2);
+
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(5, 1), Variant::Integer(1)); // active sheet untouched
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(3, 1))
+                .unwrap()
+                .value,
+            Variant::Integer(99)
+        ); // shifted up by 2 on the target sheet
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_removes_the_stale_entry_at_the_pre_shift_row() {
+        // Regression test for a bug caught in review: an earlier draft of
+        // delete_rows_on_sheet used `retain(row < first || row > last)`, which
+        // kept the pre-shift entry AND inserted a second copy at the shifted
+        // position -- silent stale duplicate data. The correct predicate is
+        // `retain(row < first)`, verified here.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (10, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(7),
+            },
+        );
+        vm.delete_rows_on_sheet("sheet1", 1, 2);
+        assert_eq!(vm.get_cell(10, 1), Variant::Empty); // stale pre-shift position is gone
+        assert_eq!(vm.get_cell(8, 1), Variant::Integer(7)); // correct shifted position
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_does_not_affect_a_different_sheet_or_change_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.sheet_cells_mut("other").unwrap().insert(
+            (1, 5),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(99),
+            },
+        );
+        vm.cells_mut().insert(
+            (1, 5),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+
+        vm.insert_cols_on_sheet("other", 1, 2);
+
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(1));
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 7))
+                .unwrap()
+                .value,
+            Variant::Integer(99)
+        );
+    }
+
+    #[test]
+    fn delete_cols_on_sheet_removes_the_stale_entry_at_the_pre_shift_col() {
+        // Column-axis mirror of the row-axis stale-position regression test above.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 10),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(7),
+            },
+        );
+        vm.delete_cols_on_sheet("sheet1", 1, 2);
+        assert_eq!(vm.get_cell(1, 10), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 8), Variant::Integer(7));
+    }
+
+    // ── P1 remainder: sort_range_on_sheet (extracted from Stmt::RangeSort) ──
+
+    #[test]
+    fn sort_range_on_sheet_does_not_affect_a_different_sheet_or_change_active_sheet() {
+        let mut vm = Vm::new(); // active sheet is "sheet1"
+        vm.ensure_sheet("Other");
+        vm.write_rect(
+            "other",
+            (1, 1),
+            &[
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+            ],
+        );
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(99)]]);
+
+        vm.sort_range_on_sheet("other", 1, 1, 3, 1, 1, false, false);
+
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(99)); // active sheet untouched
+        assert_eq!(
+            vm.iter_rows_values("other", 1, Some(3), 1, Some(1)),
+            vec![
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+                vec![Variant::Integer(3)],
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_range_on_sheet_sorts_ascending_and_descending() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+            ],
+        );
+        vm.sort_range_on_sheet("sheet1", 1, 1, 3, 1, 1, false, false);
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, Some(3), 1, Some(1)),
+            vec![
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+                vec![Variant::Integer(3)],
+            ]
+        );
+
+        let mut vm2 = Vm::new();
+        vm2.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+            ],
+        );
+        vm2.sort_range_on_sheet("sheet1", 1, 1, 3, 1, 1, true, false);
+        assert_eq!(
+            vm2.iter_rows_values("sheet1", 1, Some(3), 1, Some(1)),
+            vec![
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(2)],
+                vec![Variant::Integer(1)],
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_range_on_sheet_excludes_the_header_row() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![Variant::Integer(9)], // header -- must stay at row 1
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+            ],
+        );
+        vm.sort_range_on_sheet("sheet1", 1, 1, 3, 1, 1, false, true);
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, Some(3), 1, Some(1)),
+            vec![
+                vec![Variant::Integer(9)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(3)],
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_range_on_sheet_with_an_out_of_range_key_col_clamps_via_saturating_sub() {
+        // Pins the preserved (not fixed) VBA-path behavior: a key_col below
+        // the range's own c1 saturates to offset 0 instead of erroring, so
+        // it silently sorts by the range's first column. This must not
+        // change without a conscious decision -- PyVm::sort_range validates
+        // key_col explicitly instead of inheriting this clamp.
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 2), // range starts at column 2 (B)
+            &[
+                vec![Variant::Integer(3)],
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+            ],
+        );
+        vm.sort_range_on_sheet("sheet1", 1, 2, 3, 2, 1, false, false); // key_col=1 < c1=2
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, Some(3), 2, Some(2)),
+            vec![
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+                vec![Variant::Integer(3)],
+            ]
+        );
+    }
+
     // ── Milestone B6a: strict_resolution + resolution-failure evidence ──────
 
     #[test]
@@ -10107,6 +11033,68 @@ mod tests {
         }
     }
 
+    // ── P1 remainder: merge_cells / unmerge_cells ────────────────────────────
+
+    #[test]
+    fn merge_cells_rejects_a_single_cell_range() {
+        let mut vm = Vm::new();
+        let err = vm.merge_cells("sheet1", 1, 1, 1, 1).unwrap_err();
+        assert!(err.contains("at least 2 cells"), "{:?}", err);
+    }
+
+    #[test]
+    fn merge_cells_rejects_a_range_that_overlaps_an_existing_merge() {
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4))); // B1:D1
+        let err = vm.merge_cells("sheet1", 1, 3, 2, 5).unwrap_err(); // C1:E2 overlaps
+        assert!(err.contains("overlap"), "{:?}", err);
+        assert_eq!(vm.merged_ranges.get("sheet1").unwrap().len(), 1); // rejected merge not added
+    }
+
+    #[test]
+    fn merge_cells_allows_a_non_overlapping_second_merge_on_the_same_sheet() {
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4))); // B1:D1
+        vm.merge_cells("sheet1", 3, 1, 3, 2).unwrap(); // A3:B3, no overlap
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((1, 2), (1, 4)), ((3, 1), (3, 2))]
+        );
+    }
+
+    #[test]
+    fn merge_cells_does_not_touch_existing_cell_values_in_the_covered_range() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[vec![Variant::Integer(1), Variant::Integer(2)]],
+        );
+        vm.merge_cells("sheet1", 1, 1, 1, 2).unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+    }
+
+    #[test]
+    fn unmerge_cells_removes_an_exact_match() {
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4))); // B1:D1
+        vm.unmerge_cells("sheet1", 1, 2, 1, 4).unwrap();
+        assert!(vm.merged_ranges.get("sheet1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn unmerge_cells_errors_on_no_match_instead_of_silently_no_opping() {
+        let mut vm = Vm::new();
+        let err = vm.unmerge_cells("sheet1", 1, 1, 1, 2).unwrap_err();
+        assert!(err.contains("no merge found"), "{:?}", err);
+    }
+
+    #[test]
+    fn unmerge_cells_errors_on_a_partial_overlap_that_is_not_an_exact_match() {
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4))); // B1:D1
+        let err = vm.unmerge_cells("sheet1", 1, 2, 1, 3).unwrap_err(); // B1:C1, not exact
+        assert!(err.contains("no merge found"), "{:?}", err);
+        assert_eq!(vm.merged_ranges.get("sheet1").unwrap().len(), 1); // original merge untouched
+    }
+
     // ── Milestone B7b: hidden row/column metadata foundation ────────────────
 
     #[test]
@@ -10899,5 +11887,403 @@ mod tests {
         vm.run_sub_multi(&modules, "Main").unwrap();
         assert_eq!(vm.variables["x"], Variant::Integer(42));
         assert_eq!(vm.variables["y"], Variant::Integer(1));
+    }
+
+    // ── R1: bulk worksheet range/row API core (resolve_sheet_key,
+    // sheet_used_range, next_append_row, read_rect, write_rect,
+    // iter_rows_values) ─────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_sheet_key_none_returns_the_active_sheet() {
+        let vm = Vm::new();
+        assert_eq!(vm.resolve_sheet_key(None).unwrap(), "sheet1");
+    }
+
+    #[test]
+    fn resolve_sheet_key_looks_up_case_insensitively() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet2");
+        assert_eq!(vm.resolve_sheet_key(Some("SHEET2")).unwrap(), "sheet2");
+        assert_eq!(vm.resolve_sheet_key(Some("sheet2")).unwrap(), "sheet2");
+        assert_eq!(vm.resolve_sheet_key(Some("Sheet2")).unwrap(), "sheet2");
+    }
+
+    #[test]
+    fn resolve_sheet_key_errors_on_an_unknown_name() {
+        let vm = Vm::new();
+        let err = vm.resolve_sheet_key(Some("Typo")).unwrap_err();
+        assert!(err.contains("Typo"), "{err:?}");
+    }
+
+    #[test]
+    fn sheet_used_range_is_none_on_an_empty_sheet() {
+        let vm = Vm::new();
+        assert_eq!(vm.sheet_used_range("sheet1"), None);
+    }
+
+    #[test]
+    fn sheet_used_range_a_single_cell_is_both_corners() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (3, 3),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        assert_eq!(vm.sheet_used_range("sheet1"), Some(((3, 3), (3, 3))));
+    }
+
+    #[test]
+    fn sheet_used_range_is_the_true_bounding_box_not_anchored_at_1_1() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (3, 3),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        vm.cells_mut().insert(
+            (7, 5),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(2),
+            },
+        );
+        assert_eq!(vm.sheet_used_range("sheet1"), Some(((3, 3), (7, 5))));
+    }
+
+    #[test]
+    fn sheet_used_range_handles_a_sparse_sheet() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        vm.cells_mut().insert(
+            (50, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(2),
+            },
+        );
+        assert_eq!(vm.sheet_used_range("sheet1"), Some(((1, 1), (50, 1))));
+    }
+
+    #[test]
+    fn sheet_used_range_counts_null_but_not_empty() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (10, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Null,
+            },
+        );
+        vm.cells_mut().insert(
+            (99, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Empty,
+            },
+        );
+        assert_eq!(vm.sheet_used_range("sheet1"), Some(((10, 1), (10, 1))));
+        assert_eq!(vm.read_rect("sheet1", 10, 1, 10, 1)[0][0], Variant::Null);
+    }
+
+    #[test]
+    fn next_append_row_is_1_on_an_empty_sheet() {
+        let vm = Vm::new();
+        assert_eq!(vm.next_append_row("sheet1"), 1);
+    }
+
+    #[test]
+    fn next_append_row_uses_the_real_max_on_a_sparse_sheet() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (50, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        assert_eq!(vm.next_append_row("sheet1"), 51);
+    }
+
+    #[test]
+    fn read_rect_returns_empty_for_gaps() {
+        let vm = Vm::new();
+        let grid = vm.read_rect("sheet1", 1, 1, 2, 2);
+        assert_eq!(
+            grid,
+            vec![
+                vec![Variant::Empty, Variant::Empty],
+                vec![Variant::Empty, Variant::Empty],
+            ]
+        );
+    }
+
+    #[test]
+    fn read_rect_preserves_every_variant_kind() {
+        let mut vm = Vm::new();
+        let values = [
+            (1, 1, Variant::Integer(42)),
+            (1, 2, Variant::Float(1.5)),
+            (1, 3, Variant::Str("hi".into())),
+            (1, 4, Variant::Boolean(true)),
+            (1, 5, Variant::Date(45366)),
+            (1, 6, Variant::Error(ExcelError::DivZero)),
+        ];
+        for &(r, c, ref v) in &values {
+            vm.cells_mut().insert(
+                (r, c),
+                CellContent {
+                    formula: None,
+                    value: v.clone(),
+                },
+            );
+        }
+        let grid = vm.read_rect("sheet1", 1, 1, 1, 6);
+        for (i, (_, _, v)) in values.iter().enumerate() {
+            assert_eq!(&grid[0][i], v);
+        }
+    }
+
+    #[test]
+    fn read_rect_on_a_formula_cell_returns_its_evaluated_value() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=1+2".to_string()),
+                value: Variant::Integer(3),
+            },
+        );
+        assert_eq!(
+            vm.read_rect("sheet1", 1, 1, 1, 1)[0][0],
+            Variant::Integer(3)
+        );
+    }
+
+    #[test]
+    fn write_rect_writes_the_exact_grid_at_the_exact_offset() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (2, 3),
+            &[
+                vec![Variant::Integer(1), Variant::Integer(2)],
+                vec![Variant::Integer(3), Variant::Integer(4)],
+            ],
+        );
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(2));
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(3));
+        assert_eq!(vm.get_cell(3, 4), Variant::Integer(4));
+    }
+
+    #[test]
+    fn write_rect_on_a_non_active_sheet_does_not_change_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet2");
+        vm.write_rect("sheet2", (1, 1), &[vec![Variant::Integer(9)]]);
+        assert_eq!(vm.active_sheet, "sheet1");
+        let written = vm.get_sheet_cells("sheet2").unwrap().get(&(1, 1)).unwrap();
+        assert_eq!(written.value, Variant::Integer(9));
+        assert_eq!(written.formula, None);
+    }
+
+    #[test]
+    fn write_rect_into_a_non_anchor_merged_cell_does_not_error() {
+        // B1:D1 merged; writing at C1 (a covered, non-anchor cell) must
+        // succeed and store the value -- matches real Excel's own plain
+        // `.Value=` behavior and PyVm::set_cell's existing lack of any merge
+        // check, per docs/openpyxl-gap-audit.md's design note.
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4)));
+        vm.write_rect("sheet1", (1, 3), &[vec![Variant::Integer(5)]]);
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(5));
+    }
+
+    #[test]
+    fn write_rect_into_a_protected_sheet_does_not_error() {
+        // No VBA construct reachable from here that both protects a sheet
+        // AND leaves it selectable for a raw write_rect call, so this
+        // injects `protected_sheets` directly, the same way merge/hidden-row
+        // tests inject state with no VBA syntax to create it.
+        let mut vm = Vm::new();
+        vm.protected_sheets.insert("sheet1".to_string());
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+    }
+
+    #[test]
+    fn write_rect_invalidates_the_lazy_cell_index_used_by_end_xlup() {
+        // `last_nonempty_row`/`last_nonempty_col` (VBA's `End(xlUp)`/
+        // `End(xlToLeft)`) are backed by a lazily-rebuilt index gated on
+        // `cell_index_dirty`. `write_rect` goes through `sheet_cells_mut`,
+        // which already flips that flag unconditionally -- this test pins
+        // that behavior so a bulk write followed by a VBA-side `End(xlUp)`
+        // in the same `Vm` can't silently see stale data.
+        let mut vm = Vm::new();
+        assert_eq!(vm.last_nonempty_row(1, 100), 1); // builds+caches the index at "empty"
+        vm.write_rect("sheet1", (10, 1), &[vec![Variant::Integer(42)]]);
+        assert_eq!(vm.last_nonempty_row(1, 100), 10);
+    }
+
+    #[test]
+    fn iter_rows_values_on_an_empty_sheet_with_no_explicit_max_row_is_empty() {
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, None, 1, None),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_rows_values_on_an_empty_sheet_with_an_explicit_max_row_returns_empties() {
+        let vm = Vm::new();
+        let grid = vm.iter_rows_values("sheet1", 1, Some(3), 1, None);
+        assert_eq!(grid.len(), 3);
+        assert!(grid.iter().all(|row| row == &[Variant::Empty]));
+    }
+
+    #[test]
+    fn iter_rows_values_short_circuit_keys_on_max_row_not_max_col() {
+        // max_col given explicitly but max_row is not -- still [] on an
+        // empty sheet, proving the short-circuit is about max_row.
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, None, 1, Some(3)),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_rows_values_defaults_to_the_used_range() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (2, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        let grid = vm.iter_rows_values("sheet1", 1, None, 1, None);
+        assert_eq!(
+            grid,
+            vec![
+                vec![Variant::Empty, Variant::Empty],
+                vec![Variant::Empty, Variant::Integer(1)]
+            ]
+        );
+    }
+
+    #[test]
+    fn iter_rows_values_on_a_reversed_numeric_window_is_empty_not_a_panic() {
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 5, Some(2), 1, None),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_cols_values_on_an_empty_sheet_with_no_explicit_max_col_is_empty() {
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_cols_values("sheet1", 1, None, 1, None),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_cols_values_on_an_empty_sheet_with_an_explicit_max_col_returns_empties() {
+        let vm = Vm::new();
+        let grid = vm.iter_cols_values("sheet1", 1, None, 1, Some(3));
+        assert_eq!(grid.len(), 3);
+        assert!(grid.iter().all(|col| col == &[Variant::Empty]));
+    }
+
+    #[test]
+    fn iter_cols_values_short_circuit_keys_on_max_col_not_max_row() {
+        // max_row given explicitly but max_col is not -- still [] on an
+        // empty sheet, proving the short-circuit is about max_col.
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_cols_values("sheet1", 1, Some(3), 1, None),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_cols_values_defaults_to_the_used_range() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (2, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        let grid = vm.iter_cols_values("sheet1", 1, None, 1, None);
+        assert_eq!(
+            grid,
+            vec![
+                vec![Variant::Empty, Variant::Empty],
+                vec![Variant::Empty, Variant::Integer(1)]
+            ]
+        );
+    }
+
+    #[test]
+    fn iter_cols_values_on_a_reversed_numeric_window_is_empty_not_a_panic() {
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_cols_values("sheet1", 1, None, 5, Some(2)),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_cols_values_is_the_transpose_of_iter_rows_values_on_the_same_bounds() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        vm.cells_mut().insert(
+            (1, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(2),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(3),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(4),
+            },
+        );
+        let rows = vm.iter_rows_values("sheet1", 1, Some(2), 1, Some(2));
+        let cols = vm.iter_cols_values("sheet1", 1, Some(2), 1, Some(2));
+        let transposed_rows: Vec<Vec<Variant>> = (0..rows[0].len())
+            .map(|ci| rows.iter().map(|row| row[ci].clone()).collect())
+            .collect();
+        assert_eq!(cols, transposed_rows);
     }
 }

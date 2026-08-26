@@ -181,6 +181,155 @@ fn py_to_variant(obj: &Bound<'_, PyAny>) -> PyResult<Variant> {
     ))
 }
 
+// ── Bulk worksheet range/row API (R1) — address/shape validation ───────────────
+//
+// These two functions are deliberately NOT `#[cfg(feature = "python")]` — they
+// take no pyo3 types at all, and `cargo check --features python --lib` (the
+// only CI step that type-checks the gated PyVm code below) never *runs*
+// anything, so keeping this pure validation logic ungated is what gives it
+// any automated test coverage at all (via plain `cargo test --workspace`).
+
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
+type RangeBounds = ((u32, u32), (u32, u32));
+
+/// Validates and parses a single-area A1 range address for the bulk-range
+/// Python API (`get_range`/`set_range`). Deliberately NOT a new A1 parser —
+/// delegates to `crate::types::parse_range_addr` for the actual grammar.
+/// Adds only, as explicit errors instead of the shared parser's silent
+/// `None`:
+///   - `$`-stripping before delegating (Excel absolute-reference syntax;
+///     `elixcee-types`'s column-letter parsing does an unchecked `u32`
+///     subtraction that underflows on a leading `$` today — a real,
+///     many-call-site, pre-existing gap in the shared parser that this
+///     closes ONLY for calls that go through this wrapper, not
+///     project-wide; see docs/openpyxl-gap-audit.md),
+///   - multi-area (`,`-containing) rejection,
+///   - reversed-range rejection (`start > end`), matching the precedent
+///     `reader.rs`'s own `parse_dimension_ref` already sets for dimension
+///     refs,
+///   - row/col `0` rejection (`parse_cell_addr("A0")` succeeds as `(0,1)`
+///     today — another disclosed, out-of-scope shared-parser gap).
+///
+/// Both this and `check_grid_shape` below are only ever called from the
+/// `#[cfg(feature = "python")]` `PyVm` methods, but are deliberately left
+/// ungated themselves (see the section comment above) — a plain,
+/// feature-less build has no caller for them outside `#[cfg(test)]`, hence
+/// the narrow, conditional `dead_code` allow rather than a broad one.
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
+fn validate_range_addr(addr: &str) -> Result<RangeBounds, String> {
+    if addr.contains(',') {
+        return Err(format!("multi-area address not supported: {addr:?}"));
+    }
+    let stripped = addr.replace('$', "");
+    let (start, end) = crate::types::parse_range_addr(&stripped)
+        .ok_or_else(|| format!("invalid range address: {addr:?}"))?;
+    if start.0 == 0 || start.1 == 0 || end.0 == 0 || end.1 == 0 {
+        return Err(format!(
+            "invalid range address (row/column must be >= 1): {addr:?}"
+        ));
+    }
+    if start.0 > end.0 || start.1 > end.1 {
+        return Err(format!("reversed range address: {addr:?}"));
+    }
+    Ok((start, end))
+}
+
+/// Validates a Python-supplied nested-list grid's shape against `set_range`'s
+/// target rect, given each already-extracted outer-list row's length in
+/// order. Two distinct failure messages: ragged input (row lengths disagree
+/// with each other) vs. shape mismatch (rectangular, but wrong size) — both
+/// surfaced as `ValueError` at the call site. Never indexes into the
+/// original values, only their pre-collected lengths, so it can't panic on
+/// empty input (`row_lens == []`: no ragged check fires, falls straight to
+/// the 0x0-vs-expected shape-mismatch branch).
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
+fn check_grid_shape(expected: (u32, u32), row_lens: &[usize]) -> Result<(), String> {
+    if let Some(&first) = row_lens.first()
+        && row_lens.iter().any(|&n| n != first)
+    {
+        return Err(format!(
+            "ragged input: row lengths must all be equal, got {row_lens:?}"
+        ));
+    }
+    let (expected_rows, expected_cols) = (expected.0 as usize, expected.1 as usize);
+    let actual_rows = row_lens.len();
+    let actual_cols = row_lens.first().copied().unwrap_or(0);
+    if actual_rows != expected_rows || actual_cols != expected_cols {
+        return Err(format!(
+            "shape mismatch: range expects {expected_rows}x{expected_cols}, got {actual_rows}x{actual_cols}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod bulk_range_validation_tests {
+    use super::*;
+
+    #[test]
+    fn validate_range_addr_accepts_a_normal_range() {
+        assert_eq!(validate_range_addr("A1:C5").unwrap(), ((1, 1), (5, 3)));
+    }
+
+    #[test]
+    fn validate_range_addr_accepts_a_bare_single_cell() {
+        assert_eq!(validate_range_addr("B2").unwrap(), ((2, 2), (2, 2)));
+    }
+
+    #[test]
+    fn validate_range_addr_strips_dollar_signs() {
+        assert_eq!(validate_range_addr("$A$1:$C$5").unwrap(), ((1, 1), (5, 3)));
+    }
+
+    #[test]
+    fn validate_range_addr_rejects_multi_area() {
+        let err = validate_range_addr("A1:B2,D1:E2").unwrap_err();
+        assert!(err.contains("multi-area"), "{err:?}");
+    }
+
+    #[test]
+    fn validate_range_addr_rejects_malformed_input() {
+        assert!(validate_range_addr("!!").is_err());
+        assert!(validate_range_addr("").is_err());
+    }
+
+    #[test]
+    fn validate_range_addr_rejects_a_reversed_range() {
+        let err = validate_range_addr("C3:A1").unwrap_err();
+        assert!(err.contains("reversed"), "{err:?}");
+    }
+
+    #[test]
+    fn validate_range_addr_rejects_row_or_col_zero() {
+        assert!(validate_range_addr("A0").is_err());
+        assert!(validate_range_addr("A0:B1").is_err());
+    }
+
+    #[test]
+    fn check_grid_shape_accepts_an_exact_match() {
+        check_grid_shape((2, 3), &[3, 3]).unwrap();
+    }
+
+    #[test]
+    fn check_grid_shape_rejects_ragged_input() {
+        let err = check_grid_shape((2, 3), &[3, 2]).unwrap_err();
+        assert!(err.contains("ragged"), "{err:?}");
+    }
+
+    #[test]
+    fn check_grid_shape_rejects_a_shape_mismatch() {
+        let err = check_grid_shape((2, 3), &[2, 2]).unwrap_err();
+        assert!(err.contains("2x3"), "{err:?}");
+        assert!(err.contains("2x2"), "{err:?}");
+    }
+
+    #[test]
+    fn check_grid_shape_on_empty_input_does_not_panic() {
+        let err = check_grid_shape((2, 3), &[]).unwrap_err();
+        assert!(err.contains("0x0"), "{err:?}");
+    }
+}
+
 // ── PyVm class ────────────────────────────────────────────────────────────────
 
 /// VBA execution engine. Create one, pre-populate cells with ``set_cell``,
@@ -308,6 +457,41 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Rename a sheet.
+    ///
+    /// Parameters
+    /// ----------
+    /// old_name:
+    ///     The sheet's current name (case-insensitive).
+    /// new_name:
+    ///     The new name. Renaming the active sheet is supported (it stays active
+    ///     under the new name). Renaming a sheet to itself, or to a different
+    ///     casing of its own name, succeeds.
+    ///
+    /// Raises ``ValueError`` if *old_name* doesn't exist, *new_name* is empty or
+    /// whitespace-only, *new_name* (case-insensitively) already names a *different*
+    /// existing sheet, or the sheet is protected.
+    fn rename_sheet(&mut self, old_name: &str, new_name: &str) -> PyResult<()> {
+        self.inner
+            .rename_sheet(old_name, new_name)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Move a sheet to an absolute 0-based position among the workbook's sheets.
+    ///
+    /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
+    /// *new_index* here is an absolute target position (0 = first), matching
+    /// ``set_sheet``'s own ``index`` convention. Out-of-range values are clamped to
+    /// the nearest end rather than raising. Does not check sheet protection --
+    /// real Excel's per-sheet protection does not gate tab reordering.
+    ///
+    /// Raises ``ValueError`` if *name* doesn't exist.
+    fn move_sheet(&mut self, name: &str, new_index: usize) -> PyResult<()> {
+        self.inner
+            .move_sheet(name, new_index)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Return the name of the currently active sheet.
     fn active_sheet(&self) -> &str {
         &self.inner.active_sheet
@@ -389,6 +573,549 @@ impl PyVm {
             .call((rows_list,), Some(&kwargs))
             .map(|df| df.into_any().unbind())
     }
+
+    /// Read a rectangular range (e.g. ``"A1:C5"``), 1-based A1 notation.
+    ///
+    /// Returns a row-major nested list, ``None`` for empty cells — same
+    /// per-cell typing as ``get_cell``. Multi-area addresses (``"A1:B2,D1:E2"``)
+    /// and malformed/reversed addresses raise ``ValueError``.
+    ///
+    /// Parameters
+    /// ----------
+    /// addr:
+    ///     A single-area A1 range, e.g. ``"A1:C5"`` or a bare cell like ``"B2"``.
+    /// sheet:
+    ///     Sheet to read from. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (addr, sheet = None))]
+    fn get_range(&self, py: Python<'_>, addr: &str, sheet: Option<&str>) -> PyResult<Py<PyAny>> {
+        let (start, end) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let grid = self.inner.read_rect(&key, start.0, start.1, end.0, end.1);
+        grid_to_py(py, &grid)
+    }
+
+    /// Write a rectangular range (e.g. ``"A1:C2"``), 1-based A1 notation.
+    ///
+    /// *values* must be a strictly rectangular (non-ragged) nested sequence
+    /// whose shape exactly matches *addr*'s row×col shape, or ``ValueError``
+    /// is raised naming both the expected and actual shape. ``None`` in the
+    /// input means an empty cell. A string value starting with ``"="`` is
+    /// stored literally, never promoted to a formula — use
+    /// ``set_cell_formula``/``set_cell_formula_batch`` for that. Every value
+    /// is converted and the shape is checked **before** any cell is
+    /// touched — a validation failure leaves every existing cell unchanged.
+    ///
+    /// Writing into a non-anchor cell of a merged range, or into a protected
+    /// sheet, is **not** blocked — this matches ``set_cell``'s existing
+    /// behavior (see docs/openpyxl-gap-audit.md for why).
+    ///
+    /// Parameters
+    /// ----------
+    /// addr:
+    ///     A single-area A1 range, e.g. ``"A1:C2"``.
+    /// values:
+    ///     A rectangular nested sequence matching *addr*'s shape.
+    /// sheet:
+    ///     Sheet to write to. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (addr, values, sheet = None))]
+    fn set_range(
+        &mut self,
+        addr: &str,
+        values: &Bound<'_, PyAny>,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let (start, end) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+
+        // The whole grid is converted into a scratch buffer first -- nothing
+        // in `self.inner` is touched until every value has converted
+        // successfully AND the shape has been confirmed exact. This is what
+        // makes "no partial write on validation failure" structurally true,
+        // not just tested.
+        let mut grid: Vec<Vec<Variant>> = Vec::new();
+        let mut row_lens: Vec<usize> = Vec::new();
+        for row_obj in values.try_iter()? {
+            let mut row: Vec<Variant> = Vec::new();
+            for cell_obj in row_obj?.try_iter()? {
+                row.push(py_to_variant(&cell_obj?)?);
+            }
+            row_lens.push(row.len());
+            grid.push(row);
+        }
+        let expected = (end.0 - start.0 + 1, end.1 - start.1 + 1);
+        check_grid_shape(expected, &row_lens)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+
+        self.inner.write_rect(&key, start, &grid);
+        Ok(())
+    }
+
+    /// Write one row just past the sheet's used range (row 1 if the sheet is
+    /// empty/all-empty; uses the true max used row, so it's correct on a
+    /// sparse sheet). Returns the 1-based row number written.
+    ///
+    /// Same validate-then-commit and active-sheet-preservation guarantees as
+    /// ``set_range``. Raises ``ValueError`` if *values* is empty.
+    ///
+    /// Parameters
+    /// ----------
+    /// values:
+    ///     The row's values, written starting at column 1.
+    /// sheet:
+    ///     Sheet to append to. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (values, sheet = None))]
+    fn append_row(&mut self, values: &Bound<'_, PyAny>, sheet: Option<&str>) -> PyResult<u32> {
+        let mut row: Vec<Variant> = Vec::new();
+        for item in values.try_iter()? {
+            row.push(py_to_variant(&item?)?);
+        }
+        if row.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "append_row: values must not be empty",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let target_row = self.inner.next_append_row(&key);
+        self.inner.write_rect(&key, (target_row, 1), &[row]);
+        Ok(target_row)
+    }
+
+    /// Values-only iteration over a rectangular region, 1-based bounds.
+    ///
+    /// ``max_row``/``max_col`` default to the sheet's used range; on a sheet
+    /// with no non-empty cells at all **and** no explicit ``max_row``,
+    /// returns ``[]`` rather than one row of ``None``\ s. Returns plain
+    /// nested lists — this does **not** claim openpyxl ``Cell``-object
+    /// compatibility (no ``.value``/``.style``/etc attached, just the values).
+    ///
+    /// Parameters
+    /// ----------
+    /// min_row, min_col:
+    ///     1-based lower bounds (default 1).
+    /// max_row, max_col:
+    ///     1-based upper bounds. Default to the sheet's used range.
+    /// sheet:
+    ///     Sheet to read from. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (min_row = 1, max_row = None, min_col = 1, max_col = None, sheet = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn iter_rows(
+        &self,
+        py: Python<'_>,
+        min_row: u32,
+        max_row: Option<u32>,
+        min_col: u32,
+        max_col: Option<u32>,
+        sheet: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        if min_row == 0 || min_col == 0 || max_row == Some(0) || max_col == Some(0) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "row/column numbers must be >= 1",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let grid = self
+            .inner
+            .iter_rows_values(&key, min_row, max_row, min_col, max_col);
+        grid_to_py(py, &grid)
+    }
+
+    /// Values-only, column-major iteration over a rectangular region —
+    /// the transposed sibling of ``iter_rows``. Each returned inner list is
+    /// one column's values, top to bottom.
+    ///
+    /// ``max_row``/``max_col`` default to the sheet's used range; on a sheet
+    /// with no non-empty cells at all **and** no explicit ``max_col``,
+    /// returns ``[]`` rather than one column of ``None``\ s. Returns plain
+    /// nested lists — this does **not** claim openpyxl ``Cell``-object
+    /// compatibility (no ``.value``/``.style``/etc attached, just the values).
+    ///
+    /// Parameters
+    /// ----------
+    /// min_row, min_col:
+    ///     1-based lower bounds (default 1).
+    /// max_row, max_col:
+    ///     1-based upper bounds. Default to the sheet's used range.
+    /// sheet:
+    ///     Sheet to read from. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (min_row = 1, max_row = None, min_col = 1, max_col = None, sheet = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn iter_cols(
+        &self,
+        py: Python<'_>,
+        min_row: u32,
+        max_row: Option<u32>,
+        min_col: u32,
+        max_col: Option<u32>,
+        sheet: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        if min_row == 0 || min_col == 0 || max_row == Some(0) || max_col == Some(0) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "row/column numbers must be >= 1",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let grid = self
+            .inner
+            .iter_cols_values(&key, min_row, max_row, min_col, max_col);
+        grid_to_py(py, &grid)
+    }
+
+    /// Highest used row number, or ``None`` for a sheet with zero non-empty
+    /// cells (never ``0``).
+    #[pyo3(signature = (sheet = None))]
+    fn max_row(&self, sheet: Option<&str>) -> PyResult<Option<u32>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self.inner.sheet_used_range(&key).map(|(_, (r2, _))| r2))
+    }
+
+    /// Highest used column number, or ``None`` for a sheet with zero
+    /// non-empty cells (never ``0``).
+    #[pyo3(signature = (sheet = None))]
+    fn max_column(&self, sheet: Option<&str>) -> PyResult<Option<u32>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self.inner.sheet_used_range(&key).map(|(_, (_, c2))| c2))
+    }
+
+    /// The used range as an A1-style string (e.g. ``"B2:D10"``), or ``None``
+    /// for a sheet with zero non-empty cells (never ``"A1:A1"``).
+    ///
+    /// Min-anchored, not A1-anchored: if the only populated cell is C3, this
+    /// returns ``"C3:C3"``, not ``"A1:C3"``. Always includes the ``:`` even
+    /// for a single-cell range.
+    #[pyo3(signature = (sheet = None))]
+    fn calculate_dimension(&self, sheet: Option<&str>) -> PyResult<Option<String>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self
+            .inner
+            .sheet_used_range(&key)
+            .map(|((r1, c1), (r2, c2))| {
+                format!(
+                    "{}{}:{}{}",
+                    xlsx_col_letters(c1),
+                    r1,
+                    xlsx_col_letters(c2),
+                    r2
+                )
+            }))
+    }
+
+    /// Insert *amount* blank rows before 1-based row *idx*, shifting *idx* and
+    /// everything below it down. Mirrors openpyxl's
+    /// ``Worksheet.insert_rows(idx, amount=1)`` naming/value semantics.
+    ///
+    /// Does **not** shift merged ranges, hidden-row markers, cell styles/number
+    /// formats, or formula cell-reference text — a pre-existing limitation of the
+    /// underlying VBA engine (``Rows(n).Insert``) now reachable from Python; see
+    /// docs/openpyxl-gap-audit.md and ROADMAP.md's known gaps.
+    ///
+    /// Parameters
+    /// ----------
+    /// idx:
+    ///     1-based row number to insert before.
+    /// amount:
+    ///     Number of rows to insert (default 1).
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; never changes which
+    ///     sheet is active.
+    ///
+    /// Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds Excel's own grid
+    /// limit (1,048,576 rows), or *sheet* is unknown.
+    #[pyo3(signature = (idx, amount = 1, sheet = None))]
+    fn insert_rows(&mut self, idx: u32, amount: u32, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        if idx == 0 || amount == 0 || idx > MAX_ROW || amount > MAX_ROW {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "idx and amount must be between 1 and 1_048_576",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.insert_rows_on_sheet(&key, idx, amount);
+        Ok(())
+    }
+
+    /// Delete *amount* rows starting at 1-based row *idx*, shifting everything
+    /// below the deleted band up. Mirrors openpyxl's
+    /// ``Worksheet.delete_rows(idx, amount=1)`` naming/value semantics.
+    ///
+    /// Same fidelity gap as :meth:`insert_rows` — does not shift merges, hidden
+    /// markers, styles/number formats, or formula references.
+    ///
+    /// Parameters
+    /// ----------
+    /// idx:
+    ///     1-based row number to start deleting from.
+    /// amount:
+    ///     Number of rows to delete (default 1).
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; never changes which
+    ///     sheet is active.
+    ///
+    /// Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds Excel's own grid
+    /// limit (1,048,576 rows), or *sheet* is unknown.
+    #[pyo3(signature = (idx, amount = 1, sheet = None))]
+    fn delete_rows(&mut self, idx: u32, amount: u32, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        if idx == 0 || amount == 0 || idx > MAX_ROW || amount > MAX_ROW {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "idx and amount must be between 1 and 1_048_576",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.delete_rows_on_sheet(&key, idx, amount);
+        Ok(())
+    }
+
+    /// Insert *amount* blank columns before 1-based column *idx*, shifting *idx*
+    /// and everything to its right, right. Mirrors openpyxl's
+    /// ``Worksheet.insert_cols(idx, amount=1)`` naming/value semantics.
+    ///
+    /// Same fidelity gap as :meth:`insert_rows` — does not shift merges, hidden
+    /// markers, styles/number formats, or formula references.
+    ///
+    /// Parameters
+    /// ----------
+    /// idx:
+    ///     1-based column number to insert before.
+    /// amount:
+    ///     Number of columns to insert (default 1).
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; never changes which
+    ///     sheet is active.
+    ///
+    /// Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds Excel's own grid
+    /// limit (16,384 columns, i.e. ``XFD``), or *sheet* is unknown.
+    #[pyo3(signature = (idx, amount = 1, sheet = None))]
+    fn insert_cols(&mut self, idx: u32, amount: u32, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_COL: u32 = 16_384;
+        if idx == 0 || amount == 0 || idx > MAX_COL || amount > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "idx and amount must be between 1 and 16_384",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.insert_cols_on_sheet(&key, idx, amount);
+        Ok(())
+    }
+
+    /// Delete *amount* columns starting at 1-based column *idx*, shifting
+    /// everything to the right of the deleted band left. Mirrors openpyxl's
+    /// ``Worksheet.delete_cols(idx, amount=1)`` naming/value semantics.
+    ///
+    /// Same fidelity gap as :meth:`insert_rows` — does not shift merges, hidden
+    /// markers, styles/number formats, or formula references.
+    ///
+    /// Parameters
+    /// ----------
+    /// idx:
+    ///     1-based column number to start deleting from.
+    /// amount:
+    ///     Number of columns to delete (default 1).
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; never changes which
+    ///     sheet is active.
+    ///
+    /// Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds Excel's own grid
+    /// limit (16,384 columns, i.e. ``XFD``), or *sheet* is unknown.
+    #[pyo3(signature = (idx, amount = 1, sheet = None))]
+    fn delete_cols(&mut self, idx: u32, amount: u32, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_COL: u32 = 16_384;
+        if idx == 0 || amount == 0 || idx > MAX_COL || amount > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "idx and amount must be between 1 and 16_384",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.delete_cols_on_sheet(&key, idx, amount);
+        Ok(())
+    }
+
+    /// Return every merged range on a sheet as A1-style strings (e.g.
+    /// ``["B1:C1"]``).
+    ///
+    /// Order matches source-file/insertion order (a stable list, never
+    /// re-sorted) — do not assume alphabetical or row-major order.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown.
+    #[pyo3(signature = (sheet = None))]
+    fn merged_cells(&self, sheet: Option<&str>) -> PyResult<Vec<String>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self
+            .inner
+            .merged_ranges
+            .get(&key)
+            .map(|ranges| ranges.iter().map(merge_rect_to_a1).collect())
+            .unwrap_or_default())
+    }
+
+    /// Creates a merge over *addr*. Rejects a single-cell address (nothing
+    /// would actually be merged) and rejects a merge that would overlap an
+    /// existing one on the same sheet — two overlapping merges is invalid
+    /// OOXML, not just a fidelity gap.
+    ///
+    /// Does **not** touch cell values — whatever is in the covered cells (if
+    /// anything) stays exactly as it was.
+    ///
+    /// Raises ``ValueError`` on a bad, oversized, or single-cell address, an
+    /// overlapping merge, or an unknown *sheet* name.
+    #[pyo3(signature = (addr, sheet = None))]
+    fn merge_cells(&mut self, addr: &str, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        const MAX_COL: u32 = 16_384;
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        // Same ceiling as sort_range -- an unbounded merge address writes a
+        // real <mergeCell> spanning the whole sheet into the saved file.
+        if r2 > MAX_ROW || c2 > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "range exceeds sheet bounds (max row {MAX_ROW}, max col {MAX_COL}), got row {r2}, col {c2}"
+            )));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .merge_cells(&key, r1, c1, r2, c2)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Removes a merge whose range exactly matches *addr*. An inexact/
+    /// partial match is rejected rather than silently no-opping.
+    ///
+    /// Raises ``ValueError`` on a bad or oversized address, no exact match,
+    /// or an unknown *sheet* name.
+    #[pyo3(signature = (addr, sheet = None))]
+    fn unmerge_cells(&mut self, addr: &str, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        const MAX_COL: u32 = 16_384;
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        if r2 > MAX_ROW || c2 > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "range exceeds sheet bounds (max row {MAX_ROW}, max col {MAX_COL}), got row {r2}, col {c2}"
+            )));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .unmerge_cells(&key, r1, c1, r2, c2)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Python-native, single-key sort of a rectangular range, in place. Not
+    /// from openpyxl (which has no sort primitive of its own) — this exposes
+    /// the existing VBA ``Range(addr).Sort key:=, order:=, header:=``
+    /// statement's exact behavior to Python.
+    ///
+    /// ``header=True`` excludes *addr*'s first row from the sort; it stays
+    /// exactly where it is. Unlike the VBA statement (which silently clamps
+    /// an out-of-range ``key_col``), this raises ``ValueError`` if *key_col*
+    /// falls outside *addr*'s own column span.
+    ///
+    /// Does **not** check sheet protection — matches ``set_range``'s bulk
+    /// cell-value-write precedent.
+    ///
+    /// Raises ``ValueError`` on a bad address, an out-of-bounds *key_col*, or
+    /// an unknown *sheet* name.
+    #[pyo3(signature = (addr, key_col, descending = false, header = false, sheet = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn sort_range(
+        &mut self,
+        addr: &str,
+        key_col: u32,
+        descending: bool,
+        header: bool,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        const MAX_COL: u32 = 16_384;
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        // Same ceiling as insert_rows/delete_rows -- validate_range_addr only
+        // rejects 0 and reversed spans, not an absurdly large upper bound.
+        // Unlike get_range/iter_rows (a large-but-harmless allocation), an
+        // unbounded address here feeds a real write into the saved file.
+        if r2 > MAX_ROW || c2 > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "range exceeds sheet bounds (max row {MAX_ROW}, max col {MAX_COL}), got row {r2}, col {c2}"
+            )));
+        }
+        if key_col < c1 || key_col > c2 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "key_col {key_col} is outside the range's column span {c1}..={c2}"
+            )));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .sort_range_on_sheet(&key, r1, c1, r2, c2, key_col, descending, header);
+        Ok(())
+    }
+}
+
+/// Shared row-major `Vec<Vec<Variant>>` -> Python nested-list conversion for
+/// `get_range`/`iter_rows`.
+#[cfg(feature = "python")]
+fn grid_to_py(py: Python<'_>, grid: &[Vec<Variant>]) -> PyResult<Py<PyAny>> {
+    let rows = pyo3::types::PyList::empty(py);
+    for row in grid {
+        let py_row = pyo3::types::PyList::empty(py);
+        for v in row {
+            py_row.append(variant_to_py(py, v))?;
+        }
+        rows.append(py_row)?;
+    }
+    Ok(rows.into_any().unbind())
 }
 
 // ── Module-level functions ────────────────────────────────────────────────────
@@ -767,11 +1494,19 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     // present at load time is gone now (Sheets(...).Delete ran), every remaining
     // localSheetId could point at the wrong sheet, so the whole element is dropped
     // rather than carried through stale. See OpaqueWorkbookFragments' doc comment.
+    // Also dropped if `defined_names_may_be_stale` is set: `move_sheet` reordering
+    // `sheet_order` invalidates a positional `localSheetId` exactly like a deletion
+    // does, even though every sheet is still present; `rename_sheet` can leave a
+    // <definedName>'s TEXT (e.g. "Sheet1!$F$5") referencing a name that no longer
+    // exists, even though nothing about position changed. (VBA's
+    // `Sheets.Add(before:=...)` can shift positions the same way without tripping
+    // either check -- a narrower, pre-existing gap this doesn't close; see
+    // ROADMAP.md's known gaps.)
     let no_sheet_was_deleted = vm
         .worksheet_origins
         .keys()
         .all(|original_key| vm.sheet_order.contains(original_key));
-    let defined_names = if no_sheet_was_deleted {
+    let defined_names = if no_sheet_was_deleted && !vm.defined_names_may_be_stale {
         workbook_source_xml
             .as_deref()
             .and_then(|xml| reader::extract_raw_element(xml, "definedNames"))
@@ -1288,13 +2023,10 @@ fn build_xlsx_sheet(
         && !merges.is_empty()
     {
         out.push_str(&format!("<mergeCells count=\"{}\">\n", merges.len()));
-        for &((r1, c1), (r2, c2)) in merges {
+        for rect in merges {
             out.push_str(&format!(
-                "<mergeCell ref=\"{}{}:{}{}\"/>\n",
-                xlsx_col_letters(c1),
-                r1,
-                xlsx_col_letters(c2),
-                r2
+                "<mergeCell ref=\"{}\"/>\n",
+                merge_rect_to_a1(rect)
             ));
         }
         out.push_str("</mergeCells>\n");
@@ -1453,6 +2185,20 @@ fn xlsx_col_letters(mut col: u32) -> String {
     }
     bytes.reverse();
     String::from_utf8(bytes).unwrap()
+}
+
+/// `((r1,c1),(r2,c2))` -> A1-style range string (e.g. `"B1:D1"`). Factored out
+/// of `save_xlsx_impl`'s `<mergeCell ref="...">` writer since it's now also
+/// used by `PyVm::merged_cells`.
+fn merge_rect_to_a1(rect: &((u32, u32), (u32, u32))) -> String {
+    let ((r1, c1), (r2, c2)) = *rect;
+    format!(
+        "{}{}:{}{}",
+        xlsx_col_letters(c1),
+        r1,
+        xlsx_col_letters(c2),
+        r2
+    )
 }
 
 // ── ODS write ────────────────────────────────────────────────────────────────
@@ -1810,6 +2556,16 @@ mod tests {
             xml.contains("<sheet name=\"b\" sheetId=\"2\" r:id=\"rId2\"/>"),
             "{xml}"
         );
+    }
+
+    #[test]
+    fn merge_rect_to_a1_formats_a_multi_cell_range() {
+        assert_eq!(merge_rect_to_a1(&((1, 2), (1, 4))), "B1:D1");
+    }
+
+    #[test]
+    fn merge_rect_to_a1_formats_a_single_cell_range() {
+        assert_eq!(merge_rect_to_a1(&((3, 3), (3, 3))), "C3:C3");
     }
 }
 
