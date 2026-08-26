@@ -7,11 +7,11 @@ Requires a `maturin develop --features python` build of elixcee and
 `pip install openpyxl` in the active environment; see this directory's
 README.md for the one-time setup.
 
-Compares get_range()/iter_rows() cell values against openpyxl's own read of the
-same real fixture, checks append_row() on a sparse sheet against openpyxl's own
-max_row after a round trip, and exercises the one true end-to-end
-"no partial write on validation failure" case that only a real PyO3 boundary
-(not a pure-Rust unit test) can prove.
+Compares get_range()/iter_rows()/iter_cols() cell values against openpyxl's own
+read of the same real fixture, checks append_row() on a sparse sheet against
+openpyxl's own max_row after a round trip, and exercises the one true
+end-to-end "no partial write on validation failure" case that only a real
+PyO3 boundary (not a pure-Rust unit test) can prove.
 
 One real, expected divergence is asserted rather than silently matched:
 elixcee's max_row/max_column/calculate_dimension are a bounding box over cells
@@ -75,6 +75,13 @@ class GetRangeAndIterRowsAgreeWithOpenpyxl(unittest.TestCase):
             [c.value for c in row] for row in self.ws.iter_rows(max_col=3)
         ]
         self.assertEqual(elixcee_rows, openpyxl_rows)
+
+    def test_iter_cols_matches_openpyxl_values_only_iteration(self):
+        elixcee_cols = self.vm.iter_cols(max_col=3)
+        openpyxl_cols = [
+            [c.value for c in col] for col in self.ws.iter_cols(max_col=3)
+        ]
+        self.assertEqual(elixcee_cols, openpyxl_cols)
 
     def test_dimension_divergence_from_a_merged_range_is_the_documented_one(self):
         # NOT an assertion of agreement -- pins the one real, expected
