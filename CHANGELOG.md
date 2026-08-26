@@ -12,9 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 `publishConfig`): see its own two entries below for exactly what's implemented, plus a CI
 observability addition for the shared WASM bridge. R1 (bulk worksheet range/row API), P1
 core 3 (sheet rename/move, row/col insert-delete glue, read-only merged-cell access), P1
-remainder (`iter_cols`, `sort_range`, merge create/remove), and P2's first slice (hidden
-row/col read/write) -- all below -- are four further, independent additions in this
-section, unrelated to each other or anything above.
+remainder (`iter_cols`, `sort_range`, merge create/remove), P2's first slice (hidden
+row/col read/write), and P2's second slice (`copy_sheet`) -- all below -- are five
+further, independent additions in this section, unrelated to each other or anything
+above.
 
 ### Root crate (Python binding): R1 -- bulk worksheet range/row API
 
@@ -192,6 +193,35 @@ setters enforce the same 1,048,576-row/16,384-column ceiling `insert_rows`/`sort
 class: agreement with openpyxl on the real fixture's pre-existing hidden row 5/column D,
 a newly-hidden row/column round-tripped through a save/reload, and unhiding the fixture's
 pre-existing hidden row.
+
+### Root crate (Python binding): P2 second slice -- copy_sheet
+
+The second item off `docs/openpyxl-gap-audit.md`'s P2 list. One new Python method:
+`copy_sheet(source_name, new_name)`, duplicating a sheet's cells, merges, hidden-row/col
+state, cell styles, and cell number formats into a brand-new sheet.
+
+Reuses `rename_sheet`'s own per-sheet-map list directly (`sheets`/`merged_ranges`/
+`sheet_visibility`/`cell_style_indices`/`cell_number_formats`/`worksheet_origins`) but
+`get()`-then-`clone()`-then-`insert()` instead of `remove()`-then-`insert()` -- no new
+algorithmic work, since `rename_sheet` (P1 core 3) had already discovered that exact list
+the hard way. The copy gets a brand-new `WorksheetOrigin` with only
+`original_display_name` set, mirroring `ensure_sheet`'s own shape for a sheet with no
+loaded-file origin, so the existing from-scratch-sheet writer path handles it with zero
+new logic.
+
+Deliberately appends the copy at the end of the sheet order rather than positioning it
+immediately after the source (unlike openpyxl's own `copy_worksheet`) -- inserting
+anywhere before the end would shift every later sheet's positional index, the same risk
+`move_sheet`'s `defined_names_may_be_stale` flag exists to guard against for a reorder; an
+append avoids the risk entirely, so `copy_sheet` correctly leaves that flag untouched. Use
+`move_sheet` afterward if exact placement next to the source matters. Does not copy sheet
+protection status (the copy is always unprotected) and does not change the active sheet.
+
+`compat/differential-python/sheet_ops_check.py` gained a `CopySheetAgreesWithOpenpyxl`
+class. Discovered while writing it, unrelated to `copy_sheet` itself and pre-existing:
+`Vm::sheet_names()` returns sheets alphabetically sorted, not in `sheet_order`/
+tab-position order -- undocumented but real, not a regression, not fixed here (see
+ROADMAP.md's known gaps).
 
 
 ### CI: WASM artifact size observability

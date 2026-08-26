@@ -2150,6 +2150,67 @@ impl Vm {
         Ok(())
     }
 
+    /// Duplicates `source_name`'s cells, merges, hidden-row/col state, cell
+    /// styles, and cell number formats into a brand-new sheet named
+    /// `new_name`, appended at the end of `sheet_order`. Deliberately
+    /// appends rather than inserting immediately after the source (unlike
+    /// openpyxl's own `copy_worksheet`) -- an append never changes any
+    /// EXISTING sheet's index in `sheet_order`, sidestepping the same
+    /// positional-`<definedName localSheetId="N">`-staleness risk
+    /// `move_sheet` itself guards against. Use `move_sheet` afterward if
+    /// exact placement next to the source matters.
+    ///
+    /// The copy gets a brand-new `WorksheetOrigin` with only
+    /// `original_display_name` set -- mirroring `ensure_sheet`'s own shape
+    /// for a sheet with no loaded-file origin, since the copy has no real
+    /// source part of its own to preserve. `save_xlsx_impl`'s existing
+    /// from-scratch-sheet code path (already exercised by every
+    /// `Sheets.Add`/`set_sheet()`-created sheet) handles this with zero new
+    /// writer logic.
+    ///
+    /// Does NOT copy `protected_sheets` membership -- the copy is always
+    /// unprotected, a deliberate simplification absent any fixture evidence
+    /// or concrete signal for what "copying a protected sheet" should mean.
+    /// Does NOT change `active_sheet`.
+    pub fn copy_sheet(&mut self, source_name: &str, new_name: &str) -> Result<(), String> {
+        let source_key = source_name.to_lowercase();
+        if !self.sheets.contains_key(&source_key) {
+            return Err(format!("Sheet '{}' not found", source_name));
+        }
+        if new_name.trim().is_empty() {
+            return Err("Sheet name must not be empty".to_string());
+        }
+        let new_key = new_name.to_lowercase();
+        if self.sheets.contains_key(&new_key) {
+            return Err(format!("Sheet '{}' already exists", new_name));
+        }
+
+        let cells = self.sheets.get(&source_key).cloned().unwrap_or_default();
+        self.sheets.insert(new_key.clone(), cells);
+        self.sheet_order.push(new_key.clone());
+
+        if let Some(v) = self.merged_ranges.get(&source_key).cloned() {
+            self.merged_ranges.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.sheet_visibility.get(&source_key).cloned() {
+            self.sheet_visibility.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.cell_style_indices.get(&source_key).cloned() {
+            self.cell_style_indices.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.cell_number_formats.get(&source_key).cloned() {
+            self.cell_number_formats.insert(new_key.clone(), v);
+        }
+        self.worksheet_origins.insert(
+            new_key,
+            WorksheetOrigin {
+                original_display_name: Some(new_name.to_string()),
+                ..Default::default()
+            },
+        );
+        Ok(())
+    }
+
     /// Repositions an EXISTING sheet in `sheet_order` -- the missing complement to
     /// `ensure_sheet_at` (which only positions a NEWLY created sheet; no primitive
     /// reorders an existing one). Touches ONLY `sheet_order`: no other per-sheet map
@@ -8997,6 +9058,138 @@ mod tests {
         assert!(!vm2.defined_names_may_be_stale);
         vm2.move_sheet("B", 0).unwrap();
         assert!(vm2.defined_names_may_be_stale);
+    }
+
+    // ── P2: copy_sheet ────────────────────────────────────────────────────
+
+    #[test]
+    fn copy_sheet_duplicates_all_six_per_sheet_maps() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        vm.merged_ranges
+            .insert("sheet1".to_string(), vec![((1, 2), (1, 4))]);
+        vm.sheet_visibility.insert(
+            "sheet1".to_string(),
+            SheetVisibility {
+                hidden_rows: vec![Interval { start: 5, end: 5 }],
+                hidden_columns: vec![],
+            },
+        );
+        vm.cell_style_indices
+            .insert("sheet1".to_string(), HashMap::from([((1, 1), 3u32)]));
+        vm.cell_number_formats.insert(
+            "sheet1".to_string(),
+            HashMap::from([((1, 1), "0.00".to_string())]),
+        );
+
+        vm.copy_sheet("Sheet1", "Copy").unwrap();
+
+        // The source is untouched...
+        assert!(vm.sheets.contains_key("sheet1"));
+        assert!(vm.merged_ranges.contains_key("sheet1"));
+        assert!(vm.sheet_visibility.contains_key("sheet1"));
+        assert!(vm.cell_style_indices.contains_key("sheet1"));
+        assert!(vm.cell_number_formats.contains_key("sheet1"));
+        // ...and the copy has all the same state, independently keyed.
+        assert_eq!(vm.sheets["copy"][&(1, 1)].value, Variant::Integer(42));
+        assert_eq!(vm.merged_ranges["copy"], vec![((1, 2), (1, 4))]);
+        assert_eq!(
+            vm.sheet_visibility["copy"].hidden_rows,
+            vec![Interval { start: 5, end: 5 }]
+        );
+        assert_eq!(vm.cell_style_indices["copy"][&(1, 1)], 3);
+        assert_eq!(vm.cell_number_formats["copy"][&(1, 1)], "0.00");
+        assert!(vm.worksheet_origins.contains_key("copy"));
+    }
+
+    #[test]
+    fn copy_sheet_is_independent_of_the_source_after_the_copy() {
+        // Mutating the copy must not retroactively affect the source --
+        // proves the per-sheet maps were actually cloned, not aliased.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        vm.copy_sheet("Sheet1", "Copy").unwrap();
+        vm.sheet_cells_mut("copy").unwrap().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(99),
+            },
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1)); // source (active sheet) unchanged
+    }
+
+    #[test]
+    fn copy_sheet_sets_original_display_name_and_no_other_origin_fields() {
+        let mut vm = Vm::new();
+        vm.copy_sheet("Sheet1", "MyCopy").unwrap();
+        let origin = &vm.worksheet_origins["mycopy"];
+        assert_eq!(origin.original_display_name, Some("MyCopy".to_string()));
+        assert_eq!(origin.original_sheet_id, None);
+        assert_eq!(origin.original_workbook_rel_id, None);
+        assert_eq!(origin.original_part_name, None);
+    }
+
+    #[test]
+    fn copy_sheet_appends_at_the_end_of_sheet_order_and_does_not_touch_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.copy_sheet("Sheet1", "Copy").unwrap(); // source is NOT the last sheet
+        assert_eq!(vm.sheet_order, vec!["sheet1", "b", "copy"]);
+        assert_eq!(vm.active_sheet, "sheet1");
+    }
+
+    #[test]
+    fn copy_sheet_does_not_flag_defined_names_as_stale() {
+        // Appending never changes any EXISTING sheet's sheet_order index, so
+        // unlike move_sheet/rename_sheet there's nothing for a positional
+        // <definedName localSheetId="N"> to become stale against.
+        let mut vm = Vm::new();
+        assert!(!vm.defined_names_may_be_stale);
+        vm.copy_sheet("Sheet1", "Copy").unwrap();
+        assert!(!vm.defined_names_may_be_stale);
+    }
+
+    #[test]
+    fn copy_sheet_does_not_copy_protection_status() {
+        let mut vm = Vm::new();
+        vm.protected_sheets.insert("sheet1".to_string());
+        vm.copy_sheet("Sheet1", "Copy").unwrap();
+        assert!(!vm.protected_sheets.contains("copy"));
+    }
+
+    #[test]
+    fn copy_sheet_errors_if_source_not_found() {
+        let mut vm = Vm::new();
+        let err = vm.copy_sheet("NoSuchSheet", "Copy").unwrap_err();
+        assert!(err.contains("not found"), "{:?}", err);
+    }
+
+    #[test]
+    fn copy_sheet_errors_if_new_name_collides_with_an_existing_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Existing");
+        let err = vm.copy_sheet("Sheet1", "Existing").unwrap_err();
+        assert!(err.contains("already exists"), "{:?}", err);
+    }
+
+    #[test]
+    fn copy_sheet_errors_on_empty_or_whitespace_new_name() {
+        let mut vm = Vm::new();
+        assert!(vm.copy_sheet("Sheet1", "").is_err());
+        assert!(vm.copy_sheet("Sheet1", "   ").is_err());
     }
 
     // ── P1 core 3: row/col insert-delete sheet-parameterized siblings ───────

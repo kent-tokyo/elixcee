@@ -40,7 +40,7 @@ protect, freeze, merge, font, fill, border, rename, move_sheet, copy_sheet): onl
 | Delete sheet | — | — | — | — | — | — | — | **Done** (`delete_sheet`) |
 | Rename an existing sheet | 4 | 3 | 5 | 2 | 2 | yes (all 7) | yes (`WorksheetOrigin`) | **Shipped** (`rename_sheet`, P1 core 3) |
 | Move/reorder an existing sheet | 3 | 2 | 4 | 2 | 2 | yes | yes (`sheet_order`) | **Shipped** (`move_sheet`, P1 core 3) |
-| Copy a sheet (same workbook only) | 3 | 2 | 3 | 3 | 3 | partial | partial | **P2** |
+| Copy a sheet (same workbook only) | 3 | 2 | 3 | 3 | 3 | partial | partial | **Shipped** (`copy_sheet`, P2) |
 | Sheet visibility (hidden/veryHidden) | 2 | 2 | 4 | 2 | 2 | no | no | **P2** |
 
 `set_sheet`/`delete_sheet` already cover create/select/delete. Rename and move shipped in
@@ -54,9 +54,19 @@ sheet's merge/hidden/style state. `move_sheet` also turned out to need a genuine
 primitive — nothing reordered an *existing* sheet before this round; `ensure_sheet_at`
 only positions a newly-created one. Both are still pure in-memory `Vm` state changes with
 no new OOXML element, matching R1's low-corruption-risk profile — the *implementation*
-risk score undersold the bookkeeping, not the *corruption* risk. Copy-in-same-workbook
-needs to duplicate a sheet's `WorksheetOrigin`/cell map/merges/hidden-row state
-consistently, a bit more surface area, hence still P2.
+risk score undersold the bookkeeping, not the *corruption* risk.
+
+Copy shipped as `copy_sheet`, reusing `rename_sheet`'s own per-sheet-map list directly
+(clone-and-insert instead of remove-and-insert) — genuinely close to this table's Impl-risk
+score of 3 once `rename_sheet` had already done the harder work of *discovering* that list.
+`WorksheetOrigin`'s all-`Option` shape (already exercised by `ensure_sheet`-created sheets)
+meant the copy's own origin needed zero new writer logic. See "Implementation notes for P2:
+copy_sheet" below for the one design decision this round made deliberately — appending the
+copy rather than positioning it next to the source, to avoid the same positional
+`<definedName localSheetId="N">`-staleness risk `move_sheet` already guards against.
+Sheet visibility (whole-tab hidden/veryHidden, distinct from `sheet_visibility`'s row/col
+intervals despite the name collision) has zero existing representation anywhere in the
+reader or writer — real new surface, not glue, still P2.
 
 ## 2. Cell / range access
 
@@ -302,16 +312,25 @@ reproposed later without this context.
    existing storage, the writer's already-mechanical `hidden="1"` emission); unhiding a
    single row/column needed genuinely new interval-splitting logic the table's score didn't
    surface — see "Implementation notes for P2: hidden row/col" below.
-5. **P2, remaining**: sheet copy/visibility (category 1), row height/column width
+5. **P2, second slice (shipped)**: `copy_sheet` (category 1). Genuinely close to this
+   table's own cost estimate once `rename_sheet` had already discovered the per-sheet-map
+   list it reuses — see "Implementation notes for P2: copy_sheet" below for the one design
+   decision worth disclosing (appending rather than positioning next to the source, to
+   avoid a positional `<definedName>`-staleness risk).
+6. **P2, remaining**: sheet visibility (category 1's other row — zero existing
+   representation anywhere, real new surface, unlike `copy_sheet`), row height/column width
    (category 3's other row — no internal representation at all, real new surface, unlike
    hidden row/col), number-format-only writing (category 5, the narrowest possible slice of
    the style engine), defined-name read/write (category 7), Python-native AutoFilter
-   (category 8 — flag its own "thin wrapper" framing before taking it at face value, the
-   same optimism this doc's table showed for `rename_sheet`/`sort_range`/hidden-row-write
-   before each one turned out to need more than glue), hyperlink read/write (category 10).
-6. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
+   (category 8 — confirmed to need the same `Stmt::RangeAutoFilter`-extraction treatment
+   `sort_range` did, plus its own signature-design decision since `field`/`criteria1` are
+   VBA `Expr` AST nodes, not plain values — don't take its "thin wrapper" framing at face
+   value, the same optimism this doc's table showed for `rename_sheet`/`sort_range`/
+   hidden-row-write before each one turned out to need more than glue), hyperlink
+   read/write (category 10).
+7. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
    protection exposure (each needs its own follow-up design decision, noted above).
-7. **Not planned**: full style-engine writing, named styles, table/data-validation/
+8. **Not planned**: full style-engine writing, named styles, table/data-validation/
    conditional-formatting *creation*, chart/image authoring, outline/grouping, streaming
    modes, and a wrapper `Cell` object model — each either fights this project's own hard
    gates (no writer code without fixture evidence), fights its product identity (VBA
@@ -546,3 +565,48 @@ max="16384" hidden="1">` shape for "hide all columns," or the row equivalent) �
 such an interval into individual numbers would eagerly materialize up to 1,048,576/16,384
 entries. Not implemented in this round absent concrete fixture evidence anyone actually
 does this, matching R1's own precedent for `get_range`/`iter_rows`'s unbounded-address gap.
+
+---
+
+## Implementation notes for P2: copy_sheet
+
+Gaps and deliberate scope boundaries discovered while implementing `copy_sheet`, disclosed
+here rather than silently absorbed or fixed as a side effect of an unrelated feature:
+
+**This table's own cost estimate held up, for once — but only because `rename_sheet`
+(P1 core 3) had already paid the discovery cost.** `copy_sheet` reuses the exact same
+per-sheet-map list `rename_sheet` needed to learn the hard way (`sheets`, `merged_ranges`,
+`sheet_visibility`, `cell_style_indices`, `cell_number_formats`, `worksheet_origins`) —
+`get()`-then-`clone()`-then-`insert()` instead of `remove()`-then-`insert()`, with no new
+algorithmic work anywhere. `WorksheetOrigin`'s all-`Option` shape, already exercised by
+every `ensure_sheet`-created sheet (GitHub #2's own fix), meant the copy's brand-new origin
+(`original_display_name` set, everything else `None`) hits an already-correct writer code
+path with zero new logic. Had `rename_sheet` not already existed and disclosed its own
+8-map re-key list, this round would likely have repeated the same discovery cost.
+
+**Deliberately appends the copy at the end of `sheet_order` rather than positioning it
+immediately after the source, unlike openpyxl's own `copy_worksheet`.** Inserting a new
+sheet anywhere before the end of `sheet_order` shifts every later sheet's positional index
+by one — the exact same risk `move_sheet`'s own `defined_names_may_be_stale` flag exists to
+guard against for a *reorder*. An append never changes any existing sheet's index, so it
+was chosen specifically to avoid needing that flag at all for `copy_sheet` — verified by a
+dedicated test (`copy_sheet_does_not_flag_defined_names_as_stale`) pinning that the flag
+stays `false`. A caller who wants the copy positioned next to its source can compose
+`copy_sheet` with the existing `move_sheet` rather than this method growing its own
+placement parameter — consistent with `set_sheet`'s `index` and `move_sheet` already
+covering "position a sheet" as a separate, general concern.
+
+**Does not copy sheet protection status; the copy is always unprotected.** No fixture
+evidence or concrete signal exists for what "copying a protected sheet" should mean (does
+the copy inherit the protection, or should protecting be a separate, deliberate act on the
+new sheet?) — deferred rather than guessed, matching this project's own restraint pattern
+for genuinely ambiguous, evidence-free decisions.
+
+**Discovered while writing this round's differential-python coverage, unrelated to
+`copy_sheet` itself: `Vm::sheet_names()` returns sheets alphabetically sorted, not in
+`sheet_order`/tab-position order.** Undocumented in both the Rust doc comment and the
+Python docstring; not a regression (it predates this round entirely), just never
+previously exercised by a differential test against a real multi-sheet fixture. Not fixed
+here — changing an existing, unversioned method's ordering contract is out of scope for a
+sheet-copy feature and could be a breaking change for any existing caller relying on
+alphabetical order. Recorded so it isn't rediscovered as a surprise later.

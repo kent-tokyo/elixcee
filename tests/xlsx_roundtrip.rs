@@ -1309,6 +1309,74 @@ fn set_row_hidden_and_set_column_hidden_round_trip_on_the_real_fixture() {
     let _ = std::fs::remove_file(&output_path_2);
 }
 
+/// P2: `copy_sheet` exercised end-to-end -- the copy must carry the source's
+/// merge/hidden-row/hidden-column state and cell values into its own,
+/// independent worksheet part, while the original sheet's own part is left
+/// completely untouched.
+#[test]
+fn copy_sheet_round_trips_merge_and_hidden_metadata_on_the_real_fixture() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path = tmp_path("copy_sheet_output.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.copy_sheet("Sheet1", "Copy").unwrap();
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+
+    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        out_wb.contains(r#"<sheet name="Sheet1""#),
+        "the original sheet must still be listed: {out_wb}"
+    );
+    assert!(
+        out_wb.contains(r#"<sheet name="Copy""#),
+        "the copy must be listed in xl/workbook.xml: {out_wb}"
+    );
+
+    // The original's own worksheet part must be completely untouched.
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        out_sheet1.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "the original's merge must survive being copied from: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        "the original's hidden column must survive being copied from: {out_sheet1}"
+    );
+
+    // The copy must land in its OWN worksheet part (not overwrite sheet1.xml)
+    // and carry the same merge/hidden-row/hidden-column state and values.
+    let copy_part = output_entries
+        .keys()
+        .find(|k| k.starts_with("xl/worksheets/sheet") && k.as_str() != "xl/worksheets/sheet1.xml")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a second worksheet part, got: {:?}",
+                output_entries.keys().collect::<Vec<_>>()
+            )
+        });
+    let out_copy = String::from_utf8(output_entries[copy_part].clone()).unwrap();
+    assert!(
+        out_copy.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "the copy must carry the source's merge: {out_copy}"
+    );
+    assert!(
+        out_copy.contains(r#"min="4" max="4" hidden="1""#),
+        "the copy must carry the source's hidden column: {out_copy}"
+    );
+    assert!(
+        out_copy.contains(r#"<row r="5" hidden="1">"#)
+            || out_copy.contains(r#"<row r="5" hidden="1"/>"#),
+        "the copy must carry the source's hidden row: {out_copy}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// Real report against the released `0.10.0`: a source that binds the relationships
 /// namespace to a prefix OTHER than the conventional `r:` (here `rel:`) is fully valid
 /// OOXML on its own -- XML namespace binding is about the URI, not the prefix spelling.
