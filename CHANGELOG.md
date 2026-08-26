@@ -13,9 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 observability addition for the shared WASM bridge. R1 (bulk worksheet range/row API), P1
 core 3 (sheet rename/move, row/col insert-delete glue, read-only merged-cell access), P1
 remainder (`iter_cols`, `sort_range`, merge create/remove), P2's first slice (hidden
-row/col read/write), and P2's second slice (`copy_sheet`) -- all below -- are five
-further, independent additions in this section, unrelated to each other or anything
-above.
+row/col read/write), P2's second slice (`copy_sheet`), and P2's third slice
+(`defined_names`, read-only) -- all below -- are six further, independent additions in
+this section, unrelated to each other or anything above.
 
 ### Root crate (Python binding): R1 -- bulk worksheet range/row API
 
@@ -222,6 +222,36 @@ class. Discovered while writing it, unrelated to `copy_sheet` itself and pre-exi
 `Vm::sheet_names()` returns sheets alphabetically sorted, not in `sheet_order`/
 tab-position order -- undocumented but real, not a regression, not fixed here (see
 ROADMAP.md's known gaps).
+
+### Root crate (Python binding): P2 third slice -- defined_names (read-only)
+
+The third item off `docs/openpyxl-gap-audit.md`'s P2 list. One new Python method:
+`defined_names() -> dict[str, str]`, reading every `<definedName
+name="...">TEXT</definedName>` in the loaded workbook's `xl/workbook.xml` into `{name:
+raw_text}` (e.g. `{"MyRange": "Sheet1!$A$1:$A$3"}`).
+
+Confirmed before writing any code that `Vm.named_ranges` -- VBA's own runtime table,
+populated only by `Range(addr).Name = "x"` -- is never populated from a loaded file, so
+reading defined names needed a genuinely new parser: `reader::xlsx_defined_names`, modeled
+directly on the existing `xlsx_shared_strings` streaming pattern, no new parsing
+infrastructure required. Deliberately read-only (no create/delete this round) and
+deliberately returns each name's raw formula text rather than a resolved sheet+address --
+elixcee's formula engine has no cross-sheet reference syntax (`=Sheet2!A1`) to resolve
+that text against, and real XLSX additionally allows a sheet-scoped (`localSheetId`) name
+to shadow a workbook-scoped one of the same name, which a flat map can't represent either
+(both flatten into one map, last-encountered-in-document-order silently wins on a
+collision -- disclosed, not solved, no fixture exercises it).
+
+Re-reads the source file's ZIP on every call (mirroring `save_xlsx_impl`'s own passthrough
+re-read at save time) rather than caching at load time -- a pure reporting view of the
+file's current `<definedNames>`. Returns `{}` if no workbook is loaded; raises
+`ValueError` if a workbook WAS loaded but its source file is no longer readable (a
+genuinely different failure mode from "nothing to report").
+
+`compat/differential-python/sheet_ops_check.py` gained a `DefinedNamesAgreesWithOpenpyxl`
+class, using `fixture4_hyperlink_comment_name.xlsm` (the one real fixture with genuine
+`<definedNames>` content) to confirm exact agreement with openpyxl's own
+`wb.defined_names` dict.
 
 
 ### CI: WASM artifact size observability
