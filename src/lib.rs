@@ -492,6 +492,31 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Duplicate a sheet's cells, merges, hidden-row/col state, cell
+    /// styles, and cell number formats into a brand-new sheet.
+    ///
+    /// Appended at the end of the workbook's sheets -- unlike openpyxl's own
+    /// ``copy_worksheet`` (which places the copy immediately after the
+    /// source), use :meth:`move_sheet` afterward if exact placement matters.
+    /// Does not copy sheet protection status (the copy is always
+    /// unprotected) and does not change the active sheet.
+    ///
+    /// Parameters
+    /// ----------
+    /// source_name:
+    ///     The sheet to copy (case-insensitive).
+    /// new_name:
+    ///     The new sheet's name.
+    ///
+    /// Raises ``ValueError`` if *source_name* doesn't exist, or *new_name* is
+    /// empty/whitespace-only or (case-insensitively) already names an
+    /// existing sheet.
+    fn copy_sheet(&mut self, source_name: &str, new_name: &str) -> PyResult<()> {
+        self.inner
+            .copy_sheet(source_name, new_name)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Return the name of the currently active sheet.
     fn active_sheet(&self) -> &str {
         &self.inner.active_sheet

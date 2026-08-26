@@ -153,6 +153,22 @@ class Vm:
         """
         ...
 
+    def copy_sheet(self, source_name: str, new_name: str) -> None:
+        """Duplicate a sheet's cells, merges, hidden-row/col state, cell
+        styles, and cell number formats into a brand-new sheet.
+
+        Appended at the end of the workbook's sheets — unlike openpyxl's own
+        ``copy_worksheet`` (which places the copy immediately after the
+        source), use :meth:`move_sheet` afterward if exact placement
+        matters. Does not copy sheet protection status (the copy is always
+        unprotected) and does not change the active sheet.
+
+        Raises ``ValueError`` if *source_name* doesn't exist, or *new_name*
+        is empty/whitespace-only or (case-insensitively) already names an
+        existing sheet.
+        """
+        ...
+
     def active_sheet(self) -> str:
         """Return the name of the currently active sheet."""
         ...

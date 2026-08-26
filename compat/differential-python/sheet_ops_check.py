@@ -8,10 +8,10 @@ Requires a `maturin develop --features python` build of elixcee and
 `pip install openpyxl` in the active environment; see this directory's
 README.md for the one-time setup.
 
-Compares rename_sheet()/move_sheet()/merged_cells()/merge_cells()/
-unmerge_cells()/hidden_rows()/hidden_columns()/set_row_hidden()/
-set_column_hidden() against openpyxl's own read of the same real fixture
-after a save/reload round trip. Must build from FIXTURE via
+Compares rename_sheet()/move_sheet()/copy_sheet()/merged_cells()/
+merge_cells()/unmerge_cells()/hidden_rows()/hidden_columns()/
+set_row_hidden()/set_column_hidden() against openpyxl's own read of the same
+real fixture after a save/reload round trip. Must build from FIXTURE via
 elixcee.load_workbook, not a bare elixcee.Vm() -- a from-scratch VM's
 minimal styles.xml emits a bare <fill/> that openpyxl's own reader rejects
 on reopen (a real, pre-existing, unrelated bug -- see ROADMAP.md's known
@@ -72,6 +72,39 @@ class RenameSheetAgreesWithOpenpyxl(unittest.TestCase):
                 [str(r) for r in ws.merged_cells.ranges],
                 reloaded_vm.merged_cells(sheet="Renamed"),
             )
+
+
+class CopySheetAgreesWithOpenpyxl(unittest.TestCase):
+    def test_copy_sheet_agrees_with_openpyxl_after_a_round_trip(self):
+        vm = elixcee.load_workbook(FIXTURE)
+        vm.copy_sheet("Sheet1", "Copy")
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "out.xlsx")
+            vm.save_workbook(path)
+
+            reloaded_vm = elixcee.load_workbook(path)
+            wb = openpyxl.load_workbook(path)
+
+            self.assertEqual(wb.sheetnames, ["Sheet1", "Copy"])
+            # elixcee's own sheet_names() is alphabetically sorted, NOT
+            # sheet_order/tab-position order (a pre-existing, undocumented
+            # quirk unrelated to copy_sheet -- discovered while writing this
+            # test). "copy" < "sheet1" alphabetically, so this is reversed
+            # from wb.sheetnames' tab-position order above.
+            self.assertEqual(reloaded_vm.sheet_names(), ["copy", "sheet1"])
+
+            # The copy must carry the source's merge and hidden row/column
+            # state -- both elixcee's own reload and openpyxl's independent
+            # read of the same saved file must agree on it.
+            ws_copy = wb["Copy"]
+            self.assertEqual(
+                [str(r) for r in ws_copy.merged_cells.ranges],
+                reloaded_vm.merged_cells(sheet="Copy"),
+            )
+            self.assertIn("B1:C1", reloaded_vm.merged_cells(sheet="Copy"))
+            self.assertIn(5, reloaded_vm.hidden_rows(sheet="Copy"))
+            self.assertTrue(ws_copy.row_dimensions[5].hidden)
 
 
 class MoveSheetAgreesWithOpenpyxl(unittest.TestCase):

@@ -527,6 +527,9 @@ vm.set_row_hidden(5, sheet="Data")
 vm.set_column_hidden(4, hidden=False, sheet="Data")
 print(vm.hidden_rows(sheet="Data"))  # e.g. [5]
 
+# Copy a sheet
+vm.copy_sheet("Data", "Data Backup")
+
 # Control MsgBox behavior
 vm = elixcee.Vm(on_msgbox="skip")   # silently ignore MsgBox calls (default)
 vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
@@ -561,6 +564,7 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 | `vm.sort_range(addr, key_col, descending=False, header=False, sheet=None)` | Sort a rectangular range in place by one column. |
 | `vm.rename_sheet(old_name, new_name)` | Rename a sheet. |
 | `vm.move_sheet(name, new_index)` | Move a sheet to an absolute 0-based tab position. |
+| `vm.copy_sheet(source_name, new_name)` | Duplicate a sheet (cells, merges, hidden state, styles) into a new one. |
 | `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | Insert/delete rows (values only -- doesn't shift merges/styles). |
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | Insert/delete columns (same caveat as rows). |
 | `vm.merged_cells(sheet=None)` | List a sheet's merged ranges as A1 strings, e.g. `["B1:C1"]`. |
