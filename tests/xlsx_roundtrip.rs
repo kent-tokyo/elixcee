@@ -959,6 +959,62 @@ fn range_autofilter_hidden_rows_survive_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// R1 (bulk worksheet range/row API, see docs/openpyxl-gap-audit.md): the new
+/// `Vm::write_rect`/`read_rect` are exercised directly here (no PyO3 needed --
+/// the test crate links `elixcee` as a lib), on a real fixture that already
+/// has a merge, a hidden column, and a hidden row, to prove the new write
+/// path doesn't disturb any of that pre-existing state on save.
+#[test]
+fn write_rect_on_a_real_fixture_survives_a_save_without_disturbing_existing_state() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path = tmp_path("write_rect_output.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let key = vm.resolve_sheet_key(None).unwrap();
+    vm.write_rect(
+        &key,
+        (10, 1),
+        &[vec![
+            elixcee::vm::Variant::Str("R1WriteRect".to_string()),
+            elixcee::vm::Variant::Integer(42),
+        ]],
+    );
+    assert_eq!(
+        vm.read_rect(&key, 10, 1, 10, 2),
+        vec![vec![
+            elixcee::vm::Variant::Str("R1WriteRect".to_string()),
+            elixcee::vm::Variant::Integer(42)
+        ]]
+    );
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(r#"<c r="B10">"#) || out_sheet1.contains(r#"<c r="B10" "#),
+        "the written B10=42 cell must appear in the saved sheet: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "the fixture's pre-existing B1:C1 merge must survive: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        "the fixture's pre-existing hidden column D must survive: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"<row r="5" hidden="1">"#)
+            || out_sheet1.contains(r#"<row r="5" hidden="1"/>"#),
+        "the fixture's pre-existing hidden row 5 must survive: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// Real report against the released `0.10.0`: a source that binds the relationships
 /// namespace to a prefix OTHER than the conventional `r:` (here `rel:`) is fully valid
 /// OOXML on its own -- XML namespace binding is about the URI, not the prefix spelling.
