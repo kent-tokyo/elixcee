@@ -737,6 +737,51 @@ impl PyVm {
         grid_to_py(py, &grid)
     }
 
+    /// Values-only, column-major iteration over a rectangular region —
+    /// the transposed sibling of ``iter_rows``. Each returned inner list is
+    /// one column's values, top to bottom.
+    ///
+    /// ``max_row``/``max_col`` default to the sheet's used range; on a sheet
+    /// with no non-empty cells at all **and** no explicit ``max_col``,
+    /// returns ``[]`` rather than one column of ``None``\ s. Returns plain
+    /// nested lists — this does **not** claim openpyxl ``Cell``-object
+    /// compatibility (no ``.value``/``.style``/etc attached, just the values).
+    ///
+    /// Parameters
+    /// ----------
+    /// min_row, min_col:
+    ///     1-based lower bounds (default 1).
+    /// max_row, max_col:
+    ///     1-based upper bounds. Default to the sheet's used range.
+    /// sheet:
+    ///     Sheet to read from. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (min_row = 1, max_row = None, min_col = 1, max_col = None, sheet = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn iter_cols(
+        &self,
+        py: Python<'_>,
+        min_row: u32,
+        max_row: Option<u32>,
+        min_col: u32,
+        max_col: Option<u32>,
+        sheet: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        if min_row == 0 || min_col == 0 || max_row == Some(0) || max_col == Some(0) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "row/column numbers must be >= 1",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let grid = self
+            .inner
+            .iter_cols_values(&key, min_row, max_row, min_col, max_col);
+        grid_to_py(py, &grid)
+    }
+
     /// Highest used row number, or ``None`` for a sheet with zero non-empty
     /// cells (never ``0``).
     #[pyo3(signature = (sheet = None))]

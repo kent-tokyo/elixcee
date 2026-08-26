@@ -255,6 +255,28 @@ class Vm:
         """
         ...
 
+    def iter_cols(
+        self,
+        min_row: int = 1,
+        max_row: int | None = None,
+        min_col: int = 1,
+        max_col: int | None = None,
+        sheet: str | None = None,
+    ) -> list[list[Any]]:
+        """Values-only, column-major iteration over a rectangular region —
+        the transposed sibling of :meth:`iter_rows`. Each returned inner
+        list is one column's values, top to bottom.
+
+        *max_row*/*max_col* default to the sheet's used range. On a sheet
+        with no non-empty cells at all **and** no explicit *max_col*, returns
+        ``[]`` rather than one column of ``None``\\ s.
+
+        Returns plain nested lists — this does **not** claim openpyxl
+        ``Cell``-object compatibility (no ``.value``/``.style``/etc attached,
+        just the values).
+        """
+        ...
+
     def max_row(self, sheet: str | None = None) -> int | None:
         """Highest used row number, or ``None`` for a sheet with zero
         non-empty cells (never ``0``)."""

@@ -1302,6 +1302,38 @@ impl Vm {
         self.read_rect(key, min_row, min_col, resolved_max_row, resolved_max_col)
     }
 
+    /// Core of the Python `iter_cols` API: the column-major transpose of
+    /// `iter_rows_values`. Same short-circuit shape, but keyed off
+    /// `max_col`'s explicitness instead of `max_row`'s -- an empty sheet with
+    /// no explicit `max_col` returns zero columns, while an explicit
+    /// `max_col` always forces N columns even on an empty sheet.
+    pub fn iter_cols_values(
+        &self,
+        key: &str,
+        min_row: u32,
+        max_row: Option<u32>,
+        min_col: u32,
+        max_col: Option<u32>,
+    ) -> Vec<Vec<Variant>> {
+        let bounds = self.sheet_used_range(key);
+        let resolved_max_col = match max_col {
+            Some(c) => c,
+            None => match bounds {
+                Some((_, (_, c2))) => c2,
+                None => return Vec::new(),
+            },
+        };
+        let resolved_max_row = max_row.unwrap_or_else(|| bounds.map_or(min_row, |(_, (r2, _))| r2));
+        if resolved_max_row < min_row || resolved_max_col < min_col {
+            return Vec::new();
+        }
+        let grid = self.read_rect(key, min_row, min_col, resolved_max_row, resolved_max_col);
+        let num_cols = (resolved_max_col - min_col + 1) as usize;
+        (0..num_cols)
+            .map(|ci| grid.iter().map(|row| row[ci].clone()).collect())
+            .collect()
+    }
+
     /// `true` iff `requested` identifies the one workbook `load_workbook_file`
     /// loaded (by name, case-insensitively, or by the numeric index `1` —
     /// elixcee never has more than one workbook open, so any other index is
@@ -11923,5 +11955,101 @@ mod tests {
             vm.iter_rows_values("sheet1", 5, Some(2), 1, None),
             Vec::<Vec<Variant>>::new()
         );
+    }
+
+    #[test]
+    fn iter_cols_values_on_an_empty_sheet_with_no_explicit_max_col_is_empty() {
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_cols_values("sheet1", 1, None, 1, None),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_cols_values_on_an_empty_sheet_with_an_explicit_max_col_returns_empties() {
+        let vm = Vm::new();
+        let grid = vm.iter_cols_values("sheet1", 1, None, 1, Some(3));
+        assert_eq!(grid.len(), 3);
+        assert!(grid.iter().all(|col| col == &[Variant::Empty]));
+    }
+
+    #[test]
+    fn iter_cols_values_short_circuit_keys_on_max_col_not_max_row() {
+        // max_row given explicitly but max_col is not -- still [] on an
+        // empty sheet, proving the short-circuit is about max_col.
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_cols_values("sheet1", 1, Some(3), 1, None),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_cols_values_defaults_to_the_used_range() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (2, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        let grid = vm.iter_cols_values("sheet1", 1, None, 1, None);
+        assert_eq!(
+            grid,
+            vec![
+                vec![Variant::Empty, Variant::Empty],
+                vec![Variant::Empty, Variant::Integer(1)]
+            ]
+        );
+    }
+
+    #[test]
+    fn iter_cols_values_on_a_reversed_numeric_window_is_empty_not_a_panic() {
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_cols_values("sheet1", 1, None, 5, Some(2)),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_cols_values_is_the_transpose_of_iter_rows_values_on_the_same_bounds() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        vm.cells_mut().insert(
+            (1, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(2),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(3),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(4),
+            },
+        );
+        let rows = vm.iter_rows_values("sheet1", 1, Some(2), 1, Some(2));
+        let cols = vm.iter_cols_values("sheet1", 1, Some(2), 1, Some(2));
+        let transposed_rows: Vec<Vec<Variant>> = (0..rows[0].len())
+            .map(|ci| rows.iter().map(|row| row[ci].clone()).collect())
+            .collect();
+        assert_eq!(cols, transposed_rows);
     }
 }
