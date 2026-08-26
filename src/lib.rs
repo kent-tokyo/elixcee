@@ -784,6 +784,148 @@ impl PyVm {
                 )
             }))
     }
+
+    /// Insert *amount* blank rows before 1-based row *idx*, shifting *idx* and
+    /// everything below it down. Mirrors openpyxl's
+    /// ``Worksheet.insert_rows(idx, amount=1)`` naming/value semantics.
+    ///
+    /// Does **not** shift merged ranges, hidden-row markers, cell styles/number
+    /// formats, or formula cell-reference text — a pre-existing limitation of the
+    /// underlying VBA engine (``Rows(n).Insert``) now reachable from Python; see
+    /// docs/openpyxl-gap-audit.md and ROADMAP.md's known gaps.
+    ///
+    /// Parameters
+    /// ----------
+    /// idx:
+    ///     1-based row number to insert before.
+    /// amount:
+    ///     Number of rows to insert (default 1).
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; never changes which
+    ///     sheet is active.
+    ///
+    /// Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds Excel's own grid
+    /// limit (1,048,576 rows), or *sheet* is unknown.
+    #[pyo3(signature = (idx, amount = 1, sheet = None))]
+    fn insert_rows(&mut self, idx: u32, amount: u32, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        if idx == 0 || amount == 0 || idx > MAX_ROW || amount > MAX_ROW {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "idx and amount must be between 1 and 1_048_576",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.insert_rows_on_sheet(&key, idx, amount);
+        Ok(())
+    }
+
+    /// Delete *amount* rows starting at 1-based row *idx*, shifting everything
+    /// below the deleted band up. Mirrors openpyxl's
+    /// ``Worksheet.delete_rows(idx, amount=1)`` naming/value semantics.
+    ///
+    /// Same fidelity gap as :meth:`insert_rows` — does not shift merges, hidden
+    /// markers, styles/number formats, or formula references.
+    ///
+    /// Parameters
+    /// ----------
+    /// idx:
+    ///     1-based row number to start deleting from.
+    /// amount:
+    ///     Number of rows to delete (default 1).
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; never changes which
+    ///     sheet is active.
+    ///
+    /// Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds Excel's own grid
+    /// limit (1,048,576 rows), or *sheet* is unknown.
+    #[pyo3(signature = (idx, amount = 1, sheet = None))]
+    fn delete_rows(&mut self, idx: u32, amount: u32, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        if idx == 0 || amount == 0 || idx > MAX_ROW || amount > MAX_ROW {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "idx and amount must be between 1 and 1_048_576",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.delete_rows_on_sheet(&key, idx, amount);
+        Ok(())
+    }
+
+    /// Insert *amount* blank columns before 1-based column *idx*, shifting *idx*
+    /// and everything to its right, right. Mirrors openpyxl's
+    /// ``Worksheet.insert_cols(idx, amount=1)`` naming/value semantics.
+    ///
+    /// Same fidelity gap as :meth:`insert_rows` — does not shift merges, hidden
+    /// markers, styles/number formats, or formula references.
+    ///
+    /// Parameters
+    /// ----------
+    /// idx:
+    ///     1-based column number to insert before.
+    /// amount:
+    ///     Number of columns to insert (default 1).
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; never changes which
+    ///     sheet is active.
+    ///
+    /// Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds Excel's own grid
+    /// limit (16,384 columns, i.e. ``XFD``), or *sheet* is unknown.
+    #[pyo3(signature = (idx, amount = 1, sheet = None))]
+    fn insert_cols(&mut self, idx: u32, amount: u32, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_COL: u32 = 16_384;
+        if idx == 0 || amount == 0 || idx > MAX_COL || amount > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "idx and amount must be between 1 and 16_384",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.insert_cols_on_sheet(&key, idx, amount);
+        Ok(())
+    }
+
+    /// Delete *amount* columns starting at 1-based column *idx*, shifting
+    /// everything to the right of the deleted band left. Mirrors openpyxl's
+    /// ``Worksheet.delete_cols(idx, amount=1)`` naming/value semantics.
+    ///
+    /// Same fidelity gap as :meth:`insert_rows` — does not shift merges, hidden
+    /// markers, styles/number formats, or formula references.
+    ///
+    /// Parameters
+    /// ----------
+    /// idx:
+    ///     1-based column number to start deleting from.
+    /// amount:
+    ///     Number of columns to delete (default 1).
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; never changes which
+    ///     sheet is active.
+    ///
+    /// Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds Excel's own grid
+    /// limit (16,384 columns, i.e. ``XFD``), or *sheet* is unknown.
+    #[pyo3(signature = (idx, amount = 1, sheet = None))]
+    fn delete_cols(&mut self, idx: u32, amount: u32, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_COL: u32 = 16_384;
+        if idx == 0 || amount == 0 || idx > MAX_COL || amount > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "idx and amount must be between 1 and 16_384",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.delete_cols_on_sheet(&key, idx, amount);
+        Ok(())
+    }
 }
 
 /// Shared row-major `Vec<Vec<Variant>>` -> Python nested-list conversion for

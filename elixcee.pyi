@@ -274,6 +274,75 @@ class Vm:
         """
         ...
 
+    def insert_rows(
+        self, idx: int, amount: int = 1, sheet: str | None = None
+    ) -> None:
+        """Insert *amount* blank rows before 1-based row *idx*, shifting *idx*
+        and everything below it down. Mirrors openpyxl's
+        ``Worksheet.insert_rows(idx, amount=1)``.
+
+        Does **not** shift merged ranges, hidden-row markers, cell
+        styles/number formats, or formula cell-reference text — a
+        pre-existing limitation of the underlying VBA engine, now reachable
+        from Python.
+
+        Parameters
+        ----------
+        idx:
+            1-based row number to insert before.
+        amount:
+            Number of rows to insert.
+        sheet:
+            Sheet to modify. Defaults to the active sheet; never changes
+            which sheet is active.
+
+        Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds 1,048,576, or
+        *sheet* is unknown.
+        """
+        ...
+
+    def delete_rows(
+        self, idx: int, amount: int = 1, sheet: str | None = None
+    ) -> None:
+        """Delete *amount* rows starting at 1-based row *idx*, shifting
+        everything below the deleted band up. Mirrors openpyxl's
+        ``Worksheet.delete_rows(idx, amount=1)``.
+
+        Same fidelity gap as :meth:`insert_rows`.
+
+        Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds 1,048,576, or
+        *sheet* is unknown.
+        """
+        ...
+
+    def insert_cols(
+        self, idx: int, amount: int = 1, sheet: str | None = None
+    ) -> None:
+        """Insert *amount* blank columns before 1-based column *idx*,
+        shifting *idx* and everything to its right, right. Mirrors
+        openpyxl's ``Worksheet.insert_cols(idx, amount=1)``.
+
+        Same fidelity gap as :meth:`insert_rows`.
+
+        Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds 16,384
+        (``XFD``), or *sheet* is unknown.
+        """
+        ...
+
+    def delete_cols(
+        self, idx: int, amount: int = 1, sheet: str | None = None
+    ) -> None:
+        """Delete *amount* columns starting at 1-based column *idx*,
+        shifting everything to the right of the deleted band left. Mirrors
+        openpyxl's ``Worksheet.delete_cols(idx, amount=1)``.
+
+        Same fidelity gap as :meth:`insert_rows`.
+
+        Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds 16,384
+        (``XFD``), or *sheet* is unknown.
+        """
+        ...
+
     # ── Variables ──────────────────────────────────────────────────────────────
 
     def variables(self) -> dict[str, Any]:

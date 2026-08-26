@@ -938,83 +938,130 @@ impl Vm {
             .expect("active sheet must exist")
     }
 
-    /// Deletes `count` rows starting at 1-based `first` (inclusive), shifting every row
-    /// below the deleted range up by `count`. Shared by `Stmt::RangeDelete`'s `Axis::Row`
-    /// (`Range(addr).Delete`/`EntireRow.Delete`) and `Stmt::RowColDelete` (`Rows(n).Delete`)
-    /// so the two syntactic forms can't drift apart. Mirrored by `delete_cols` below --
-    /// keep the two in sync if either changes.
-    fn delete_rows(&mut self, first: u32, count: u32) {
-        let last = first + count - 1;
+    /// `insert_rows`'s sheet-parameterized sibling (backs Python's
+    /// `insert_rows(..., sheet=None)`). `insert_rows` below just forwards here with
+    /// `key = active_sheet` -- VBA's `RowColInsert`/`RangeInsert` call sites don't
+    /// change at all. Does NOT shift `merged_ranges`/`sheet_visibility`/
+    /// `cell_style_indices`/`cell_number_formats`/formula text -- a pre-existing
+    /// VBA-engine limitation, now Python-reachable; see ROADMAP.md's known gaps.
+    pub fn insert_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         let to_move: Vec<((u32, u32), CellContent)> = self
-            .cells()
-            .iter()
-            .filter(|((r, _), _)| *r > last)
-            .map(|((r, c), v)| ((*r, *c), v.clone()))
-            .collect();
-        for ((r, c), _) in &to_move {
-            self.cells_mut().remove(&(*r, *c));
-        }
-        for r in first..=last {
-            self.cells_mut().retain(|&(row, _), _| row != r);
-        }
-        for ((r, c), v) in to_move {
-            self.cells_mut().insert((r - count, c), v);
-        }
-    }
-
-    /// Inserts `count` blank rows at 1-based `first`, shifting `first` and everything
-    /// below it down by `count`. See `delete_rows`'s doc comment for what shares this.
-    fn insert_rows(&mut self, first: u32, count: u32) {
-        let to_move: Vec<((u32, u32), CellContent)> = self
-            .cells()
-            .iter()
+            .get_sheet_cells(key)
+            .into_iter()
+            .flatten()
             .filter(|((r, _), _)| *r >= first)
             .map(|((r, c), v)| ((*r, *c), v.clone()))
             .collect();
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
         for ((r, c), _) in &to_move {
-            self.cells_mut().remove(&(*r, *c));
+            cells.remove(&(*r, *c));
         }
         for ((r, c), v) in to_move {
-            self.cells_mut().insert((r + count, c), v);
+            cells.insert((r + count, c), v);
+        }
+    }
+
+    /// Inserts `count` blank rows at 1-based `first` on the active sheet, shifting
+    /// `first` and everything below it down by `count`. Shared by
+    /// `Stmt::RangeInsert`'s `Axis::Row` and `Stmt::RowColInsert` (`Rows(n).Insert`).
+    fn insert_rows(&mut self, first: u32, count: u32) {
+        let key = self.active_sheet.clone();
+        self.insert_rows_on_sheet(&key, first, count);
+    }
+
+    /// `delete_rows`'s sheet-parameterized sibling. Single-pass `retain` that drops
+    /// everything at `row >= first` (both the deleted band `[first, last]` *and* the
+    /// cells about to be reinserted shifted) before reinserting `to_move` at its new
+    /// position -- NOT `row < first || row > last`, which would keep the `row > last`
+    /// cells at their stale original position while ALSO inserting a second copy at
+    /// the shifted position, duplicating data. See
+    /// `delete_rows_on_sheet_removes_the_stale_entry_at_the_pre_shift_row` for the
+    /// regression test this exists to keep passing.
+    pub fn delete_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        let last = first + count - 1;
+        let to_move: Vec<((u32, u32), CellContent)> = self
+            .get_sheet_cells(key)
+            .into_iter()
+            .flatten()
+            .filter(|((r, _), _)| *r > last)
+            .map(|((r, c), v)| ((*r, *c), v.clone()))
+            .collect();
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
+        cells.retain(|&(row, _), _| row < first);
+        for ((r, c), v) in to_move {
+            cells.insert((r - count, c), v);
+        }
+    }
+
+    /// Deletes `count` rows starting at 1-based `first` (inclusive) on the active
+    /// sheet, shifting every row below the deleted range up by `count`. Shared by
+    /// `Stmt::RangeDelete`'s `Axis::Row` (`Range(addr).Delete`/`EntireRow.Delete`) and
+    /// `Stmt::RowColDelete` (`Rows(n).Delete`) so the two syntactic forms can't drift
+    /// apart. Mirrored by `delete_cols` below -- keep the two in sync if either changes.
+    fn delete_rows(&mut self, first: u32, count: u32) {
+        let key = self.active_sheet.clone();
+        self.delete_rows_on_sheet(&key, first, count);
+    }
+
+    /// `insert_cols_on_sheet`'s row-axis sibling is `insert_rows_on_sheet` above --
+    /// this is `delete_cols`'s sheet-parameterized version, the column-axis mirror of
+    /// `delete_rows_on_sheet` (same single-pass `retain(col < first)` correctness
+    /// reasoning, on the column instead of the row).
+    pub fn delete_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        let last = first + count - 1;
+        let to_move: Vec<((u32, u32), CellContent)> = self
+            .get_sheet_cells(key)
+            .into_iter()
+            .flatten()
+            .filter(|((_, c), _)| *c > last)
+            .map(|((r, c), v)| ((*r, *c), v.clone()))
+            .collect();
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
+        cells.retain(|&(_, col), _| col < first);
+        for ((r, c), v) in to_move {
+            cells.insert((r, c - count), v);
         }
     }
 
     /// `delete_rows`'s column-axis mirror -- deletes `count` columns starting at 1-based
-    /// `first`, shifting every column to its right left by `count`.
+    /// `first` on the active sheet, shifting every column to its right left by `count`.
     fn delete_cols(&mut self, first: u32, count: u32) {
-        let last = first + count - 1;
+        let key = self.active_sheet.clone();
+        self.delete_cols_on_sheet(&key, first, count);
+    }
+
+    /// `insert_rows_on_sheet`'s column-axis mirror.
+    pub fn insert_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         let to_move: Vec<((u32, u32), CellContent)> = self
-            .cells()
-            .iter()
-            .filter(|((_, c), _)| *c > last)
+            .get_sheet_cells(key)
+            .into_iter()
+            .flatten()
+            .filter(|((_, c), _)| *c >= first)
             .map(|((r, c), v)| ((*r, *c), v.clone()))
             .collect();
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
         for ((r, c), _) in &to_move {
-            self.cells_mut().remove(&(*r, *c));
-        }
-        for c in first..=last {
-            self.cells_mut().retain(|&(_, col), _| col != c);
+            cells.remove(&(*r, *c));
         }
         for ((r, c), v) in to_move {
-            self.cells_mut().insert((r, c - count), v);
+            cells.insert((r, c + count), v);
         }
     }
 
     /// `insert_rows`'s column-axis mirror -- inserts `count` blank columns at 1-based
-    /// `first`, shifting `first` and everything to its right right by `count`.
+    /// `first` on the active sheet, shifting `first` and everything to its right right
+    /// by `count`.
     fn insert_cols(&mut self, first: u32, count: u32) {
-        let to_move: Vec<((u32, u32), CellContent)> = self
-            .cells()
-            .iter()
-            .filter(|((_, c), _)| *c >= first)
-            .map(|((r, c), v)| ((*r, *c), v.clone()))
-            .collect();
-        for ((r, c), _) in &to_move {
-            self.cells_mut().remove(&(*r, *c));
-        }
-        for ((r, c), v) in to_move {
-            self.cells_mut().insert((r, c + count), v);
-        }
+        let key = self.active_sheet.clone();
+        self.insert_cols_on_sheet(&key, first, count);
     }
 
     fn rebuild_cell_index(&mut self) {
@@ -8729,6 +8776,143 @@ mod tests {
         assert!(!vm.sheet_order_reordered);
         vm.move_sheet("Renamed", 0).unwrap();
         assert!(vm.sheet_order_reordered);
+    }
+
+    // ── P1 core 3: row/col insert-delete sheet-parameterized siblings ───────
+
+    #[test]
+    fn insert_rows_on_sheet_does_not_affect_a_different_sheet_or_change_active_sheet() {
+        let mut vm = Vm::new(); // active sheet is "sheet1"
+        vm.ensure_sheet("Other");
+        vm.sheet_cells_mut("other").unwrap().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(99),
+            },
+        );
+        vm.cells_mut().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+
+        vm.insert_rows_on_sheet("other", 1, 2);
+
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(5, 1), Variant::Integer(1)); // active sheet untouched
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(7, 1))
+                .unwrap()
+                .value,
+            Variant::Integer(99)
+        ); // shifted down by 2 on the target sheet
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_shifts_only_the_target_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.sheet_cells_mut("other").unwrap().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(99),
+            },
+        );
+        vm.cells_mut().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+
+        vm.delete_rows_on_sheet("other", 1, 2);
+
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(5, 1), Variant::Integer(1)); // active sheet untouched
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(3, 1))
+                .unwrap()
+                .value,
+            Variant::Integer(99)
+        ); // shifted up by 2 on the target sheet
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_removes_the_stale_entry_at_the_pre_shift_row() {
+        // Regression test for a bug caught in review: an earlier draft of
+        // delete_rows_on_sheet used `retain(row < first || row > last)`, which
+        // kept the pre-shift entry AND inserted a second copy at the shifted
+        // position -- silent stale duplicate data. The correct predicate is
+        // `retain(row < first)`, verified here.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (10, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(7),
+            },
+        );
+        vm.delete_rows_on_sheet("sheet1", 1, 2);
+        assert_eq!(vm.get_cell(10, 1), Variant::Empty); // stale pre-shift position is gone
+        assert_eq!(vm.get_cell(8, 1), Variant::Integer(7)); // correct shifted position
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_does_not_affect_a_different_sheet_or_change_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.sheet_cells_mut("other").unwrap().insert(
+            (1, 5),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(99),
+            },
+        );
+        vm.cells_mut().insert(
+            (1, 5),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+
+        vm.insert_cols_on_sheet("other", 1, 2);
+
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(1));
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 7))
+                .unwrap()
+                .value,
+            Variant::Integer(99)
+        );
+    }
+
+    #[test]
+    fn delete_cols_on_sheet_removes_the_stale_entry_at_the_pre_shift_col() {
+        // Column-axis mirror of the row-axis stale-position regression test above.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 10),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(7),
+            },
+        );
+        vm.delete_cols_on_sheet("sheet1", 1, 2);
+        assert_eq!(vm.get_cell(1, 10), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 8), Variant::Integer(7));
     }
 
     // ── Milestone B6a: strict_resolution + resolution-failure evidence ──────
