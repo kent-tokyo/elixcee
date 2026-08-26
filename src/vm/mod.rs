@@ -383,13 +383,13 @@ pub struct SheetVisibility {
 /// why that matters (it's the same `sheetId` `snapshot.rs`'s `stable_id` already treats
 /// as the one cross-save-stable identifier a real `.xlsx` can offer).
 ///
-/// Deliberately has no separate rename-stable "VM internal identity" field: nothing in
-/// this VM currently renames a loaded sheet (grep-confirmed against this file and
-/// `src/parser/`), so the sheet's own lowercased name is, today, already the stable key
-/// every other per-sheet `Vm` map (`merged_ranges`, `sheet_visibility`,
-/// `cell_style_indices`, and this one) is keyed by. Add a rename-proof identity only if
-/// and when sheet-rename VBA support is implemented — building it now would be validated
-/// by nothing.
+/// Deliberately has no separate rename-stable "VM internal identity" field:
+/// `Vm::rename_sheet` re-keys this map (and every other per-sheet map --
+/// `merged_ranges`, `sheet_visibility`, `cell_style_indices`, `cell_number_formats`,
+/// `protected_sheets`) atomically in one call, including updating this struct's own
+/// `original_display_name` to the new name, so the sheet's lowercased name stays a
+/// valid stable key across a rename -- no separate identity needed because the re-key
+/// is atomic, not because rename doesn't happen.
 #[derive(Debug, Clone, Default)]
 pub struct WorksheetOrigin {
     pub original_sheet_id: Option<String>,
@@ -585,6 +585,9 @@ pub struct Vm {
     /// Sheets("New")`). Kept in sync with `sheets`' key set by
     /// `ensure_sheet` (push on first insert) and `Stmt::SheetsDelete`
     /// (remove on delete); `populate_from_sheets` clears both together.
+    /// `rename_sheet` swaps a slot's value in place (position preserved);
+    /// `move_sheet` removes and re-inserts a slot at a new position (the
+    /// only primitive that actually reorders an existing sheet).
     ///
     /// This is deliberately a *second* source of sheet order, kept apart
     /// from `sheet_names()` (which still sorts alphabetically) — real order
@@ -639,6 +642,14 @@ pub struct Vm {
     row_cols: HashMap<u32, BTreeSet<u32>>,
     /// Set to true whenever cells change; triggers index rebuild on next End query.
     cell_index_dirty: bool,
+    /// Set to true by `move_sheet`; once true, `save_xlsx_impl` drops any
+    /// `<definedNames>` passthrough even if no sheet was deleted, since a
+    /// `<definedName localSheetId="N">` is positional and reordering can silently
+    /// invalidate it. Never reset -- once a session has reordered sheets, that
+    /// workbook's original positional indices can no longer be trusted for its
+    /// remaining lifetime. `rename_sheet` does NOT set this: it changes a name, not
+    /// a position.
+    pub(crate) sheet_order_reordered: bool,
     /// Wall-clock deadline for loop execution (Milestone B5a's `test-workbook`
     /// timeout guard). `None` (the default) means no limit — every existing
     /// caller (run-mode, `check`, `snapshot`, Python bindings) is unaffected.
@@ -808,6 +819,7 @@ impl Vm {
             col_rows: HashMap::new(),
             row_cols: HashMap::new(),
             cell_index_dirty: true,
+            sheet_order_reordered: false,
             deadline: None,
             loop_iters: 0,
             strict_resolution: false,
@@ -1036,8 +1048,7 @@ impl Vm {
     /// sheet at 0-based position `i` in `sheet_order` (clamped to the current length, so
     /// an out-of-range index appends rather than panicking). Ignored if `name` already
     /// exists -- this only controls where a *newly created* sheet lands, not reordering
-    /// an existing one (this VM has no reorder primitive at all, same N/A noted on
-    /// `WorksheetOrigin`'s own doc comment).
+    /// an existing one; use `move_sheet` to reposition a sheet that already exists.
     pub fn ensure_sheet_at(&mut self, name: &str, index: Option<usize>) {
         let key = name.to_lowercase();
         if !self.sheets.contains_key(&key) {
@@ -1716,6 +1727,131 @@ impl Vm {
         let key = name.to_lowercase();
         self.require_sheet_exists(name, &key)?;
         self.remove_sheet(&key, name)
+    }
+
+    /// Renames a sheet, atomically re-keying all eight lowercase-keyed per-sheet `Vm`
+    /// maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
+    /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
+    /// `cell_number_formats`, `worksheet_origins`). Each gets one explicit
+    /// remove+insert line rather than a generic "walk every map" helper: the maps
+    /// have different value types, a truly generic helper needs a macro or
+    /// trait-object indirection to cross that, and with exactly one call site a
+    /// helper would save nothing. `remove_sheet`'s own, separate, pre-existing leak
+    /// of 6 of these maps on delete is NOT touched here (see ROADMAP.md's known
+    /// gaps -- left unfixed by deliberate choice, not missed).
+    ///
+    /// `protected_sheets` (a `HashSet`) is NOT re-keyed here -- it doesn't need to
+    /// be. Renaming a protected sheet is rejected outright below, so `old_key` is
+    /// guaranteed absent from `protected_sheets` by the time any re-keying runs; a
+    /// re-key step for it would be unreachable dead code, not a defensive one.
+    ///
+    /// Renaming the ACTIVE sheet is a normal, supported case (updates `active_sheet`
+    /// itself) -- NOT rejected, and NOT the silent no-op `remove_sheet` uses for
+    /// deleting the active sheet: a real rename request must actually rename.
+    /// Skipping `active_sheet` here would leave `cells()`/`cells_mut()`'s
+    /// `.expect("active sheet must exist")` pointing at a key no longer present in
+    /// `sheets`, panicking on the very next cell access.
+    ///
+    /// Does not touch `cell_index_dirty`/`col_rows`/`row_cols`: that lazy index is
+    /// keyed off `sheets[active_sheet]`'s CONTENTS, which are unchanged by a rename
+    /// (same cell map, just re-keyed) -- and `active_sheet` itself is re-pointed in
+    /// the same call, so the index still resolves to the same data.
+    ///
+    /// Renaming to the same name (including a pure-case change, e.g. "Sheet1" ->
+    /// "SHEET1") is allowed and updates `original_display_name`'s casing -- this is
+    /// NOT a collision with itself; the collision check only fires when `new_key`
+    /// names a DIFFERENT existing sheet.
+    ///
+    /// Known, deliberate non-goals (see ROADMAP.md known gaps): does not validate
+    /// Excel's 31-char length limit, illegal characters (`: \ / ? * [ ]`), or
+    /// reserved names -- matches `set_sheet`'s pre-existing total lack of name
+    /// validation. Does not rewrite any formula or `<definedName>` text that refers
+    /// to this sheet by its OLD name -- only the `<sheet name="...">` tab label
+    /// changes.
+    pub fn rename_sheet(&mut self, old_name: &str, new_name: &str) -> Result<(), String> {
+        let old_key = old_name.to_lowercase();
+        if !self.sheets.contains_key(&old_key) {
+            return Err(format!("Sheet '{}' not found", old_name));
+        }
+        if new_name.trim().is_empty() {
+            return Err("Sheet name must not be empty".to_string());
+        }
+        if self.protected_sheets.contains(&old_key) {
+            return Err(format!("Cannot rename: sheet '{}' is protected", old_name));
+        }
+        let new_key = new_name.to_lowercase();
+        if new_key != old_key && self.sheets.contains_key(&new_key) {
+            return Err(format!("Sheet '{}' already exists", new_name));
+        }
+
+        // 1. `sheets` -- the cell map itself.
+        if let Some(cells) = self.sheets.remove(&old_key) {
+            self.sheets.insert(new_key.clone(), cells);
+        }
+        // 2. `sheet_order` -- IN-PLACE value swap, not remove+push, so tab position
+        //    is preserved.
+        if let Some(slot) = self.sheet_order.iter_mut().find(|k| **k == old_key) {
+            *slot = new_key.clone();
+        }
+        // 3. `active_sheet`.
+        if self.active_sheet == old_key {
+            self.active_sheet = new_key.clone();
+        }
+        // 4-7: merged_ranges / sheet_visibility / cell_style_indices / cell_number_formats.
+        if let Some(v) = self.merged_ranges.remove(&old_key) {
+            self.merged_ranges.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.sheet_visibility.remove(&old_key) {
+            self.sheet_visibility.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.cell_style_indices.remove(&old_key) {
+            self.cell_style_indices.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.cell_number_formats.remove(&old_key) {
+            self.cell_number_formats.insert(new_key.clone(), v);
+        }
+        // 8. `worksheet_origins` -- re-key AND update `original_display_name` to the
+        //    NEW name; `save_xlsx_impl` reads this field (not the lowercased key) to
+        //    write `<sheet name="...">` on save.
+        let mut origin = self.worksheet_origins.remove(&old_key).unwrap_or_default();
+        origin.original_display_name = Some(new_name.to_string());
+        self.worksheet_origins.insert(new_key, origin);
+        // `protected_sheets` needs no re-key: the protection check above already
+        // rejected this call if `old_key` were a member, so it's guaranteed absent
+        // here -- a re-key step would be unreachable dead code, not a defensive one.
+        Ok(())
+    }
+
+    /// Repositions an EXISTING sheet in `sheet_order` -- the missing complement to
+    /// `ensure_sheet_at` (which only positions a NEWLY created sheet; no primitive
+    /// reorders an existing one). Touches ONLY `sheet_order`: no other per-sheet map
+    /// is keyed by position, so unlike `rename_sheet` this needs no re-keying
+    /// anywhere else.
+    ///
+    /// `new_index` is an ABSOLUTE 0-based target position (matching `set_sheet`'s
+    /// existing `index` convention), not a relative offset like openpyxl's
+    /// `Worksheet.move_sheet(offset)`. Clamped to `0..=sheet_order.len()`
+    /// post-removal, matching `ensure_sheet_at`'s own clamp -- an out-of-range index
+    /// moves to the nearest end rather than erroring.
+    ///
+    /// Deliberately does NOT check `protected_sheets`: real Excel's per-sheet
+    /// "Protect Sheet" does not gate tab reordering (that's the entirely separate,
+    /// unimplemented "Protect Workbook" structure flag) -- no precedent in this
+    /// codebase to check anything here.
+    ///
+    /// Sets `sheet_order_reordered`, which gates `<definedNames>` passthrough on
+    /// save (see `save_xlsx_impl`) -- a `<definedName localSheetId="N">` is
+    /// positional, and reordering can silently invalidate it otherwise.
+    pub fn move_sheet(&mut self, name: &str, new_index: usize) -> Result<(), String> {
+        let key = name.to_lowercase();
+        if !self.sheets.contains_key(&key) {
+            return Err(format!("Sheet '{}' not found", name));
+        }
+        self.sheet_order.retain(|k| k != &key);
+        let idx = new_index.min(self.sheet_order.len());
+        self.sheet_order.insert(idx, key);
+        self.sheet_order_reordered = true;
+        Ok(())
     }
 
     /// Evaluates an `ObjectExpr` to the `ObjectRef` it names (Milestone
@@ -8416,6 +8552,183 @@ mod tests {
         vm.ensure_sheet("Second");
         vm.ensure_sheet_at("Second", Some(0)); // already exists -- must not move it
         assert_eq!(vm.sheet_order, vec!["sheet1", "second"]);
+    }
+
+    // ── P1 core 3: Vm::rename_sheet / Vm::move_sheet ─────────────────────────
+
+    #[test]
+    fn rename_sheet_updates_all_eight_per_sheet_maps() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        vm.merged_ranges
+            .insert("sheet1".to_string(), vec![((1, 2), (1, 4))]);
+        vm.sheet_visibility.insert(
+            "sheet1".to_string(),
+            SheetVisibility {
+                hidden_rows: vec![Interval { start: 5, end: 5 }],
+                hidden_columns: vec![],
+            },
+        );
+        vm.cell_style_indices
+            .insert("sheet1".to_string(), HashMap::from([((1, 1), 3u32)]));
+        vm.cell_number_formats.insert(
+            "sheet1".to_string(),
+            HashMap::from([((1, 1), "0.00".to_string())]),
+        );
+
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+
+        assert!(vm.sheets.contains_key("renamed"));
+        assert!(!vm.sheets.contains_key("sheet1"));
+        assert!(vm.merged_ranges.contains_key("renamed"));
+        assert!(!vm.merged_ranges.contains_key("sheet1"));
+        assert!(vm.sheet_visibility.contains_key("renamed"));
+        assert!(!vm.sheet_visibility.contains_key("sheet1"));
+        assert!(vm.cell_style_indices.contains_key("renamed"));
+        assert!(!vm.cell_style_indices.contains_key("sheet1"));
+        assert!(vm.cell_number_formats.contains_key("renamed"));
+        assert!(!vm.cell_number_formats.contains_key("sheet1"));
+        assert!(vm.worksheet_origins.contains_key("renamed"));
+        assert!(!vm.worksheet_origins.contains_key("sheet1"));
+        assert!(vm.sheet_order.contains(&"renamed".to_string()));
+        assert!(!vm.sheet_order.contains(&"sheet1".to_string()));
+    }
+
+    #[test]
+    fn rename_sheet_preserves_tab_position_in_sheet_order() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.ensure_sheet("C");
+        assert_eq!(vm.sheet_order, vec!["sheet1", "b", "c"]);
+        vm.rename_sheet("B", "Renamed").unwrap();
+        assert_eq!(vm.sheet_order, vec!["sheet1", "renamed", "c"]);
+    }
+
+    #[test]
+    fn rename_sheet_updates_active_sheet_when_renaming_the_active_sheet() {
+        let mut vm = Vm::new(); // active sheet is "sheet1"
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+        assert_eq!(vm.active_sheet, "renamed");
+        // Must not panic -- `cells()` unwraps on `self.sheets[active_sheet]`.
+        assert_eq!(vm.cells().len(), 0);
+    }
+
+    #[test]
+    fn rename_sheet_does_not_touch_active_sheet_when_renaming_a_different_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.rename_sheet("Other", "Renamed").unwrap();
+        assert_eq!(vm.active_sheet, "sheet1");
+    }
+
+    #[test]
+    fn rename_sheet_sets_worksheet_origins_display_name_to_the_new_name() {
+        let mut vm = Vm::new();
+        vm.rename_sheet("Sheet1", "NewName").unwrap();
+        assert_eq!(
+            vm.worksheet_origins
+                .get("newname")
+                .and_then(|o| o.original_display_name.clone()),
+            Some("NewName".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_sheet_allows_case_only_rename_of_the_same_sheet() {
+        let mut vm = Vm::new();
+        vm.rename_sheet("Sheet1", "SHEET1").unwrap();
+        assert_eq!(
+            vm.worksheet_origins
+                .get("sheet1")
+                .and_then(|o| o.original_display_name.clone()),
+            Some("SHEET1".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_sheet_errors_if_old_name_not_found() {
+        let mut vm = Vm::new();
+        let err = vm.rename_sheet("Typo", "New").unwrap_err();
+        assert!(err.contains("not found"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rename_sheet_errors_if_new_name_collides_with_a_different_existing_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        let err = vm.rename_sheet("Sheet1", "Other").unwrap_err();
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rename_sheet_errors_on_empty_or_whitespace_new_name() {
+        let mut vm = Vm::new();
+        assert!(vm.rename_sheet("Sheet1", "").is_err());
+        assert!(vm.rename_sheet("Sheet1", "   ").is_err());
+    }
+
+    #[test]
+    fn rename_sheet_errors_if_sheet_is_protected() {
+        let mut vm = Vm::new();
+        vm.protected_sheets.insert("sheet1".to_string());
+        let err = vm.rename_sheet("Sheet1", "New").unwrap_err();
+        assert!(err.contains("protected"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn move_sheet_reorders_sheet_order_without_touching_other_maps() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.ensure_sheet("C");
+        vm.merged_ranges
+            .insert("sheet1".to_string(), vec![((1, 1), (1, 1))]);
+        let active_before = vm.active_sheet.clone();
+
+        vm.move_sheet("C", 0).unwrap();
+
+        assert_eq!(vm.sheet_order, vec!["c", "sheet1", "b"]);
+        assert_eq!(vm.active_sheet, active_before);
+        assert!(vm.merged_ranges.contains_key("sheet1"));
+    }
+
+    #[test]
+    fn move_sheet_clamps_out_of_range_index_to_the_end() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.move_sheet("Sheet1", 999).unwrap();
+        assert_eq!(vm.sheet_order, vec!["b", "sheet1"]);
+    }
+
+    #[test]
+    fn move_sheet_errors_if_sheet_not_found() {
+        let mut vm = Vm::new();
+        let err = vm.move_sheet("Typo", 0).unwrap_err();
+        assert!(err.contains("not found"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn move_sheet_does_not_check_protected_sheets() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.protected_sheets.insert("sheet1".to_string());
+        vm.move_sheet("Sheet1", 1).unwrap();
+        assert_eq!(vm.sheet_order, vec!["b", "sheet1"]);
+    }
+
+    #[test]
+    fn move_sheet_sets_sheet_order_reordered_but_rename_sheet_does_not() {
+        let mut vm = Vm::new();
+        assert!(!vm.sheet_order_reordered);
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+        assert!(!vm.sheet_order_reordered);
+        vm.move_sheet("Renamed", 0).unwrap();
+        assert!(vm.sheet_order_reordered);
     }
 
     // ── Milestone B6a: strict_resolution + resolution-failure evidence ──────

@@ -1440,11 +1440,16 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     // present at load time is gone now (Sheets(...).Delete ran), every remaining
     // localSheetId could point at the wrong sheet, so the whole element is dropped
     // rather than carried through stale. See OpaqueWorkbookFragments' doc comment.
+    // Also dropped if `move_sheet` has reordered `sheet_order` at all: localSheetId is
+    // positional, not name-keyed, so a reorder invalidates it exactly like a deletion
+    // does, even though every sheet is still present. (VBA's `Sheets.Add(before:=...)`
+    // can shift positions the same way without tripping either check -- a narrower,
+    // pre-existing gap this doesn't close; see ROADMAP.md's known gaps.)
     let no_sheet_was_deleted = vm
         .worksheet_origins
         .keys()
         .all(|original_key| vm.sheet_order.contains(original_key));
-    let defined_names = if no_sheet_was_deleted {
+    let defined_names = if no_sheet_was_deleted && !vm.sheet_order_reordered {
         workbook_source_xml
             .as_deref()
             .and_then(|xml| reader::extract_raw_element(xml, "definedNames"))
