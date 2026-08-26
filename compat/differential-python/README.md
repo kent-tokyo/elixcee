@@ -1,9 +1,13 @@
 # Python differential tests
 
-Compares elixcee's Python-native bulk worksheet range/row API (`get_range`/
-`set_range`/`append_row`/`iter_rows`/`max_row`/`max_column`/
-`calculate_dimension`, R1 — see `docs/openpyxl-gap-audit.md`) against
-`openpyxl`'s own read of the same fixtures.
+Compares elixcee's Python-native worksheet APIs against `openpyxl`'s own read
+of the same fixtures — see `docs/openpyxl-gap-audit.md`:
+
+- `bulk_range_check.py`: the bulk worksheet range/row API (R1) — `get_range`/
+  `set_range`/`append_row`/`iter_rows`/`max_row`/`max_column`/
+  `calculate_dimension`.
+- `sheet_ops_check.py`: sheet management (P1 core 3) — `rename_sheet`/
+  `move_sheet`/`merged_cells`.
 
 This is the one place in the repo with a genuine, disclosed new dependency:
 `openpyxl` is a **test-only oracle**, never a runtime dependency of the
@@ -24,6 +28,7 @@ maturin develop --release --features python
 
 ```
 python3 compat/differential-python/bulk_range_check.py
+python3 compat/differential-python/sheet_ops_check.py
 ```
 
 Plain stdlib `unittest`, no test runner required. Exits non-zero on any
