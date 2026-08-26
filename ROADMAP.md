@@ -86,6 +86,22 @@ full account, including why hiding an already-hidden unit is a no-op (not a dupl
 interval) and unhiding an already-visible unit creates no stray `sheet_visibility` entry,
 both following `merge_cells`'s own established convention. No version bump this round.
 
+**P2, second slice: `copy_sheet`, merged to `master`, not yet released.** The second item
+off `docs/openpyxl-gap-audit.md`'s P2 list (category 1). One new Python method:
+`copy_sheet(source_name, new_name)`, duplicating a sheet's cells, merges, hidden-row/col
+state, cell styles, and cell number formats into a brand-new sheet. Reuses `rename_sheet`'s
+own per-sheet-map list directly (`sheets`/`merged_ranges`/`sheet_visibility`/
+`cell_style_indices`/`cell_number_formats`/`worksheet_origins`) but clone-and-insert
+instead of remove-and-insert, and a brand-new `WorksheetOrigin` mirroring `ensure_sheet`'s
+own no-source-part shape — genuinely close to this doc's own cost estimate for once, since
+`rename_sheet` had already paid the discovery cost for that map list. Deliberately appends
+the copy at the end of the sheet order rather than positioning it next to the source (unlike
+openpyxl's own `copy_worksheet`), sidestepping the same positional
+`<definedName localSheetId="N">`-staleness risk `move_sheet` guards against for a reorder —
+see the gap-audit doc's "Implementation notes for P2: copy_sheet" for the full account,
+including a pre-existing, unrelated `sheet_names()` ordering quirk discovered while testing
+(item 24 below). Does not copy sheet protection status. No version bump this round.
+
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
 `arr(1,2)`, `UBound(arr, dimension)` honors its argument for real, `ReDim Preserve` enforces
@@ -582,6 +598,15 @@ all), so this needs a human/agent to remember it explicitly rather than relying 
     full account, including why unhiding a single row/column (not reading or hiding one)
     was this slice's real new work — the same undersold-cost pattern items 19/22 above
     already flagged for `rename_sheet`/`sort_range`.
+
+24. **`Vm::sheet_names()` (and Python's `sheet_names()`) return sheets alphabetically
+    sorted, not in `sheet_order`/tab-position order.** Undocumented in both the Rust doc
+    comment and the Python docstring. Pre-existing, not introduced by `copy_sheet` or any
+    round in this document — discovered while writing `copy_sheet`'s own differential-python
+    coverage (the first test in this repo to check `sheet_names()`'s order against a real
+    multi-sheet fixture). Not fixed: changing an existing, unversioned method's ordering
+    contract is out of scope for whatever round happens to notice it, and could break a
+    caller already relying on alphabetical order.
 
 ## npm/JS/WASM: still-open gaps
 
