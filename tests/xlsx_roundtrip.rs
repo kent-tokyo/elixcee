@@ -1015,6 +1015,85 @@ fn write_rect_on_a_real_fixture_survives_a_save_without_disturbing_existing_stat
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// P1 core 3: `rename_sheet`'s atomic re-key exercised end-to-end -- the exact
+/// regression a broken re-key would produce is losing the merge/hidden-column/
+/// hidden-row state that lived under the OLD lowercased key.
+#[test]
+fn rename_sheet_round_trips_merge_and_hidden_metadata_on_the_real_fixture() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path = tmp_path("rename_sheet_output.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.rename_sheet("Sheet1", "Renamed").unwrap();
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        out_wb.contains(r#"<sheet name="Renamed""#),
+        "the sheet must be renamed in xl/workbook.xml: {out_wb}"
+    );
+
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        out_sheet1.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "the fixture's pre-existing B1:C1 merge must survive a rename: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        "the fixture's pre-existing hidden column D must survive a rename: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"<row r="5" hidden="1">"#)
+            || out_sheet1.contains(r#"<row r="5" hidden="1"/>"#),
+        "the fixture's pre-existing hidden row 5 must survive a rename: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// P1 core 3: pins the disclosed row/col insert-delete fidelity gap as an
+/// executable fact -- merges and hidden-row/col markers are NOT shifted, which is
+/// a pre-existing VBA-engine limitation this round makes Python-reachable, not a
+/// new regression. If this ever starts failing because someone taught
+/// `insert_rows_on_sheet` to shift these, update ROADMAP.md's known gaps too.
+#[test]
+fn insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidden_markers() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path = tmp_path("insert_rows_on_sheet_output.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let key = vm.resolve_sheet_key(None).unwrap();
+    vm.insert_rows_on_sheet(&key, 1, 1);
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "merge ref must still reference its ORIGINAL, unshifted row -- insert_rows_on_sheet \
+         does not (yet) shift merges: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        "hidden column D marker must be unchanged -- column shifting is not this axis: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"<row r="5" hidden="1">"#)
+            || out_sheet1.contains(r#"<row r="5" hidden="1"/>"#),
+        "hidden row marker must still say row 5, NOT shifted to row 6: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// Real report against the released `0.10.0`: a source that binds the relationships
 /// namespace to a prefix OTHER than the conventional `r:` (here `rel:`) is fully valid
 /// OOXML on its own -- XML namespace binding is about the URI, not the prefix spelling.
@@ -1893,6 +1972,171 @@ fn defined_names_are_dropped_entirely_once_a_sheet_is_deleted() {
     let _ = std::fs::remove_file(&source_path);
     let _ = std::fs::remove_file(&noop_output_path);
     let _ = std::fs::remove_file(&delete_output_path);
+}
+
+/// P1 core 3: builds a minimal synthetic 3-sheet workbook, matching this file's
+/// established pattern for shapes no real fixture demonstrates (real fixtures are
+/// all single-sheet or lack a name distinct enough to test reordering safely).
+fn synthetic_three_sheet_workbook(source_name: &str, defined_names_xml: &str) -> String {
+    let workbook_xml = format!(
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+            "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+            "<sheets>\n",
+            "<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/>\n",
+            "<sheet name=\"Sheet2\" sheetId=\"2\" r:id=\"rId2\"/>\n",
+            "<sheet name=\"Sheet3\" sheetId=\"3\" r:id=\"rId3\"/>\n",
+            "</sheets>\n",
+            "{}",
+            "</workbook>\n",
+        ),
+        defined_names_xml
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>\n",
+        "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet3.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const MINIMAL_SHEET: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n</worksheet>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", workbook_xml.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet1.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet2.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet3.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    let bytes = zip.finish().unwrap().into_inner();
+    let path = tmp_path(source_name);
+    std::fs::write(&path, &bytes).unwrap();
+    path
+}
+
+#[test]
+fn rename_sheet_preserves_tab_position_in_a_synthetic_three_sheet_workbook() {
+    let source_path =
+        synthetic_three_sheet_workbook("synthetic_three_sheet_source_rename.xlsx", "");
+    let output_path = tmp_path("rename_sheet_synthetic_output.xlsx");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("synthetic fixture should load");
+    vm.rename_sheet("Sheet2", "Renamed").unwrap();
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    let sheet1_pos = out_wb.find("<sheet name=\"Sheet1\"").unwrap();
+    let renamed_pos = out_wb.find("<sheet name=\"Renamed\"").unwrap();
+    let sheet3_pos = out_wb.find("<sheet name=\"Sheet3\"").unwrap();
+    assert!(
+        sheet1_pos < renamed_pos && renamed_pos < sheet3_pos,
+        "the renamed sheet must stay in the MIDDLE tab position, not move to the end: {out_wb}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
+#[test]
+fn move_sheet_reorders_tabs_in_a_synthetic_three_sheet_workbook() {
+    let source_path = synthetic_three_sheet_workbook("synthetic_three_sheet_source_move.xlsx", "");
+    let output_path = tmp_path("move_sheet_synthetic_output.xlsx");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("synthetic fixture should load");
+    vm.move_sheet("Sheet3", 0).unwrap();
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    let sheet3_pos = out_wb.find("<sheet name=\"Sheet3\"").unwrap();
+    let sheet1_pos = out_wb.find("<sheet name=\"Sheet1\"").unwrap();
+    let sheet2_pos = out_wb.find("<sheet name=\"Sheet2\"").unwrap();
+    assert!(
+        sheet3_pos < sheet1_pos && sheet1_pos < sheet2_pos,
+        "Sheet3 must now come first, with Sheet1/Sheet2 following in their original \
+         relative order: {out_wb}"
+    );
+
+    // Each sheet's own worksheet part is unaffected by a pure reorder -- move_sheet
+    // only touches sheet_order, never worksheet_origins/part naming.
+    assert!(output_entries.contains_key("xl/worksheets/sheet1.xml"));
+    assert!(output_entries.contains_key("xl/worksheets/sheet2.xml"));
+    assert!(output_entries.contains_key("xl/worksheets/sheet3.xml"));
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// Pins the src/lib.rs `<definedNames>`-gate fix: a `<definedName localSheetId="N">`
+/// is positional, so `move_sheet` reordering `sheet_order` must drop any surviving
+/// `<definedNames>` passthrough exactly like a sheet deletion already does --
+/// otherwise a saved workbook could carry a defined name silently pointing at the
+/// wrong sheet after a reorder.
+#[test]
+fn move_sheet_drops_defined_names_that_would_have_stale_positional_indices() {
+    let source_path = synthetic_three_sheet_workbook(
+        "synthetic_three_sheet_source_move_defined_names.xlsx",
+        concat!(
+            "<definedNames>",
+            "<definedName name=\"test\">Sheet1!$F$5</definedName>",
+            "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"2\">Sheet3!$E$3</definedName>",
+            "</definedNames>\n",
+        ),
+    );
+    let output_path = tmp_path("move_sheet_defined_names_output.xlsx");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("synthetic fixture should load");
+    vm.move_sheet("Sheet3", 0).unwrap();
+    save_workbook(&vm, &output_path).expect("save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        !out_wb.contains("<definedNames>"),
+        "definedNames must be dropped entirely once move_sheet has reordered sheet_order, \
+         not carried through with a stale localSheetId: {out_wb}"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_file(&output_path);
 }
 
 /// 0.10.0-D, slice D1: a surviving sheet's output part name stays its own origin
