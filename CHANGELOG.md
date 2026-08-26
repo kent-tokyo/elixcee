@@ -164,11 +164,16 @@ sheet) -- reordering an *existing* sheet had no primitive at all before this rou
 
 Because `<definedName localSheetId="N">` is positional, `move_sheet` reordering
 `sheet_order` could otherwise leave a saved workbook's `<definedNames>` pointing at the
-wrong sheet -- fixed by extending the existing deletion-only passthrough guard
-(`src/lib.rs`) with a new `Vm::sheet_order_reordered` flag, set by `move_sheet`, checked
-alongside the existing check. Pinned by an integration test that verifies `<definedNames>`
-is actually absent from a real saved output after a reorder, not just that an internal
-flag got set.
+wrong sheet; separately, a `<definedName>`'s own TEXT can reference a sheet by name (e.g.
+`Sheet1!$F$5`), which `rename_sheet` doesn't rewrite, so a rename could leave that text
+dangling too. Both are fixed by extending the existing deletion-only passthrough guard
+(`src/lib.rs`) with a new `Vm::defined_names_may_be_stale` flag, set by both `move_sheet`
+and `rename_sheet`, checked alongside the existing check. The `rename_sheet` half was
+missed in the first pass -- caught in a follow-up review against `fixture4` (the one real
+fixture with genuine `<definedNames>` content; the original tests only used fixtures
+without any) -- and fixed with its own integration test verifying `<definedNames>` is
+actually absent from a real saved output after a rename, not just that an internal flag
+got set.
 
 `insert_rows`/`delete_rows`/`insert_cols`/`delete_cols` are built on new
 `insert_rows_on_sheet`/`delete_rows_on_sheet`/`insert_cols_on_sheet`/`delete_cols_on_sheet`

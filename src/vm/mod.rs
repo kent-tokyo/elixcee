@@ -642,14 +642,19 @@ pub struct Vm {
     row_cols: HashMap<u32, BTreeSet<u32>>,
     /// Set to true whenever cells change; triggers index rebuild on next End query.
     cell_index_dirty: bool,
-    /// Set to true by `move_sheet`; once true, `save_xlsx_impl` drops any
-    /// `<definedNames>` passthrough even if no sheet was deleted, since a
-    /// `<definedName localSheetId="N">` is positional and reordering can silently
-    /// invalidate it. Never reset -- once a session has reordered sheets, that
-    /// workbook's original positional indices can no longer be trusted for its
-    /// remaining lifetime. `rename_sheet` does NOT set this: it changes a name, not
-    /// a position.
-    pub(crate) sheet_order_reordered: bool,
+    /// Set to true by `move_sheet` and `rename_sheet`; once true, `save_xlsx_impl`
+    /// drops any `<definedNames>` passthrough even if no sheet was deleted. Two
+    /// distinct reasons feed this one flag: a `<definedName localSheetId="N">` is
+    /// positional, so `move_sheet` reordering `sheet_order` can silently invalidate
+    /// it; separately, a `<definedName>`'s TEXT can reference a sheet by name (e.g.
+    /// `Sheet1!$F$5`), so `rename_sheet` can leave that text dangling even though
+    /// nothing about *position* changed. Neither case is worth trying to fix
+    /// surgically (rewriting `localSheetId`s, or parsing and rewriting a sheet name
+    /// out of arbitrary defined-name formula text) -- dropped wholesale instead,
+    /// matching the exact same choice already made for a deleted sheet. Never reset
+    /// -- once a session has reordered or renamed a sheet, that workbook's original
+    /// `<definedNames>` can no longer be trusted for its remaining lifetime.
+    pub(crate) defined_names_may_be_stale: bool,
     /// Wall-clock deadline for loop execution (Milestone B5a's `test-workbook`
     /// timeout guard). `None` (the default) means no limit — every existing
     /// caller (run-mode, `check`, `snapshot`, Python bindings) is unaffected.
@@ -819,7 +824,7 @@ impl Vm {
             col_rows: HashMap::new(),
             row_cols: HashMap::new(),
             cell_index_dirty: true,
-            sheet_order_reordered: false,
+            defined_names_may_be_stale: false,
             deadline: None,
             loop_iters: 0,
             strict_resolution: false,
@@ -1866,6 +1871,13 @@ impl Vm {
         // `protected_sheets` needs no re-key: the protection check above already
         // rejected this call if `old_key` were a member, so it's guaranteed absent
         // here -- a re-key step would be unreachable dead code, not a defensive one.
+        //
+        // A <definedName>'s TEXT can reference a sheet by name (e.g. "Sheet1!$F$5"),
+        // and this rename doesn't rewrite that text -- so any surviving
+        // <definedNames> passthrough could now dangle. Set unconditionally, even for
+        // a same-name/case-only rename, matching this flag's existing coarse-grained
+        // "drop rather than try to prove it's still safe" precedent.
+        self.defined_names_may_be_stale = true;
         Ok(())
     }
 
@@ -1886,8 +1898,8 @@ impl Vm {
     /// unimplemented "Protect Workbook" structure flag) -- no precedent in this
     /// codebase to check anything here.
     ///
-    /// Sets `sheet_order_reordered`, which gates `<definedNames>` passthrough on
-    /// save (see `save_xlsx_impl`) -- a `<definedName localSheetId="N">` is
+    /// Sets `defined_names_may_be_stale`, which gates `<definedNames>` passthrough
+    /// on save (see `save_xlsx_impl`) -- a `<definedName localSheetId="N">` is
     /// positional, and reordering can silently invalidate it otherwise.
     pub fn move_sheet(&mut self, name: &str, new_index: usize) -> Result<(), String> {
         let key = name.to_lowercase();
@@ -1897,7 +1909,7 @@ impl Vm {
         self.sheet_order.retain(|k| k != &key);
         let idx = new_index.min(self.sheet_order.len());
         self.sheet_order.insert(idx, key);
-        self.sheet_order_reordered = true;
+        self.defined_names_may_be_stale = true;
         Ok(())
     }
 
@@ -8769,13 +8781,22 @@ mod tests {
     }
 
     #[test]
-    fn move_sheet_sets_sheet_order_reordered_but_rename_sheet_does_not() {
+    fn rename_sheet_and_move_sheet_both_flag_defined_names_as_possibly_stale() {
+        // A rename can leave a <definedName>'s TEXT dangling (e.g. "Sheet1!$F$5"
+        // after "Sheet1" is renamed); a reorder can invalidate a positional
+        // localSheetId. Both set the same flag -- caught in review after an
+        // earlier version of this fix only covered move_sheet, missing that
+        // rename_sheet needed to set it too.
         let mut vm = Vm::new();
-        assert!(!vm.sheet_order_reordered);
+        assert!(!vm.defined_names_may_be_stale);
         vm.rename_sheet("Sheet1", "Renamed").unwrap();
-        assert!(!vm.sheet_order_reordered);
-        vm.move_sheet("Renamed", 0).unwrap();
-        assert!(vm.sheet_order_reordered);
+        assert!(vm.defined_names_may_be_stale);
+
+        let mut vm2 = Vm::new();
+        vm2.ensure_sheet("B");
+        assert!(!vm2.defined_names_may_be_stale);
+        vm2.move_sheet("B", 0).unwrap();
+        assert!(vm2.defined_names_may_be_stale);
     }
 
     // ── P1 core 3: row/col insert-delete sheet-parameterized siblings ───────

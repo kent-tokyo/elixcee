@@ -48,9 +48,10 @@ management — `move_sheet`'s `new_index` is an absolute 0-based position, match
 `merged_cells(sheet=None) -> list[str]` (read-only). Rename turned out to need atomically
 re-keying 8 lowercase-keyed per-sheet `Vm` maps, not the 2-3 originally assumed — see the
 gap-audit doc's "Implementation notes for P1 core 3" for the full account, including a
-`<definedNames>`-passthrough fix `move_sheet` required (Known gaps item 19, below) and
-three newly-disclosed gaps (items 18/20/21). See `CHANGELOG.md`'s `[Unreleased]` section
-for the full method-by-method account; no version bump this round either.
+`<definedNames>`-passthrough fix both `move_sheet` and `rename_sheet` required (Known gaps
+item 21, below — the `rename_sheet` half was missed in a first pass and caught in review)
+and three further disclosed gaps (items 18/19/20). See `CHANGELOG.md`'s `[Unreleased]`
+section for the full method-by-method account; no version bump this round either.
 
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
@@ -496,9 +497,11 @@ all), so this needs a human/agent to remember it explicitly rather than relying 
     by its old name, and doesn't validate Excel's real sheet-name rules** (31-char limit,
     illegal characters, reserved/duplicate-after-truncation names) beyond rejecting an
     empty/whitespace-only name. The formula-text case can't corrupt anything today —
-    `elixcee`'s formula engine has no cross-sheet cell-reference syntax (`=Sheet2!A1`) —
-    but is recorded in case that changes. The name-validation gap matches `set_sheet`'s
-    pre-existing total lack of validation, not a new regression.
+    `elixcee`'s formula engine has no cross-sheet cell-reference syntax (`=Sheet2!A1`).
+    The `<definedName>`-text case (a real risk for the file's *next* reader, e.g. Excel)
+    is mitigated, not by rewriting the text, but by `rename_sheet` dropping the whole
+    `<definedNames>` element on save (item 21). The name-validation gap matches
+    `set_sheet`'s pre-existing total lack of validation, not a new regression.
 
 20. **`remove_sheet` leaves stale entries in 6 of 8 per-sheet `Vm` maps on delete**
     (`merged_ranges`/`sheet_visibility`/`cell_style_indices`/`cell_number_formats`/
@@ -509,14 +512,20 @@ all), so this needs a human/agent to remember it explicitly rather than relying 
     option (fix this first, share the re-key list with `rename_sheet`) and declined in
     favor of shipping rename on its own.
 
-21. **`<definedNames>` passthrough is guarded against sheet deletion and `move_sheet`
-    reordering, but not against VBA's `Sheets.Add(before:=...)` shifting existing sheets'
-    positions.** A `<definedName localSheetId="N">` is a positional index into `<sheets>`;
-    P1 core 3's `move_sheet` closed the reordering case (`Vm::sheet_order_reordered`,
-    checked alongside the existing deletion guard in `save_xlsx_impl`), but
-    `Sheets.Add(before:=...)` can shift positions the same way without tripping either
-    check, and this predates the round. A real fix needs snapshotting the workbook's
-    load-time sheet order for comparison, which doesn't exist anywhere today.
+21. **`<definedNames>` passthrough is guarded against sheet deletion, `move_sheet`
+    reordering, and `rename_sheet` staleness, but not against VBA's
+    `Sheets.Add(before:=...)` shifting existing sheets' positions.** A `<definedName
+    localSheetId="N">` is a positional index into `<sheets>`; a `<definedName>`'s TEXT can
+    separately reference a sheet by name (e.g. `Sheet1!$F$5`). P1 core 3's `move_sheet` and
+    `rename_sheet` both set a single `Vm::defined_names_may_be_stale` flag, checked
+    alongside the existing deletion guard in `save_xlsx_impl` — the whole element is
+    dropped rather than attempting a `localSheetId` renumbering or a defined-name-text
+    rewrite. (The `rename_sheet` half of this was missed in the first pass and caught in a
+    follow-up review against a fixture with real `<definedNames>` content — the original
+    tests only used fixtures without any.) `Sheets.Add(before:=...)` can still shift
+    positions without tripping either check, and this predates the round. A real fix needs
+    snapshotting the workbook's load-time sheet order for comparison, which doesn't exist
+    anywhere today.
 
 ## npm/JS/WASM: still-open gaps
 

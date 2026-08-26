@@ -352,12 +352,13 @@ by `insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hid
 **`rename_sheet` does not rewrite formula or `<definedName>` text that refers to the
 sheet by its old name — only the `<sheet name="...">` tab label changes.** `elixcee`'s
 formula engine has no cross-sheet cell-reference syntax (`=Sheet2!A1`) today, so this
-can't corrupt a formula; a `<definedName>` whose *text* names the old sheet (as opposed to
-its *`localSheetId`*, which is positional and unaffected by a rename) would still read
-correctly today only because nothing resolves that text against a live sheet name at
-save/read time — recorded so it isn't rediscovered as a surprise if that ever changes.
-Also does not validate Excel's real sheet-name rules (31-character limit, illegal
-characters `: \ / ? * [ ]`, reserved/duplicate-after-truncation names) beyond rejecting an
+can't corrupt a formula. A `<definedName>` whose *text* names the old sheet (as opposed to
+its *`localSheetId`*, which is positional) is a real risk for the file's next reader
+(Excel, or anything else that resolves that text against a live sheet name) — mitigated,
+not by rewriting the text, but by dropping the whole `<definedNames>` element on any
+rename, the same way a deletion already does (see "dropped wholesale" below). Also does
+not validate Excel's real sheet-name rules (31-character limit, illegal characters
+`: \ / ? * [ ]`, reserved/duplicate-after-truncation names) beyond rejecting an
 empty/whitespace-only name — matches `set_sheet`'s pre-existing total lack of name
 validation, not a new regression.
 
@@ -371,17 +372,27 @@ Deliberately **not** fixed in this round — the user was offered "fix this firs
 the re-key list with `rename_sheet`" as an option and chose to proceed with rename alone
 instead, so this stays a known gap for a future round rather than an incidental fix.
 
-**`<definedNames>` passthrough is now also guarded against `move_sheet`-caused
-reordering, closing a gap that `move_sheet` would otherwise have introduced.** A
-`<definedName localSheetId="N">` is a positional index into `<sheets>`; the existing
-save-time guard (`src/lib.rs`) already dropped `<definedNames>` passthrough once any
-sheet was deleted (its `localSheetId`s could no longer be trusted), but said nothing about
-*reordering* — before this round, nothing could reorder an existing sheet, so the gap was
-latent. `move_sheet` now sets `Vm::sheet_order_reordered`, and the save-time guard checks
-it alongside the existing deletion check. **One related gap remains, not closed by this
-fix**: VBA's `Sheets.Add(before:=...)` can also shift existing sheets' positions without
-deleting anything, and nothing tracks that today either — pre-existing, not introduced by
-this round, and a real fix would need snapshotting the workbook's load-time sheet order
-for comparison, which doesn't exist anywhere today. Pinned by
-`move_sheet_drops_defined_names_that_would_have_stale_positional_indices`
+**`<definedNames>` passthrough is now also guarded against `move_sheet`-caused reordering
+AND `rename_sheet`-caused staleness, closing two gaps that P1 core 3 would otherwise have
+introduced.** A `<definedName localSheetId="N">` is a positional index into `<sheets>`;
+the existing save-time guard (`src/lib.rs`) already dropped `<definedNames>` passthrough
+once any sheet was deleted (its `localSheetId`s could no longer be trusted), but said
+nothing about *reordering* — before this round, nothing could reorder an existing sheet,
+so the gap was latent. Separately, a `<definedName>`'s own TEXT can reference a sheet by
+name (e.g. `Sheet1!$F$5`), which `rename_sheet` doesn't rewrite, so a renamed sheet could
+leave that text dangling. **Both were initially missed**: the first implementation of this
+fix set a flag only from `move_sheet`, not `rename_sheet` — caught in a second review pass
+against a fixture (`fixture4`) that actually has `<definedNames>` content, since neither
+this round's original tests nor `mechanical_check.py`'s pipeline exercised that
+combination. Fixed by a single `Vm::defined_names_may_be_stale` flag, set by both
+`move_sheet` and `rename_sheet`, checked alongside the existing deletion check — dropping
+the whole element wholesale rather than attempting a surgical `localSheetId`
+renumbering or defined-name-text rewrite, consistent with the deletion case's own
+established choice. **One related gap remains, not closed by this fix**: VBA's
+`Sheets.Add(before:=...)` can also shift existing sheets' positions without deleting
+anything, and nothing tracks that today either — pre-existing, not introduced by this
+round, and a real fix would need snapshotting the workbook's load-time sheet order for
+comparison, which doesn't exist anywhere today. Pinned by
+`move_sheet_drops_defined_names_that_would_have_stale_positional_indices` and
+`rename_sheet_drops_defined_names_that_would_reference_the_old_name`
 (`tests/xlsx_roundtrip.rs`).

@@ -1055,6 +1055,46 @@ fn rename_sheet_round_trips_merge_and_hidden_metadata_on_the_real_fixture() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// P1 core 3 follow-up fix: a real, reviewer-caught bug -- `rename_sheet` re-keys
+/// `worksheet_origins`/`sheet_order` in lockstep, so the deletion-only guard on
+/// `<definedNames>` passthrough (`no_sheet_was_deleted`) stayed true through a
+/// rename, and an earlier version of the `move_sheet` fix only set
+/// `defined_names_may_be_stale` from `move_sheet`, not `rename_sheet` -- so a
+/// renamed sheet's `<definedNames>` (e.g. `<definedName>Sheet1!$F$5</definedName>`)
+/// survived a save verbatim, now dangling: pointing at a sheet name that no longer
+/// exists in `<sheets>`. fixture4 is the one real fixture with genuine
+/// `<definedNames>` content, confirmed by
+/// `real_excel_workbook_metadata_survives_a_save`'s own sibling test file.
+#[test]
+fn rename_sheet_drops_defined_names_that_would_reference_the_old_name() {
+    let source_path = real_fixture("fixture4_hyperlink_comment_name.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_wb = String::from_utf8(fixture_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        source_wb.contains("<definedNames>") && source_wb.contains("Sheet1!$F$5"),
+        "fixture no longer contains the expected definedName -- test needs updating: {source_wb}"
+    );
+
+    let output_path = tmp_path("rename_sheet_defined_names_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.rename_sheet("Sheet1", "Renamed").unwrap();
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        !out_wb.contains("<definedNames>"),
+        "definedNames must be dropped entirely once a sheet is renamed, not carried \
+         through referencing a sheet name that no longer exists: {out_wb}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// P1 core 3: pins the disclosed row/col insert-delete fidelity gap as an
 /// executable fact -- merges and hidden-row/col markers are NOT shifted, which is
 /// a pre-existing VBA-engine limitation this round makes Python-reachable, not a
