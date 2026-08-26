@@ -1095,6 +1095,26 @@ fn rename_sheet_drops_defined_names_that_would_reference_the_old_name() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// P2: `defined_names` exercised against the one real fixture with genuine
+/// `<definedNames>` content -- confirms the reader correctly parses a real
+/// Excel-authored `<definedName name="..." comment="...">TEXT</definedName>`
+/// element (ignoring the unrelated `comment` attribute) into `{name: text}`.
+#[test]
+fn defined_names_reads_the_real_fixtures_defined_name() {
+    let source_path = real_fixture("fixture4_hyperlink_comment_name.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+
+    let names = vm.defined_names().expect("should read defined names");
+    assert_eq!(
+        names.get("test").map(|s| s.as_str()),
+        Some("Sheet1!$F$5"),
+        "{:?}",
+        names
+    );
+}
+
 /// P1 core 3: pins the disclosed row/col insert-delete fidelity gap as an
 /// executable fact -- merges and hidden-row/col markers are NOT shifted, which is
 /// a pre-existing VBA-engine limitation this round makes Python-reachable, not a
