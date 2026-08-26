@@ -926,6 +926,29 @@ impl PyVm {
         self.inner.delete_cols_on_sheet(&key, idx, amount);
         Ok(())
     }
+
+    /// Return every merged range on a sheet as A1-style strings (e.g.
+    /// ``["B1:C1"]``).
+    ///
+    /// Read-only — creating or removing a merge is not implemented (see
+    /// docs/openpyxl-gap-audit.md). Order matches source-file/insertion order
+    /// (a stable list, never re-sorted) — do not assume alphabetical or
+    /// row-major order.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown.
+    #[pyo3(signature = (sheet = None))]
+    fn merged_cells(&self, sheet: Option<&str>) -> PyResult<Vec<String>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self
+            .inner
+            .merged_ranges
+            .get(&key)
+            .map(|ranges| ranges.iter().map(merge_rect_to_a1).collect())
+            .unwrap_or_default())
+    }
 }
 
 /// Shared row-major `Vec<Vec<Variant>>` -> Python nested-list conversion for
@@ -2171,13 +2194,10 @@ fn build_xlsx_sheet(
         && !merges.is_empty()
     {
         out.push_str(&format!("<mergeCells count=\"{}\">\n", merges.len()));
-        for &((r1, c1), (r2, c2)) in merges {
+        for rect in merges {
             out.push_str(&format!(
-                "<mergeCell ref=\"{}{}:{}{}\"/>\n",
-                xlsx_col_letters(c1),
-                r1,
-                xlsx_col_letters(c2),
-                r2
+                "<mergeCell ref=\"{}\"/>\n",
+                merge_rect_to_a1(rect)
             ));
         }
         out.push_str("</mergeCells>\n");
@@ -2365,6 +2385,20 @@ fn xlsx_col_letters(mut col: u32) -> String {
     }
     bytes.reverse();
     String::from_utf8(bytes).unwrap()
+}
+
+/// `((r1,c1),(r2,c2))` -> A1-style range string (e.g. `"B1:D1"`). Factored out
+/// of `save_xlsx_impl`'s `<mergeCell ref="...">` writer since it's now also
+/// used by `PyVm::merged_cells`.
+fn merge_rect_to_a1(rect: &((u32, u32), (u32, u32))) -> String {
+    let ((r1, c1), (r2, c2)) = *rect;
+    format!(
+        "{}{}:{}{}",
+        xlsx_col_letters(c1),
+        r1,
+        xlsx_col_letters(c2),
+        r2
+    )
 }
 
 // ── ODS write ────────────────────────────────────────────────────────────────
@@ -2732,6 +2766,16 @@ mod tests {
             xml.contains("<sheet name=\"b\" sheetId=\"2\" r:id=\"rId2\"/>"),
             "{xml}"
         );
+    }
+
+    #[test]
+    fn merge_rect_to_a1_formats_a_multi_cell_range() {
+        assert_eq!(merge_rect_to_a1(&((1, 2), (1, 4))), "B1:D1");
+    }
+
+    #[test]
+    fn merge_rect_to_a1_formats_a_single_cell_range() {
+        assert_eq!(merge_rect_to_a1(&((3, 3), (3, 3))), "C3:C3");
     }
 }
 

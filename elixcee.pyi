@@ -343,6 +343,18 @@ class Vm:
         """
         ...
 
+    def merged_cells(self, sheet: str | None = None) -> list[str]:
+        """Return every merged range on a sheet as A1-style strings (e.g.
+        ``["B1:C1"]``).
+
+        Read-only — creating or removing a merge is not implemented. Order
+        matches source-file/insertion order (never re-sorted) — do not
+        assume alphabetical or row-major order.
+
+        Raises ``ValueError`` if *sheet* is unknown.
+        """
+        ...
+
     # ── Variables ──────────────────────────────────────────────────────────────
 
     def variables(self) -> dict[str, Any]:
