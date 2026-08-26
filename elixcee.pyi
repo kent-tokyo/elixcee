@@ -61,6 +61,18 @@ class Vm:
         """Return the value at (``row``, ``col``).  Returns ``None`` for empty cells."""
         ...
 
+    def get_cell_number_format(self, row: int, col: int) -> str | None:
+        """Return the active sheet's resolved number-format code for a cell.
+
+        E.g. ``"m/d/yyyy"`` for a date-formatted cell. Returns ``None`` for a
+        cell with no format, the General format, or a sheet with no
+        source-file styles (e.g. one created purely via ``set_sheet()``).
+        Lets a caller detect a date-formatted cell (whose value otherwise
+        comes back as a raw Excel serial number, e.g. ``45366``) and convert
+        it itself.
+        """
+        ...
+
     def cells(self) -> dict[tuple[int, int], Any]:
         """Return all non-empty cells of the active sheet as ``{(row, col): value}``."""
         ...
@@ -93,8 +105,18 @@ class Vm:
 
     # ── Sheet management ───────────────────────────────────────────────────────
 
-    def set_sheet(self, name: str) -> None:
-        """Switch the active sheet to *name* (creates it if absent)."""
+    def set_sheet(self, name: str, index: int | None = None) -> None:
+        """Switch the active sheet to *name* (creates it if absent).
+
+        *index* (0-based) places a newly-created sheet at that position among
+        the existing sheets instead of appending it at the end; ignored if
+        *name* already exists, and clamped rather than erroring if it's past
+        the current sheet count.
+        """
+        ...
+
+    def delete_sheet(self, name: str) -> None:
+        """Delete the sheet named *name*. Raises ``ValueError`` if it doesn't exist."""
         ...
 
     def active_sheet(self) -> str:

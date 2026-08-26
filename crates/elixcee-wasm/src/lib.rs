@@ -265,6 +265,7 @@ mod tests {
                 hidden_columns: vec![],
                 raw_style_indices: HashMap::new(),
                 formulas: HashMap::new(),
+                cell_number_formats: HashMap::new(),
             },
             formulas: HashMap::new(),
             dimension: None,

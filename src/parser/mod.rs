@@ -810,6 +810,8 @@ impl Parser {
             "call" => self.parse_call_stmt(),
             "range" => self.parse_range_stmt(),
             "cells" => self.parse_cell_write_stmt(),
+            "rows" => self.parse_rows_cols_stmt("rows", Axis::Row),
+            "columns" => self.parse_rows_cols_stmt("columns", Axis::Column),
             "application" => self.parse_application_stmt(),
             "worksheetfunction" => self.parse_wsf_call_stmt(None),
             "worksheets" | "sheets" => self.parse_sheets_stmt(),
@@ -1904,9 +1906,11 @@ impl Parser {
                 })
             }
             "sort" => {
-                // Optional kwargs: Key1:=Range("A1"), Order1:=xlAscending/xlDescending, etc.
+                // Optional kwargs: Key1:=Range("A1"), Order1:=xlAscending/xlDescending,
+                // Header:=xlYes/xlNo, etc.
                 let mut key_col: u32 = 1;
                 let mut descending = false;
+                let mut header = false;
                 while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof {
                     if !matches!(self.peek(), Tok::Ident(_)) {
                         self.advance();
@@ -1945,6 +1949,19 @@ impl Parser {
                             };
                             descending = val.contains("descend");
                         }
+                        "header" => {
+                            let val = match self.peek().clone() {
+                                Tok::Ident(s) => {
+                                    self.advance();
+                                    s
+                                }
+                                _ => {
+                                    self.parse_expr()?;
+                                    String::new()
+                                }
+                            };
+                            header = val.contains("yes");
+                        }
                         _ => {
                             self.parse_expr()?;
                         }
@@ -1957,15 +1974,57 @@ impl Parser {
                     addr,
                     key_col,
                     descending,
+                    header,
                 })
             }
-            "delete" => Ok(Stmt::RangeDelete { addr }),
+            "autofilter" => {
+                // Optional kwargs: Field:=n, Criteria1:=v, plus real VBA's
+                // Operator:=/Criteria2:=/VisibleDropDown:= (evaluated and discarded,
+                // same convention as RangeSort's unmodeled kwargs above).
+                let mut field = None;
+                let mut criteria1 = None;
+                while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof {
+                    if !matches!(self.peek(), Tok::Ident(_)) {
+                        self.advance();
+                        continue;
+                    }
+                    let kw_name = self.consume_ident()?;
+                    if *self.peek() != Tok::ColonEq {
+                        continue;
+                    }
+                    self.advance(); // :=
+                    match kw_name.as_str() {
+                        "field" => field = Some(self.parse_expr()?),
+                        "criteria1" => criteria1 = Some(self.parse_expr()?),
+                        _ => {
+                            self.parse_expr()?;
+                        }
+                    }
+                    if *self.peek() == Tok::Comma {
+                        self.advance();
+                    }
+                }
+                Ok(Stmt::RangeAutoFilter {
+                    addr,
+                    field,
+                    criteria1,
+                })
+            }
+            // A bare `Range(addr).Delete`/`.Insert` (no `EntireRow`/`EntireColumn`
+            // qualifier) shifts by row -- this VM's pre-existing convention, unchanged.
+            "delete" => Ok(Stmt::RangeDelete {
+                addr,
+                axis: Axis::Row,
+            }),
             "insert" => {
                 // optional kwargs
                 while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof {
                     self.advance();
                 }
-                Ok(Stmt::RangeInsert { addr })
+                Ok(Stmt::RangeInsert {
+                    addr,
+                    axis: Axis::Row,
+                })
             }
             "offset" => {
                 self.expect_tok(Tok::LParen)?;
@@ -1985,10 +2044,26 @@ impl Parser {
                 })
             }
             "entirerow" | "entirecolumn" => {
+                // `axis` is which dimension `addr`'s Delete/Insert shifts along -- the
+                // whole reason #8 (EntireColumn.Delete deleting the row instead) was a
+                // bug: Delete/Insert used to ignore which of the two this was.
+                let axis = if prop == "entirecolumn" {
+                    Axis::Column
+                } else {
+                    Axis::Row
+                };
                 self.expect_tok(Tok::Dot)?;
                 let method = self.consume_ident()?;
                 match method.as_str() {
-                    "delete" => Ok(Stmt::RangeDelete { addr }),
+                    "delete" => Ok(Stmt::RangeDelete { addr, axis }),
+                    "insert" => {
+                        // optional kwargs (Shift:=, CopyOrigin:=), same convention as
+                        // the bare `Range(addr).Insert` arm above.
+                        while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof {
+                            self.advance();
+                        }
+                        Ok(Stmt::RangeInsert { addr, axis })
+                    }
                     "clearcontents" | "clear" => Ok(Stmt::RangeClear {
                         addr,
                         contents_only: method == "clearcontents",
@@ -2037,6 +2112,35 @@ impl Parser {
         self.expect_tok(Tok::Eq)?;
         let value = self.parse_expr()?;
         Ok(Stmt::CellWrite { row, col, value })
+    }
+
+    /// `Rows(index).Insert`/`.Delete` and `Columns(index).Insert`/`.Delete` -- `index`
+    /// is an `Expr` (like `Cells(row, col)`'s row/col, not `Range`'s string-literal-only
+    /// addressing), since a real macro commonly loops with a variable row/column number.
+    fn parse_rows_cols_stmt(&mut self, kw: &str, axis: Axis) -> Result<Stmt, String> {
+        self.expect_ident(kw)?;
+        self.expect_tok(Tok::LParen)?;
+        let index = self.parse_expr()?;
+        self.expect_tok(Tok::RParen)?;
+        self.expect_tok(Tok::Dot)?;
+        let method = self.consume_ident()?;
+        match method.as_str() {
+            "insert" => {
+                // optional kwargs (Shift:=, CopyOrigin:=), same convention as
+                // Range(addr).Insert.
+                while *self.peek() != Tok::Newline && *self.peek() != Tok::Eof {
+                    self.advance();
+                }
+                Ok(Stmt::RowColInsert { axis, index })
+            }
+            "delete" => Ok(Stmt::RowColDelete { axis, index }),
+            _ => {
+                self.skip_to_stmt_end();
+                Ok(Stmt::Unsupported {
+                    reason: format!("{}({{index}}).{} is not implemented", kw, method),
+                })
+            }
+        }
     }
 
     fn parse_application_stmt(&mut self) -> Result<Stmt, String> {

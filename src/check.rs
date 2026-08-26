@@ -196,7 +196,10 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::RangeOffsetWrite { .. } => {}
             Stmt::RangeDelete { .. } => {}
             Stmt::RangeInsert { .. } => {}
+            Stmt::RowColDelete { .. } => {}
+            Stmt::RowColInsert { .. } => {}
             Stmt::RangeSort { .. } => {}
+            Stmt::RangeAutoFilter { .. } => {}
             Stmt::RangeName { .. } => {}
             Stmt::SheetCellWrite { .. } => {}
             Stmt::SheetRangeWrite { .. } => {}
@@ -344,7 +347,10 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[SpannedStmt]> {
         | Stmt::RangeOffsetWrite { .. }
         | Stmt::RangeDelete { .. }
         | Stmt::RangeInsert { .. }
+        | Stmt::RowColDelete { .. }
+        | Stmt::RowColInsert { .. }
         | Stmt::RangeSort { .. }
+        | Stmt::RangeAutoFilter { .. }
         | Stmt::RangeName { .. }
         | Stmt::SheetCellWrite { .. }
         | Stmt::SheetRangeWrite { .. }
@@ -952,7 +958,19 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         }
         Stmt::RangeDelete { .. } => {}
         Stmt::RangeInsert { .. } => {}
+        Stmt::RowColDelete { index, .. } => out.push(index),
+        Stmt::RowColInsert { index, .. } => out.push(index),
         Stmt::RangeSort { .. } => {}
+        Stmt::RangeAutoFilter {
+            field, criteria1, ..
+        } => {
+            if let Some(e) = field {
+                out.push(e);
+            }
+            if let Some(e) = criteria1 {
+                out.push(e);
+            }
+        }
         Stmt::RangeName { .. } => {}
         Stmt::SheetCellWrite {
             sheet,

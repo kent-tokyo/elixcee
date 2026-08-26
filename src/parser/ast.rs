@@ -196,6 +196,15 @@ pub enum CalcModeValue {
     Manual,
 }
 
+/// Which dimension a row/column structural edit (`RangeDelete`/`RangeInsert`/
+/// `RowColDelete`/`RowColInsert`) shifts along. `EntireRow`/`Rows(...)` -> `Row`;
+/// `EntireColumn`/`Columns(...)` -> `Column`. See `Vm`'s `shift_rows`/`shift_cols`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Axis {
+    Row,
+    Column,
+}
+
 /// A reference-typed expression (Milestone B7c) — evaluates to an object
 /// reference (currently only `Range`, possibly multi-area), never a plain
 /// `Variant`. Kept as its own small AST, separate from `Expr`, matching
@@ -374,16 +383,56 @@ pub enum Stmt {
         col_off: Expr,
         value: Expr,
     },
+    /// `Range(addr).Delete` (bare, or via `.EntireRow`/`.EntireColumn`) --
+    /// `axis` picks which of `addr`'s two dimensions is shifted (see `Axis`).
+    /// A bare `Range(addr).Delete` (no `Entire...` qualifier) is `Axis::Row`,
+    /// matching this VM's pre-existing behavior for that form.
     RangeDelete {
         addr: String,
+        axis: Axis,
     },
+    /// `Range(addr).Insert`, same `axis` convention as `RangeDelete`.
     RangeInsert {
         addr: String,
+        axis: Axis,
+    },
+    /// `Rows(index).Delete` / `Columns(index).Delete` -- a single row/column,
+    /// dynamically indexed (unlike `RangeDelete`'s statically-parsed `addr`,
+    /// matching `CellWrite`'s `Expr`-typed row/col rather than `Range`'s
+    /// string-literal-only addressing).
+    RowColDelete {
+        axis: Axis,
+        index: Expr,
+    },
+    /// `Rows(index).Insert` / `Columns(index).Insert`, same convention as `RowColDelete`.
+    RowColInsert {
+        axis: Axis,
+        index: Expr,
     },
     RangeSort {
         addr: String,
         key_col: u32,
         descending: bool,
+        /// `Header:=xlYes` -- excludes `addr`'s first row from the sort (it stays in
+        /// place). `Header:=xlNo` or omitted (VBA's real default is `xlGuess`, not
+        /// modeled -- no fixture/report evidence either way) both mean `false`.
+        header: bool,
+    },
+    /// `Range(addr).AutoFilter [Field:=n, Criteria1:=v]` (GitHub #5). VM-side only:
+    /// `addr`'s first row is always the header (never hidden); when `field`/`criteria1`
+    /// are given, a data row is hidden (via the same `Vm.sheet_visibility` a loaded
+    /// file's own hidden rows already round-trip through) when its `field`'th column
+    /// (1-based, relative to `addr`'s own left edge -- real VBA's own convention)
+    /// doesn't match `criteria1`'s string form. Does NOT persist `<autoFilter
+    /// ref="...">`/dropdown-arrow state itself -- no real fixture in this repo has one,
+    /// and this project's own hard gate is "no writer code for an OOXML element until a
+    /// fixture shows the shape" (see ROADMAP.md's former B5 item). A bare `.AutoFilter`
+    /// (no Field/Criteria1) is a real no-op here, matching real Excel: with no filter
+    /// element, there's nothing to visibly turn on.
+    RangeAutoFilter {
+        addr: String,
+        field: Option<Expr>,
+        criteria1: Option<Expr>,
     },
     RangeName {
         addr: String,
