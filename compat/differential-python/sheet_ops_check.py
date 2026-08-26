@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Differential check: elixcee's sheet management API (P1 core 3 + remainder +
-P2 hidden row/col) vs. openpyxl.
+"""Differential check: elixcee's sheet management + workbook-metadata API
+(P1 core 3 + remainder + P2 hidden row/col + copy_sheet + defined_names)
+vs. openpyxl.
 
 openpyxl is used PURELY as a test-only oracle here -- never a runtime dependency
 of the shipped `elixcee` package (see pyproject.toml, which declares none).
@@ -10,12 +11,16 @@ README.md for the one-time setup.
 
 Compares rename_sheet()/move_sheet()/copy_sheet()/merged_cells()/
 merge_cells()/unmerge_cells()/hidden_rows()/hidden_columns()/
-set_row_hidden()/set_column_hidden() against openpyxl's own read of the same
-real fixture after a save/reload round trip. Must build from FIXTURE via
-elixcee.load_workbook, not a bare elixcee.Vm() -- a from-scratch VM's
-minimal styles.xml emits a bare <fill/> that openpyxl's own reader rejects
-on reopen (a real, pre-existing, unrelated bug -- see ROADMAP.md's known
-gaps).
+set_row_hidden()/set_column_hidden()/defined_names() against openpyxl's own
+read of the same real fixture after a save/reload round trip. Must build
+from FIXTURE via elixcee.load_workbook, not a bare elixcee.Vm() -- a
+from-scratch VM's minimal styles.xml emits a bare <fill/> that openpyxl's
+own reader rejects on reopen (a real, pre-existing, unrelated bug -- see
+ROADMAP.md's known gaps).
+
+defined_names() coverage uses FIXTURE4 (fixture1 has no <definedNames> at
+all), and reads directly rather than through a save/reload round trip --
+it's a passthrough-only feature this round doesn't create/modify.
 
 Row/col insert-delete is deliberately given NO differential coverage here:
 the disclosed fidelity gap (merges/hidden markers/styles/formats not shifted)
@@ -47,6 +52,17 @@ FIXTURE = os.path.join(
     "fixtures",
     "pristine",
     "fixture1_values_styles_merge_hidden.xlsm",
+)
+
+# The one real Excel-authored fixture with genuine <definedNames> content --
+# fixture1 has none, so defined_names() coverage needs this one instead.
+FIXTURE4 = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "oracle-excel-com",
+    "fixtures",
+    "pristine",
+    "fixture4_hyperlink_comment_name.xlsm",
 )
 
 
@@ -216,6 +232,24 @@ class HiddenRowsAndColumnsAgreeWithOpenpyxl(unittest.TestCase):
             # (the row still exists for its cell data), so check the
             # attribute's truthiness rather than the row's mere presence.
             self.assertFalse(bool(ws.row_dimensions[5].hidden))
+
+
+class DefinedNamesAgreesWithOpenpyxl(unittest.TestCase):
+    def test_defined_names_matches_openpyxl_on_the_real_fixture(self):
+        # FIXTURE4, not FIXTURE -- fixture1 has no <definedNames> at all.
+        vm = elixcee.load_workbook(FIXTURE4)
+        wb = openpyxl.load_workbook(FIXTURE4)
+
+        elixcee_names = vm.defined_names()
+        openpyxl_names = {name: dn.value for name, dn in wb.defined_names.items()}
+        self.assertEqual(elixcee_names, openpyxl_names)
+        self.assertEqual(elixcee_names.get("test"), "Sheet1!$F$5")
+
+    def test_defined_names_is_empty_on_a_fixture_with_none(self):
+        vm = elixcee.load_workbook(FIXTURE)
+        wb = openpyxl.load_workbook(FIXTURE)
+        self.assertEqual(vm.defined_names(), {})
+        self.assertEqual(dict(wb.defined_names), {})
 
 
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):
