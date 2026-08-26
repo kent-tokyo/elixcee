@@ -6,6 +6,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.11.0] - 2026-08-26
+
+Root `elixcee` (Rust crate + Python package) only: seven real-world bugs/gaps reported
+against `0.10.1` (GitHub #2–#8), all from the same reporter building small Excel "RPA
+action" wrappers on top of elixcee instead of pulling in openpyxl as a second
+Excel-handling dependency. Minor, not patch: two genuinely new PyO3 methods
+(`delete_sheet`, `get_cell_number_format`) and one new keyword argument (`set_sheet`'s
+`index`) are real API additions, not just bug fixes. `elixcee-types`/`elixcee-wasm`/
+`@elixcee/xlsx` all unaffected.
+
+**#8 — `EntireColumn.Delete` deleted the row instead of the column (the most severe of
+the seven: silent wrong-data deletion, not a no-op).** `Stmt::RangeDelete`/`RangeInsert`
+carried no axis at all — the parser mapped `EntireRow.Delete` and `EntireColumn.Delete`
+to the exact same AST node, so both always shifted by row. Fixed by adding an `Axis`
+(`Row`/`Column`) to both statements; `Vm` gained `delete_cols`/`insert_cols` as the
+column-axis mirror of the pre-existing `delete_rows`/`insert_rows`.
+
+**#7 — `EntireRow.Insert`/`EntireColumn.Insert`/`Rows(n).Insert`/`Columns(n).Insert` were
+silent no-ops.** `EntireRow`/`EntireColumn` only ever recognized `.Delete`/`.Clear`/
+`.ClearContents` — `.Insert` fell through to `Stmt::Unsupported`. `Rows(n)`/`Columns(n)`
+weren't recognized as statement-starting keywords at all. Fixed using the same `Axis`
+infrastructure as #8: `EntireRow`/`EntireColumn` now handle `.Insert`, and new
+`Rows(index)`/`Columns(index)` statement parsing (an `Expr`-typed index, like
+`Cells(row, col)`, so a variable index works — unlike `Range(...)`'s string-literal-only
+addressing) backs `Stmt::RowColDelete`/`RowColInsert`.
+
+**#6 — `Range.Sort` ignored `Header:=xlYes`, sweeping the header row into the sort.** The
+parser never captured `Header:=` at all. Fixed: `Stmt::RangeSort` gained a `header: bool`
+field: `true` excludes the range's first row from both the sort and the write-back, which
+stays exactly where it was. `Header:=xlNo`/omitted is unchanged (VBA's real default,
+`xlGuess`, isn't modeled — no report/fixture evidence either way).
+
+**#2 — a sheet created via `set_sheet()` (or VBA's `Sheets.Add`) round-tripped its name in
+lowercase, ASCII names only.** The same bug class as the already-fixed GitHub #1 (display
+name lowercased on save), but for a sheet with no `WorksheetOrigin` from a loaded file —
+`ensure_sheet` never recorded one, so the writer's display-name fallback used the
+lowercased internal key. Non-ASCII names were never affected (`to_lowercase()` is a no-op
+on e.g. Japanese), which is exactly why this went unnoticed until a plain ASCII name was
+tried. Fixed: `ensure_sheet` now records the caller's as-written name into
+`WorksheetOrigin.original_display_name` at creation time.
+
+**#3 — no direct sheet-deletion API, and no position control on sheet creation.**
+Deleting a sheet required building and running a VBA snippet through `Vm::run()` — a much
+heavier tool than the structural operation warranted. Added `Vm::delete_sheet(name)` /
+Python's `delete_sheet(name)`, sharing its actual removal code with VBA's
+`Sheets(name).Delete` (so 0.10.0-D4's save-time reachability pruning behaves identically
+regardless of which caller deleted the sheet) but — unlike the VBA path, which never
+validates existence — raising a clear error on an unknown name instead of silently
+no-opping. `set_sheet()`/Python's `set_sheet()` gained an optional `index` (0-based),
+placing a newly-created sheet at that position instead of always appending; ignored if the
+sheet already exists (this VM still has no sheet-reorder primitive at all).
+
+**#4 — no way to read a date-formatted cell as a date, or to see its number format at
+all.** `get_cell()` returns a date-formatted cell as the raw Excel serial number (e.g.
+`45366`), matching openpyxl's own underlying storage but not its converted-on-read
+behavior — and elixcee had no way to expose the format string a caller could use to
+convert it themselves either. Fixed via the reporter's own preferred option (exposing the
+format, not auto-converting `get_cell` — a caller-visible type change would be a breaking
+change a patch-adjacent fix shouldn't make): new `Vm::get_cell_number_format`/Python's
+`get_cell_number_format(row, col)`, resolving a cell's `s="N"` style index through
+`xl/styles.xml`'s `<cellXfs>` to either a custom `<numFmt formatCode="...">` definition or
+the ECMA-376 built-in numFmtId table (a fixed, published constant — not something this
+project's usual "no writer code until a fixture shows the shape" rule applies to). The
+path-based reader (`WorkbookSheet`, backing `Vm`/`load_workbook_file`) gained a
+`cell_number_formats` field for this; the pre-existing buffer/WASM path already resolved
+`numFmtId` per cell but never turned it into a format string.
+
+**#5 — `Range.AutoFilter` was a silent no-op, even with `Field`/`Criteria1` given.**
+Partially fixed, with the scope boundary disclosed rather than silently bypassed: the
+VM-side effect (hiding rows whose `Field`-th column, 1-based relative to the given range's
+own left edge per real VBA's convention, doesn't match `Criteria1`) is now implemented,
+reusing the same `Vm.sheet_visibility`/`<row hidden="1">` machinery a loaded file's own
+hidden rows already round-trip through — verified end to end, including the save. The
+`<autoFilter ref="...">` element itself (the dropdown-arrow UI state) is deliberately
+**not** persisted: no real fixture in this repo has one, and this project's own hard gate
+is no writer code for an OOXML structural element without fixture evidence (this was
+already an open, disclosed item — ROADMAP.md's former "B5" note). A bare `.AutoFilter`
+(no `Field`/`Criteria1`) remains a real no-op, matching real Excel (nothing to visibly
+turn on without the element).
+
 ## [Unreleased]
 
 Root `elixcee` (Rust crate + Python package): `0.10.0-D`, the last slice of the Lossless

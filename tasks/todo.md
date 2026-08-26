@@ -524,3 +524,21 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
   - 0.10.2（小規模修正のみの場合）か0.11.0（table/drawing/hyperlink保存を正式な新機能として追加する場合）かは、実Excel検証完了まで未決定と明記。
 
 コード変更なし、tag/publish/version変更もなし。ドキュメント同期のみ、ローカルコミット（push未承認）。
+
+## GitHub issue #2〜#8（7件）修正、`elixcee` 0.11.0リリース準備
+
+ユーザーから「これらのissueを最優先で解決してください。そしてバージョン切って公開してください」との明示的指示を受け、報告された7件（#2〜#8、いずれも同一報告者がopenpyxlを二重依存にせずelixceeだけでExcel RPAアクションを組もうとして発見）を着手前にadvisorへ相談。「issue番号順ではなく、触るコードが同じものでグループ化せよ」「#5はこのプロジェクト自身のhard gate（実fixture証拠なしにOOXML要素のwriterコードを書かない）に抵触する、サイレントにバイパスせず表面化させよ」「バンドルする7件は新API追加を含むためpatchでなくminor」という助言を得て、それに従い実装。
+
+- [x] **#8（`EntireColumn.Delete`が列でなく行を削除）**：`Stmt::RangeDelete`/`RangeInsert`が軸情報を一切持たず、parserが`EntireRow`/`EntireColumn`を同一のAST nodeへマッピングしていたことが根本原因（advisorの事前予測通り）。新設`Axis`（Row/Column）enumを追加、`Vm`に既存の`delete_rows`/`insert_rows`と対になる`delete_cols`/`insert_cols`を新設。
+- [x] **#7（`EntireRow/EntireColumn.Insert`・`Rows(n)/Columns(n).Insert`が無反応）**：`.Insert`は`entirerow`/`entirecolumn`ブランチで未対応（`Stmt::Unsupported`行き）、`Rows(n)`/`Columns(n)`はそもそも文の先頭キーワードとして未認識と判明。#8と同じ`Axis`基盤を使い実装。`Rows(n)`/`Columns(n)`のインデックスは`Range(...)`の文字列リテラル限定とは異なり`Cells(row,col)`と同じ`Expr`型（変数インデックスに対応）。
+- [x] **#6（`Range.Sort`が`Header:=xlYes`を無視）**：parserが`Header:=`引数自体を一切捕捉していなかった。`Stmt::RangeSort`に`header: bool`フィールドを追加、`true`なら範囲の先頭行をソート対象・書き戻し対象の両方から除外。
+- [x] **#2（`set_sheet()`で新規作成したシートが保存時に小文字化、ASCII名のみ）**：既に修正済みのissue #1と同種のバグだが、読み込みファイル由来の`WorksheetOrigin`を持たない新規シート側で再発。`ensure_sheet`が呼び出し元の実際の大文字小文字を`WorksheetOrigin.original_display_name`へ記録していなかったことが原因（日本語名は`to_lowercase()`が無演算のため無症状だった、という#1と同じ発見パターン）。
+- [x] **#3（直接的なシート削除APIが無い、シート作成時の位置指定が無い）**：`Vm::delete_sheet(name)`を新設——VBAの`Sheets(name).Delete`と実際の削除ロジックを共有する`remove_sheet`を抽出することで、0.10.0-D4のsave時reachability pruningがどちらの呼び出し経路でも同じに振る舞うことを保証（advisor指摘の「二重の削除セマンティクスを作るな」を反映）。ただしVBA経路と異なり、直接APIは存在しないシート名に対し明示的にエラーを返す（VBA側の`resolve_sheet_expr`はそもそも存在チェックをしないサイレントno-opという既存の別ギャップがあり、そちらは今回touchしていない）。`ensure_sheet_at(name, index)`を新設し`set_sheet(name, index=None)`から利用可能に。
+- [x] **#4（日付書式セルが生シリアル値のまま、number formatを取得する手段が無い）**：報告者自身の希望（`get_cell`の戻り値型を変えるbreaking changeではなく、format文字列を露出する）を採用。`WorkbookSheet`に`cell_number_formats`フィールドを新設、ECMA-376の組み込みnumFmtIdテーブル（固定の公開仕様定数のため、このプロジェクト独自の「実fixture証拠必須」ルールの対象外と判断）とカスタム`<numFmt>`定義の両方を解決。`Vm::get_cell_number_format`/Python `get_cell_number_format(row,col)`を新設。
+- [x] **#5（`Range.AutoFilter`が完全な無反応）**：advisor指摘通りhard gate抵触を検討——実7fixture全件・compat/corpus全件を`autoFilter`でgrep、標準要素としての実例ゼロを確認（ROADMAP.mdの既存記載と一致）。VM側の実効果（`Field`/`Criteria1`に基づく非該当行の非表示化）のみ実装し、`<autoFilter ref="...">`要素自体（ドロップダウン矢印のUI状態）は実装しない、という意図的な部分修正とし、コード・CHANGELOG・ROADMAP全てに明記。行非表示化は既存の`Vm.sheet_visibility`／`<row hidden="1">`書き戻し機構（実fixtureで既に検証済み）をそのまま再利用するため新規writerコードは不要——保存後の実際のXML出力まで統合テストで確認済み。
+- [x] **フルリグレッションスイープ**：`cargo fmt --all --check`／`cargo clippy --workspace --all-targets -- -D warnings`（python feature・wasm32ターゲット含む）／`cargo test --workspace`（877 lib + 27 xlsx_roundtrip、他全suite）、`compat/differential`5ファイル全て、`compat/corpus`（581件0 UNEXPLAINED/0 MISMATCH）、`compat/vba-semantics`（386件0 BUG/0 UNCLASSIFIED、既存14 KNOWN_LIMITATION不変）、`mechanical_check.py --self-test`、実CLIでfixture1〜7全件save-as（9カテゴリ全てCLEAN）、いずれもクリーン・既存ベースラインから無回帰。
+- [x] **実Python拡張での7issue全件再現テスト**：`maturin develop --release --features python`でビルドした実拡張に対し、各issueの報告文そのままのreproコードを実行——#2/#3/#4/#6/#7/#8は完全一致で解消確認、#5は行非表示化が実際に効くこと（`ws.row_dimensions[r].hidden`）を確認した上で`ws.auto_filter.ref`が意図通り`None`のまま（部分修正の証拠）であることも確認。
+- [x] **バージョン判定**：0.10.2（patch）ではなく0.11.0（minor）を採用——`delete_sheet`・`get_cell_number_format`という正真正銘の新規公開API追加、および`set_sheet`への新規kwarg追加を含むバンドルのため。`Cargo.toml`/`pyproject.toml`を0.10.1→0.11.0へbump、`check-versions.sh`で確認済み。
+- [x] `CHANGELOG.md`（`[0.11.0]`セクション新設、7件全ての詳細と#5の部分修正スコープを明記）・`ROADMAP.md`（Current state更新、旧B5記載にVM側実装済みの追記）・`elixcee.pyi`（`set_sheet`のindex引数・`delete_sheet`・`get_cell_number_format`を追加）を同期。
+
+残作業：`Cargo.lock`のversion反映確認・最終sweep再確認・`chore: bump elixcee to 0.11.0`commit・push/tag/publish（ユーザーから既に「バージョン切って公開してください」の明示的承認あり、0.10.0/0.10.1と同じ手順で実施予定）。

@@ -7,14 +7,17 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 ## Current state
 
-`elixcee` **0.10.1** (Rust crate + Python package), `elixcee-types` **0.3.0** (unchanged),
-`elixcee-wasm` **0.1.0** (never published to crates.io by design — `publish = false`) — all
-confirmed live via crates.io's/PyPI's own APIs, not assumed from local files. `0.10.1` is a
-single targeted patch over `0.10.0`, fixing a critical unbound-`r:`-namespace-prefix
-regression (see `CHANGELOG.md`'s `[0.10.1]`) — released from the same commit across PyPI,
-crates.io, and a GitHub Release (`bin-v0.10.1`, 3 platform binaries), each independently
-re-verified against the live published artifact, not just a local build. The downloaded
-macOS CLI binary confirmed runnable and reports `elixcee 0.10.1` via `--version`.
+`elixcee` **0.11.0** (Rust crate + Python package), `elixcee-types` **0.3.0** (unchanged),
+`elixcee-wasm` **0.1.0** (never published to crates.io by design — `publish = false`).
+`0.11.0` fixes seven real-world bugs/gaps reported against `0.10.1` (GitHub #2–#8) — see
+`CHANGELOG.md`'s `[0.11.0]` for the full account, including one deliberately partial fix
+(`Range.AutoFilter`'s VM-side row-hiding is implemented; the `<autoFilter>` XML element
+itself stays gated on real fixture evidence this repo doesn't have). Minor, not patch: two
+genuinely new Python methods (`delete_sheet`, `get_cell_number_format`) and one new
+keyword argument (`set_sheet`'s `index`). `0.10.1` (still live) was a single targeted
+patch over `0.10.0`, fixing a critical unbound-`r:`-namespace-prefix regression — released
+from the same commit across PyPI, crates.io, and a GitHub Release (`bin-v0.10.1`, 3
+platform binaries), each independently re-verified against the live published artifact.
 `@elixcee/xlsx` is unchanged:
 `read()`/`readFile()`/`readFileSync()` and `write()`/`writeFile()`/`writeFileSync()` are both
 implemented and differential-tested, but the package is still
@@ -592,7 +595,13 @@ relationship-free children with `r:id`-backed ones that stay out of scope until 
 so it's reconstructed from filtered children rather than byte-copied whole. Deliberately left
 out (not blocking): `<autoFilter>` (no fixture has it as a standalone worksheet element yet —
 the only real example lives inside a table part) and row/column style properties beyond
-hidden state (real fixture evidence exists but needs its own design pass).
+hidden state (real fixture evidence exists but needs its own design pass). Since this was
+written, `0.11.0` added the VM-side *effect* real Excel VBA's `Range.AutoFilter` has (hiding
+non-matching rows via `Field`/`Criteria1`, reusing the hidden-row machinery this same
+milestone already built) — this hard gate still blocks only the `<autoFilter ref="...">`
+element itself (the dropdown-arrow UI state), which remains unimplemented for the same
+no-standalone-fixture reason. See `CHANGELOG.md`'s `[0.11.0]` (GitHub #5) for the exact
+scope line.
 
 **0.10.0-C (workbook-level preservation, done)** — the same opaque-fragment mechanism as B,
 applied to `xl/workbook.xml`'s own direct children, split into 3 slices by position-
