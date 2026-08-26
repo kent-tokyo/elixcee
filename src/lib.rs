@@ -975,10 +975,8 @@ impl PyVm {
     /// Return every merged range on a sheet as A1-style strings (e.g.
     /// ``["B1:C1"]``).
     ///
-    /// Read-only — creating or removing a merge is not implemented (see
-    /// docs/openpyxl-gap-audit.md). Order matches source-file/insertion order
-    /// (a stable list, never re-sorted) — do not assume alphabetical or
-    /// row-major order.
+    /// Order matches source-file/insertion order (a stable list, never
+    /// re-sorted) — do not assume alphabetical or row-major order.
     ///
     /// Raises ``ValueError`` if *sheet* is unknown.
     #[pyo3(signature = (sheet = None))]
@@ -993,6 +991,63 @@ impl PyVm {
             .get(&key)
             .map(|ranges| ranges.iter().map(merge_rect_to_a1).collect())
             .unwrap_or_default())
+    }
+
+    /// Creates a merge over *addr*. Rejects a single-cell address (nothing
+    /// would actually be merged) and rejects a merge that would overlap an
+    /// existing one on the same sheet — two overlapping merges is invalid
+    /// OOXML, not just a fidelity gap.
+    ///
+    /// Does **not** touch cell values — whatever is in the covered cells (if
+    /// anything) stays exactly as it was.
+    ///
+    /// Raises ``ValueError`` on a bad, oversized, or single-cell address, an
+    /// overlapping merge, or an unknown *sheet* name.
+    #[pyo3(signature = (addr, sheet = None))]
+    fn merge_cells(&mut self, addr: &str, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        const MAX_COL: u32 = 16_384;
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        // Same ceiling as sort_range -- an unbounded merge address writes a
+        // real <mergeCell> spanning the whole sheet into the saved file.
+        if r2 > MAX_ROW || c2 > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "range exceeds sheet bounds (max row {MAX_ROW}, max col {MAX_COL}), got row {r2}, col {c2}"
+            )));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .merge_cells(&key, r1, c1, r2, c2)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Removes a merge whose range exactly matches *addr*. An inexact/
+    /// partial match is rejected rather than silently no-opping.
+    ///
+    /// Raises ``ValueError`` on a bad or oversized address, no exact match,
+    /// or an unknown *sheet* name.
+    #[pyo3(signature = (addr, sheet = None))]
+    fn unmerge_cells(&mut self, addr: &str, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        const MAX_COL: u32 = 16_384;
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        if r2 > MAX_ROW || c2 > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "range exceeds sheet bounds (max row {MAX_ROW}, max col {MAX_COL}), got row {r2}, col {c2}"
+            )));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .unmerge_cells(&key, r1, c1, r2, c2)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
     /// Python-native, single-key sort of a rectangular range, in place. Not

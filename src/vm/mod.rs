@@ -1373,6 +1373,83 @@ impl Vm {
         self.write_rect(key, (data_r1, c1), &rows);
     }
 
+    /// Creates a merge over `(r1,c1)..(r2,c2)` on `key`. Rejects a single-cell
+    /// "merge" (nothing would actually be merged) and rejects any merge that
+    /// would overlap an existing one on the same sheet -- reusing
+    /// `rects_overlap` (Milestone B6c2's Copy/Paste conflict-detection
+    /// primitive, already sheet-agnostic and side-channel-free) rather than
+    /// `check_merge_conflicts` (Copy/Paste-specific: `&mut self`, writes
+    /// `last_resolution_failure`, a diagnostic side channel Python callers
+    /// don't read). Two overlapping `<mergeCell>` elements is genuinely
+    /// invalid OOXML, not just a fidelity gap, so this is a hard error, not a
+    /// disclosed limitation.
+    ///
+    /// Does NOT touch cell values -- whatever is in the covered cells (if
+    /// anything) stays exactly as it was. This VM's merge geometry and cell
+    /// values are already orthogonal by design (`write_rect`/`set_range`
+    /// explicitly allow writing into a non-anchor merged cell without error;
+    /// this is the same precedent applied in the other direction).
+    pub fn merge_cells(
+        &mut self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+    ) -> Result<(), String> {
+        if r1 == r2 && c1 == c2 {
+            return Err("a merge must span at least 2 cells".to_string());
+        }
+        let new_rect = ((r1, c1), (r2, c2));
+        // Check BEFORE touching the map -- `.entry().or_default()` would
+        // insert an empty Vec for `key` even on a rejected merge, a state
+        // mutation on a failure path this project's validate-before-
+        // committing convention rules out.
+        if let Some(existing) = self.merged_ranges.get(key)
+            && let Some(&conflict) = existing.iter().find(|&&m| rects_overlap(m, new_rect))
+        {
+            return Err(format!(
+                "merge {} would overlap an existing merge {}",
+                crate::merge_rect_to_a1(&new_rect),
+                crate::merge_rect_to_a1(&conflict)
+            ));
+        }
+        self.merged_ranges
+            .entry(key.to_string())
+            .or_default()
+            .push(new_rect);
+        Ok(())
+    }
+
+    /// Removes a merge on `key` whose rect exactly matches `(r1,c1)..(r2,c2)`
+    /// -- an inexact/partial match is rejected rather than silently
+    /// no-opping, matching this project's "must not silently no-op on
+    /// failure" house rule (`rename_sheet`/`move_sheet`/`delete_sheet` all
+    /// reject an unknown target the same way).
+    pub fn unmerge_cells(
+        &mut self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+    ) -> Result<(), String> {
+        let target = ((r1, c1), (r2, c2));
+        let before = self.merged_ranges.get(key).map_or(0, |v| v.len());
+        if let Some(merges) = self.merged_ranges.get_mut(key) {
+            merges.retain(|&m| m != target);
+        }
+        let after = self.merged_ranges.get(key).map_or(0, |v| v.len());
+        if after == before {
+            return Err(format!(
+                "no merge found at {} on sheet '{}'",
+                crate::merge_rect_to_a1(&target),
+                key
+            ));
+        }
+        Ok(())
+    }
+
     /// `true` iff `requested` identifies the one workbook `load_workbook_file`
     /// loaded (by name, case-insensitively, or by the numeric index `1` —
     /// elixcee never has more than one workbook open, so any other index is
@@ -10999,6 +11076,68 @@ mod tests {
             }
             other => panic!("expected PasteIntoNonAnchorMergedCell, got {:?}", other),
         }
+    }
+
+    // ── P1 remainder: merge_cells / unmerge_cells ────────────────────────────
+
+    #[test]
+    fn merge_cells_rejects_a_single_cell_range() {
+        let mut vm = Vm::new();
+        let err = vm.merge_cells("sheet1", 1, 1, 1, 1).unwrap_err();
+        assert!(err.contains("at least 2 cells"), "{:?}", err);
+    }
+
+    #[test]
+    fn merge_cells_rejects_a_range_that_overlaps_an_existing_merge() {
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4))); // B1:D1
+        let err = vm.merge_cells("sheet1", 1, 3, 2, 5).unwrap_err(); // C1:E2 overlaps
+        assert!(err.contains("overlap"), "{:?}", err);
+        assert_eq!(vm.merged_ranges.get("sheet1").unwrap().len(), 1); // rejected merge not added
+    }
+
+    #[test]
+    fn merge_cells_allows_a_non_overlapping_second_merge_on_the_same_sheet() {
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4))); // B1:D1
+        vm.merge_cells("sheet1", 3, 1, 3, 2).unwrap(); // A3:B3, no overlap
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((1, 2), (1, 4)), ((3, 1), (3, 2))]
+        );
+    }
+
+    #[test]
+    fn merge_cells_does_not_touch_existing_cell_values_in_the_covered_range() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[vec![Variant::Integer(1), Variant::Integer(2)]],
+        );
+        vm.merge_cells("sheet1", 1, 1, 1, 2).unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+    }
+
+    #[test]
+    fn unmerge_cells_removes_an_exact_match() {
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4))); // B1:D1
+        vm.unmerge_cells("sheet1", 1, 2, 1, 4).unwrap();
+        assert!(vm.merged_ranges.get("sheet1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn unmerge_cells_errors_on_no_match_instead_of_silently_no_opping() {
+        let mut vm = Vm::new();
+        let err = vm.unmerge_cells("sheet1", 1, 1, 1, 2).unwrap_err();
+        assert!(err.contains("no merge found"), "{:?}", err);
+    }
+
+    #[test]
+    fn unmerge_cells_errors_on_a_partial_overlap_that_is_not_an_exact_match() {
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4))); // B1:D1
+        let err = vm.unmerge_cells("sheet1", 1, 2, 1, 3).unwrap_err(); // B1:C1, not exact
+        assert!(err.contains("no merge found"), "{:?}", err);
+        assert_eq!(vm.merged_ranges.get("sheet1").unwrap().len(), 1); // original merge untouched
     }
 
     // ── Milestone B7b: hidden row/column metadata foundation ────────────────

@@ -369,11 +369,33 @@ class Vm:
         """Return every merged range on a sheet as A1-style strings (e.g.
         ``["B1:C1"]``).
 
-        Read-only — creating or removing a merge is not implemented. Order
-        matches source-file/insertion order (never re-sorted) — do not
+        Order matches source-file/insertion order (never re-sorted) — do not
         assume alphabetical or row-major order.
 
         Raises ``ValueError`` if *sheet* is unknown.
+        """
+        ...
+
+    def merge_cells(self, addr: str, sheet: str | None = None) -> None:
+        """Creates a merge over *addr*.
+
+        Rejects a single-cell address (nothing would actually be merged) and
+        rejects a merge that would overlap an existing one on the same
+        sheet. Does **not** touch cell values — whatever is in the covered
+        cells (if anything) stays exactly as it was.
+
+        Raises ``ValueError`` on a bad, oversized, or single-cell address, an
+        overlapping merge, or an unknown *sheet* name.
+        """
+        ...
+
+    def unmerge_cells(self, addr: str, sheet: str | None = None) -> None:
+        """Removes a merge whose range exactly matches *addr*.
+
+        An inexact/partial match is rejected rather than silently no-opping.
+
+        Raises ``ValueError`` on a bad or oversized address, no exact match,
+        or an unknown *sheet* name.
         """
         ...
 
