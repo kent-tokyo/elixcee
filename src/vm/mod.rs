@@ -1135,6 +1135,15 @@ impl Vm {
         bounds
     }
 
+    /// The 1-based row `append_row` should write to: one past the sheet's
+    /// current max used row, or row 1 if the sheet is empty/all-empty. Uses
+    /// `sheet_used_range`'s real max, not a populated-row count -- correct on
+    /// a sparse sheet (data only at row 50 appends at row 51).
+    pub fn next_append_row(&self, key: &str) -> u32 {
+        self.sheet_used_range(key)
+            .map_or(1, |(_, (max_r, _))| max_r + 1)
+    }
+
     /// Reads a rectangular region (1-based inclusive `r1..=r2`, `c1..=c2`) of
     /// `key` as a row-major grid, `Variant::Empty` for any cell with no
     /// `CellContent` entry. No validation of `key`'s existence (callers
@@ -1197,6 +1206,37 @@ impl Vm {
                 );
             }
         }
+    }
+
+    /// Core of the Python `iter_rows` API: `max_row`/`max_col` of `None` mean
+    /// "default to the sheet's used range." If the sheet has NO non-empty
+    /// cells at all and the caller didn't pin `max_row` down explicitly,
+    /// there is no used range to iterate -- returns zero rows, not one row of
+    /// `Empty`s. Only `max_row`'s explicitness matters for this
+    /// short-circuit, not `max_col`'s. An explicit `max_row` is always
+    /// honored even on an empty sheet (an explicit ask for N rows of Emptys
+    /// is not the ambiguous case this guards against).
+    pub fn iter_rows_values(
+        &self,
+        key: &str,
+        min_row: u32,
+        max_row: Option<u32>,
+        min_col: u32,
+        max_col: Option<u32>,
+    ) -> Vec<Vec<Variant>> {
+        let bounds = self.sheet_used_range(key);
+        let resolved_max_row = match max_row {
+            Some(r) => r,
+            None => match bounds {
+                Some((_, (r2, _))) => r2,
+                None => return Vec::new(),
+            },
+        };
+        let resolved_max_col = max_col.unwrap_or_else(|| bounds.map_or(min_col, |(_, (_, c2))| c2));
+        if resolved_max_row < min_row || resolved_max_col < min_col {
+            return Vec::new();
+        }
+        self.read_rect(key, min_row, min_col, resolved_max_row, resolved_max_col)
     }
 
     /// `true` iff `requested` identifies the one workbook `load_workbook_file`
@@ -11172,6 +11212,25 @@ mod tests {
     }
 
     #[test]
+    fn next_append_row_is_1_on_an_empty_sheet() {
+        let vm = Vm::new();
+        assert_eq!(vm.next_append_row("sheet1"), 1);
+    }
+
+    #[test]
+    fn next_append_row_uses_the_real_max_on_a_sparse_sheet() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (50, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        assert_eq!(vm.next_append_row("sheet1"), 51);
+    }
+
+    #[test]
     fn read_rect_returns_empty_for_gaps() {
         let vm = Vm::new();
         let grid = vm.read_rect("sheet1", 1, 1, 2, 2);
@@ -11275,5 +11334,62 @@ mod tests {
         vm.protected_sheets.insert("sheet1".to_string());
         vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+    }
+
+    #[test]
+    fn iter_rows_values_on_an_empty_sheet_with_no_explicit_max_row_is_empty() {
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, None, 1, None),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_rows_values_on_an_empty_sheet_with_an_explicit_max_row_returns_empties() {
+        let vm = Vm::new();
+        let grid = vm.iter_rows_values("sheet1", 1, Some(3), 1, None);
+        assert_eq!(grid.len(), 3);
+        assert!(grid.iter().all(|row| row == &[Variant::Empty]));
+    }
+
+    #[test]
+    fn iter_rows_values_short_circuit_keys_on_max_row_not_max_col() {
+        // max_col given explicitly but max_row is not -- still [] on an
+        // empty sheet, proving the short-circuit is about max_row.
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 1, None, 1, Some(3)),
+            Vec::<Vec<Variant>>::new()
+        );
+    }
+
+    #[test]
+    fn iter_rows_values_defaults_to_the_used_range() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (2, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        let grid = vm.iter_rows_values("sheet1", 1, None, 1, None);
+        assert_eq!(
+            grid,
+            vec![
+                vec![Variant::Empty, Variant::Empty],
+                vec![Variant::Empty, Variant::Integer(1)]
+            ]
+        );
+    }
+
+    #[test]
+    fn iter_rows_values_on_a_reversed_numeric_window_is_empty_not_a_panic() {
+        let vm = Vm::new();
+        assert_eq!(
+            vm.iter_rows_values("sheet1", 5, Some(2), 1, None),
+            Vec::<Vec<Variant>>::new()
+        );
     }
 }

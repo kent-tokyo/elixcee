@@ -188,6 +188,58 @@ class Vm:
         """
         ...
 
+    def append_row(self, values: list[Any], sheet: str | None = None) -> int:
+        """Write one row just past the sheet's used range.
+
+        Uses the true max used row (row 1 if the sheet is empty/all-empty),
+        so this is correct on a sparse sheet. Returns the 1-based row number
+        written. Same validate-then-commit and active-sheet-preservation
+        guarantees as :meth:`set_range`.
+
+        Raises ``ValueError`` if *values* is empty or *sheet* is unknown;
+        ``TypeError`` on an unsupported value type.
+        """
+        ...
+
+    def iter_rows(
+        self,
+        min_row: int = 1,
+        max_row: int | None = None,
+        min_col: int = 1,
+        max_col: int | None = None,
+        sheet: str | None = None,
+    ) -> list[list[Any]]:
+        """Values-only iteration over a rectangular region, 1-based bounds.
+
+        *max_row*/*max_col* default to the sheet's used range. On a sheet
+        with no non-empty cells at all **and** no explicit *max_row*, returns
+        ``[]`` rather than one row of ``None``\\ s.
+
+        Returns plain nested lists — this does **not** claim openpyxl
+        ``Cell``-object compatibility (no ``.value``/``.style``/etc attached,
+        just the values).
+        """
+        ...
+
+    def max_row(self, sheet: str | None = None) -> int | None:
+        """Highest used row number, or ``None`` for a sheet with zero
+        non-empty cells (never ``0``)."""
+        ...
+
+    def max_column(self, sheet: str | None = None) -> int | None:
+        """Highest used column number, or ``None`` for a sheet with zero
+        non-empty cells (never ``0``)."""
+        ...
+
+    def calculate_dimension(self, sheet: str | None = None) -> str | None:
+        """The used range as an A1-style string (e.g. ``"B2:D10"``), or
+        ``None`` for a sheet with zero non-empty cells (never ``"A1:A1"``).
+
+        Min-anchored, not A1-anchored: if the only populated cell is ``C3``,
+        this returns ``"C3:C3"``, not ``"A1:C3"``.
+        """
+        ...
+
     # ── Variables ──────────────────────────────────────────────────────────────
 
     def variables(self) -> dict[str, Any]:

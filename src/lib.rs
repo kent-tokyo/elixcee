@@ -624,6 +624,131 @@ impl PyVm {
         self.inner.write_rect(&key, start, &grid);
         Ok(())
     }
+
+    /// Write one row just past the sheet's used range (row 1 if the sheet is
+    /// empty/all-empty; uses the true max used row, so it's correct on a
+    /// sparse sheet). Returns the 1-based row number written.
+    ///
+    /// Same validate-then-commit and active-sheet-preservation guarantees as
+    /// ``set_range``. Raises ``ValueError`` if *values* is empty.
+    ///
+    /// Parameters
+    /// ----------
+    /// values:
+    ///     The row's values, written starting at column 1.
+    /// sheet:
+    ///     Sheet to append to. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (values, sheet = None))]
+    fn append_row(&mut self, values: &Bound<'_, PyAny>, sheet: Option<&str>) -> PyResult<u32> {
+        let mut row: Vec<Variant> = Vec::new();
+        for item in values.try_iter()? {
+            row.push(py_to_variant(&item?)?);
+        }
+        if row.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "append_row: values must not be empty",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let target_row = self.inner.next_append_row(&key);
+        self.inner.write_rect(&key, (target_row, 1), &[row]);
+        Ok(target_row)
+    }
+
+    /// Values-only iteration over a rectangular region, 1-based bounds.
+    ///
+    /// ``max_row``/``max_col`` default to the sheet's used range; on a sheet
+    /// with no non-empty cells at all **and** no explicit ``max_row``,
+    /// returns ``[]`` rather than one row of ``None``\ s. Returns plain
+    /// nested lists — this does **not** claim openpyxl ``Cell``-object
+    /// compatibility (no ``.value``/``.style``/etc attached, just the values).
+    ///
+    /// Parameters
+    /// ----------
+    /// min_row, min_col:
+    ///     1-based lower bounds (default 1).
+    /// max_row, max_col:
+    ///     1-based upper bounds. Default to the sheet's used range.
+    /// sheet:
+    ///     Sheet to read from. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (min_row = 1, max_row = None, min_col = 1, max_col = None, sheet = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn iter_rows(
+        &self,
+        py: Python<'_>,
+        min_row: u32,
+        max_row: Option<u32>,
+        min_col: u32,
+        max_col: Option<u32>,
+        sheet: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        if min_row == 0 || min_col == 0 || max_row == Some(0) || max_col == Some(0) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "row/column numbers must be >= 1",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let grid = self
+            .inner
+            .iter_rows_values(&key, min_row, max_row, min_col, max_col);
+        grid_to_py(py, &grid)
+    }
+
+    /// Highest used row number, or ``None`` for a sheet with zero non-empty
+    /// cells (never ``0``).
+    #[pyo3(signature = (sheet = None))]
+    fn max_row(&self, sheet: Option<&str>) -> PyResult<Option<u32>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self.inner.sheet_used_range(&key).map(|(_, (r2, _))| r2))
+    }
+
+    /// Highest used column number, or ``None`` for a sheet with zero
+    /// non-empty cells (never ``0``).
+    #[pyo3(signature = (sheet = None))]
+    fn max_column(&self, sheet: Option<&str>) -> PyResult<Option<u32>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self.inner.sheet_used_range(&key).map(|(_, (_, c2))| c2))
+    }
+
+    /// The used range as an A1-style string (e.g. ``"B2:D10"``), or ``None``
+    /// for a sheet with zero non-empty cells (never ``"A1:A1"``).
+    ///
+    /// Min-anchored, not A1-anchored: if the only populated cell is C3, this
+    /// returns ``"C3:C3"``, not ``"A1:C3"``. Always includes the ``:`` even
+    /// for a single-cell range.
+    #[pyo3(signature = (sheet = None))]
+    fn calculate_dimension(&self, sheet: Option<&str>) -> PyResult<Option<String>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self
+            .inner
+            .sheet_used_range(&key)
+            .map(|((r1, c1), (r2, c2))| {
+                format!(
+                    "{}{}:{}{}",
+                    xlsx_col_letters(c1),
+                    r1,
+                    xlsx_col_letters(c2),
+                    r2
+                )
+            }))
+    }
 }
 
 /// Shared row-major `Vec<Vec<Variant>>` -> Python nested-list conversion for
