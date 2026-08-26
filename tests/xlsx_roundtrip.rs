@@ -786,6 +786,172 @@ fn sheet_order_and_display_case_survive_a_save_even_when_source_names_are_not_al
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// GitHub #2: a sheet created via `Vm::ensure_sheet` (backing both VBA's `Sheets.Add`
+/// and Python's `set_sheet()`, which creates on demand) had no `WorksheetOrigin` from a
+/// loaded file, so `save_xlsx_impl`'s display-name fallback used the lowercased internal
+/// key -- `"NewSheet"` round-tripped as `"newsheet"`. Non-ASCII names (e.g. Japanese)
+/// were never affected: `to_lowercase()` is a no-op on them, which is exactly why this
+/// went unnoticed until a plain ASCII name was tried. Fixed by `ensure_sheet` itself
+/// recording the caller's as-written name into `WorksheetOrigin.original_display_name`.
+#[test]
+fn a_sheet_created_via_ensure_sheet_keeps_its_original_case_on_save() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path = tmp_path("new_sheet_case_output.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.ensure_sheet("NewSheet");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let wb_xml = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+
+    let names: Vec<String> = wb_xml
+        .match_indices("<sheet ")
+        .map(|(start, _)| {
+            let tag_end = wb_xml[start..].find("/>").unwrap() + start;
+            extract_attr(&wb_xml[start..tag_end], "name").unwrap()
+        })
+        .collect();
+    assert!(
+        names.contains(&"NewSheet".to_string()),
+        "a freshly-created sheet's name must survive exactly as passed to ensure_sheet(), \
+         not get lowercased: {names:?}"
+    );
+    assert!(
+        !names.contains(&"newsheet".to_string()),
+        "must not ALSO carry a lowercased duplicate: {names:?}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// GitHub #4: `get_cell()` returns a date-formatted cell as the raw Excel serial number
+/// (e.g. `45366`), with no way for a caller to tell it apart from a plain number --
+/// unlike openpyxl, which converts using the cell's number format. Rather than guess and
+/// change `get_cell`'s return type (a breaking change), `get_cell_number_format` exposes
+/// the resolved format string itself, letting the caller convert if it wants to.
+#[test]
+fn get_cell_number_format_resolves_a_builtin_date_format_from_styles_xml() {
+    const WORKBOOK_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheets>\n<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/>\n</sheets>\n</workbook>\n",
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    // cellXfs index 0 = General (no numFmtId), index 1 = numFmtId 14 ("m/d/yyyy") --
+    // matches a real producer's shape: index 0 always exists as the default style.
+    const STYLES_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<cellXfs count=\"2\">\n<xf/>\n<xf numFmtId=\"14\"/>\n</cellXfs>\n</styleSheet>\n",
+    );
+    const SHEET_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<sheetData><row r=\"1\">",
+        "<c r=\"A1\" s=\"1\"><v>45366</v></c>",
+        "<c r=\"B1\"><v>42</v></c>",
+        "</row></sheetData>\n</worksheet>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(&mut zip, "xl/styles.xml", STYLES_XML.as_bytes());
+    zip_add(&mut zip, "xl/worksheets/sheet1.xml", SHEET_XML.as_bytes());
+    let fixture_bytes = zip.finish().unwrap().into_inner();
+
+    let source_path = tmp_path("date_format_source.xlsx");
+    std::fs::write(&source_path, &fixture_bytes).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("fixture should load");
+
+    assert_eq!(vm.get_cell_number_format(1, 1), Some("m/d/yyyy"));
+    assert_eq!(
+        vm.get_cell_number_format(1, 2),
+        None,
+        "a cell with the default/General style must report no format"
+    );
+    assert_eq!(
+        vm.get_cell(1, 1),
+        elixcee::vm::Variant::Integer(45366),
+        "get_cell itself must still return the raw serial number, unchanged -- \
+         get_cell_number_format is additive, not a breaking change to get_cell"
+    );
+
+    let _ = std::fs::remove_file(&source_path);
+}
+
+/// GitHub #5: `Range.AutoFilter` was a silent no-op -- no rows got hidden even with
+/// `Field`/`Criteria1` given. The VM-side effect (hiding non-matching rows) reuses the
+/// same `Vm.sheet_visibility` a loaded file's own hidden rows already round-trip
+/// through -- this proves that round-trip for AutoFilter-driven hides specifically, not
+/// just that the VM's in-memory state changes. `<autoFilter ref="...">` itself (the
+/// dropdown-arrow element) is deliberately NOT persisted -- no real fixture in this repo
+/// has one, and this project's hard gate is no writer code for an OOXML element without
+/// fixture evidence.
+#[test]
+fn range_autofilter_hidden_rows_survive_a_save() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path = tmp_path("autofilter_output.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let prog = parser::parse(concat!(
+        "Sub FilterIt()\n",
+        "    Cells(20,1).Value = \"Name\"\n    Cells(20,2).Value = \"Age\"\n",
+        "    Cells(21,1).Value = \"Charlie\"\n    Cells(21,2).Value = 25\n",
+        "    Cells(22,1).Value = \"Alice\"\n    Cells(22,2).Value = 40\n",
+        "    Range(\"A20:B22\").AutoFilter Field:=2, Criteria1:=\"25\"\n",
+        "End Sub\n",
+    ))
+    .unwrap();
+    vm.run_sub(&prog, "FilterIt").expect("macro should run");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    let row22 = &out_sheet1[out_sheet1.find("r=\"22\"").unwrap() - 5..];
+    let row22_tag = &row22[..row22.find('>').unwrap()];
+    assert!(
+        row22_tag.contains("hidden=\"1\""),
+        "row 22 (Alice/40, doesn't match Criteria1) must be hidden in the saved file: {row22_tag}"
+    );
+    let row21 = &out_sheet1[out_sheet1.find("r=\"21\"").unwrap() - 5..];
+    let row21_tag = &row21[..row21.find('>').unwrap()];
+    assert!(
+        !row21_tag.contains("hidden=\"1\""),
+        "row 21 (Charlie/25, matches Criteria1) must stay visible: {row21_tag}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// Real report against the released `0.10.0`: a source that binds the relationships
 /// namespace to a prefix OTHER than the conventional `r:` (here `rel:`) is fully valid
 /// OOXML on its own -- XML namespace binding is about the URI, not the prefix spelling.

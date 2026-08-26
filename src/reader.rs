@@ -68,6 +68,16 @@ pub struct WorkbookSheet {
     /// bare cached value, which `save_xlsx_impl` would otherwise silently re-emit as a
     /// permanent literal on the very next save. Always empty for `.ods` (not parsed there).
     pub formulas: HashMap<(u32, u32), String>,
+    /// Per-cell resolved number-format code string (GitHub #4: a date-formatted cell's
+    /// serial number gave no way for a Python caller to tell it was a date at all) --
+    /// e.g. `"m/d/yyyy"` for numFmtId 14, or a custom `<numFmt formatCode="...">` string.
+    /// Resolved once at read time via `resolve_number_format` (custom formats checked
+    /// first, then the built-in table) from each cell's `raw_style_indices` entry through
+    /// `xl/styles.xml`'s `<cellXfs>`. Absent for a cell with no format, the General
+    /// format (numFmtId 0), or an unresolvable id -- exposing `None`/no-entry rather
+    /// than guessing is the same convention `BufferSheet::style_ids` already uses. Always
+    /// empty for `.ods` (no equivalent parsed there).
+    pub cell_number_formats: HashMap<(u32, u32), String>,
 }
 
 pub enum SheetCell {
@@ -956,6 +966,15 @@ fn read_workbook_from_archive<R: Read + Seek>(
             Err(_) => continue,
         };
         let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared, &styles.cell_xfs);
+        // GitHub #4: resolved from the same style_ids BufferSheet::style_ids already
+        // carries -- see WorkbookSheet::cell_number_formats' doc comment.
+        let cell_number_formats: HashMap<(u32, u32), String> = sheet_data
+            .style_ids
+            .iter()
+            .filter_map(|(&pos, &fmt_id)| {
+                resolve_number_format(fmt_id, &styles.number_formats).map(|code| (pos, code))
+            })
+            .collect();
         sheets.push(BufferSheet {
             sheet: WorkbookSheet {
                 name,
@@ -968,6 +987,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 hidden_columns: sheet_data.hidden_columns,
                 raw_style_indices: sheet_data.raw_style_indices,
                 formulas: sheet_data.formulas.clone(),
+                cell_number_formats,
             },
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
@@ -1144,6 +1164,70 @@ fn xlsx_styles(xml: &str) -> XlsxStyles {
         number_formats,
         cell_xfs,
     }
+}
+
+/// ECMA-376 Part 1 §18.8.30's built-in `numFmtId` -> format-code table (ids 0-49; 23-36
+/// are reserved for legacy international formats the spec itself never assigns a code
+/// to, and are omitted here the same way -- not a gap this reader introduced). A fixed,
+/// published constant, unlike this project's usual "no writer code until a real fixture
+/// shows the shape" rule for OOXML structural elements: there's nothing to discover here,
+/// every real `.xlsx`/`.xlsm` producer uses these exact ids for these exact meanings.
+const BUILTIN_NUMBER_FORMATS: &[(u32, &str)] = &[
+    (0, "General"),
+    (1, "0"),
+    (2, "0.00"),
+    (3, "#,##0"),
+    (4, "#,##0.00"),
+    (5, "$#,##0;($#,##0)"),
+    (6, "$#,##0;[Red]($#,##0)"),
+    (7, "$#,##0.00;($#,##0.00)"),
+    (8, "$#,##0.00;[Red]($#,##0.00)"),
+    (9, "0%"),
+    (10, "0.00%"),
+    (11, "0.00E+00"),
+    (12, "# ?/?"),
+    (13, "# ??/??"),
+    (14, "m/d/yyyy"),
+    (15, "d-mmm-yy"),
+    (16, "d-mmm"),
+    (17, "mmm-yy"),
+    (18, "h:mm AM/PM"),
+    (19, "h:mm:ss AM/PM"),
+    (20, "h:mm"),
+    (21, "h:mm:ss"),
+    (22, "m/d/yyyy h:mm"),
+    (37, "#,##0 ;(#,##0)"),
+    (38, "#,##0 ;[Red](#,##0)"),
+    (39, "#,##0.00;(#,##0.00)"),
+    (40, "#,##0.00;[Red](#,##0.00)"),
+    (41, "_(* #,##0_);_(* (#,##0);_(* \"-\"_);_(@_)"),
+    (42, "_($* #,##0_);_($* (#,##0);_($* \"-\"_);_(@_)"),
+    (43, "_(* #,##0.00_);_(* (#,##0.00);_(* \"-\"??_);_(@_)"),
+    (44, "_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)"),
+    (45, "mm:ss"),
+    (46, "[h]:mm:ss"),
+    (47, "mm:ss.0"),
+    (48, "##0.0E+0"),
+    (49, "@"),
+];
+
+/// Resolves a `numFmtId` to its format-code string -- a workbook-level custom
+/// `<numFmt formatCode="...">` definition first (an id can only mean one thing in a
+/// given file, but a custom entry is the file's own explicit statement of what an id
+/// means, so it takes priority over the built-in table on the vanishingly rare chance
+/// both exist for the same id), falling back to `BUILTIN_NUMBER_FORMATS`. `None` for
+/// numFmtId 0 (General -- nothing to report) or any other id neither source defines.
+fn resolve_number_format(num_fmt_id: u32, custom_formats: &HashMap<u32, String>) -> Option<String> {
+    if let Some(code) = custom_formats.get(&num_fmt_id) {
+        return Some(code.clone());
+    }
+    if num_fmt_id == 0 {
+        return None;
+    }
+    BUILTIN_NUMBER_FORMATS
+        .iter()
+        .find(|(id, _)| *id == num_fmt_id)
+        .map(|(_, code)| code.to_string())
 }
 
 /// Parses a single worksheet XML into a 1-based (row, col) → SheetCell map,
@@ -1496,6 +1580,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             hidden_columns: Vec::new(),
                             raw_style_indices: HashMap::new(),
                             formulas: HashMap::new(),
+                            cell_number_formats: HashMap::new(),
                         });
                         in_sheet = true;
                         row = 0;
@@ -2096,6 +2181,46 @@ mod merge_tests {
         let xml = r#"<styleSheet><cellXfs count="0"/></styleSheet>"#;
         let styles = xlsx_styles(xml);
         assert!(styles.cell_xfs.is_empty());
+    }
+
+    // ── GitHub #4: resolve_number_format ────────────────────────────────────
+
+    #[test]
+    fn resolve_number_format_finds_a_builtin_date_format() {
+        assert_eq!(
+            resolve_number_format(14, &HashMap::new()).as_deref(),
+            Some("m/d/yyyy")
+        );
+    }
+
+    #[test]
+    fn resolve_number_format_general_is_none() {
+        assert_eq!(resolve_number_format(0, &HashMap::new()), None);
+    }
+
+    #[test]
+    fn resolve_number_format_an_unknown_id_with_no_custom_definition_is_none() {
+        assert_eq!(resolve_number_format(9999, &HashMap::new()), None);
+    }
+
+    #[test]
+    fn resolve_number_format_prefers_a_custom_definition_over_the_builtin_table() {
+        let mut custom = HashMap::new();
+        custom.insert(14, "yyyy-mm-dd".to_string());
+        assert_eq!(
+            resolve_number_format(14, &custom).as_deref(),
+            Some("yyyy-mm-dd")
+        );
+    }
+
+    #[test]
+    fn resolve_number_format_finds_a_custom_format_above_id_163() {
+        let mut custom = HashMap::new();
+        custom.insert(164, "0.00\"kg\"".to_string());
+        assert_eq!(
+            resolve_number_format(164, &custom).as_deref(),
+            Some("0.00\"kg\"")
+        );
     }
 
     #[test]

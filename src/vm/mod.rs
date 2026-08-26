@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use crate::check;
 use crate::formula;
 use crate::parser::ast::{
-    ArrayDim, CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan,
+    ArrayDim, Axis, CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan,
     SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp,
 };
 use crate::parser::{self, EntrypointResolution};
@@ -402,9 +402,12 @@ pub struct WorksheetOrigin {
     /// the original casing: `Sheet1` round-tripped as `sheet1`, a visible
     /// tab-label change on every save with zero macro involvement (same
     /// class of bug as `Vm::sheet_order`, found via the same fixture).
-    /// `None` for a sheet with no origin (created purely in-VBA via
-    /// `Sheets.Add`) -- its lowercased key is already the only name it
-    /// ever had.
+    /// `Ensure_sheet` (backing both `Sheets.Add` and Python's `set_sheet()`) also
+    /// populates this for a sheet with no loaded-file origin, from the caller's
+    /// as-written name -- GitHub #2 was exactly this field being `None` for such a
+    /// sheet and the writer falling back to the lowercased key instead. `None` here
+    /// in practice only for `Vm::new()`'s own provisional default sheet, which
+    /// `populate_from_sheets` always replaces before any save can observe it.
     pub original_display_name: Option<String>,
 }
 
@@ -706,6 +709,14 @@ pub struct Vm {
     /// are explicit no-ops, see the tests of those same names below). Empty
     /// for any sheet built purely in-VBA.
     pub(crate) cell_style_indices: HashMap<String, HashMap<(u32, u32), u32>>,
+    /// Per-sheet, per-cell resolved number-format code string (GitHub #4), keyed the
+    /// same way as `merged_ranges`/`cell_style_indices`. Populated by
+    /// `populate_from_sheets` from the reader's `WorkbookSheet::cell_number_formats`;
+    /// read by `get_cell_number_format` (below) so a Python caller can tell a date-
+    /// formatted cell's serial number apart from a plain number without a second,
+    /// format-aware Excel library. Empty for any sheet built purely in-VBA or loaded
+    /// from `.ods`.
+    pub(crate) cell_number_formats: HashMap<String, HashMap<(u32, u32), String>>,
     /// Per-sheet origin facts (0.10.0-A), keyed the same way as `merged_ranges`.
     /// Populated unconditionally by `populate_from_sheets` for every sheet that came from
     /// a real `WorkbookSheet` (unlike `merged_ranges`/`sheet_visibility`/
@@ -808,6 +819,7 @@ impl Vm {
             merged_ranges: HashMap::new(),
             sheet_visibility: HashMap::new(),
             cell_style_indices: HashMap::new(),
+            cell_number_formats: HashMap::new(),
             worksheet_origins: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
@@ -914,6 +926,85 @@ impl Vm {
             .expect("active sheet must exist")
     }
 
+    /// Deletes `count` rows starting at 1-based `first` (inclusive), shifting every row
+    /// below the deleted range up by `count`. Shared by `Stmt::RangeDelete`'s `Axis::Row`
+    /// (`Range(addr).Delete`/`EntireRow.Delete`) and `Stmt::RowColDelete` (`Rows(n).Delete`)
+    /// so the two syntactic forms can't drift apart. Mirrored by `delete_cols` below --
+    /// keep the two in sync if either changes.
+    fn delete_rows(&mut self, first: u32, count: u32) {
+        let last = first + count - 1;
+        let to_move: Vec<((u32, u32), CellContent)> = self
+            .cells()
+            .iter()
+            .filter(|((r, _), _)| *r > last)
+            .map(|((r, c), v)| ((*r, *c), v.clone()))
+            .collect();
+        for ((r, c), _) in &to_move {
+            self.cells_mut().remove(&(*r, *c));
+        }
+        for r in first..=last {
+            self.cells_mut().retain(|&(row, _), _| row != r);
+        }
+        for ((r, c), v) in to_move {
+            self.cells_mut().insert((r - count, c), v);
+        }
+    }
+
+    /// Inserts `count` blank rows at 1-based `first`, shifting `first` and everything
+    /// below it down by `count`. See `delete_rows`'s doc comment for what shares this.
+    fn insert_rows(&mut self, first: u32, count: u32) {
+        let to_move: Vec<((u32, u32), CellContent)> = self
+            .cells()
+            .iter()
+            .filter(|((r, _), _)| *r >= first)
+            .map(|((r, c), v)| ((*r, *c), v.clone()))
+            .collect();
+        for ((r, c), _) in &to_move {
+            self.cells_mut().remove(&(*r, *c));
+        }
+        for ((r, c), v) in to_move {
+            self.cells_mut().insert((r + count, c), v);
+        }
+    }
+
+    /// `delete_rows`'s column-axis mirror -- deletes `count` columns starting at 1-based
+    /// `first`, shifting every column to its right left by `count`.
+    fn delete_cols(&mut self, first: u32, count: u32) {
+        let last = first + count - 1;
+        let to_move: Vec<((u32, u32), CellContent)> = self
+            .cells()
+            .iter()
+            .filter(|((_, c), _)| *c > last)
+            .map(|((r, c), v)| ((*r, *c), v.clone()))
+            .collect();
+        for ((r, c), _) in &to_move {
+            self.cells_mut().remove(&(*r, *c));
+        }
+        for c in first..=last {
+            self.cells_mut().retain(|&(_, col), _| col != c);
+        }
+        for ((r, c), v) in to_move {
+            self.cells_mut().insert((r, c - count), v);
+        }
+    }
+
+    /// `insert_rows`'s column-axis mirror -- inserts `count` blank columns at 1-based
+    /// `first`, shifting `first` and everything to its right right by `count`.
+    fn insert_cols(&mut self, first: u32, count: u32) {
+        let to_move: Vec<((u32, u32), CellContent)> = self
+            .cells()
+            .iter()
+            .filter(|((_, c), _)| *c >= first)
+            .map(|((r, c), v)| ((*r, *c), v.clone()))
+            .collect();
+        for ((r, c), _) in &to_move {
+            self.cells_mut().remove(&(*r, *c));
+        }
+        for ((r, c), v) in to_move {
+            self.cells_mut().insert((r, c + count), v);
+        }
+    }
+
     fn rebuild_cell_index(&mut self) {
         let pairs: Vec<(u32, u32)> = self
             .cells()
@@ -937,9 +1028,40 @@ impl Vm {
     }
 
     pub fn ensure_sheet(&mut self, name: &str) {
+        self.ensure_sheet_at(name, None);
+    }
+
+    /// `ensure_sheet`, with an optional insertion position (GitHub #3) -- `None` keeps
+    /// `ensure_sheet`'s existing append-at-the-end behavior; `Some(i)` inserts the new
+    /// sheet at 0-based position `i` in `sheet_order` (clamped to the current length, so
+    /// an out-of-range index appends rather than panicking). Ignored if `name` already
+    /// exists -- this only controls where a *newly created* sheet lands, not reordering
+    /// an existing one (this VM has no reorder primitive at all, same N/A noted on
+    /// `WorksheetOrigin`'s own doc comment).
+    pub fn ensure_sheet_at(&mut self, name: &str, index: Option<usize>) {
         let key = name.to_lowercase();
         if !self.sheets.contains_key(&key) {
-            self.sheet_order.push(key.clone());
+            match index {
+                Some(i) => self
+                    .sheet_order
+                    .insert(i.min(self.sheet_order.len()), key.clone()),
+                None => self.sheet_order.push(key.clone()),
+            }
+            // GitHub #2: a sheet created here (via `Sheets.Add`, or Python's
+            // `set_sheet()`) has no `WorksheetOrigin` from a loaded file, so
+            // `save_xlsx_impl`'s display-name fallback used the lowercased `key`
+            // itself -- silently lowercasing any ASCII name on save (non-ASCII names
+            // were never affected: `to_lowercase()` is a no-op on e.g. Japanese,
+            // which is exactly why this went unnoticed until a plain ASCII name was
+            // tried). Recording the caller's real casing here is what that fallback
+            // needs to find instead.
+            self.worksheet_origins.insert(
+                key.clone(),
+                WorksheetOrigin {
+                    original_display_name: Some(name.to_string()),
+                    ..Default::default()
+                },
+            );
         }
         self.sheets.entry(key).or_default();
     }
@@ -1404,6 +1526,37 @@ impl Vm {
             return Err(format!("Cannot edit: sheet '{}' is protected", display));
         }
         Ok(())
+    }
+
+    /// The actual removal, shared by `Stmt::SheetsDelete` (`sheet` already resolved to
+    /// `key`/`display` by `resolve_sheet_expr`) and `delete_sheet` below (GitHub #3) --
+    /// one removal path so 0.10.0-D4's save-time reachability pruning, which keys off
+    /// `self.sheets`/`self.sheet_order`, behaves identically regardless of which
+    /// caller removed the sheet. Silently no-ops on `key == self.active_sheet` -- a
+    /// pre-existing, deliberate limitation of the VBA path (real Excel allows deleting
+    /// the active sheet and re-activates another one; this VM doesn't attempt that),
+    /// preserved as-is rather than fixed as a side effect of this refactor.
+    fn remove_sheet(&mut self, key: &str, display: &str) -> Result<(), String> {
+        self.check_sheet_not_protected(key, display)?;
+        if key != self.active_sheet {
+            self.sheets.remove(key);
+            self.sheet_order.retain(|n| n != key);
+        }
+        Ok(())
+    }
+
+    /// Deletes the sheet named `name` -- the direct counterpart to `ensure_sheet`'s
+    /// create-on-demand, for a caller (Python's `delete_sheet()`) that isn't going
+    /// through a VBA `Sheets(name).Delete` statement. Unlike the VBA path (whose sheet
+    /// name comes from `resolve_sheet_expr`, which never validates existence itself --
+    /// an existing, separate gap not touched here), this direct entry point DOES
+    /// validate `name` exists first: a caller building a structural "delete this sheet"
+    /// action wants a clear error on a typo, not `Sheets("Typo").Delete`'s pre-existing
+    /// silent no-op. The removal itself is `remove_sheet`, shared with the VBA path.
+    pub fn delete_sheet(&mut self, name: &str) -> Result<(), String> {
+        let key = name.to_lowercase();
+        self.require_sheet_exists(name, &key)?;
+        self.remove_sheet(&key, name)
     }
 
     /// Evaluates an `ObjectExpr` to the `ObjectRef` it names (Milestone
@@ -2146,6 +2299,10 @@ impl Vm {
             if !sheet_data.raw_style_indices.is_empty() {
                 self.cell_style_indices
                     .insert(key.clone(), sheet_data.raw_style_indices.clone());
+            }
+            if !sheet_data.cell_number_formats.is_empty() {
+                self.cell_number_formats
+                    .insert(key.clone(), sheet_data.cell_number_formats.clone());
             }
             if !sheet_data.hidden_rows.is_empty() || !sheet_data.hidden_columns.is_empty() {
                 self.sheet_visibility.insert(
@@ -2907,64 +3064,63 @@ impl Vm {
                     },
                 );
             }
-            Stmt::RangeDelete { addr } => {
+            Stmt::RangeDelete { addr, axis } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
-                let ((r1, _), (r2, _)) = self
+                let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeDelete: invalid address '{}'", addr))?;
-                let rows_del = r2 - r1 + 1;
-                // Collect cells below the deleted range and shift them up
-                let to_move: Vec<((u32, u32), CellContent)> = self
-                    .cells()
-                    .iter()
-                    .filter(|((r, _), _)| *r > r2)
-                    .map(|((r, c), v)| ((*r, *c), v.clone()))
-                    .collect();
-                for ((r, c), _) in &to_move {
-                    self.cells_mut().remove(&(*r, *c));
-                }
-                for r in r1..=r2 {
-                    self.cells_mut().retain(|&(row, _), _| row != r);
-                }
-                for ((r, c), v) in to_move {
-                    self.cells_mut().insert((r - rows_del, c), v);
+                match axis {
+                    Axis::Row => self.delete_rows(r1, r2 - r1 + 1),
+                    Axis::Column => self.delete_cols(c1, c2 - c1 + 1),
                 }
             }
-            Stmt::RangeInsert { addr } => {
+            Stmt::RangeInsert { addr, axis } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
-                let ((r1, _), (r2, _)) = self
+                let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeInsert: invalid address '{}'", addr))?;
-                let rows_ins = r2 - r1 + 1;
-                // Shift cells at r1 and below downward
-                let to_move: Vec<((u32, u32), CellContent)> = self
-                    .cells()
-                    .iter()
-                    .filter(|((r, _), _)| *r >= r1)
-                    .map(|((r, c), v)| ((*r, *c), v.clone()))
-                    .collect();
-                for ((r, c), _) in &to_move {
-                    self.cells_mut().remove(&(*r, *c));
+                match axis {
+                    Axis::Row => self.insert_rows(r1, r2 - r1 + 1),
+                    Axis::Column => self.insert_cols(c1, c2 - c1 + 1),
                 }
-                for ((r, c), v) in to_move {
-                    self.cells_mut().insert((r + rows_ins, c), v);
+            }
+            Stmt::RowColDelete { axis, index } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
+                let idx = to_f64(&self.eval_expr(index)?)? as u32;
+                match axis {
+                    Axis::Row => self.delete_rows(idx, 1),
+                    Axis::Column => self.delete_cols(idx, 1),
+                }
+            }
+            Stmt::RowColInsert { axis, index } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
+                let idx = to_f64(&self.eval_expr(index)?)? as u32;
+                match axis {
+                    Axis::Row => self.insert_rows(idx, 1),
+                    Axis::Column => self.insert_cols(idx, 1),
                 }
             }
             Stmt::RangeSort {
                 addr,
                 key_col,
                 descending,
+                header,
             } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
                 let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeSort: invalid address '{}'", addr))?;
+                // Header:=xlYes -- addr's first row is excluded from the sort and stays
+                // exactly where it is; only data_r1..=r2 gets reordered.
+                let data_r1 = if *header { r1 + 1 } else { r1 };
                 // key_col is 1-based absolute column; convert to 0-based offset within range
                 let key_off = (*key_col).saturating_sub(c1) as usize;
-                let mut rows: Vec<Vec<Variant>> = (r1..=r2)
+                let mut rows: Vec<Vec<Variant>> = (data_r1..=r2)
                     .map(|r| (c1..=c2).map(|c| self.get_cell(r, c)).collect())
                     .collect();
                 rows.sort_by(|a, b| {
@@ -2976,12 +3132,47 @@ impl Vm {
                 for (ri, row) in rows.iter().enumerate() {
                     for (ci, val) in row.iter().enumerate() {
                         self.cells_mut().insert(
-                            (r1 + ri as u32, c1 + ci as u32),
+                            (data_r1 + ri as u32, c1 + ci as u32),
                             CellContent {
                                 formula: None,
                                 value: val.clone(),
                             },
                         );
+                    }
+                }
+            }
+            Stmt::RangeAutoFilter {
+                addr,
+                field,
+                criteria1,
+            } => {
+                let active = self.active_sheet.clone();
+                self.check_sheet_not_protected(&active, &active)?;
+                let ((r1, c1), (r2, _)) = self
+                    .resolve_range_addr(addr)
+                    .ok_or_else(|| format!("RangeAutoFilter: invalid address '{}'", addr))?;
+                // A bare AutoFilter (no Field/Criteria1) is a real no-op here -- see
+                // RangeAutoFilter's own doc comment for why (no <autoFilter> element is
+                // persisted, so there'd be nothing to visibly turn on either way).
+                if let (Some(field_expr), Some(criteria_expr)) = (field, criteria1) {
+                    // Field is 1-based, relative to addr's own left edge (real VBA's
+                    // convention -- "the leftmost field is 1"), not an absolute column.
+                    let field_off = to_f64(&self.eval_expr(field_expr)?)? as u32;
+                    let filter_col = c1 + field_off.saturating_sub(1);
+                    let criteria = vba_to_str(&self.eval_expr(criteria_expr)?);
+                    // Row r1 is always the header -- AutoFilter never hides it.
+                    let mut newly_hidden = Vec::new();
+                    for r in (r1 + 1)..=r2 {
+                        if vba_to_str(&self.get_cell(r, filter_col)) != criteria {
+                            newly_hidden.push(Interval { start: r, end: r });
+                        }
+                    }
+                    if !newly_hidden.is_empty() {
+                        self.sheet_visibility
+                            .entry(active)
+                            .or_default()
+                            .hidden_rows
+                            .extend(newly_hidden);
                     }
                 }
             }
@@ -3189,11 +3380,7 @@ impl Vm {
             }
             Stmt::SheetsDelete { sheet } => {
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
-                self.check_sheet_not_protected(&key, &display)?;
-                if key != self.active_sheet {
-                    self.sheets.remove(&key);
-                    self.sheet_order.retain(|n| n != &key);
-                }
+                self.remove_sheet(&key, &display)?;
             }
             Stmt::SheetProtection {
                 sheet,
@@ -4268,6 +4455,19 @@ impl Vm {
             .get(&(row, col))
             .map(|c| c.value.clone())
             .unwrap_or(Variant::Empty)
+    }
+
+    /// The active sheet's resolved number-format code for a cell (GitHub #4), e.g.
+    /// `"m/d/yyyy"` for a date-formatted cell -- `None` for a cell with no format, the
+    /// General format, or a sheet built purely in-VBA/loaded from `.ods`. Letting a
+    /// caller do the serial-number-to-date conversion itself (rather than this VM
+    /// guessing and changing `get_cell`'s return type) matches the reporter's own
+    /// stated preference and avoids a breaking change to `get_cell`.
+    pub fn get_cell_number_format(&self, row: u32, col: u32) -> Option<&str> {
+        self.cell_number_formats
+            .get(&self.active_sheet)?
+            .get(&(row, col))
+            .map(String::as_str)
     }
 
     pub fn set_cell_formula(&mut self, row: u32, col: u32, formula: &str) -> Result<(), String> {
@@ -7547,11 +7747,100 @@ mod tests {
 
     #[test]
     fn test_entirecolumn_delete() {
-        // パースエラーなしで実行できることを確認
+        // GitHub #8: EntireColumn.Delete used to delete the ROW the reference cell was
+        // in (RangeDelete ignored which axis EntireRow/EntireColumn meant) -- column B
+        // must be removed here, column A and C's former contents (now shifted into B)
+        // must survive, and row 1 (which B1 is in) must NOT be the thing that vanishes.
         let vm = run(
-            "Sub MySub()\n    Cells(1,1).Value = 10\n    Range(\"A1:A3\").EntireColumn.Delete\n    x = 1\nEnd Sub\n",
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(1,2).Value = 20\n    Cells(1,3).Value = 30\n    Range(\"B1\").EntireColumn.Delete\n    a = Cells(1,1).Value\n    b = Cells(1,2).Value\n    c = Cells(1,3).Value\nEnd Sub\n",
         );
-        assert_eq!(vm.variables["x"], Variant::Integer(1));
+        assert_eq!(vm.variables["a"], Variant::Integer(10)); // column A untouched
+        assert_eq!(vm.variables["b"], Variant::Integer(30)); // column C shifted into B
+        assert_eq!(vm.variables["c"], Variant::Empty); // nothing shifted into C
+    }
+
+    #[test]
+    fn test_entirecolumn_delete_multi_column_range() {
+        // Range("A1:B1").EntireColumn spans 2 columns (A-B, not just the reference
+        // cell's own column) -- mirrors test_entirerow_delete's multi-row coverage.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(1,2).Value = 2\n    Cells(1,3).Value = 3\n    Range(\"A1:B1\").EntireColumn.Delete\n    a = Cells(1,1).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(3)); // old C1 shifted into A1
+    }
+
+    #[test]
+    fn test_entirerow_insert() {
+        // GitHub #7: EntireRow.Insert was a silent no-op.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Range(\"A2\").EntireRow.Insert\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\n    c = Cells(3,1).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Empty); // new blank row
+        assert_eq!(vm.variables["c"], Variant::Integer(2)); // shifted down
+    }
+
+    #[test]
+    fn test_entirecolumn_insert() {
+        // GitHub #7: EntireColumn.Insert was a silent no-op.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(1,2).Value = 2\n    Range(\"B1\").EntireColumn.Insert\n    a = Cells(1,1).Value\n    b = Cells(1,2).Value\n    c = Cells(1,3).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Empty); // new blank column
+        assert_eq!(vm.variables["c"], Variant::Integer(2)); // shifted right
+    }
+
+    // ── Rows(n) / Columns(n) ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_rows_delete() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    Rows(2).Delete\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Integer(3)); // old row 3 shifted up
+    }
+
+    #[test]
+    fn test_rows_insert() {
+        // GitHub #7: Rows(n).Insert was a silent no-op.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Rows(2).Insert\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\n    c = Cells(3,1).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Empty);
+        assert_eq!(vm.variables["c"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn test_columns_delete() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(1,2).Value = 2\n    Cells(1,3).Value = 3\n    Columns(2).Delete\n    a = Cells(1,1).Value\n    b = Cells(1,2).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Integer(3)); // old column C shifted left
+    }
+
+    #[test]
+    fn test_columns_insert() {
+        // GitHub #7: Columns(n).Insert was a silent no-op.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(1,2).Value = 2\n    Columns(2).Insert\n    a = Cells(1,1).Value\n    b = Cells(1,2).Value\n    c = Cells(1,3).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Empty);
+        assert_eq!(vm.variables["c"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn test_rows_delete_accepts_a_variable_index() {
+        // Rows(n)/Columns(n) take an Expr (like Cells(row, col)), not a parse-time
+        // string literal like Range(...) -- confirms a variable index actually works.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(2,1).Value = 2\n    Cells(3,1).Value = 3\n    n = 2\n    Rows(n).Delete\n    a = Cells(2,1).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(3));
     }
 
     #[test]
@@ -7613,6 +7902,82 @@ mod tests {
             "Sub MySub()\n    Cells(1,1).Value = 3\n    Cells(2,1).Value = 1\n    Cells(3,1).Value = 2\n    Range(\"A1:A3\").Sort Key1:=Range(\"A1\"), Order1:=xlDescending\n    a = Cells(1,1).Value\nEnd Sub\n",
         );
         assert_eq!(vm.variables["a"], Variant::Integer(3));
+    }
+
+    #[test]
+    fn test_range_sort_header_yes_excludes_the_first_row() {
+        // GitHub #6: Header:=xlYes was ignored -- the header row got swept into the sort.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"Name\"\n    Cells(2,1).Value = 3\n    Cells(3,1).Value = 1\n    Cells(4,1).Value = 2\n    Range(\"A1:A4\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending, Header:=xlYes\n    header = Cells(1,1).Value\n    a = Cells(2,1).Value\n    b = Cells(3,1).Value\n    c = Cells(4,1).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["header"], Variant::Str("Name".into())); // untouched
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Integer(2));
+        assert_eq!(vm.variables["c"], Variant::Integer(3));
+    }
+
+    #[test]
+    fn test_range_sort_header_no_is_unchanged_from_the_default() {
+        // Header:=xlNo (or omitted) must keep sorting the whole given range, same as
+        // before Header:=xlYes existed -- no regression on the already-working path.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 3\n    Cells(2,1).Value = 1\n    Cells(3,1).Value = 2\n    Range(\"A1:A3\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending, Header:=xlNo\n    a = Cells(1,1).Value\n    b = Cells(2,1).Value\n    c = Cells(3,1).Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["a"], Variant::Integer(1));
+        assert_eq!(vm.variables["b"], Variant::Integer(2));
+        assert_eq!(vm.variables["c"], Variant::Integer(3));
+    }
+
+    // ── GitHub #5: Range.AutoFilter ────────────────────────────────────────
+
+    #[test]
+    fn test_range_autofilter_hides_rows_not_matching_the_criteria() {
+        // Name/Age, matching the exact GitHub #5 repro: Charlie/25, Alice/40, Bob/10,
+        // Dan/25 -- Field:=2 (the 2nd column of the range, "Age") Criteria1:="25" must
+        // hide rows 3 (Alice/40) and 4 (Bob/10), keep the header (row 1) and the two
+        // matching rows (2, 5) visible.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"Name\"\n    Cells(1,2).Value = \"Age\"\n    \
+             Cells(2,1).Value = \"Charlie\"\n    Cells(2,2).Value = 25\n    \
+             Cells(3,1).Value = \"Alice\"\n    Cells(3,2).Value = 40\n    \
+             Cells(4,1).Value = \"Bob\"\n    Cells(4,2).Value = 10\n    \
+             Cells(5,1).Value = \"Dan\"\n    Cells(5,2).Value = 25\n    \
+             Range(\"A1:B5\").AutoFilter Field:=2, Criteria1:=\"25\"\nEnd Sub\n",
+        );
+        let hidden = &vm.sheet_visibility.get("sheet1").unwrap().hidden_rows;
+        assert!(
+            hidden.contains(&Interval { start: 3, end: 3 }),
+            "row 3 (Alice/40) must be hidden: {hidden:?}"
+        );
+        assert!(
+            hidden.contains(&Interval { start: 4, end: 4 }),
+            "row 4 (Bob/10) must be hidden: {hidden:?}"
+        );
+        assert!(
+            !hidden.iter().any(|iv| iv.start == 1),
+            "the header row must never be hidden by AutoFilter: {hidden:?}"
+        );
+        assert!(
+            !hidden.iter().any(|iv| iv.start == 2 || iv.start == 5),
+            "matching rows (Charlie/25, Dan/25) must stay visible: {hidden:?}"
+        );
+    }
+
+    #[test]
+    fn test_range_autofilter_bare_form_hides_nothing() {
+        // A bare .AutoFilter (no Field/Criteria1) just turns on the dropdown arrows in
+        // real Excel -- no rows get hidden, matching GitHub #5's own description.
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"Name\"\n    Cells(2,1).Value = \"Charlie\"\n    \
+             Range(\"A1:A2\").AutoFilter\nEnd Sub\n",
+        );
+        assert!(
+            vm.sheet_visibility
+                .get("sheet1")
+                .map(|v| v.hidden_rows.is_empty())
+                .unwrap_or(true),
+            "bare AutoFilter must not hide any rows"
+        );
     }
 
     // ── Range clear / offset / multi-cell write / Sheets() ───────────────────
@@ -7803,6 +8168,50 @@ mod tests {
             !vm.sheet_order.contains(&"sheet2".to_string()),
             "sheet_order must drop a deleted sheet too, or the writer would still emit it"
         );
+    }
+
+    // ── GitHub #3: Vm::delete_sheet / Vm::ensure_sheet_at ────────────────────
+
+    #[test]
+    fn delete_sheet_removes_a_non_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Extra");
+        vm.delete_sheet("Extra").unwrap();
+        assert!(!vm.sheet_names().contains(&"extra".to_string()));
+        assert!(!vm.sheet_order.contains(&"extra".to_string()));
+    }
+
+    #[test]
+    fn delete_sheet_errors_on_an_unknown_name_instead_of_silently_no_opping() {
+        // Unlike Sheets("Typo").Delete (which resolves via resolve_sheet_expr, never
+        // validates existence, and silently no-ops), the direct API is a caller-facing
+        // structural operation and should say so on a typo.
+        let mut vm = Vm::new();
+        let err = vm.delete_sheet("Typo").unwrap_err();
+        assert!(err.contains("not found"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn ensure_sheet_at_inserts_at_the_requested_position() {
+        let mut vm = Vm::new(); // starts with just "sheet1"
+        vm.ensure_sheet("Second");
+        vm.ensure_sheet_at("First", Some(0));
+        assert_eq!(vm.sheet_order, vec!["first", "sheet1", "second"]);
+    }
+
+    #[test]
+    fn ensure_sheet_at_clamps_an_out_of_range_index_instead_of_panicking() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet_at("Later", Some(999));
+        assert_eq!(vm.sheet_order, vec!["sheet1", "later"]);
+    }
+
+    #[test]
+    fn ensure_sheet_at_ignores_the_index_when_the_sheet_already_exists() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Second");
+        vm.ensure_sheet_at("Second", Some(0)); // already exists -- must not move it
+        assert_eq!(vm.sheet_order, vec!["sheet1", "second"]);
     }
 
     // ── Milestone B6a: strict_resolution + resolution-failure evidence ──────
@@ -8699,6 +9108,7 @@ mod tests {
             hidden_columns: Vec::new(),
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
         }];
 
         let mut vm = Vm::new();
@@ -8734,6 +9144,7 @@ mod tests {
                 hidden_columns: Vec::new(),
                 raw_style_indices: HashMap::new(),
                 formulas: HashMap::new(),
+                cell_number_formats: HashMap::new(),
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -8746,6 +9157,7 @@ mod tests {
                 hidden_columns: Vec::new(),
                 raw_style_indices: HashMap::new(),
                 formulas: HashMap::new(),
+                cell_number_formats: HashMap::new(),
             },
         ];
 
@@ -8780,6 +9192,7 @@ mod tests {
             hidden_columns: Vec::new(),
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
         }];
 
         let mut vm = Vm::new();
@@ -9675,6 +10088,7 @@ mod tests {
             hidden_columns: Vec::new(),
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -9712,6 +10126,7 @@ mod tests {
             hidden_columns: vec![(2, 2)],
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -9748,6 +10163,7 @@ mod tests {
             hidden_columns: Vec::new(),
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -9773,6 +10189,7 @@ mod tests {
             hidden_columns: Vec::new(),
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);

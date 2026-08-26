@@ -229,6 +229,13 @@ impl PyVm {
         variant_to_py(py, &self.inner.get_cell(row, col))
     }
 
+    /// Return the active sheet's resolved number-format code for a cell (1-based
+    /// row/col), e.g. ``"m/d/yyyy"`` for a date-formatted cell, or ``None`` for a cell
+    /// with no format, the General format, or a sheet with no source-file styles.
+    fn get_cell_number_format(&self, row: u32, col: u32) -> Option<&str> {
+        self.inner.get_cell_number_format(row, col)
+    }
+
     /// Return all non-empty cells as a dict: ``{(row, col): value}``.
     fn cells(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
@@ -285,9 +292,20 @@ impl PyVm {
     }
 
     /// Switch the active sheet. Creates the sheet if it does not exist.
-    fn set_sheet(&mut self, name: &str) {
-        self.inner.ensure_sheet(name);
+    /// ``index`` (0-based) places a newly-created sheet at that position among the
+    /// existing sheets instead of appending it at the end; ignored if ``name`` already
+    /// exists, and clamped rather than erroring if it's past the current sheet count.
+    #[pyo3(signature = (name, index = None))]
+    fn set_sheet(&mut self, name: &str, index: Option<usize>) {
+        self.inner.ensure_sheet_at(name, index);
         self.inner.active_sheet = name.to_lowercase();
+    }
+
+    /// Delete the sheet named ``name``. Raises ``ValueError`` if it doesn't exist.
+    fn delete_sheet(&mut self, name: &str) -> PyResult<()> {
+        self.inner
+            .delete_sheet(name)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
     /// Return the name of the currently active sheet.
