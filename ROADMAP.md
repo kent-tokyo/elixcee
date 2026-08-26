@@ -25,6 +25,19 @@ implemented and differential-tested, but the package is still
 live: `registry.npmjs.org/@elixcee/xlsx` 404s), and `@elixcee` scope ownership itself is
 unconfirmed (item 9 below).
 
+**R1: bulk worksheet range/row API, merged to `master`, not yet released in any version.**
+Seven new Python methods close the highest-value gap identified against openpyxl (see the
+new `docs/openpyxl-gap-audit.md`): `get_range`/`set_range` (rectangular read/write),
+`append_row` (uses the sheet's true max used row, correct on a sparse sheet), `iter_rows`
+(values-only, defaults to the used range), and `max_row`/`max_column`/`calculate_dimension`
+(all `None`, never `0`/`"A1:A1"`, on a sheet with zero non-empty cells). All take an
+optional `sheet=` keyword that never changes the active sheet. Deliberately does not check
+sheet protection or merged-range membership on write — matches `set_cell`'s existing
+unchecked behavior, see the gap-audit doc's "Implementation notes for R1" for why. See
+`CHANGELOG.md`'s `[Unreleased]` section for the full account; version number for the
+release that eventually includes this is not decided yet (this round only adds the API and
+commits locally, no version bump).
+
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
 `arr(1,2)`, `UBound(arr, dimension)` honors its argument for real, `ReDim Preserve` enforces
@@ -426,6 +439,31 @@ all), so this needs a human/agent to remember it explicitly rather than relying 
     leaving it behind. Verified against the exact real scenario that first exposed this gap
     (a fixture with a relationship-bearing sheet deleted) — the orphaned `.rels` is now
     genuinely absent. See the `0.10.0-D4` roadmap entry above for the full account.
+
+16. **R1's bulk range/row API disclosed, not fixed, two pre-existing gaps and one new
+    limitation of its own** — see `docs/openpyxl-gap-audit.md`'s "Implementation notes for
+    R1" for the full account:
+    - Three `elixcee-types::parse_cell_addr`/`parse_range_addr` gaps (a `$`-prefix `u32`
+      underflow, row/col `0` accepted, a reversed range accepted unnormalized) are closed
+      only for calls made through `get_range`/`set_range`'s own address-validation wrapper
+      — the shared parser itself, used by many other call sites, is untouched.
+    - `cells_df`'s used-range convention (includes `Variant::Empty` map entries) still
+      diverges from `sheet_used_range`'s (excludes them, feeding `get_range`/`iter_rows`/
+      `max_row`/`max_column`/`calculate_dimension`) — pre-existing, not reconciled.
+    - No upper-bound guard on `get_range`/`iter_rows`/`set_range`: a pathological
+      full-column/full-row address (e.g. `"A1:XFD1048576"`, ~2.3 billion cells) will
+      attempt to allocate/iterate that many cells rather than erroring quickly. Not
+      implemented absent concrete evidence anyone actually does this.
+
+17. **A from-scratch `Vm().save_workbook()` (no loaded source file) emits a bare `<fill/>`
+    with no `<patternFill>`/`<gradientFill>` child in its minimal `styles.xml`** —
+    `openpyxl.load_workbook()` rejects this on reopen (`TypeError: expected Fill`), found
+    incidentally while writing R1's `compat/differential-python/` oracle test (which routes
+    around it by loading a real fixture instead — see that test file's own comment). Not
+    reproducible when a real source file's `styles.xml` is preserved via passthrough; only
+    a from-scratch `Vm()`'s own minimal stylesheet hits it. Not investigated further or
+    fixed — unrelated to R1's own scope, recorded here so it isn't rediscovered the hard
+    way.
 
 ## npm/JS/WASM: still-open gaps
 

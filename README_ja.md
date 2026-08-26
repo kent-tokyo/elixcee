@@ -425,6 +425,13 @@ result_cells = vm.cells()   # {(row, col): value, ...}
 vm.set_cell_formula(4, 1, "=SUM(A1:A3)")
 print(vm.get_cell(4, 1))   # A列1〜3行の合計
 
+# 範囲・行の一括操作 -- セル単位の往復が不要
+vm = elixcee.load_workbook("input.xlsx")
+rows = vm.get_range("A1:C10", sheet="Data")
+vm.set_range("E1:F2", [[1, 2], [3, 4]], sheet="Result")
+vm.append_row(["Alice", 100], sheet="Result")
+vm.save_workbook("output.xlsx")
+
 # MsgBox の動作を制御
 vm = elixcee.Vm(on_msgbox="skip")   # MsgBox を無視（デフォルト）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
@@ -449,6 +456,12 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 | `vm.active_sheet()` | 現在のアクティブシート名を返す。 |
 | `vm.sheet_names()` | すべてのシート名のリストを返す。 |
 | `vm.get_sheet(name)` | 指定シートの全非空セルを `{(row, col): value}` で返す。 |
+| `vm.get_range(addr, sheet=None)` | 矩形範囲（例: `"A1:C5"`）をネストしたリストとして読み取る。 |
+| `vm.set_range(addr, values, sheet=None)` | ネストしたリストから矩形範囲へ書き込む。 |
+| `vm.append_row(values, sheet=None)` | シートの使用範囲の直後に1行書き込み、書き込んだ行番号を返す。 |
+| `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | 矩形範囲を値のみで反復。 |
+| `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | 使用範囲の最大行・最大列。空シートは `None`。 |
+| `vm.calculate_dimension(sheet=None)` | 使用範囲をA1形式の文字列（例: `"B2:D10"`）で返す。空シートは `None`。 |
 | `vm.save_workbook(path)` | 全シートを `.xlsx` または `.ods` に保存。 |
 | `vm.cells_df()` | アクティブシートを **pandas DataFrame** として返す（pandas 要インストール）。 |
 | `elixcee.run_macro(vba, name)` | 一発実行: マクロを実行して `{(row, col): value}` を返す。 |

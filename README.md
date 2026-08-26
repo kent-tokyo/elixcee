@@ -503,6 +503,13 @@ result_cells = vm.cells()   # {(row, col): value, ...}
 vm.set_cell_formula(4, 1, "=SUM(A1:A3)")
 print(vm.get_cell(4, 1))   # sum of rows 1-3 in column A
 
+# Bulk range/row access -- no per-cell round trips needed
+vm = elixcee.load_workbook("input.xlsx")
+rows = vm.get_range("A1:C10", sheet="Data")
+vm.set_range("E1:F2", [[1, 2], [3, 4]], sheet="Result")
+vm.append_row(["Alice", 100], sheet="Result")
+vm.save_workbook("output.xlsx")
+
 # Control MsgBox behavior
 vm = elixcee.Vm(on_msgbox="skip")   # silently ignore MsgBox calls (default)
 vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
@@ -527,6 +534,12 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 | `vm.active_sheet()` | Name of the currently active sheet. |
 | `vm.sheet_names()` | List of all sheet names. |
 | `vm.get_sheet(name)` | Cells of a named sheet as `{(row, col): value}`. |
+| `vm.get_range(addr, sheet=None)` | Read a rectangular range (e.g. `"A1:C5"`) as a nested list. |
+| `vm.set_range(addr, values, sheet=None)` | Write a rectangular range from a nested list. |
+| `vm.append_row(values, sheet=None)` | Write one row just past the sheet's used range; returns the row number. |
+| `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | Values-only iteration over a rectangular region. |
+| `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | Highest used row/column, or `None` if the sheet is empty. |
+| `vm.calculate_dimension(sheet=None)` | Used range as an A1-style string (e.g. `"B2:D10"`), or `None` if empty. |
 | `vm.save_workbook(path)` | Save all sheets to `.xlsx` or `.ods`. |
 | `vm.cells_df()` | Return the active sheet as a **pandas DataFrame** (requires pandas). |
 | `elixcee.run_macro(vba, name)` | One-shot: run a macro and return `{(row, col): value}`. |

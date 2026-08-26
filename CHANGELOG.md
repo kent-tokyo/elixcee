@@ -96,7 +96,51 @@ regression that `0.10.0` introduced was fixed and released separately as `[0.10.
 not yet released in any version. `@elixcee/xlsx` (still unpublished,
 `0.0.0-development`/`private: true`, no `publishConfig`): see its own two entries below
 for exactly what's implemented, plus a CI observability addition for the shared WASM
-bridge.
+bridge. R1 (bulk worksheet range/row API, below) is a third, independent addition in this
+section, unrelated to either.
+
+### Root crate (Python binding): R1 -- bulk worksheet range/row API
+
+Seven new Python methods close the highest-value gap identified against openpyxl (see the
+new `docs/openpyxl-gap-audit.md`, which scores openpyxl's full API surface against what
+`elixcee` exposes today and records P1/P2/P3 follow-up candidates): `get_range(addr,
+sheet=None)`/`set_range(addr, values, sheet=None)` (rectangular read/write, 1-based A1
+notation), `append_row(values, sheet=None)` (writes past the sheet's true max used row --
+correct on a sparse sheet, not a populated-row count), `iter_rows(min_row=1, max_row=None,
+min_col=1, max_col=None, sheet=None)` (values-only, defaults to the used range, `[]` on a
+totally empty sheet unless `max_row` is given explicitly), and `max_row`/`max_column`/
+`calculate_dimension` (all `None`, never `0`/`"A1:A1"`, on a sheet with zero non-empty
+cells). Every method takes `sheet` as a keyword; `None` means the active sheet, and an
+explicit sheet name never changes which sheet is active.
+
+New `Vm`-core primitives (`src/vm/mod.rs`, PyO3-agnostic, unit-tested via plain `cargo
+test`): `resolve_sheet_key`, `sheet_used_range` (Empty-exclusion bounding box, matching
+`cells()`/`get_sheet()`'s convention, not `cells_df`'s divergent one), `next_append_row`,
+`read_rect`/`write_rect`, `iter_rows_values`. `set_range`/`append_row` convert and
+shape-validate their entire input into a scratch buffer before writing anything, so a
+validation failure can't partially apply. A literal `"="`-prefixed string is stored as-is,
+never promoted to a formula (`set_cell_formula`/`set_cell_formula_batch` remain the only
+way to set one). Address parsing reuses `elixcee-types::parse_range_addr` as-is; a new,
+ungated `validate_range_addr` wrapper in `src/lib.rs` adds `$`-stripping, multi-area
+rejection, and reversed/zero-row-col rejection as explicit `ValueError`s, closing three
+disclosed shared-parser gaps only for calls made through this API -- the shared parser
+itself is untouched, recorded in the gap-audit doc for whoever picks it up next.
+
+Writing into a non-anchor cell of a merged range, or into a protected sheet, is
+deliberately **not** blocked by `set_range`/`append_row` -- matches `PyVm::set_cell`'s
+existing (equally unchecked) behavior; introducing a stricter Python-only rule with no
+VBA-side precedent was rejected as inconsistent with the rest of the binding. See the
+gap-audit doc's "Implementation notes for R1" for this and two other disclosed,
+out-of-scope gaps (a `cells_df` used-range inconsistency, no upper-bound guard against a
+pathological full-column/full-row address).
+
+New `compat/differential-python/` harness (stdlib `unittest`, `openpyxl` as a test-only
+oracle -- `pyproject.toml` still declares no runtime/test Python dependencies) compares
+`get_range`/`iter_rows`/`append_row` against openpyxl's own read of a real fixture, and
+pins one real, expected divergence rather than silently matching it: a merged range's
+non-anchor cells are excluded from `calculate_dimension`'s bounding box (no value of their
+own), while openpyxl's `dimensions` mirrors the real XLSX `<dimension>` element, which
+Excel widens to the merge's full span regardless.
 
 `0.10.0-D` (relationship-backed features, including the actual fix for
 `SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing

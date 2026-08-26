@@ -424,6 +424,13 @@ result_cells = vm.cells()   # {(row, col): value, ...}
 vm.set_cell_formula(4, 1, "=SUM(A1:A3)")
 print(vm.get_cell(4, 1))   # 第1~3行A列的合计
 
+# 批量读写区域/行 -- 无需逐单元格往返
+vm = elixcee.load_workbook("input.xlsx")
+rows = vm.get_range("A1:C10", sheet="Data")
+vm.set_range("E1:F2", [[1, 2], [3, 4]], sheet="Result")
+vm.append_row(["Alice", 100], sheet="Result")
+vm.save_workbook("output.xlsx")
+
 # 控制 MsgBox 行为
 vm = elixcee.Vm(on_msgbox="skip")   # 静默忽略 MsgBox（默认）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 时抛出 RuntimeError
@@ -448,6 +455,12 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 时抛出 RuntimeError
 | `vm.active_sheet()` | 返回当前活动工作表名称。 |
 | `vm.sheet_names()` | 返回所有工作表名称列表。 |
 | `vm.get_sheet(name)` | 以 `{(row, col): value}` 返回指定工作表的所有非空单元格。 |
+| `vm.get_range(addr, sheet=None)` | 将矩形区域（如 `"A1:C5"`）读取为嵌套列表。 |
+| `vm.set_range(addr, values, sheet=None)` | 从嵌套列表写入矩形区域。 |
+| `vm.append_row(values, sheet=None)` | 在工作表已用区域之后写入一行，返回写入的行号。 |
+| `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | 仅返回值的矩形区域迭代。 |
+| `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | 已用区域的最大行/列；空工作表返回 `None`。 |
+| `vm.calculate_dimension(sheet=None)` | 以 A1 格式字符串（如 `"B2:D10"`）返回已用区域；空工作表返回 `None`。 |
 | `vm.save_workbook(path)` | 将所有工作表保存为 `.xlsx` 或 `.ods`。 |
 | `vm.cells_df()` | 将活动工作表作为 **pandas DataFrame** 返回（需安装 pandas）。 |
 | `elixcee.run_macro(vba, name)` | 一次性执行：运行宏并返回 `{(row, col): value}`。 |
