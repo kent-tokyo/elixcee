@@ -187,14 +187,24 @@ rejection instead of writing new geometry-math from scratch.
 
 | Feature | Value | Freq | Fit | Impl risk | Corrupt risk | Fixture evid. | Primitive reuse | Milestone |
 |---|---|---|---|---|---|---|---|---|
-| Read defined names | 3 | 2 | 4 | 1 | 1 | yes (`fixture4`) | partial | **P2** |
+| Read defined names | 3 | 2 | 4 | 1 | 1 | yes (`fixture4`) | partial | **Shipped** (`defined_names`, P2) |
 | Create/delete a defined name | 2 | 1 | 3 | 3 | 3 | yes | no | **P2** |
 
 Defined names already survive round-trip (`0.10.0-C` slice 3, delete-gated passthrough) —
-confirmed preserved, but there is no Python-visible representation of them at all (not
-even internal to `Vm` as a queryable structure; they live purely as passthrough XML
-today). Reading requires actually parsing `<definedNames>` into a real internal
-structure for the first time — real, if modest, new work, hence P2 not P1.
+confirmed preserved, but there was no Python-visible representation of them at all (not
+even internal to `Vm` as a queryable structure; they lived purely as passthrough XML).
+Reading required actually parsing `<definedNames>` into a real internal structure for the
+first time — genuinely as modest as this row predicted: a new `reader::xlsx_defined_names`
+streaming parser, modeled directly on the existing `xlsx_shared_strings` pattern (same
+crate, same technique, no new parsing infrastructure). Deliberately read-only and
+deliberately unresolved — returns each name's raw formula text (e.g. `"Sheet1!$A$1:$A$3"`)
+rather than a resolved `(sheet, address)` tuple, since elixcee's formula engine has no
+cross-sheet reference syntax to resolve that text against, and real XLSX additionally
+allows a sheet-scoped (`localSheetId`) name to shadow a workbook-scoped one of the same
+name, which a flat map can't represent anyway — see "Implementation notes for P2:
+defined_names" below for the full account. Create/delete remains P2: a real write path
+into `<definedNames>` (rather than reading the existing passthrough blob) is a different,
+larger piece of work not attempted this round.
 
 ## 8. Tables / AutoFilter / sorting
 
@@ -317,20 +327,29 @@ reproposed later without this context.
    list it reuses — see "Implementation notes for P2: copy_sheet" below for the one design
    decision worth disclosing (appending rather than positioning next to the source, to
    avoid a positional `<definedName>`-staleness risk).
-6. **P2, remaining**: sheet visibility (category 1's other row — zero existing
+6. **P2, third slice (shipped)**: `defined_names` read-only (category 7). Genuinely as
+   modest as this table's own row predicted — a new streaming parser modeled directly on
+   the existing `xlsx_shared_strings` pattern, no new parsing infrastructure. Deliberately
+   read-only and deliberately unresolved (raw formula text, not a resolved sheet+address) —
+   see "Implementation notes for P2: defined_names" below.
+7. **P2, remaining**: sheet visibility (category 1's other row — zero existing
    representation anywhere, real new surface, unlike `copy_sheet`), row height/column width
    (category 3's other row — no internal representation at all, real new surface, unlike
    hidden row/col), number-format-only writing (category 5, the narrowest possible slice of
-   the style engine), defined-name read/write (category 7), Python-native AutoFilter
-   (category 8 — confirmed to need the same `Stmt::RangeAutoFilter`-extraction treatment
-   `sort_range` did, plus its own signature-design decision since `field`/`criteria1` are
-   VBA `Expr` AST nodes, not plain values — don't take its "thin wrapper" framing at face
-   value, the same optimism this doc's table showed for `rename_sheet`/`sort_range`/
-   hidden-row-write before each one turned out to need more than glue), hyperlink
-   read/write (category 10).
-7. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
+   the style engine), defined-name create/delete (category 7's other row — a real write
+   path into `<definedNames>`, different and larger than the read-only slice just shipped),
+   Python-native AutoFilter (category 8 — confirmed to need the same
+   `Stmt::RangeAutoFilter`-extraction treatment `sort_range` did, plus its own
+   signature-design decision since `field`/`criteria1` are VBA `Expr` AST nodes, not plain
+   values — don't take its "thin wrapper" framing at face value, the same optimism this
+   doc's table showed for `rename_sheet`/`sort_range`/hidden-row-write before each one
+   turned out to need more than glue), hyperlink read/write (category 10 — confirmed to
+   need two separate pieces of new work, not one: parsing `<hyperlink>` elements into a
+   queryable structure AND joining `r:id`-backed ones against the sheet's own `.rels` file,
+   a lookup that today only happens ad hoc for survival-checking).
+8. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
    protection exposure (each needs its own follow-up design decision, noted above).
-8. **Not planned**: full style-engine writing, named styles, table/data-validation/
+9. **Not planned**: full style-engine writing, named styles, table/data-validation/
    conditional-formatting *creation*, chart/image authoring, outline/grouping, streaming
    modes, and a wrapper `Cell` object model — each either fights this project's own hard
    gates (no writer code without fixture evidence), fights its product identity (VBA
@@ -610,3 +629,51 @@ previously exercised by a differential test against a real multi-sheet fixture. 
 here — changing an existing, unversioned method's ordering contract is out of scope for a
 sheet-copy feature and could be a breaking change for any existing caller relying on
 alphabetical order. Recorded so it isn't rediscovered as a surprise later.
+
+---
+
+## Implementation notes for P2: defined_names
+
+Gaps and deliberate scope boundaries discovered while implementing `defined_names`,
+disclosed here rather than silently absorbed or fixed as a side effect of an unrelated
+feature:
+
+**Confirmed before writing any code: `Vm.named_ranges` is NOT a loaded file's defined
+names.** It's a completely separate table, populated only by the VBA runtime statement
+`Range(addr).Name = "x"` (`Stmt::RangeName`) and consulted only by `resolve_range_addr`/
+`resolve_multi_area_addr` to expand an active-sheet-only address string during macro
+execution. `populate_from_sheets` never touches it. Worth stating plainly since it would
+have been an easy, wrong assumption to reuse it — "read defined names" turned out to be
+genuinely zero reused work, not partially done, matching this table's own "partial"
+primitive-reuse rating for the right reason (the passthrough machinery is reusable, the
+resolution table is not).
+
+**`<definedNames>` had no queryable in-memory representation anywhere — only a raw,
+opaque XML blob carried from source to output by `save_xlsx_impl`'s own passthrough
+logic (`OpaqueWorkbookFragments`).** That passthrough logic doesn't even live on `Vm`
+between load and save: the raw `xl/workbook.xml` text is re-read from the source file
+path at *save* time (`reader::read_raw_zip_entries`), not cached anywhere after
+`load_workbook_file` returns. `Vm::defined_names()` follows the same re-read-on-demand
+pattern rather than adding a new eagerly-populated `Vm` field — it's a pure reporting
+view of what the file currently says, re-derived from `Vm.loaded_workbook_path` (already
+existed, used for the in-place-save feature) each call. This means it surfaces a `ValueError`
+if the source file is no longer readable (moved/deleted after loading) rather than
+silently reporting `{}` — a genuinely different failure mode from "no workbook loaded at
+all," which does return `{}`.
+
+**Deliberately does not resolve a defined name's text into a `(sheet, address)` tuple.**
+A `<definedName>`'s TEXT is a sheet-qualified reference like `Sheet1!$F$5` — elixcee's
+formula engine has no cross-sheet reference syntax (`=Sheet2!A1`) anywhere today, and there
+is no existing "split sheet-name!address" parser to reuse. Writing one from scratch for
+this feature alone was judged real, separable new work, not folded in here. Returning the
+raw text (matching openpyxl's own `wb.defined_names[name].value`, confirmed via a
+differential test against the real fixture) is a smaller, honestly-scoped read.
+
+**Sheet-scoped and workbook-scoped names both flatten into the same map, undistinguished.**
+Real XLSX allows a `localSheetId`-scoped (sheet-local) name to shadow a workbook-scoped
+name of the same string — a flat `HashMap<String, String>` cannot represent that collision
+at all, let alone resolve it correctly. `xlsx_defined_names` (the reader-level parser)
+collects both kinds under their own `name` attribute in document order; `Vm::defined_names`
+collapses them with whichever the reader encounters LAST silently winning. Disclosed, not
+solved — no fixture in this repo exercises the collision case, so there's no concrete
+shape to design around yet.

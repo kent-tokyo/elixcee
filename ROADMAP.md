@@ -102,6 +102,24 @@ see the gap-audit doc's "Implementation notes for P2: copy_sheet" for the full a
 including a pre-existing, unrelated `sheet_names()` ordering quirk discovered while testing
 (item 24 below). Does not copy sheet protection status. No version bump this round.
 
+**P2, third slice: `defined_names` (read-only), merged to `master`, not yet released.**
+The third item off `docs/openpyxl-gap-audit.md`'s P2 list (category 7). One new Python
+method: `defined_names() -> dict[str, str]`, reading every `<definedName
+name="...">TEXT</definedName>` in the loaded workbook's `xl/workbook.xml` into `{name:
+raw_text}`. Confirmed before writing any code that `Vm.named_ranges` (VBA's own
+`Range(addr).Name = "x"` runtime table) is a completely separate thing, never populated
+from a loaded file — reading defined names from a file needed a genuinely new parser
+(`reader::xlsx_defined_names`), modeled directly on the existing `xlsx_shared_strings`
+streaming pattern, no new parsing infrastructure. Deliberately read-only (no create/
+delete) and deliberately returns each name's raw formula text rather than a resolved
+sheet+address, since elixcee's formula engine has no cross-sheet reference syntax to
+resolve that text against — see the gap-audit doc's "Implementation notes for P2:
+defined_names" for the full account, including why sheet-scoped and workbook-scoped names
+collapse into one flat map with a silent last-one-wins collision rule. Re-reads the
+source file's ZIP on every call rather than caching, so it can raise `ValueError` if the
+source file is no longer readable after loading (distinct from the legitimate `{}` for no
+workbook loaded at all). No version bump this round.
+
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
 `arr(1,2)`, `UBound(arr, dimension)` honors its argument for real, `ReDim Preserve` enforces
