@@ -146,10 +146,26 @@ neither ships until each clears its own real-Excel check, done by hand against r
   text — a formula referencing it and `ISERROR()` both need to see it as an error; and the
   type survives a save → reopen → save cycle, not just the first save.
 
-Whether the next release is `0.10.2` (if `0.10.0-D`'s real-Excel pass turns up only small
-fixes) or `0.11.0` (if it lands as a real new capability, table/drawing/hyperlink
+Whether the next release is `0.11.1` (if `0.10.0-D`'s real-Excel pass turns up only small
+fixes) or `0.12.0` (if it lands as a real new capability, table/drawing/hyperlink
 preservation formally added) is an open question until that verification is done — not
-decided in advance.
+decided in advance. (`0.11.0` itself already shipped, for the unrelated GitHub #2–#8 fix
+round above — cut from a `release-0.10.0`-branch cherry-pick of just that work, not from
+`master`'s tip, precisely so it wouldn't drag in this still-unverified `0.10.0-D`/`t="e"`
+work by accident.)
+
+**Packaging note for whoever ships that release**: `master`'s tip cannot be
+`cargo publish`ed as-is today — `t="e"`'s `ExcelError::FromStr`/`biff_code()` (added to
+`crates/elixcee-types`) were never accompanied by an `elixcee-types` version bump, so the
+copy live on crates.io (`0.3.0`) doesn't have them, and `cargo publish -p elixcee`'s own
+verification build (which resolves `elixcee-types` from the registry, not the local
+workspace path) fails with `error[E0599]: no variant, associated function, or constant
+named 'from_str' found for enum 'ExcelError'`. Confirmed live via the crates.io API
+during `0.11.0`'s release. Bump `crates/elixcee-types/Cargo.toml` and the root
+`Cargo.toml`'s dependency pin to `0.3.1` and publish `elixcee-types` first, in the same
+`crates-publish.yml` run, before this milestone's own release — `scripts/check-versions.sh`
+does not currently catch this class of gap (it doesn't check `elixcee-types`'s version at
+all), so this needs a human/agent to remember it explicitly rather than relying on CI.
 
 ## Known gaps
 

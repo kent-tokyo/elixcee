@@ -24,6 +24,22 @@ if [[ "$cargo_version" != "$pyproject_version" ]]; then
   exit 1
 fi
 
+# Root Cargo.toml pins an exact elixcee-types version (cargo publish's own
+# verification build resolves it from the registry, not the local workspace path —
+# see ROADMAP.md's "Packaging note" for the release this caught). Catches the pin
+# drifting from the workspace member's actual version; doesn't catch the member's
+# code changing without its version being bumped at all.
+types_toml="crates/elixcee-types/Cargo.toml"
+if [[ -f "$types_toml" ]]; then
+  types_version=$(grep -m1 '^version = "' "$types_toml" | sed -E 's/^version = "(.*)"$/\1/')
+  pinned_types_version=$(grep -m1 'elixcee-types = ' Cargo.toml | sed -E 's/.*version = "([^"]*)".*/\1/')
+
+  if [[ -n "$pinned_types_version" && "$types_version" != "$pinned_types_version" ]]; then
+    echo "check-versions: elixcee-types version mismatch — crates/elixcee-types/Cargo.toml version=$types_version, root Cargo.toml pins version=$pinned_types_version" >&2
+    exit 1
+  fi
+fi
+
 # @elixcee/xlsx versions independently of the root crate (see ROADMAP.md), so this
 # doesn't cross-check its version against Cargo.toml/pyproject.toml — it only guards
 # the one concrete drift this project has actually hit: "private" flipped to false
