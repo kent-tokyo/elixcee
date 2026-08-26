@@ -131,6 +131,63 @@ class Vm:
         """Return all non-empty cells in the named sheet as ``{(row, col): value}``."""
         ...
 
+    # ── Bulk worksheet range/row access ──────────────────────────────────────────
+    #
+    # A Python-native API for common row/range operations — not a claim of
+    # openpyxl compatibility (different return-type contract, no ``Cell``
+    # objects). All methods take *sheet* as a keyword; ``None`` (the default)
+    # means the active sheet, and passing an explicit sheet name never changes
+    # which sheet is active.
+
+    def get_range(self, addr: str, sheet: str | None = None) -> list[list[Any]]:
+        """Read a rectangular range (e.g. ``"A1:C5"``), 1-based A1 notation.
+
+        Returns a row-major nested list, ``None`` for empty cells — same
+        per-cell typing as :meth:`get_cell`.
+
+        Parameters
+        ----------
+        addr:
+            A single-area A1 range, e.g. ``"A1:C5"`` or a bare cell like ``"B2"``.
+        sheet:
+            Sheet to read from. Defaults to the active sheet.
+
+        Raises ``ValueError`` on a multi-area, malformed, or reversed address,
+        or an unknown *sheet* name.
+        """
+        ...
+
+    def set_range(
+        self, addr: str, values: list[list[Any]], sheet: str | None = None
+    ) -> None:
+        """Write a rectangular range (e.g. ``"A1:C2"``), 1-based A1 notation.
+
+        *values* must be a strictly rectangular (non-ragged) nested sequence
+        whose shape exactly matches *addr*'s row×col shape. ``None`` means an
+        empty cell. A string value starting with ``"="`` is stored literally,
+        never promoted to a formula — use :meth:`set_cell_formula`/
+        :meth:`set_cell_formula_batch` for that. Every value is converted and
+        the shape is checked **before** any cell is touched: a validation
+        failure leaves every existing cell unchanged.
+
+        Writing into a non-anchor cell of a merged range, or into a protected
+        sheet, is **not** blocked — this matches :meth:`set_cell`'s existing
+        behavior.
+
+        Parameters
+        ----------
+        addr:
+            A single-area A1 range, e.g. ``"A1:C2"``.
+        values:
+            A rectangular nested sequence matching *addr*'s shape.
+        sheet:
+            Sheet to write to. Defaults to the active sheet.
+
+        Raises ``ValueError`` on a bad address, ragged/mismatched shape, or an
+        unknown *sheet* name; ``TypeError`` on an unsupported value type.
+        """
+        ...
+
     # ── Variables ──────────────────────────────────────────────────────────────
 
     def variables(self) -> dict[str, Any]:

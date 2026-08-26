@@ -1080,6 +1080,125 @@ impl Vm {
         self.sheets.get(&name.to_lowercase())
     }
 
+    /// Resolves `sheet` (`None` = active sheet) to its internal lowercase key,
+    /// for the Python-binding bulk range/row API (`get_range`/`set_range`/
+    /// `append_row`/`iter_rows`/`max_row`/`max_column`/`calculate_dimension`).
+    /// Deliberately does not reuse `require_sheet_exists` (used by
+    /// `delete_sheet`/VBA sheet resolution): that one is `&mut self` and
+    /// records `last_resolution_failure` for the `diagnose` subcommand's
+    /// VBA-side diagnostics -- a side channel Python callers never read.
+    /// `get_sheet_cells` alone isn't enough either: it returns `None` silently
+    /// on an unknown name, and every caller here needs an explicit error.
+    pub fn resolve_sheet_key(&self, sheet: Option<&str>) -> Result<String, String> {
+        match sheet {
+            None => Ok(self.active_sheet.clone()),
+            Some(name) => {
+                let key = name.to_lowercase();
+                if self.sheets.contains_key(&key) {
+                    Ok(key)
+                } else {
+                    Err(format!("Sheet '{name}' not found"))
+                }
+            }
+        }
+    }
+
+    /// The 1-based inclusive bounding box of every non-`Empty` cell in `key`
+    /// (an already-resolved, lowercased sheet key) -- `None` if the sheet has
+    /// no non-empty cells at all. Follows `cells()`/`get_sheet()`'s
+    /// Empty-exclusion convention (the one actually surfaced to Python via
+    /// `get_range`/`iter_rows`/`max_row`/`max_column`/`calculate_dimension`),
+    /// not `cells_df`'s divergent one (`src/lib.rs`'s `cells_df` includes
+    /// `Variant::Empty` map entries in its own max) -- a pre-existing,
+    /// disclosed inconsistency this doesn't reconcile; see
+    /// docs/openpyxl-gap-audit.md.
+    ///
+    /// NOTE: this excludes `Variant::Empty` only, not `Variant::Null` -- a
+    /// `Null`-valued cell (VBA `Null`, distinct from an uninitialized
+    /// `Empty`) counts as "non-empty" here and inflates the bounding box,
+    /// even though it also crosses into Python as `None` (see
+    /// `variant_to_py`). This exactly matches `cells()`/`get_sheet()`'s
+    /// existing behavior; it is not a new inconsistency introduced here, but
+    /// it is a real, disclosed surprise -- see the gap-audit doc.
+    pub fn sheet_used_range(&self, key: &str) -> Option<((u32, u32), (u32, u32))> {
+        let cells = self.get_sheet_cells(key)?;
+        let mut bounds: Option<((u32, u32), (u32, u32))> = None;
+        for (&(r, c), content) in cells {
+            if matches!(content.value, Variant::Empty) {
+                continue;
+            }
+            bounds = Some(match bounds {
+                None => ((r, c), (r, c)),
+                Some(((r1, c1), (r2, c2))) => ((r1.min(r), c1.min(c)), (r2.max(r), c2.max(c))),
+            });
+        }
+        bounds
+    }
+
+    /// Reads a rectangular region (1-based inclusive `r1..=r2`, `c1..=c2`) of
+    /// `key` as a row-major grid, `Variant::Empty` for any cell with no
+    /// `CellContent` entry. No validation of `key`'s existence (callers
+    /// resolve via `resolve_sheet_key` first) or of the rect's shape (callers
+    /// guarantee `r1<=r2`, `c1<=c2`, both >=1) -- a pure mechanical read,
+    /// matching the established inline-nested-loop style used throughout this
+    /// file and `src/formula/eval.rs` rather than a new range-iteration
+    /// abstraction.
+    pub fn read_rect(&self, key: &str, r1: u32, c1: u32, r2: u32, c2: u32) -> Vec<Vec<Variant>> {
+        let empty = HashMap::new();
+        let cells = self.get_sheet_cells(key).unwrap_or(&empty);
+        (r1..=r2)
+            .map(|r| {
+                (c1..=c2)
+                    .map(|c| {
+                        cells
+                            .get(&(r, c))
+                            .map(|ct| ct.value.clone())
+                            .unwrap_or(Variant::Empty)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Writes `values` (already validated by the caller: rectangular, exact
+    /// target shape, every element already a `Variant`) at `top_left` in
+    /// `key`. No shape check here -- the PyO3 glue (`set_range`/`append_row`
+    /// in `src/lib.rs`) validates the *entire* input against the target shape
+    /// and converts every value before calling this, so by the time this runs
+    /// there is nothing left that can fail partway through.
+    ///
+    /// Deliberately does NOT call `check_sheet_not_protected` and does NOT
+    /// consult `merged_ranges` -- matches `PyVm::set_cell`'s existing,
+    /// equally unchecked behavior. Sheet protection is a VBA-statement
+    /// concept today (14 call sites, all inside this file's statement
+    /// handlers; `protected_sheets` isn't even reachable from `src/lib.rs`).
+    /// Merge-conflict checking (`check_merge_conflicts`) exists only on the
+    /// VBA Copy/Paste path, matching real Excel's own distinction between
+    /// Paste's stricter semantics and plain `.Value=` assignment, which
+    /// really does store a value on a non-anchor merged cell (just never
+    /// displays it). Adding either restriction here would be a new
+    /// Python-only behavior with no VBA-side precedent -- see
+    /// docs/openpyxl-gap-audit.md.
+    ///
+    /// Never touches `self.active_sheet`.
+    pub fn write_rect(&mut self, key: &str, top_left: (u32, u32), values: &[Vec<Variant>]) {
+        let (r1, c1) = top_left;
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
+        for (i, row) in values.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                cells.insert(
+                    (r1 + i as u32, c1 + j as u32),
+                    CellContent {
+                        formula: None,
+                        value: v.clone(),
+                    },
+                );
+            }
+        }
+    }
+
     /// `true` iff `requested` identifies the one workbook `load_workbook_file`
     /// loaded (by name, case-insensitively, or by the numeric index `1` —
     /// elixcee never has more than one workbook open, so any other index is
@@ -10944,5 +11063,217 @@ mod tests {
         vm.run_sub_multi(&modules, "Main").unwrap();
         assert_eq!(vm.variables["x"], Variant::Integer(42));
         assert_eq!(vm.variables["y"], Variant::Integer(1));
+    }
+
+    // ── R1: bulk worksheet range/row API core (resolve_sheet_key,
+    // sheet_used_range, next_append_row, read_rect, write_rect,
+    // iter_rows_values) ─────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_sheet_key_none_returns_the_active_sheet() {
+        let vm = Vm::new();
+        assert_eq!(vm.resolve_sheet_key(None).unwrap(), "sheet1");
+    }
+
+    #[test]
+    fn resolve_sheet_key_looks_up_case_insensitively() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet2");
+        assert_eq!(vm.resolve_sheet_key(Some("SHEET2")).unwrap(), "sheet2");
+        assert_eq!(vm.resolve_sheet_key(Some("sheet2")).unwrap(), "sheet2");
+        assert_eq!(vm.resolve_sheet_key(Some("Sheet2")).unwrap(), "sheet2");
+    }
+
+    #[test]
+    fn resolve_sheet_key_errors_on_an_unknown_name() {
+        let vm = Vm::new();
+        let err = vm.resolve_sheet_key(Some("Typo")).unwrap_err();
+        assert!(err.contains("Typo"), "{err:?}");
+    }
+
+    #[test]
+    fn sheet_used_range_is_none_on_an_empty_sheet() {
+        let vm = Vm::new();
+        assert_eq!(vm.sheet_used_range("sheet1"), None);
+    }
+
+    #[test]
+    fn sheet_used_range_a_single_cell_is_both_corners() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (3, 3),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        assert_eq!(vm.sheet_used_range("sheet1"), Some(((3, 3), (3, 3))));
+    }
+
+    #[test]
+    fn sheet_used_range_is_the_true_bounding_box_not_anchored_at_1_1() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (3, 3),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        vm.cells_mut().insert(
+            (7, 5),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(2),
+            },
+        );
+        assert_eq!(vm.sheet_used_range("sheet1"), Some(((3, 3), (7, 5))));
+    }
+
+    #[test]
+    fn sheet_used_range_handles_a_sparse_sheet() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        vm.cells_mut().insert(
+            (50, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(2),
+            },
+        );
+        assert_eq!(vm.sheet_used_range("sheet1"), Some(((1, 1), (50, 1))));
+    }
+
+    #[test]
+    fn sheet_used_range_counts_null_but_not_empty() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (10, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Null,
+            },
+        );
+        vm.cells_mut().insert(
+            (99, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Empty,
+            },
+        );
+        assert_eq!(vm.sheet_used_range("sheet1"), Some(((10, 1), (10, 1))));
+        assert_eq!(vm.read_rect("sheet1", 10, 1, 10, 1)[0][0], Variant::Null);
+    }
+
+    #[test]
+    fn read_rect_returns_empty_for_gaps() {
+        let vm = Vm::new();
+        let grid = vm.read_rect("sheet1", 1, 1, 2, 2);
+        assert_eq!(
+            grid,
+            vec![
+                vec![Variant::Empty, Variant::Empty],
+                vec![Variant::Empty, Variant::Empty],
+            ]
+        );
+    }
+
+    #[test]
+    fn read_rect_preserves_every_variant_kind() {
+        let mut vm = Vm::new();
+        let values = [
+            (1, 1, Variant::Integer(42)),
+            (1, 2, Variant::Float(1.5)),
+            (1, 3, Variant::Str("hi".into())),
+            (1, 4, Variant::Boolean(true)),
+            (1, 5, Variant::Date(45366)),
+            (1, 6, Variant::Error(ExcelError::DivZero)),
+        ];
+        for &(r, c, ref v) in &values {
+            vm.cells_mut().insert(
+                (r, c),
+                CellContent {
+                    formula: None,
+                    value: v.clone(),
+                },
+            );
+        }
+        let grid = vm.read_rect("sheet1", 1, 1, 1, 6);
+        for (i, (_, _, v)) in values.iter().enumerate() {
+            assert_eq!(&grid[0][i], v);
+        }
+    }
+
+    #[test]
+    fn read_rect_on_a_formula_cell_returns_its_evaluated_value() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=1+2".to_string()),
+                value: Variant::Integer(3),
+            },
+        );
+        assert_eq!(
+            vm.read_rect("sheet1", 1, 1, 1, 1)[0][0],
+            Variant::Integer(3)
+        );
+    }
+
+    #[test]
+    fn write_rect_writes_the_exact_grid_at_the_exact_offset() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (2, 3),
+            &[
+                vec![Variant::Integer(1), Variant::Integer(2)],
+                vec![Variant::Integer(3), Variant::Integer(4)],
+            ],
+        );
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(2));
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(3));
+        assert_eq!(vm.get_cell(3, 4), Variant::Integer(4));
+    }
+
+    #[test]
+    fn write_rect_on_a_non_active_sheet_does_not_change_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet2");
+        vm.write_rect("sheet2", (1, 1), &[vec![Variant::Integer(9)]]);
+        assert_eq!(vm.active_sheet, "sheet1");
+        let written = vm.get_sheet_cells("sheet2").unwrap().get(&(1, 1)).unwrap();
+        assert_eq!(written.value, Variant::Integer(9));
+        assert_eq!(written.formula, None);
+    }
+
+    #[test]
+    fn write_rect_into_a_non_anchor_merged_cell_does_not_error() {
+        // B1:D1 merged; writing at C1 (a covered, non-anchor cell) must
+        // succeed and store the value -- matches real Excel's own plain
+        // `.Value=` behavior and PyVm::set_cell's existing lack of any merge
+        // check, per docs/openpyxl-gap-audit.md's design note.
+        let mut vm = vm_with_merge("sheet1", ((1, 2), (1, 4)));
+        vm.write_rect("sheet1", (1, 3), &[vec![Variant::Integer(5)]]);
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(5));
+    }
+
+    #[test]
+    fn write_rect_into_a_protected_sheet_does_not_error() {
+        // No VBA construct reachable from here that both protects a sheet
+        // AND leaves it selectable for a raw write_rect call, so this
+        // injects `protected_sheets` directly, the same way merge/hidden-row
+        // tests inject state with no VBA syntax to create it.
+        let mut vm = Vm::new();
+        vm.protected_sheets.insert("sheet1".to_string());
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
     }
 }

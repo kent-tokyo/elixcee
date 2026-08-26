@@ -181,6 +181,155 @@ fn py_to_variant(obj: &Bound<'_, PyAny>) -> PyResult<Variant> {
     ))
 }
 
+// ── Bulk worksheet range/row API (R1) — address/shape validation ───────────────
+//
+// These two functions are deliberately NOT `#[cfg(feature = "python")]` — they
+// take no pyo3 types at all, and `cargo check --features python --lib` (the
+// only CI step that type-checks the gated PyVm code below) never *runs*
+// anything, so keeping this pure validation logic ungated is what gives it
+// any automated test coverage at all (via plain `cargo test --workspace`).
+
+/// Validates and parses a single-area A1 range address for the bulk-range
+/// Python API (`get_range`/`set_range`). Deliberately NOT a new A1 parser —
+/// delegates to `crate::types::parse_range_addr` for the actual grammar.
+/// Adds only, as explicit errors instead of the shared parser's silent
+/// `None`:
+///   - `$`-stripping before delegating (Excel absolute-reference syntax;
+///     `elixcee-types`'s column-letter parsing does an unchecked `u32`
+///     subtraction that underflows on a leading `$` today — a real,
+///     many-call-site, pre-existing gap in the shared parser that this
+///     closes ONLY for calls that go through this wrapper, not
+///     project-wide; see docs/openpyxl-gap-audit.md),
+///   - multi-area (`,`-containing) rejection,
+///   - reversed-range rejection (`start > end`), matching the precedent
+///     `reader.rs`'s own `parse_dimension_ref` already sets for dimension
+///     refs,
+///   - row/col `0` rejection (`parse_cell_addr("A0")` succeeds as `(0,1)`
+///     today — another disclosed, out-of-scope shared-parser gap).
+///
+/// Both this and `check_grid_shape` below are only ever called from the
+/// `#[cfg(feature = "python")]` `PyVm` methods, but are deliberately left
+/// ungated themselves (see the section comment above) — a plain,
+/// feature-less build has no caller for them outside `#[cfg(test)]`, hence
+/// the narrow, conditional `dead_code` allow rather than a broad one.
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
+type RangeBounds = ((u32, u32), (u32, u32));
+
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
+fn validate_range_addr(addr: &str) -> Result<RangeBounds, String> {
+    if addr.contains(',') {
+        return Err(format!("multi-area address not supported: {addr:?}"));
+    }
+    let stripped = addr.replace('$', "");
+    let (start, end) = crate::types::parse_range_addr(&stripped)
+        .ok_or_else(|| format!("invalid range address: {addr:?}"))?;
+    if start.0 == 0 || start.1 == 0 || end.0 == 0 || end.1 == 0 {
+        return Err(format!(
+            "invalid range address (row/column must be >= 1): {addr:?}"
+        ));
+    }
+    if start.0 > end.0 || start.1 > end.1 {
+        return Err(format!("reversed range address: {addr:?}"));
+    }
+    Ok((start, end))
+}
+
+/// Validates a Python-supplied nested-list grid's shape against `set_range`'s
+/// target rect, given each already-extracted outer-list row's length in
+/// order. Two distinct failure messages: ragged input (row lengths disagree
+/// with each other) vs. shape mismatch (rectangular, but wrong size) — both
+/// surfaced as `ValueError` at the call site. Never indexes into the
+/// original values, only their pre-collected lengths, so it can't panic on
+/// empty input (`row_lens == []`: no ragged check fires, falls straight to
+/// the 0x0-vs-expected shape-mismatch branch).
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
+fn check_grid_shape(expected: (u32, u32), row_lens: &[usize]) -> Result<(), String> {
+    if let Some(&first) = row_lens.first()
+        && row_lens.iter().any(|&n| n != first)
+    {
+        return Err(format!(
+            "ragged input: row lengths must all be equal, got {row_lens:?}"
+        ));
+    }
+    let (expected_rows, expected_cols) = (expected.0 as usize, expected.1 as usize);
+    let actual_rows = row_lens.len();
+    let actual_cols = row_lens.first().copied().unwrap_or(0);
+    if actual_rows != expected_rows || actual_cols != expected_cols {
+        return Err(format!(
+            "shape mismatch: range expects {expected_rows}x{expected_cols}, got {actual_rows}x{actual_cols}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod bulk_range_validation_tests {
+    use super::*;
+
+    #[test]
+    fn validate_range_addr_accepts_a_normal_range() {
+        assert_eq!(validate_range_addr("A1:C5").unwrap(), ((1, 1), (5, 3)));
+    }
+
+    #[test]
+    fn validate_range_addr_accepts_a_bare_single_cell() {
+        assert_eq!(validate_range_addr("B2").unwrap(), ((2, 2), (2, 2)));
+    }
+
+    #[test]
+    fn validate_range_addr_strips_dollar_signs() {
+        assert_eq!(validate_range_addr("$A$1:$C$5").unwrap(), ((1, 1), (5, 3)));
+    }
+
+    #[test]
+    fn validate_range_addr_rejects_multi_area() {
+        let err = validate_range_addr("A1:B2,D1:E2").unwrap_err();
+        assert!(err.contains("multi-area"), "{err:?}");
+    }
+
+    #[test]
+    fn validate_range_addr_rejects_malformed_input() {
+        assert!(validate_range_addr("!!").is_err());
+        assert!(validate_range_addr("").is_err());
+    }
+
+    #[test]
+    fn validate_range_addr_rejects_a_reversed_range() {
+        let err = validate_range_addr("C3:A1").unwrap_err();
+        assert!(err.contains("reversed"), "{err:?}");
+    }
+
+    #[test]
+    fn validate_range_addr_rejects_row_or_col_zero() {
+        assert!(validate_range_addr("A0").is_err());
+        assert!(validate_range_addr("A0:B1").is_err());
+    }
+
+    #[test]
+    fn check_grid_shape_accepts_an_exact_match() {
+        check_grid_shape((2, 3), &[3, 3]).unwrap();
+    }
+
+    #[test]
+    fn check_grid_shape_rejects_ragged_input() {
+        let err = check_grid_shape((2, 3), &[3, 2]).unwrap_err();
+        assert!(err.contains("ragged"), "{err:?}");
+    }
+
+    #[test]
+    fn check_grid_shape_rejects_a_shape_mismatch() {
+        let err = check_grid_shape((2, 3), &[2, 2]).unwrap_err();
+        assert!(err.contains("2x3"), "{err:?}");
+        assert!(err.contains("2x2"), "{err:?}");
+    }
+
+    #[test]
+    fn check_grid_shape_on_empty_input_does_not_panic() {
+        let err = check_grid_shape((2, 3), &[]).unwrap_err();
+        assert!(err.contains("0x0"), "{err:?}");
+    }
+}
+
 // ── PyVm class ────────────────────────────────────────────────────────────────
 
 /// VBA execution engine. Create one, pre-populate cells with ``set_cell``,
@@ -389,6 +538,107 @@ impl PyVm {
             .call((rows_list,), Some(&kwargs))
             .map(|df| df.into_any().unbind())
     }
+
+    /// Read a rectangular range (e.g. ``"A1:C5"``), 1-based A1 notation.
+    ///
+    /// Returns a row-major nested list, ``None`` for empty cells — same
+    /// per-cell typing as ``get_cell``. Multi-area addresses (``"A1:B2,D1:E2"``)
+    /// and malformed/reversed addresses raise ``ValueError``.
+    ///
+    /// Parameters
+    /// ----------
+    /// addr:
+    ///     A single-area A1 range, e.g. ``"A1:C5"`` or a bare cell like ``"B2"``.
+    /// sheet:
+    ///     Sheet to read from. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (addr, sheet = None))]
+    fn get_range(&self, py: Python<'_>, addr: &str, sheet: Option<&str>) -> PyResult<Py<PyAny>> {
+        let (start, end) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let grid = self.inner.read_rect(&key, start.0, start.1, end.0, end.1);
+        grid_to_py(py, &grid)
+    }
+
+    /// Write a rectangular range (e.g. ``"A1:C2"``), 1-based A1 notation.
+    ///
+    /// *values* must be a strictly rectangular (non-ragged) nested sequence
+    /// whose shape exactly matches *addr*'s row×col shape, or ``ValueError``
+    /// is raised naming both the expected and actual shape. ``None`` in the
+    /// input means an empty cell. A string value starting with ``"="`` is
+    /// stored literally, never promoted to a formula — use
+    /// ``set_cell_formula``/``set_cell_formula_batch`` for that. Every value
+    /// is converted and the shape is checked **before** any cell is
+    /// touched — a validation failure leaves every existing cell unchanged.
+    ///
+    /// Writing into a non-anchor cell of a merged range, or into a protected
+    /// sheet, is **not** blocked — this matches ``set_cell``'s existing
+    /// behavior (see docs/openpyxl-gap-audit.md for why).
+    ///
+    /// Parameters
+    /// ----------
+    /// addr:
+    ///     A single-area A1 range, e.g. ``"A1:C2"``.
+    /// values:
+    ///     A rectangular nested sequence matching *addr*'s shape.
+    /// sheet:
+    ///     Sheet to write to. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    #[pyo3(signature = (addr, values, sheet = None))]
+    fn set_range(
+        &mut self,
+        addr: &str,
+        values: &Bound<'_, PyAny>,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let (start, end) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+
+        // The whole grid is converted into a scratch buffer first -- nothing
+        // in `self.inner` is touched until every value has converted
+        // successfully AND the shape has been confirmed exact. This is what
+        // makes "no partial write on validation failure" structurally true,
+        // not just tested.
+        let mut grid: Vec<Vec<Variant>> = Vec::new();
+        let mut row_lens: Vec<usize> = Vec::new();
+        for row_obj in values.try_iter()? {
+            let mut row: Vec<Variant> = Vec::new();
+            for cell_obj in row_obj?.try_iter()? {
+                row.push(py_to_variant(&cell_obj?)?);
+            }
+            row_lens.push(row.len());
+            grid.push(row);
+        }
+        let expected = (end.0 - start.0 + 1, end.1 - start.1 + 1);
+        check_grid_shape(expected, &row_lens)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+
+        self.inner.write_rect(&key, start, &grid);
+        Ok(())
+    }
+}
+
+/// Shared row-major `Vec<Vec<Variant>>` -> Python nested-list conversion for
+/// `get_range`/`iter_rows`.
+#[cfg(feature = "python")]
+fn grid_to_py(py: Python<'_>, grid: &[Vec<Variant>]) -> PyResult<Py<PyAny>> {
+    let rows = pyo3::types::PyList::empty(py);
+    for row in grid {
+        let py_row = pyo3::types::PyList::empty(py);
+        for v in row {
+            py_row.append(variant_to_py(py, v))?;
+        }
+        rows.append(py_row)?;
+    }
+    Ok(rows.into_any().unbind())
 }
 
 // ── Module-level functions ────────────────────────────────────────────────────
