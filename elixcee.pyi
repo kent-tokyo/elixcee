@@ -119,6 +119,40 @@ class Vm:
         """Delete the sheet named *name*. Raises ``ValueError`` if it doesn't exist."""
         ...
 
+    def rename_sheet(self, old_name: str, new_name: str) -> None:
+        """Rename a sheet.
+
+        Renaming the active sheet is supported (it stays active under the new
+        name). Renaming a sheet to itself, or to a different casing of its
+        own name, succeeds.
+
+        Parameters
+        ----------
+        old_name:
+            The sheet's current name (case-insensitive).
+        new_name:
+            The new name.
+
+        Raises ``ValueError`` if *old_name* doesn't exist, *new_name* is empty
+        or whitespace-only, *new_name* (case-insensitively) already names a
+        *different* existing sheet, or the sheet is protected.
+        """
+        ...
+
+    def move_sheet(self, name: str, new_index: int) -> None:
+        """Move a sheet to an absolute 0-based position among the workbook's sheets.
+
+        Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative
+        offset), *new_index* here is an absolute target position (0 =
+        first), matching :meth:`set_sheet`'s own *index* convention.
+        Out-of-range values are clamped to the nearest end rather than
+        raising. Does not check sheet protection — real Excel's per-sheet
+        protection does not gate tab reordering.
+
+        Raises ``ValueError`` if *name* doesn't exist.
+        """
+        ...
+
     def active_sheet(self) -> str:
         """Return the name of the currently active sheet."""
         ...

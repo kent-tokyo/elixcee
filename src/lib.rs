@@ -457,6 +457,41 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Rename a sheet.
+    ///
+    /// Parameters
+    /// ----------
+    /// old_name:
+    ///     The sheet's current name (case-insensitive).
+    /// new_name:
+    ///     The new name. Renaming the active sheet is supported (it stays active
+    ///     under the new name). Renaming a sheet to itself, or to a different
+    ///     casing of its own name, succeeds.
+    ///
+    /// Raises ``ValueError`` if *old_name* doesn't exist, *new_name* is empty or
+    /// whitespace-only, *new_name* (case-insensitively) already names a *different*
+    /// existing sheet, or the sheet is protected.
+    fn rename_sheet(&mut self, old_name: &str, new_name: &str) -> PyResult<()> {
+        self.inner
+            .rename_sheet(old_name, new_name)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Move a sheet to an absolute 0-based position among the workbook's sheets.
+    ///
+    /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
+    /// *new_index* here is an absolute target position (0 = first), matching
+    /// ``set_sheet``'s own ``index`` convention. Out-of-range values are clamped to
+    /// the nearest end rather than raising. Does not check sheet protection --
+    /// real Excel's per-sheet protection does not gate tab reordering.
+    ///
+    /// Raises ``ValueError`` if *name* doesn't exist.
+    fn move_sheet(&mut self, name: &str, new_index: usize) -> PyResult<()> {
+        self.inner
+            .move_sheet(name, new_index)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Return the name of the currently active sheet.
     fn active_sheet(&self) -> &str {
         &self.inner.active_sheet
