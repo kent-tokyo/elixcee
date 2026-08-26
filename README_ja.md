@@ -452,6 +452,9 @@ print(vm.hidden_rows(sheet="Data"))  # 例: [5]
 # シートの複製
 vm.copy_sheet("Data", "Data Backup")
 
+# ワークブックレベルの名前付き範囲を読み取る
+print(vm.defined_names())  # 例: {"MyRange": "Sheet1!$A$1:$A$3"}
+
 # MsgBox の動作を制御
 vm = elixcee.Vm(on_msgbox="skip")   # MsgBox を無視（デフォルト）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
@@ -487,6 +490,7 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 | `vm.rename_sheet(old_name, new_name)` | シート名を変更する。 |
 | `vm.move_sheet(name, new_index)` | シートを絶対位置（0始まり）のタブ位置へ移動する。 |
 | `vm.copy_sheet(source_name, new_name)` | シートを複製する（セル・結合・非表示状態・スタイルを含む）。 |
+| `vm.defined_names()` | ワークブックレベルの名前付き範囲を `{name: 数式テキスト}` で返す。読み取り専用。 |
 | `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | 行の挿入・削除（値のみ -- 結合セルやスタイルはシフトされない）。 |
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | 列の挿入・削除（行と同じ制約）。 |
 | `vm.merged_cells(sheet=None)` | シートの結合範囲をA1形式の文字列リストで返す（例: `["B1:C1"]`）。 |

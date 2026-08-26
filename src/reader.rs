@@ -1079,6 +1079,48 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>)> {
     result
 }
 
+/// Returns `[(name, raw_text)]` in document order, from every
+/// `<definedName name="...">TEXT</definedName>` inside `xl/workbook.xml`'s
+/// `<definedNames>`. `raw_text` is the exact formula-text content (e.g.
+/// `"Sheet1!$A$1:$A$3"`), unresolved -- see `Vm::defined_names`'s own doc
+/// comment for why resolving it into a sheet+address isn't attempted.
+/// `localSheetId`-scoped (sheet-local) and workbook-scoped names are not
+/// distinguished here -- both are returned under their own `name` attribute
+/// exactly as written; `Vm::defined_names` is what decides how to flatten
+/// them into one map.
+pub(crate) fn xlsx_defined_names(xml: &str) -> Vec<(String, String)> {
+    let mut iter = XmlIter::new(xml);
+    let mut result = vec![];
+    let mut current_name: Option<String> = None;
+    let mut current_text = String::new();
+    while let Some(ev) = iter.next_ev() {
+        match &ev {
+            Ev::Open(tag, attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
+                if local == "definedName" {
+                    current_name = attr_get(attrs, "name").map(|s| s.to_string());
+                    current_text.clear();
+                }
+            }
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
+                if local == "definedName"
+                    && let Some(name) = current_name.take()
+                {
+                    result.push((name, current_text.clone()));
+                }
+            }
+            Ev::Text(text) => {
+                if current_name.is_some() {
+                    current_text.push_str(text);
+                }
+            }
+            Ev::SelfClose(_, _) => {}
+        }
+    }
+    result
+}
+
 /// Returns `{rId → target_path}` for worksheet relationships.
 fn xlsx_rels(xml: &str) -> HashMap<String, String> {
     let mut iter = XmlIter::new(xml);
@@ -1827,6 +1869,41 @@ mod sheet_id_tests {
         let sheets = ods_parse(xml);
         assert_eq!(sheets.len(), 2);
         assert!(sheets.iter().all(|s| s.sheet_id.is_none()));
+    }
+}
+
+#[cfg(test)]
+mod defined_names_tests {
+    use super::*;
+
+    #[test]
+    fn xlsx_defined_names_captures_name_and_raw_text() {
+        let xml = r#"<workbook><definedNames>
+<definedName name="MyRange">Sheet1!$A$1:$A$3</definedName>
+<definedName name="Other" localSheetId="0">Sheet1!$B$1</definedName>
+</definedNames></workbook>"#;
+        assert_eq!(
+            xlsx_defined_names(xml),
+            vec![
+                ("MyRange".to_string(), "Sheet1!$A$1:$A$3".to_string()),
+                ("Other".to_string(), "Sheet1!$B$1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn xlsx_defined_names_is_empty_when_absent() {
+        let xml = r#"<workbook><sheets><sheet name="Sheet1" r:id="rId1"/></sheets></workbook>"#;
+        assert_eq!(xlsx_defined_names(xml), Vec::<(String, String)>::new());
+    }
+
+    #[test]
+    fn xlsx_defined_names_xml_unescapes_the_text_content() {
+        let xml = r#"<definedNames><definedName name="X">Sheet1!$A$1 &amp; "text"</definedName></definedNames>"#;
+        assert_eq!(
+            xlsx_defined_names(xml),
+            vec![("X".to_string(), "Sheet1!$A$1 & \"text\"".to_string())]
+        );
     }
 }
 

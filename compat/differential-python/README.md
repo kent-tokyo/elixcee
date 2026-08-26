@@ -6,12 +6,12 @@ of the same fixtures — see `docs/openpyxl-gap-audit.md`:
 - `bulk_range_check.py`: the bulk worksheet range/row API (R1 + P1 remainder)
   — `get_range`/`set_range`/`append_row`/`iter_rows`/`iter_cols`/`max_row`/
   `max_column`/`calculate_dimension`.
-- `sheet_ops_check.py`: sheet management (P1 core 3 + remainder + P2 hidden
-  row/col + copy_sheet) — `rename_sheet`/`move_sheet`/`copy_sheet`/
-  `merged_cells`/`merge_cells`/`unmerge_cells`/`hidden_rows`/
-  `hidden_columns`/`set_row_hidden`/`set_column_hidden`, plus PyO3-layer
-  bound-check pins for `sort_range`/`merge_cells` (no openpyxl comparison
-  needed for those).
+- `sheet_ops_check.py`: sheet management + workbook metadata (P1 core 3 +
+  remainder + P2 hidden row/col + copy_sheet + defined_names) —
+  `rename_sheet`/`move_sheet`/`copy_sheet`/`merged_cells`/`merge_cells`/
+  `unmerge_cells`/`hidden_rows`/`hidden_columns`/`set_row_hidden`/
+  `set_column_hidden`/`defined_names`, plus PyO3-layer bound-check pins for
+  `sort_range`/`merge_cells` (no openpyxl comparison needed for those).
 
 This is the one place in the repo with a genuine, disclosed new dependency:
 `openpyxl` is a **test-only oracle**, never a runtime dependency of the

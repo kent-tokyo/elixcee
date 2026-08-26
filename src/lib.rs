@@ -517,6 +517,28 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Every workbook-level defined name as ``{name: raw_text}`` (e.g.
+    /// ``{"MyRange": "Sheet1!$A$1:$A$3"}``).
+    ///
+    /// *raw_text* is the exact formula-text content, **not** resolved into a
+    /// sheet+address — elixcee's formula engine has no cross-sheet reference
+    /// syntax (``=Sheet2!A1``) to resolve it against. Sheet-scoped and
+    /// workbook-scoped names are not distinguished; on a name collision
+    /// across scopes, whichever the reader encounters last wins.
+    ///
+    /// Independent of VBA's own ``Range(addr).Name = "x"`` runtime names —
+    /// this reads what the *loaded file* declares, not the VM's in-memory
+    /// named-range table.
+    ///
+    /// Returns ``{}`` if no workbook is loaded. Raises ``ValueError`` if a
+    /// workbook WAS loaded but its source file is no longer readable (this
+    /// method re-reads the file on every call rather than caching).
+    fn defined_names(&self) -> PyResult<std::collections::HashMap<String, String>> {
+        self.inner
+            .defined_names()
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Return the name of the currently active sheet.
     fn active_sheet(&self) -> &str {
         &self.inner.active_sheet

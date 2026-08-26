@@ -2927,6 +2927,47 @@ impl Vm {
         Ok(self.populate_from_sheets(sheets))
     }
 
+    /// Every `<definedName name="...">TEXT</definedName>` in the loaded
+    /// workbook's `xl/workbook.xml`, as `{name: raw_text}` (e.g.
+    /// `{"MyRange": "Sheet1!$A$1:$A$3"}`). `raw_text` is the exact
+    /// formula-text content, NOT resolved into a sheet+address -- elixcee's
+    /// formula engine has no cross-sheet reference syntax (`=Sheet2!A1`) to
+    /// resolve it against today, and real XLSX also allows a sheet-scoped
+    /// (`localSheetId="N"`) name to shadow a workbook-scoped one of the same
+    /// name, which a flat map can't represent either.
+    ///
+    /// Re-reads the source file's ZIP on every call (the same way
+    /// `save_xlsx_impl`'s own passthrough re-reads it at save time) rather
+    /// than caching at load time -- this is a pure reporting view of what
+    /// the FILE currently says, independent of `named_ranges` (a completely
+    /// separate table, populated only by VBA's `Range(addr).Name = "x"`
+    /// statement, never from a loaded file).
+    ///
+    /// Sheet-scoped and workbook-scoped names are not distinguished --
+    /// both flatten into the same map under their own `name` attribute,
+    /// with whichever the reader encounters LAST in document order winning
+    /// on a collision. Disclosed, not resolved (see
+    /// docs/openpyxl-gap-audit.md).
+    ///
+    /// Returns an empty map if no workbook is loaded (`Vm::new()`'s own
+    /// provisional state) -- NOT an error, which is reserved for a
+    /// workbook that WAS loaded but whose source file is no longer
+    /// readable.
+    pub fn defined_names(&self) -> Result<HashMap<String, String>, String> {
+        let Some(path) = self.loaded_workbook_path.as_deref() else {
+            return Ok(HashMap::new());
+        };
+        let raw_entries = reader::read_raw_zip_entries(path)
+            .map_err(|e| format!("cannot read '{}': {}", path, e))?;
+        let Some(xml) = raw_entries
+            .get("xl/workbook.xml")
+            .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+        else {
+            return Ok(HashMap::new());
+        };
+        Ok(reader::xlsx_defined_names(&xml).into_iter().collect())
+    }
+
     /// Populates this `Vm` from already-read sheet data and sets the active
     /// sheet to the first one. Split out from `load_workbook_file` so the
     /// mixed-case-sheet-name fix (see below) is unit-testable without going
@@ -10493,6 +10534,23 @@ mod tests {
         let err = vm
             .load_workbook_file("/nonexistent/path/does_not_exist.xlsx")
             .unwrap_err();
+        assert!(err.starts_with("cannot read"), "{:?}", err);
+    }
+
+    #[test]
+    fn defined_names_is_empty_when_no_workbook_is_loaded() {
+        let vm = Vm::new();
+        assert_eq!(vm.defined_names().unwrap(), HashMap::new());
+    }
+
+    #[test]
+    fn defined_names_errors_if_the_loaded_source_file_is_no_longer_readable() {
+        let mut vm = Vm::new();
+        // Simulates the source file having been deleted/moved after loading
+        // -- defined_names() re-reads the ZIP on every call rather than
+        // caching, so this must surface as a clear error, not a silent [].
+        vm.loaded_workbook_path = Some("/nonexistent/path/does_not_exist.xlsx".to_string());
+        let err = vm.defined_names().unwrap_err();
         assert!(err.starts_with("cannot read"), "{:?}", err);
     }
 
