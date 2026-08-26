@@ -119,6 +119,40 @@ class Vm:
         """Delete the sheet named *name*. Raises ``ValueError`` if it doesn't exist."""
         ...
 
+    def rename_sheet(self, old_name: str, new_name: str) -> None:
+        """Rename a sheet.
+
+        Renaming the active sheet is supported (it stays active under the new
+        name). Renaming a sheet to itself, or to a different casing of its
+        own name, succeeds.
+
+        Parameters
+        ----------
+        old_name:
+            The sheet's current name (case-insensitive).
+        new_name:
+            The new name.
+
+        Raises ``ValueError`` if *old_name* doesn't exist, *new_name* is empty
+        or whitespace-only, *new_name* (case-insensitively) already names a
+        *different* existing sheet, or the sheet is protected.
+        """
+        ...
+
+    def move_sheet(self, name: str, new_index: int) -> None:
+        """Move a sheet to an absolute 0-based position among the workbook's sheets.
+
+        Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative
+        offset), *new_index* here is an absolute target position (0 =
+        first), matching :meth:`set_sheet`'s own *index* convention.
+        Out-of-range values are clamped to the nearest end rather than
+        raising. Does not check sheet protection — real Excel's per-sheet
+        protection does not gate tab reordering.
+
+        Raises ``ValueError`` if *name* doesn't exist.
+        """
+        ...
+
     def active_sheet(self) -> str:
         """Return the name of the currently active sheet."""
         ...
@@ -129,6 +163,263 @@ class Vm:
 
     def get_sheet(self, name: str) -> dict[tuple[int, int], Any]:
         """Return all non-empty cells in the named sheet as ``{(row, col): value}``."""
+        ...
+
+    # ── Bulk worksheet range/row access ──────────────────────────────────────────
+    #
+    # A Python-native API for common row/range operations — not a claim of
+    # openpyxl compatibility (different return-type contract, no ``Cell``
+    # objects). All methods take *sheet* as a keyword; ``None`` (the default)
+    # means the active sheet, and passing an explicit sheet name never changes
+    # which sheet is active.
+
+    def get_range(self, addr: str, sheet: str | None = None) -> list[list[Any]]:
+        """Read a rectangular range (e.g. ``"A1:C5"``), 1-based A1 notation.
+
+        Returns a row-major nested list, ``None`` for empty cells — same
+        per-cell typing as :meth:`get_cell`.
+
+        Parameters
+        ----------
+        addr:
+            A single-area A1 range, e.g. ``"A1:C5"`` or a bare cell like ``"B2"``.
+        sheet:
+            Sheet to read from. Defaults to the active sheet.
+
+        Raises ``ValueError`` on a multi-area, malformed, or reversed address,
+        or an unknown *sheet* name.
+        """
+        ...
+
+    def set_range(
+        self, addr: str, values: list[list[Any]], sheet: str | None = None
+    ) -> None:
+        """Write a rectangular range (e.g. ``"A1:C2"``), 1-based A1 notation.
+
+        *values* must be a strictly rectangular (non-ragged) nested sequence
+        whose shape exactly matches *addr*'s row×col shape. ``None`` means an
+        empty cell. A string value starting with ``"="`` is stored literally,
+        never promoted to a formula — use :meth:`set_cell_formula`/
+        :meth:`set_cell_formula_batch` for that. Every value is converted and
+        the shape is checked **before** any cell is touched: a validation
+        failure leaves every existing cell unchanged.
+
+        Writing into a non-anchor cell of a merged range, or into a protected
+        sheet, is **not** blocked — this matches :meth:`set_cell`'s existing
+        behavior.
+
+        Parameters
+        ----------
+        addr:
+            A single-area A1 range, e.g. ``"A1:C2"``.
+        values:
+            A rectangular nested sequence matching *addr*'s shape.
+        sheet:
+            Sheet to write to. Defaults to the active sheet.
+
+        Raises ``ValueError`` on a bad address, ragged/mismatched shape, or an
+        unknown *sheet* name; ``TypeError`` on an unsupported value type.
+        """
+        ...
+
+    def append_row(self, values: list[Any], sheet: str | None = None) -> int:
+        """Write one row just past the sheet's used range.
+
+        Uses the true max used row (row 1 if the sheet is empty/all-empty),
+        so this is correct on a sparse sheet. Returns the 1-based row number
+        written. Same validate-then-commit and active-sheet-preservation
+        guarantees as :meth:`set_range`.
+
+        Raises ``ValueError`` if *values* is empty or *sheet* is unknown;
+        ``TypeError`` on an unsupported value type.
+        """
+        ...
+
+    def iter_rows(
+        self,
+        min_row: int = 1,
+        max_row: int | None = None,
+        min_col: int = 1,
+        max_col: int | None = None,
+        sheet: str | None = None,
+    ) -> list[list[Any]]:
+        """Values-only iteration over a rectangular region, 1-based bounds.
+
+        *max_row*/*max_col* default to the sheet's used range. On a sheet
+        with no non-empty cells at all **and** no explicit *max_row*, returns
+        ``[]`` rather than one row of ``None``\\ s.
+
+        Returns plain nested lists — this does **not** claim openpyxl
+        ``Cell``-object compatibility (no ``.value``/``.style``/etc attached,
+        just the values).
+        """
+        ...
+
+    def iter_cols(
+        self,
+        min_row: int = 1,
+        max_row: int | None = None,
+        min_col: int = 1,
+        max_col: int | None = None,
+        sheet: str | None = None,
+    ) -> list[list[Any]]:
+        """Values-only, column-major iteration over a rectangular region —
+        the transposed sibling of :meth:`iter_rows`. Each returned inner
+        list is one column's values, top to bottom.
+
+        *max_row*/*max_col* default to the sheet's used range. On a sheet
+        with no non-empty cells at all **and** no explicit *max_col*, returns
+        ``[]`` rather than one column of ``None``\\ s.
+
+        Returns plain nested lists — this does **not** claim openpyxl
+        ``Cell``-object compatibility (no ``.value``/``.style``/etc attached,
+        just the values).
+        """
+        ...
+
+    def max_row(self, sheet: str | None = None) -> int | None:
+        """Highest used row number, or ``None`` for a sheet with zero
+        non-empty cells (never ``0``)."""
+        ...
+
+    def max_column(self, sheet: str | None = None) -> int | None:
+        """Highest used column number, or ``None`` for a sheet with zero
+        non-empty cells (never ``0``)."""
+        ...
+
+    def calculate_dimension(self, sheet: str | None = None) -> str | None:
+        """The used range as an A1-style string (e.g. ``"B2:D10"``), or
+        ``None`` for a sheet with zero non-empty cells (never ``"A1:A1"``).
+
+        Min-anchored, not A1-anchored: if the only populated cell is ``C3``,
+        this returns ``"C3:C3"``, not ``"A1:C3"``.
+        """
+        ...
+
+    def insert_rows(
+        self, idx: int, amount: int = 1, sheet: str | None = None
+    ) -> None:
+        """Insert *amount* blank rows before 1-based row *idx*, shifting *idx*
+        and everything below it down. Mirrors openpyxl's
+        ``Worksheet.insert_rows(idx, amount=1)``.
+
+        Does **not** shift merged ranges, hidden-row markers, cell
+        styles/number formats, or formula cell-reference text — a
+        pre-existing limitation of the underlying VBA engine, now reachable
+        from Python.
+
+        Parameters
+        ----------
+        idx:
+            1-based row number to insert before.
+        amount:
+            Number of rows to insert.
+        sheet:
+            Sheet to modify. Defaults to the active sheet; never changes
+            which sheet is active.
+
+        Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds 1,048,576, or
+        *sheet* is unknown.
+        """
+        ...
+
+    def delete_rows(
+        self, idx: int, amount: int = 1, sheet: str | None = None
+    ) -> None:
+        """Delete *amount* rows starting at 1-based row *idx*, shifting
+        everything below the deleted band up. Mirrors openpyxl's
+        ``Worksheet.delete_rows(idx, amount=1)``.
+
+        Same fidelity gap as :meth:`insert_rows`.
+
+        Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds 1,048,576, or
+        *sheet* is unknown.
+        """
+        ...
+
+    def insert_cols(
+        self, idx: int, amount: int = 1, sheet: str | None = None
+    ) -> None:
+        """Insert *amount* blank columns before 1-based column *idx*,
+        shifting *idx* and everything to its right, right. Mirrors
+        openpyxl's ``Worksheet.insert_cols(idx, amount=1)``.
+
+        Same fidelity gap as :meth:`insert_rows`.
+
+        Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds 16,384
+        (``XFD``), or *sheet* is unknown.
+        """
+        ...
+
+    def delete_cols(
+        self, idx: int, amount: int = 1, sheet: str | None = None
+    ) -> None:
+        """Delete *amount* columns starting at 1-based column *idx*,
+        shifting everything to the right of the deleted band left. Mirrors
+        openpyxl's ``Worksheet.delete_cols(idx, amount=1)``.
+
+        Same fidelity gap as :meth:`insert_rows`.
+
+        Raises ``ValueError`` if *idx*/*amount* is 0 or exceeds 16,384
+        (``XFD``), or *sheet* is unknown.
+        """
+        ...
+
+    def merged_cells(self, sheet: str | None = None) -> list[str]:
+        """Return every merged range on a sheet as A1-style strings (e.g.
+        ``["B1:C1"]``).
+
+        Order matches source-file/insertion order (never re-sorted) — do not
+        assume alphabetical or row-major order.
+
+        Raises ``ValueError`` if *sheet* is unknown.
+        """
+        ...
+
+    def merge_cells(self, addr: str, sheet: str | None = None) -> None:
+        """Creates a merge over *addr*.
+
+        Rejects a single-cell address (nothing would actually be merged) and
+        rejects a merge that would overlap an existing one on the same
+        sheet. Does **not** touch cell values — whatever is in the covered
+        cells (if anything) stays exactly as it was.
+
+        Raises ``ValueError`` on a bad, oversized, or single-cell address, an
+        overlapping merge, or an unknown *sheet* name.
+        """
+        ...
+
+    def unmerge_cells(self, addr: str, sheet: str | None = None) -> None:
+        """Removes a merge whose range exactly matches *addr*.
+
+        An inexact/partial match is rejected rather than silently no-opping.
+
+        Raises ``ValueError`` on a bad or oversized address, no exact match,
+        or an unknown *sheet* name.
+        """
+        ...
+
+    def sort_range(
+        self,
+        addr: str,
+        key_col: int,
+        descending: bool = False,
+        header: bool = False,
+        sheet: str | None = None,
+    ) -> None:
+        """Python-native, single-key sort of a rectangular range, in place.
+
+        Not from openpyxl (which has no sort primitive of its own) — this
+        exposes the existing VBA ``Range(addr).Sort key:=, order:=,
+        header:=`` statement's exact behavior to Python.
+
+        *header=True* excludes *addr*'s first row from the sort; it stays
+        exactly where it is. Does **not** check sheet protection — matches
+        :meth:`set_range`'s bulk cell-value-write precedent.
+
+        Raises ``ValueError`` on a bad or oversized address, a *key_col*
+        outside *addr*'s own column span, or an unknown *sheet* name.
+        """
         ...
 
     # ── Variables ──────────────────────────────────────────────────────────────
