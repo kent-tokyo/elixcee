@@ -1050,6 +1050,70 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Every hidden row number on a sheet, as a sorted list of 1-based row
+    /// numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown.
+    #[pyo3(signature = (sheet = None))]
+    fn hidden_rows(&self, sheet: Option<&str>) -> PyResult<Vec<u32>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self.inner.hidden_rows_on_sheet(&key))
+    }
+
+    /// Column-axis mirror of :meth:`hidden_rows`.
+    #[pyo3(signature = (sheet = None))]
+    fn hidden_columns(&self, sheet: Option<&str>) -> PyResult<Vec<u32>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self.inner.hidden_columns_on_sheet(&key))
+    }
+
+    /// Hides or unhides a single row (1-based). Hiding an already-hidden row
+    /// is a no-op; unhiding an already-visible row is a no-op.
+    ///
+    /// Raises ``ValueError`` if *row* is 0 or exceeds Excel's own grid limit
+    /// (1,048,576 rows), or *sheet* is unknown.
+    #[pyo3(signature = (row, hidden = true, sheet = None))]
+    fn set_row_hidden(&mut self, row: u32, hidden: bool, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        if row == 0 || row > MAX_ROW {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "row must be between 1 and 1_048_576",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.set_row_hidden_on_sheet(&key, row, hidden);
+        Ok(())
+    }
+
+    /// Column-axis mirror of :meth:`set_row_hidden`.
+    ///
+    /// Raises ``ValueError`` if *col* is 0 or exceeds Excel's own grid limit
+    /// (16,384 columns), or *sheet* is unknown.
+    #[pyo3(signature = (col, hidden = true, sheet = None))]
+    fn set_column_hidden(&mut self, col: u32, hidden: bool, sheet: Option<&str>) -> PyResult<()> {
+        const MAX_COL: u32 = 16_384;
+        if col == 0 || col > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "col must be between 1 and 16_384",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.set_column_hidden_on_sheet(&key, col, hidden);
+        Ok(())
+    }
+
     /// Python-native, single-key sort of a rectangular range, in place. Not
     /// from openpyxl (which has no sort primitive of its own) — this exposes
     /// the existing VBA ``Range(addr).Sort key:=, order:=, header:=``

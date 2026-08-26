@@ -399,6 +399,41 @@ class Vm:
         """
         ...
 
+    def hidden_rows(self, sheet: str | None = None) -> list[int]:
+        """Every hidden row number on a sheet, as a sorted list of 1-based
+        row numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.
+
+        Raises ``ValueError`` if *sheet* is unknown.
+        """
+        ...
+
+    def hidden_columns(self, sheet: str | None = None) -> list[int]:
+        """Column-axis mirror of :meth:`hidden_rows`."""
+        ...
+
+    def set_row_hidden(
+        self, row: int, hidden: bool = True, sheet: str | None = None
+    ) -> None:
+        """Hides or unhides a single row (1-based).
+
+        Hiding an already-hidden row is a no-op; unhiding an already-visible
+        row is a no-op.
+
+        Raises ``ValueError`` if *row* is 0 or exceeds Excel's own grid limit
+        (1,048,576 rows), or *sheet* is unknown.
+        """
+        ...
+
+    def set_column_hidden(
+        self, col: int, hidden: bool = True, sheet: str | None = None
+    ) -> None:
+        """Column-axis mirror of :meth:`set_row_hidden`.
+
+        Raises ``ValueError`` if *col* is 0 or exceeds Excel's own grid limit
+        (16,384 columns), or *sheet* is unknown.
+        """
+        ...
+
     def sort_range(
         self,
         addr: str,
