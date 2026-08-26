@@ -510,6 +510,12 @@ vm.set_range("E1:F2", [[1, 2], [3, 4]], sheet="Result")
 vm.append_row(["Alice", 100], sheet="Result")
 vm.save_workbook("output.xlsx")
 
+# Sheet management and row/column edits
+vm.rename_sheet("Result", "Summary")
+vm.move_sheet("Summary", 0)          # move to the first tab
+vm.insert_rows(1, sheet="Summary")   # shift everything down by one row
+print(vm.merged_cells(sheet="Data")) # e.g. ["B1:C1"]
+
 # Control MsgBox behavior
 vm = elixcee.Vm(on_msgbox="skip")   # silently ignore MsgBox calls (default)
 vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
@@ -540,6 +546,11 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 | `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | Values-only iteration over a rectangular region. |
 | `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | Highest used row/column, or `None` if the sheet is empty. |
 | `vm.calculate_dimension(sheet=None)` | Used range as an A1-style string (e.g. `"B2:D10"`), or `None` if empty. |
+| `vm.rename_sheet(old_name, new_name)` | Rename a sheet. |
+| `vm.move_sheet(name, new_index)` | Move a sheet to an absolute 0-based tab position. |
+| `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | Insert/delete rows (values only -- doesn't shift merges/styles). |
+| `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | Insert/delete columns (same caveat as rows). |
+| `vm.merged_cells(sheet=None)` | List a sheet's merged ranges as A1 strings, e.g. `["B1:C1"]`. Read-only. |
 | `vm.save_workbook(path)` | Save all sheets to `.xlsx` or `.ods`. |
 | `vm.cells_df()` | Return the active sheet as a **pandas DataFrame** (requires pandas). |
 | `elixcee.run_macro(vba, name)` | One-shot: run a macro and return `{(row, col): value}`. |

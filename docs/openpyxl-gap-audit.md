@@ -38,20 +38,25 @@ protect, freeze, merge, font, fill, border, rename, move_sheet, copy_sheet): onl
 |---|---|---|---|---|---|---|---|---|
 | Create/select sheet, position control | — | — | — | — | — | — | — | **Done** (`set_sheet`) |
 | Delete sheet | — | — | — | — | — | — | — | **Done** (`delete_sheet`) |
-| Rename an existing sheet | 4 | 3 | 5 | 2 | 2 | yes (all 7) | yes (`WorksheetOrigin`) | **P1** |
-| Move/reorder an existing sheet | 3 | 2 | 4 | 2 | 2 | yes | yes (`sheet_order`) | **P1** |
+| Rename an existing sheet | 4 | 3 | 5 | 2 | 2 | yes (all 7) | yes (`WorksheetOrigin`) | **Shipped** (`rename_sheet`, P1 core 3) |
+| Move/reorder an existing sheet | 3 | 2 | 4 | 2 | 2 | yes | yes (`sheet_order`) | **Shipped** (`move_sheet`, P1 core 3) |
 | Copy a sheet (same workbook only) | 3 | 2 | 3 | 3 | 3 | partial | partial | **P2** |
 | Sheet visibility (hidden/veryHidden) | 2 | 2 | 4 | 2 | 2 | no | no | **P2** |
 
-`set_sheet`/`delete_sheet` already cover create/select/delete. Rename and move are the
-two genuinely missing lifecycle primitives with a clean, low-risk implementation path:
-`sheet_order` (`src/vm/mod.rs:598`) already models tab order, and `WorksheetOrigin`
-already threads a sheet's original display name/part name through to the writer — a
-rename is "update the key in `sheets`/`sheet_order`/`worksheet_origins` consistently," a
-reorder is "permute `sheet_order`." Both are pure in-memory `Vm` state changes with no new
-OOXML element involved, matching R1's own risk profile — good P1 candidates for the very
-next round. Copy-in-same-workbook needs to duplicate a sheet's `WorksheetOrigin`/cell map/
-merges/hidden-row state consistently, a bit more surface area, hence P2.
+`set_sheet`/`delete_sheet` already cover create/select/delete. Rename and move shipped in
+the P1 core 3 round as `rename_sheet`/`move_sheet`. **Rename's actual risk was higher than
+this table's Impl-risk score of 2 suggested**: it isn't "update the key in `sheets`/
+`sheet_order`/`worksheet_origins`" (3 maps) as first assumed — it's 8 lowercase-keyed
+per-sheet `Vm` maps that all needed atomic re-keying (`sheets`, `sheet_order`,
+`active_sheet`, `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
+`cell_number_formats`, `worksheet_origins`), or a rename would silently drop a renamed
+sheet's merge/hidden/style state. `move_sheet` also turned out to need a genuinely new
+primitive — nothing reordered an *existing* sheet before this round; `ensure_sheet_at`
+only positions a newly-created one. Both are still pure in-memory `Vm` state changes with
+no new OOXML element, matching R1's low-corruption-risk profile — the *implementation*
+risk score undersold the bookkeeping, not the *corruption* risk. Copy-in-same-workbook
+needs to duplicate a sheet's `WorksheetOrigin`/cell map/merges/hidden-row state
+consistently, a bit more surface area, hence still P2.
 
 ## 2. Cell / range access
 
@@ -81,17 +86,21 @@ value contract (plain Python values, not wrapper objects) for every consumer of
 
 | Feature | Value | Freq | Fit | Impl risk | Corrupt risk | Fixture evid. | Primitive reuse | Milestone |
 |---|---|---|---|---|---|---|---|---|
-| Insert/delete rows/cols (Python-native) | 3 | 3 | 4 | 2 | 1 | n/a | yes (`Vm::delete_rows`/`insert_rows`/`delete_cols`/`insert_cols`) | **P1** |
+| Insert/delete rows/cols (Python-native) | 3 | 3 | 4 | 2 | 1 | n/a | yes (`Vm::delete_rows`/`insert_rows`/`delete_cols`/`insert_cols`) | **Shipped** (`*_on_sheet` + PyVm glue, P1 core 3) |
 | Row height / column width (read/write) | 2 | 2 | 3 | 3 | 3 | no | no | **P2** |
 | Hidden row/col (read/write, Python-native) | 2 | 2 | 4 | 2 | 2 | yes | yes (`sheet_visibility`) | **P2** |
 | Outline/grouping level | 1 | 1 | 2 | 3 | 3 | no | no | **Not planned** |
 
-Row/column insert-delete already has a full, tested implementation at the VBA-execution
+Row/column insert-delete already had a full, tested implementation at the VBA-execution
 layer (`Vm::delete_rows`/`insert_rows`/`delete_cols`/`insert_cols`, added for GitHub #7/#8
-in `0.11.0`) — a Python-native `insert_rows(idx, count)`/`delete_rows(idx, count)` pair
-would be nearly free glue on top of those exact functions, making this a strong P1
-candidate once R1 ships. Row height/column width have no internal representation at all
-today (not read, not stored, not written) — real new surface area, not glue, hence P2.
+in `0.11.0`); the P1 core 3 round added sheet-parameterized `*_on_sheet` siblings and thin
+`PyVm` glue (`insert_rows`/`delete_rows`/`insert_cols`/`delete_cols`, matching openpyxl's
+own `idx`/`amount` naming) — genuinely close to "nearly free glue" as this row predicted.
+It does **not** shift `merged_ranges`/`sheet_visibility`/`cell_style_indices`/
+`cell_number_formats`/formula references — a pre-existing VBA-engine limitation, now
+Python-reachable (see "Implementation notes for P1 core 3" below). Row height/column
+width have no internal representation at all today (not read, not stored, not written) —
+real new surface area, not glue, hence still P2.
 Grouping/outline levels have no evidence of demand and touch a genuinely unexplored part
 of the schema — not planned absent a concrete request.
 
@@ -133,17 +142,18 @@ dedicated design round of its own, not a slice of this one.
 
 | Feature | Value | Freq | Fit | Impl risk | Corrupt risk | Fixture evid. | Primitive reuse | Milestone |
 |---|---|---|---|---|---|---|---|---|
-| Read a sheet's merged ranges | 3 | 3 | 4 | 1 | 1 | yes (`fixture1`) | yes (`merged_ranges`) | **P1** |
-| Create/remove a merge | 3 | 2 | 3 | 2 | 3 | yes | partial | **P1** |
+| Read a sheet's merged ranges | 3 | 3 | 4 | 1 | 1 | yes (`fixture1`) | yes (`merged_ranges`) | **Shipped** (`merged_cells`, P1 core 3) |
+| Create/remove a merge | 3 | 2 | 3 | 2 | 3 | yes | partial | **P2** |
 
-`merged_ranges` (`src/vm/mod.rs:693`) is already fully populated from any loaded file and
-already round-trips on save — there is simply no Python getter for it at all today (not
-even read-only). A read-only `merged_cells(sheet=None) -> list[str]` is nearly free glue,
-identical in spirit to R1's own `get_range`. Creating a *new* merge needs the writer to
-correctly emit a `<mergeCell>` for a range that didn't have one in the source, which is
-new writer surface — still low/contained risk (the shape is well understood, unlike
-styles), but real, hence bundled with the read side into the same P1 slice rather than
-split.
+`merged_ranges` (`src/vm/mod.rs:693`) was already fully populated from any loaded file and
+already round-tripped on save — there was simply no Python getter for it (not even
+read-only). The P1 core 3 round added a read-only `merged_cells(sheet=None) -> list[str]`,
+genuinely nearly-free glue as this row predicted, identical in spirit to R1's own
+`get_range`. Creating/removing a merge was considered for the same round (an earlier
+draft of this doc floated bundling it in) but the user scoped P1 core 3 to read-only —
+creating a *new* merge needs the writer to correctly emit a `<mergeCell>` for a range that
+didn't have one in the source, real new writer surface, so it's deferred to P2 rather than
+bundled.
 
 ## 7. Defined names
 
@@ -249,16 +259,20 @@ reproposed later without this context.
 
 ## Summary: recommended order after R1
 
-1. **R1 (this round)**: bulk worksheet range/row API — category 2, closes it almost
+1. **R1 (shipped)**: bulk worksheet range/row API — category 2, closes it almost
    entirely, zero writer changes, lowest risk in this document.
-2. **P1**: sheet rename/move (category 1), Python-native row/col insert-delete wrapping
-   the existing `0.11.0` VBA handlers (category 3), read-only merged-cell access
-   (category 6) — all cheap glue over primitives that already exist and are already
-   tested at the VBA layer.
+2. **P1 core 3 (shipped)**: sheet rename/move (category 1), Python-native row/col
+   insert-delete wrapping the existing `0.11.0` VBA handlers (category 3), read-only
+   merged-cell access (category 6). Rename/move turned out to be more than "cheap glue"
+   (see "Implementation notes for P1 core 3" below) — real, if contained, new bookkeeping.
+   `iter_cols` (category 2) and Python-native `.sort_range(...)` (category 8), both also
+   tagged P1 in this document's tables, were deliberately deferred out of this round's
+   scope, not forgotten.
 3. **P2**: sheet copy/visibility (category 1), hidden row/col + width/height (category 3),
    number-format-only writing (category 5, the narrowest possible slice of the style
-   engine), defined-name read/write (category 7), Python-native AutoFilter (category 8),
-   hyperlink read/write (category 10).
+   engine), merge create/remove (category 6, re-scoped here from an earlier P1 draft —
+   the user kept P1 core 3 read-only), defined-name read/write (category 7), Python-native
+   AutoFilter (category 8), hyperlink read/write (category 10).
 4. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
    protection exposure (each needs its own follow-up design decision, noted above).
 5. **Not planned**: full style-engine writing, named styles, table/data-validation/
@@ -316,3 +330,58 @@ to allocate and iterate that many cells rather than erroring quickly. Not implem
 this round absent concrete evidence anyone actually does this — added here as a disclosed
 limitation, matching this project's own stated pattern of not preemptively guarding
 without evidence of real-world impact.
+
+---
+
+## Implementation notes for P1 core 3
+
+Gaps and deliberate scope boundaries discovered while implementing sheet rename/move and
+row/col insert-delete glue, disclosed here rather than silently absorbed or fixed as a
+side effect of an unrelated feature:
+
+**Row/col insert-delete does not shift merged ranges, hidden-row/col markers, cell
+styles/number formats, or formula cell-reference text.** This is a pre-existing
+limitation of the underlying VBA engine (`Vm::insert_rows`/`delete_rows`/`insert_cols`/
+`delete_cols`, and now their `*_on_sheet` siblings) — real Excel shifts all of these when
+a row/column is inserted or deleted; `elixcee` doesn't, and didn't before this round
+either. Making these functions Python-reachable surfaces the gap to a new audience, so
+it's stated here explicitly rather than silently inherited. Pinned as an executable fact
+by `insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidden_markers`
+(`tests/xlsx_roundtrip.rs`).
+
+**`rename_sheet` does not rewrite formula or `<definedName>` text that refers to the
+sheet by its old name — only the `<sheet name="...">` tab label changes.** `elixcee`'s
+formula engine has no cross-sheet cell-reference syntax (`=Sheet2!A1`) today, so this
+can't corrupt a formula; a `<definedName>` whose *text* names the old sheet (as opposed to
+its *`localSheetId`*, which is positional and unaffected by a rename) would still read
+correctly today only because nothing resolves that text against a live sheet name at
+save/read time — recorded so it isn't rediscovered as a surprise if that ever changes.
+Also does not validate Excel's real sheet-name rules (31-character limit, illegal
+characters `: \ / ? * [ ]`, reserved/duplicate-after-truncation names) beyond rejecting an
+empty/whitespace-only name — matches `set_sheet`'s pre-existing total lack of name
+validation, not a new regression.
+
+**`remove_sheet` leaves stale entries in 6 of the 8 per-sheet maps `rename_sheet` had to
+learn to re-key atomically.** `remove_sheet` (`src/vm/mod.rs`) only cleans `sheets` and
+`sheet_order` on delete; `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
+`cell_number_formats`, `worksheet_origins`, and `protected_sheets` all keep a dead entry
+under the deleted sheet's old key. Harmless today (the key is never looked up again), but
+a real, pre-existing gap surfaced while designing `rename_sheet`'s own re-key list.
+Deliberately **not** fixed in this round — the user was offered "fix this first and share
+the re-key list with `rename_sheet`" as an option and chose to proceed with rename alone
+instead, so this stays a known gap for a future round rather than an incidental fix.
+
+**`<definedNames>` passthrough is now also guarded against `move_sheet`-caused
+reordering, closing a gap that `move_sheet` would otherwise have introduced.** A
+`<definedName localSheetId="N">` is a positional index into `<sheets>`; the existing
+save-time guard (`src/lib.rs`) already dropped `<definedNames>` passthrough once any
+sheet was deleted (its `localSheetId`s could no longer be trusted), but said nothing about
+*reordering* — before this round, nothing could reorder an existing sheet, so the gap was
+latent. `move_sheet` now sets `Vm::sheet_order_reordered`, and the save-time guard checks
+it alongside the existing deletion check. **One related gap remains, not closed by this
+fix**: VBA's `Sheets.Add(before:=...)` can also shift existing sheets' positions without
+deleting anything, and nothing tracks that today either — pre-existing, not introduced by
+this round, and a real fix would need snapshotting the workbook's load-time sheet order
+for comparison, which doesn't exist anywhere today. Pinned by
+`move_sheet_drops_defined_names_that_would_have_stale_positional_indices`
+(`tests/xlsx_roundtrip.rs`).

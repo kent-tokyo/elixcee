@@ -432,6 +432,12 @@ vm.set_range("E1:F2", [[1, 2], [3, 4]], sheet="Result")
 vm.append_row(["Alice", 100], sheet="Result")
 vm.save_workbook("output.xlsx")
 
+# シート操作・行/列の編集
+vm.rename_sheet("Result", "Summary")
+vm.move_sheet("Summary", 0)          # 先頭タブへ移動
+vm.insert_rows(1, sheet="Summary")   # 1行分下へシフト
+print(vm.merged_cells(sheet="Data")) # 例: ["B1:C1"]
+
 # MsgBox の動作を制御
 vm = elixcee.Vm(on_msgbox="skip")   # MsgBox を無視（デフォルト）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
@@ -462,6 +468,11 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 | `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | 矩形範囲を値のみで反復。 |
 | `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | 使用範囲の最大行・最大列。空シートは `None`。 |
 | `vm.calculate_dimension(sheet=None)` | 使用範囲をA1形式の文字列（例: `"B2:D10"`）で返す。空シートは `None`。 |
+| `vm.rename_sheet(old_name, new_name)` | シート名を変更する。 |
+| `vm.move_sheet(name, new_index)` | シートを絶対位置（0始まり）のタブ位置へ移動する。 |
+| `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | 行の挿入・削除（値のみ -- 結合セルやスタイルはシフトされない）。 |
+| `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | 列の挿入・削除（行と同じ制約）。 |
+| `vm.merged_cells(sheet=None)` | シートの結合範囲をA1形式の文字列リストで返す（例: `["B1:C1"]`）。読み取り専用。 |
 | `vm.save_workbook(path)` | 全シートを `.xlsx` または `.ods` に保存。 |
 | `vm.cells_df()` | アクティブシートを **pandas DataFrame** として返す（pandas 要インストール）。 |
 | `elixcee.run_macro(vba, name)` | 一発実行: マクロを実行して `{(row, col): value}` を返す。 |

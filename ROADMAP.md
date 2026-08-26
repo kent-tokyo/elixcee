@@ -38,6 +38,20 @@ unchecked behavior, see the gap-audit doc's "Implementation notes for R1" for wh
 release that eventually includes this is not decided yet (this round only adds the API and
 commits locally, no version bump).
 
+**P1 core 3: sheet rename/move + row/col insert-delete glue + read-only merged-cell
+access, merged to `master`, not yet released.** The next slice of `docs/openpyxl-gap-audit.md`'s
+priority list after R1. Seven new Python methods: `rename_sheet`/`move_sheet` (sheet
+management — `move_sheet`'s `new_index` is an absolute 0-based position, matching
+`set_sheet`'s own convention, not openpyxl's relative-offset `move_sheet(offset)`),
+`insert_rows`/`delete_rows`/`insert_cols`/`delete_cols` (Python glue over the existing
+`0.11.0` VBA-only handlers, `sheet=` keyword, Excel-grid bounds checked), and
+`merged_cells(sheet=None) -> list[str]` (read-only). Rename turned out to need atomically
+re-keying 8 lowercase-keyed per-sheet `Vm` maps, not the 2-3 originally assumed — see the
+gap-audit doc's "Implementation notes for P1 core 3" for the full account, including a
+`<definedNames>`-passthrough fix `move_sheet` required (Known gaps item 19, below) and
+three newly-disclosed gaps (items 18/20/21). See `CHANGELOG.md`'s `[Unreleased]` section
+for the full method-by-method account; no version bump this round either.
+
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
 `arr(1,2)`, `UBound(arr, dimension)` honors its argument for real, `ReDim Preserve` enforces
@@ -136,8 +150,10 @@ with real fixture evidence — `<tableParts>`, `<drawing>`, `<legacyDrawing>`, `
 category, including `source_references`: `SOURCE_REFERENCE_LOSS` is eliminated from the
 entire current fixture set. `D4` (reachability-based cleanup of a deleted sheet's
 exclusively-reachable parts) is also done, closing Known gaps item 15; sheet rename/reorder
-are marked N/A rather than implemented (this `Vm` has no such primitive, and adding one
-purely to fill a test-table row would invert this milestone's own hard gate). Plain
+were marked N/A at the time (this `Vm` had no such primitive, and adding one purely to
+fill a test-table row would have inverted this milestone's own hard gate) — both now
+exist as `rename_sheet`/`move_sheet` (P1 core 3, below), added for their own reason, not
+retroactively for this table. Plain
 (relationship-free) `<pageSetup>` is also restored — `fixture5`'s real shape, previously
 silently lost and uncaught by any checker. `r:id`-backed `<pageSetup>` (a `printerSettings`
 relationship) remains the only genuinely open item, blocked on the project's own hard gate:
@@ -464,6 +480,43 @@ all), so this needs a human/agent to remember it explicitly rather than relying 
     a from-scratch `Vm()`'s own minimal stylesheet hits it. Not investigated further or
     fixed — unrelated to R1's own scope, recorded here so it isn't rediscovered the hard
     way.
+
+18. **P1 core 3's row/col insert-delete Python glue (`insert_rows`/`delete_rows`/
+    `insert_cols`/`delete_cols`) does not shift merged ranges, hidden-row/col markers,
+    cell styles/number formats, or formula cell-reference text.** Pre-existing limitation
+    of the underlying VBA engine (`Vm::insert_rows`/`delete_rows`/`insert_cols`/
+    `delete_cols` and their new `*_on_sheet` siblings) — real Excel shifts all of these;
+    `elixcee` doesn't, and didn't before this round either. Making these Python-reachable
+    surfaces the gap to a new audience. Pinned as an executable fact by
+    `insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidden_markers`
+    (`tests/xlsx_roundtrip.rs`). See `docs/openpyxl-gap-audit.md`'s "Implementation notes
+    for P1 core 3" for the full account.
+
+19. **`rename_sheet` doesn't rewrite formula or `<definedName>` text referring to a sheet
+    by its old name, and doesn't validate Excel's real sheet-name rules** (31-char limit,
+    illegal characters, reserved/duplicate-after-truncation names) beyond rejecting an
+    empty/whitespace-only name. The formula-text case can't corrupt anything today —
+    `elixcee`'s formula engine has no cross-sheet cell-reference syntax (`=Sheet2!A1`) —
+    but is recorded in case that changes. The name-validation gap matches `set_sheet`'s
+    pre-existing total lack of validation, not a new regression.
+
+20. **`remove_sheet` leaves stale entries in 6 of 8 per-sheet `Vm` maps on delete**
+    (`merged_ranges`/`sheet_visibility`/`cell_style_indices`/`cell_number_formats`/
+    `worksheet_origins`/`protected_sheets` all keep a dead entry under the deleted sheet's
+    old key — only `sheets`/`sheet_order` are cleaned). Surfaced while designing
+    `rename_sheet`'s own atomic 8-map re-key (P1 core 3); harmless today since the stale
+    key is never looked up again. Deliberately **not** fixed this round — offered as an
+    option (fix this first, share the re-key list with `rename_sheet`) and declined in
+    favor of shipping rename on its own.
+
+21. **`<definedNames>` passthrough is guarded against sheet deletion and `move_sheet`
+    reordering, but not against VBA's `Sheets.Add(before:=...)` shifting existing sheets'
+    positions.** A `<definedName localSheetId="N">` is a positional index into `<sheets>`;
+    P1 core 3's `move_sheet` closed the reordering case (`Vm::sheet_order_reordered`,
+    checked alongside the existing deletion guard in `save_xlsx_impl`), but
+    `Sheets.Add(before:=...)` can shift positions the same way without tripping either
+    check, and this predates the round. A real fix needs snapshotting the workbook's
+    load-time sheet order for comparison, which doesn't exist anywhere today.
 
 ## npm/JS/WASM: still-open gaps
 
