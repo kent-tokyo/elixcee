@@ -1134,6 +1134,115 @@ fn insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidd
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// P1 remainder: `merge_cells`/`unmerge_cells` exercised end-to-end against the
+/// one real fixture with a pre-existing merge (B1:C1). A new non-overlapping
+/// merge (D1:E1) is added and must round-trip alongside B1:C1; then, continuing
+/// the same session, B1:C1 is removed and must actually disappear from the saved
+/// XML rather than merely being absent from a freshly-added set.
+#[test]
+fn merge_cells_and_unmerge_cells_round_trip_on_the_real_fixture() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path_1 = tmp_path("merge_cells_output_1.xlsm");
+    let output_path_2 = tmp_path("merge_cells_output_2.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let key = vm.resolve_sheet_key(None).unwrap();
+
+    vm.merge_cells(&key, 1, 4, 1, 5).unwrap(); // D1:E1, non-overlapping with B1:C1
+    save_workbook(&vm, &output_path_1).expect("save-as should succeed");
+
+    let output_bytes_1 = std::fs::read(&output_path_1).unwrap();
+    let output_entries_1 = read_all_zip_entries(&output_bytes_1);
+    let out_sheet1_1 =
+        String::from_utf8(output_entries_1["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        out_sheet1_1.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "the fixture's pre-existing B1:C1 merge must survive: {out_sheet1_1}"
+    );
+    assert!(
+        out_sheet1_1.contains(r#"<mergeCell ref="D1:E1"/>"#),
+        "the newly-added D1:E1 merge must be saved: {out_sheet1_1}"
+    );
+
+    vm.unmerge_cells(&key, 1, 2, 1, 3).unwrap(); // remove B1:C1
+    save_workbook(&vm, &output_path_2).expect("save-as should succeed");
+
+    let output_bytes_2 = std::fs::read(&output_path_2).unwrap();
+    let output_entries_2 = read_all_zip_entries(&output_bytes_2);
+    let out_sheet1_2 =
+        String::from_utf8(output_entries_2["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        !out_sheet1_2.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "B1:C1 must actually be gone after unmerge_cells, not just absent from a fresh set: {out_sheet1_2}"
+    );
+    assert!(
+        out_sheet1_2.contains(r#"<mergeCell ref="D1:E1"/>"#),
+        "D1:E1 must remain after removing the unrelated B1:C1 merge: {out_sheet1_2}"
+    );
+
+    let _ = std::fs::remove_file(&output_path_1);
+    let _ = std::fs::remove_file(&output_path_2);
+}
+
+/// P1 remainder: `sort_range_on_sheet` exercised end-to-end -- a bulk value
+/// rewrite must not disturb the fixture's pre-existing merge/hidden-row/
+/// hidden-column state, matching the same 3-assertion pattern as
+/// `write_rect_on_a_real_fixture_survives_a_save_without_disturbing_existing_state`.
+#[test]
+fn sort_range_on_sheet_survives_a_save_and_does_not_disturb_unrelated_state() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path = tmp_path("sort_range_output.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let key = vm.resolve_sheet_key(None).unwrap();
+
+    // Rows 20-22, column A -- far from the fixture's merge (row 1) and hidden
+    // row/column markers (row 5, column D).
+    vm.write_rect(
+        &key,
+        (20, 1),
+        &[
+            vec![elixcee::vm::Variant::Integer(3)],
+            vec![elixcee::vm::Variant::Integer(1)],
+            vec![elixcee::vm::Variant::Integer(2)],
+        ],
+    );
+    vm.sort_range_on_sheet(&key, 20, 1, 22, 1, 1, false, false);
+    assert_eq!(
+        vm.read_rect(&key, 20, 1, 22, 1),
+        vec![
+            vec![elixcee::vm::Variant::Integer(1)],
+            vec![elixcee::vm::Variant::Integer(2)],
+            vec![elixcee::vm::Variant::Integer(3)],
+        ]
+    );
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "the fixture's pre-existing B1:C1 merge must survive a sort elsewhere on the sheet: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        "the fixture's pre-existing hidden column D must survive a sort elsewhere on the sheet: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains(r#"<row r="5" hidden="1">"#)
+            || out_sheet1.contains(r#"<row r="5" hidden="1"/>"#),
+        "the fixture's pre-existing hidden row 5 must survive a sort elsewhere on the sheet: {out_sheet1}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// Real report against the released `0.10.0`: a source that binds the relationships
 /// namespace to a prefix OTHER than the conventional `r:` (here `rel:`) is fully valid
 /// OOXML on its own -- XML namespace binding is about the URI, not the prefix spelling.
