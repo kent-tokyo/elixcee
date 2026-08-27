@@ -1,0 +1,18 @@
+# sha256 of crates/elixcee-types/src/lib.rs as of the last time this crate was
+# actually published to crates.io at the version currently in this crate's own
+# Cargo.toml. Checked by scripts/check-versions.sh, which fails the build if the
+# source has drifted from this hash without a version bump -- catching the exact
+# gap that blocked cargo publish -p elixcee during 0.11.0/0.12.0's release prep
+# (crates/elixcee-types grew ExcelError::FromStr/biff_code with no version bump
+# at all; the registry copy at 0.3.0 doesn't have them, and check-versions.sh
+# had no way to notice since the pin and the member version still agreed with
+# each other while both were stale). This file's hash is seeded from git commit
+# a44d374 (the 0.7.0 release, when elixcee-types was last actually bumped-and-
+# published, to 0.3.0), NOT from the current tree -- the current tree already
+# has real, unpublished drift, which is deliberately left failing until whoever
+# ships the release carrying it bumps the version and regenerates this file.
+#
+# To regenerate after actually re-versioning and republishing elixcee-types:
+#   shasum -a 256 crates/elixcee-types/src/lib.rs | awk '{print $1}'
+# and replace the hash below with the output (keep this comment block).
+cf88cf8cf24cbf146d731219d38d52175aa491968dfc30afd1ec795a4bcf0785

@@ -40,6 +40,31 @@ if [[ -f "$types_toml" ]]; then
   fi
 fi
 
+# The pin/member check above only catches the two numbers disagreeing with each
+# other — it can't catch elixcee-types' own source drifting away from what's
+# actually live on crates.io at that shared version number, which is the gap
+# that broke `cargo publish -p elixcee` during 0.11.0/0.12.0's release prep (see
+# ROADMAP.md's "Packaging note"). Guard it with a committed source hash, the
+# same pattern as crates/elixcee-wasm/wasm-size-baseline.json: fails if
+# crates/elixcee-types/src/lib.rs has changed since it was last actually
+# published, until a human/agent deliberately re-versions and regenerates the
+# hash — exactly the explicit-remembering ROADMAP.md says this needs.
+types_hash_file="crates/elixcee-types/PUBLISHED_HASH"
+types_lib="crates/elixcee-types/src/lib.rs"
+if [[ -f "$types_hash_file" && -f "$types_lib" ]]; then
+  if command -v sha256sum >/dev/null 2>&1; then
+    types_current_hash=$(sha256sum "$types_lib" | awk '{print $1}')
+  else
+    types_current_hash=$(shasum -a 256 "$types_lib" | awk '{print $1}')
+  fi
+  types_recorded_hash=$(grep -v '^#' "$types_hash_file" | tr -d '[:space:]')
+
+  if [[ "$types_current_hash" != "$types_recorded_hash" ]]; then
+    echo "check-versions: $types_lib has changed since it was last published at elixcee-types $types_version (recorded in $types_hash_file) — bump crates/elixcee-types/Cargo.toml's version (and the root Cargo.toml pin) before publishing elixcee off this source, then regenerate $types_hash_file once elixcee-types is actually republished" >&2
+    exit 1
+  fi
+fi
+
 # @elixcee/xlsx versions independently of the root crate (see ROADMAP.md), so this
 # doesn't cross-check its version against Cargo.toml/pyproject.toml — it only guards
 # the one concrete drift this project has actually hit: "private" flipped to false
