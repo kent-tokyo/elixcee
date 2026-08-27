@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Differential check: elixcee's sheet management + workbook-metadata API
 (P1 core 3 + remainder + P2 hidden row/col + copy_sheet + defined_names +
-sheet_state) vs. openpyxl.
+sheet_state + row height/column width) vs. openpyxl.
 
 openpyxl is used PURELY as a test-only oracle here -- never a runtime dependency
 of the shipped `elixcee` package (see pyproject.toml, which declares none).
@@ -22,6 +22,12 @@ sheet_state() coverage uses an openpyxl-AUTHORED fixture, not a real
 Excel-authored one under compat/oracle-excel-com (none has a hidden/
 veryHidden sheet), and reads only -- no elixcee save() round trip, since
 elixcee has no writer support for `state="..."` yet.
+
+row_height()/column_width() coverage also uses an openpyxl-AUTHORED fixture
+(no real fixture has a genuine custom row height or column width), reads
+only, same no-writer-support caveat -- a loaded row height/column width is
+dropped on EVERY elixcee save today, not just sometimes (the writer
+regenerates <row>/<cols> from hidden-row/column state alone).
 
 defined_names() coverage uses FIXTURE4 (fixture1 has no <definedNames> at
 all), and reads directly rather than through a save/reload round trip --
@@ -46,6 +52,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import zipfile
 
 import elixcee
 import openpyxl
@@ -302,6 +309,82 @@ class SheetStateAgreesWithOpenpyxl(unittest.TestCase):
                 "visible",
                 "known gap: update this test (and ship set_sheet_state) once "
                 "the writer preserves state=... on save",
+            )
+
+
+class RowHeightAndColumnWidthAgreeWithOpenpyxl(unittest.TestCase):
+    # No real fixture in this repo has a genuine custom row height or column
+    # width (fixture1's only <col> is a hidden column with width="0", not
+    # real data) -- fixture built with openpyxl itself, same approach as
+    # SheetStateAgreesWithOpenpyxl. Reads only, no elixcee save() round trip.
+    def test_row_height_and_column_width_match_openpyxl_on_an_openpyxl_authored_fixture(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "dims.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws["A1"] = 1
+            ws.row_dimensions[5].height = 30.5
+            ws.column_dimensions["B"].width = 12.5
+            wb.save(path)
+
+            vm = elixcee.load_workbook(path)
+            wb2 = openpyxl.load_workbook(path)
+            ws2 = wb2.active
+
+            self.assertEqual(vm.row_height(5), ws2.row_dimensions[5].height)
+            self.assertEqual(vm.column_width(2), ws2.column_dimensions["B"].width)
+            # A row with no explicit height is None on both sides. Column is
+            # NOT compared the same way: openpyxl's column_dimensions[letter]
+            # auto-vivifies a default-width (13.0) entry on first `[]` access
+            # even for a column the file never set -- an openpyxl
+            # implementation artifact, not something elixcee's own correct
+            # None-for-unset behavior should be judged against.
+            self.assertIsNone(vm.row_height(1))
+            self.assertIsNone(ws2.row_dimensions[1].height)
+            self.assertIsNone(vm.column_width(1))
+
+    def test_row_height_and_column_width_do_not_yet_survive_an_elixcee_save(self):
+        # Disclosed known gap, not a hypothetical: the writer unconditionally
+        # regenerates <row>/<cols> from hidden-row/column state alone, so a
+        # loaded row height / column width is dropped on EVERY save, not just
+        # sometimes. Pinned here so a future writer fix is a deliberate,
+        # visible change to this test, not a silent behavior shift.
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "dims_src.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.row_dimensions[5].height = 30.5
+            ws.column_dimensions["B"].width = 12.5
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            self.assertEqual(vm.row_height(5), 30.5)
+            self.assertEqual(vm.column_width(2), 12.5)
+
+            out = os.path.join(d, "dims_out.xlsx")
+            vm.save_workbook(out)
+            wb2 = openpyxl.load_workbook(out)
+            ws2 = wb2.active
+            self.assertIsNone(
+                ws2.row_dimensions[5].height,
+                "known gap: update this test (and ship set_row_height/"
+                "set_column_width) once the writer preserves ht=.../width=... "
+                "on save",
+            )
+            # column_dimensions[letter] auto-vivifies a default-width entry on
+            # first `[]` access (see the fixture-comparison test above), so
+            # checking the raw saved XML directly is the only reliable way to
+            # confirm customWidth="1" was actually dropped, not just masked
+            # by that access-time default.
+            with zipfile.ZipFile(out) as z:
+                sheet_xml = z.read("xl/worksheets/sheet1.xml").decode()
+            self.assertNotIn(
+                "customWidth",
+                sheet_xml,
+                "known gap: update this test (and ship set_column_width) once "
+                "the writer preserves width=... on save",
             )
 
 
