@@ -2381,6 +2381,23 @@ fn func_find(
     };
     let h_chars: Vec<char> = haystack.chars().collect();
     let n_chars: Vec<char> = needle.chars().collect();
+    // An empty search string matches trivially at `start` (real Excel: `FIND("","abc")` is
+    // 1, `FIND("","abc",3)` is 3) -- mirrors VBA InStr's identical "empty needle -> return
+    // start position" convention (`src/vm/mod.rs`). Handled before the `.windows()` call
+    // below, which panics on a zero window size (`slice::windows` requires non-zero) --
+    // found by the fuzz corpus on `FIND("","...")`.
+    if n_chars.is_empty() {
+        return if start > h_chars.len() {
+            Err("FIND: value not found".into())
+        } else {
+            Ok(Variant::Integer((start + 1) as i64))
+        };
+    }
+    // `start` beyond the haystack has no match -- guarded explicitly rather than letting
+    // `h_chars[start..]` panic on an out-of-bounds slice.
+    if start >= h_chars.len() {
+        return Err("FIND: value not found".into());
+    }
     let pos = h_chars[start..]
         .windows(n_chars.len())
         .position(|w| w == n_chars.as_slice());
@@ -6640,6 +6657,51 @@ mod tests {
         assert_eq!(calc("=FIND(\"lo\",\"Hello\")", &c), Variant::Integer(4));
         assert_eq!(calc("=SEARCH(\"LO\",\"Hello\")", &c), Variant::Integer(4));
         assert_eq!(calc("=SEARCH(\"h*o\",\"Hello\")", &c), Variant::Integer(1));
+    }
+
+    #[test]
+    fn test_find_with_an_empty_search_string_does_not_panic() {
+        // Regression: fuzz corpus found `FIND("","...")` panicked on
+        // `.windows(0)` ("window size must be non-zero"). Real Excel
+        // matches trivially at the start position -- same convention
+        // VBA InStr already uses (src/vm/mod.rs).
+        let c = HashMap::new();
+        assert_eq!(calc("=FIND(\"\",\"abc\")", &c), Variant::Integer(1));
+        assert_eq!(calc("=FIND(\"\",\"abc\",3)", &c), Variant::Integer(3));
+    }
+
+    #[test]
+    fn test_find_with_a_start_beyond_the_haystack_errors_instead_of_panicking() {
+        let c = HashMap::new();
+        assert!(evaluate(&fparse("=FIND(\"a\",\"abc\",10)").unwrap(), &c).is_err());
+        assert!(evaluate(&fparse("=FIND(\"\",\"abc\",10)").unwrap(), &c).is_err());
+    }
+
+    #[test]
+    fn test_find_reproduces_the_exact_fuzz_crash_input() {
+        // The exact bytes fuzz/fuzz_targets/fuzz_formula_eval.rs's corpus found:
+        // "FIND(v0\t\t,D)" -- an unquoted bare name `v0` (unresolved, evaluates
+        // to Variant::Empty -> to_str -> "") as the search string. Reproduced
+        // with that fuzz target's own 5x5 (r*c) cell setup, not this module's
+        // usual empty-map `c`, so this is a faithful reproduction, not just a
+        // simplified equivalent. Verified (by temporarily reverting the fix)
+        // that this test and the two above actually fail without it.
+        let raw = std::str::from_utf8(&[70, 73, 78, 68, 40, 118, 48, 9, 9, 44, 68, 41]).unwrap();
+        assert_eq!(raw, "FIND(v0\t\t,D)");
+        let mut cells: HashMap<(u32, u32), CellContent> = HashMap::new();
+        for r in 1u32..=5 {
+            for col in 1u32..=5 {
+                cells.insert(
+                    (r, col),
+                    CellContent {
+                        formula: None,
+                        value: Variant::Integer((r * col) as i64),
+                    },
+                );
+            }
+        }
+        let expr = fparse(raw).unwrap();
+        let _ = evaluate(&expr, &cells); // must not panic; result value not asserted
     }
 
     #[test]
