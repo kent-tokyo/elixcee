@@ -238,32 +238,14 @@ cleanly). The original reporter independently re-verified this fix plus both of 
 fixes against the published wheel and closed issue #1 themselves — no action needed on this
 repo's side.
 
-`0.10.0-D` (relationship-backed features, the actual fix for `SOURCE_REFERENCE_LOSS`) is
-**not released yet** — see `CHANGELOG.md`'s `[Unreleased]`. It has a decided design
-(origin-based worksheet part naming — see the roadmap entry below); `D1` (the
-`WorksheetOutputPlan` output plan itself) is done, and every relationship-backed element
-with real fixture evidence — `<tableParts>`, `<drawing>`, `<legacyDrawing>`, `<hyperlinks>`
-(including r:id-backed ones, a rewrite of `0.10.0-B4`'s prior relationship-free-only scope)
-— is now restored. All 7 real fixtures report `CLEAN` across every `mechanical_check.py`
-category, including `source_references`: `SOURCE_REFERENCE_LOSS` is eliminated from the
-entire current fixture set. `D4` (reachability-based cleanup of a deleted sheet's
-exclusively-reachable parts) is also done, closing Known gaps item 15; sheet rename/reorder
-were marked N/A at the time (this `Vm` had no such primitive, and adding one purely to
-fill a test-table row would have inverted this milestone's own hard gate) — both now
-exist as `rename_sheet`/`move_sheet` (P1 core 3, below), added for their own reason, not
-retroactively for this table. Plain
-(relationship-free) `<pageSetup>` is also restored — `fixture5`'s real shape, previously
-silently lost and uncaught by any checker. `r:id`-backed `<pageSetup>` (a `printerSettings`
-relationship) remains the only genuinely open item, blocked on the project's own hard gate:
-no fixture with that shape exists in the repo. All of `0.10.0-D` above is
-mechanical-check-verified but not yet real-Excel reopen-verified — that verification, plus
-whatever `<pageSetup r:id>` needs, gates the next release.
-
-**Next round: release qualification, not new development — version not decided yet.**
-`0.10.0-D` and the `t="e"` error-cell fix (Known gaps item 14, above) are both merged to
-`master` and both correctly excluded from `0.10.1`'s score (see the `0.10.1` scorecard) —
-neither ships until each clears its own real-Excel check, done by hand against real Excel
-(this `Vm` has no way to drive that itself):
+`0.10.0-D` (relationship-backed features, the actual fix for `SOURCE_REFERENCE_LOSS`) and
+the `t="e"` error-cell fix (Known gaps item 14, above) are both **still unreleased,
+sitting on `master` only** — this release (`0.12.0`, the R1-through-P2-fifth-slice batch
+described above) was deliberately cut from a `release-0.10.0`-branch base plus
+cherry-picked gap-audit work, not from `master`'s tip, precisely so it would not drag in
+this still-unverified work by accident (the same reasoning `0.11.0` used before it — see
+`0.11.0`'s own entry above). Neither ships until each clears its own real-Excel
+verification, done by hand against real Excel (this `Vm` has no way to drive that itself):
 
 - `0.10.0-D`, per element: a table survives; an external hyperlink still works; a
   drawing/chart/image still displays; a comment/note survives; plain `<pageSetup>` is
@@ -273,26 +255,28 @@ neither ships until each clears its own real-Excel check, done by hand against r
   text — a formula referencing it and `ISERROR()` both need to see it as an error; and the
   type survives a save → reopen → save cycle, not just the first save.
 
-Whether the next release is `0.11.1` (if `0.10.0-D`'s real-Excel pass turns up only small
-fixes) or `0.12.0` (if it lands as a real new capability, table/drawing/hyperlink
-preservation formally added) is an open question until that verification is done — not
-decided in advance. (`0.11.0` itself already shipped, for the unrelated GitHub #2–#8 fix
-round above — cut from a `release-0.10.0`-branch cherry-pick of just that work, not from
-`master`'s tip, precisely so it wouldn't drag in this still-unverified `0.10.0-D`/`t="e"`
-work by accident.)
+As of `master`'s own tip (not this release), `0.10.0-D`'s `D1` (the `WorksheetOutputPlan`
+output plan) and every relationship-backed element with real fixture evidence —
+`<tableParts>`, `<drawing>`, `<legacyDrawing>`, `<hyperlinks>` (including r:id-backed ones),
+`D4` (deleted-sheet reachability cleanup), and plain `<pageSetup>` — are implemented and
+mechanical-check-verified, just not yet real-Excel reopen-verified. Whichever release
+eventually carries this work (`0.12.1`, `0.13.0`, or otherwise) is not decided in advance;
+it depends on what that verification turns up.
 
-**Packaging note for whoever ships that release**: `master`'s tip cannot be
-`cargo publish`ed as-is today — `t="e"`'s `ExcelError::FromStr`/`biff_code()` (added to
+**Packaging note for whoever ships that future release**: `master`'s tip cannot be `cargo
+publish`ed as-is — `t="e"`'s `ExcelError::FromStr`/`biff_code()` (added to
 `crates/elixcee-types`) were never accompanied by an `elixcee-types` version bump, so the
 copy live on crates.io (`0.3.0`) doesn't have them, and `cargo publish -p elixcee`'s own
 verification build (which resolves `elixcee-types` from the registry, not the local
 workspace path) fails with `error[E0599]: no variant, associated function, or constant
-named 'from_str' found for enum 'ExcelError'`. Confirmed live via the crates.io API
-during `0.11.0`'s release. Bump `crates/elixcee-types/Cargo.toml` and the root
-`Cargo.toml`'s dependency pin to `0.3.1` and publish `elixcee-types` first, in the same
-`crates-publish.yml` run, before this milestone's own release — `scripts/check-versions.sh`
-does not currently catch this class of gap (it doesn't check `elixcee-types`'s version at
-all), so this needs a human/agent to remember it explicitly rather than relying on CI.
+named 'from_str' found for enum 'ExcelError'`. Confirmed live via the crates.io API during
+`0.11.0`'s release, and reconfirmed via a `cargo publish --dry-run` while preparing
+`0.12.0` (whose own release line excludes `t="e"` and hits no such error). Bump
+`crates/elixcee-types/Cargo.toml` and the root `Cargo.toml`'s dependency pin to `0.3.1`
+and publish `elixcee-types` first, in the same `crates-publish.yml` run, before that
+future milestone's own release — `scripts/check-versions.sh` does not currently catch
+this class of gap (it doesn't check `elixcee-types`'s version at all), so this needs a
+human/agent to remember it explicitly rather than relying on CI.
 
 ## Known gaps
 
