@@ -99,9 +99,10 @@ for exactly what's implemented, plus a CI observability addition for the shared 
 bridge. R1 (bulk worksheet range/row API), P1 core 3 (sheet rename/move, row/col
 insert-delete glue, read-only merged-cell access), P1 remainder (`iter_cols`,
 `sort_range`, merge create/remove), P2's first slice (hidden row/col read/write), P2's
-second slice (`copy_sheet`), P2's third slice (`defined_names`, read-only), and P2's
-fourth slice (`sheet_state`, read-only) — all below — are seven further, independent
-additions in this section, unrelated to each other or anything above.
+second slice (`copy_sheet`), P2's third slice (`defined_names`, read-only), P2's fourth
+slice (`sheet_state`, read-only), and P2's fifth slice (`row_height`/`column_width`,
+read-only) — all below — are eight further, independent additions in this section,
+unrelated to each other or anything above.
 
 ### Root crate (Python binding): R1 -- bulk worksheet range/row API
 
@@ -370,6 +371,44 @@ exercise this) and two tests using it. `compat/differential-python/sheet_ops_che
 gained a `SheetStateAgreesWithOpenpyxl` class -- its fixture is built with openpyxl
 itself (which can freely write `ws.sheet_state = "hidden"`), compared against elixcee's
 read of the same file, plus the round-trip-loses-state regression test described above.
+
+### Root crate (Python binding): P2 fifth slice -- row_height/column_width (read-only)
+
+The fifth item off `docs/openpyxl-gap-audit.md`'s P2 list. Two new Python methods:
+`row_height(row, sheet=None) -> float | None` / `column_width(col, sheet=None) -> float |
+None`, sheet-parameterized like `hidden_rows`/`hidden_columns` (not name-addressed like
+`sheet_state`) since these are row/column-level queries within a sheet.
+
+Confirmed zero prior representation anywhere (not read, stored, or written), and
+confirmed the writer's gap is worse than `sheet_state`'s: `xlsx_worksheet_xml`'s
+`<row>`/`<cols>` emission is fully regenerated from `Vm.sheet_visibility` alone on EVERY
+save -- not passthrough, not even an opaque fragment -- so a loaded file's row heights
+and column widths are unconditionally dropped, not just sometimes. Pinned by a
+differential-python regression test that checks the saved file's raw XML directly:
+openpyxl's own `column_dimensions[letter].width` auto-vivifies a default-13.0 entry on
+first `[]` access even for a column the file never set, which would have made a naive
+comparison pass for the wrong reason.
+
+Deliberately read-only, same reason as `sheet_state`: zero real fixtures have a genuine
+custom row height or column width (a first grep pass falsely suggested `ht=` existed on
+real `<row>` elements -- a substring false positive from `<sheetFormatPr
+defaultRowHeight="15">`; fixture1's only `<col>` is the already-known hidden column D
+with `width="0"`, not real data).
+
+Two independent value types, not one enum like `sheet_state`: `row_heights:
+HashMap<u32, f64>` (per-row, sparse) and `column_widths: Vec<(u32, u32, f64)>`
+(range-shaped like `hidden_columns`, with a value attached) -- confirmed live that real
+producers don't always coalesce same-width columns into one range either (openpyxl wrote
+three separate single-column `<col>` elements for three identically-widthed columns, not
+one `<col min="2" max="4">`). This pushed `rename_sheet`'s per-sheet-map re-key count from
+9 to 11, and `copy_sheet`'s copied-field count from 7 to 9. `customHeight="1"`/
+`customWidth="1"` are both required for `ht`/`width` to actually apply in real Excel; a
+bare `ht`/`width` without the flag is not recorded, pinned by dedicated unit tests rather
+than assumed from the spec.
+
+`tests/xlsx_roundtrip.rs` gained a `synthetic_sheet_with_row_heights_and_column_widths`
+helper and two tests. `compat/differential-python/sheet_ops_check.py` gained a
+`RowHeightAndColumnWidthAgreeWithOpenpyxl` class, fixture built with openpyxl itself.
 
 `0.10.0-D` (relationship-backed features, including the actual fix for
 `SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing

@@ -536,6 +536,10 @@ print(vm.defined_names())  # e.g. {"MyRange": "Sheet1!$A$1:$A$3"}
 # Read a sheet's whole-tab visibility
 print(vm.sheet_state("Data"))  # "visible", "hidden", or "veryHidden"
 
+# Read a row's height or a column's width, if explicitly set
+print(vm.row_height(5, sheet="Data"))     # e.g. 30.5, or None
+print(vm.column_width(2, sheet="Data"))   # e.g. 12.5, or None
+
 # Control MsgBox behavior
 vm = elixcee.Vm(on_msgbox="skip")   # silently ignore MsgBox calls (default)
 vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
@@ -573,6 +577,7 @@ vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 | `vm.copy_sheet(source_name, new_name)` | Duplicate a sheet (cells, merges, hidden state, styles) into a new one. |
 | `vm.defined_names()` | Workbook-level defined names as `{name: raw_formula_text}`. Read-only. |
 | `vm.sheet_state(name)` | A sheet's whole-tab visibility: `"visible"`, `"hidden"`, or `"veryHidden"`. Read-only. |
+| `vm.row_height(row, sheet=None)` / `vm.column_width(col, sheet=None)` | A row's height in points / column's width in characters, or `None` if never explicitly set. Read-only. |
 | `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | Insert/delete rows (values only -- doesn't shift merges/styles). |
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | Insert/delete columns (same caveat as rows). |
 | `vm.merged_cells(sheet=None)` | List a sheet's merged ranges as A1 strings, e.g. `["B1:C1"]`. |

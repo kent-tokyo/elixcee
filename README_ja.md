@@ -458,6 +458,10 @@ print(vm.defined_names())  # 例: {"MyRange": "Sheet1!$A$1:$A$3"}
 # シートのタブ全体の表示状態を読み取る
 print(vm.sheet_state("Data"))  # "visible" / "hidden" / "veryHidden"
 
+# 行の高さ・列の幅を読み取る（明示的に設定されている場合のみ）
+print(vm.row_height(5, sheet="Data"))    # 例: 30.5、未設定なら None
+print(vm.column_width(2, sheet="Data"))  # 例: 12.5、未設定なら None
+
 # MsgBox の動作を制御
 vm = elixcee.Vm(on_msgbox="skip")   # MsgBox を無視（デフォルト）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
@@ -495,6 +499,7 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 時に RuntimeError を発生
 | `vm.copy_sheet(source_name, new_name)` | シートを複製する（セル・結合・非表示状態・スタイルを含む）。 |
 | `vm.defined_names()` | ワークブックレベルの名前付き範囲を `{name: 数式テキスト}` で返す。読み取り専用。 |
 | `vm.sheet_state(name)` | シートのタブ全体の表示状態: `"visible"` / `"hidden"` / `"veryHidden"`。読み取り専用。 |
+| `vm.row_height(row, sheet=None)` / `vm.column_width(col, sheet=None)` | 行の高さ（ポイント）/ 列の幅（文字数）。明示的に設定されていなければ `None`。読み取り専用。 |
 | `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | 行の挿入・削除（値のみ -- 結合セルやスタイルはシフトされない）。 |
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | 列の挿入・削除（行と同じ制約）。 |
 | `vm.merged_cells(sheet=None)` | シートの結合範囲をA1形式の文字列リストで返す（例: `["B1:C1"]`）。 |

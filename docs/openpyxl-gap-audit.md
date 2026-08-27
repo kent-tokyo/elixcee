@@ -105,7 +105,7 @@ value contract (plain Python values, not wrapper objects) for every consumer of
 | Feature | Value | Freq | Fit | Impl risk | Corrupt risk | Fixture evid. | Primitive reuse | Milestone |
 |---|---|---|---|---|---|---|---|---|
 | Insert/delete rows/cols (Python-native) | 3 | 3 | 4 | 2 | 1 | n/a | yes (`Vm::delete_rows`/`insert_rows`/`delete_cols`/`insert_cols`) | **Shipped** (`*_on_sheet` + PyVm glue, P1 core 3) |
-| Row height / column width (read/write) | 2 | 2 | 3 | 3 | 3 | no | no | **P2** |
+| Row height / column width (read/write) | 2 | 2 | 3 | 3 | 3 | no | no | **Shipped, read-only** (`row_height`/`column_width`, P2) |
 | Hidden row/col (read/write, Python-native) | 2 | 2 | 4 | 2 | 2 | yes | yes (`sheet_visibility`) | **Shipped** (`hidden_rows`/`hidden_columns`/`set_row_hidden`/`set_column_hidden`, P2) |
 | Outline/grouping level | 1 | 1 | 2 | 3 | 3 | no | no | **Not planned** |
 
@@ -117,8 +117,14 @@ own `idx`/`amount` naming) — genuinely close to "nearly free glue" as this row
 It does **not** shift `merged_ranges`/`sheet_visibility`/`cell_style_indices`/
 `cell_number_formats`/formula references — a pre-existing VBA-engine limitation, now
 Python-reachable (see "Implementation notes for P1 core 3" below). Row height/column
-width have no internal representation at all today (not read, not stored, not written) —
-real new surface area, not glue, hence still P2.
+width had zero internal representation at all before this round (not read, not stored,
+not written) — real new surface area, not glue, confirmed by research; shipped
+read-only as `row_height`/`column_width` (P2, fifth slice), following the same
+read-first precedent `sheet_state`/`defined_names`/`merged_cells` already established.
+The writer's gap turned out *worse* than `sheet_state`'s: `<row>`/`<cols>` are fully
+regenerated from `sheet_visibility` alone on every save, so a loaded file's row
+heights/column widths are dropped UNCONDITIONALLY, not just sometimes — see
+"Implementation notes for P2: row height / column width" below.
 
 Hidden row/col (read/write) shipped as the first P2 slice, and this row's "primitive
 reuse: yes" framing held up on the read side but undersold the write side, a smaller
@@ -347,29 +353,41 @@ reproposed later without this context.
    have a hidden/veryHidden sheet, and this project's hard gate is no writer code for a
    structural OOXML element without real fixture evidence. See "Implementation notes for P2:
    sheet_state" below for the fixture-generation path found (and not yet taken) this round.
-8. **P2, remaining**: row height/column width (category 3's other row — no internal
-   representation at all, real new surface, unlike hidden row/col), number-format-only
-   writing (category 5, the narrowest possible slice of the style engine), defined-name
-   create/delete (category 7's other row — a real write path into `<definedNames>`,
-   different and larger than the read-only slice already shipped), sheet-visibility
-   *write* support (`set_sheet_state`, blocked on real fixture evidence — see above),
-   Python-native AutoFilter (category 8 — confirmed to need the same
-   `Stmt::RangeAutoFilter`-extraction treatment `sort_range` did, plus its own
-   signature-design decision since `field`/`criteria1` are VBA `Expr` AST nodes, not plain
-   values — don't take its "thin wrapper" framing at face value, the same optimism this
-   doc's table showed for `rename_sheet`/`sort_range`/hidden-row-write before each one
-   turned out to need more than glue), hyperlink read/write (category 10 — confirmed to
-   need two separate pieces of new work, not one: parsing `<hyperlink>` elements into a
+8. **P2, fifth slice (shipped)**: `row_height`/`column_width` read-only (category 3's
+   other row). Confirmed zero prior representation, matching this row's own prediction —
+   but also confirmed the writer's gap is *worse* than `sheet_state`'s: `<row>`/`<cols>`
+   are fully regenerated from `sheet_visibility` alone on every save, so a loaded file's
+   row heights/column widths are dropped UNCONDITIONALLY (not just on some saves), pinned
+   by a differential-python test. Two independent value types, not one enum like
+   `sheet_state` — `row_heights: HashMap<u32, f64>` (per-row) and `column_widths:
+   Vec<(u32, u32, f64)>` (range-shaped like `hidden_columns`, with a value attached) —
+   pushed `rename_sheet`'s per-sheet-map re-key count from 9 to 11. Write support
+   deferred for the same reason as `sheet_state`'s: zero real fixtures have a genuine
+   custom row height or column width (fixture1's only `<col>` is a hidden column with
+   `width="0"`, not real data). See "Implementation notes for P2: row height / column
+   width" below.
+9. **P2, remaining**: number-format-only writing (category 5, the narrowest possible
+   slice of the style engine), defined-name create/delete (category 7's other row — a
+   real write path into `<definedNames>`, different and larger than the read-only slice
+   already shipped), sheet-visibility *write* support (`set_sheet_state`, blocked on real
+   fixture evidence), row-height/column-width *write* support (`set_row_height`/
+   `set_column_width`, same blocker), Python-native AutoFilter (category 8 — confirmed to
+   need the same `Stmt::RangeAutoFilter`-extraction treatment `sort_range` did, plus its
+   own signature-design decision since `field`/`criteria1` are VBA `Expr` AST nodes, not
+   plain values — don't take its "thin wrapper" framing at face value, the same optimism
+   this doc's table showed for `rename_sheet`/`sort_range`/hidden-row-write before each
+   one turned out to need more than glue), hyperlink read/write (category 10 — confirmed
+   to need two separate pieces of new work, not one: parsing `<hyperlink>` elements into a
    queryable structure AND joining `r:id`-backed ones against the sheet's own `.rels` file,
    a lookup that today only happens ad hoc for survival-checking).
-9. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
-   protection exposure (each needs its own follow-up design decision, noted above).
-10. **Not planned**: full style-engine writing, named styles, table/data-validation/
-   conditional-formatting *creation*, chart/image authoring, outline/grouping, streaming
-   modes, and a wrapper `Cell` object model — each either fights this project's own hard
-   gates (no writer code without fixture evidence), fights its product identity (VBA
-   execution needs full random access; chart/image authoring has no VBA-emulation angle),
-   or both.
+10. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
+    protection exposure (each needs its own follow-up design decision, noted above).
+11. **Not planned**: full style-engine writing, named styles, table/data-validation/
+    conditional-formatting *creation*, chart/image authoring, outline/grouping, streaming
+    modes, and a wrapper `Cell` object model — each either fights this project's own hard
+    gates (no writer code without fixture evidence), fights its product identity (VBA
+    execution needs full random access; chart/image authoring has no VBA-emulation angle),
+    or both.
 
 ---
 
@@ -748,3 +766,64 @@ matches openpyxl's own exactly, confirmed live during research — no translatio
 per-sheet map to re-key on `rename_sheet`, eighth to copy on `copy_sheet`), matching the
 "copy everything else" precedent every other field on that method already sets, absent
 any concrete signal pointing the other way.
+
+## Implementation notes for P2: row height / column width
+
+Gaps and deliberate scope boundaries discovered while implementing `row_height`/
+`column_width`, disclosed here rather than silently absorbed or fixed as a side effect of
+an unrelated feature:
+
+**Confirmed the writer's gap is worse than `sheet_state`'s.** `sheet_state`'s bug was
+conditional in spirit (the writer just never read or wrote the attribute at all, so a
+save silently lost it). Row height/column width hit the same root cause but with a
+starker consequence: `xlsx_worksheet_xml`'s `<row>`/`<cols>` emission is **fully
+regenerated from `Vm.sheet_visibility` alone**, not passthrough, not even an opaque
+fragment (unlike `<sheetFormatPr>`/`<sheetViews>`/`<sheetPr>`, which already are carried
+as opaque blobs). A loaded file's row heights and column widths are dropped on every
+single save, full stop — pinned by a differential-python regression test
+(`test_row_height_and_column_width_do_not_yet_survive_an_elixcee_save`) that inspects the
+saved file's raw XML directly (not `openpyxl`'s `column_dimensions[letter].width`, which
+turned out to auto-vivify a default-13.0 entry on first `[]` access even for a column the
+file never set — an openpyxl implementation artifact that would have made the regression
+test pass for the wrong reason if trusted blindly).
+
+**Zero real fixtures have a genuine custom row height or column width, confirmed by
+direct inspection, not assumed.** A first grep pass across the 7 pristine fixtures
+falsely suggested `ht=` existed on `<row>` elements — a substring false positive:
+`<sheetFormatPr defaultRowHeight="15">` (a workbook-wide default, already opaquely
+preserved, unrelated to any individual row) contains the literal text `ht="`. Redone with
+a `<row ...>`-anchored check: zero real `ht=`/`customHeight` attributes anywhere. Only
+`fixture1` has any `<col>` element at all, and it's the already-known hidden column D
+(`width="0" hidden="1" customWidth="1"`) — `width="0"` is how Excel represents a hidden
+column, not a real custom width. This project's hard gate (no writer code for a
+structural OOXML element without real fixture evidence) isn't met for either value, so
+write support (`set_row_height`/`set_column_width`) is deferred the same way
+`set_sheet_state` was.
+
+**Two independent value types, not one enum.** Unlike `sheet_state` (three fixed
+variants), row height is inherently per-row (`row_heights: HashMap<u32, f64>`, sparse —
+only rows with an explicit `customHeight="1"` height get an entry) and column width is
+range-shaped like `hidden_columns` but with a value attached
+(`column_widths: Vec<(u32, u32, f64)>`). This pushed `rename_sheet`'s per-sheet-map
+re-key count from 9 to 11, and `copy_sheet`'s copied-field count from 7 to 9 — confirmed
+live (via openpyxl) that real producers don't always coalesce a run of identically-widthed
+columns into one `<col min="B" max="D">` range either: setting the same width on columns
+B/C/D one at a time produced three separate single-column `<col>` elements in openpyxl's
+own output, not one coalesced range. `column_width_on_sheet`'s linear scan over
+`(min, max, width)` triples handles both shapes correctly regardless.
+
+**`customHeight="1"`/`customWidth="1"` are both required for `ht`/`width` to actually
+apply in real Excel** — a bare `ht` without the flag (some producers emit this for an
+auto-fit row) is not recorded as an explicit height, confirmed via a dedicated unit test
+(`xlsx_sheet_cells_ignores_ht_without_custom_height`) rather than assumed from the spec
+alone.
+
+**API shape**: `row_height(row, sheet=None) -> Optional[float]` /
+`column_width(col, sheet=None) -> Optional[float]`, matching `hidden_rows`/
+`hidden_columns`'s sheet-parameterized (not name-required) convention rather than
+`sheet_state`'s name-addressed one — row/column-level queries within a sheet are this
+project's own established shape for that family, distinct from whole-sheet-level queries.
+No bound-checking on `row`/`col` (unlike `set_row_hidden`'s write-side Excel-grid-limit
+check): an out-of-range lookup on a sparse map just costs a `None`, the same
+no-cost-to-check-large-values precedent R1's `get_range`/`iter_rows` already established
+for reads.
