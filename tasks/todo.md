@@ -561,3 +561,20 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 **スコープに関する自己修正（2026-08-27）**：セッション中、ユーザーから「今後しばらくの間あなた自身で自律的に開発を続けてください。PRのmergeはあなた自身で行って構いません」という承認を受けたが、これを「新規機能領域を自分で選んで良い」という意味に拡大解釈し、ユーザーが直接スコープ指定した「P1 remainder」1ラウンドの後、未承認のままP2を3ラウンド（hidden row/col・copy_sheet・defined_names）実装・マージしてしまった。advisorのレビューで指摘を受け、「ユーザーの発言は"進行中の作業のプロセス確認を省略してよい"という意味であり、"次に何を作るか"という新規スコープ決定の許可ではない」と訂正。該当memory（`feedback_autonomous_dev_and_pr_merge.md`）を修正し、以降は新規スコープ選択をユーザーへ差し戻す方針に変更。バージョンbump/tag/publishは発生していないため、上記3ラウンドの公開API設計判断（`copy_sheet`の挿入位置、`hidden_columns`の戻り値形式、`defined_names`のstaleness挙動、名前衝突時の挙動）は次のリリース判断までレビュー可能な状態。
 
 残作業：なし（この段階でのpush/PR/mergeは全て完了済み）。次の新規スコープ（P2残り：シート可視性、行高/列幅、number-format書き込み、defined-name作成/削除、AutoFilter、hyperlink）は、ユーザーの明示的な指定を待つ。
+
+## GitHub issue #2〜#8のクローズ、P2第4弾: sheet_state（読み取り専用、PR #13）
+
+前ラウンドの報告に対しユーザーから2件の明示的指示を受けた：(1)「close issues #2–#8 as fixed-in-0.11.0」、(2) AskUserQuestionでの選択「Start a new P2 round」→「Sheet visibility」。
+
+- [x] **GitHub issue #2〜#8を全件クローズ**：0.11.0で修正済みであることを確認済みの7件それぞれに、該当する修正内容・CHANGELOG該当セクションへのリンクを添えて個別にクローズコメントを投稿。#5（AutoFilter部分修正）には「ドロップダウン矢印の永続化が必要ならreopen可、ただし実fixtureが必要」と案内。
+- [x] **research fork起動**：シート可視性（whole-tab hidden/veryHidden、`<sheet state="...">`）の実装コストをsource+実fixtureに対して検証。以下を発見——
+  - **独立した既存バグを確認**：readerもwriterも`state`属性を一切扱っておらず、hidden sheetを含む実ファイルを読み込んで保存（no-op saveでも）すると、そのシートは無条件にvisibleへ戻ってしまう。今回のスコープとは無関係の、以前から存在するバグ。
+  - **実fixture証拠ゼロ**：7件のpristine fixture・corpus全件をgrepしたが、hidden/veryHiddenなsheetを持つものは1件も無い。このプロジェクトのhard gate（実fixture証拠なしにOOXML構造要素のwriterコードを書かない）に抵触するため、write側（`set_sheet_state`）は見送り。
+  - **fixture生成経路を発見（未実施）**：Mac版ExcelのAppleScript辞書（`Excel.sdef`）が`visible`プロパティ（`XlSheetVisibility`: `sheet visible`/`sheet hidden`/`sheet very hidden`）を公開しており、VBAプロジェクトへのアクセス不要で読み書き可能なことをlive確認。ただし保存時にmacOSのサンドボックス「Grant File Access」ダイアログが出現し、人間の1クリックが必要（スクリプトで回避不可）。ユーザーへの提案として提示、今回は未実施のまま進行。
+- [x] **read-onlyスライスとして実装を即断**（前ラウンドの`merged_cells`/`defined_names`のread-only先行precedentに従う、局所的な実装判断としてユーザーへの再確認なしで進行）：新設`SheetState` enum（Visible/Hidden/VeryHidden）、`Vm::sheet_state`/Python `sheet_state(name)`。`rename_sheet`の再キー対象が8→9マップに、`copy_sheet`のコピー対象が7→8フィールドに拡張（可視性状態もコピー、他フィールドと同じ扱い）。
+- [x] **テスト**：Rust unitテスト多数（`SheetState::from_attr`、`sheet_state()`の大文字小文字非依存・不明シート名エラー、`populate_from_sheets`のstate読み込み、`rename_sheet`/`copy_sheet`の再キー・コピー）。実fixtureにhidden sheetが無いため、`tests/xlsx_roundtrip.rs`に`synthetic_three_sheet_workbook_with_states`ヘルパーを新設（既存の`synthetic_three_sheet_workbook`は呼び出し元4箇所以上があるため、パラメータ追加ではなく専用ヘルパーとして分離）し2テスト追加。`compat/differential-python`は openpyxl自身で hidden/veryHidden シートを持つfixtureを構築して比較（実Excel fixtureに頼れないため）、かつ「elixcee経由で保存すると現状state情報が失われる」ことを明示的に検証するregressionテストも追加。
+- [x] フルリグレッションスイープ（fmt/clippy×4パターン/rustdoc/cargo test workspace/check-versions/cargo audit/mechanical_check self-test/compat corpus・semantics/JS differential 5種/Python differential 2種）、いずれもクリーン・既存ベースラインから無回帰を確認。
+- [x] `README.md`/`README_ja.md`/`README_zh.md`・`ROADMAP.md`（Known gaps item 25として上記バグを追記）・`CHANGELOG.md`・`docs/openpyxl-gap-audit.md`（新規"Implementation notes for P2: sheet_state"セクション）を同期。
+- [x] PR #13作成、CI 9項目green確認、自己マージ（`986ef8d`）、ローカルmaster同期。
+
+残作業：なし。次の新規スコープ（P2残り：行高/列幅、number-format書き込み、defined-name作成/削除、AutoFilter、hyperlink、および今回見送ったsheet visibility書き込み）は、ユーザーの明示的な指定を待つ。
