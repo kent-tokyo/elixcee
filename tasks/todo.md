@@ -592,3 +592,13 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] PR #14作成→fuzz CI red（既存バグ発見）→修正コミット追加→CI 9項目green確認→自己マージ（`1a13e84`）、ローカルmaster同期。
 
 残作業：なし。次の新規スコープ（P2残り：number-format書き込み、defined-name作成/削除、AutoFilter、hyperlink、sheet visibility書き込み、row height/column width書き込み）は、ユーザーの明示的な指定を待つ。
+
+## `elixcee` 0.12.0リリース公開・masterへのバージョンメタデータ同期
+
+「0.12.0へ今バンプ」ユーザー承認、続く「Publish now」承認を受け、`release/0.12.0`ブランチ（PR #9〜#14 cherry-pick、`0.10.0-D`／`t="e"`は意図的に除外——詳細は同ブランチの本ファイル参照）をpush・タグ付け・publish実施。
+
+- [x] `v0.12.0`／`bin-v0.12.0`タグをpush、PyPI publish（`publish.yml`）・crates.io publish（`crates-publish.yml`、`elixcee-types`は0.3.0のまま据え置き——dry-run検証済み）・CLI binary release（`release.yml`）、いずれも成功。crates.io API・PyPI API・`bin-v0.12.0`のmacOSバイナリ実行（`--version`→`elixcee 0.12.0`）・PyPIからの実`pip install`＋新規メソッド存在確認、全て実物に対して再検証済み。
+- [x] **masterへのバージョンメタデータ同期**（`5227318`の0.10.1同期コミットと同じ方式）：`Cargo.toml`／`pyproject.toml`／`Cargo.lock`を0.12.0へバンプ。`CHANGELOG.md`の`[Unreleased]`からR1〜P2第五スライス＋`FIND()`修正のみを新設`[0.12.0]`セクションへ移動、`0.10.0-D`・`t="e"`・CI観測性・`@elixcee/xlsx`関連エントリは`[Unreleased]`に残置（未リリースのため）。`ROADMAP.md`の「Current state」冒頭と各ラウンドの「`master`にマージ済み・未リリース」記述を「`0.12.0`でリリース済み」に更新、「次リリースのバージョン番号は0.11.1か0.12.0か未定」という記述を「0.12.1か0.13.0か未定」に修正（0.12.0が既に別件で使われたため）。`docs/openpyxl-gap-audit.md`の`t="e"`／外部ハイパーリンク／図形・画像に関する記述も「`0.11.0`から」等の誤った帰属を訂正。
+- [x] `cargo test --workspace`（1001+43件）・fmt・`check-versions.sh`、masterの本来のコード（`0.10.0-D`／`t="e"`込み）に対しても無回帰を確認。
+
+残作業：`0.10.0-D`／`t="e"`の実Excel検証は引き続き未着手（ブロッカー変わらず）。次のリリース番号（`0.12.1`か`0.13.0`か）はその検証結果を見てから決定。

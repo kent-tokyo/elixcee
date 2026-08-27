@@ -7,17 +7,23 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 ## Current state
 
-`elixcee` **0.11.0** (Rust crate + Python package), `elixcee-types` **0.3.0** (unchanged),
+`elixcee` **0.12.0** (Rust crate + Python package), `elixcee-types` **0.3.0** (unchanged),
 `elixcee-wasm` **0.1.0** (never published to crates.io by design — `publish = false`).
-`0.11.0` fixes seven real-world bugs/gaps reported against `0.10.1` (GitHub #2–#8) — see
-`CHANGELOG.md`'s `[0.11.0]` for the full account, including one deliberately partial fix
-(`Range.AutoFilter`'s VM-side row-hiding is implemented; the `<autoFilter>` XML element
-itself stays gated on real fixture evidence this repo doesn't have). Minor, not patch: two
-genuinely new Python methods (`delete_sheet`, `get_cell_number_format`) and one new
-keyword argument (`set_sheet`'s `index`). `0.10.1` (still live) was a single targeted
-patch over `0.10.0`, fixing a critical unbound-`r:`-namespace-prefix regression — released
-from the same commit across PyPI, crates.io, and a GitHub Release (`bin-v0.10.1`, 3
-platform binaries), each independently re-verified against the live published artifact.
+`0.12.0` adds eight independent Python API items against `docs/openpyxl-gap-audit.md`'s
+priority list (R1, P1 core 3, P1 remainder, and P2's first five slices) plus a `FIND()`
+crash fix — see `CHANGELOG.md`'s `[0.12.0]` for the full account. Minor, not patch: real
+new API surface throughout, nothing removed or changed. Released from a
+`release-0.10.0`-branch base (`v0.11.0`) with those eight rounds cherry-picked on top,
+deliberately excluding this repo's own still-unreleased `0.10.0-D`/`t="e"` work (see this
+section's "Packaging note" below for why, and what a *future* release carrying that work
+still needs). `0.11.0` (still live) fixed seven real-world bugs/gaps reported against
+`0.10.1` (GitHub #2–#8) — see `CHANGELOG.md`'s `[0.11.0]` for the full account, including
+one deliberately partial fix (`Range.AutoFilter`'s VM-side row-hiding is implemented; the
+`<autoFilter>` XML element itself stays gated on real fixture evidence this repo doesn't
+have). `0.10.1` (still live) was a single targeted patch over `0.10.0`, fixing a critical
+unbound-`r:`-namespace-prefix regression — released from the same commit across PyPI,
+crates.io, and a GitHub Release (`bin-v0.10.1`, 3 platform binaries), each independently
+re-verified against the live published artifact.
 `@elixcee/xlsx` is unchanged:
 `read()`/`readFile()`/`readFileSync()` and `write()`/`writeFile()`/`writeFileSync()` are both
 implemented and differential-tested, but the package is still
@@ -25,7 +31,7 @@ implemented and differential-tested, but the package is still
 live: `registry.npmjs.org/@elixcee/xlsx` 404s), and `@elixcee` scope ownership itself is
 unconfirmed (item 9 below).
 
-**R1: bulk worksheet range/row API, merged to `master`, not yet released in any version.**
+**R1: bulk worksheet range/row API, released in `0.12.0`.**
 Seven new Python methods close the highest-value gap identified against openpyxl (see the
 new `docs/openpyxl-gap-audit.md`): `get_range`/`set_range` (rectangular read/write),
 `append_row` (uses the sheet's true max used row, correct on a sparse sheet), `iter_rows`
@@ -39,7 +45,7 @@ release that eventually includes this is not decided yet (this round only adds t
 commits locally, no version bump).
 
 **P1 core 3: sheet rename/move + row/col insert-delete glue + read-only merged-cell
-access, merged to `master`, not yet released.** The next slice of `docs/openpyxl-gap-audit.md`'s
+access, released in `0.12.0`.** The next slice of `docs/openpyxl-gap-audit.md`'s
 priority list after R1. Seven new Python methods: `rename_sheet`/`move_sheet` (sheet
 management — `move_sheet`'s `new_index` is an absolute 0-based position, matching
 `set_sheet`'s own convention, not openpyxl's relative-offset `move_sheet(offset)`),
@@ -54,7 +60,7 @@ and three further disclosed gaps (items 18/19/20). See `CHANGELOG.md`'s `[Unrele
 section for the full method-by-method account; no version bump this round either.
 
 **P1 remainder: `iter_cols`, Python-native `sort_range`, merge create/remove, merged to
-`master`, not yet released.** The last three items `docs/openpyxl-gap-audit.md` still
+released in `0.12.0`.** The last three items `docs/openpyxl-gap-audit.md` still
 tagged P1. Four new Python methods: `iter_cols` (column-major values-only iteration, the
 transposed sibling of `iter_rows`), `sort_range(addr, key_col, descending=False,
 header=False, sheet=None)` (elixcee's own feature, not from openpyxl — exposes the
@@ -70,7 +76,7 @@ oversized address here writes real geometry into the saved file, unlike `get_ran
 `iter_rows`'s disclosed unbounded-allocation gap, item 16 below). See `CHANGELOG.md`'s
 `[Unreleased]` section for the full method-by-method account; no version bump this round.
 
-**P2, first slice: hidden row/col read/write, merged to `master`, not yet released.** The
+**P2, first slice: hidden row/col read/write, released in `0.12.0`.** The
 first item off `docs/openpyxl-gap-audit.md`'s P2 list (category 3). Four new Python
 methods: `hidden_rows(sheet=None)`/`hidden_columns(sheet=None)` (sorted, flattened 1-based
 row/column numbers) and `set_row_hidden(row, hidden=True, sheet=None)`/`set_column_hidden`
@@ -84,9 +90,9 @@ visible gaps across a whole range and discards which specific hidden interval pr
 each one — see the gap-audit doc's "Implementation notes for P2: hidden row/col" for the
 full account, including why hiding an already-hidden unit is a no-op (not a duplicate
 interval) and unhiding an already-visible unit creates no stray `sheet_visibility` entry,
-both following `merge_cells`'s own established convention. No version bump this round.
+both following `merge_cells`'s own established convention.
 
-**P2, second slice: `copy_sheet`, merged to `master`, not yet released.** The second item
+**P2, second slice: `copy_sheet`, released in `0.12.0`.** The second item
 off `docs/openpyxl-gap-audit.md`'s P2 list (category 1). One new Python method:
 `copy_sheet(source_name, new_name)`, duplicating a sheet's cells, merges, hidden-row/col
 state, cell styles, and cell number formats into a brand-new sheet. Reuses `rename_sheet`'s
@@ -100,9 +106,9 @@ openpyxl's own `copy_worksheet`), sidestepping the same positional
 `<definedName localSheetId="N">`-staleness risk `move_sheet` guards against for a reorder —
 see the gap-audit doc's "Implementation notes for P2: copy_sheet" for the full account,
 including a pre-existing, unrelated `sheet_names()` ordering quirk discovered while testing
-(item 24 below). Does not copy sheet protection status. No version bump this round.
+(item 24 below). Does not copy sheet protection status.
 
-**P2, third slice: `defined_names` (read-only), merged to `master`, not yet released.**
+**P2, third slice: `defined_names` (read-only), released in `0.12.0`.**
 The third item off `docs/openpyxl-gap-audit.md`'s P2 list (category 7). One new Python
 method: `defined_names() -> dict[str, str]`, reading every `<definedName
 name="...">TEXT</definedName>` in the loaded workbook's `xl/workbook.xml` into `{name:
@@ -118,9 +124,9 @@ defined_names" for the full account, including why sheet-scoped and workbook-sco
 collapse into one flat map with a silent last-one-wins collision rule. Re-reads the
 source file's ZIP on every call rather than caching, so it can raise `ValueError` if the
 source file is no longer readable after loading (distinct from the legitimate `{}` for no
-workbook loaded at all). No version bump this round.
+workbook loaded at all).
 
-**P2, fourth slice: `sheet_state` (read-only), merged to `master`, not yet released.**
+**P2, fourth slice: `sheet_state` (read-only), released in `0.12.0`.**
 The fourth item off `docs/openpyxl-gap-audit.md`'s P2 list (category 1's other row). One
 new Python method: `sheet_state(name) -> str`, reading a sheet's whole-tab visibility
 (`"visible"`/`"hidden"`/`"veryHidden"`, matching openpyxl's own `ws.sheet_state`
@@ -136,10 +142,10 @@ Excel AppleScript route, blocked on one manual file-access grant) but not yet ta
 Name-addressed like `rename_sheet`/`copy_sheet` rather than "current sheet"-defaulted;
 raises `ValueError` on an unknown name rather than silently returning `"visible"`.
 `copy_sheet` now also copies the source's visibility state (its ninth per-sheet map to
-re-key on rename, eighth to copy). No version bump this round.
+re-key on rename, eighth to copy).
 
-**P2, fifth slice: `row_height`/`column_width` (read-only), merged to `master`, not yet
-released.** The fifth item off `docs/openpyxl-gap-audit.md`'s P2 list (category 3's other
+**P2, fifth slice: `row_height`/`column_width` (read-only), released in `0.12.0`.** The
+fifth item off `docs/openpyxl-gap-audit.md`'s P2 list (category 3's other
 row). Two new Python methods: `row_height(row, sheet=None) -> Optional[float]` /
 `column_width(col, sheet=None) -> Optional[float]`, sheet-parameterized like `hidden_rows`/
 `hidden_columns` rather than name-addressed like `sheet_state`. Confirmed zero prior
@@ -155,7 +161,7 @@ pass for the wrong reason). Two independent value types, not one enum: per-row
 to 9. Deliberately read-only: zero real fixtures have a genuine custom row height or
 column width (fixture1's only `<col>` is a hidden column with `width="0"`, not real data)
 — see the gap-audit doc's "Implementation notes for P2: row height / column width" for the
-full account, including a new known gap (item 26 below). No version bump this round.
+full account, including a new known gap (item 26 below).
 
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
@@ -280,26 +286,29 @@ neither ships until each clears its own real-Excel check, done by hand against r
   text — a formula referencing it and `ISERROR()` both need to see it as an error; and the
   type survives a save → reopen → save cycle, not just the first save.
 
-Whether the next release is `0.11.1` (if `0.10.0-D`'s real-Excel pass turns up only small
-fixes) or `0.12.0` (if it lands as a real new capability, table/drawing/hyperlink
-preservation formally added) is an open question until that verification is done — not
-decided in advance. (`0.11.0` itself already shipped, for the unrelated GitHub #2–#8 fix
-round above — cut from a `release-0.10.0`-branch cherry-pick of just that work, not from
-`master`'s tip, precisely so it wouldn't drag in this still-unverified `0.10.0-D`/`t="e"`
-work by accident.)
+Whether the next release carrying this work is `0.12.1` (if `0.10.0-D`'s real-Excel pass
+turns up only small fixes) or `0.13.0` (if it lands as a real new capability,
+table/drawing/hyperlink preservation formally added) is an open question until that
+verification is done — not decided in advance. Both `0.11.0` and `0.12.0` already shipped
+without this work, each for its own unrelated reason (GitHub #2–#8 fixes; the R1-through-
+P2 gap-audit batch) — each cut from a `release-0.10.0`-branch base with just that round's
+work cherry-picked on top, not from `master`'s tip, precisely so neither would drag in
+this still-unverified `0.10.0-D`/`t="e"` work by accident.
 
-**Packaging note for whoever ships that release**: `master`'s tip cannot be
+**Packaging note for whoever ships that future release**: `master`'s tip cannot be
 `cargo publish`ed as-is today — `t="e"`'s `ExcelError::FromStr`/`biff_code()` (added to
 `crates/elixcee-types`) were never accompanied by an `elixcee-types` version bump, so the
 copy live on crates.io (`0.3.0`) doesn't have them, and `cargo publish -p elixcee`'s own
 verification build (which resolves `elixcee-types` from the registry, not the local
 workspace path) fails with `error[E0599]: no variant, associated function, or constant
 named 'from_str' found for enum 'ExcelError'`. Confirmed live via the crates.io API
-during `0.11.0`'s release. Bump `crates/elixcee-types/Cargo.toml` and the root
-`Cargo.toml`'s dependency pin to `0.3.1` and publish `elixcee-types` first, in the same
-`crates-publish.yml` run, before this milestone's own release — `scripts/check-versions.sh`
-does not currently catch this class of gap (it doesn't check `elixcee-types`'s version at
-all), so this needs a human/agent to remember it explicitly rather than relying on CI.
+during `0.11.0`'s release, and reconfirmed via a `cargo publish --dry-run` while
+preparing `0.12.0` (whose own release line excludes `t="e"` and hits no such error). Bump
+`crates/elixcee-types/Cargo.toml` and the root `Cargo.toml`'s dependency pin to `0.3.1`
+and publish `elixcee-types` first, in the same `crates-publish.yml` run, before that
+future milestone's own release — `scripts/check-versions.sh` does not currently catch
+this class of gap (it doesn't check `elixcee-types`'s version at all), so this needs a
+human/agent to remember it explicitly rather than relying on CI.
 
 ## Known gaps
 

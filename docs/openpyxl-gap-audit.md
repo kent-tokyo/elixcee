@@ -142,10 +142,12 @@ of the schema — not planned absent a concrete request.
 ## 4. Formula / error / date handling
 
 Already broadly comparable, no large gap. `set_cell_formula`/`set_cell_formula_batch`/
-`recalculate()` cover formula writing; `ExcelError` (a typed object, `code` attribute)
-round-trips real error cells since `0.11.0`'s `t="e"` work on `master` — arguably a
-stronger contract than openpyxl's own (which surfaces an error cell's cached value as a
-plain string, with no typed wrapper). Date handling is openpyxl's weaker spot too, not
+`recalculate()` cover formula writing; a `t="e"` fix on `master` makes `ExcelError` (a
+typed object, `code` attribute) round-trip real error cells, but is not yet part of any
+released version (ROADMAP.md Known gaps item 14; see the "Packaging note" for why) — once
+released, arguably a stronger contract than openpyxl's own (which surfaces an error
+cell's cached value as a plain string, with no typed wrapper). Date handling is
+openpyxl's weaker spot too, not
 elixcee's: both libraries return a date-formatted cell as a raw serial number unless the
 caller consults the cell's number format (`get_cell_number_format`, `0.11.0`) or an
 `is_date`-style heuristic. No action recommended here; noted for completeness only.
@@ -261,15 +263,20 @@ the user's priority bands and has no signal of demand — recorded, not planned.
 | Create/modify a hyperlink | 2 | 2 | 3 | 3 | 3 | yes | partial | **P2** |
 | Read/write comments (notes) | 2 | 2 | 3 | 3 | 4 | yes (`fixture4`) | no | **P3** |
 
-Hyperlinks (both internal and external) already round-trip via `0.10.0-B`/`D`'s
-relationship-backed restoration; there is still no Python-visible read of them. Comments
+Internal (location-only) hyperlinks already round-trip via `0.10.0-B4`'s relationship-free
+restoration, released. External (r:id-backed) hyperlinks round-trip too on `master`, via
+`0.10.0-D`'s relationship-backed restoration -- but `0.10.0-D` is not yet part of any
+released version (see ROADMAP.md's "Packaging note"). There is still no Python-visible
+read of either kind. Comments
 are VML-backed (`<legacyDrawing>`) — a genuinely more awkward OOXML shape than a plain
 `r:id` hyperlink, and higher corruption risk to write, hence P3 over P2.
 
 ## 11. Charts / images / drawings
 
-Read-only passthrough preservation exists (`0.10.0-D`, relationship-graph reachability);
-zero creation/modification API of any kind. Explicitly out of scope for this round's
+Read-only passthrough preservation exists on `master` (`0.10.0-D`, relationship-graph
+reachability), but is not yet part of any released version (see ROADMAP.md's "Packaging
+note"). Zero creation/modification API of any kind, regardless. Explicitly out of scope
+for this round's
 non-goals, and arguably **not planned indefinitely** rather than merely deferred — chart/
 image *authoring* is one of openpyxl's largest subsystems in its own right, has a poor fit
 with a VBA-execution-centric product identity (nobody drives Excel chart creation from
