@@ -2936,12 +2936,20 @@ impl Vm {
     /// (`localSheetId="N"`) name to shadow a workbook-scoped one of the same
     /// name, which a flat map can't represent either.
     ///
-    /// Re-reads the source file's ZIP on every call (the same way
+    /// Re-reads `loaded_workbook_path`'s ZIP on every call (the same way
     /// `save_xlsx_impl`'s own passthrough re-reads it at save time) rather
     /// than caching at load time -- this is a pure reporting view of what
-    /// the FILE currently says, independent of `named_ranges` (a completely
-    /// separate table, populated only by VBA's `Range(addr).Name = "x"`
-    /// statement, never from a loaded file).
+    /// the ORIGINALLY-LOADED file on disk currently says, independent of
+    /// `named_ranges` (a completely separate table, populated only by VBA's
+    /// `Range(addr).Name = "x"` statement, never from a loaded file).
+    ///
+    /// `loaded_workbook_path` is set once, at load time, and never updated
+    /// by a save -- so after `save_workbook(new_path)`, this still reads
+    /// the original source file, not `new_path`, and will not reflect
+    /// edits made since loading (including a rename/move that set
+    /// `defined_names_may_be_stale` and caused a later save to drop
+    /// `<definedNames>` entirely -- this method has no way to know that
+    /// happened and keeps reporting the pre-drop names from the source).
     ///
     /// Sheet-scoped and workbook-scoped names are not distinguished --
     /// both flatten into the same map under their own `name` attribute,
