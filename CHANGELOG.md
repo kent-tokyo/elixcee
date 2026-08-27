@@ -102,7 +102,9 @@ insert-delete glue, read-only merged-cell access), P1 remainder (`iter_cols`,
 second slice (`copy_sheet`), P2's third slice (`defined_names`, read-only), P2's fourth
 slice (`sheet_state`, read-only), and P2's fifth slice (`row_height`/`column_width`,
 read-only) — all below — are eight further, independent additions in this section,
-unrelated to each other or anything above.
+unrelated to each other or anything above. A `FIND()` crash fix, found by the P2 fifth
+slice round's own fuzz CI job (unrelated to what that round actually changed), is also
+below.
 
 ### Root crate (Python binding): R1 -- bulk worksheet range/row API
 
@@ -409,6 +411,19 @@ than assumed from the spec.
 `tests/xlsx_roundtrip.rs` gained a `synthetic_sheet_with_row_heights_and_column_widths`
 helper and two tests. `compat/differential-python/sheet_ops_check.py` gained a
 `RowHeightAndColumnWidthAgreeWithOpenpyxl` class, fixture built with openpyxl itself.
+
+### Root crate: `FIND()` panicked on an empty search string
+
+Found by the P2 fifth slice round's own `fuzz` CI job -- unrelated to what that round
+actually changed; the fuzz corpus discovers whatever bugs already exist in the code it
+runs against, regardless of the current PR's diff. `func_find`'s `.windows(n_chars.len())`
+panics ("window size must be non-zero", a real `slice::windows` requirement) when the
+search string is empty, e.g. `FIND("","abc")`. Fixed by matching trivially at the start
+position for an empty search string -- the same convention VBA's `InStr` already uses in
+this codebase -- plus a start-beyond-haystack guard for the identical
+out-of-bounds-slice risk. Verified by temporarily reverting the fix and confirming all
+three new tests fail with the exact original panic, including a reproduction using the
+fuzz corpus's own crash bytes.
 
 `0.10.0-D` (relationship-backed features, including the actual fix for
 `SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing
