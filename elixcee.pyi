@@ -181,8 +181,13 @@ class Vm:
         wins.
 
         Independent of VBA's own ``Range(addr).Name = "x"`` runtime names —
-        this reads what the *loaded file* declares, not the VM's in-memory
-        named-range table.
+        this reads what the *originally-loaded source file on disk*
+        declares, not the VM's in-memory named-range table. Re-read on every
+        call rather than cached, but always from the path passed to
+        ``load_workbook``/``Vm.load_workbook_file`` — a later
+        ``save_workbook(new_path)`` does not change what this reports, so it
+        will not reflect a save that dropped ``<definedNames>`` (e.g. after
+        ``rename_sheet``/``move_sheet``) or was written to a different path.
 
         Returns ``{}`` if no workbook is loaded. Raises ``ValueError`` if a
         workbook WAS loaded but its source file is no longer readable (this
