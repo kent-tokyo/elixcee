@@ -113,6 +113,24 @@ source file's ZIP on every call rather than caching, so it can raise `ValueError
 source file is no longer readable after loading (distinct from the legitimate `{}` for no
 workbook loaded at all). No version bump this round.
 
+**P2, fourth slice: `sheet_state` (read-only), merged to `master`, not yet released.**
+The fourth item off `docs/openpyxl-gap-audit.md`'s P2 list (category 1's other row). One
+new Python method: `sheet_state(name) -> str`, reading a sheet's whole-tab visibility
+(`"visible"`/`"hidden"`/`"veryHidden"`, matching openpyxl's own `ws.sheet_state`
+vocabulary exactly). Confirmed a real, independent, pre-existing bug while researching
+this round: the writer never emitted `<sheet state="...">` at all, so a loaded file's
+hidden or veryHidden sheet silently reverted to visible on ANY save, even a no-op one —
+pinned by a differential-python test asserting the current broken behavior, not just
+disclosed in prose (item 25 below). Deliberately read-only: zero real fixtures in this
+repo have a hidden/veryHidden sheet, and this project's hard gate is no writer code for a
+structural OOXML element without real fixture evidence — see the gap-audit doc's
+"Implementation notes for P2: sheet_state" for the fixture-generation path found (a Mac
+Excel AppleScript route, blocked on one manual file-access grant) but not yet taken.
+Name-addressed like `rename_sheet`/`copy_sheet` rather than "current sheet"-defaulted;
+raises `ValueError` on an unknown name rather than silently returning `"visible"`.
+`copy_sheet` now also copies the source's visibility state (its ninth per-sheet map to
+re-key on rename, eighth to copy). No version bump this round.
+
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
 `arr(1,2)`, `UBound(arr, dimension)` honors its argument for real, `ReDim Preserve` enforces
@@ -607,6 +625,19 @@ all), so this needs a human/agent to remember it explicitly rather than relying 
     multi-sheet fixture). Not fixed: changing an existing, unversioned method's ordering
     contract is out of scope for whatever round happens to notice it, and could break a
     caller already relying on alphabetical order.
+
+25. **A loaded file's hidden/veryHidden sheet reverts to visible on ANY save, including a
+    completely no-op one.** Pre-existing since the writer has always reconstructed
+    `<sheets>` without ever emitting `state="..."`, and the reader never captured it either
+    — not introduced by `sheet_state` (P2, fourth slice) or any round in this document,
+    just discovered while researching it. Pinned by a differential-python test
+    (`test_sheet_state_does_not_yet_survive_an_elixcee_save`) asserting the current broken
+    behavior explicitly. Not fixed this round: no real fixture in this repo has a hidden or
+    veryHidden sheet to validate the writer's `state="..."` shape against, and this
+    project's hard gate is no writer code for a structural OOXML element without real
+    fixture evidence — see `docs/openpyxl-gap-audit.md`'s "Implementation notes for P2:
+    sheet_state" for the fixture-generation path found (blocked on one manual step) but not
+    yet taken.
 
 ## npm/JS/WASM: still-open gaps
 

@@ -428,6 +428,63 @@ pub struct SheetVisibility {
     pub hidden_columns: Vec<Interval>,
 }
 
+/// A whole sheet's tab visibility -- XLSX's `<sheet state="...">` (`Visible` is the
+/// default when the attribute is omitted or unrecognized), NOT to be confused with
+/// `SheetVisibility` above, which is per-row/per-column hidden state *within* a
+/// sheet -- a different, already-shipped mechanism (Milestone B7b). Threaded from
+/// `reader::WorkbookSheet::sheet_state`'s raw attribute string into `Vm.sheet_states`
+/// the same way `SheetVisibility` already is into `Vm.sheet_visibility`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SheetState {
+    #[default]
+    Visible,
+    Hidden,
+    VeryHidden,
+}
+
+impl SheetState {
+    /// The exact XLSX `state="..."` attribute value this variant round-trips to on
+    /// save -- `Visible` has none (the writer omits the attribute entirely, matching
+    /// the default), so this returns `Option<&'static str>` rather than `&'static
+    /// str`. Matches openpyxl's own `ws.sheet_state` string vocabulary exactly
+    /// (confirmed live against openpyxl during this round's research) -- no
+    /// translation needed for the Python-facing API.
+    pub fn as_xml_attr(self) -> Option<&'static str> {
+        match self {
+            SheetState::Visible => None,
+            SheetState::Hidden => Some("hidden"),
+            SheetState::VeryHidden => Some("veryHidden"),
+        }
+    }
+
+    /// The Python-facing string this variant reports through `sheet_state()` --
+    /// unlike `as_xml_attr`, `Visible` has a real value here (`"visible"`), matching
+    /// openpyxl's `ws.sheet_state` default, which is always a string never `None`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SheetState::Visible => "visible",
+            SheetState::Hidden => "hidden",
+            SheetState::VeryHidden => "veryHidden",
+        }
+    }
+
+    /// Parses the raw XML `state="..."` attribute value (`WorkbookSheet::sheet_state`).
+    /// Anything other than exactly `"hidden"`/`"veryHidden"` (including `"visible"`
+    /// itself, a producer-written-but-redundant value some tools emit, or `None`)
+    /// maps to `Visible` -- matching this attribute's own XSD default-on-absence
+    /// semantics: an unrecognized value is no more meaningful than an absent one. A
+    /// plain associated function rather than `impl FromStr`: this has exactly one
+    /// call site (`populate_from_sheets`) and takes `Option<&str>` directly, matching
+    /// the field it reads -- a trait impl would just add an `.as_deref()` dance there.
+    pub fn from_attr(s: Option<&str>) -> SheetState {
+        match s {
+            Some("hidden") => SheetState::Hidden,
+            Some("veryHidden") => SheetState::VeryHidden,
+            _ => SheetState::Visible,
+        }
+    }
+}
+
 /// A loaded sheet's origin facts from its source file (0.10.0-A) — threaded from
 /// `reader::WorkbookSheet`'s own `sheet_id`/`workbook_rel_id`/`source_part_name` fields
 /// (see their doc comments) the same way `merged_ranges`/`SheetVisibility` already are,
@@ -787,6 +844,17 @@ pub struct Vm {
     /// format-aware Excel library. Empty for any sheet built purely in-VBA or loaded
     /// from `.ods`.
     pub(crate) cell_number_formats: HashMap<String, HashMap<(u32, u32), String>>,
+    /// Per-sheet whole-tab visibility (P2), keyed the same way as `merged_ranges`.
+    /// Populated by `populate_from_sheets` from the reader's `WorkbookSheet::
+    /// sheet_state`; sparse like `merged_ranges`/`sheet_visibility` -- only sheets
+    /// with a non-`Visible` state get an entry, an absent key means `Visible`
+    /// (`sheet_state()` returns that default rather than an error). Read-only this
+    /// round: no writer support yet (no real fixture has a hidden/veryHidden sheet
+    /// to validate the writer shape against -- see docs/openpyxl-gap-audit.md), so
+    /// `save_xlsx_impl` does not yet re-emit `state="..."` and a loaded file's
+    /// hidden sheet currently reverts to visible on save regardless of this map;
+    /// disclosed in ROADMAP.md rather than silently left unmentioned.
+    pub(crate) sheet_states: HashMap<String, SheetState>,
     /// Per-sheet origin facts (0.10.0-A), keyed the same way as `merged_ranges`.
     /// Populated unconditionally by `populate_from_sheets` for every sheet that came from
     /// a real `WorkbookSheet` (unlike `merged_ranges`/`sheet_visibility`/
@@ -891,6 +959,7 @@ impl Vm {
             sheet_visibility: HashMap::new(),
             cell_style_indices: HashMap::new(),
             cell_number_formats: HashMap::new(),
+            sheet_states: HashMap::new(),
             worksheet_origins: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
@@ -2050,10 +2119,10 @@ impl Vm {
         self.remove_sheet(&key, name)
     }
 
-    /// Renames a sheet, atomically re-keying all eight lowercase-keyed per-sheet `Vm`
+    /// Renames a sheet, atomically re-keying all nine lowercase-keyed per-sheet `Vm`
     /// maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
     /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
-    /// `cell_number_formats`, `worksheet_origins`). Each gets one explicit
+    /// `cell_number_formats`, `sheet_states`, `worksheet_origins`). Each gets one explicit
     /// remove+insert line rather than a generic "walk every map" helper: the maps
     /// have different value types, a truly generic helper needs a macro or
     /// trait-object indirection to cross that, and with exactly one call site a
@@ -2131,7 +2200,11 @@ impl Vm {
         if let Some(v) = self.cell_number_formats.remove(&old_key) {
             self.cell_number_formats.insert(new_key.clone(), v);
         }
-        // 8. `worksheet_origins` -- re-key AND update `original_display_name` to the
+        // 8. `sheet_states`.
+        if let Some(v) = self.sheet_states.remove(&old_key) {
+            self.sheet_states.insert(new_key.clone(), v);
+        }
+        // 9. `worksheet_origins` -- re-key AND update `original_display_name` to the
         //    NEW name; `save_xlsx_impl` reads this field (not the lowercased key) to
         //    write `<sheet name="...">` on save.
         let mut origin = self.worksheet_origins.remove(&old_key).unwrap_or_default();
@@ -2151,8 +2224,12 @@ impl Vm {
     }
 
     /// Duplicates `source_name`'s cells, merges, hidden-row/col state, cell
-    /// styles, and cell number formats into a brand-new sheet named
-    /// `new_name`, appended at the end of `sheet_order`. Deliberately
+    /// styles, cell number formats, and whole-tab visibility state into a
+    /// brand-new sheet named `new_name`, appended at the end of `sheet_order`.
+    /// Copying the source's visibility (rather than always creating the copy
+    /// visible) matches the "copy everything else" precedent every other
+    /// field here already sets, absent any concrete signal pointing the other
+    /// way. Deliberately
     /// appends rather than inserting immediately after the source (unlike
     /// openpyxl's own `copy_worksheet`) -- an append never changes any
     /// EXISTING sheet's index in `sheet_order`, sidestepping the same
@@ -2201,6 +2278,9 @@ impl Vm {
         if let Some(v) = self.cell_number_formats.get(&source_key).cloned() {
             self.cell_number_formats.insert(new_key.clone(), v);
         }
+        if let Some(&v) = self.sheet_states.get(&source_key) {
+            self.sheet_states.insert(new_key.clone(), v);
+        }
         self.worksheet_origins.insert(
             new_key,
             WorksheetOrigin {
@@ -2241,6 +2321,28 @@ impl Vm {
         self.sheet_order.insert(idx, key);
         self.defined_names_may_be_stale = true;
         Ok(())
+    }
+
+    /// `name`'s whole-tab visibility (P2) -- `Visible` for a sheet with no
+    /// `sheet_states` entry (the sparse-map default), matching what an omitted
+    /// `state="..."` attribute means in the source file. Name-addressed like
+    /// `rename_sheet`/`copy_sheet`/`delete_sheet` (not "current sheet"-defaulted
+    /// like `hidden_rows_on_sheet`) since visibility is inherently a question
+    /// about a specific, often non-active, sheet. Errors on an unknown name
+    /// rather than silently returning `Visible` -- openpyxl's own `ws.sheet_state`
+    /// can't make this distinction at all (it's a plain attribute on an already-
+    /// resolved `Worksheet` object), but this project's own "explicit error over
+    /// silent wrong behavior" convention (`sort_range`'s `key_col`, `merge_cells`'
+    /// address bounds) applies here too.
+    ///
+    /// Read-only: no `set_sheet_state` yet -- see `sheet_states`' own doc comment
+    /// for why (no real fixture evidence for the writer shape).
+    pub fn sheet_state(&self, name: &str) -> Result<SheetState, String> {
+        let key = name.to_lowercase();
+        if !self.sheets.contains_key(&key) {
+            return Err(format!("Sheet '{}' not found", name));
+        }
+        Ok(self.sheet_states.get(&key).copied().unwrap_or_default())
     }
 
     /// Evaluates an `ObjectExpr` to the `ObjectRef` it names (Milestone
@@ -3053,6 +3155,10 @@ impl Vm {
                             .collect(),
                     },
                 );
+            }
+            let state = SheetState::from_attr(sheet_data.sheet_state.as_deref());
+            if state != SheetState::Visible {
+                self.sheet_states.insert(key.clone(), state);
             }
             self.worksheet_origins.insert(
                 key.clone(),
@@ -8926,7 +9032,7 @@ mod tests {
     // ── P1 core 3: Vm::rename_sheet / Vm::move_sheet ─────────────────────────
 
     #[test]
-    fn rename_sheet_updates_all_eight_per_sheet_maps() {
+    fn rename_sheet_updates_all_nine_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -8950,6 +9056,8 @@ mod tests {
             "sheet1".to_string(),
             HashMap::from([((1, 1), "0.00".to_string())]),
         );
+        vm.sheet_states
+            .insert("sheet1".to_string(), SheetState::Hidden);
 
         vm.rename_sheet("Sheet1", "Renamed").unwrap();
 
@@ -8963,6 +9071,8 @@ mod tests {
         assert!(!vm.cell_style_indices.contains_key("sheet1"));
         assert!(vm.cell_number_formats.contains_key("renamed"));
         assert!(!vm.cell_number_formats.contains_key("sheet1"));
+        assert_eq!(vm.sheet_states.get("renamed"), Some(&SheetState::Hidden));
+        assert!(!vm.sheet_states.contains_key("sheet1"));
         assert!(vm.worksheet_origins.contains_key("renamed"));
         assert!(!vm.worksheet_origins.contains_key("sheet1"));
         assert!(vm.sheet_order.contains(&"renamed".to_string()));
@@ -9112,7 +9222,7 @@ mod tests {
     // ── P2: copy_sheet ────────────────────────────────────────────────────
 
     #[test]
-    fn copy_sheet_duplicates_all_six_per_sheet_maps() {
+    fn copy_sheet_duplicates_all_seven_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -9136,6 +9246,8 @@ mod tests {
             "sheet1".to_string(),
             HashMap::from([((1, 1), "0.00".to_string())]),
         );
+        vm.sheet_states
+            .insert("sheet1".to_string(), SheetState::VeryHidden);
 
         vm.copy_sheet("Sheet1", "Copy").unwrap();
 
@@ -9145,6 +9257,7 @@ mod tests {
         assert!(vm.sheet_visibility.contains_key("sheet1"));
         assert!(vm.cell_style_indices.contains_key("sheet1"));
         assert!(vm.cell_number_formats.contains_key("sheet1"));
+        assert_eq!(vm.sheet_states.get("sheet1"), Some(&SheetState::VeryHidden));
         // ...and the copy has all the same state, independently keyed.
         assert_eq!(vm.sheets["copy"][&(1, 1)].value, Variant::Integer(42));
         assert_eq!(vm.merged_ranges["copy"], vec![((1, 2), (1, 4))]);
@@ -9154,7 +9267,18 @@ mod tests {
         );
         assert_eq!(vm.cell_style_indices["copy"][&(1, 1)], 3);
         assert_eq!(vm.cell_number_formats["copy"][&(1, 1)], "0.00");
+        assert_eq!(vm.sheet_states.get("copy"), Some(&SheetState::VeryHidden));
         assert!(vm.worksheet_origins.contains_key("copy"));
+    }
+
+    #[test]
+    fn copy_sheet_leaves_the_copy_visible_when_the_source_has_no_sheet_states_entry() {
+        // Sparse-map default: a source with no explicit entry (the common
+        // case, an ordinary visible sheet) must not fabricate one on the copy.
+        let mut vm = Vm::new();
+        vm.copy_sheet("Sheet1", "Copy").unwrap();
+        assert!(!vm.sheet_states.contains_key("copy"));
+        assert_eq!(vm.sheet_state("Copy").unwrap(), SheetState::Visible);
     }
 
     #[test]
@@ -9239,6 +9363,97 @@ mod tests {
         let mut vm = Vm::new();
         assert!(vm.copy_sheet("Sheet1", "").is_err());
         assert!(vm.copy_sheet("Sheet1", "   ").is_err());
+    }
+
+    // ── P2: sheet visibility (whole-tab hidden/veryHidden, read-only) ───────
+
+    #[test]
+    fn sheet_state_defaults_to_visible_with_no_sheet_states_entry() {
+        let vm = Vm::new();
+        assert_eq!(vm.sheet_state("Sheet1").unwrap(), SheetState::Visible);
+    }
+
+    #[test]
+    fn sheet_state_reports_hidden_and_very_hidden() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.sheet_states
+            .insert("sheet1".to_string(), SheetState::Hidden);
+        vm.sheet_states
+            .insert("b".to_string(), SheetState::VeryHidden);
+        assert_eq!(vm.sheet_state("Sheet1").unwrap(), SheetState::Hidden);
+        assert_eq!(vm.sheet_state("B").unwrap(), SheetState::VeryHidden);
+    }
+
+    #[test]
+    fn sheet_state_is_case_insensitive() {
+        let mut vm = Vm::new();
+        vm.sheet_states
+            .insert("sheet1".to_string(), SheetState::Hidden);
+        assert_eq!(vm.sheet_state("SHEET1").unwrap(), SheetState::Hidden);
+    }
+
+    #[test]
+    fn sheet_state_errors_on_an_unknown_sheet_name() {
+        let vm = Vm::new();
+        let err = vm.sheet_state("NoSuchSheet").unwrap_err();
+        assert!(err.contains("not found"), "{:?}", err);
+    }
+
+    #[test]
+    fn sheet_state_from_attr_maps_the_two_real_values() {
+        assert_eq!(SheetState::from_attr(Some("hidden")), SheetState::Hidden);
+        assert_eq!(
+            SheetState::from_attr(Some("veryHidden")),
+            SheetState::VeryHidden
+        );
+    }
+
+    #[test]
+    fn sheet_state_from_attr_treats_absent_or_unrecognized_as_visible() {
+        assert_eq!(SheetState::from_attr(None), SheetState::Visible);
+        assert_eq!(SheetState::from_attr(Some("visible")), SheetState::Visible);
+        assert_eq!(SheetState::from_attr(Some("bogus")), SheetState::Visible);
+    }
+
+    #[test]
+    fn populate_from_sheets_threads_sheet_state_into_the_vm() {
+        let sheets = vec![
+            WorkbookSheet {
+                name: "First".to_string(),
+                cells: HashMap::new(),
+                sheet_id: None,
+                workbook_rel_id: None,
+                source_part_name: None,
+                merged_ranges: Vec::new(),
+                hidden_rows: Vec::new(),
+                hidden_columns: Vec::new(),
+                raw_style_indices: HashMap::new(),
+                formulas: HashMap::new(),
+                cell_number_formats: HashMap::new(),
+                sheet_state: Some("hidden".to_string()),
+            },
+            WorkbookSheet {
+                name: "Second".to_string(),
+                cells: HashMap::new(),
+                sheet_id: None,
+                workbook_rel_id: None,
+                source_part_name: None,
+                merged_ranges: Vec::new(),
+                hidden_rows: Vec::new(),
+                hidden_columns: Vec::new(),
+                raw_style_indices: HashMap::new(),
+                formulas: HashMap::new(),
+                cell_number_formats: HashMap::new(),
+                sheet_state: None,
+            },
+        ];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+        assert_eq!(vm.sheet_state("First").unwrap(), SheetState::Hidden);
+        assert_eq!(vm.sheet_state("Second").unwrap(), SheetState::Visible);
+        // Sparse: a visible sheet gets no entry at all, not an explicit one.
+        assert!(!vm.sheet_states.contains_key("second"));
     }
 
     // ── P1 core 3: row/col insert-delete sheet-parameterized siblings ───────
@@ -10398,6 +10613,7 @@ mod tests {
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
+            sheet_state: None,
         }];
 
         let mut vm = Vm::new();
@@ -10434,6 +10650,7 @@ mod tests {
                 raw_style_indices: HashMap::new(),
                 formulas: HashMap::new(),
                 cell_number_formats: HashMap::new(),
+                sheet_state: None,
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -10447,6 +10664,7 @@ mod tests {
                 raw_style_indices: HashMap::new(),
                 formulas: HashMap::new(),
                 cell_number_formats: HashMap::new(),
+                sheet_state: None,
             },
         ];
 
@@ -10482,6 +10700,7 @@ mod tests {
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
+            sheet_state: None,
         }];
 
         let mut vm = Vm::new();
@@ -11395,6 +11614,7 @@ mod tests {
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
+            sheet_state: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11495,6 +11715,7 @@ mod tests {
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
+            sheet_state: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11532,6 +11753,7 @@ mod tests {
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
+            sheet_state: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11558,6 +11780,7 @@ mod tests {
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
+            sheet_state: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);

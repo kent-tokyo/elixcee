@@ -8,7 +8,10 @@
 /// macro-enabled workbooks at all) -- kept as a synthetic, reviewable-as-source
 /// complement to the real Excel-authored fixtures now under
 /// `compat/oracle-excel-com/fixtures/pristine/` (see `ROADMAP.md`'s `0.9.0-A`).
-use elixcee::{parser, reader, save_workbook, vm::Vm};
+use elixcee::{
+    parser, reader, save_workbook,
+    vm::{SheetState, Vm},
+};
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 use zip::ZipArchive;
@@ -2047,6 +2050,121 @@ fn move_sheet_drops_defined_names_that_would_have_stale_positional_indices() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// P2: sheet visibility -- same synthetic 3-sheet shape as
+/// `synthetic_three_sheet_workbook`, but with each sheet's `<sheet state="...">`
+/// attribute settable. No real fixture in this repo has a hidden/veryHidden sheet
+/// (see docs/openpyxl-gap-audit.md), so this is the only way to exercise the reader
+/// against real `state="hidden"`/`state="veryHidden"` XML shapes -- a separate
+/// helper rather than adding a parameter to `synthetic_three_sheet_workbook`, which
+/// already has 4+ unrelated call sites that would all need updating for a shape they
+/// don't care about.
+fn synthetic_three_sheet_workbook_with_states(
+    source_name: &str,
+    states: [Option<&str>; 3],
+) -> String {
+    let attr = |s: Option<&str>| match s {
+        Some(v) => format!(" state=\"{}\"", v),
+        None => String::new(),
+    };
+    let workbook_xml = format!(
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+            "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+            "<sheets>\n",
+            "<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"{}/>\n",
+            "<sheet name=\"Sheet2\" sheetId=\"2\" r:id=\"rId2\"{}/>\n",
+            "<sheet name=\"Sheet3\" sheetId=\"3\" r:id=\"rId3\"{}/>\n",
+            "</sheets>\n",
+            "</workbook>\n",
+        ),
+        attr(states[0]),
+        attr(states[1]),
+        attr(states[2]),
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>\n",
+        "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet3.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const MINIMAL_SHEET: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n</worksheet>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", workbook_xml.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet1.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet2.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/worksheets/sheet3.xml",
+        MINIMAL_SHEET.as_bytes(),
+    );
+    let bytes = zip.finish().unwrap().into_inner();
+    let path = tmp_path(source_name);
+    std::fs::write(&path, &bytes).unwrap();
+    path
+}
+
+#[test]
+fn sheet_state_reads_hidden_and_very_hidden_from_a_synthetic_fixture() {
+    let source_path = synthetic_three_sheet_workbook_with_states(
+        "synthetic_three_sheet_source_states.xlsx",
+        [None, Some("hidden"), Some("veryHidden")],
+    );
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("synthetic fixture should load");
+
+    assert_eq!(vm.sheet_state("Sheet1").unwrap(), SheetState::Visible);
+    assert_eq!(vm.sheet_state("Sheet2").unwrap(), SheetState::Hidden);
+    assert_eq!(vm.sheet_state("Sheet3").unwrap(), SheetState::VeryHidden);
+
+    let _ = std::fs::remove_file(&source_path);
+}
+
+#[test]
+fn rename_sheet_preserves_hidden_state_on_a_synthetic_fixture() {
+    let source_path = synthetic_three_sheet_workbook_with_states(
+        "synthetic_three_sheet_source_states_rename.xlsx",
+        [None, Some("hidden"), None],
+    );
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("synthetic fixture should load");
+    vm.rename_sheet("Sheet2", "Renamed").unwrap();
+
+    assert_eq!(vm.sheet_state("Renamed").unwrap(), SheetState::Hidden);
+
+    let _ = std::fs::remove_file(&source_path);
+}
 
 /// 0.10.0-B slice 4 (B4): internal (location=, relationship-free) hyperlinks.
 /// fixture6_internal_hyperlink.xlsm has exactly one, no r:id.

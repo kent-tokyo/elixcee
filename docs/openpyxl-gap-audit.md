@@ -41,7 +41,7 @@ protect, freeze, merge, font, fill, border, rename, move_sheet, copy_sheet): onl
 | Rename an existing sheet | 4 | 3 | 5 | 2 | 2 | yes (all 7) | yes (`WorksheetOrigin`) | **Shipped** (`rename_sheet`, P1 core 3) |
 | Move/reorder an existing sheet | 3 | 2 | 4 | 2 | 2 | yes | yes (`sheet_order`) | **Shipped** (`move_sheet`, P1 core 3) |
 | Copy a sheet (same workbook only) | 3 | 2 | 3 | 3 | 3 | partial | partial | **Shipped** (`copy_sheet`, P2) |
-| Sheet visibility (hidden/veryHidden) | 2 | 2 | 4 | 2 | 2 | no | no | **P2** |
+| Sheet visibility (hidden/veryHidden) | 2 | 2 | 4 | 2 | 2 | no | no | **Shipped, read-only** (`sheet_state`, P2) |
 
 `set_sheet`/`delete_sheet` already cover create/select/delete. Rename and move shipped in
 the P1 core 3 round as `rename_sheet`/`move_sheet`. **Rename's actual risk was higher than
@@ -65,8 +65,15 @@ copy_sheet" below for the one design decision this round made deliberately — a
 copy rather than positioning it next to the source, to avoid the same positional
 `<definedName localSheetId="N">`-staleness risk `move_sheet` already guards against.
 Sheet visibility (whole-tab hidden/veryHidden, distinct from `sheet_visibility`'s row/col
-intervals despite the name collision) has zero existing representation anywhere in the
-reader or writer — real new surface, not glue, still P2.
+intervals despite the name collision) shipped read-only as `sheet_state` (P2, fourth
+slice). It had zero existing representation anywhere in the reader or writer, confirmed
+during this round's research — including a real, independent, pre-existing bug: the
+writer never emitted `state="..."` at all, so loading a file with a hidden sheet and
+saving it (even a no-op save) silently un-hid it. Write support (`set_sheet_state`) is
+deliberately deferred: no real fixture in this repo has a hidden/veryHidden sheet to
+validate the writer shape against, and generating one needs either a one-time manual
+grant of Excel's sandboxed file-access dialog (macOS) or a hand-built fixture — see
+"Implementation notes for P2: sheet_state" below.
 
 ## 2. Cell / range access
 
@@ -332,12 +339,20 @@ reproposed later without this context.
    the existing `xlsx_shared_strings` pattern, no new parsing infrastructure. Deliberately
    read-only and deliberately unresolved (raw formula text, not a resolved sheet+address) —
    see "Implementation notes for P2: defined_names" below.
-7. **P2, remaining**: sheet visibility (category 1's other row — zero existing
-   representation anywhere, real new surface, unlike `copy_sheet`), row height/column width
-   (category 3's other row — no internal representation at all, real new surface, unlike
-   hidden row/col), number-format-only writing (category 5, the narrowest possible slice of
-   the style engine), defined-name create/delete (category 7's other row — a real write
-   path into `<definedNames>`, different and larger than the read-only slice just shipped),
+7. **P2, fourth slice (shipped)**: `sheet_state` read-only (category 1's other row).
+   Confirmed a real, independent, pre-existing bug in the same research pass: the writer
+   never emitted `state="..."` at all, so a loaded file's hidden sheet silently reverted to
+   visible on ANY save (pinned by a differential-python test, not just disclosed in prose).
+   Write support (`set_sheet_state`) deliberately deferred — zero real fixtures in this repo
+   have a hidden/veryHidden sheet, and this project's hard gate is no writer code for a
+   structural OOXML element without real fixture evidence. See "Implementation notes for P2:
+   sheet_state" below for the fixture-generation path found (and not yet taken) this round.
+8. **P2, remaining**: row height/column width (category 3's other row — no internal
+   representation at all, real new surface, unlike hidden row/col), number-format-only
+   writing (category 5, the narrowest possible slice of the style engine), defined-name
+   create/delete (category 7's other row — a real write path into `<definedNames>`,
+   different and larger than the read-only slice already shipped), sheet-visibility
+   *write* support (`set_sheet_state`, blocked on real fixture evidence — see above),
    Python-native AutoFilter (category 8 — confirmed to need the same
    `Stmt::RangeAutoFilter`-extraction treatment `sort_range` did, plus its own
    signature-design decision since `field`/`criteria1` are VBA `Expr` AST nodes, not plain
@@ -347,9 +362,9 @@ reproposed later without this context.
    need two separate pieces of new work, not one: parsing `<hyperlink>` elements into a
    queryable structure AND joining `r:id`-backed ones against the sheet's own `.rels` file,
    a lookup that today only happens ad hoc for survival-checking).
-8. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
+9. **P3**: font/fill/border/alignment *read* (not write), comments, page-setup read, sheet
    protection exposure (each needs its own follow-up design decision, noted above).
-9. **Not planned**: full style-engine writing, named styles, table/data-validation/
+10. **Not planned**: full style-engine writing, named styles, table/data-validation/
    conditional-formatting *creation*, chart/image authoring, outline/grouping, streaming
    modes, and a wrapper `Cell` object model — each either fights this project's own hard
    gates (no writer code without fixture evidence), fights its product identity (VBA
@@ -677,3 +692,59 @@ collects both kinds under their own `name` attribute in document order; `Vm::def
 collapses them with whichever the reader encounters LAST silently winning. Disclosed, not
 solved — no fixture in this repo exercises the collision case, so there's no concrete
 shape to design around yet.
+
+## Implementation notes for P2: sheet_state
+
+Gaps and deliberate scope boundaries discovered while implementing `sheet_state`,
+disclosed here rather than silently absorbed or fixed as a side effect of an unrelated
+feature:
+
+**Confirmed a real, independent, pre-existing bug: whole-tab visibility was not read OR
+written anywhere before this round.** `xlsx_workbook_sheets` (the `<sheet>`-element
+parser) never captured the `state="..."` attribute, and the writer's `<sheets>` emission
+never wrote it. The practical consequence: loading any real file with a hidden or
+veryHidden sheet and saving it — even a completely no-op save — silently un-hid every
+sheet. This has nothing to do with `sheet_state` shipping this round; it was already
+broken and would still be broken if this round had shipped nothing at all. Pinned by a
+differential-python test (`test_sheet_state_does_not_yet_survive_an_elixcee_save`) that
+asserts the CURRENT broken behavior explicitly, so a future writer fix is a deliberate,
+visible change to that test rather than a silent behavior shift nobody notices.
+
+**Zero real fixtures have a hidden/veryHidden sheet, which is why write support
+(`set_sheet_state`) is deferred, not shipped alongside the read side.** Checked all 7
+pristine fixtures under `compat/oracle-excel-com/fixtures/` and everything under
+`compat/corpus/` — none has `state=` on any `<sheet>` element. This project's hard gate
+(no writer code for a structural OOXML element without real fixture evidence) isn't met.
+A path to get real evidence was found but not taken this round: Mac Excel's AppleScript
+dictionary (`Excel.sdef`) exposes a worksheet-level `visible` property (`XlSheetVisibility`:
+`sheet visible`/`sheet hidden`/`sheet very hidden`), live-verified to read/write correctly
+with no VBA-project access needed — but saving through it hits macOS's sandboxed
+"Grant File Access" dialog, which needs one human click and can't be scripted around.
+Unblocking it needs either a one-time manual grant (open Excel, do one normal Save into
+the target fixture folder) or a hand-built fixture (2-3 sheets, one hidden, one
+veryHidden, via Excel's UI or `ActiveWorkbook.Sheets("X").Visible = xlSheetVeryHidden`).
+
+**The read side's test fixture is synthetic (hand-built XML via `ZipWriter`), matching
+this test file's own established pattern for shapes no real fixture demonstrates** — the
+same technique `synthetic_three_sheet_workbook` already uses for rename/move-order tests.
+A separate `synthetic_three_sheet_workbook_with_states` helper was added rather than
+extending the existing one with a new parameter, which would have touched 4+ unrelated
+call sites for a shape they don't care about. The differential-python side instead builds
+its fixture with openpyxl itself (which can freely write `ws.sheet_state = "hidden"`) —
+simpler than replicating the same synthetic-ZIP technique in Python, and openpyxl is
+already the established test-only oracle for this whole file.
+
+**Design choices, matching established conventions rather than copying openpyxl
+blindly:** `sheet_state(name)` is name-addressed like `rename_sheet`/`copy_sheet`/
+`delete_sheet` (not "current sheet"-defaulted like `hidden_rows`/`hidden_columns`), since
+visibility is inherently a question about a specific, often non-active, sheet. It raises
+`ValueError` on an unknown name rather than silently returning `"visible"` — openpyxl's
+own `ws.sheet_state` can't make that distinction at all (it's a plain attribute read off
+an already-resolved `Worksheet` object), but this project's own "explicit error over
+silent wrong behavior" convention (`sort_range`'s `key_col`, `merge_cells`'s address
+bounds) applies here too. The string vocabulary (`"visible"`/`"hidden"`/`"veryHidden"`)
+matches openpyxl's own exactly, confirmed live during research — no translation needed.
+`copy_sheet` was extended to also copy the source's visibility state (its now-ninth
+per-sheet map to re-key on `rename_sheet`, eighth to copy on `copy_sheet`), matching the
+"copy everything else" precedent every other field on that method already sets, absent
+any concrete signal pointing the other way.
