@@ -99,9 +99,9 @@ for exactly what's implemented, plus a CI observability addition for the shared 
 bridge. R1 (bulk worksheet range/row API), P1 core 3 (sheet rename/move, row/col
 insert-delete glue, read-only merged-cell access), P1 remainder (`iter_cols`,
 `sort_range`, merge create/remove), P2's first slice (hidden row/col read/write), P2's
-second slice (`copy_sheet`), and P2's third slice (`defined_names`, read-only) — all
-below — are six further, independent additions in this section, unrelated to each other
-or anything above.
+second slice (`copy_sheet`), P2's third slice (`defined_names`, read-only), and P2's
+fourth slice (`sheet_state`, read-only) — all below — are seven further, independent
+additions in this section, unrelated to each other or anything above.
 
 ### Root crate (Python binding): R1 -- bulk worksheet range/row API
 
@@ -338,6 +338,38 @@ genuinely different failure mode from "nothing to report").
 class, using `fixture4_hyperlink_comment_name.xlsm` (the one real fixture with genuine
 `<definedNames>` content) to confirm exact agreement with openpyxl's own
 `wb.defined_names` dict.
+
+### Root crate (Python binding): P2 fourth slice -- sheet_state (read-only)
+
+The fourth item off `docs/openpyxl-gap-audit.md`'s P2 list. One new Python method:
+`sheet_state(name) -> str`, reading a sheet's whole-tab visibility as `"visible"`,
+`"hidden"`, or `"veryHidden"` -- matching openpyxl's own `ws.sheet_state` string
+vocabulary exactly, no translation needed. Name-addressed (case-insensitive) like
+`rename_sheet`/`copy_sheet`, not "current sheet"-defaulted; raises `ValueError` on an
+unknown sheet name rather than silently returning `"visible"`.
+
+Confirmed a real, independent, pre-existing bug while researching this round: neither the
+reader nor the writer has ever handled XLSX's `<sheet state="...">` attribute at all --
+loading a real file with a hidden or veryHidden sheet and saving it, even a completely
+no-op save, silently reverted every sheet to visible. Not introduced by this round; just
+discovered by it, and now pinned by a differential-python test that asserts the current
+broken behavior explicitly rather than leaving it as an unverified claim.
+
+Deliberately read-only this round -- no `set_sheet_state` yet. Every real fixture under
+`compat/oracle-excel-com/fixtures/` and `compat/corpus/` was checked; none has a hidden or
+veryHidden sheet, and this project's hard gate is no writer code for a structural OOXML
+element without real fixture evidence. `copy_sheet` was extended to also copy the
+source's visibility state onto the new sheet (its ninth per-sheet map to re-key on
+`rename_sheet`, eighth to copy on `copy_sheet`), matching every other field it already
+copies.
+
+New `SheetState` enum (`Visible`/`Hidden`/`VeryHidden`) on the Rust side; the reader's
+`xlsx_workbook_sheets` now also captures the `state` attribute. `tests/xlsx_roundtrip.rs`
+gained a `synthetic_three_sheet_workbook_with_states` helper (a real fixture can't
+exercise this) and two tests using it. `compat/differential-python/sheet_ops_check.py`
+gained a `SheetStateAgreesWithOpenpyxl` class -- its fixture is built with openpyxl
+itself (which can freely write `ws.sheet_state = "hidden"`), compared against elixcee's
+read of the same file, plus the round-trip-loses-state regression test described above.
 
 `0.10.0-D` (relationship-backed features, including the actual fix for
 `SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing
