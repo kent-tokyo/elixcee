@@ -155,8 +155,8 @@ class Vm:
 
     def copy_sheet(self, source_name: str, new_name: str) -> None:
         """Duplicate a sheet's cells, merges, hidden-row/col state, cell
-        styles, cell number formats, and whole-tab visibility state into a
-        brand-new sheet.
+        styles, cell number formats, whole-tab visibility state, and row
+        heights/column widths into a brand-new sheet.
 
         Appended at the end of the workbook's sheets — unlike openpyxl's own
         ``copy_worksheet`` (which places the copy immediately after the
@@ -492,6 +492,32 @@ class Vm:
 
         Raises ``ValueError`` if *col* is 0 or exceeds Excel's own grid limit
         (16,384 columns), or *sheet* is unknown.
+        """
+        ...
+
+    def row_height(self, row: int, sheet: str | None = None) -> float | None:
+        """A row's explicit height in points, or ``None`` if it was never
+        explicitly set (it uses the sheet's default row height, which this
+        VM doesn't track as a queryable value).
+
+        Read-only: there's no ``set_row_height`` yet, and a loaded file's
+        row heights are dropped on EVERY save regardless of what this
+        reports (the writer unconditionally regenerates ``<row>`` from
+        hidden-row state alone) — no real fixture has a custom row height
+        to validate a writer shape against.
+
+        Raises ``ValueError`` if *sheet* is unknown.
+        """
+        ...
+
+    def column_width(self, col: int, sheet: str | None = None) -> float | None:
+        """Column-axis mirror of :meth:`row_height` — a column's explicit
+        width in "characters" (the XLSX unit, font-relative), or ``None``
+        if never explicitly set. Same read-only caveat: no
+        ``set_column_width`` yet, and a loaded file's column widths are
+        dropped on every save today.
+
+        Raises ``ValueError`` if *sheet* is unknown.
         """
         ...
 

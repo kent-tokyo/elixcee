@@ -85,6 +85,17 @@ pub struct WorkbookSheet {
     /// resolved type -- `Vm::populate_from_sheets` is what turns this into a proper
     /// `SheetState`. Always `None` for `.ods` (no equivalent attribute).
     pub sheet_state: Option<String>,
+    /// Per-row explicit height in points (P2), from `<row r=".." ht=".."
+    /// customHeight="1">` -- sparse, only rows with an explicit height get an
+    /// entry. `customHeight="1"` is required for `ht` to actually apply in real
+    /// Excel, so a bare `ht` without it is not recorded. Always empty for `.ods`
+    /// (deferred, same as `hidden_rows`).
+    pub row_heights: HashMap<u32, f64>,
+    /// Column width ranges in "characters" (P2), 1-based inclusive
+    /// `(min, max, width)`, from `<col min=".." max=".." width=".."
+    /// customWidth="1"/>` -- same `customWidth="1"`-required caveat as
+    /// `row_heights`. Always empty for `.ods` (deferred, same as `hidden_columns`).
+    pub column_widths: Vec<(u32, u32, f64)>,
 }
 
 pub enum SheetCell {
@@ -996,6 +1007,8 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 formulas: sheet_data.formulas.clone(),
                 cell_number_formats,
                 sheet_state,
+                row_heights: sheet_data.row_heights,
+                column_widths: sheet_data.column_widths,
             },
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
@@ -1300,6 +1313,19 @@ struct XlsxSheetData {
     /// directly from `<col min=".." max=".." hidden="1">` (Milestone
     /// B7b), already interval-shaped in the XML, no coalescing needed.
     hidden_columns: Vec<(u32, u32)>,
+    /// Per-row explicit height in points (P2), from `<row r=".." ht=".."
+    /// customHeight="1">` — `customHeight="1"` is required for `ht` to
+    /// actually apply in real Excel, so a bare `ht` without it is not
+    /// recorded (matches real Excel's own behavior, confirmed via
+    /// ECMA-376's `CT_Row` semantics). Sparse: only rows with an explicit
+    /// height get an entry, matching `cell_number_formats`'s sparsity.
+    row_heights: HashMap<u32, f64>,
+    /// Column width ranges in "characters" (P2), 1-based inclusive
+    /// `(min, max, width)` — from `<col min=".." max=".." width=".."
+    /// customWidth="1"/>`, same `customWidth="1"`-required caveat as
+    /// `row_heights`' `customHeight`. Already range-shaped in the XML, no
+    /// coalescing needed, same as `hidden_columns`.
+    column_widths: Vec<(u32, u32, f64)>,
     /// Per-cell raw `<f>` formula text — see `BufferSheet::formulas`.
     formulas: HashMap<(u32, u32), String>,
     /// The worksheet's declared `<dimension>`, when present and trusted —
@@ -1318,6 +1344,8 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     let mut hidden_rows: Vec<(u32, u32)> = Vec::new();
     let mut hidden_columns: Vec<(u32, u32)> = Vec::new();
     let mut pending_hidden_row_run: Option<(u32, u32)> = None;
+    let mut row_heights: HashMap<u32, f64> = HashMap::new();
+    let mut column_widths: Vec<(u32, u32, f64)> = Vec::new();
     let mut formulas: HashMap<(u32, u32), String> = HashMap::new();
     let mut dimension: Option<MergeRect> = None;
     let mut style_ids: HashMap<(u32, u32), u32> = HashMap::new();
@@ -1361,6 +1389,11 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                         } else if let Some(run) = pending_hidden_row_run.take() {
                             hidden_rows.push(run);
                         }
+                        if attr_is_true(attrs, "customHeight")
+                            && let Some(ht) = attr_get(attrs, "ht").and_then(|s| s.parse().ok())
+                        {
+                            row_heights.insert(cur_row, ht);
+                        }
                     }
                     "col" => {
                         if attr_is_true(attrs, "hidden") {
@@ -1368,6 +1401,14 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                             let max = attr_get(attrs, "max").and_then(|s| s.parse().ok());
                             if let (Some(min), Some(max)) = (min, max) {
                                 hidden_columns.push((min, max));
+                            }
+                        }
+                        if attr_is_true(attrs, "customWidth") {
+                            let min = attr_get(attrs, "min").and_then(|s| s.parse().ok());
+                            let max = attr_get(attrs, "max").and_then(|s| s.parse().ok());
+                            let width = attr_get(attrs, "width").and_then(|s| s.parse().ok());
+                            if let (Some(min), Some(max), Some(width)) = (min, max, width) {
+                                column_widths.push((min, max, width));
                             }
                         }
                     }
@@ -1511,6 +1552,8 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
         merged_ranges,
         hidden_rows,
         hidden_columns,
+        row_heights,
+        column_widths,
         formulas,
         dimension,
         style_ids,
@@ -1636,6 +1679,8 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             formulas: HashMap::new(),
                             cell_number_formats: HashMap::new(),
                             sheet_state: None,
+                            row_heights: HashMap::new(),
+                            column_widths: Vec::new(),
                         });
                         in_sheet = true;
                         row = 0;
@@ -1994,6 +2039,59 @@ mod merge_tests {
         let data = xlsx_sheet_cells(xml, &[], &[]);
         assert_eq!(data.hidden_columns, vec![(1, 1)]);
         assert_eq!(data.hidden_rows, vec![(1, 1)]);
+    }
+
+    // ── P2: row height / column width parsing ───────────────────────────────
+
+    #[test]
+    fn xlsx_sheet_cells_reads_a_custom_row_height() {
+        let xml = r#"<worksheet><sheetData>
+<row r="5" ht="30.5" customHeight="1"><c r="A5"><v>1</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &[]);
+        assert_eq!(data.row_heights.get(&5), Some(&30.5));
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_ignores_ht_without_custom_height() {
+        // Real Excel ignores a bare `ht` without `customHeight="1"` -- some
+        // producers emit `ht` alongside an auto-fit row without ever setting
+        // the flag, and that must not be recorded as an explicit height.
+        let xml = r#"<worksheet><sheetData>
+<row r="5" ht="30.5"><c r="A5"><v>1</v></c></row>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &[]);
+        assert!(data.row_heights.is_empty());
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_reads_a_custom_column_width_range() {
+        let xml = r#"<worksheet><cols>
+<col min="2" max="4" width="12.5" customWidth="1"/>
+</cols><sheetData></sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &[]);
+        assert_eq!(data.column_widths, vec![(2, 4, 12.5)]);
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_ignores_width_without_custom_width() {
+        let xml = r#"<worksheet><cols>
+<col min="2" max="4" width="12.5"/>
+</cols><sheetData></sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &[]);
+        assert!(data.column_widths.is_empty());
+    }
+
+    #[test]
+    fn xlsx_sheet_cells_row_height_and_hidden_are_independent() {
+        // A row can be both explicitly-heighted and hidden at once -- confirm
+        // one attribute's parsing doesn't clobber the other's.
+        let xml = r#"<worksheet><sheetData>
+<row r="5" ht="20" customHeight="1" hidden="1"/>
+</sheetData></worksheet>"#;
+        let data = xlsx_sheet_cells(xml, &[], &[]);
+        assert_eq!(data.row_heights.get(&5), Some(&20.0));
+        assert_eq!(data.hidden_rows, vec![(5, 5)]);
     }
 
     #[test]

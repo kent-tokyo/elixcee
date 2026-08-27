@@ -457,6 +457,10 @@ print(vm.defined_names())  # 例如 {"MyRange": "Sheet1!$A$1:$A$3"}
 # 读取工作表的整表可见性状态
 print(vm.sheet_state("Data"))  # "visible" / "hidden" / "veryHidden"
 
+# 读取行高或列宽（仅当已显式设置时）
+print(vm.row_height(5, sheet="Data"))    # 例如 30.5，未设置则为 None
+print(vm.column_width(2, sheet="Data"))  # 例如 12.5，未设置则为 None
+
 # 控制 MsgBox 行为
 vm = elixcee.Vm(on_msgbox="skip")   # 静默忽略 MsgBox（默认）
 vm = elixcee.Vm(on_msgbox="error")  # MsgBox 时抛出 RuntimeError
@@ -494,6 +498,7 @@ vm = elixcee.Vm(on_msgbox="error")  # MsgBox 时抛出 RuntimeError
 | `vm.copy_sheet(source_name, new_name)` | 复制一个工作表（单元格、合并区域、隐藏状态、样式）。 |
 | `vm.defined_names()` | 以 `{name: 原始公式文本}` 返回工作簿级别的已定义名称。只读。 |
 | `vm.sheet_state(name)` | 工作表的整表可见性状态：`"visible"`、`"hidden"` 或 `"veryHidden"`。只读。 |
+| `vm.row_height(row, sheet=None)` / `vm.column_width(col, sheet=None)` | 行高（磅）/ 列宽（字符数），若未显式设置则为 `None`。只读。 |
 | `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | 插入/删除行（仅限数值 -- 不会移动合并单元格或样式）。 |
 | `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | 插入/删除列（与行相同的限制）。 |
 | `vm.merged_cells(sheet=None)` | 以 A1 格式字符串列表返回工作表的合并区域，例如 `["B1:C1"]`。 |

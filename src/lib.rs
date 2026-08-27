@@ -493,8 +493,8 @@ impl PyVm {
     }
 
     /// Duplicate a sheet's cells, merges, hidden-row/col state, cell
-    /// styles, cell number formats, and whole-tab visibility state into a
-    /// brand-new sheet.
+    /// styles, cell number formats, whole-tab visibility state, and row
+    /// heights/column widths into a brand-new sheet.
     ///
     /// Appended at the end of the workbook's sheets -- unlike openpyxl's own
     /// ``copy_worksheet`` (which places the copy immediately after the
@@ -1191,6 +1191,39 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         self.inner.set_column_hidden_on_sheet(&key, col, hidden);
         Ok(())
+    }
+
+    /// A row's explicit height in points (P2), or ``None`` if it was never
+    /// explicitly set (it uses the sheet's default row height, which this VM
+    /// doesn't track as a queryable value). Read-only: there's no
+    /// ``set_row_height`` yet, and a loaded file's row heights are dropped on
+    /// EVERY save regardless of what this reports (the writer unconditionally
+    /// regenerates ``<row>`` from hidden-row state alone) -- no real fixture
+    /// has a custom row height to validate a writer shape against.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown.
+    #[pyo3(signature = (row, sheet = None))]
+    fn row_height(&self, row: u32, sheet: Option<&str>) -> PyResult<Option<f64>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self.inner.row_height_on_sheet(&key, row))
+    }
+
+    /// Column-axis mirror of :meth:`row_height` -- a column's explicit width
+    /// in "characters" (the XLSX unit, font-relative), or ``None`` if never
+    /// explicitly set. Same read-only caveat: no ``set_column_width`` yet, and
+    /// a loaded file's column widths are dropped on every save today.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown.
+    #[pyo3(signature = (col, sheet = None))]
+    fn column_width(&self, col: u32, sheet: Option<&str>) -> PyResult<Option<f64>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        Ok(self.inner.column_width_on_sheet(&key, col))
     }
 
     /// Python-native, single-key sort of a rectangular range, in place. Not

@@ -131,6 +131,25 @@ raises `ValueError` on an unknown name rather than silently returning `"visible"
 `copy_sheet` now also copies the source's visibility state (its ninth per-sheet map to
 re-key on rename, eighth to copy). No version bump this round.
 
+**P2, fifth slice: `row_height`/`column_width` (read-only), merged to `master`, not yet
+released.** The fifth item off `docs/openpyxl-gap-audit.md`'s P2 list (category 3's other
+row). Two new Python methods: `row_height(row, sheet=None) -> Optional[float]` /
+`column_width(col, sheet=None) -> Optional[float]`, sheet-parameterized like `hidden_rows`/
+`hidden_columns` rather than name-addressed like `sheet_state`. Confirmed zero prior
+representation (not read, stored, or written anywhere), and confirmed the writer's gap is
+worse than `sheet_state`'s: `<row>`/`<cols>` are fully regenerated from `sheet_visibility`
+alone on EVERY save (not passthrough, not even an opaque fragment), so a loaded file's row
+heights/column widths are unconditionally dropped — pinned by a differential-python test
+that checks the saved file's raw XML directly (openpyxl's own `column_dimensions[letter]`
+auto-vivifies a default width on access, which would have made a naive regression test
+pass for the wrong reason). Two independent value types, not one enum: per-row
+`HashMap<u32, f64>` and range-shaped `Vec<(u32, u32, f64)>` for columns — pushed
+`rename_sheet`'s re-key count from 9 to 11 maps, `copy_sheet`'s copied-field count from 7
+to 9. Deliberately read-only: zero real fixtures have a genuine custom row height or
+column width (fixture1's only `<col>` is a hidden column with `width="0"`, not real data)
+— see the gap-audit doc's "Implementation notes for P2: row height / column width" for the
+full account, including a new known gap (item 26 below). No version bump this round.
+
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
 `arr(1,2)`, `UBound(arr, dimension)` honors its argument for real, `ReDim Preserve` enforces
@@ -638,6 +657,20 @@ all), so this needs a human/agent to remember it explicitly rather than relying 
     fixture evidence — see `docs/openpyxl-gap-audit.md`'s "Implementation notes for P2:
     sheet_state" for the fixture-generation path found (blocked on one manual step) but not
     yet taken.
+
+26. **A loaded file's row heights and column widths are dropped on EVERY save,
+    unconditionally — not just on some saves like item 25's sheet-visibility bug.**
+    `xlsx_worksheet_xml`'s `<row>`/`<cols>` emission is fully regenerated from
+    `Vm.sheet_visibility` alone, not passthrough, not even an opaque fragment. Pre-existing,
+    not introduced by `row_height`/`column_width` (P2, fifth slice) or any round in this
+    document — just discovered while researching it. Pinned by a differential-python test
+    (`test_row_height_and_column_width_do_not_yet_survive_an_elixcee_save`) that checks the
+    saved file's raw XML directly, since openpyxl's own `column_dimensions[letter]`
+    auto-vivifies a default-width entry on `[]` access and would mask the bug if trusted for
+    this check. Not fixed this round: zero real fixtures in this repo have a genuine custom
+    row height or column width (fixture1's only `<col>` is a hidden column with `width="0"`,
+    not real data) to validate the writer's `ht="..."`/`width="..."` shapes against — see
+    `docs/openpyxl-gap-audit.md`'s "Implementation notes for P2: row height / column width".
 
 ## npm/JS/WASM: still-open gaps
 
