@@ -855,6 +855,21 @@ pub struct Vm {
     /// hidden sheet currently reverts to visible on save regardless of this map;
     /// disclosed in ROADMAP.md rather than silently left unmentioned.
     pub(crate) sheet_states: HashMap<String, SheetState>,
+    /// Per-sheet, per-row explicit height in points (P2), keyed the same way as
+    /// `merged_ranges`. Populated by `populate_from_sheets` from the reader's
+    /// `WorkbookSheet::row_heights`; sparse -- only rows with an explicit
+    /// `customHeight="1"` height get an entry. Read-only this round: the writer
+    /// unconditionally regenerates `<row>` from `sheet_visibility` alone, so a
+    /// loaded file's row heights are dropped on EVERY save today, not just
+    /// sometimes -- see docs/openpyxl-gap-audit.md and ROADMAP.md's known gaps.
+    pub(crate) row_heights: HashMap<String, HashMap<u32, f64>>,
+    /// Per-sheet column width ranges in "characters" (P2), 1-based inclusive
+    /// `(min, max, width)`, keyed the same way as `merged_ranges`/`row_heights`.
+    /// Populated by `populate_from_sheets` from the reader's
+    /// `WorkbookSheet::column_widths`. Read-only this round, same writer gap as
+    /// `row_heights` above (the writer unconditionally regenerates `<cols>`
+    /// from `sheet_visibility` alone).
+    pub(crate) column_widths: HashMap<String, Vec<(u32, u32, f64)>>,
     /// Per-sheet origin facts (0.10.0-A), keyed the same way as `merged_ranges`.
     /// Populated unconditionally by `populate_from_sheets` for every sheet that came from
     /// a real `WorkbookSheet` (unlike `merged_ranges`/`sheet_visibility`/
@@ -960,6 +975,8 @@ impl Vm {
             cell_style_indices: HashMap::new(),
             cell_number_formats: HashMap::new(),
             sheet_states: HashMap::new(),
+            row_heights: HashMap::new(),
+            column_widths: HashMap::new(),
             worksheet_origins: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
@@ -1602,6 +1619,28 @@ impl Vm {
         set.into_iter().collect()
     }
 
+    /// `row`'s explicit height in points on `key` (P2), or `None` if it was never
+    /// explicitly set (i.e. it uses the sheet's default row height, which this VM
+    /// doesn't store as a queryable value anywhere -- see `row_heights`' own doc
+    /// comment). Infallible like `hidden_rows_on_sheet`: an unknown `key` or `row`
+    /// just returns `None`, no existence check -- sheet-name validation happens at
+    /// the PyO3 boundary (`resolve_sheet_key`), matching this family's convention.
+    pub fn row_height_on_sheet(&self, key: &str, row: u32) -> Option<f64> {
+        self.row_heights.get(key)?.get(&row).copied()
+    }
+
+    /// Column-axis mirror of `row_height_on_sheet`. `col`'s explicit width in
+    /// "characters" on `key`, or `None` if never explicitly set. `column_widths`
+    /// is range-shaped (`(min, max, width)`, like `hidden_columns`), so this scans
+    /// for the range containing `col` rather than a direct map lookup.
+    pub fn column_width_on_sheet(&self, key: &str, col: u32) -> Option<f64> {
+        self.column_widths
+            .get(key)?
+            .iter()
+            .find(|&&(min, max, _)| min <= col && col <= max)
+            .map(|&(_, _, width)| width)
+    }
+
     /// Hides or unhides a single row on `key`. Hiding an already-hidden row
     /// is a no-op (does not push a duplicate single-unit interval alongside
     /// the interval that already covers it). Unhiding splits the covering
@@ -2119,10 +2158,11 @@ impl Vm {
         self.remove_sheet(&key, name)
     }
 
-    /// Renames a sheet, atomically re-keying all nine lowercase-keyed per-sheet `Vm`
+    /// Renames a sheet, atomically re-keying all eleven lowercase-keyed per-sheet `Vm`
     /// maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
     /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
-    /// `cell_number_formats`, `sheet_states`, `worksheet_origins`). Each gets one explicit
+    /// `cell_number_formats`, `sheet_states`, `row_heights`, `column_widths`,
+    /// `worksheet_origins`). Each gets one explicit
     /// remove+insert line rather than a generic "walk every map" helper: the maps
     /// have different value types, a truly generic helper needs a macro or
     /// trait-object indirection to cross that, and with exactly one call site a
@@ -2204,7 +2244,14 @@ impl Vm {
         if let Some(v) = self.sheet_states.remove(&old_key) {
             self.sheet_states.insert(new_key.clone(), v);
         }
-        // 9. `worksheet_origins` -- re-key AND update `original_display_name` to the
+        // 9-10: row_heights / column_widths.
+        if let Some(v) = self.row_heights.remove(&old_key) {
+            self.row_heights.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.column_widths.remove(&old_key) {
+            self.column_widths.insert(new_key.clone(), v);
+        }
+        // 11. `worksheet_origins` -- re-key AND update `original_display_name` to the
         //    NEW name; `save_xlsx_impl` reads this field (not the lowercased key) to
         //    write `<sheet name="...">` on save.
         let mut origin = self.worksheet_origins.remove(&old_key).unwrap_or_default();
@@ -2224,12 +2271,12 @@ impl Vm {
     }
 
     /// Duplicates `source_name`'s cells, merges, hidden-row/col state, cell
-    /// styles, cell number formats, and whole-tab visibility state into a
-    /// brand-new sheet named `new_name`, appended at the end of `sheet_order`.
-    /// Copying the source's visibility (rather than always creating the copy
-    /// visible) matches the "copy everything else" precedent every other
-    /// field here already sets, absent any concrete signal pointing the other
-    /// way. Deliberately
+    /// styles, cell number formats, whole-tab visibility state, and row
+    /// heights/column widths into a brand-new sheet named `new_name`, appended
+    /// at the end of `sheet_order`. Copying every one of these (rather than
+    /// leaving the copy at its defaults) matches the "copy everything else"
+    /// precedent every other field here already sets, absent any concrete
+    /// signal pointing the other way. Deliberately
     /// appends rather than inserting immediately after the source (unlike
     /// openpyxl's own `copy_worksheet`) -- an append never changes any
     /// EXISTING sheet's index in `sheet_order`, sidestepping the same
@@ -2280,6 +2327,12 @@ impl Vm {
         }
         if let Some(&v) = self.sheet_states.get(&source_key) {
             self.sheet_states.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.row_heights.get(&source_key).cloned() {
+            self.row_heights.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.column_widths.get(&source_key).cloned() {
+            self.column_widths.insert(new_key.clone(), v);
         }
         self.worksheet_origins.insert(
             new_key,
@@ -3160,6 +3213,14 @@ impl Vm {
             let state = SheetState::from_attr(sheet_data.sheet_state.as_deref());
             if state != SheetState::Visible {
                 self.sheet_states.insert(key.clone(), state);
+            }
+            if !sheet_data.row_heights.is_empty() {
+                self.row_heights
+                    .insert(key.clone(), sheet_data.row_heights.clone());
+            }
+            if !sheet_data.column_widths.is_empty() {
+                self.column_widths
+                    .insert(key.clone(), sheet_data.column_widths.clone());
             }
             self.worksheet_origins.insert(
                 key.clone(),
@@ -9077,7 +9138,7 @@ mod tests {
     // ── P1 core 3: Vm::rename_sheet / Vm::move_sheet ─────────────────────────
 
     #[test]
-    fn rename_sheet_updates_all_nine_per_sheet_maps() {
+    fn rename_sheet_updates_all_eleven_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -9103,6 +9164,10 @@ mod tests {
         );
         vm.sheet_states
             .insert("sheet1".to_string(), SheetState::Hidden);
+        vm.row_heights
+            .insert("sheet1".to_string(), HashMap::from([(5u32, 30.0)]));
+        vm.column_widths
+            .insert("sheet1".to_string(), vec![(2, 4, 12.5)]);
 
         vm.rename_sheet("Sheet1", "Renamed").unwrap();
 
@@ -9118,6 +9183,10 @@ mod tests {
         assert!(!vm.cell_number_formats.contains_key("sheet1"));
         assert_eq!(vm.sheet_states.get("renamed"), Some(&SheetState::Hidden));
         assert!(!vm.sheet_states.contains_key("sheet1"));
+        assert_eq!(vm.row_height_on_sheet("renamed", 5), Some(30.0));
+        assert_eq!(vm.row_height_on_sheet("sheet1", 5), None);
+        assert_eq!(vm.column_width_on_sheet("renamed", 3), Some(12.5));
+        assert_eq!(vm.column_width_on_sheet("sheet1", 3), None);
         assert!(vm.worksheet_origins.contains_key("renamed"));
         assert!(!vm.worksheet_origins.contains_key("sheet1"));
         assert!(vm.sheet_order.contains(&"renamed".to_string()));
@@ -9267,7 +9336,7 @@ mod tests {
     // ── P2: copy_sheet ────────────────────────────────────────────────────
 
     #[test]
-    fn copy_sheet_duplicates_all_seven_per_sheet_maps() {
+    fn copy_sheet_duplicates_all_nine_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -9293,6 +9362,10 @@ mod tests {
         );
         vm.sheet_states
             .insert("sheet1".to_string(), SheetState::VeryHidden);
+        vm.row_heights
+            .insert("sheet1".to_string(), HashMap::from([(5u32, 30.0)]));
+        vm.column_widths
+            .insert("sheet1".to_string(), vec![(2, 4, 12.5)]);
 
         vm.copy_sheet("Sheet1", "Copy").unwrap();
 
@@ -9303,6 +9376,8 @@ mod tests {
         assert!(vm.cell_style_indices.contains_key("sheet1"));
         assert!(vm.cell_number_formats.contains_key("sheet1"));
         assert_eq!(vm.sheet_states.get("sheet1"), Some(&SheetState::VeryHidden));
+        assert_eq!(vm.row_height_on_sheet("sheet1", 5), Some(30.0));
+        assert_eq!(vm.column_width_on_sheet("sheet1", 3), Some(12.5));
         // ...and the copy has all the same state, independently keyed.
         assert_eq!(vm.sheets["copy"][&(1, 1)].value, Variant::Integer(42));
         assert_eq!(vm.merged_ranges["copy"], vec![((1, 2), (1, 4))]);
@@ -9313,6 +9388,8 @@ mod tests {
         assert_eq!(vm.cell_style_indices["copy"][&(1, 1)], 3);
         assert_eq!(vm.cell_number_formats["copy"][&(1, 1)], "0.00");
         assert_eq!(vm.sheet_states.get("copy"), Some(&SheetState::VeryHidden));
+        assert_eq!(vm.row_height_on_sheet("copy", 5), Some(30.0));
+        assert_eq!(vm.column_width_on_sheet("copy", 3), Some(12.5));
         assert!(vm.worksheet_origins.contains_key("copy"));
     }
 
@@ -9477,6 +9554,8 @@ mod tests {
                 formulas: HashMap::new(),
                 cell_number_formats: HashMap::new(),
                 sheet_state: Some("hidden".to_string()),
+                row_heights: HashMap::new(),
+                column_widths: Vec::new(),
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -9491,6 +9570,8 @@ mod tests {
                 formulas: HashMap::new(),
                 cell_number_formats: HashMap::new(),
                 sheet_state: None,
+                row_heights: HashMap::new(),
+                column_widths: Vec::new(),
             },
         ];
         let mut vm = Vm::new();
@@ -9499,6 +9580,90 @@ mod tests {
         assert_eq!(vm.sheet_state("Second").unwrap(), SheetState::Visible);
         // Sparse: a visible sheet gets no entry at all, not an explicit one.
         assert!(!vm.sheet_states.contains_key("second"));
+    }
+
+    // ── P2: row height / column width (read-only) ───────────────────────────
+
+    #[test]
+    fn row_height_on_sheet_returns_none_with_no_entry() {
+        let vm = Vm::new();
+        assert_eq!(vm.row_height_on_sheet("sheet1", 5), None);
+    }
+
+    #[test]
+    fn row_height_on_sheet_returns_the_stored_height() {
+        let mut vm = Vm::new();
+        vm.row_heights
+            .insert("sheet1".to_string(), HashMap::from([(5u32, 30.5)]));
+        assert_eq!(vm.row_height_on_sheet("sheet1", 5), Some(30.5));
+        assert_eq!(vm.row_height_on_sheet("sheet1", 6), None);
+        assert_eq!(vm.row_height_on_sheet("other", 5), None);
+    }
+
+    #[test]
+    fn column_width_on_sheet_returns_none_with_no_entry() {
+        let vm = Vm::new();
+        assert_eq!(vm.column_width_on_sheet("sheet1", 3), None);
+    }
+
+    #[test]
+    fn column_width_on_sheet_finds_the_range_containing_the_column() {
+        let mut vm = Vm::new();
+        vm.column_widths
+            .insert("sheet1".to_string(), vec![(2, 4, 12.5), (7, 7, 5.0)]);
+        assert_eq!(vm.column_width_on_sheet("sheet1", 2), Some(12.5));
+        assert_eq!(vm.column_width_on_sheet("sheet1", 3), Some(12.5));
+        assert_eq!(vm.column_width_on_sheet("sheet1", 4), Some(12.5));
+        assert_eq!(vm.column_width_on_sheet("sheet1", 5), None);
+        assert_eq!(vm.column_width_on_sheet("sheet1", 7), Some(5.0));
+    }
+
+    #[test]
+    fn populate_from_sheets_threads_row_heights_and_column_widths_into_the_vm() {
+        let sheets = vec![WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells: HashMap::new(),
+            sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
+            sheet_state: None,
+            row_heights: HashMap::from([(3u32, 45.0)]),
+            column_widths: vec![(1, 2, 8.43)],
+        }];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+        assert_eq!(vm.row_height_on_sheet("sheet1", 3), Some(45.0));
+        assert_eq!(vm.column_width_on_sheet("sheet1", 1), Some(8.43));
+    }
+
+    #[test]
+    fn populate_from_sheets_does_not_create_row_heights_or_column_widths_entries_when_empty() {
+        let sheets = vec![WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells: HashMap::new(),
+            sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
+            sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
+        }];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+        assert!(!vm.row_heights.contains_key("sheet1"));
+        assert!(!vm.column_widths.contains_key("sheet1"));
     }
 
     // ── P1 core 3: row/col insert-delete sheet-parameterized siblings ───────
@@ -10659,6 +10824,8 @@ mod tests {
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
             sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -10696,6 +10863,8 @@ mod tests {
                 formulas: HashMap::new(),
                 cell_number_formats: HashMap::new(),
                 sheet_state: None,
+                row_heights: HashMap::new(),
+                column_widths: Vec::new(),
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -10710,6 +10879,8 @@ mod tests {
                 formulas: HashMap::new(),
                 cell_number_formats: HashMap::new(),
                 sheet_state: None,
+                row_heights: HashMap::new(),
+                column_widths: Vec::new(),
             },
         ];
 
@@ -10746,6 +10917,8 @@ mod tests {
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
             sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -11660,6 +11833,8 @@ mod tests {
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
             sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11761,6 +11936,8 @@ mod tests {
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
             sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11799,6 +11976,8 @@ mod tests {
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
             sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11826,6 +12005,8 @@ mod tests {
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
             sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);

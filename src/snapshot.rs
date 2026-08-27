@@ -192,6 +192,8 @@ mod tests {
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
             sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
         }
     }
 
