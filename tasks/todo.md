@@ -378,3 +378,14 @@ version bump・push（各コミットは`/greenlane`実行前に個別push・CI�
 - [x] `ROADMAP.md`・`CHANGELOG.md`・design docを実Excel検証結果・0.10.0-D方針決定・D8バグ発見に同期。
 
 D1（`WorksheetOutputPlan`導入）着手条件（0.10.0-Cの実Excel確認完了）が満たされたため、D1実装に着手。
+
+## `elixcee` 0.12.0リリースブランチ切り出し・バージョンバンプ（ユーザー承認）
+
+「バージョンアップする？」との質問に対しユーザーが「0.12.0へ今バンプ（推奨）」を選択。実行着手直前にadvisorへ相談した結果、`master`の最新コミットには本セッションのgap-audit 6ラウンド（PR #9〜#14：R1・P1 core 3・P1 remainder・P2の5スライス）に加え、**未リリースの`0.10.0-D`（relationship-backed復元）と`t="e"`エラーセル修正**が乗っていることが判明——いずれもROADMAP.mdが「実Excel検証未完了」と明記している成果物で、`0.11.0`自体が意図的に`master`の先端ではなく`release-0.10.0`ブランチから切られていたのはまさにこれを避けるためだった。ユーザーに状況を提示しAskUserQuestionで判断を仰いだ結果、**「gap-audit 6ラウンドのみをcherry-pickする（0.11.0と同じ手法）」を選択**。
+
+- [x] **`release/0.12.0`ブランチを`v0.11.0`タグから作成**、PR #9〜#14の各マージコミットを`git cherry-pick -m 1`で順次適用。PR #12（`efaf0c2`）・#13（`986ef8d`）・#14（`1a13e84`）でCHANGELOG.md／`tests/xlsx_roundtrip.rs`にコンフリクト発生——いずれも「0.10.0-Dが`master`に残した後続テキスト・テストが、このブランチには存在しない0.10.0-D本体を前提にしている」形。全件手動解決（該当セクション削除）し、都度`cargo check --lib --tests --features python`で再ビルド確認。
+- [x] 標準の検証一式（fmt・clippy全variant・rustdoc・`cargo test --workspace`996件・`cargo check`・`check-versions.sh`・`cargo audit`・`mechanical_check.py --self-test`・corpus 581件・vba-semantics 386件・JS differential 5suite・differential-python 2ファイル）を`release/0.12.0`ブランチ上で再実行、全てクリーン。
+- [x] **advisor指摘によりROADMAP.md／docs/openpyxl-gap-audit.mdを追加修正**：両ファイルとも4回のcherry-pick中コンフリクトなく自動マージされていたため未レビューだったが、内容は「0.10.0-D／t="e"は既に完了・master上で有効」という、このブランチでは誤った前提のまま残っていた（次リリース番号を巡る記述、`cargo publish`のためのpackaging note、外部ハイパーリンク／図形・画像の永続化状況など）。該当箇所を全て「`master`上のみに存在し本リリースには含まれない」旨に訂正。`cargo publish --dry-run -p elixcee`でelixcee-types 0.3.0のまま検証ビルドが通ることも確認（t="e"を含まないため、0.11.0公開時に問題になったelixcee-types同時バンプは今回不要と確定）。
+- [x] バージョンメタデータを0.12.0へ更新：`Cargo.toml`・`pyproject.toml`・`Cargo.lock`（`cargo check`で再生成）、`check-versions.sh`でOK確認。`CHANGELOG.md`の`[Unreleased]`を`[0.12.0] - 2026-08-27`へ改称・内容整理（gap-audit 6ラウンド分のみを移動、CI観測性・`@elixcee/xlsx`関連の2エントリは無関係なため`[Unreleased]`に残置——`0.11.0`切り出し時も同様の扱いだったことを`v0.11.0`タグ自身のCHANGELOG.mdで確認済み）。`ROADMAP.md`の「Current state」冒頭段落（`0.9.0`のまま長期間放置されていたスタール表記）とR1〜P2各ラウンドの「`master`にマージ済み・未リリース」という記述を「`0.12.0`でリリース済み」に一括更新。
+
+tag作成・crates.io/PyPI/GitHub Releaseへの実publish・`release/0.12.0`ブランチのpush・masterへの同期反映は、いずれもRed分類の不可逆操作としてユーザー確認前に実施していない。

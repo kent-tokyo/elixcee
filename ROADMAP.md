@@ -7,18 +7,21 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 ## Current state
 
-`elixcee` **0.9.0** (Rust crate + Python package), `elixcee-types` **0.3.0**, `elixcee-wasm`
-**0.1.0** (never published to crates.io by design — `publish = false`) — all confirmed live
-via crates.io's/PyPI's own APIs, not assumed from local files. `bin-v0.9.0`'s GitHub Release
-carries all three CLI platform binaries (macOS aarch64, Windows x86_64, Linux x86_64),
-`--version` confirmed live against the downloaded macOS binary. `@elixcee/xlsx` is unchanged:
+`elixcee` **0.12.0** (Rust crate + Python package), `elixcee-types` **0.3.0** (unchanged),
+`elixcee-wasm` **0.1.0** (never published to crates.io by design — `publish = false`).
+`0.12.0` adds eight independent Python API items against `docs/openpyxl-gap-audit.md`'s
+priority list (R1, P1 core 3, P1 remainder, and P2's first five slices) plus a `FIND()`
+crash fix — see `CHANGELOG.md`'s `[0.12.0]` for the full account. Minor, not patch: real
+new API surface throughout, nothing removed or changed. Cut from a `release-0.10.0`-branch
+base, deliberately excluding `master`'s own still-unreleased `0.10.0-D`/`t="e"` work (see
+this file's "Packaging note" below). `@elixcee/xlsx` is unchanged:
 `read()`/`readFile()`/`readFileSync()` and `write()`/`writeFile()`/`writeFileSync()` are both
 implemented and differential-tested, but the package is still
 `0.0.0-development`/`private: true`/unpublished — no `npm publish` has happened (confirmed
 live: `registry.npmjs.org/@elixcee/xlsx` 404s), and `@elixcee` scope ownership itself is
 unconfirmed (item 9 below).
 
-**R1: bulk worksheet range/row API, merged to `master`, not yet released in any version.**
+**R1: bulk worksheet range/row API, released in `0.12.0`.**
 Seven new Python methods close the highest-value gap identified against openpyxl (see the
 new `docs/openpyxl-gap-audit.md`): `get_range`/`set_range` (rectangular read/write),
 `append_row` (uses the sheet's true max used row, correct on a sparse sheet), `iter_rows`
@@ -32,7 +35,7 @@ release that eventually includes this is not decided yet (this round only adds t
 commits locally, no version bump).
 
 **P1 core 3: sheet rename/move + row/col insert-delete glue + read-only merged-cell
-access, merged to `master`, not yet released.** The next slice of `docs/openpyxl-gap-audit.md`'s
+access, released in `0.12.0`.** The next slice of `docs/openpyxl-gap-audit.md`'s
 priority list after R1. Seven new Python methods: `rename_sheet`/`move_sheet` (sheet
 management — `move_sheet`'s `new_index` is an absolute 0-based position, matching
 `set_sheet`'s own convention, not openpyxl's relative-offset `move_sheet(offset)`),
@@ -47,7 +50,7 @@ and three further disclosed gaps (items 18/19/20). See `CHANGELOG.md`'s `[Unrele
 section for the full method-by-method account; no version bump this round either.
 
 **P1 remainder: `iter_cols`, Python-native `sort_range`, merge create/remove, merged to
-`master`, not yet released.** The last three items `docs/openpyxl-gap-audit.md` still
+released in `0.12.0`.** The last three items `docs/openpyxl-gap-audit.md` still
 tagged P1. Four new Python methods: `iter_cols` (column-major values-only iteration, the
 transposed sibling of `iter_rows`), `sort_range(addr, key_col, descending=False,
 header=False, sheet=None)` (elixcee's own feature, not from openpyxl — exposes the
@@ -63,7 +66,7 @@ oversized address here writes real geometry into the saved file, unlike `get_ran
 `iter_rows`'s disclosed unbounded-allocation gap, item 16 below). See `CHANGELOG.md`'s
 `[Unreleased]` section for the full method-by-method account; no version bump this round.
 
-**P2, first slice: hidden row/col read/write, merged to `master`, not yet released.** The
+**P2, first slice: hidden row/col read/write, released in `0.12.0`.** The
 first item off `docs/openpyxl-gap-audit.md`'s P2 list (category 3). Four new Python
 methods: `hidden_rows(sheet=None)`/`hidden_columns(sheet=None)` (sorted, flattened 1-based
 row/column numbers) and `set_row_hidden(row, hidden=True, sheet=None)`/`set_column_hidden`
@@ -77,9 +80,9 @@ visible gaps across a whole range and discards which specific hidden interval pr
 each one — see the gap-audit doc's "Implementation notes for P2: hidden row/col" for the
 full account, including why hiding an already-hidden unit is a no-op (not a duplicate
 interval) and unhiding an already-visible unit creates no stray `sheet_visibility` entry,
-both following `merge_cells`'s own established convention. No version bump this round.
+both following `merge_cells`'s own established convention.
 
-**P2, second slice: `copy_sheet`, merged to `master`, not yet released.** The second item
+**P2, second slice: `copy_sheet`, released in `0.12.0`.** The second item
 off `docs/openpyxl-gap-audit.md`'s P2 list (category 1). One new Python method:
 `copy_sheet(source_name, new_name)`, duplicating a sheet's cells, merges, hidden-row/col
 state, cell styles, and cell number formats into a brand-new sheet. Reuses `rename_sheet`'s
@@ -93,9 +96,9 @@ openpyxl's own `copy_worksheet`), sidestepping the same positional
 `<definedName localSheetId="N">`-staleness risk `move_sheet` guards against for a reorder —
 see the gap-audit doc's "Implementation notes for P2: copy_sheet" for the full account,
 including a pre-existing, unrelated `sheet_names()` ordering quirk discovered while testing
-(item 24 below). Does not copy sheet protection status. No version bump this round.
+(item 24 below). Does not copy sheet protection status.
 
-**P2, third slice: `defined_names` (read-only), merged to `master`, not yet released.**
+**P2, third slice: `defined_names` (read-only), released in `0.12.0`.**
 The third item off `docs/openpyxl-gap-audit.md`'s P2 list (category 7). One new Python
 method: `defined_names() -> dict[str, str]`, reading every `<definedName
 name="...">TEXT</definedName>` in the loaded workbook's `xl/workbook.xml` into `{name:
@@ -111,9 +114,9 @@ defined_names" for the full account, including why sheet-scoped and workbook-sco
 collapse into one flat map with a silent last-one-wins collision rule. Re-reads the
 source file's ZIP on every call rather than caching, so it can raise `ValueError` if the
 source file is no longer readable after loading (distinct from the legitimate `{}` for no
-workbook loaded at all). No version bump this round.
+workbook loaded at all).
 
-**P2, fourth slice: `sheet_state` (read-only), merged to `master`, not yet released.**
+**P2, fourth slice: `sheet_state` (read-only), released in `0.12.0`.**
 The fourth item off `docs/openpyxl-gap-audit.md`'s P2 list (category 1's other row). One
 new Python method: `sheet_state(name) -> str`, reading a sheet's whole-tab visibility
 (`"visible"`/`"hidden"`/`"veryHidden"`, matching openpyxl's own `ws.sheet_state`
@@ -129,10 +132,10 @@ Excel AppleScript route, blocked on one manual file-access grant) but not yet ta
 Name-addressed like `rename_sheet`/`copy_sheet` rather than "current sheet"-defaulted;
 raises `ValueError` on an unknown name rather than silently returning `"visible"`.
 `copy_sheet` now also copies the source's visibility state (its ninth per-sheet map to
-re-key on rename, eighth to copy). No version bump this round.
+re-key on rename, eighth to copy).
 
-**P2, fifth slice: `row_height`/`column_width` (read-only), merged to `master`, not yet
-released.** The fifth item off `docs/openpyxl-gap-audit.md`'s P2 list (category 3's other
+**P2, fifth slice: `row_height`/`column_width` (read-only), released in `0.12.0`.** The
+fifth item off `docs/openpyxl-gap-audit.md`'s P2 list (category 3's other
 row). Two new Python methods: `row_height(row, sheet=None) -> Optional[float]` /
 `column_width(col, sheet=None) -> Optional[float]`, sheet-parameterized like `hidden_rows`/
 `hidden_columns` rather than name-addressed like `sheet_state`. Confirmed zero prior
@@ -148,7 +151,7 @@ pass for the wrong reason). Two independent value types, not one enum: per-row
 to 9. Deliberately read-only: zero real fixtures have a genuine custom row height or
 column width (fixture1's only `<col>` is a hidden column with `width="0"`, not real data)
 — see the gap-audit doc's "Implementation notes for P2: row height / column width" for the
-full account, including a new known gap (item 26 below). No version bump this round.
+full account, including a new known gap (item 26 below).
 
 **0.7.0** shipped three VBA-runtime items: real multi-dimensional arrays (`Variant::VbaArray`,
 per-dimension bounds and row-major storage — `Dim arr(3,2)` no longer aliases `arr(1,1)`/
