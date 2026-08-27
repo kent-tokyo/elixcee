@@ -1054,21 +1054,471 @@ progress is gated by real fixture availability per element (7 fixtures total as 
 `0.10.0-B` slice 4), consistent with `0.9.0-A`'s own precedent of shipping partial, honestly-scoped
 wins rather than blocking on a headline number.
 
-### 0.11.0 — VBA Semantic Closure
+### North Star
 
-**Goal**: structurally close out the VBA semantic gaps that remain. `0.7.0` already fixed
-multi-dimensional arrays and call-frame error handling; `Date`/`Time` and type-width tracking
-are what's left.
+elixcee's goal isn't simply out-scoring openpyxl on API count. The goal is:
+
+**The safest Excel-editing engine that doesn't need Microsoft Excel** — one that edits
+existing workbooks without breaking their semantics, reference relationships, rendering, or
+VBA assets.
+
+For pure XLSX editing, that means beating openpyxl in three stages, in order: catch up on
+save fidelity; overtake on dependency-aware structural editing; overtake on formatting,
+structured data, and large-scale-processing breadth.
+
+### Product principles
+
+Every mutation is meant to flow through the same pipeline:
+
+```
+Preflight
+  ↓
+Mutation plan
+  ↓
+Dependency rewrite
+  ↓
+Atomic apply
+  ↓
+Package validation
+  ↓
+Save
+```
+
+When safety can't be proven partway through, the answer is an explicit diagnostic, never a
+silent partial edit.
+
+**Required principles**: no silent no-op; no silent data loss; an unsupported shape fails
+closed; no partial mutation on failure; preserve unknown existing OOXML elements wherever
+possible; no complex writer without a real Excel-authored fixture demonstrating the shape
+first; verify save-as, in-place, and repeated (chained) saves — all three, every time; an
+Excel repair warning blocks release; verify against real Microsoft Excel, not just an
+openpyxl differential; heavy performance measurement stays out of regular CI — nightly or
+release-qualification only.
+
+### 0.13.0 — Fidelity Closure
+
+**Goal**: close what `0.12.0` leaves open — properties elixcee can *read* but not yet
+*save*, and work that's already fixed on `master` but never released — before adding more
+editing surface. Complete the save foundation first.
+
+1. **Relationship-backed preservation, shipped for real**: tables, drawings, charts,
+   images, comments/notes, external hyperlinks, VML, plain `pageSetup`, worksheet `.rels`,
+   deleted-sheet reachability cleanup.
+2. **Error-cell preservation**: stop converting `t="e"` cells to strings — `#VALUE!`,
+   `#DIV/0!`, `#N/A`, `#REF!`, `#NAME?`, `#NUM!`, `#NULL!` all round-trip as real typed
+   errors.
+3. **Existing-attribute preservation**: hidden/veryHidden sheets, row height, column width,
+   custom row/column attributes, print area, print titles, freeze panes, active sheet, tab
+   order.
+4. **Packaging integrity**: bump `elixcee-types` to whatever version its own API additions
+   actually need; make publish verification pass off registry dependencies alone, not just
+   the local workspace path; shrink the master/release-branch manual-cherry-pick
+   dependency; auto-generate a release manifest. (Both the `elixcee-types` version gap and
+   the manual-cherry-pick dependency aren't hypothetical — both were hit directly shipping
+   `0.12.0` itself.)
+
+**Release gate**: 15+ real Excel-authored fixtures; save-as and in-place on every fixture;
+0 repair warnings; 0 relationship loss; 0 orphan parts; 0 error-cell type loss; 0
+hidden-state/dimension loss; an identical verdict across 5 consecutive saves; verified via
+a PyPI wheel, a crates.io consumer, and all 3 OS CLI binaries.
+
+| Metric | `0.12.0` | `0.13.0` target |
+|---|---|---|
+| XLSX editing | 92.5 | 95.5 |
+| Overall | 98.0 | 98.4 |
+
+### 0.14.0 — Dependency-Aware Structural Editing
+
+**Goal**: the release that overtakes openpyxl on pure editing. Moving, inserting, or
+deleting rows, columns, or ranges must move every dependent Excel structure correctly
+along with them, not just the raw cell grid.
+
+**Core architecture**
+
+`GridTransform` — insertions, deletions, and moves expressed as coordinate transforms:
+
+```rust
+enum GridTransform {
+    InsertRows { at: u32, count: u32 },
+    DeleteRows { at: u32, count: u32 },
+    InsertCols { at: u32, count: u32 },
+    DeleteCols { at: u32, count: u32 },
+    MoveRange {
+        source: Rect,
+        row_offset: i32,
+        col_offset: i32,
+    },
+}
+```
+
+`ReferenceGraph` — enumerates and updates every reference source a transform can
+invalidate: cell formulas, shared formulas, array formulas, defined names, print areas,
+print titles, data-validation formulas, conditional-formatting formulas, table ranges,
+AutoFilter ranges, merged ranges, hyperlink locations, chart series formulas, drawing
+anchors, image anchors, comment anchors, selection/active cell, freeze panes. External
+references are identified but not rewritten in this first pass.
+
+`MutationTransaction` — validate input → discover affected objects → generate a rewrite
+plan → validate every rewrite → apply atomically → validate the package graph.
+
+**Implementation order**
+
+#### 0.14.0-A — Formula reference transformer
+
+Supported: `A1`, `$A$1`, `A$1`, `$A1`, `A1:B20`, `Sheet1!A1`, `'Sales 2026'!A1`,
+unions/multi-area, sheet rename, row/column insert-delete, range move.
+
+Not yet supported: external workbook references, cube formulas, structured table
+references — all fail with an explicit diagnostic rather than silently mis-rewriting.
+
+#### 0.14.0-B — Cell metadata transformation
+
+Tracked through a transform: style index, number format, merged ranges, hidden
+rows/columns, row height, column width, comments, hyperlinks, validation ranges,
+conditional-formatting ranges.
+
+#### 0.14.0-C — Structured object transformation
+
+Tracked through a transform: table refs, AutoFilter, chart series, drawing anchors, image
+anchors, print area, print titles, defined names.
+
+**Python API**
+
+```python
+vm.insert_rows(10, amount=2, sheet="Data", update_references=True)
+vm.delete_cols(4, amount=1, sheet="Data", update_references=True)
+
+vm.move_range(
+    "A1:F20",
+    rows=5,
+    cols=2,
+    translate_formulas=True,
+    update_dependents=True,
+)
+```
+
+Defaults to safe: if a related object can't be updated, the whole operation is rejected
+rather than partially applied.
+
+```python
+UnsupportedDependencyError(
+    code="UNSUPPORTED_CHART_REFERENCE",
+    object="Chart 2",
+    formula="SERIES(...)",
+)
+```
+
+**Release gate**: 20+ structural-editing fixtures, covering both cases that match
+openpyxl's own result and cases openpyxl doesn't track but elixcee does; compound fixtures
+spanning formulas, merges, tables, validation, and charts together; atomic-rollback
+verified on every operation; a real-Excel reopen after a chain of edits; 0 repair
+warnings; recalculated formula results match.
+
+| Metric | `0.13.0` | `0.14.0` target |
+|---|---|---|
+| XLSX editing | 95.5 | 97.6 |
+| Overall | 98.4 | 98.7 |
+
+This is the milestone where elixcee's pure-edit safety overtakes openpyxl's overall.
+
+### 0.15.0 — Safe Style Engine
+
+**Goal**: create, change, and copy formatting without corrupting the existing
+`styles.xml` — matching openpyxl's font/fill/border/alignment/number-format/protection/
+named-style breadth.
+
+**Design**: never mutate a shared style directly.
+
+```
+Style read
+  ↓
+normalized StyleRecord
+  ↓
+deduplicate/intern
+  ↓
+append missing subrecords
+  ↓
+append cellXf
+  ↓
+assign new style index
+```
+
+#### 0.15.0-A
+Number format: date/time, percentage, currency, decimal precision, text format.
+
+#### 0.15.0-B
+Font, fill, border, alignment, protection.
+
+#### 0.15.0-C
+Copy style, copy formatting, row style, column style, named style, theme-color
+resolution.
+
+**Python API**
+
+```python
+vm.set_number_format("B2:B100", "#,##0.00", sheet="Sales")
+
+vm.set_style(
+    "A1:D1",
+    font={"bold": True, "color": "FFFFFF"},
+    fill={"type": "solid", "color": "4472C4"},
+    alignment={"horizontal": "center"},
+)
+
+vm.copy_style("A1", "A2:A20")
+```
+
+**Required safety measures**: no shared-style mutation; style-table deduplication; never
+leave an orphan style; preserve unknown style attributes; style-explosion detection (a
+diagnostic threshold on new styles created per operation); never reinterpret a date's or
+number's meaning on its own.
+
+| Metric | `0.14.0` | `0.15.0` target |
+|---|---|---|
+| XLSX editing | 97.6 | 98.1 |
+| Overall | 98.7 | 98.9 |
+
+### 0.16.0 — Tables, Filters and Rules
+
+**Goal**: fully edit the "tables" of everyday business Excel. openpyxl can handle tables,
+AutoFilter, data validation, and conditional formatting, but doesn't evaluate or enforce
+validation itself.
+
+**Tables**: create, delete, resize, rename, add/remove columns, totals row, table style,
+structured references, calculated columns — with AutoFilter integration.
+
+**AutoFilter**: create/remove, filter range, equality, numeric comparison, multiple
+values, blanks/non-blanks, date grouping, top 10, custom filter, persisting filter state
+(hiding/unhiding the non-matching rows).
+
+**Data validation**: list, whole number, decimal, date, time, text length, custom
+formula, prompt, error message, multi-area targets, add/update/delete, an optional
+validation evaluator.
+
+**Conditional formatting**: phase one — `CellIs`, `Formula`, `ColorScale`, `DataBar`,
+`IconSet`. Phase two — differential styles, priority, `stopIfTrue`, tracking through a
+range move.
+
+**Defined names**: create, update, delete, workbook scope, sheet scope, shadowing,
+tracking through rename/move/insert/delete.
+
+| Metric | `0.15.0` | `0.16.0` target |
+|---|---|---|
+| XLSX editing | 98.1 | 98.6 |
+| Overall | 98.9 | 99.0 |
+
+### 0.17.0 — Notes, Hyperlinks and Media
+
+**Goal**: safely create and edit business information beyond raw cell values.
+
+**Comments/notes**: read, create, update, delete, author, text, VML anchor, tracking
+through row/column edits.
+
+**Hyperlinks**: internal link, external URL, external file, tooltip, display text,
+create/update/delete, tracking through sheet rename and row/column edits.
+
+**Images**: insert, remove, move/resize, one-cell anchor, two-cell anchor, relationship
+management, media deduplication.
+
+**Charts** — not every chart type from day one. Phase one: preserve existing charts, move
+chart anchors, rewrite series ranges, update titles and data ranges. Phase two: bar,
+line, pie, scatter creation.
+
+openpyxl can add both images and charts to a worksheet — to clearly beat it on pure-edit
+breadth, elixcee needs at minimum basic image insertion and safe editing of existing
+charts.
+
+| Metric | `0.16.0` | `0.17.0` target |
+|---|---|---|
+| XLSX editing | 98.6 | 98.9 |
+| Overall | 99.0 | 99.1 |
+
+### 0.18.0 — Workbook Semantics
+
+**Goal**: make workbook-wide settings and display state editable.
+
+**Scope**: sheet protection, workbook-structure protection, editable ranges,
+hidden/veryHidden, page setup, margins, headers/footers, print area, print titles, page
+breaks, orientation, scaling, freeze panes, split panes, selection, active cell, tab
+color, workbook properties, custom document properties, calculation mode,
+`fullCalcOnLoad`, theme read/write, external-links read/preserve, calc-chain
+regeneration or safe deletion.
+
+(openpyxl also has workbook/worksheet protection — like elixcee's, it's an
+unintended-edit guard, not encryption.)
+
+**Pivot tables**: openpyxl can read and preserve an existing pivot, and adjust some
+settings, but doesn't treat pivot-table *creation* as a supported goal. elixcee's staged
+plan: preserve → source-range update → refresh-on-load → field configuration → basic
+pivot creation. Reaching basic creation alone is a clear functional edge over openpyxl.
+
+| Metric | `0.17.0` | `0.18.0` target |
+|---|---|---|
+| XLSX editing | 98.9 | 99.1 |
+| Overall | 99.1 | 99.2 |
+
+### 0.19.0 — Scale and Streaming
+
+**Goal**: compete on large-file processing, not just editing breadth — including the
+production-readiness work (security hardening, distribution) carried forward from an
+earlier draft of this milestone, since `1.0.0` needs both.
+
+openpyxl has constant-memory read-only/write-only modes (write-only can't random-access
+arbitrary cells — it's essentially append-only). MiniExcel centers on row-level streaming
+and low-memory processing. The VBA-execution `Vm` needs random access, so streaming isn't
+forced into the same engine.
+
+**Two-layer design**
+
+```
+elixcee.Vm
+- VBA execution
+- random access
+- formulas
+- diagnostics
+- complete mutable workbook
+
+elixcee.StreamReader / StreamWriter
+- no VBA
+- forward-only
+- constant-memory bulk I/O
+- CSV/DB/DataFrame pipelines
+```
+
+**API**
+
+```python
+with elixcee.open_stream("large.xlsx") as book:
+    for row in book.rows(sheet="Data"):
+        process(row)
+
+with elixcee.create_stream("output.xlsx") as book:
+    sheet = book.create_sheet("Result")
+    for row in source:
+        sheet.append(row)
+```
+
+**Performance targets**: read 1 million rows without exhausting memory; the write-only
+path runs in constant memory (not required to beat the normal `Vm` path); compared
+against openpyxl/MiniExcel on identical fixtures; heavy benchmarking stays nightly-only,
+regular CI keeps a small smoke test.
+
+**Also folded into this milestone** (carried forward from an earlier "Scale, Security,
+and Distribution" draft — not duplicated elsewhere):
+
+- **Performance regression gates**: 10MB/50MB/100MB workbooks, 100K/1M cells,
+  100-workbook batches, cold start, peak RSS, write latency, Python call overhead, WASM
+  payload size — all as continuous regression gates, not one-off measurements.
+- **Security hardening**: zip-bomb protection, oversized-XML limits, entry-count limits,
+  decompression-ratio limits, path traversal, XML entity expansion, formula-injection
+  handling, unsafe external relationships, malformed/cyclic relationship graphs.
+- **Distribution**: SBOM, build provenance, reproducible builds, checksums, signed
+  releases, dependency license audit, vulnerability scanning.
+
+| Metric | `0.18.0` | `0.19.0` target |
+|---|---|---|
+| XLSX editing | 99.1 | 99.2 |
+| Overall | 99.2 | 99.3 |
+
+### 1.0.0 — Verified Excel Editing Profile
+
+**Goal**: not "it can do anything" — a documented, stabilized, *guaranteed* editing scope.
+
+**Supported profile**: `.xlsx`, `.xlsm`, VBA project preservation, values, formulas,
+typed errors, styles, merged cells, tables, filters, validations, conditional
+formatting, hyperlinks, comments, images, common charts, defined names, page setup,
+protection, structural row/column edits, dependency-aware reference rewriting.
+
+**Verification corpus** — real workbooks, 100 minimum: Excel for Windows, Excel for Mac,
+openpyxl, ClosedXML, LibreOffice, Google Sheets export, third-party ERP/RPA outputs,
+alternate namespace prefixes, non-sequential worksheet part names.
+
+**Mutation corpus** — applied to every workbook above: no-op save, one-cell edit,
+formula edit, row insert, column delete, sheet rename, table resize, style update,
+hyperlink update, save-as, in-place, a 5-cycle chain.
+
+**Required gates**: 0 Excel repair warnings; 0 OPC graph violations; 0 unbound
+namespaces; 0 dangling relationships; 0 orphan parts; 0 silent feature loss; 0 silent
+no-op on an unsupported operation; property-based mutation testing; fuzzing with
+deterministic reproduction seeds; a backward-compatible Python API; a semver policy; a
+security audit.
+
+**Explicitly still out of scope, even at 1.0**: the Excel UI itself, `UserForm`, ActiveX,
+COM add-ins, Power Query, full `PivotTable` compatibility, full chart-generation
+compatibility, the complete VBA event model, the VBA IDE, and "replaces Excel entirely"
+as a claim. (`0.18.0`'s basic pivot creation and `0.17.0`'s basic chart editing are
+deliberately short of *full* parity with either.)
+
+VBA semantic work (`DateTime`, type width, `Variant` tagging) is tracked separately,
+unscheduled — see "Unscheduled: VBA Semantic Closure" below.
+
+| Product | Overall | Pure XLSX editing |
+|---|---|---|
+| Microsoft Excel + VBA | 99.5 | 99.8 |
+| elixcee 1.0 | 99.3 | 99.2 |
+| openpyxl | 95.0 | 97.0 |
+| ClosedXML | 94.5 | 96.5 |
+| xlwings | 94.0 | 99.0* |
+| SheetJS | 93.5 | ~95 |
+| MiniExcel | 92.5 | 88.0 |
+
+\* xlwings drives real Excel, so its editing power is high, but as an "editing library
+that doesn't need Excel" it's a different category entirely.
+
+**Version-by-version trend** (strategic scores, not an objective benchmark — a rollup of
+feature breadth, save fidelity, dependency safety, API, performance, and verification
+maturity):
+
+| Version | Pure editing | Overall | Milestone |
+|---|---|---|---|
+| `0.12.0` | 92.5 | 98.0 | Python editing API becomes practical |
+| `0.13.0` | 95.5 | 98.4 | Save fidelity closed |
+| `0.14.0` | 97.6 | 98.7 | Dependency-aware editing overtakes openpyxl |
+| `0.15.0` | 98.1 | 98.9 | Style editing fills out practical breadth |
+| `0.16.0` | 98.6 | 99.0 | Tables/validation/conditional-formatting support |
+| `0.17.0` | 98.9 | 99.1 | Media/chart editing |
+| `0.18.0` | 99.1 | 99.2 | Full workbook editing, pivot support |
+| `0.19.0` | 99.2 | 99.3 | Streaming/large-scale processing |
+| `1.0.0` | 99.2 | 99.3 | A stable, verified editing profile |
+
+### The most important sequencing decision
+
+**Do not go to the style engine next.**
+
+The order has to be:
+
+```
+0.13 fidelity closure
+  ↓
+0.14 dependency-aware structural editing
+  ↓
+0.15 style engine
+  ↓
+0.16 tables / validation / conditional formatting
+```
+
+Adding the same formatting APIs openpyxl already has, without first fixing "insert a row
+and the formula/table/chart references shift out from under you," keeps elixcee wide but
+not safe. Finishing `0.14.0` first gets to say something openpyxl genuinely can't:
+**openpyxl leaves dependency updates on structural edits to the caller; elixcee's engine
+guarantees them.** That's a decisive advantage explainable in terms of pure Excel editing
+alone.
+
+### Unscheduled: VBA Semantic Closure
+
+Designed but not yet built, and no longer tied to a specific version — the XLSX-editing
+roadmap above takes priority, but this work is real and already scoped
+(`docs/date-time-runtime-model-adr.md`), not abandoned.
 
 1. **DateTime runtime model.** `Variant::Date(i64)` is whole-day-only today — a structural
-   reason `Time()`/`Now()` report `TypeName` `"Double"` instead of real VBA's `"Date"` (item 5
-   above). This has already been designed, not yet implemented: `docs/date-time-runtime-model-adr.md`
+   reason `Time()`/`Now()` report `TypeName` `"Double"` instead of real VBA's `"Date"`. This
+   has already been designed, not yet implemented: `docs/date-time-runtime-model-adr.md`
    compares three options (A: change `Variant::Date(i64)` to a breaking `Variant::DateSerial(f64)`;
    B: keep `Date`, add an additive `Variant::DateTime(f64)`; C: an internal-only
    representation, shown not to actually work since `Now()`'s return value must be a real
    `Variant` to be assignable to a VBA variable at all). **Recommendation: B** — same
    `elixcee-types` minor-version cost as A, far less code churn, zero observable-behavior
-   change for any value that's already `Variant::Date`. Scope for `0.11.0`: `Date`, `Time`,
+   change for any value that's already `Variant::Date`. Scope: `Date`, `Time`,
    `Now`, `CDate`, `DateSerial`, `TimeSerial`, date/time arithmetic and comparison, `TypeName
    == "Date"`, the Python/JSON/WASM representations, `date1904`, Excel serial-60 handling.
 2. **Separate declared type from runtime value**, at least for `Integer`/`Long`/`Double`/
@@ -1079,87 +1529,10 @@ are what's left.
    `CStr(1) + CStr(2)`, and handle a numeric-string-vs-number-Variant comparison explicitly
    rather than by accident.
 
-**Exit criteria**: `compat/vba-semantics` suite grows to 500–600+ cases, 0 `BUG`, 0
-`UNCLASSIFIED`, `KNOWN_LIMITATION` down from 14 to 5 or fewer, `Date`/`Time`'s `TypeName`
-matches real VBA, Python/WASM/JSON round-trip verified, real-Excel differential agreement on
-supported cases at 95%+.
-
-### 0.12.0 — Practical Workbook Mutation
-
-**Goal**: `0.8.0`–`0.10.0` are about *preserving* existing state; `0.12.0` is about safely
-*changing* more of it — style edits, not just style preservation.
-
-- **Style editing**: `Range.NumberFormat`, `Range.Interior.Color`, `Range.Font.Bold`,
-  `Range.Font.Color`, borders, alignment, wrap text — de-duplicating against the existing
-  style table when adding a new style rather than growing it unboundedly.
-- **Worksheet operations**: add/delete/rename/reorder sheets, visible/hidden/very-hidden,
-  changing the active sheet.
-- **Workbook structure**: add/change/delete defined names, hyperlinks, comments, data
-  validation, autofilter, minimal table updates, and a policy for discarding vs. regenerating
-  the calculation chain.
-
-**Exit criteria**: 0 Excel repair warnings on reopen, newly-applied styles render correctly,
-relationship integrity holds, sheet-rename updates every reference to it, 0 silent no-ops for
-a claimed-supported mutation, any genuinely unsupported property fails with an explicit error
-rather than a silent no-op.
-
-### 0.13.0 — Scale, Security, and Distribution
-
-**Goal**: not just features — safely handling real-world-sized files in production.
-
-- **Performance**: 10MB/50MB/100MB workbooks, 100K/1M cells, 100-workbook batches, cold
-  start, peak RSS, write latency, Python call overhead, WASM payload size — all as continuous
-  regression gates, not one-off measurements.
-- **Security**: ZIP-bomb protection, oversized-XML limits, entry-count limits,
-  decompression-ratio limits, path traversal, XML entity expansion, explicit
-  formula-injection handling, unsafe external relationships, malformed/cyclic relationship
-  graphs.
-- **Fuzz**: a persisted corpus, automatic promotion of crash-producing inputs into fixtures,
-  round-trip fuzzing across parser/reader/writer, keeping the existing 30-second CI gate
-  while running any longer fuzzing campaign as a separate scheduled workflow, and classifying
-  panic/OOM/hang outcomes distinctly.
-- **Distribution**: SBOM, build provenance, reproducible builds, checksums, signed releases,
-  dependency license audit, vulnerability scanning.
-
-### 1.0.0 — Stable Supported Profile
-
-**What 1.0 means here**: not "full Microsoft Excel feature parity." Defined instead as the
-**elixcee Supported VBA and Workbook Profile 1.0** — within that documented scope, no silent
-corruption, and a stable, guaranteed API and behavior contract.
-
-**Required**:
-- *VBA*: 95%+ agreement with real Excel on supported semantic cases; 0 silently-wrong
-  results; unsupported syntax rejected explicitly at parse/check time; stable runtime error
-  numbers and metadata; `DateTime` and type-width support in place; 750+ semantic-suite cases.
-- *Workbook*: 30+ Excel-authored fixtures (10+ `.xlsm`); 0 repair warnings; 0 loss of any
-  supported property; VBA project preserved; styles both preserved and editable;
-  tables/validation/comments/etc. preserved; chart/image relationships intact.
-- *API*: stable Rust API, stable Python API, a fixed CLI JSON schema with real schema
-  versioning, a fixed WASM API, a documented deprecation policy and migration guide.
-- *Distribution and track record*: consistent crates.io/PyPI/GitHub-Release publishing, a
-  published npm package, 3–5 real external usage examples, a security policy, a support
-  matrix, reproducible releases, and a documented rollback/yank policy.
-
-**Explicitly still out of scope, even at 1.0**: the Excel UI itself, `UserForm`, ActiveX, COM
-add-ins, Power Query, full `PivotTable` compatibility, full chart-generation compatibility,
-the complete VBA event model, the VBA IDE, and "replaces Excel entirely" as a claim.
-
-### Score trajectory
-
-| State | Score |
-|---|---|
-| `0.7.0` | 94 |
-| `0.8.0` | 95 |
-| Real-Excel round trip succeeds (`0.9.0`) | 96 |
-| Preserve-and-merge extended (`0.10.0`) | 96–97 |
-| Known VBA semantic gaps down to 5 or fewer (`0.11.0`) | 97 |
-| npm alpha + real external usage | 97 |
-| `1.0.0` Supported Profile | 97–98 |
-
-100/100 isn't the target — chasing full Microsoft Excel feature/compatibility parity would
-let this project grow without bound. The current highest-priority work is not a new feature
-but building real evidence: a genuine Microsoft-Excel-authored `.xlsm` round trip, in
-`0.9.0`. Clearing that is what makes the 95 → 96 move concretely defensible.
+**Exit criteria, whenever this is picked up**: `compat/vba-semantics` suite grows to
+500–600+ cases, 0 `BUG`, 0 `UNCLASSIFIED`, `KNOWN_LIMITATION` down from 14 to 5 or fewer,
+`Date`/`Time`'s `TypeName` matches real VBA, Python/WASM/JSON round-trip verified,
+real-Excel differential agreement on supported cases at 95%+.
 
 ### `@elixcee/xlsx` — independent roadmap
 
