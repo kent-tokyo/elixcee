@@ -2568,6 +2568,93 @@ fn rename_sheet_preserves_hidden_state_on_a_synthetic_fixture() {
     let _ = std::fs::remove_file(&source_path);
 }
 
+/// P2: row height / column width -- single-sheet synthetic fixture with a custom
+/// row height and column width, matching this file's own established pattern for
+/// shapes no real fixture demonstrates (see `synthetic_three_sheet_workbook_with_states`
+/// above). `<row r="5" ht="30.5" customHeight="1">` and `<col min="2" max="4"
+/// width="12.5" customWidth="1"/>`.
+fn synthetic_sheet_with_row_heights_and_column_widths(source_name: &str) -> String {
+    const WORKBOOK_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
+        "<sheets>\n",
+        "<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/>\n",
+        "</sheets>\n",
+        "</workbook>\n",
+    );
+    const WORKBOOK_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
+        "</Relationships>\n",
+    );
+    const SHEET_XML: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
+        "<cols><col min=\"2\" max=\"4\" width=\"12.5\" customWidth=\"1\"/></cols>\n",
+        "<sheetData>\n",
+        "<row r=\"1\"><c r=\"A1\"><v>1</v></c></row>\n",
+        "<row r=\"5\" ht=\"30.5\" customHeight=\"1\"><c r=\"A5\"><v>2</v></c></row>\n",
+        "</sheetData>\n</worksheet>\n",
+    );
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        CONTENT_TYPES_NO_VBA.as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        WORKBOOK_RELS.as_bytes(),
+    );
+    zip_add(&mut zip, "xl/worksheets/sheet1.xml", SHEET_XML.as_bytes());
+    let bytes = zip.finish().unwrap().into_inner();
+    let path = tmp_path(source_name);
+    std::fs::write(&path, &bytes).unwrap();
+    path
+}
+
+#[test]
+fn row_height_and_column_width_read_from_a_synthetic_fixture() {
+    let source_path = synthetic_sheet_with_row_heights_and_column_widths(
+        "synthetic_row_height_column_width.xlsx",
+    );
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("synthetic fixture should load");
+
+    assert_eq!(vm.row_height_on_sheet("sheet1", 5), Some(30.5));
+    assert_eq!(vm.row_height_on_sheet("sheet1", 1), None);
+    assert_eq!(vm.column_width_on_sheet("sheet1", 3), Some(12.5));
+    assert_eq!(vm.column_width_on_sheet("sheet1", 1), None);
+
+    let _ = std::fs::remove_file(&source_path);
+}
+
+#[test]
+fn copy_sheet_preserves_row_height_and_column_width_on_a_synthetic_fixture() {
+    let source_path = synthetic_sheet_with_row_heights_and_column_widths(
+        "synthetic_row_height_column_width_copy.xlsx",
+    );
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("synthetic fixture should load");
+    vm.copy_sheet("Sheet1", "Copy").unwrap();
+
+    assert_eq!(vm.row_height_on_sheet("copy", 5), Some(30.5));
+    assert_eq!(vm.column_width_on_sheet("copy", 3), Some(12.5));
+
+    let _ = std::fs::remove_file(&source_path);
+}
+
 /// 0.10.0-D, slice D1: a surviving sheet's output part name stays its own origin
 /// (`WorksheetOrigin.original_part_name`), not renumbered by output position. Three
 /// sheets, no VBA; Sheet3 (last, with a real worksheet-level relationship) is the one
