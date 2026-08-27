@@ -578,3 +578,17 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] PR #13作成、CI 9項目green確認、自己マージ（`986ef8d`）、ローカルmaster同期。
 
 残作業：なし。次の新規スコープ（P2残り：行高/列幅、number-format書き込み、defined-name作成/削除、AutoFilter、hyperlink、および今回見送ったsheet visibility書き込み）は、ユーザーの明示的な指定を待つ。
+
+## P2第5弾: row_height/column_width（読み取り専用）＋ FIND()クラッシュ修正（PR #14）
+
+ユーザーがAskUserQuestionで「Row height / column width」を選択、続く2問目の質問には答えず自律的に進めることを選択。
+
+- [x] **research fork起動**：行高/列幅の実装コストを検証。既存表現ゼロを確認し、さらに"writer側のバグはsheet_stateより悪い"ことが判明——`<row>`/`<cols>`は`Vm.sheet_visibility`のみから毎回完全再構築されており、opaque fragment扱いですらない。実fixtureにも本物の行高・列幅の例はゼロ（fixture1の唯一の`<col>`は既知の隠し列D、`width="0"`で実データではない）。read-onlyで即断実装（前ラウンドの`sheet_state`と同じ局所判断）。
+- [x] **実装**：`row_height(row, sheet=None)`/`column_width(col, sheet=None)`——`sheet_state`と異なり、`hidden_rows`/`hidden_columns`と同じsheet引数パターン（名前必須ではない）を採用。値の型が2種類（行高=`HashMap<u32,f64>`疎、列幅=範囲付き`Vec<(u32,u32,f64)>`）のため、`rename_sheet`の再キー対象マップが9→11、`copy_sheet`のコピー対象フィールドが7→9に拡張。
+- [x] **テスト**：reader.rsのunit test（`customHeight`/`customWidth`必須の確認含む）、Vm-level unit test、実fixture非対応のため合成fixtureヘルパー`synthetic_sheet_with_row_heights_and_column_widths`新設。differential-pythonはopenpyxl自身で構築したfixtureで比較し、かつ「elixcee保存で失われる」ことを生XML直接検査で確認するregressionテストも追加——openpyxl自身の`column_dimensions[letter]`が`[]`アクセス時にデフォルト幅13.0を自動生成する実装上の癖を発見し、素朴な比較では検出漏れになることを確認した上で回避。
+- [x] **無関係な既存バグを発見・修正**：本ラウンドのPR自身のfuzz CIジョブが`FIND("","...")`（空検索文字列）で`.windows(0)`パニック（"window size must be non-zero"）を検出。row_height/column_widthとは無関係、既存のVBA `InStr`関数がすでに採用している「空needle→start位置を返す」という同一プロジェクト内の慣習に倣って修正。修正を一時的に取り消して3件の新規テストが実際に元のパニックで落ちることを確認（fuzzクラッシュの生バイト列を使った再現テストも含む）してから復元。
+- [x] フルリグレッションスイープ（fmt/clippy×4パターン/rustdoc/cargo test workspace 1001件/check-versions/cargo audit/mechanical_check self-test/compat corpus・semantics/JS differential 5種/Python differential 2種）、いずれもクリーン・既存ベースラインから無回帰を確認。
+- [x] `README.md`/`README_ja.md`/`README_zh.md`・`ROADMAP.md`（Known gaps item 26として"全保存で無条件に失われる"バグを追記）・`CHANGELOG.md`（P2第5弾セクション＋FIND()修正セクション）・`docs/openpyxl-gap-audit.md`（新規"Implementation notes for P2: row height / column width"セクション）を同期。
+- [x] PR #14作成→fuzz CI red（既存バグ発見）→修正コミット追加→CI 9項目green確認→自己マージ（`1a13e84`）、ローカルmaster同期。
+
+残作業：なし。次の新規スコープ（P2残り：number-format書き込み、defined-name作成/削除、AutoFilter、hyperlink、sheet visibility書き込み、row height/column width書き込み）は、ユーザーの明示的な指定を待つ。
