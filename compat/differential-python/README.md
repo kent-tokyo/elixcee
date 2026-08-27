@@ -7,14 +7,17 @@ of the same fixtures — see `docs/openpyxl-gap-audit.md`:
   — `get_range`/`set_range`/`append_row`/`iter_rows`/`iter_cols`/`max_row`/
   `max_column`/`calculate_dimension`.
 - `sheet_ops_check.py`: sheet management + workbook metadata (P1 core 3 +
-  remainder + P2 hidden row/col + copy_sheet + defined_names + sheet_state) —
+  remainder + P2 hidden row/col + copy_sheet + defined_names + sheet_state +
+  row height/column width) —
   `rename_sheet`/`move_sheet`/`copy_sheet`/`merged_cells`/`merge_cells`/
   `unmerge_cells`/`hidden_rows`/`hidden_columns`/`set_row_hidden`/
-  `set_column_hidden`/`defined_names`/`sheet_state`, plus PyO3-layer
-  bound-check pins for `sort_range`/`merge_cells` (no openpyxl comparison
-  needed for those). `sheet_state`'s fixture is openpyxl-AUTHORED, not one
-  of the real Excel fixtures (none has a hidden/veryHidden sheet) — reads
-  only, no elixcee save() round trip (no writer support yet).
+  `set_column_hidden`/`defined_names`/`sheet_state`/`row_height`/
+  `column_width`, plus PyO3-layer bound-check pins for `sort_range`/
+  `merge_cells` (no openpyxl comparison needed for those). `sheet_state`'s
+  and `row_height`/`column_width`'s fixtures are openpyxl-AUTHORED, not one
+  of the real Excel fixtures (none has a hidden/veryHidden sheet or a
+  genuine custom row height/column width) — reads only, no elixcee save()
+  round trip (no writer support yet for either).
 
 This is the one place in the repo with a genuine, disclosed new dependency:
 `openpyxl` is a **test-only oracle**, never a runtime dependency of the
