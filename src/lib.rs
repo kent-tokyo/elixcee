@@ -493,7 +493,8 @@ impl PyVm {
     }
 
     /// Duplicate a sheet's cells, merges, hidden-row/col state, cell
-    /// styles, and cell number formats into a brand-new sheet.
+    /// styles, cell number formats, and whole-tab visibility state into a
+    /// brand-new sheet.
     ///
     /// Appended at the end of the workbook's sheets -- unlike openpyxl's own
     /// ``copy_worksheet`` (which places the copy immediately after the
@@ -514,6 +515,32 @@ impl PyVm {
     fn copy_sheet(&mut self, source_name: &str, new_name: &str) -> PyResult<()> {
         self.inner
             .copy_sheet(source_name, new_name)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// A sheet's whole-tab visibility: ``"visible"``, ``"hidden"``, or
+    /// ``"veryHidden"`` -- matching openpyxl's own ``ws.sheet_state`` string
+    /// vocabulary exactly, no translation needed.
+    ///
+    /// Read-only for now: there's no ``set_sheet_state`` yet, and a loaded
+    /// file's hidden/veryHidden sheet currently reverts to visible on save
+    /// regardless of what this reports (no writer support -- no real fixture
+    /// in this project has a hidden sheet to validate the writer shape
+    /// against; see docs/openpyxl-gap-audit.md).
+    ///
+    /// Parameters
+    /// ----------
+    /// name:
+    ///     The sheet to query (case-insensitive).
+    ///
+    /// Raises ``ValueError`` if *name* doesn't exist. Unlike openpyxl's own
+    /// property (which can't fail -- it just reads an attribute off an
+    /// already-resolved ``Worksheet`` object), an unknown name is a real
+    /// error here rather than silently returning ``"visible"``.
+    fn sheet_state(&self, name: &str) -> PyResult<String> {
+        self.inner
+            .sheet_state(name)
+            .map(|s| s.as_str().to_string())
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
