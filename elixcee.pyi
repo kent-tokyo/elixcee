@@ -155,7 +155,8 @@ class Vm:
 
     def copy_sheet(self, source_name: str, new_name: str) -> None:
         """Duplicate a sheet's cells, merges, hidden-row/col state, cell
-        styles, and cell number formats into a brand-new sheet.
+        styles, cell number formats, and whole-tab visibility state into a
+        brand-new sheet.
 
         Appended at the end of the workbook's sheets — unlike openpyxl's own
         ``copy_worksheet`` (which places the copy immediately after the
@@ -166,6 +167,24 @@ class Vm:
         Raises ``ValueError`` if *source_name* doesn't exist, or *new_name*
         is empty/whitespace-only or (case-insensitively) already names an
         existing sheet.
+        """
+        ...
+
+    def sheet_state(self, name: str) -> str:
+        """A sheet's whole-tab visibility: ``"visible"``, ``"hidden"``, or
+        ``"veryHidden"`` — matching openpyxl's own ``ws.sheet_state`` string
+        vocabulary exactly, no translation needed.
+
+        Read-only for now: there's no ``set_sheet_state`` yet, and a loaded
+        file's hidden/veryHidden sheet currently reverts to visible on save
+        regardless of what this reports (no writer support — no real
+        fixture in this project has a hidden sheet to validate the writer
+        shape against).
+
+        Raises ``ValueError`` if *name* doesn't exist. Unlike openpyxl's own
+        property (which can't fail — it just reads an attribute off an
+        already-resolved ``Worksheet`` object), an unknown name is a real
+        error here rather than silently returning ``"visible"``.
         """
         ...
 

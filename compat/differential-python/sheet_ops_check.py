@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Differential check: elixcee's sheet management + workbook-metadata API
-(P1 core 3 + remainder + P2 hidden row/col + copy_sheet + defined_names)
-vs. openpyxl.
+(P1 core 3 + remainder + P2 hidden row/col + copy_sheet + defined_names +
+sheet_state) vs. openpyxl.
 
 openpyxl is used PURELY as a test-only oracle here -- never a runtime dependency
 of the shipped `elixcee` package (see pyproject.toml, which declares none).
@@ -17,6 +17,11 @@ from FIXTURE via elixcee.load_workbook, not a bare elixcee.Vm() -- a
 from-scratch VM's minimal styles.xml emits a bare <fill/> that openpyxl's
 own reader rejects on reopen (a real, pre-existing, unrelated bug -- see
 ROADMAP.md's known gaps).
+
+sheet_state() coverage uses an openpyxl-AUTHORED fixture, not a real
+Excel-authored one under compat/oracle-excel-com (none has a hidden/
+veryHidden sheet), and reads only -- no elixcee save() round trip, since
+elixcee has no writer support for `state="..."` yet.
 
 defined_names() coverage uses FIXTURE4 (fixture1 has no <definedNames> at
 all), and reads directly rather than through a save/reload round trip --
@@ -250,6 +255,54 @@ class DefinedNamesAgreesWithOpenpyxl(unittest.TestCase):
         wb = openpyxl.load_workbook(FIXTURE)
         self.assertEqual(vm.defined_names(), {})
         self.assertEqual(dict(wb.defined_names), {})
+
+
+class SheetStateAgreesWithOpenpyxl(unittest.TestCase):
+    # No real fixture in this repo has a hidden/veryHidden sheet (see
+    # docs/openpyxl-gap-audit.md), so the fixture here is built WITH
+    # openpyxl itself rather than loaded from compat/oracle-excel-com --
+    # this compares reads only, no elixcee save() round trip involved.
+    def test_sheet_state_matches_openpyxl_on_an_openpyxl_authored_fixture(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "states.xlsx")
+            wb = openpyxl.Workbook()
+            wb.active.title = "Visible"
+            wb.create_sheet("Hidden").sheet_state = "hidden"
+            wb.create_sheet("VeryHidden").sheet_state = "veryHidden"
+            wb.save(path)
+
+            vm = elixcee.load_workbook(path)
+            wb2 = openpyxl.load_workbook(path)
+
+            for name in ("Visible", "Hidden", "VeryHidden"):
+                self.assertEqual(vm.sheet_state(name), wb2[name].sheet_state)
+
+    def test_sheet_state_does_not_yet_survive_an_elixcee_save(self):
+        # Disclosed known gap, not a hypothetical: elixcee has no writer
+        # support for `state="..."` yet (no real fixture to validate the
+        # writer shape against -- see ROADMAP.md's known gaps), so a loaded
+        # hidden sheet currently reverts to visible on ANY save, even a
+        # no-op one. Pinned here so a future writer fix is a deliberate,
+        # visible change to this test, not a silent behavior shift.
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "states_src.xlsx")
+            wb = openpyxl.Workbook()
+            wb.active.title = "Visible"
+            wb.create_sheet("Hidden").sheet_state = "hidden"
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            self.assertEqual(vm.sheet_state("Hidden"), "hidden")
+
+            out = os.path.join(d, "states_out.xlsx")
+            vm.save_workbook(out)
+            wb2 = openpyxl.load_workbook(out)
+            self.assertEqual(
+                wb2["Hidden"].sheet_state,
+                "visible",
+                "known gap: update this test (and ship set_sheet_state) once "
+                "the writer preserves state=... on save",
+            )
 
 
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):

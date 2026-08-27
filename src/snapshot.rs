@@ -191,6 +191,7 @@ mod tests {
             raw_style_indices: HashMap::new(),
             formulas: HashMap::new(),
             cell_number_formats: HashMap::new(),
+            sheet_state: None,
         }
     }
 

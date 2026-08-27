@@ -81,6 +81,13 @@ pub struct WorkbookSheet {
     /// than guessing is the same convention `BufferSheet::style_ids` already uses. Always
     /// empty for `.ods` (no equivalent parsed there).
     pub cell_number_formats: HashMap<(u32, u32), String>,
+    /// The XLSX `<sheet state="...">` attribute's raw value, exactly as written --
+    /// `Some("hidden")`/`Some("veryHidden")`, or `None` when the attribute is absent
+    /// (the default, meaning visible) or unrecognized. Kept as the raw string here,
+    /// the same way `cell_number_formats` keeps raw format-code strings rather than a
+    /// resolved type -- `Vm::populate_from_sheets` is what turns this into a proper
+    /// `SheetState`. Always `None` for `.ods` (no equivalent attribute).
+    pub sheet_state: Option<String>,
 }
 
 pub enum SheetCell {
@@ -996,7 +1003,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
     };
 
     let mut sheets = vec![];
-    for (name, rid, sheet_id) in sheet_refs {
+    for (name, rid, sheet_id, sheet_state) in sheet_refs {
         let Some(target) = rels.get(&rid) else {
             continue;
         };
@@ -1032,6 +1039,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 raw_style_indices: sheet_data.raw_style_indices,
                 formulas: sheet_data.formulas.clone(),
                 cell_number_formats,
+                sheet_state,
             },
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
@@ -1061,8 +1069,11 @@ fn xlsx_workbook_date1904(xml: &str) -> bool {
     false
 }
 
-/// Returns `[(sheet_name, rId, sheetId)]` in document order.
-fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>)> {
+/// Returns `[(sheet_name, rId, sheetId, state)]` in document order. `state` is the
+/// `<sheet state="...">` attribute's raw value (`None` when absent, the default
+/// meaning visible) -- see `WorkbookSheet::sheet_state`'s doc comment for why this
+/// stays a raw string here rather than a resolved type.
+fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>, Option<String>)> {
     let mut iter = XmlIter::new(xml);
     let mut result = vec![];
     while let Some(ev) = iter.next_ev() {
@@ -1072,7 +1083,8 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>)> {
                 && let (Some(name), Some(rid)) = (attr_get(attrs, "name"), attr_get(attrs, "id"))
             {
                 let sheet_id = attr_get(attrs, "sheetId").map(|s| s.to_string());
-                result.push((name.to_string(), rid.to_string(), sheet_id));
+                let state = attr_get(attrs, "state").map(|s| s.to_string());
+                result.push((name.to_string(), rid.to_string(), sheet_id, state));
             }
         }
     }
@@ -1674,6 +1686,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             raw_style_indices: HashMap::new(),
                             formulas: HashMap::new(),
                             cell_number_formats: HashMap::new(),
+                            sheet_state: None,
                         });
                         in_sheet = true;
                         row = 0;
@@ -1839,12 +1852,14 @@ mod sheet_id_tests {
                 (
                     "Sheet1".to_string(),
                     "rId1".to_string(),
-                    Some("1".to_string())
+                    Some("1".to_string()),
+                    None
                 ),
                 (
                     "Sheet2".to_string(),
                     "rId2".to_string(),
-                    Some("5".to_string())
+                    Some("5".to_string()),
+                    None
                 ),
             ]
         );
@@ -1856,7 +1871,26 @@ mod sheet_id_tests {
         let result = xlsx_workbook_sheets(xml);
         assert_eq!(
             result,
-            vec![("Sheet1".to_string(), "rId1".to_string(), None)]
+            vec![("Sheet1".to_string(), "rId1".to_string(), None, None)]
+        );
+    }
+
+    #[test]
+    fn xlsx_workbook_sheets_captures_the_state_attribute() {
+        let xml = r#"<sheets>
+<sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+<sheet name="Sheet2" sheetId="2" r:id="rId2" state="hidden"/>
+<sheet name="Sheet3" sheetId="3" r:id="rId3" state="veryHidden"/>
+</sheets>"#;
+        let result = xlsx_workbook_sheets(xml);
+        let states: Vec<Option<String>> = result.into_iter().map(|(_, _, _, s)| s).collect();
+        assert_eq!(
+            states,
+            vec![
+                None,
+                Some("hidden".to_string()),
+                Some("veryHidden".to_string())
+            ]
         );
     }
 
