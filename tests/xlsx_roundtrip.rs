@@ -1112,13 +1112,16 @@ fn defined_names_reads_the_real_fixtures_defined_name() {
     );
 }
 
-/// P1 core 3: pins the disclosed row/col insert-delete fidelity gap as an
-/// executable fact -- merges and hidden-row/col markers are NOT shifted, which is
-/// a pre-existing VBA-engine limitation this round makes Python-reachable, not a
-/// new regression. If this ever starts failing because someone taught
-/// `insert_rows_on_sheet` to shift these, update ROADMAP.md's known gaps too.
+/// 0.14.0-B Phase 2 updated this: merges now shift on insert/delete
+/// (`shift_merged_ranges_for_structural_edit`), so B1:C1 (row 1) moves to
+/// B2:C2 when a row is inserted at row 1 -- previously this test pinned the
+/// opposite (merge NOT shifted) as the disclosed gap. Hidden-row/col
+/// markers still don't shift -- that's `sheet_visibility`, a later 0.14.0-B
+/// phase (ROADMAP.md's known gaps) -- so those assertions are unchanged. If
+/// this starts failing because hidden markers now shift too, update
+/// ROADMAP.md's known gaps and this test together.
 #[test]
-fn insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidden_markers() {
+fn insert_rows_on_a_merged_and_hidden_row_sheet_shifts_the_merge_but_not_hidden_markers() {
     let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
     let output_path = tmp_path("insert_rows_on_sheet_output.xlsm");
 
@@ -1134,9 +1137,12 @@ fn insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidd
     let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
 
     assert!(
-        out_sheet1.contains(r#"<mergeCell ref="B1:C1"/>"#),
-        "merge ref must still reference its ORIGINAL, unshifted row -- insert_rows_on_sheet \
-         does not (yet) shift merges: {out_sheet1}"
+        out_sheet1.contains(r#"<mergeCell ref="B2:C2"/>"#),
+        "merge ref must shift down to the post-insert row: {out_sheet1}"
+    );
+    assert!(
+        !out_sheet1.contains(r#"<mergeCell ref="B1:C1"/>"#),
+        "the stale, pre-shift merge ref must not also still be present: {out_sheet1}"
     );
     assert!(
         out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
@@ -1145,7 +1151,8 @@ fn insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidd
     assert!(
         out_sheet1.contains(r#"<row r="5" hidden="1">"#)
             || out_sheet1.contains(r#"<row r="5" hidden="1"/>"#),
-        "hidden row marker must still say row 5, NOT shifted to row 6: {out_sheet1}"
+        "hidden row marker must still say row 5, NOT shifted to row 6 (sheet_visibility \
+         transform is a later 0.14.0-B phase, not yet implemented): {out_sheet1}"
     );
 
     let _ = std::fs::remove_file(&output_path);

@@ -865,6 +865,52 @@ unit-tested.
   merged ranges staying untouched.
 - New `elixcee.pyi` stub entry for `move_range`.
 
+### Root crate: merged-cell transform on structural edit and range move (0.14.0-B Phase 2)
+
+`insert_rows`/`delete_rows`/`insert_cols`/`delete_cols`/`move_range` now transform
+`merged_ranges` too, closing the gap the entries above disclosed ("merged ranges staying
+untouched"). Real Excel's own behavior for the most common shape — a merge with only
+*some* of its rows/columns falling inside a deleted band — has no dedicated Microsoft
+documentation and came back unconfirmed after a targeted research pass (same
+Microsoft-documentation-based method as 0.14.0-A4's range-move research, since this
+machine can't run Excel); see `internal_docs/cell-metadata-transform-0.14.0-b-design.md`
+§5 for the full findings and confidence levels per case, and §7 for the decision below.
+
+- **Insert/delete**: reuses `formula::shift_bound_low`/`shift_bound_high` — the *exact*
+  arithmetic a formula range already uses for insert/delete, now exposed as `pub(crate)`
+  for this purpose (Phase 1, PR #23) — applied to a merge's row or column bounds on
+  whichever axis is edited. For the cases real Excel's behavior is actually confirmed or
+  reasonably well-supported (a merge entirely inside a deleted band is destroyed; an
+  insert landing strictly inside a merge grows it; an insert at a merge's edges shifts or
+  leaves it as expected), this matches. For the one case that came back genuinely
+  unconfirmed — a delete removing only *some* of a merge's rows/columns — this applies
+  the clamp arithmetic anyway as a **disclosed, unverified-against-real-Excel best-effort
+  shape**, matching the precedent already set by the formula-empty-cached-value fix
+  (`[Unreleased]`/PR #20): decided explicitly by the user rather than assumed, after two
+  other options (reject the edit outright; leave only this shape untouched) were laid out
+  with their tradeoffs.
+- A merge that would collapse entirely, or survive but shrink to a single cell on both
+  axes, is dropped rather than kept — `merge_cells` itself already refuses to create a
+  single-cell "merge", so keeping one here would be inconsistent with this engine's own
+  rule regardless of what real Excel does for this exact shape.
+- **Range move**: a merge fully inside the moved rectangle translates as a whole; fully
+  outside is untouched; a merge with only *partial* overlap makes the *whole move* fail
+  (`Err`/`ValueError`, nothing mutated) rather than guessing — the same "reject rather
+  than guess" precedent already established for a partially-overlapping formula range
+  reference (`MoveRewrite::Ambiguous`). A moved merge landing on an existing, unrelated
+  merge is rejected the same way, independent of the research question above — it follows
+  directly from `merge_cells`'s own already-enforced overlap rule.
+- Validate-before-mutate: `move_range_on_sheet`'s merge check runs in the same
+  scan-before-any-mutation phase as its existing formula-reference check, so a move
+  rejected for either reason leaves cells, formulas, and merges all completely unchanged.
+- Verified through the actual built Python extension (`maturin develop --release`), not
+  just `cargo test`: `insert_rows` shifting a merge, `move_range` translating one,
+  `move_range` rejecting a partial-overlap case with the merge confirmed unchanged
+  afterward, and a real `save_workbook` → `load_workbook` round trip.
+- 9 new `Vm`-level unit tests. Updated one existing unit test and one real-fixture
+  integration test that had pinned the OLD "merges are not shifted" behavior as the
+  disclosed gap this round closes (both now assert the new, correct behavior instead).
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
