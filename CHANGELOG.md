@@ -677,6 +677,44 @@ both fixed at the source**:
   Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
   externalization) and needs a different solution.
 
+### Root crate: formula reference rewriting on row/column insert-delete (0.14.0-A / 0.14.0-A2)
+
+`insert_rows_on_sheet`/`delete_rows_on_sheet`/`insert_cols_on_sheet`/`delete_cols_on_sheet`
+(and their Python-bound `insert_rows`/`delete_rows`/`insert_cols`/`delete_cols`) now rewrite
+formula cell-references workbook-wide instead of leaving every formula's text stale. Precise
+scope, not "cross-sheet formulas are supported":
+
+- **Supported**: an unqualified reference (`=A10`) shifts when its own formula's cell lives
+  on the sheet being edited; a sheet-qualified reference (`=Sheet2!A10`, `='Sales 2026'!A10`,
+  `='Bob''s Data'!A10` — quoting/escaping/case-insensitive identity all handled) shifts
+  whenever it *names* the edited sheet, regardless of which sheet hosts the formula. A
+  reference landing inside a deleted band becomes `#REF!` (a range with only one corner
+  inside the band shrinks instead of collapsing, matching real Excel); the sheet qualifier,
+  if any, is preserved through both cases.
+- **Not supported**: cross-sheet formula *evaluation* — `evaluate()` explicitly refuses any
+  formula containing a sheet-qualified reference rather than ever silently reading the
+  active sheet's cell as if it were the qualified one; `recalculate_all` skips such formulas
+  the same way it already skips unparseable ones, so one cross-sheet formula can't abort a
+  whole-workbook recalculation. `set_cell_formula` still can't be used to *author* a new
+  cross-sheet formula (it evaluates immediately) — only a formula already present (e.g.
+  loaded from a file) benefits from the rewrite. External workbook references
+  (`[Book2.xlsx]Sheet1!A1`), 3D references (`Sheet1:Sheet3!A1`), sheet rename
+  reference-following, and range move are all still unimplemented.
+- Implemented as targeted text splicing over parser-tracked reference spans
+  (`formula::parse_with_refs`/`shift_references`), not a general AST-to-formula-text
+  serializer — everything outside a changed reference (operators, function names, literals,
+  whitespace, unaffected references, unrelated sheets' formulas) is left byte-for-byte
+  untouched. `$`-absolute cell/range reference parsing (`FormulaExpr::CellRef`/`Range` gained
+  `abs_col`/`abs_row`) is a prerequisite this round also depends on.
+- 60+ new tests across the parser, rewriter, evaluator, and VM layers, plus a real
+  save→reload→re-save integration test confirming a plain re-save doesn't shift a reference
+  a second time.
+- **Discovered, unrelated, unfixed**: the XLSX writer silently drops a cell entirely —
+  formula text included — whenever its cached value is `Variant::Empty`, regardless of
+  whether a formula is present (reproduces for an ordinary same-sheet formula with no
+  cross-sheet reference involved at all, e.g. `=IF(FALSE,1)`; pre-existing, not introduced by
+  this work). Tracked as discovered work, not fixed here.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
