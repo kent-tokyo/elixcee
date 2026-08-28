@@ -777,6 +777,11 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 ユーザーの「start Phase 1 of 0.14.0-B」を受けて着手。Phase 1は2部構成（スコーピング文書§8の1番目の項目）。
 
 - [x] **共有座標シフトプリミティブの公開**：`src/formula/rewrite.rs`の`shift_cell_coord`/`shift_bound_low`/`shift_bound_high`（および`CellShift` enum、`MoveRect::contains`）を`private`から`pub(crate)`へ変更——振る舞いは一切変更せず、可視性のみの変更。`formula::mod.rs`への再エクスポートは今回あえて見送り（消費者がまだ存在せず、再エクスポートするとclippyのunused-import警告になるため——実際に最初に使うラウンド（merged_rangesのtransform実装）で追加する方針をコメントに明記）。全1107件のテストが無回帰で通過、`cargo fmt`/`clippy -D warnings`ともにクリーン。
-- [ ] **merge片コーナー縮小等の実Excel挙動調査**：range move Stage 1と同じ手法（実Excelがこのマシンでは動かせないため、Microsoft公式ドキュメント・Microsoft Learn/Support・Microsoft Community Hubのモデレーター確認済みスレッドを根拠にする）で、7つの具体的な質問（delete片コーナー重複時の縮小挙動／delete で1セルまで縮んだ場合の扱い／delete全体がmergeを覆う場合の破棄／insert がmerge内部に入る場合／insert がmergeの開始境界に入る場合／insert がmergeの終了直後境界に入る場合／cut-pasteでmergeの片コーナーだけが移動元に重なる場合）を調査するforkを起動済み（agent id: 内部管理、ユーザーには非開示）——結果待ち。
+- [x] **merge片コーナー縮小等の実Excel挙動調査（完了、ただしrange move Stage 1より確信度が低い結果）**：7つの質問を調査したforkが完了。結果：
+  - 高確信度：deleteでmerge全体が削除帯に完全に覆われる場合は単純に破棄（自明なケース）。
+  - 中確信度：merge と交差するfull row/column deleteは一般にブロックされない／insertがmerge内部に厳密に入る場合はmergeが拡張される（Microsoft Supportが自分の環境で再現）。
+  - 低確信度（非Microsoft・単一ソース）：insertがmergeの開始境界に入る場合はmerge全体がそのままシフト／終了直後境界への挿入は無関係（後者は根拠なしの推論のみ）。
+  - **未確認（最重要）**：delete がmergeの一部だけを削除帯に含む場合（最も一般的なケースのはず）に縮小後の形状がどうなるか——Microsoft公式ドキュメントにこの操作専用の記事が存在せず、コミュニティの間接的証拠（あるボランティアモデレーターのVBA回避策のコード設計）しか見つからなかった。同様に、1セルまで縮んだ場合にExcelがmergeを黙って解除するのか拒否するのか、という点も未確認（そもそも「1セルmergeをExcelが禁止する」という前提自体の裏付けも見つからず）。cut-pasteでmergeの片コーナーだけが移動元に重なるケースも同様に未確認。
+- [x] **設計文書の更新**：`internal_docs/cell-metadata-transform-0.14.0-b-design.md`の§5・§7を実際の調査結果に基づいて全面改稿。range move Stage 1との違いを明記——今回は「コアの挙動自体」が未確認であり、周辺的なopen questionではない。§7では3つの実際的な選択肢（(1)formula range と同じclamp演算を「実Excel未検証」と明示した上で適用、(2)部分重複するedit自体を拒否、(3)確認済みケースのみtransformし部分重複ケースは現状維持で開示）を提示——今回は技術的な判断ではなくプロダクトのリスク許容度の判断であるため、あえて推奨案を出さずユーザー判断を仰ぐ方針とした。
 
-残作業：merge意味論調査の結果を待って、findingsを`internal_docs/cell-metadata-transform-0.14.0-b-design.md`に反映し、Phase 2（merged_ranges transform実装）へ進む。
+残作業：§7の3択についてユーザーの判断待ち。決定後、Phase 2（merged_ranges transform実装）へ進む。
