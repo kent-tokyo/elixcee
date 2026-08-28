@@ -628,3 +628,15 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] **次サブシステムの事前調査（未実装）**：ASTベースの汎用シリアライザではなく、パーサが各CellRef/Range出現のテキストspan（文字オフセット）を副産物として記録し、リライタはそのspanだけを元の文字列に対して置換する設計の方が、無関係な部分（演算子・関数名・数値表記・空白）を一切変更せずに済み、より安全でコード量も少ないと判断（この判断はレビュー可能な内部実装詳細であり、新規スコープ決定ではないため単独で採用）。ただしこの設計を実装する前に、`CellContent.formula`の保存規約が統一されていないことを確認：XLSX読み込み経由（`reader.rs`のformulas収集）は先頭`=`なし（OOXML `<f>`要素の生テキスト）、`Vm::set_cell_formula`経由（Python/VBA API）は呼び出し側が`=`を付けたまま渡すことが多く、書き込み側（`src/lib.rs`の`xlsx_cell_xml`）が両対応のため`.trim().trim_start_matches('=')`で防御的に正規化している。span設計はこの不統一を前提に、`formula::parse`と同じ正規化後のオフセット空間で座標を持たせ、リライタ側で同じ正規化を再適用する契約にする必要がある——次ラウンドの実装前提として記録。
 
 残作業：`0.14.0-A`サブシステム2（span記録付きパース）以降、および同一シート内insert/delete時のリライタ本体・削除帯に落ちた参照の`#REF!`化・cross-sheet構文は未着手。複数ラウンドで継続する前提でユーザー承認済み。
+
+## 0.14.0-A サブシステム2・3実装：span記録パース＋同一シート内リライタ（PR #16）
+
+ユーザーの「build the reference span-tracking/rewriter subsystem」を受け、前ラウンドで事前調査済みの設計（ASTベース汎用シリアライザではなくspanベースのテキスト置換）をそのまま実装。
+
+- [x] **`parser::parse_with_refs`**：`FormulaExpr`本体は無変更のまま、パーサ内部に`refs: Vec<RefOccurrence>`を追加し副産物として記録。`RefOccurrence::Cell`/`Range`（Rangeは角ごとにspan保持）。`parse()`は`parse_with_refs()`に委譲するよう再実装（重複排除）。既存`parse_ref_corner`を「span付きで座標を返すだけ」の純粋関数に整理し、両方の呼び出し箇所（`$`付き分岐・裸`A1`分岐）を`finish_ref`という共通の末尾処理へ統合。span正しさは「実際に文字列をスライスして期待の部分文字列と一致するか」を検証するテストで担保（手計算のオフセットを信用せず、1件は手計算ミスで実際に落ちて修正）。
+- [x] **`formula::shift_references(formula, axis, edit)`**：同一シート内のrow/col insert/deleteに対するリライタ。単一セル参照は削除帯に入ったら無条件`#REF!`、Range参照は角ごとに`shift_bound_low`/`shift_bound_high`でクランプし、結果`low > high`になった場合のみ全体を`#REF!`へ（片方の角だけ削除帯に入った場合は縮小するだけ——実Excelの挙動と一致することを`A1:A10`削除rows3-4→`A1:A8`等の具体例で確認）。`$`絶対フラグはinsert/delete時の可否には影響しない（copy/fillとは異なる）ことを設計原則として明記し、出力テキストではそのまま保持。逆順range（`B10:A1`）もこのコードベースの評価器自身が`min`/`max`で正規化する慣習に倣って対応。
+- [x] **テスト**：span記録14件、リライタ14件の計28件新規。1件（列axisテスト）は当初の期待値が誤り（row=10がinsert(2,1)の対象行以上だったため実際にshiftするのが正しい）と判明、テスト側を修正。
+- [x] `cargo test --workspace`（1022件・0 failed）・clippy・fmt・`check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。
+- [x] `internal_docs/ROADMAP.md`の`0.14.0-A`節を更新：エンジン部分（span記録＋リライタ）は完了として打ち消し線、残りは「`insert_rows_on_sheet`等への実際の配線・`update_references`フラグのAPI設計・cross-sheet構文（未着手のまま）」に絞って明記。
+
+残作業：`shift_references`は完成したが、`insert_rows_on_sheet`/`delete_rows_on_sheet`/`insert_cols_on_sheet`/`delete_cols_on_sheet`（`src/vm/mod.rs`）からまだ一切呼ばれていない——配線と、それをユーザーに見せるAPI（Python側の`update_references`引数等）の設計が次の実装対象。cross-sheet構文（`!`/`'`ハンドリング）・sheet rename・range moveは依然未着手。
