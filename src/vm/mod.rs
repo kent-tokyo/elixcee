@@ -1083,13 +1083,71 @@ impl Vm {
             .expect("active sheet must exist")
     }
 
+    /// Rewrites every formula cell-reference on `key` for a same-sheet row/column
+    /// insert or delete (`formula::shift_references`, 0.14.0-A), in place, before
+    /// the physical row/col shift below moves any cells. Every formula cell on the
+    /// sheet is checked, not just the ones about to move -- a formula that stays put
+    /// can still reference a row/col that's shifting. A formula elixcee's parser
+    /// can't parse (most commonly one containing a cross-sheet reference like
+    /// `Sheet2!A1` -- cross-sheet syntax isn't supported yet, see ROADMAP.md's
+    /// 0.14.0-A note) is left untouched rather than partially rewritten: this is
+    /// the same "stale until you touch it" status quo every such formula already
+    /// had before this method existed, not a new gap.
+    fn rewrite_formulas_for_structural_edit(
+        &mut self,
+        key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return;
+        };
+        let updates: Vec<((u32, u32), String)> = cells
+            .iter()
+            .filter_map(|(&pos, content)| {
+                let f = content.formula.as_ref()?;
+                match formula::shift_references(f, axis, edit) {
+                    Ok(Some(new_f)) => {
+                        // shift_references normalizes away a leading '=' (see its
+                        // doc comment); CellContent::formula doesn't consistently
+                        // carry one (XLSX-loaded formulas never do, VBA/Python-set
+                        // ones often do -- see xlsx_cell_xml's own defensive strip),
+                        // so restore it here iff the original had one, or a
+                        // rewritten formula would visibly disagree with an
+                        // untouched sibling's convention (e.g. via FORMULATEXT()).
+                        let final_f = if f.trim_start().starts_with('=') {
+                            format!("={new_f}")
+                        } else {
+                            new_f
+                        };
+                        Some((pos, final_f))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        for (pos, new_f) in updates {
+            if let Some(cell) = cells.get_mut(&pos) {
+                cell.formula = Some(new_f);
+            }
+        }
+    }
+
     /// `insert_rows`'s sheet-parameterized sibling (backs Python's
     /// `insert_rows(..., sheet=None)`). `insert_rows` below just forwards here with
     /// `key = active_sheet` -- VBA's `RowColInsert`/`RangeInsert` call sites don't
-    /// change at all. Does NOT shift `merged_ranges`/`sheet_visibility`/
-    /// `cell_style_indices`/`cell_number_formats`/formula text -- a pre-existing
-    /// VBA-engine limitation, now Python-reachable; see ROADMAP.md's known gaps.
+    /// change at all. Shifts same-sheet formula cell-references (0.14.0-A -- see
+    /// `rewrite_formulas_for_structural_edit`). Does NOT shift `merged_ranges`/
+    /// `sheet_visibility`/`cell_style_indices`/`cell_number_formats` -- a
+    /// pre-existing VBA-engine limitation, now Python-reachable; see ROADMAP.md's
+    /// known gaps. Cached `.value`s are left stale, same as any other edit --
+    /// callers that need fresh values already call `recalculate_all()` themselves.
     pub fn insert_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.rewrite_formulas_for_structural_edit(
+            key,
+            formula::RefAxis::Row,
+            formula::StructuralEdit::Insert { at: first, count },
+        );
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -1123,8 +1181,15 @@ impl Vm {
     /// cells at their stale original position while ALSO inserting a second copy at
     /// the shifted position, duplicating data. See
     /// `delete_rows_on_sheet_removes_the_stale_entry_at_the_pre_shift_row` for the
-    /// regression test this exists to keep passing.
+    /// regression test this exists to keep passing. Shifts same-sheet formula
+    /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`);
+    /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.rewrite_formulas_for_structural_edit(
+            key,
+            formula::RefAxis::Row,
+            formula::StructuralEdit::Delete { at: first, count },
+        );
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1155,8 +1220,15 @@ impl Vm {
     /// `insert_cols_on_sheet`'s row-axis sibling is `insert_rows_on_sheet` above --
     /// this is `delete_cols`'s sheet-parameterized version, the column-axis mirror of
     /// `delete_rows_on_sheet` (same single-pass `retain(col < first)` correctness
-    /// reasoning, on the column instead of the row).
+    /// reasoning, on the column instead of the row). Shifts same-sheet formula
+    /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`);
+    /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.rewrite_formulas_for_structural_edit(
+            key,
+            formula::RefAxis::Col,
+            formula::StructuralEdit::Delete { at: first, count },
+        );
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1181,8 +1253,14 @@ impl Vm {
         self.delete_cols_on_sheet(&key, first, count);
     }
 
-    /// `insert_rows_on_sheet`'s column-axis mirror.
+    /// `insert_rows_on_sheet`'s column-axis mirror. Shifts same-sheet formula
+    /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`).
     pub fn insert_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.rewrite_formulas_for_structural_edit(
+            key,
+            formula::RefAxis::Col,
+            formula::StructuralEdit::Insert { at: first, count },
+        );
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -9801,6 +9879,143 @@ mod tests {
         vm.delete_cols_on_sheet("sheet1", 1, 2);
         assert_eq!(vm.get_cell(1, 10), Variant::Empty);
         assert_eq!(vm.get_cell(1, 8), Variant::Integer(7));
+    }
+
+    // ── 0.14.0-A: structural edits shift same-sheet formula references ──────
+
+    #[test]
+    fn insert_rows_on_sheet_shifts_a_formula_that_stays_put_but_points_below_the_insertion() {
+        // The formula cell itself (row 1) does NOT move -- only the reference
+        // inside it, since row 10 is being pushed down by the insert.
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=A10+1").unwrap();
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=A12+1".to_string())
+        );
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_shifts_a_formula_that_itself_moves() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(10, 1, "=A1+1").unwrap();
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        assert!(!cells.contains_key(&(10, 1))); // moved away from its pre-shift position
+        let moved = cells.get(&(12, 1)).unwrap();
+        assert_eq!(moved.formula, Some("=A1+1".to_string())); // A1 is before the insertion point, unaffected
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_turns_a_reference_into_the_deleted_band_into_ref_error() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=A5+1").unwrap();
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=#REF!+1".to_string())
+        );
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_shifts_only_the_column_axis_of_a_formula() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=C10+1").unwrap();
+        vm.insert_cols_on_sheet("sheet1", 2, 1);
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=D10+1".to_string())
+        );
+    }
+
+    #[test]
+    fn delete_cols_on_sheet_shifts_a_formula_after_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=J1+1").unwrap();
+        vm.delete_cols_on_sheet("sheet1", 2, 2);
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=H1+1".to_string())
+        );
+    }
+
+    #[test]
+    fn structural_edit_preserves_a_formula_stored_without_a_leading_equals() {
+        // Matches how XLSX-loaded formulas are stored (see reader.rs) -- a
+        // rewritten formula must not gain a leading '=' it never had.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("A10+1".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("A12+1".to_string())
+        );
+    }
+
+    #[test]
+    fn structural_edit_does_not_rewrite_formulas_on_a_different_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.set_cell_formula(1, 1, "=A10+1").unwrap(); // on "sheet1" (active)
+        vm.insert_rows_on_sheet("other", 5, 2);
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=A10+1".to_string())
+        );
+    }
+
+    #[test]
+    fn structural_edit_leaves_an_unparseable_formula_untouched_instead_of_erroring() {
+        // Elixcee's parser doesn't support cross-sheet syntax (Sheet2!A1) yet --
+        // such a formula must be left exactly as-is, not corrupted or dropped.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("Sheet2!A1+A10".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("Sheet2!A1+A10".to_string())
+        );
     }
 
     // ── P1 remainder: sort_range_on_sheet (extracted from Stmt::RangeSort) ──

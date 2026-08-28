@@ -913,9 +913,17 @@ impl PyVm {
     /// everything below it down. Mirrors openpyxl's
     /// ``Worksheet.insert_rows(idx, amount=1)`` naming/value semantics.
     ///
-    /// Does **not** shift merged ranges, hidden-row markers, cell styles/number
-    /// formats, or formula cell-reference text — a pre-existing limitation of the
-    /// underlying VBA engine (``Rows(n).Insert``) now reachable from Python; see
+    /// Same-sheet formula cell-references on *sheet* are updated to follow the
+    /// shift (e.g. ``=A10`` becomes ``=A12`` when 2 rows are inserted before row
+    /// 5); a reference that lands inside a *deleted* band becomes ``#REF!`` on
+    /// :meth:`delete_rows`. A formula that couldn't be parsed in the first place
+    /// (most commonly one containing a cross-sheet reference like ``Sheet2!A1`` —
+    /// not supported yet) is left exactly as-is rather than partially rewritten.
+    /// Does **not** shift merged ranges, hidden-row markers, or cell
+    /// styles/number formats yet, does not touch cross-sheet references, and
+    /// does not recompute any cached formula value — call :meth:`recalculate`
+    /// afterwards if you need fresh values (note it recalculates the *active*
+    /// sheet, so switch sheets first if *sheet* isn't already active). See
     /// docs/openpyxl-gap-audit.md and ROADMAP.md's known gaps.
     ///
     /// Parameters
@@ -950,8 +958,10 @@ impl PyVm {
     /// below the deleted band up. Mirrors openpyxl's
     /// ``Worksheet.delete_rows(idx, amount=1)`` naming/value semantics.
     ///
-    /// Same fidelity gap as :meth:`insert_rows` — does not shift merges, hidden
-    /// markers, styles/number formats, or formula references.
+    /// Same-sheet formula references are updated the same way :meth:`insert_rows`
+    /// documents (a reference into the deleted band becomes ``#REF!``); same
+    /// fidelity gap otherwise — does not shift merges, hidden markers, or
+    /// styles/number formats.
     ///
     /// Parameters
     /// ----------
@@ -985,8 +995,9 @@ impl PyVm {
     /// and everything to its right, right. Mirrors openpyxl's
     /// ``Worksheet.insert_cols(idx, amount=1)`` naming/value semantics.
     ///
-    /// Same fidelity gap as :meth:`insert_rows` — does not shift merges, hidden
-    /// markers, styles/number formats, or formula references.
+    /// Same-sheet formula references are updated the same way :meth:`insert_rows`
+    /// documents, on the column axis; same fidelity gap otherwise — does not
+    /// shift merges, hidden markers, or styles/number formats.
     ///
     /// Parameters
     /// ----------
@@ -1020,8 +1031,10 @@ impl PyVm {
     /// everything to the right of the deleted band left. Mirrors openpyxl's
     /// ``Worksheet.delete_cols(idx, amount=1)`` naming/value semantics.
     ///
-    /// Same fidelity gap as :meth:`insert_rows` — does not shift merges, hidden
-    /// markers, styles/number formats, or formula references.
+    /// Same-sheet formula references are updated the same way :meth:`insert_rows`
+    /// documents, on the column axis (a reference into the deleted band becomes
+    /// ``#REF!``); same fidelity gap otherwise — does not shift merges, hidden
+    /// markers, or styles/number formats.
     ///
     /// Parameters
     /// ----------
