@@ -35,10 +35,40 @@ fn lookup_binding(name: &str) -> Option<Variant> {
     })
 }
 
+/// Does `expr` contain a sheet-qualified reference (`Sheet2!A1`) anywhere in
+/// its tree? `cells` (every evaluation site's cell lookup) is always a single
+/// sheet's map with no sheet dimension in its key -- there is no way to
+/// evaluate a qualified reference without either silently reading the wrong
+/// (active/current) sheet's cell, or threading a whole extra workbook
+/// parameter through every eval helper. Neither is done; `evaluate` checks
+/// this ONCE, over the whole tree, before doing anything else, so no helper
+/// below it (`func_sum`'s range fast path, `collect_values`, `func_filter`,
+/// etc., which read `cells` directly rather than recursing through
+/// `evaluate`) ever gets a chance to run on a qualified reference. 0.14.0-A2
+/// added parsing (and reference-rewrite support) for these references without
+/// adding cross-sheet formula *evaluation* -- that's a separate, larger,
+/// still-unbuilt project (a real workbook-cell-graph engine, not a single
+/// `HashMap<(u32,u32), CellContent>`).
+pub(crate) fn references_another_sheet(expr: &FormulaExpr) -> bool {
+    match expr {
+        FormulaExpr::Number(_) | FormulaExpr::Str(_) | FormulaExpr::Bool(_) => false,
+        FormulaExpr::CellRef { sheet, .. } => sheet.is_some(),
+        FormulaExpr::Range { sheet, .. } => sheet.is_some(),
+        FormulaExpr::BinOp { lhs, rhs, .. } => {
+            references_another_sheet(lhs) || references_another_sheet(rhs)
+        }
+        FormulaExpr::UnaryMinus(inner) => references_another_sheet(inner),
+        FormulaExpr::FuncCall { args, .. } => args.iter().any(references_another_sheet),
+    }
+}
+
 pub fn evaluate(
     expr: &FormulaExpr,
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
+    if references_another_sheet(expr) {
+        return Err("cross-sheet formula evaluation is not supported yet".into());
+    }
     match expr {
         FormulaExpr::Number(n) => Ok(as_integer_if_whole(*n)),
         FormulaExpr::Str(s) => Ok(Variant::Str(s.clone())),
@@ -6044,6 +6074,40 @@ mod tests {
         let c = cells_from(&[((1, 1), Variant::Integer(42))]);
         assert_eq!(calc("=A1", &c), Variant::Integer(42));
         assert_eq!(calc("=B1", &c), Variant::Empty);
+    }
+
+    // ── 0.14.0-A2: cross-sheet references parse but never silently evaluate ──
+
+    #[test]
+    fn evaluating_a_qualified_cell_ref_is_an_explicit_error_not_a_wrong_answer() {
+        // Sheet2!A1 must never be silently read as if it were this sheet's
+        // own A1 -- `cells` here has no sheet dimension at all, so reading it
+        // that way would be a real correctness bug, not a missing feature.
+        let c = cells_from(&[((1, 1), Variant::Integer(999))]);
+        let expr = fparse("=Sheet2!A1").unwrap();
+        let err = evaluate(&expr, &c).unwrap_err();
+        assert!(err.contains("cross-sheet"), "unexpected error text: {err}");
+    }
+
+    #[test]
+    fn a_qualified_ref_nested_inside_a_function_call_still_trips_the_guard() {
+        let c = HashMap::new();
+        let expr = fparse("=SUM(Sheet2!A1:A3)").unwrap();
+        assert!(evaluate(&expr, &c).is_err());
+    }
+
+    #[test]
+    fn a_qualified_ref_nested_inside_a_binop_still_trips_the_guard() {
+        let c = HashMap::new();
+        let expr = fparse("=1+Sheet2!A1").unwrap();
+        assert!(evaluate(&expr, &c).is_err());
+    }
+
+    #[test]
+    fn a_formula_with_no_qualified_ref_anywhere_still_evaluates_normally() {
+        // Regression: the guard must not over-trigger on ordinary formulas.
+        let c = cells_from(&[((1, 1), Variant::Integer(1)), ((2, 1), Variant::Integer(2))]);
+        assert_eq!(calc("=SUM(A1:A2)+1", &c), Variant::Integer(4));
     }
 
     #[test]

@@ -1083,52 +1083,63 @@ impl Vm {
             .expect("active sheet must exist")
     }
 
-    /// Rewrites every formula cell-reference on `key` for a same-sheet row/column
-    /// insert or delete (`formula::shift_references`, 0.14.0-A), in place, before
-    /// the physical row/col shift below moves any cells. Every formula cell on the
-    /// sheet is checked, not just the ones about to move -- a formula that stays put
-    /// can still reference a row/col that's shifting. A formula elixcee's parser
-    /// can't parse (most commonly one containing a cross-sheet reference like
-    /// `Sheet2!A1` -- cross-sheet syntax isn't supported yet, see ROADMAP.md's
-    /// 0.14.0-A note) is left untouched rather than partially rewritten: this is
-    /// the same "stale until you touch it" status quo every such formula already
-    /// had before this method existed, not a new gap.
+    /// Rewrites every formula cell-reference in the WHOLE workbook for a row/column
+    /// insert or delete on `edited_key` (`formula::shift_references`, 0.14.0-A /
+    /// 0.14.0-A2), in place, before the physical row/col shift below moves any
+    /// cells on `edited_key` itself. Every formula cell on every sheet is checked,
+    /// not just the ones on `edited_key` -- a formula hosted on a different sheet
+    /// can still hold a `Sheet2!A1`-style reference INTO `edited_key`, and an
+    /// unqualified reference is only relative to its own host sheet, so whether it
+    /// shifts depends on whether the host sheet IS `edited_key` (see
+    /// `formula::shift_references`'s own doc comment for the full targeting rule).
+    ///
+    /// Iterates `self.sheets` exactly once (not once per sheet, which would shift
+    /// every formula N times) -- `edited_key` is cloned up front specifically so
+    /// the loop below can borrow `self.sheets` mutably without also borrowing
+    /// `self` for the parameter.
+    ///
+    /// A formula elixcee's parser can't parse (external workbook references,
+    /// 3D references, and anything else 0.14.0-A2 doesn't cover -- see
+    /// ROADMAP.md's 0.14.0-A note) is left untouched rather than partially
+    /// rewritten: this is the same "stale until you touch it" status quo every
+    /// such formula already had before this method existed, not a new gap.
     fn rewrite_formulas_for_structural_edit(
         &mut self,
-        key: &str,
+        edited_key: &str,
         axis: formula::RefAxis,
         edit: formula::StructuralEdit,
     ) {
-        let Some(cells) = self.sheet_cells_mut(key) else {
-            return;
-        };
-        let updates: Vec<((u32, u32), String)> = cells
-            .iter()
-            .filter_map(|(&pos, content)| {
-                let f = content.formula.as_ref()?;
-                match formula::shift_references(f, axis, edit) {
-                    Ok(Some(new_f)) => {
-                        // shift_references normalizes away a leading '=' (see its
-                        // doc comment); CellContent::formula doesn't consistently
-                        // carry one (XLSX-loaded formulas never do, VBA/Python-set
-                        // ones often do -- see xlsx_cell_xml's own defensive strip),
-                        // so restore it here iff the original had one, or a
-                        // rewritten formula would visibly disagree with an
-                        // untouched sibling's convention (e.g. via FORMULATEXT()).
-                        let final_f = if f.trim_start().starts_with('=') {
-                            format!("={new_f}")
-                        } else {
-                            new_f
-                        };
-                        Some((pos, final_f))
+        let edited_key = edited_key.to_string();
+        for (host_key, cells) in self.sheets.iter_mut() {
+            let updates: Vec<((u32, u32), String)> = cells
+                .iter()
+                .filter_map(|(&pos, content)| {
+                    let f = content.formula.as_ref()?;
+                    match formula::shift_references(f, host_key, &edited_key, axis, edit) {
+                        Ok(Some(new_f)) => {
+                            // shift_references normalizes away a leading '=' (see
+                            // its doc comment); CellContent::formula doesn't
+                            // consistently carry one (XLSX-loaded formulas never
+                            // do, VBA/Python-set ones often do -- see
+                            // xlsx_cell_xml's own defensive strip), so restore it
+                            // here iff the original had one, or a rewritten
+                            // formula would visibly disagree with an untouched
+                            // sibling's convention (e.g. via FORMULATEXT()).
+                            let final_f = if f.trim_start().starts_with('=') {
+                                format!("={new_f}")
+                            } else {
+                                new_f
+                            };
+                            Some((pos, final_f))
+                        }
+                        _ => None,
                     }
-                    _ => None,
+                })
+                .collect();
+            for (pos, new_f) in updates {
+                if let Some(cell) = cells.get_mut(&pos) {
+                    cell.formula = Some(new_f);
                 }
-            })
-            .collect();
-        for (pos, new_f) in updates {
-            if let Some(cell) = cells.get_mut(&pos) {
-                cell.formula = Some(new_f);
             }
         }
     }
@@ -5451,14 +5462,26 @@ impl Vm {
     }
 
     pub fn recalculate_all(&mut self) -> Result<(), String> {
-        // Collect all formula cells and parse them
+        // Collect all formula cells and parse them. A formula containing a
+        // sheet-qualified reference (0.14.0-A2, e.g. `=Sheet2!A1`) now PARSES
+        // successfully but is deliberately excluded here, same as a genuine
+        // parse failure -- `formula::evaluate` refuses to evaluate one (see
+        // `references_another_sheet`), and recalculating the whole workbook
+        // must not fail just because one formula references another sheet;
+        // that formula's cached value is simply left as-is, same as it
+        // already was for every cross-sheet formula before 0.14.0-A2 (when
+        // all of them failed to parse at all).
         let formula_cells: Vec<(u32, u32, formula::FormulaExpr)> = {
             self.cells()
                 .iter()
                 .filter_map(|((r, c), cell)| {
-                    cell.formula
-                        .as_ref()
-                        .and_then(|f| formula::parse(f).ok().map(|e| (*r, *c, e)))
+                    cell.formula.as_ref().and_then(|f| {
+                        let expr = formula::parse(f).ok()?;
+                        if formula::references_another_sheet(&expr) {
+                            return None;
+                        }
+                        Some((*r, *c, expr))
+                    })
                 })
                 .collect()
         };
@@ -9996,14 +10019,17 @@ mod tests {
     }
 
     #[test]
-    fn structural_edit_leaves_an_unparseable_formula_untouched_instead_of_erroring() {
-        // Elixcee's parser doesn't support cross-sheet syntax (Sheet2!A1) yet --
-        // such a formula must be left exactly as-is, not corrupted or dropped.
+    fn structural_edit_leaves_a_genuinely_unparseable_formula_untouched_instead_of_erroring() {
+        // External workbook references ([Book2.xlsx]Sheet1!A1) aren't
+        // supported syntax (0.14.0-A2 covers same-workbook sheet qualifiers
+        // only) -- the whole formula must be left exactly as-is, not
+        // corrupted or dropped. (Sheet2!A1-style same-workbook qualified refs
+        // now DO parse -- see the 0.14.0-A2 section below for that case.)
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
             CellContent {
-                formula: Some("Sheet2!A1+A10".to_string()),
+                formula: Some("[Book2.xlsx]Sheet2!A1+A10".to_string()),
                 value: Variant::Empty,
             },
         );
@@ -10014,8 +10040,146 @@ mod tests {
                 .get(&(1, 1))
                 .unwrap()
                 .formula,
-            Some("Sheet2!A1+A10".to_string())
+            Some("[Book2.xlsx]Sheet2!A1+A10".to_string())
         );
+    }
+
+    // ── 0.14.0-A2: workbook-wide sheet-qualified reference rewrite ──────────
+
+    #[test]
+    fn qualified_reference_on_a_different_sheet_shifts_when_its_target_sheet_is_edited() {
+        let mut vm = Vm::new(); // active/default sheet is "sheet1"
+        vm.ensure_sheet("Other");
+        // set_cell_formula also evaluates -- and evaluate() refuses any
+        // formula containing a qualified reference (cross-sheet evaluation
+        // isn't supported), so a qualified-ref formula is inserted directly
+        // here rather than through set_cell_formula, same as
+        // structural_edit_leaves_a_genuinely_unparseable_formula_untouched...
+        // does for a formula the parser itself can't handle.
+        vm.sheet_cells_mut("other").unwrap().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=Sheet1!A10+1".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.insert_rows_on_sheet("sheet1", 5, 1);
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=Sheet1!A11+1".to_string())
+        );
+    }
+
+    #[test]
+    fn unqualified_reference_on_a_different_sheet_is_not_shifted_by_editing_another_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.set_active_sheet("Other").unwrap();
+        // A bare A10 here means Other!A10, not Sheet1!A10.
+        vm.set_cell_formula(1, 1, "=A10+1").unwrap();
+        vm.insert_rows_on_sheet("sheet1", 5, 1);
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=A10+1".to_string())
+        );
+    }
+
+    #[test]
+    fn qualified_reference_naming_a_sheet_other_than_the_edited_one_is_untouched() {
+        // Formula lives ON sheet1 (the sheet being edited), but explicitly
+        // names "Other" -- must not shift just because it's hosted there.
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=Other!A10+1".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.insert_rows_on_sheet("sheet1", 5, 1);
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=Other!A10+1".to_string())
+        );
+    }
+
+    #[test]
+    fn quoted_sheet_name_reference_shifts_across_sheets() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sales 2026");
+        vm.sheet_cells_mut("sales 2026").unwrap().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("='Sheet1'!A10+1".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.insert_rows_on_sheet("sheet1", 5, 1);
+        assert_eq!(
+            vm.get_sheet_cells("sales 2026")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("='Sheet1'!A11+1".to_string())
+        );
+    }
+
+    #[test]
+    fn qualified_reference_into_a_deleted_band_becomes_ref_error_workbook_wide() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.sheet_cells_mut("other").unwrap().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=Sheet1!A5+1".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.delete_rows_on_sheet("sheet1", 5, 1);
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=Sheet1!#REF!+1".to_string())
+        );
+    }
+
+    #[test]
+    fn recalculate_all_skips_a_cross_sheet_formula_instead_of_erroring_the_whole_recalc() {
+        // Regression: a formula containing a sheet-qualified reference now
+        // PARSES successfully (0.14.0-A2), so it enters recalculate_all's
+        // formula-cell collection where it didn't before. evaluate() refuses
+        // to evaluate it (cross-sheet evaluation isn't supported), and
+        // recalculate_all must not let that failure abort the whole
+        // workbook's recalculation -- every other formula must still update.
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=Other!A1".to_string()), // cross-sheet, left un-evaluated
+                value: Variant::Empty,
+            },
+        );
+        vm.set_cell_formula(2, 1, "=1+1").unwrap(); // ordinary, must still recalculate
+        assert!(vm.recalculate_all().is_ok());
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(2));
     }
 
     // ── P1 remainder: sort_range_on_sheet (extracted from Stmt::RangeSort) ──

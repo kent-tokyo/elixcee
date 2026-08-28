@@ -2941,3 +2941,127 @@ fn check_real_fixture_output(
         "[{mode}] docProps relationships must survive: {root_rels}"
     );
 }
+
+/// 0.14.0-A2 integration: a cross-sheet formula reference survives a real
+/// save/reload round trip after a structural edit on the sheet it targets,
+/// both save-as and in-place, and a second (no-op) save does NOT shift it
+/// again -- `insert_rows_on_sheet` is the only thing that ever calls the
+/// rewriter, and it's called exactly once here.
+///
+/// The formula is inserted directly into the cell map (with a placeholder
+/// cached value, standing in for whatever `<v>` a real Excel-authored file
+/// would have cached alongside its `<f>`) rather than through
+/// `set_cell_formula` -- `set_cell_formula` also evaluates immediately, and
+/// `evaluate()` deliberately refuses any formula containing a sheet-qualified
+/// reference (cross-sheet formula *evaluation* isn't supported -- see
+/// `eval::references_another_sheet`), so it isn't a usable path for a
+/// cross-sheet formula's *text* today. This exercises the actual
+/// save/reload machinery a real Excel-authored file with such a formula
+/// would go through -- `reader.rs` loads `<f>`/`<v>` independently of each
+/// other and without evaluating anything, so a real file with this formula
+/// would load exactly the same way.
+///
+/// A placeholder NON-empty value is deliberately used, not `Variant::Empty`:
+/// `xlsx_cell_xml` (this file's own writer helper, `src/lib.rs`) silently
+/// drops a cell ENTIRELY -- formula text included -- whenever its value is
+/// `Variant::Empty`, regardless of whether a formula is present. Confirmed
+/// via a throwaway probe that this reproduces identically for a plain
+/// same-sheet formula (`=IF(FALSE,1)`) with no qualified reference involved
+/// at all -- a real, pre-existing writer gap, not something 0.14.0-A2
+/// introduced. Out of scope here (unrelated to reference rewriting); flagged
+/// in `tasks/todo.md` as discovered work rather than silently worked around.
+#[test]
+fn cross_sheet_formula_reference_survives_a_real_save_reload_round_trip() {
+    use elixcee::vm::{CellContent, Variant};
+
+    let mut vm = Vm::new(); // default/active sheet key is "sheet1"
+    vm.ensure_sheet("Sheet2");
+    vm.set_active_sheet("Sheet2").unwrap();
+    vm.cells_mut().insert(
+        (1, 1),
+        CellContent {
+            formula: Some("=sheet1!A10+1".to_string()),
+            value: Variant::Integer(0), // placeholder cached value, see doc comment above
+        },
+    );
+    vm.set_active_sheet("Sheet1").unwrap();
+
+    // Insert 1 row before row 5 on sheet1 -- A10 (>= 5) must become A11.
+    vm.insert_rows_on_sheet("sheet1", 5, 1);
+    assert_eq!(
+        vm.get_sheet_cells("sheet2")
+            .unwrap()
+            .get(&(1, 1))
+            .unwrap()
+            .formula,
+        Some("=sheet1!A11+1".to_string()),
+        "in-memory rewrite must have already happened before any save"
+    );
+
+    let save_as_path = tmp_path("cross_sheet_ref_save_as.xlsx");
+    save_workbook(&vm, &save_as_path).expect("save-as should succeed");
+
+    // Reload into a FRESH Vm (as a real user re-opening the file would) and
+    // confirm the rewritten formula text persisted through the XLSX <f>
+    // element, not just the in-memory struct.
+    let mut reloaded = Vm::new();
+    reloaded
+        .load_workbook_file(&save_as_path)
+        .expect("save-as output should reload");
+    assert_eq!(
+        reloaded
+            .get_sheet_cells("sheet2")
+            .unwrap()
+            .get(&(1, 1))
+            .unwrap()
+            .formula,
+        Some("sheet1!A11+1".to_string()), // no leading '=' -- matches <f> element text
+        "rewritten formula must survive a save-as + reload round trip"
+    );
+
+    // A second, no-op save (no structural edit in between) must NOT shift
+    // the reference again -- insert_rows_on_sheet is the only thing that
+    // calls the rewriter, and it isn't called here.
+    save_workbook(&reloaded, &save_as_path).expect("second save should succeed");
+    let mut reloaded_again = Vm::new();
+    reloaded_again
+        .load_workbook_file(&save_as_path)
+        .expect("twice-saved output should reload");
+    assert_eq!(
+        reloaded_again
+            .get_sheet_cells("sheet2")
+            .unwrap()
+            .get(&(1, 1))
+            .unwrap()
+            .formula,
+        Some("sheet1!A11+1".to_string()),
+        "a plain re-save with no structural edit must not shift the reference again"
+    );
+
+    // In-place save (source == output), the other realistic CLI usage.
+    let inplace_path = tmp_path("cross_sheet_ref_inplace.xlsx");
+    std::fs::copy(&save_as_path, &inplace_path).unwrap();
+    let mut inplace_vm = Vm::new();
+    inplace_vm
+        .load_workbook_file(&inplace_path)
+        .expect("copy should reload");
+    inplace_vm.insert_rows_on_sheet("sheet1", 1, 1); // A11 (>=1) -> A12
+    save_workbook(&inplace_vm, &inplace_path).expect("in-place save should succeed");
+    let mut reloaded_inplace = Vm::new();
+    reloaded_inplace
+        .load_workbook_file(&inplace_path)
+        .expect("in-place output should reload");
+    assert_eq!(
+        reloaded_inplace
+            .get_sheet_cells("sheet2")
+            .unwrap()
+            .get(&(1, 1))
+            .unwrap()
+            .formula,
+        Some("sheet1!A12+1".to_string()),
+        "in-place save must also persist the rewrite correctly"
+    );
+
+    let _ = std::fs::remove_file(&save_as_path);
+    let _ = std::fs::remove_file(&inplace_path);
+}

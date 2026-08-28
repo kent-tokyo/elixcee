@@ -6,129 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
-
-### CI: WASM artifact size observability
-
-`packages/xlsx`'s WASM bridge size was already measured (`scripts/wasm-smoke.mjs` step 5)
-but only printed to the console, with no baseline to compare against. Now diffed against a
-committed baseline (`crates/elixcee-wasm/wasm-size-baseline.json`, updated by hand when a
-size change is intentional) and written to the CI step summary; the vendored WASM bridge
-build is also uploaded as a CI artifact. Observation only — no pass/fail threshold yet;
-that needs a few normal builds' worth of data first.
-
-### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
-
-Independent of the root `elixcee` crate: no Rust changes, no new npm dependency.
-`bookType: "xlsx"` only, output `type: "buffer" | "array" | "base64"`, producing a real
-OOXML ZIP via a hand-rolled ZIP/XML writer (no zip/xml-builder dependency added) —
-strings/numbers/booleans/dates/formulas, multiple worksheets, merges, sheet visibility,
-hidden rows/columns, basic number formats, safe XML escaping. Unsupported input (a
-non-`"xlsx"` `bookType`, an unrecognized `type`, an unsupported cell shape/type, a
-non-finite numeric/formula-cached value, an oversized declared `!ref`) throws an explicit
-`ELIXCEE_*` error, never silently ignored or truncated.
-
-- **`packages/xlsx/src/internal/xlsx-writer.cjs`** (new) — the OOXML XML generator:
-  `[Content_Types].xml`, both `.rels` parts, `docProps/{core,app}.xml`, `xl/workbook.xml`,
-  `xl/worksheets/sheetN.xml`, `xl/styles.xml`. Output is deliberately constrained to
-  shapes `src/reader.rs` (elixcee's own reader) already parses, verified by reading
-  `reader.rs` directly — inline strings (not shared strings), a small built-in
-  numFmtId table plus custom `<numFmts>` entries (164+) for anything else.
-- **`packages/xlsx/src/internal/zip-writer.cjs`** (new) — a hand-rolled ZIP archive
-  writer (local file headers, central directory, end-of-central-directory record,
-  table-based CRC-32) with a deterministic fixed epoch, so two `write()` calls on the
-  same `WorkBook` produce byte-identical output. Platform-agnostic by design: no
-  `Buffer`, every byte buffer is a plain `Uint8Array` built with `DataView`/
-  `TextEncoder` — real browsers never had `Buffer` regardless of bundler, so the shared
-  writer core is built to work on both platforms from the start. DEFLATE compression is
-  supplied by the caller as an optional callback rather than required internally (falls
-  back to STORED, a legal ZIP/OOXML method, when omitted — this is what lets the browser
-  entry reuse the same writer with no `zlib` access at all).
-- **`compat/differential/xlsx-write.test.mjs`** (new) — 36 MATCH + 1 disclosed
-  UNSUPPORTED case (`bookType: "ods"`, registered in `classify.mjs`'s
-  `UNSUPPORTED_ALLOWLIST`), covering all three round-trip directions (own write -> own
-  read, own write -> oracle read, oracle write -> own read) against a fourth,
-  independently-computed baseline (oracle write -> oracle read); plus standalone checks
-  for OOXML ZIP/XML structural validation (CRC-32, balanced XML, `[Content_Types].xml`/
-  `.rels` cross-references), 12 malformed-workbook rejection cases, output-type
-  agreement (buffer/array/base64 carry identical bytes), write-determinism, a real
-  filesystem round trip for `writeFile`/`writeFileSync`, and the browser entry's
-  behavior (both throwing `ELIXCEE_UNSUPPORTED_IN_BROWSER` for `writeFile`/
-  `writeFileSync`, and `write()` itself working with no filesystem).
-- `compat/differential/metadata.test.mjs` extended: `write`/`writeFile`/`writeFileSync`
-  now among the 39/39 exports checked (name/length/property-descriptor/CJS-ESM-identity
-  against the oracle), plus a `writeFile === writeFileSync` aliasing check.
-
-### `@elixcee/xlsx` — make writer bundles work in Node ESM and browsers
-
-**Two real bundler bugs found by actually bundling and running the code, not assumed, and
-both fixed at the source**:
-
-1. An esbuild `--format=esm --platform=node` bundle can never synchronously `require()`
-   anything reached through CJS-origin code — confirmed neither a lazy require,
-   `require('node:zlib')`, nor `--external:zlib` changes this; the documented, correct
-   pattern is marking the whole package `external` (`--packages=external`), verified
-   end-to-end and pinned as a permanent regression check in `scripts/wasm-smoke.mjs`
-   (step 6).
-2. An esbuild `--platform=browser` bundle refused to even build at all with a
-   `require('zlib')` reachable anywhere in its module graph (dead code included, since
-   esbuild can't tree-shake CommonJS `module.exports` properties). Fixed by isolating the
-   Node-only `zlib.deflateRawSync` wrapper into its own new file,
-   **`packages/xlsx/src/internal/deflate-node.cjs`**, and stubbing that exact path (plus
-   bare `zlib`) to `false` in `package.json`'s `browser` field — the same mechanism
-   already used for `elixcee_wasm.node.cjs`. This works because `browser`-field
-   path-remapping happens at module-resolution time, before the stubbed file's contents
-   are ever parsed; moving the `require('zlib')` around *within* `index.cjs` (tried
-   first) did not work, since `index.cjs` itself is wholesale-included in the browser
-   bundle graph via `index.browser.mjs`'s re-export of its other, browser-safe exports.
-
-- `scripts/wasm-smoke.mjs` extended (step 6): `bundleAndRunWrite`/`runWriteBundle` verify
-  all four combinations — inlined-ESM-must-throw, inlined-CJS-must-run,
-  externalized-ESM-must-run, externalized-CJS-must-run — pinned as a permanent regression
-  check for bug 1 above.
-- `scripts/browser-smoke.mjs` extended: the bundled entry now calls `write()` then
-  `read()` and asserts the round trip, plus a build-time assertion that the bundle
-  contains zero `zlib` references at all — verified against a real headless Chrome
-  process, not just a passing build.
-- `scripts/pack-consumer-smoke.mjs` extended: a shared `WRITE_ROUNDTRIP` snippet exercises
-  `write()`/`writeFile()`/`writeFileSync()` from inside a real `npm pack` + `npm install`,
-  both from CJS and ESM consumers, plus a new step for `writeFile()`/`writeFileSync()`
-  against a real filesystem.
-- `docs/xlsx-architecture.md` — new "Phase D: `write()`'s Node-builtin bundling posture"
-  section documents both bugs, why each fix works, and why bug 2's fix (isolating the
-  Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
-  externalization) and needs a different solution.
-
-## [0.13.0] - 2026-08-30
-
-Root `elixcee` and `elixcee-types` release. This release promotes the previously
-unreleased safe-round-trip and typed Excel-error work into the supported package line.
-
-### Added
-
-- Origin-based worksheet output planning: existing worksheet parts retain their original
-  `sheetN.xml` names, preventing worksheet relationships from drifting after edits.
-- Preservation of relationship-backed worksheet content, including tables, drawings,
-  legacy drawings, hyperlinks, plain page setup, and exclusively-reachable parts from
-  deleted sheets.
-- Real Excel error cells (`t="e"`) now remain typed errors through load, save, and reload;
-  the same behavior is exposed by the WASM/XLSX reader.
-- `elixcee-types` `0.4.0`, containing the shared error parsing and BIFF-code mapping needed
-  by the new round-trip behavior.
-
-### Verification
-
-- Rust workspace tests and XLSX round-trip integration tests pass.
-- Relationship reachability and error-cell differential checks pass for the repository's
-  fixtures.
-- Direct reopen verification in Microsoft Excel remains a documented limitation because
-  the release environment has no Windows/Excel automation.
-
 ## [0.12.0] - 2026-08-27
 
-Root `elixcee` (Rust crate + Python package) only -- `@elixcee/xlsx` and the CI
-observability entry above are independent of this release (a separate, still-unpublished
-npm package with its own versioning). Eight independent Python API additions against
+Root `elixcee` (Rust crate + Python package) only -- `elixcee-types`/`elixcee-wasm`/
+`@elixcee/xlsx` all unaffected (see `[Unreleased]` below for `@elixcee/xlsx`'s own
+independent, still-unpublished work). Eight independent Python API additions against
 `docs/openpyxl-gap-audit.md`'s priority list -- R1 (bulk worksheet range/row API), P1
 core 3 (sheet rename/move, row/col insert-delete glue, read-only merged-cell access), P1
 remainder (`iter_cols`, `sort_range`, merge create/remove), P2's first slice (hidden
@@ -136,10 +18,10 @@ row/col read/write), P2's second slice (`copy_sheet`), P2's third slice
 (`defined_names`, read-only), P2's fourth slice (`sheet_state`, read-only), and P2's
 fifth slice (`row_height`/`column_width`, read-only) -- all below -- unrelated to each
 other. A `FIND()` crash fix, found by the P2 fifth slice round's own fuzz CI job
-(unrelated to what that round actually changed), is also below. Cut from a
-`release-0.10.0`-branch base (not `master`'s tip) plus these eight rounds cherry-picked on
-top, deliberately excluding `master`'s own still-unreleased `0.10.0-D`/`t="e"` work --
-see ROADMAP.md's "Packaging note" for why.
+(unrelated to what that round actually changed), is also below. Released from a
+`release-0.10.0`-branch base (`v0.11.0`) with these eight rounds cherry-picked on top,
+deliberately excluding this repo's own still-unreleased `0.10.0-D`/`t="e"` work below
+(same reasoning `0.11.0` used before it -- see the "Packaging note" in ROADMAP.md).
 
 ### Root crate (Python binding): R1 -- bulk worksheet range/row API
 
@@ -540,6 +422,299 @@ already an open, disclosed item — ROADMAP.md's former "B5" note). A bare `.Aut
 (no `Field`/`Criteria1`) remains a real no-op, matching real Excel (nothing to visibly
 turn on without the element).
 
+## [Unreleased]
+
+Root `elixcee` (Rust crate + Python package): `0.10.0-D`, the last slice of the Lossless
+Worksheet Preservation milestone `[0.10.0]` (below) — the first three slices, plus an
+unrelated dependency-security fix, shipped as `elixcee` `0.10.0`; the unbound-`r:`-prefix
+regression that `0.10.0` introduced was fixed and released separately as `[0.10.1]`
+(below). The error-typed-cell fix in this section is a genuinely new, independent fix —
+not yet released in any version (see `[0.12.0]`'s own "Packaging note" reference in
+ROADMAP.md for what that blocks). `@elixcee/xlsx` (still unpublished,
+`0.0.0-development`/`private: true`, no `publishConfig`): see its own two entries below
+for exactly what's implemented, plus a CI observability addition for the shared WASM
+bridge — both independent of the root crate's own `[0.12.0]` release above.
+
+`0.10.0-D` (relationship-backed features, including the actual fix for
+`SOURCE_REFERENCE_LOSS`): design decided (origin-based worksheet part naming — an existing
+sheet's output part name stays `WorksheetOrigin.original_part_name` rather than being
+renumbered by position; see `docs/xlsx-worksheet-preservation-0.10.0-design.md` §10 for the
+full `WorksheetOutputPlan` design and D1–D4 breakdown).
+
+**`D1` (output plan + tests, done).** New `WorksheetOutputPlan` +
+`plan_worksheet_output(sheet_names, origins, reserved_part_numbers)`: an existing sheet
+keeps its own `original_part_name` verbatim regardless of save-time position; a new sheet
+gets `max(reserved) + 1`, where `reserved` is every `sheetN.xml` number that ever existed
+in the source (including a deleted sheet's number, scanned from the raw passthrough ZIP
+entries) — never reusing a freed number. `build_xlsx_content_types` /
+`build_xlsx_workbook` / `build_xlsx_workbook_rels` and the per-sheet write loop all now
+consume `&[WorksheetOutputPlan]` instead of separately re-deriving `sheet{i+1}.xml` /
+`sheetId` / `r:id` at each call site. This is a real bug fix, not just a rename: before
+this change, a surviving sheet's content was written to a position-derived part name
+while its own passthrough `.rels` file stayed at its original name, so deleting an
+earlier sheet could orphan a later sheet's relationship file — confirmed via a git-stash
+A/B comparison against the pre-fix code, not just inferred. No relationship-backed
+restoration yet (`r:id` references / `SOURCE_REFERENCE_LOSS` itself are still `D2`/`D3`),
+per the approved D1 scope boundary.
+
+One independent bug found and fixed while building end-to-end coverage for D1's
+fresh-part-name branch: `Stmt::SheetsAdd` named a new sheet from `self.sheets.len() + 1`
+alone, with no collision check — any workbook with a gap in sheet numbering (most
+commonly: delete a middle sheet, then `Sheets.Add`) computed a name that collided with a
+later surviving sheet, and `ensure_sheet()` no-ops on an existing key, so the `Add`
+silently produced nothing. Fixed by probing upward until a free name is found. Confirmed
+pre-existing via `git blame` (`72b5cc38`, 2026-06-21), unrelated to `0.10.0`.
+
+**`<tableParts>` restored (first `SOURCE_REFERENCE_LOSS` fix, done).** Turned out D1 had
+already satisfied `D2`'s stated goal ("carry a surviving sheet's `.rels` through at the
+original part name with `r:id`s unchanged") as a side effect: the generic passthrough
+loop has copied worksheet `.rels` files byte-identical since `0.9.0`, and D1 made them
+land at the correct co-located part name — confirmed by running
+`check_source_references()` against `fixture3` and finding every violation was "the
+sheet doesn't reference the rId", never "the `.rels` differs from the original". So there
+was no separate D2 slice to implement; the whole remaining gap was splicing the reference
+itself back into the regenerated worksheet — that's what this does, for `<tableParts>`
+specifically (schema position confirmed: right after `<pageMargins>`, since nothing
+between the two is emitted yet). Gated on `rels_survived` (the sheet `is_existing` AND
+its own `.rels` genuinely present in this save's passthrough set) — splicing a reference
+whose `.rels` didn't survive would emit a dangling `r:id`, a real Excel repair warning
+strictly worse than the prior silent inertness. `fixture3`'s `check_source_references()`
+verdict is now `CLEAN`; `fixture4`/`fixture5` still report `SOURCE_REFERENCE_LOSS` for
+hyperlink/vmlDrawing/drawing `r:id`s — unaffected, next slices.
+
+`<drawing>`/`<legacyDrawing>`, `<hyperlinks>` (a rewrite of `0.10.0-B4`'s existing
+relationship-free-only filtering, not a new addition), `<pageSetup r:id>` (only if a
+fixture actually has one), and `D4` (rename/reorder/delete/add + reachability-based
+deleted-part cleanup) remain not started, in that fixture-evidence order.
+
+**`<drawing>`/`<legacyDrawing>` restored, same mechanism and `rels_survived` gate as
+`<tableParts>`.** `fixture5_chart_image_freeze_print.xlsm`'s only worksheet-level
+relationship is its `<drawing r:id>` — `check_source_references()` now reports `CLEAN`
+for this fixture too. `fixture4_hyperlink_comment_name.xlsm`'s `<legacyDrawing r:id>`
+(VML comment shapes) is restored as well, though that fixture's `.rels` also carries an
+r:id-backed hyperlink, left unrestored at this point — `SOURCE_REFERENCE_LOSS` remained
+on `fixture4` until the next change.
+
+**`<hyperlinks>` r:id children restored — all 7 real fixtures now `CLEAN`, the last
+`SOURCE_REFERENCE_LOSS` gap closed.** This one is a rewrite of `0.10.0-B4`'s shipped
+behavior, not a new addition: B4 unconditionally excluded every r:id-bearing
+`<hyperlink>` child (no relationship-graph reconnection existed at the time). Now that
+`rels_survived` exists, `reader::extract_hyperlinks(xml, include_relationship_backed:
+bool)` keeps location-only children unconditionally (unchanged from B4) and r:id-backed
+ones only when `rels_survived` is true. `fixture4`'s hyperlink is r:id-backed (external
+URL, `TargetMode="External"`) — exactly the shape B4's own negative test asserted must
+NOT survive; that test is rewritten to assert the opposite (`fixture4` is now fully
+`CLEAN`, its last violation cleared). `SOURCE_REFERENCE_LOSS` is eliminated from the
+entire current fixture set: all 7 fixtures report `CLEAN` across every
+`mechanical_check.py` category.
+
+**`D4` (deleted-sheet reachability cleanup, done) — closes Known gaps item 15.** A
+deleted sheet's own worksheet-level `.rels` (and whatever it exclusively pointed at —
+tables, drawings, comments) used to survive a save as an orphan: byte-identical, but
+unreferenced by anything in the output, invisible to `check_roundtrip()`'s structural
+checks alone. Fixture→checker→writer, as always: `check_deleted_sheet_cleanup()` (a
+package-reachability BFS over the source's own relationship graph, computed independently
+of whatever the writer actually did) was written and self-test-verified first; the Rust
+writer's `deleted_sheet_prunable_parts` is a direct port of the same algorithm, wired into
+the existing passthrough-building loop so a prunable part never enters `passthrough` in
+the first place — no separate cleanup pass needed, since `carried_overrides` and both
+`carry_over_rels` calls already only keep what's still present. A part shared between the
+deleted sheet and anything else (a surviving sheet, or a workbook-level relationship) is
+correctly kept; a part exclusively reachable from the deleted sheet is correctly pruned,
+transitively (its own `.rels`, and one level further for whatever that points at). Two
+real bugs in the reachability computation were found and fixed on the Python checker side
+before the Rust port even started: naively using `xl/workbook.xml` as a "reachable
+elsewhere" root walks its own unfiltered `.rels`, which in the source still lists the
+deleted sheet, silently reintroducing everything reachable from it — fixed by threading an
+`exclude` set through every hop of the BFS, not just the initial roots. Verified against
+the exact real scenario that exposed item 15 earlier this session (a fixture with a
+relationship-bearing sheet deleted): the orphaned `.rels` is now genuinely absent, both
+`check_roundtrip()` (no false positive) and the new checker report `CLEAN`. A dedicated
+shared-vs-exclusive-target scenario was also run end to end through the CLI.
+
+Sheet rename/reorder — two rows in the design doc's required test-case table — are
+deliberately marked N/A: this `Vm` has no rename/reorder primitive (only `Sheets.Add`/
+`Delete`), and adding VBA statement support purely to make a test-table row reachable
+would invert this project's own hard gate (`src/vm/mod.rs`'s own stated position: "building
+it now would be validated by nothing").
+
+**Plain `<pageSetup>` restored (done).** Checked all 7 real fixtures for the `<pageSetup
+r:id>` shape before starting — none has it; `fixture5`'s own `<pageSetup paperSize="9"
+orientation="portrait" horizontalDpi="0" verticalDpi="0"/>` has no `r:id` at all, and no
+fixture's `.rels` declares a `printerSettings` relationship. `r:id`-backed `<pageSetup>`
+stays genuinely blocked on this project's own hard gate (fixture evidence required before
+writer code). But `fixture5`'s plain `pageSetup` was itself a real, previously-uncaught
+bug: never added to `_INLINE_WORKSHEET_ELEMENTS`, so it was silently lost on every save,
+invisible to every existing checker category. New `check_page_setup()` — deliberately not
+folded into `check_inline_worksheet_elements()`, same reasoning as
+`check_internal_hyperlinks()` (already excluded for the identical hazard on
+`<hyperlinks>`): unlike `sheetViews`/`pageMargins`/etc, `CT_PageSetup` genuinely CAN carry
+an `r:id` per the real XSD, so a blanket present/absent check would false-positive the
+day a real `r:id`-backed fixture shows up. This check only ever looks at an `r:id`-free
+original `<pageSetup>`. New `reader::root_tag_has_rid()` gates the writer side the same
+way: a plain `pageSetup` restores unconditionally (no relationship dependency, same as
+`pageMargins`); one with `r:id` is dropped entirely, staying unrestored until a real
+fixture justifies the same `rels_survived` gate every other relationship-backed element
+uses. All 7 real fixtures now report `CLEAN` across every `mechanical_check.py` category.
+
+This closes `0.10.0-D`'s only remaining open item for the current fixture set. Real-Excel
+reopen verification remains not done for `tableParts`/`drawing`/`legacyDrawing`/
+`hyperlinks`/`D4`/plain `pageSetup`.
+
+### Root crate + `@elixcee/xlsx`: error-typed cells (`t="e"`) round-trip as real errors, not strings
+
+ROADMAP.md Known gaps item 14, found live during `0.10.0-C`'s real-Excel verification
+(fixture5's `D8`, a real `#VALUE!` cell) and pre-existing since well before `0.10.0`
+(`git blame`: `72b5cc38`, 2026-06-21). `reader.rs`'s `SheetCell` enum had no `Error`
+variant, so `xlsx_parse_cell` treated `t="e"` identically to `t="str"` — both became
+`SheetCell::Str`. On save the error text was written into `xl/sharedStrings.xml` as an
+ordinary string (`t="s"`), so the cell displayed the same text in Excel but was no longer
+an error-typed cell underneath.
+
+Fixed by threading a new `SheetCell::Error(ExcelError)`/`elixcee_types::ExcelError::FromStr`
+through the reader, `Vm::populate_from_sheets`, and the writer, the same way
+`Variant::Error` already is at the VBA-runtime level: `xlsx_cell_xml` now emits `t="e"`
+with the literal error string in `<v>`, never shared-string indexed — confirmed against
+real Excel's own output, which never puts e.g. `"#VALUE!"` in `sharedStrings.xml` either.
+An unrecognized error string (a newer dynamic-array error like `#SPILL!`) falls back to a
+plain string rather than guessing at a wrong code.
+
+`@elixcee/xlsx`'s `read()` (via `crates/elixcee-wasm`) gets the same fix: error cells now
+come back as `{t:"e", v:<BIFF numeric code>, w:<display string>}`, matching the real
+`xlsx` oracle's own shape exactly (confirmed live: even reading a real Excel-authored
+`t="e"` cell through `XLSX.read()`, the display string only ever appears in `.w`, never
+`.v`). New differential case (`compat/differential/xlsx-read.test.mjs`, all 7 classic
+error codes) — read differential count is now 34/34 MATCH (up from 33/33).
+
+### CI: WASM artifact size observability
+
+`packages/xlsx`'s WASM bridge size was already measured (`scripts/wasm-smoke.mjs` step 5)
+but only printed to the console, with no baseline to compare against. Now diffed against a
+committed baseline (`crates/elixcee-wasm/wasm-size-baseline.json`, updated by hand when a
+size change is intentional) and written to the CI step summary; the vendored WASM bridge
+build is also uploaded as a CI artifact. Observation only — no pass/fail threshold yet;
+that needs a few normal builds' worth of data first.
+
+### `@elixcee/xlsx` — `write()`/`writeFile()`/`writeFileSync()`
+
+Independent of the root `elixcee` crate: no Rust changes, no new npm dependency.
+`bookType: "xlsx"` only, output `type: "buffer" | "array" | "base64"`, producing a real
+OOXML ZIP via a hand-rolled ZIP/XML writer (no zip/xml-builder dependency added) —
+strings/numbers/booleans/dates/formulas, multiple worksheets, merges, sheet visibility,
+hidden rows/columns, basic number formats, safe XML escaping. Unsupported input (a
+non-`"xlsx"` `bookType`, an unrecognized `type`, an unsupported cell shape/type, a
+non-finite numeric/formula-cached value, an oversized declared `!ref`) throws an explicit
+`ELIXCEE_*` error, never silently ignored or truncated.
+
+- **`packages/xlsx/src/internal/xlsx-writer.cjs`** (new) — the OOXML XML generator:
+  `[Content_Types].xml`, both `.rels` parts, `docProps/{core,app}.xml`, `xl/workbook.xml`,
+  `xl/worksheets/sheetN.xml`, `xl/styles.xml`. Output is deliberately constrained to
+  shapes `src/reader.rs` (elixcee's own reader) already parses, verified by reading
+  `reader.rs` directly — inline strings (not shared strings), a small built-in
+  numFmtId table plus custom `<numFmts>` entries (164+) for anything else.
+- **`packages/xlsx/src/internal/zip-writer.cjs`** (new) — a hand-rolled ZIP archive
+  writer (local file headers, central directory, end-of-central-directory record,
+  table-based CRC-32) with a deterministic fixed epoch, so two `write()` calls on the
+  same `WorkBook` produce byte-identical output. Platform-agnostic by design: no
+  `Buffer`, every byte buffer is a plain `Uint8Array` built with `DataView`/
+  `TextEncoder` — real browsers never had `Buffer` regardless of bundler, so the shared
+  writer core is built to work on both platforms from the start. DEFLATE compression is
+  supplied by the caller as an optional callback rather than required internally (falls
+  back to STORED, a legal ZIP/OOXML method, when omitted — this is what lets the browser
+  entry reuse the same writer with no `zlib` access at all).
+- **`compat/differential/xlsx-write.test.mjs`** (new) — 36 MATCH + 1 disclosed
+  UNSUPPORTED case (`bookType: "ods"`, registered in `classify.mjs`'s
+  `UNSUPPORTED_ALLOWLIST`), covering all three round-trip directions (own write -> own
+  read, own write -> oracle read, oracle write -> own read) against a fourth,
+  independently-computed baseline (oracle write -> oracle read); plus standalone checks
+  for OOXML ZIP/XML structural validation (CRC-32, balanced XML, `[Content_Types].xml`/
+  `.rels` cross-references), 12 malformed-workbook rejection cases, output-type
+  agreement (buffer/array/base64 carry identical bytes), write-determinism, a real
+  filesystem round trip for `writeFile`/`writeFileSync`, and the browser entry's
+  behavior (both throwing `ELIXCEE_UNSUPPORTED_IN_BROWSER` for `writeFile`/
+  `writeFileSync`, and `write()` itself working with no filesystem).
+- `compat/differential/metadata.test.mjs` extended: `write`/`writeFile`/`writeFileSync`
+  now among the 39/39 exports checked (name/length/property-descriptor/CJS-ESM-identity
+  against the oracle), plus a `writeFile === writeFileSync` aliasing check.
+
+### `@elixcee/xlsx` — make writer bundles work in Node ESM and browsers
+
+**Two real bundler bugs found by actually bundling and running the code, not assumed, and
+both fixed at the source**:
+
+1. An esbuild `--format=esm --platform=node` bundle can never synchronously `require()`
+   anything reached through CJS-origin code — confirmed neither a lazy require,
+   `require('node:zlib')`, nor `--external:zlib` changes this; the documented, correct
+   pattern is marking the whole package `external` (`--packages=external`), verified
+   end-to-end and pinned as a permanent regression check in `scripts/wasm-smoke.mjs`
+   (step 6).
+2. An esbuild `--platform=browser` bundle refused to even build at all with a
+   `require('zlib')` reachable anywhere in its module graph (dead code included, since
+   esbuild can't tree-shake CommonJS `module.exports` properties). Fixed by isolating the
+   Node-only `zlib.deflateRawSync` wrapper into its own new file,
+   **`packages/xlsx/src/internal/deflate-node.cjs`**, and stubbing that exact path (plus
+   bare `zlib`) to `false` in `package.json`'s `browser` field — the same mechanism
+   already used for `elixcee_wasm.node.cjs`. This works because `browser`-field
+   path-remapping happens at module-resolution time, before the stubbed file's contents
+   are ever parsed; moving the `require('zlib')` around *within* `index.cjs` (tried
+   first) did not work, since `index.cjs` itself is wholesale-included in the browser
+   bundle graph via `index.browser.mjs`'s re-export of its other, browser-safe exports.
+
+- `scripts/wasm-smoke.mjs` extended (step 6): `bundleAndRunWrite`/`runWriteBundle` verify
+  all four combinations — inlined-ESM-must-throw, inlined-CJS-must-run,
+  externalized-ESM-must-run, externalized-CJS-must-run — pinned as a permanent regression
+  check for bug 1 above.
+- `scripts/browser-smoke.mjs` extended: the bundled entry now calls `write()` then
+  `read()` and asserts the round trip, plus a build-time assertion that the bundle
+  contains zero `zlib` references at all — verified against a real headless Chrome
+  process, not just a passing build.
+- `scripts/pack-consumer-smoke.mjs` extended: a shared `WRITE_ROUNDTRIP` snippet exercises
+  `write()`/`writeFile()`/`writeFileSync()` from inside a real `npm pack` + `npm install`,
+  both from CJS and ESM consumers, plus a new step for `writeFile()`/`writeFileSync()`
+  against a real filesystem.
+- `docs/xlsx-architecture.md` — new "Phase D: `write()`'s Node-builtin bundling posture"
+  section documents both bugs, why each fix works, and why bug 2's fix (isolating the
+  Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
+  externalization) and needs a different solution.
+
+### Root crate: formula reference rewriting on row/column insert-delete (0.14.0-A / 0.14.0-A2)
+
+`insert_rows_on_sheet`/`delete_rows_on_sheet`/`insert_cols_on_sheet`/`delete_cols_on_sheet`
+(and their Python-bound `insert_rows`/`delete_rows`/`insert_cols`/`delete_cols`) now rewrite
+formula cell-references workbook-wide instead of leaving every formula's text stale. Precise
+scope, not "cross-sheet formulas are supported":
+
+- **Supported**: an unqualified reference (`=A10`) shifts when its own formula's cell lives
+  on the sheet being edited; a sheet-qualified reference (`=Sheet2!A10`, `='Sales 2026'!A10`,
+  `='Bob''s Data'!A10` — quoting/escaping/case-insensitive identity all handled) shifts
+  whenever it *names* the edited sheet, regardless of which sheet hosts the formula. A
+  reference landing inside a deleted band becomes `#REF!` (a range with only one corner
+  inside the band shrinks instead of collapsing, matching real Excel); the sheet qualifier,
+  if any, is preserved through both cases.
+- **Not supported**: cross-sheet formula *evaluation* — `evaluate()` explicitly refuses any
+  formula containing a sheet-qualified reference rather than ever silently reading the
+  active sheet's cell as if it were the qualified one; `recalculate_all` skips such formulas
+  the same way it already skips unparseable ones, so one cross-sheet formula can't abort a
+  whole-workbook recalculation. `set_cell_formula` still can't be used to *author* a new
+  cross-sheet formula (it evaluates immediately) — only a formula already present (e.g.
+  loaded from a file) benefits from the rewrite. External workbook references
+  (`[Book2.xlsx]Sheet1!A1`), 3D references (`Sheet1:Sheet3!A1`), sheet rename
+  reference-following, and range move are all still unimplemented.
+- Implemented as targeted text splicing over parser-tracked reference spans
+  (`formula::parse_with_refs`/`shift_references`), not a general AST-to-formula-text
+  serializer — everything outside a changed reference (operators, function names, literals,
+  whitespace, unaffected references, unrelated sheets' formulas) is left byte-for-byte
+  untouched. `$`-absolute cell/range reference parsing (`FormulaExpr::CellRef`/`Range` gained
+  `abs_col`/`abs_row`) is a prerequisite this round also depends on.
+- 60+ new tests across the parser, rewriter, evaluator, and VM layers, plus a real
+  save→reload→re-save integration test confirming a plain re-save doesn't shift a reference
+  a second time.
+- **Discovered, unrelated, unfixed**: the XLSX writer silently drops a cell entirely —
+  formula text included — whenever its cached value is `Variant::Empty`, regardless of
+  whether a formula is present (reproduces for an ordinary same-sheet formula with no
+  cross-sheet reference involved at all, e.g. `=IF(FALSE,1)`; pre-existing, not introduced by
+  this work). Tracked as discovered work, not fixed here.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
@@ -568,12 +743,24 @@ string is reused: if `xmlns:r` is already correctly bound, nothing changes; if i
 simply absent (the realistic case), the correct binding is appended; if `r:` is already
 bound to some unrelated URI (essentially never seen in real files), the source's root
 attrs are not reused at all, falling back to the writer's own safe hardcoded default
-rather than risk a wrong rebind.
+rather than risk a wrong rebind. In short: arbitrary relationship-namespace prefixes are
+supported; a malformed workbook with no sheet relationship identifier at all (under any
+prefix) is rejected at load time, unrelated to this fix (`<sheet>`'s relationship id is a
+required attribute per the OOXML schema — no real producer omits it).
 
 Full regression sweep clean (see the fix commit for the complete list); all 7 real
 fixtures rerun with no new regressions (`fixture3`/`4`/`5` still show the already-known,
 already-disclosed `SOURCE_REFERENCE_LOSS` gap `0.10.0-D` — unreleased, unrelated — not a
-regression from this fix).
+regression from this fix). Before release, six additional cases were verified end-to-end
+against the real published PyPI `0.10.1` wheel and a real `cargo check` against the live
+crates.io `0.10.1`: the standard-prefix case; the alternate-prefix case; `xmlns:r` already
+correctly bound (no spurious growth); `xmlns:r` bound to an unrelated URI (falls back
+without ever producing a duplicate `xmlns:r` declaration — confirmed via direct XML
+inspection, not just successful parsing); and save-as/in-place/two-consecutive-saves, all
+reopening cleanly in openpyxl. Released as `elixcee` `0.10.1` on PyPI, crates.io, and as a
+GitHub Release (`bin-v0.10.1`, 3 platform binaries), all from the same commit. The
+original reporter independently re-verified both of GitHub issue #1's fixes plus this
+namespace fix against the published `0.10.1` wheel and closed the issue themselves.
 
 ## [0.10.0] - 2026-08-24
 

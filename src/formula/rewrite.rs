@@ -1,4 +1,5 @@
-//! Reference rewriting for same-sheet row/column insert-delete (0.14.0-A).
+//! Reference rewriting for row/column insert-delete, workbook-wide (0.14.0-A,
+//! 0.14.0-A2).
 //!
 //! Patches only the text span of each affected cell/range reference --
 //! everything else in the formula (operators, function names, literals,
@@ -8,10 +9,24 @@
 //! no general AST-to-text serializer -- see `internal_docs/ROADMAP.md`'s
 //! 0.14.0-A note for why a span-patching design replaced that idea.
 //!
-//! Scope, matching what was explicitly approved for this round: same-sheet
-//! row/column insert/delete only. Cross-sheet syntax, sheet rename, and
-//! range move are out of scope here, as is wiring this into the VM's
-//! `insert_rows_on_sheet`/etc (that's the next round).
+//! A formula lives on one sheet (`host_sheet_key`) and may reference cells on
+//! any sheet, unqualified (bare `A1`, implicitly the host sheet) or qualified
+//! (`Sheet2!A1`, explicitly named). A structural edit happens on exactly one
+//! sheet (`edited_sheet_key`). A reference is only rewritten when it actually
+//! points at the edited sheet:
+//!
+//! - unqualified: only if `host_sheet_key == edited_sheet_key`
+//! - qualified: only if the qualifier's name resolves (case-insensitively) to
+//!   `edited_sheet_key`, regardless of which sheet hosts the formula
+//!
+//! Cross-sheet formula *evaluation* is a separate, still-unsupported concern
+//! (see `eval::references_another_sheet`) -- this module only rewrites text,
+//! it never reads a cell's value.
+//!
+//! Scope, matching what was explicitly approved for this round: row/column
+//! insert/delete only. Sheet rename and range move are separate, larger
+//! follow-up projects that reuse this qualifier parsing (see
+//! `internal_docs/ROADMAP.md`'s 0.14.0-A note).
 
 use super::eval::col_to_letter;
 use super::parser::{RefOccurrence, parse_with_refs};
@@ -115,6 +130,22 @@ fn format_cell_ref(col: u32, row: u32, abs_col: bool, abs_row: bool) -> String {
     s
 }
 
+/// Does this reference (qualified or not) point at the sheet being edited?
+/// `host_sheet_key`/`edited_sheet_key` are already-lowercased sheet keys
+/// (this codebase's own identity convention, see `ensure_sheet_at`); a
+/// qualifier's `normalized_name` is lowercased here at compare-time since it
+/// preserves the formula's original casing (e.g. `Sheet2!`, not `sheet2!`).
+fn ref_targets_edited_sheet(
+    sheet: &Option<super::ast::SheetQualifier>,
+    host_sheet_key: &str,
+    edited_sheet_key: &str,
+) -> bool {
+    match sheet {
+        None => host_sheet_key == edited_sheet_key,
+        Some(q) => q.normalized_name.to_lowercase() == edited_sheet_key,
+    }
+}
+
 /// Splice non-overlapping `(start, end, replacement)` patches (char-offset
 /// spans, half-open) into `input`, sorted by start position.
 fn apply_patches(input: &str, mut patches: Vec<(usize, usize, String)>) -> String {
@@ -131,17 +162,26 @@ fn apply_patches(input: &str, mut patches: Vec<(usize, usize, String)>) -> Strin
     out
 }
 
-/// Rewrite `formula`'s cell/range references for a same-sheet row or column
-/// insert/delete. Returns `Ok(None)` when no reference in the formula was
-/// affected (caller can skip rewriting the stored formula string). A
-/// reference that falls entirely inside a deleted band becomes `#REF!`,
-/// matching real Excel -- this is deliberate, tested behavior, not an
-/// omission.
+/// Rewrite `formula`'s cell/range references for a row or column insert/delete
+/// happening on `edited_sheet_key`. `formula` is hosted on `host_sheet_key`
+/// (the sheet its own cell lives on) -- an unqualified reference is relative
+/// to the host sheet, so it only shifts when the host sheet IS the edited
+/// sheet; a qualified reference (`Sheet2!A1`) shifts whenever it names the
+/// edited sheet, regardless of which sheet hosts the formula. See this
+/// module's doc comment for the full targeting rule.
+///
+/// Returns `Ok(None)` when no reference in the formula was affected (caller
+/// can skip rewriting the stored formula string). A reference that falls
+/// entirely inside a deleted band becomes `#REF!` (the qualifier, if any, is
+/// preserved -- only the coordinate collapses, matching real Excel).
 ///
 /// `$` (absolute) flags never change whether a reference shifts here --
 /// unlike copy/fill, real Excel shifts every reference on row/column
 /// insert-delete regardless of `$` -- they're only preserved as-is in the
-/// rewritten text.
+/// rewritten text. A formula this parser can't parse (external workbook
+/// refs, 3D refs, and anything else 0.14.0-A2 doesn't cover) is reported as
+/// `Err` by `parse_with_refs` and must be left completely untouched by the
+/// caller -- see `Vm::rewrite_formulas_for_structural_edit`.
 ///
 /// `formula` is normalized internally the same way `parse`/`parse_with_refs`
 /// normalize it (leading `=` and surrounding whitespace stripped); the
@@ -152,6 +192,8 @@ fn apply_patches(input: &str, mut patches: Vec<(usize, usize, String)>) -> Strin
 /// writing formulas back out.
 pub fn shift_references(
     formula: &str,
+    host_sheet_key: &str,
+    edited_sheet_key: &str,
     axis: RefAxis,
     edit: StructuralEdit,
 ) -> Result<Option<String>, String> {
@@ -178,7 +220,11 @@ pub fn shift_references(
                 row,
                 abs_col,
                 abs_row,
+                sheet,
             } => {
+                if !ref_targets_edited_sheet(sheet, host_sheet_key, edited_sheet_key) {
+                    continue;
+                }
                 let idx = match axis {
                     RefAxis::Row => *row,
                     RefAxis::Col => *col,
@@ -213,7 +259,11 @@ pub fn shift_references(
                 abs_c2,
                 abs_r2,
                 c2_span,
+                sheet,
             } => {
+                if !ref_targets_edited_sheet(sheet, host_sheet_key, edited_sheet_key) {
+                    continue;
+                }
                 let (v1, v2) = match axis {
                     RefAxis::Row => (*r1, *r2),
                     RefAxis::Col => (*c1, *c2),
@@ -275,25 +325,36 @@ pub fn shift_references(
 mod tests {
     use super::*;
 
+    const S1: &str = "sheet1";
+    const S2: &str = "sheet2";
+
     fn insert(at: u32, count: u32) -> StructuralEdit {
         StructuralEdit::Insert { at, count }
     }
     fn delete(at: u32, count: u32) -> StructuralEdit {
         StructuralEdit::Delete { at, count }
     }
+    // Convenience for the common same-sheet case most existing tests exercise.
+    fn shift_same_sheet(
+        formula: &str,
+        axis: RefAxis,
+        edit: StructuralEdit,
+    ) -> Result<Option<String>, String> {
+        shift_references(formula, S1, S1, axis, edit)
+    }
 
     #[test]
     fn unaffected_reference_is_a_noop() {
         assert_eq!(
-            shift_references("=A1+1", RefAxis::Row, insert(5, 1)).unwrap(),
+            shift_same_sheet("=A1+1", RefAxis::Row, insert(5, 1)).unwrap(),
             None
         );
         assert_eq!(
-            shift_references("=A1+1", RefAxis::Row, delete(5, 1)).unwrap(),
+            shift_same_sheet("=A1+1", RefAxis::Row, delete(5, 1)).unwrap(),
             None
         );
         assert_eq!(
-            shift_references("=A1+1", RefAxis::Row, insert(1, 0)).unwrap(),
+            shift_same_sheet("=A1+1", RefAxis::Row, insert(1, 0)).unwrap(),
             None
         );
     }
@@ -302,16 +363,16 @@ mod tests {
     fn insert_shifts_cell_ref_at_or_after_the_insertion_point() {
         // Insert 2 rows before row 5: a ref at row 5 or later moves down by 2.
         assert_eq!(
-            shift_references("=A5+1", RefAxis::Row, insert(5, 2)).unwrap(),
+            shift_same_sheet("=A5+1", RefAxis::Row, insert(5, 2)).unwrap(),
             Some("A7+1".to_string())
         );
         assert_eq!(
-            shift_references("=A10+1", RefAxis::Row, insert(5, 2)).unwrap(),
+            shift_same_sheet("=A10+1", RefAxis::Row, insert(5, 2)).unwrap(),
             Some("A12+1".to_string())
         );
         // Strictly before the insertion point: unaffected.
         assert_eq!(
-            shift_references("=A4+1", RefAxis::Row, insert(5, 2)).unwrap(),
+            shift_same_sheet("=A4+1", RefAxis::Row, insert(5, 2)).unwrap(),
             None
         );
     }
@@ -319,19 +380,19 @@ mod tests {
     #[test]
     fn insert_columns_shifts_only_the_column() {
         assert_eq!(
-            shift_references("=C10", RefAxis::Col, insert(2, 1)).unwrap(),
+            shift_same_sheet("=C10", RefAxis::Col, insert(2, 1)).unwrap(),
             Some("D10".to_string())
         );
         // A row-axis edit that DOES affect the row must still leave the
         // column letter untouched -- only the row digits change.
         assert_eq!(
-            shift_references("=C10", RefAxis::Row, insert(5, 1)).unwrap(),
+            shift_same_sheet("=C10", RefAxis::Row, insert(5, 1)).unwrap(),
             Some("C11".to_string())
         );
         // And a row-axis edit that doesn't reach this row must be a no-op,
         // even though the column axis has its own affecting edit elsewhere.
         assert_eq!(
-            shift_references("=C10", RefAxis::Row, insert(20, 1)).unwrap(),
+            shift_same_sheet("=C10", RefAxis::Row, insert(20, 1)).unwrap(),
             None
         );
     }
@@ -339,7 +400,7 @@ mod tests {
     #[test]
     fn delete_shifts_cell_ref_after_the_deleted_band() {
         assert_eq!(
-            shift_references("=A10+1", RefAxis::Row, delete(5, 2)).unwrap(),
+            shift_same_sheet("=A10+1", RefAxis::Row, delete(5, 2)).unwrap(),
             Some("A8+1".to_string())
         );
     }
@@ -347,11 +408,11 @@ mod tests {
     #[test]
     fn delete_turns_a_reference_into_the_deleted_band_into_ref_error() {
         assert_eq!(
-            shift_references("=A5+1", RefAxis::Row, delete(5, 2)).unwrap(),
+            shift_same_sheet("=A5+1", RefAxis::Row, delete(5, 2)).unwrap(),
             Some("#REF!+1".to_string())
         );
         assert_eq!(
-            shift_references("=A6+1", RefAxis::Row, delete(5, 2)).unwrap(),
+            shift_same_sheet("=A6+1", RefAxis::Row, delete(5, 2)).unwrap(),
             Some("#REF!+1".to_string())
         );
     }
@@ -359,11 +420,11 @@ mod tests {
     #[test]
     fn absolute_flags_are_preserved_through_a_shift() {
         assert_eq!(
-            shift_references("=$A$10", RefAxis::Row, insert(5, 2)).unwrap(),
+            shift_same_sheet("=$A$10", RefAxis::Row, insert(5, 2)).unwrap(),
             Some("$A$12".to_string())
         );
         assert_eq!(
-            shift_references("=A$10", RefAxis::Row, delete(5, 2)).unwrap(),
+            shift_same_sheet("=A$10", RefAxis::Row, delete(5, 2)).unwrap(),
             Some("A$8".to_string())
         );
     }
@@ -372,19 +433,19 @@ mod tests {
     fn range_shrinks_when_deletion_falls_inside_it_without_collapsing() {
         // A1:A10, delete rows 3-4 -> A1:A8 (both corners survive).
         assert_eq!(
-            shift_references("=SUM(A1:A10)", RefAxis::Row, delete(3, 2)).unwrap(),
+            shift_same_sheet("=SUM(A1:A10)", RefAxis::Row, delete(3, 2)).unwrap(),
             Some("SUM(A1:A8)".to_string())
         );
         // A3:A10, delete rows 3-4 -> top corner clamps to the surviving row
         // that slides into position 3; bottom shifts down by 2.
         assert_eq!(
-            shift_references("=SUM(A3:A10)", RefAxis::Row, delete(3, 2)).unwrap(),
+            shift_same_sheet("=SUM(A3:A10)", RefAxis::Row, delete(3, 2)).unwrap(),
             Some("SUM(A3:A8)".to_string())
         );
         // A1:A4, delete rows 3-4 -> bottom corner clamps to just above the
         // deletion; top is untouched (both survive as A1:A2).
         assert_eq!(
-            shift_references("=SUM(A1:A4)", RefAxis::Row, delete(3, 2)).unwrap(),
+            shift_same_sheet("=SUM(A1:A4)", RefAxis::Row, delete(3, 2)).unwrap(),
             Some("SUM(A1:A2)".to_string())
         );
     }
@@ -393,12 +454,12 @@ mod tests {
     fn range_becomes_ref_error_when_fully_deleted() {
         // A3:A4, delete rows 3-4: nothing survives.
         assert_eq!(
-            shift_references("=SUM(A3:A4)", RefAxis::Row, delete(3, 2)).unwrap(),
+            shift_same_sheet("=SUM(A3:A4)", RefAxis::Row, delete(3, 2)).unwrap(),
             Some("SUM(#REF!)".to_string())
         );
         // A single-row range exactly matching a 1-row deletion at row 1.
         assert_eq!(
-            shift_references("=SUM(A1:A1)", RefAxis::Row, delete(1, 1)).unwrap(),
+            shift_same_sheet("=SUM(A1:A1)", RefAxis::Row, delete(1, 1)).unwrap(),
             Some("SUM(#REF!)".to_string())
         );
     }
@@ -407,7 +468,7 @@ mod tests {
     fn range_insert_never_collapses_and_grows_the_range() {
         // Inserting a row inside a range grows it, never splits/collapses it.
         assert_eq!(
-            shift_references("=SUM(A1:A10)", RefAxis::Row, insert(5, 1)).unwrap(),
+            shift_same_sheet("=SUM(A1:A10)", RefAxis::Row, insert(5, 1)).unwrap(),
             Some("SUM(A1:A11)".to_string())
         );
     }
@@ -416,7 +477,7 @@ mod tests {
     fn reversed_range_order_is_handled_like_the_evaluator_treats_it() {
         // B10:A1 (reversed): min/max logic still applies per-corner-slot.
         assert_eq!(
-            shift_references("=SUM(A10:A1)", RefAxis::Row, insert(5, 1)).unwrap(),
+            shift_same_sheet("=SUM(A10:A1)", RefAxis::Row, insert(5, 1)).unwrap(),
             Some("SUM(A11:A1)".to_string())
         );
     }
@@ -424,7 +485,7 @@ mod tests {
     #[test]
     fn mixed_corner_absolute_flags_survive_a_range_shift() {
         assert_eq!(
-            shift_references("=SUM($A1:B$10)", RefAxis::Row, insert(5, 1)).unwrap(),
+            shift_same_sheet("=SUM($A1:B$10)", RefAxis::Row, insert(5, 1)).unwrap(),
             Some("SUM($A1:B$11)".to_string())
         );
     }
@@ -432,13 +493,13 @@ mod tests {
     #[test]
     fn leading_equals_and_whitespace_are_normalized_away() {
         assert_eq!(
-            shift_references("  =A10  ", RefAxis::Row, insert(5, 1)).unwrap(),
+            shift_same_sheet("  =A10  ", RefAxis::Row, insert(5, 1)).unwrap(),
             Some("A11".to_string())
         );
         // A formula with no leading '=' at all (matches how <f> XML content
         // and this function's own return value are stored) works the same.
         assert_eq!(
-            shift_references("A10", RefAxis::Row, insert(5, 1)).unwrap(),
+            shift_same_sheet("A10", RefAxis::Row, insert(5, 1)).unwrap(),
             Some("A11".to_string())
         );
     }
@@ -446,13 +507,155 @@ mod tests {
     #[test]
     fn multiple_references_in_one_formula_each_patch_independently() {
         assert_eq!(
-            shift_references("=A10+B2*SUM(C10:C20)", RefAxis::Row, insert(5, 1)).unwrap(),
+            shift_same_sheet("=A10+B2*SUM(C10:C20)", RefAxis::Row, insert(5, 1)).unwrap(),
             Some("A11+B2*SUM(C11:C21)".to_string())
         );
     }
 
     #[test]
     fn propagates_a_parse_error_instead_of_silently_ignoring_it() {
-        assert!(shift_references("=A1+", RefAxis::Row, insert(1, 1)).is_err());
+        assert!(shift_same_sheet("=A1+", RefAxis::Row, insert(1, 1)).is_err());
+    }
+
+    // ── 0.14.0-A2: sheet-qualified references, workbook-wide targeting ──────
+
+    #[test]
+    fn qualified_reference_targeting_the_edited_sheet_shifts_regardless_of_host() {
+        // Formula hosted on sheet2, referencing sheet1 -- sheet1 is being edited.
+        assert_eq!(
+            shift_references("=Sheet1!A10+1", S2, S1, RefAxis::Row, insert(5, 1)).unwrap(),
+            Some("Sheet1!A11+1".to_string())
+        );
+    }
+
+    #[test]
+    fn unqualified_reference_on_a_different_host_sheet_is_untouched() {
+        // Formula hosted on sheet2; sheet1 is being edited. A bare A10 on
+        // sheet2 means sheet2!A10, not sheet1!A10 -- must not shift.
+        assert_eq!(
+            shift_references("=A10+1", S2, S1, RefAxis::Row, insert(5, 1)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn unqualified_reference_on_the_edited_sheet_still_shifts() {
+        assert_eq!(
+            shift_references("=A10+1", S1, S1, RefAxis::Row, insert(5, 1)).unwrap(),
+            Some("A11+1".to_string())
+        );
+    }
+
+    #[test]
+    fn qualified_reference_to_a_different_sheet_is_untouched_even_when_hosted_on_the_edited_sheet()
+    {
+        // Formula lives ON sheet1 (the sheet being edited), but this
+        // particular reference explicitly names sheet2 -- must not shift.
+        assert_eq!(
+            shift_references("=Sheet2!A10+1", S1, S1, RefAxis::Row, insert(5, 1)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn quoted_sheet_name_reference_shifts_and_keeps_its_quoting() {
+        assert_eq!(
+            shift_references(
+                "='Sales 2026'!A10",
+                S2,
+                "sales 2026",
+                RefAxis::Row,
+                insert(5, 1)
+            )
+            .unwrap(),
+            Some("'Sales 2026'!A11".to_string())
+        );
+    }
+
+    #[test]
+    fn escaped_apostrophe_in_a_quoted_sheet_name_resolves_correctly() {
+        // 'Bob''s Data' normalizes to "Bob's Data"; the sheet key convention
+        // lowercases the unescaped name, so the edited key is "bob's data".
+        assert_eq!(
+            shift_references(
+                "='Bob''s Data'!A10",
+                S2,
+                "bob's data",
+                RefAxis::Row,
+                insert(5, 1)
+            )
+            .unwrap(),
+            Some("'Bob''s Data'!A11".to_string())
+        );
+    }
+
+    #[test]
+    fn qualifier_case_does_not_matter_for_targeting() {
+        assert_eq!(
+            shift_references("=SHEET1!A10", S2, S1, RefAxis::Row, insert(5, 1)).unwrap(),
+            Some("SHEET1!A11".to_string())
+        );
+    }
+
+    #[test]
+    fn only_the_reference_naming_the_edited_sheet_is_rewritten_among_several() {
+        assert_eq!(
+            shift_references(
+                "=Sheet1!A10+A10+Sheet3!A10",
+                S1,
+                S1,
+                RefAxis::Row,
+                insert(5, 1)
+            )
+            .unwrap(),
+            // Sheet1!A10 (qualified, targets edited sheet1) and the bare A10
+            // (unqualified, host IS sheet1) both shift; Sheet3!A10 does not.
+            Some("Sheet1!A11+A11+Sheet3!A10".to_string())
+        );
+    }
+
+    #[test]
+    fn qualified_reference_into_a_deleted_band_becomes_ref_error_keeping_the_qualifier() {
+        assert_eq!(
+            shift_references("=Sheet1!A5+1", S2, S1, RefAxis::Row, delete(5, 2)).unwrap(),
+            Some("Sheet1!#REF!+1".to_string())
+        );
+    }
+
+    #[test]
+    fn qualified_range_partial_delete_shrinks_keeping_the_qualifier() {
+        assert_eq!(
+            shift_references("=SUM(Sheet1!A1:A10)", S2, S1, RefAxis::Row, delete(3, 2)).unwrap(),
+            Some("SUM(Sheet1!A1:A8)".to_string())
+        );
+    }
+
+    #[test]
+    fn external_and_3d_references_are_left_completely_untouched() {
+        // External workbook references ([Book2.xlsx]Sheet1!A1) and 3D
+        // references (Sheet1:Sheet3!A1) aren't supported syntax -- the whole
+        // formula must fail to parse and be reported as Err, not partially
+        // rewritten. The caller (Vm::rewrite_formulas_for_structural_edit)
+        // is what actually leaves such formulas untouched on an Err.
+        assert!(
+            shift_references("=[Book2.xlsx]Sheet1!A1", S1, S1, RefAxis::Row, insert(1, 1)).is_err()
+        );
+        assert!(shift_references("=Sheet1:Sheet3!A1", S1, S1, RefAxis::Row, insert(1, 1)).is_err());
+    }
+
+    #[test]
+    fn a_sheet_qualifier_inside_a_string_literal_is_never_treated_as_a_reference() {
+        assert_eq!(
+            shift_references("=\"Sheet1!A1\"&A10", S1, S1, RefAxis::Row, insert(5, 1)).unwrap(),
+            Some("\"Sheet1!A1\"&A11".to_string())
+        );
+    }
+
+    #[test]
+    fn a_ref_error_literal_in_the_formula_does_not_confuse_the_qualifier_lookahead() {
+        // #REF! contains '!' -- must not be misread as a sheet qualifier.
+        // Elixcee's parser doesn't parse error literals at all (pre-existing,
+        // unrelated to this round), so the whole formula is Err either way.
+        assert!(shift_references("=#REF!+A10", S1, S1, RefAxis::Row, insert(5, 1)).is_err());
     }
 }
