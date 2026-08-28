@@ -1153,6 +1153,26 @@ impl Vm {
         });
     }
 
+    /// Shifts every merge on `key` for a row/col structural edit -- `shift_merge_rect`,
+    /// see its own doc comment for the exact clamp/drop rules (0.14.0-B Phase 2). Unlike
+    /// formula references, merges are per-sheet-only here: nothing else in the workbook
+    /// can hold a "reference" to a merge, so only `key`'s own map needs touching.
+    fn shift_merged_ranges_for_structural_edit(
+        &mut self,
+        key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        let Some(merges) = self.merged_ranges.get(key) else {
+            return;
+        };
+        let shifted: Vec<MergeRect> = merges
+            .iter()
+            .filter_map(|&rect| shift_merge_rect(rect, axis, edit))
+            .collect();
+        self.merged_ranges.insert(key.to_string(), shifted);
+    }
+
     /// Rewrites every formula reference qualified with `old_key` (workbook-wide,
     /// regardless of which sheet hosts the formula) to name `new_name` instead --
     /// `formula::rename_sheet_references`, see its own doc comment for the exact
@@ -1196,9 +1216,12 @@ impl Vm {
     ///
     /// Scoped to same-sheet moves only this round -- cross-sheet reference
     /// following is an explicit, disclosed open question (design doc §4-B),
-    /// not attempted here. Does NOT move `merged_ranges`/`sheet_visibility`/
-    /// `cell_style_indices`/`cell_number_formats` -- 0.14.0-B/Stage 4's
-    /// scope, same disclosed gap `insert_rows_on_sheet` already has. Cached
+    /// not attempted here. `merged_ranges` now moves too (0.14.0-B Phase 2,
+    /// see `plan_merge_move`'s own doc comment) -- a merge fully inside
+    /// `source` translates as a whole, a merge with only partial overlap
+    /// rejects the whole move (same "reject rather than guess" precedent as
+    /// `MoveRewrite::Ambiguous`). `sheet_visibility`/`cell_style_indices`/
+    /// `cell_number_formats` don't move yet -- later 0.14.0-B phases. Cached
     /// `.value`s are left stale, same as every other structural edit in this
     /// engine -- recalculation is always the caller's job.
     ///
@@ -1255,12 +1278,26 @@ impl Vm {
             }
         }
 
+        // Merge scan -- must also complete, with no rejection, before ANY
+        // mutation below (same atomicity requirement as the formula scan
+        // above): `plan_merge_move`'s `?` bails out here, before either
+        // apply step, on a partial-overlap or landed-on-existing-merge
+        // rejection (0.14.0-B, see its own doc comment).
+        let merge_plan = match self.merged_ranges.get(key) {
+            Some(merges) => Some(plan_merge_move(merges, source, d_row, d_col)?),
+            None => None,
+        };
+
         if let Some(cells) = self.sheets.get_mut(key) {
             for (pos, new_f) in formula_updates {
                 if let Some(cell) = cells.get_mut(&pos) {
                     cell.formula = Some(new_f);
                 }
             }
+        }
+
+        if let Some(new_merges) = merge_plan {
+            self.merged_ranges.insert(key.to_string(), new_merges);
         }
 
         let snapshot: Vec<((u32, u32), CellContent)> = self
@@ -1289,17 +1326,16 @@ impl Vm {
     /// `insert_rows(..., sheet=None)`). `insert_rows` below just forwards here with
     /// `key = active_sheet` -- VBA's `RowColInsert`/`RangeInsert` call sites don't
     /// change at all. Shifts same-sheet formula cell-references (0.14.0-A -- see
-    /// `rewrite_formulas_for_structural_edit`). Does NOT shift `merged_ranges`/
-    /// `sheet_visibility`/`cell_style_indices`/`cell_number_formats` -- a
-    /// pre-existing VBA-engine limitation, now Python-reachable; see ROADMAP.md's
-    /// known gaps. Cached `.value`s are left stale, same as any other edit --
-    /// callers that need fresh values already call `recalculate_all()` themselves.
+    /// `rewrite_formulas_for_structural_edit`) and merges (0.14.0-B -- see
+    /// `shift_merged_ranges_for_structural_edit`). `sheet_visibility`/
+    /// `cell_style_indices`/`cell_number_formats` still don't shift -- a pre-existing
+    /// VBA-engine limitation, now Python-reachable; see ROADMAP.md's known gaps.
+    /// Cached `.value`s are left stale, same as any other edit -- callers that need
+    /// fresh values already call `recalculate_all()` themselves.
     pub fn insert_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
-        self.rewrite_formulas_for_structural_edit(
-            key,
-            formula::RefAxis::Row,
-            formula::StructuralEdit::Insert { at: first, count },
-        );
+        let edit = formula::StructuralEdit::Insert { at: first, count };
+        self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -1337,11 +1373,9 @@ impl Vm {
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`);
     /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
-        self.rewrite_formulas_for_structural_edit(
-            key,
-            formula::RefAxis::Row,
-            formula::StructuralEdit::Delete { at: first, count },
-        );
+        let edit = formula::StructuralEdit::Delete { at: first, count };
+        self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1376,11 +1410,9 @@ impl Vm {
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`);
     /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
-        self.rewrite_formulas_for_structural_edit(
-            key,
-            formula::RefAxis::Col,
-            formula::StructuralEdit::Delete { at: first, count },
-        );
+        let edit = formula::StructuralEdit::Delete { at: first, count };
+        self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1408,11 +1440,9 @@ impl Vm {
     /// `insert_rows_on_sheet`'s column-axis mirror. Shifts same-sheet formula
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`).
     pub fn insert_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
-        self.rewrite_formulas_for_structural_edit(
-            key,
-            formula::RefAxis::Col,
-            formula::StructuralEdit::Insert { at: first, count },
-        );
+        let edit = formula::StructuralEdit::Insert { at: first, count };
+        self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -5797,6 +5827,102 @@ fn rect_contains(outer: MergeRect, inner: MergeRect) -> bool {
     let ((or1, oc1), (or2, oc2)) = outer;
     let ((ir1, ic1), (ir2, ic2)) = inner;
     or1 <= ir1 && ir2 <= or2 && oc1 <= ic1 && ic2 <= oc2
+}
+
+/// Shifts `rect` for a row/col structural edit on `axis`, reusing
+/// `formula::shift_bound_low`/`shift_bound_high` -- the SAME arithmetic a
+/// formula range already uses for insert/delete (0.14.0-B, applied here as
+/// a disclosed, unverified-against-real-Excel best-effort shape for the one
+/// case research couldn't confirm -- see
+/// `internal_docs/cell-metadata-transform-0.14.0-b-design.md` §5/§7,
+/// decided 2026-08-29). `None` means the merge must be dropped entirely:
+/// either the clamp collapsed (`low > high`, mirrors a formula range's own
+/// `#REF!` collapse -- there's no text to write, so the entry is just
+/// removed), or it survived but degenerated to a single cell on BOTH axes
+/// (e.g. `B3:B4` shrinking to lone `B3`) -- `merge_cells` itself already
+/// refuses to create a single-cell "merge" ("a merge must span at least 2
+/// cells"), so keeping one here would be inconsistent with this engine's
+/// own rule, independent of what real Excel does for this specific shape.
+fn shift_merge_rect(
+    rect: MergeRect,
+    axis: formula::RefAxis,
+    edit: formula::StructuralEdit,
+) -> Option<MergeRect> {
+    let ((r1, c1), (r2, c2)) = rect;
+    let (low, high) = match axis {
+        formula::RefAxis::Row => (r1, r2),
+        formula::RefAxis::Col => (c1, c2),
+    };
+    let new_low = formula::shift_bound_low(low, edit);
+    let new_high = formula::shift_bound_high(high, edit);
+    if new_low as i64 > new_high {
+        return None;
+    }
+    let new_high = new_high as u32;
+    let new_rect = match axis {
+        formula::RefAxis::Row => ((new_low, c1), (new_high, c2)),
+        formula::RefAxis::Col => ((r1, new_low), (r2, new_high)),
+    };
+    let ((nr1, nc1), (nr2, nc2)) = new_rect;
+    if nr1 == nr2 && nc1 == nc2 {
+        return None;
+    }
+    Some(new_rect)
+}
+
+/// Plans how `merges` transform for a range move of `source` by `(d_row,
+/// d_col)` -- returns the new merge list on success, or `Err` (no mutation
+/// happened, caller must reject the whole move) if a merge only partially
+/// overlaps `source` (real Excel's behavior for this shape is unconfirmed,
+/// same "reject rather than guess" precedent as `MoveRewrite::Ambiguous`
+/// for formula ranges) or a translated merge would land on a merge outside
+/// the moved set (invalid OOXML, matching `merge_cells`'s own overlap
+/// rule). A merge fully inside `source` translates as a whole; fully
+/// outside is untouched. Two moved merges can never collide with each
+/// other post-translation -- the existing set is already overlap-free
+/// (`merge_cells` enforces that at creation time) and every moved merge
+/// shifts by the identical offset, which preserves relative position.
+fn plan_merge_move(
+    merges: &[MergeRect],
+    source: formula::MoveRect,
+    d_row: i64,
+    d_col: i64,
+) -> Result<Vec<MergeRect>, String> {
+    let mut moved: Vec<MergeRect> = Vec::new();
+    let mut stationary: Vec<MergeRect> = Vec::new();
+    for &((r1, c1), (r2, c2)) in merges {
+        let c1_inside = source.contains(c1, r1);
+        let c2_inside = source.contains(c2, r2);
+        match (c1_inside, c2_inside) {
+            (true, true) => {
+                let new_r1 = (r1 as i64 + d_row) as u32;
+                let new_c1 = (c1 as i64 + d_col) as u32;
+                let new_r2 = (r2 as i64 + d_row) as u32;
+                let new_c2 = (c2 as i64 + d_col) as u32;
+                moved.push(((new_r1, new_c1), (new_r2, new_c2)));
+            }
+            (false, false) => stationary.push(((r1, c1), (r2, c2))),
+            _ => {
+                return Err(format!(
+                    "cannot move: merge {} partially overlaps the moved area, and real \
+                     Excel's behavior for this shape is unconfirmed -- move rejected \
+                     rather than guessed at (see \
+                     internal_docs/cell-metadata-transform-0.14.0-b-design.md)",
+                    crate::merge_rect_to_a1(&((r1, c1), (r2, c2))),
+                ));
+            }
+        }
+    }
+    for &m in &moved {
+        if stationary.iter().any(|&s| rects_overlap(m, s)) {
+            return Err(format!(
+                "cannot move: relocating merge {} would overlap an existing merge",
+                crate::merge_rect_to_a1(&m),
+            ));
+        }
+    }
+    stationary.extend(moved);
+    Ok(stationary)
 }
 
 /// `(sheet_name_lowercase, (r1,c1), (r2,c2))`.
@@ -10522,12 +10648,12 @@ mod tests {
         );
     }
 
+    // ── 0.14.0-B Phase 2: merge transform ────────────────────────────────
+
     #[test]
-    fn move_range_on_sheet_does_not_shift_merged_ranges() {
-        // Disclosed 0.14.0-B/Stage-4 gap, same precedent as
-        // insert_rows_on_sheet -- merge geometry is untouched by a move.
+    fn move_range_on_sheet_translates_a_merge_fully_inside_the_source() {
         let mut vm = Vm::new();
-        vm.merge_cells("sheet1", 1, 1, 1, 2).unwrap();
+        vm.merge_cells("sheet1", 1, 1, 1, 2).unwrap(); // A1:B1
         vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
         vm.move_range_on_sheet(
             "sheet1",
@@ -10535,7 +10661,30 @@ mod tests {
                 r1: 1,
                 c1: 1,
                 r2: 1,
-                c2: 1,
+                c2: 2,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((10, 10), (10, 11))]
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_leaves_a_merge_fully_outside_the_source_untouched() {
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 1, 1, 1, 2).unwrap(); // A1:B1
+        vm.write_rect("sheet1", (50, 50), &[vec![Variant::Integer(1)]]);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 50,
+                c1: 50,
+                r2: 50,
+                c2: 50,
             },
             10,
             10,
@@ -10544,6 +10693,134 @@ mod tests {
         assert_eq!(
             vm.merged_ranges.get("sheet1").unwrap(),
             &vec![((1, 1), (1, 2))]
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_rejects_the_whole_move_on_a_partially_overlapping_merge() {
+        // A1:B1 -- only A1 (one corner) falls inside a 1x1 move source at
+        // A1. Real Excel's behavior for this shape is unconfirmed (design
+        // doc §5/§7) -- reject rather than guess, nothing mutated.
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 1, 1, 1, 2).unwrap();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        let err = vm
+            .move_range_on_sheet(
+                "sheet1",
+                formula::MoveRect {
+                    r1: 1,
+                    c1: 1,
+                    r2: 1,
+                    c2: 1,
+                },
+                10,
+                10,
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("partially overlaps"),
+            "unexpected message: {err}"
+        );
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((1, 1), (1, 2))]
+        );
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .value,
+            Variant::Integer(1)
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_rejects_a_move_that_would_land_on_an_existing_merge() {
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 1, 1, 1, 2).unwrap(); // A1:B1, moving
+        vm.merge_cells("sheet1", 10, 10, 10, 11).unwrap(); // J10:K10, stationary, in the way
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        let err = vm
+            .move_range_on_sheet(
+                "sheet1",
+                formula::MoveRect {
+                    r1: 1,
+                    c1: 1,
+                    r2: 1,
+                    c2: 2,
+                },
+                10,
+                10,
+            )
+            .unwrap_err();
+        assert!(err.contains("overlap"), "unexpected message: {err}");
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((1, 1), (1, 2)), ((10, 10), (10, 11))]
+        );
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_shifts_a_merge_below_the_insertion_point() {
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 10, 1, 10, 2).unwrap(); // A10:B10
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((12, 1), (12, 2))]
+        );
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_grows_a_merge_the_insertion_lands_inside() {
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 3, 2, 6, 2).unwrap(); // B3:B6
+        vm.insert_rows_on_sheet("sheet1", 5, 1);
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((3, 2), (7, 2))]
+        );
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_shrinks_a_partially_overlapping_merge() {
+        // B3:B6, delete row 4 -- clamps to B3:B5, matching the same
+        // formula-range arithmetic (disclosed as unverified against real
+        // Excel for this specific shape, design doc §5/§7).
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 3, 2, 6, 2).unwrap();
+        vm.delete_rows_on_sheet("sheet1", 4, 1);
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((3, 2), (5, 2))]
+        );
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_drops_a_merge_shrunk_to_a_single_cell() {
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 3, 2, 4, 2).unwrap(); // B3:B4
+        vm.delete_rows_on_sheet("sheet1", 4, 1);
+        assert_eq!(vm.merged_ranges.get("sheet1").unwrap(), &Vec::new());
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_drops_a_merge_entirely_covered_by_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 3, 2, 4, 2).unwrap(); // B3:B4
+        vm.delete_rows_on_sheet("sheet1", 1, 10);
+        assert_eq!(vm.merged_ranges.get("sheet1").unwrap(), &Vec::new());
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_shifts_a_merge_on_the_column_axis_only() {
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 1, 5, 2, 5).unwrap(); // E1:E2
+        vm.insert_cols_on_sheet("sheet1", 2, 1);
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((1, 6), (2, 6))]
         );
     }
 

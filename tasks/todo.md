@@ -785,3 +785,18 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] **設計文書の更新**：`internal_docs/cell-metadata-transform-0.14.0-b-design.md`の§5・§7を実際の調査結果に基づいて全面改稿。range move Stage 1との違いを明記——今回は「コアの挙動自体」が未確認であり、周辺的なopen questionではない。§7では3つの実際的な選択肢（(1)formula range と同じclamp演算を「実Excel未検証」と明示した上で適用、(2)部分重複するedit自体を拒否、(3)確認済みケースのみtransformし部分重複ケースは現状維持で開示）を提示——今回は技術的な判断ではなくプロダクトのリスク許容度の判断であるため、あえて推奨案を出さずユーザー判断を仰ぐ方針とした。
 
 残作業：§7の3択についてユーザーの判断待ち。決定後、Phase 2（merged_ranges transform実装）へ進む。
+
+## 0.14.0-B Phase 2：merged_ranges transform実装
+
+ユーザーが§7の3択から「formula rangeと同じclamp演算を適用（未検証と明示）」を選択したことを受けて実装。
+
+- [x] **`shift_merge_rect(rect, axis, edit)`**（`src/vm/mod.rs`）：Phase 1で`pub(crate)`化した`formula::shift_bound_low`/`shift_bound_high`をそのまま再利用し、編集対象の軸（row/col）だけをclampする純粋関数。結果が`low > high`（完全崩壊）または両軸とも1セルに縮退した場合は`None`（drop）を返す——後者は実Excelの挙動とは無関係に、`merge_cells`自身が既に単一セルmergeを拒否しているルールとの整合性から導出（研究結果に依存しない設計上の帰結）。
+- [x] **`plan_merge_move(merges, source, d_row, d_col)`**：range move用のscan関数。各mergeについて両コーナーが`source`矩形内かどうかを判定——両方内側なら平行移動、両方外側なら不変、片方だけなら「実Excel未確認」を理由にmove全体を拒否（`MoveRewrite::Ambiguous`と同じ「推測しない」方針をmergeにも適用——これはこの研究の結果ではなく、range move自体が既に採用している既存方針の一貫適用）。移動後のmergeが既存の無関係なmergeと重なる場合も同様に拒否（`merge_cells`自身の重複禁止ルールに由来、研究結果とは無関係）。
+- [x] **配線**：`insert_rows_on_sheet`/`delete_rows_on_sheet`/`insert_cols_on_sheet`/`delete_cols_on_sheet`に`shift_merged_ranges_for_structural_edit`を追加。`move_range_on_sheet`にmergeスキャンを追加——formulaスキャンと同じ「全スキャンが成功して初めてどちらのapplyも実行する」というatomicity要件を維持（`plan_merge_move`の`?`は両方のapply blockより前に配置）。
+- [x] **既存テストの更新**：`move_range_on_sheet_does_not_shift_merged_ranges`（旧・merge不変を確認するテスト）と、real fixtureベースの統合テスト`insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidden_markers`は、今回の実装によって前提が変わったため、新しい正しい挙動（mergeはshiftする、hidden row/col markerは引き続きshiftしない——これは別フェーズのスコープ）を検証するテストに置き換え。
+- [x] **新規テスト9件**：move_rangeでのsource内完全translate／source外不変／片コーナー重複での全体拒否（何も変更されていないことまで確認）／既存mergeと重なる移動先の拒否、insert_rows/insert_colsでのshift、insertがmerge内部に入る場合の拡張、deleteでの部分重複縮小、deleteで1セルまで縮んだ場合のdrop、delete全体がmergeを覆う場合のdrop。
+- [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1116件+既存の統合テスト、0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）／`scripts/check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。
+- [x] **実際にビルドしたPython拡張での動作確認**：`maturin develop --release`で実際にビルド・インストールし、Pythonから(1)`insert_rows`によるmerge shift、(2)`move_range`によるmerge translate、(3)片コーナー重複moveの拒否と非変更の確認、(4)実際の`.xlsx`ファイルへのsave→reloadまでのround tripを実行して確認。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション、PR #22時点の「merged ranges staying untouched」という記述を今回上書きする旨を明記）、`internal_docs/ROADMAP.md`（0.14.0-B節をPhase 1・2完了として整理）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus、`tasks/todo.md`（本エントリ）。
+
+残作業：Phase 3（`sheet_visibility`の行/列非表示区間のtransform）とPhase 4（`cell_style_indices`/`cell_number_formats`のtransform）が未着手。着手前にユーザーへの確認を推奨（ただし新規スコープではなく既に承認済みのphased breakdownの続きなので、`/greenlane`的な文脈では続行可）。
