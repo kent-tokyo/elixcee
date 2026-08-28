@@ -756,3 +756,18 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] **ドキュメント反映**：`internal_docs/ROADMAP.md`の0.14.0-A4を完了（取り消し線）として整理し直し——「Stage 4は0.14.0-Bへ統合済み、0.14.0-A4自体はセル内容とformula参照の移動のみが最終スコープ」であることを明記。0.14.0-Bの節にも「insert/delete側の既存metadata未対応と、range moveのmetadata移動の両方を1つの機構でカバーする」旨を追記。`internal_docs/range-move-0.14.0-a4-design.md`のStatus・§6も同様に更新。
 
 残作業：0.14.0-A4（range move）はこれで完了扱い（同一シート内、セル内容とformula参照の移動のみ）。次のスコープは0.14.0-B（cell metadata transformation、insert/delete分とrange move分を1機構で統合設計）——ただし0.14.0-Bはまだ設計未着手の大きめのマイルストーンであり、着手前にユーザーへの確認を推奨。cross-sheet move（0.14.0-A4のopen question B）も引き続き未着手のまま、0.14.0-A4のスコープには含めない。
+
+## 0.14.0-Bのスコーピング（実装なし、調査のみ）
+
+ユーザーの「scope 0.14.0-B」を受け、range move Stage 1と同じプロセス（ROADMAP.mdの既存の事前構想を鵜呑みにせず、実ソースコードを直接確認してから設計する）で着手。
+
+- [x] **`Vm`構造体のフィールドを直接列挙**：ROADMAP.mdの`GridTransform`/`ReferenceGraph`/`MutationTransaction`という事前構想（0.14.0-A系列の実装が始まる前に書かれたもので、実際には一切実装されなかった——実装は`shift_references`等の個別関数＋`rewrite_formulas_workbook_wide`という共有ヘルパーという、もっと軽量な設計に落ち着いた）を根拠にせず、`src/vm/mod.rs`のフィールド一覧を直接確認。`merged_ranges`/`sheet_visibility`（行/列の非表示区間——シート自体のtab visibilityとは別物、コード自身のdoc commentが明示的に混同注意している）/`cell_style_indices`/`cell_number_formats`/`row_heights`/`column_widths`/`sheet_states`を発見・各々のPython書き込み可否とwriter側での実際の保存有無を個別に確認。
+- [x] **`cell_number_formats`の誤った初期結論を訂正**：`src/lib.rs`内`cell_number_formats`のgrep結果が0件だったことから「保存時に消える」と誤って結論づけたが、advisorの指摘（number formatはOOXML上セル単位ではなく`styles.xml`の`numFmt`/`cellXf`として保持され、`s="N"`属性経由で参照される——`xl/styles.xml`はwriter-ownedだが中身は条件付きpassthroughなので実際には保持されるはず）を受けて再検証。実際に`maturin develop --release`でビルドしたPython拡張を使い、openpyxlで日付書式付きセルを作成→elixceeでload→save→reload→`get_cell_number_format`で書式文字列が保持されていることを実機確認——grepだけで結論を出さず実証した。
+- [x] **3段階のtier分け**：Tier 1（`merged_ranges`/`sheet_visibility`/`cell_style_indices`/`cell_number_formats`——いずれも既にwriterが正しく保存している・real-value-now）、Tier 2（`row_heights`/`column_widths`——writerが既存の別バグ（ROADMAP.md既存item 26）で常に保存時に消えるため、transform実装の価値がwriter修正まで観測不能）、Tier 3（comments/hyperlinks/data validation/conditional formatting——構造化されたRust側の状態が一切存在せず、passthrough XMLに座標が焼き込まれたままという別種の開示済みバグ——0.16.0/0.17.0という既存の計画済みマイルストーンの領分であり0.14.0-Bのスコープではない、と結論）に整理。`sheet_states`（シート自体のtab visibility）は今回のtransform対象外（シート内の構造編集ではシート自体の可視性は変化しないため無関係）と判断。
+- [x] **merge固有の意味論を特定**：`merge_cells`自身の既存ルール（単一セルmerge拒否・重複merge拒否）から、削除で2セルmergeが1セルに縮む場合はmerge自体をdropすべき、range moveの移動先が既存mergeと重なる場合はmove全体を拒否すべき（`MoveRewrite::Ambiguous`と同じ設計）、という2点を導出。片方のコーナーだけが削除/挿入帯にかかる場合のmerge縮小挙動は実Excelでの検証が未実施であることを明記——open questionとして記録。
+- [x] **共有すべき既存プリミティブの特定**：`formula::rewrite`の`shift_cell_coord`/`shift_bound_low`/`shift_bound_high`（現在private、28件のテストで裏付け済み）は純粋な座標シフト演算でありformula固有ではないため、`pub(crate)`化して0.14.0-Bからも再利用すべきと結論——formulaのSUM(A1:A10)とmergeのA1:A10が異なるルールで縮小するのは別バグの温床になるため。削除帯に落ちた場合の意味論（formulaは`#REF!`、metadataはエントリ自体をdrop）はconsumerごとに異なる、という区別も明記。
+- [x] **設計文書化**：`internal_docs/cell-metadata-transform-0.14.0-b-design.md`を新規作成——フィールド一覧表、tier分け、merge意味論、共有プリミティブの提案、6段階の推奨phased breakdown、3件のopen question（merge片コーナー縮小の実Excel挙動未検証、row-height/column-width transformの実装順序、Tier 3のROADMAP開示タイミング）を記録。
+- [x] **ROADMAP.md更新**：0.14.0-Bの節に今回のスコーピング結果への参照を追加。Known gapsにitem 27として「passthrough XMLの座標が構造編集後に古くなる」問題を新規開示（Tier 3の裏付けとして、修正時期に関わらず今すぐ開示すべきとadvisorが指摘したため）。
+- [x] **advisor確認**：本格的な調査に入る前とドキュメント化前の2回、advisorに相談——1回目は調査方針の確認、2回目（本節冒頭に記載）は`cell_number_formats`の結論訂正・merge固有意味論の追加・Tier 3を「transformすべきものがない」ではなく「実在する開示済みギャップ」として書くべき、という3点の指摘を受け、すべて反映。
+
+残作業：本ラウンドは実装を一切行わず、スコーピングのみで完了（ユーザー自身の依頼どおり）。次はユーザーによるphased breakdownの承認待ち——承認され次第、Phase 1（共有プリミティブのpub(crate)化＋merge片コーナー縮小の実Excel挙動調査）から着手予定。
