@@ -459,6 +459,17 @@ impl PyVm {
 
     /// Rename a sheet.
     ///
+    /// Every formula reference qualified with *old_name* (``='Old Name'!A1``),
+    /// on ANY sheet in the workbook, is rewritten to name *new_name* instead —
+    /// requoted/escaped as *new_name* itself requires, regardless of how the old
+    /// reference was written. An unqualified reference is never touched, even on
+    /// the renamed sheet itself (``=A1`` still means "this same sheet", whatever
+    /// it's now called). A formula this parser can't parse at all (an external
+    /// workbook reference, a 3D reference) is left completely untouched rather
+    /// than partially rewritten. Does **not** rewrite ``<definedName>`` text that
+    /// refers to this sheet by its old name — that mechanism stays out of scope;
+    /// see docs/openpyxl-gap-audit.md.
+    ///
     /// Parameters
     /// ----------
     /// old_name:
@@ -466,7 +477,8 @@ impl PyVm {
     /// new_name:
     ///     The new name. Renaming the active sheet is supported (it stays active
     ///     under the new name). Renaming a sheet to itself, or to a different
-    ///     casing of its own name, succeeds.
+    ///     casing of its own name, succeeds — and still updates any formula
+    ///     reference's qualifier to match the new casing.
     ///
     /// Raises ``ValueError`` if *old_name* doesn't exist, *new_name* is empty or
     /// whitespace-only, *new_name* (case-insensitively) already names a *different*

@@ -1083,48 +1083,34 @@ impl Vm {
             .expect("active sheet must exist")
     }
 
-    /// Rewrites every formula cell-reference in the WHOLE workbook for a row/column
-    /// insert or delete on `edited_key` (`formula::shift_references`, 0.14.0-A /
-    /// 0.14.0-A2), in place, before the physical row/col shift below moves any
-    /// cells on `edited_key` itself. Every formula cell on every sheet is checked,
-    /// not just the ones on `edited_key` -- a formula hosted on a different sheet
-    /// can still hold a `Sheet2!A1`-style reference INTO `edited_key`, and an
-    /// unqualified reference is only relative to its own host sheet, so whether it
-    /// shifts depends on whether the host sheet IS `edited_key` (see
-    /// `formula::shift_references`'s own doc comment for the full targeting rule).
+    /// Walks every sheet's formula cells EXACTLY ONCE, offering each one
+    /// (`host_key`, current formula text) to `rewrite_fn`, and writing back
+    /// whatever it returns (`Ok(Some(new_text))`) -- restoring a leading `=`
+    /// iff the original had one, since `CellContent::formula` doesn't
+    /// consistently carry one (XLSX-loaded formulas never do, VBA/Python-set
+    /// ones often do -- see `xlsx_cell_xml`'s own defensive strip) and a
+    /// rewritten formula must not visibly disagree with an untouched
+    /// sibling's convention (e.g. via `FORMULATEXT()`). `Ok(None)` or `Err`
+    /// (a formula this parser can't parse at all -- external workbook
+    /// references, 3D references, anything else the parser doesn't cover)
+    /// both leave the formula completely untouched -- the same "stale until
+    /// you touch it" status quo every such formula already had.
     ///
-    /// Iterates `self.sheets` exactly once (not once per sheet, which would shift
-    /// every formula N times) -- `edited_key` is cloned up front specifically so
-    /// the loop below can borrow `self.sheets` mutably without also borrowing
-    /// `self` for the parameter.
-    ///
-    /// A formula elixcee's parser can't parse (external workbook references,
-    /// 3D references, and anything else 0.14.0-A2 doesn't cover -- see
-    /// ROADMAP.md's 0.14.0-A note) is left untouched rather than partially
-    /// rewritten: this is the same "stale until you touch it" status quo every
-    /// such formula already had before this method existed, not a new gap.
-    fn rewrite_formulas_for_structural_edit(
-        &mut self,
-        edited_key: &str,
-        axis: formula::RefAxis,
-        edit: formula::StructuralEdit,
-    ) {
-        let edited_key = edited_key.to_string();
+    /// Shared plumbing for every workbook-wide formula-text rewrite: 0.14.0-A2's
+    /// structural-edit reference shift and sheet-rename's qualifier rewrite
+    /// (both below), and range move later (see ROADMAP.md's 0.14.0-A note) --
+    /// only what actually gets rewritten differs per caller.
+    fn rewrite_formulas_workbook_wide<F>(&mut self, mut rewrite_fn: F)
+    where
+        F: FnMut(&str, &str) -> Result<Option<String>, String>,
+    {
         for (host_key, cells) in self.sheets.iter_mut() {
             let updates: Vec<((u32, u32), String)> = cells
                 .iter()
                 .filter_map(|(&pos, content)| {
                     let f = content.formula.as_ref()?;
-                    match formula::shift_references(f, host_key, &edited_key, axis, edit) {
+                    match rewrite_fn(host_key, f) {
                         Ok(Some(new_f)) => {
-                            // shift_references normalizes away a leading '=' (see
-                            // its doc comment); CellContent::formula doesn't
-                            // consistently carry one (XLSX-loaded formulas never
-                            // do, VBA/Python-set ones often do -- see
-                            // xlsx_cell_xml's own defensive strip), so restore it
-                            // here iff the original had one, or a rewritten
-                            // formula would visibly disagree with an untouched
-                            // sibling's convention (e.g. via FORMULATEXT()).
                             let final_f = if f.trim_start().starts_with('=') {
                                 format!("={new_f}")
                             } else {
@@ -1142,6 +1128,40 @@ impl Vm {
                 }
             }
         }
+    }
+
+    /// Rewrites every formula cell-reference in the WHOLE workbook for a row/column
+    /// insert or delete on `edited_key` (`formula::shift_references`, 0.14.0-A /
+    /// 0.14.0-A2), in place, before the physical row/col shift below moves any
+    /// cells on `edited_key` itself. Every formula cell on every sheet is checked,
+    /// not just the ones on `edited_key` -- a formula hosted on a different sheet
+    /// can still hold a `Sheet2!A1`-style reference INTO `edited_key`, and an
+    /// unqualified reference is only relative to its own host sheet, so whether it
+    /// shifts depends on whether the host sheet IS `edited_key` (see
+    /// `formula::shift_references`'s own doc comment for the full targeting rule).
+    /// `edited_key` is cloned up front so the closure below can borrow it without
+    /// also borrowing `self` for the parameter.
+    fn rewrite_formulas_for_structural_edit(
+        &mut self,
+        edited_key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        let edited_key = edited_key.to_string();
+        self.rewrite_formulas_workbook_wide(|host_key, f| {
+            formula::shift_references(f, host_key, &edited_key, axis, edit)
+        });
+    }
+
+    /// Rewrites every formula reference qualified with `old_key` (workbook-wide,
+    /// regardless of which sheet hosts the formula) to name `new_name` instead --
+    /// `formula::rename_sheet_references`, see its own doc comment for the exact
+    /// targeting/quoting rules. Unqualified references are never touched (renaming
+    /// a sheet never changes what a bare `A1` means to a formula already on it).
+    fn rewrite_qualifiers_for_rename(&mut self, old_key: &str, new_name: &str) {
+        self.rewrite_formulas_workbook_wide(|_host_key, f| {
+            formula::rename_sheet_references(f, old_key, new_name)
+        });
     }
 
     /// `insert_rows`'s sheet-parameterized sibling (backs Python's
@@ -2284,9 +2304,18 @@ impl Vm {
     /// Known, deliberate non-goals (see ROADMAP.md known gaps): does not validate
     /// Excel's 31-char length limit, illegal characters (`: \ / ? * [ ]`), or
     /// reserved names -- matches `set_sheet`'s pre-existing total lack of name
-    /// validation. Does not rewrite any formula or `<definedName>` text that refers
-    /// to this sheet by its OLD name -- only the `<sheet name="...">` tab label
-    /// changes.
+    /// validation. Does not rewrite `<definedName>` text that refers to this sheet
+    /// by its OLD name -- that mechanism stays out of scope, unlike cell formulas
+    /// below (see `defined_names_may_be_stale`'s own comment further down).
+    ///
+    /// Formula cell-references naming this sheet by its OLD name, workbook-wide,
+    /// ARE rewritten to the new one (0.14.0-A2 follow-up --
+    /// `rewrite_qualifiers_for_rename`/`formula::rename_sheet_references`) -- e.g.
+    /// `='Old Name'!A1` on any sheet becomes `=NewName!A1`. An unqualified
+    /// reference is never touched (it's relative to its own host sheet, which a
+    /// rename doesn't change). A formula this parser can't parse at all (external
+    /// workbook references, 3D references) is left completely untouched, same as
+    /// 0.14.0-A's structural-edit rewrite.
     pub fn rename_sheet(&mut self, old_name: &str, new_name: &str) -> Result<(), String> {
         let old_key = old_name.to_lowercase();
         if !self.sheets.contains_key(&old_key) {
@@ -2302,6 +2331,8 @@ impl Vm {
         if new_key != old_key && self.sheets.contains_key(&new_key) {
             return Err(format!("Sheet '{}' already exists", new_name));
         }
+
+        self.rewrite_qualifiers_for_rename(&old_key, new_name);
 
         // 1. `sheets` -- the cell map itself.
         if let Some(cells) = self.sheets.remove(&old_key) {
@@ -9432,6 +9463,94 @@ mod tests {
         assert!(!vm2.defined_names_may_be_stale);
         vm2.move_sheet("B", 0).unwrap();
         assert!(vm2.defined_names_may_be_stale);
+    }
+
+    // ── 0.14.0-A2 follow-up: rename_sheet rewrites qualifier references ─────
+
+    #[test]
+    fn rename_sheet_rewrites_a_qualifier_naming_it_from_another_sheet() {
+        let mut vm = Vm::new(); // "sheet1" is the default sheet
+        vm.ensure_sheet("Other");
+        vm.set_active_sheet("Other").unwrap();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=Sheet1!A1+1".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.set_active_sheet("Sheet1").unwrap();
+        vm.rename_sheet("Sheet1", "Data").unwrap();
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=Data!A1+1".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_sheet_does_not_touch_unqualified_references_on_the_renamed_sheet_itself() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=A10+1").unwrap();
+        vm.rename_sheet("Sheet1", "Data").unwrap();
+        assert_eq!(
+            vm.get_sheet_cells("data")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=A10+1".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_sheet_does_not_touch_a_qualifier_naming_a_different_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.set_active_sheet("Other").unwrap();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=Other!A1+1".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.rename_sheet("Sheet1", "Data").unwrap();
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("=Other!A1+1".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_sheet_quotes_the_new_name_in_rewritten_qualifiers_when_needed() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.set_active_sheet("Other").unwrap();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=Sheet1!A1".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.set_active_sheet("Sheet1").unwrap();
+        vm.rename_sheet("Sheet1", "Sales 2026").unwrap();
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .formula,
+            Some("='Sales 2026'!A1".to_string())
+        );
     }
 
     // ── P2: copy_sheet ────────────────────────────────────────────────────
