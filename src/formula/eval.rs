@@ -3457,7 +3457,7 @@ fn func_formulatext(
     }
 }
 
-fn col_to_letter(mut col: u32) -> String {
+pub(crate) fn col_to_letter(mut col: u32) -> String {
     let mut s = String::new();
     while col > 0 {
         col -= 1;

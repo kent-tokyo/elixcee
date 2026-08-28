@@ -1,8 +1,41 @@
 use super::ast::{BinOpKind, FormulaExpr};
 
+/// One cell/range reference as it literally appears in formula text, with its
+/// exact char-offset span (relative to the normalized input `parse_with_refs`
+/// was called on -- see that function's doc comment). Used by the reference
+/// rewriter (`super::rewrite`) to patch only the substring that actually
+/// changed on a structural edit, leaving everything else in the formula --
+/// operators, function names, number/string literals, whitespace -- byte-for-
+/// byte untouched.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RefOccurrence {
+    Cell {
+        span: (usize, usize),
+        col: u32,
+        row: u32,
+        abs_col: bool,
+        abs_row: bool,
+    },
+    Range {
+        /// Span of the whole reference, e.g. all of `A1:B10` including the `:`.
+        span: (usize, usize),
+        c1: u32,
+        r1: u32,
+        abs_c1: bool,
+        abs_r1: bool,
+        c1_span: (usize, usize),
+        c2: u32,
+        r2: u32,
+        abs_c2: bool,
+        abs_r2: bool,
+        c2_span: (usize, usize),
+    },
+}
+
 pub struct FormulaParser {
     chars: Vec<char>,
     pos: usize,
+    refs: Vec<RefOccurrence>,
 }
 
 impl FormulaParser {
@@ -10,6 +43,7 @@ impl FormulaParser {
         FormulaParser {
             chars: input.chars().collect(),
             pos: 0,
+            refs: Vec::new(),
         }
     }
 
@@ -233,8 +267,10 @@ impl FormulaParser {
 
     /// Parse one side of a range (`[$]COL[$]ROW`), e.g. the `B10` in `A1:B10`
     /// or the `$B$10` in `A1:$B$10`. Always a cell reference — a range corner
-    /// is never a function name.
-    fn parse_ref_corner(&mut self) -> Result<(u32, u32, bool, bool), String> {
+    /// is never a function name. Returns the corner's own span alongside its
+    /// coordinates so the caller can record it in a `RefOccurrence::Range`.
+    fn parse_ref_corner(&mut self) -> Result<(u32, u32, bool, bool, usize, usize), String> {
+        let start = self.pos;
         let abs_col = self.consume('$');
         let mut name = String::new();
         while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
@@ -251,14 +287,73 @@ impl FormulaParser {
         if row_s.is_empty() {
             return Err(format!("Expected row number after '{}' in range", name));
         }
+        let end = self.pos;
         let col = col_letters_to_num(&name);
         let row: u32 = row_s
             .parse()
             .map_err(|e: std::num::ParseIntError| e.to_string())?;
-        Ok((col, row, abs_col, abs_row))
+        Ok((col, row, abs_col, abs_row, start, end))
+    }
+
+    /// Shared tail for both the `$`-flagged and bare-reference parse paths:
+    /// given the already-parsed first corner, check for a trailing `:SECOND`
+    /// range and record a `RefOccurrence` (`Cell` or `Range`) for whichever
+    /// this turns out to be, alongside building the `FormulaExpr`.
+    fn finish_ref(
+        &mut self,
+        tok_start: usize,
+        corner1_end: usize,
+        col: u32,
+        row: u32,
+        abs_col: bool,
+        abs_row: bool,
+    ) -> Result<FormulaExpr, String> {
+        self.skip_ws();
+        if self.peek() == Some(':') {
+            self.advance();
+            self.skip_ws();
+            let (c2, r2, abs_c2, abs_r2, c2_start, c2_end) = self.parse_ref_corner()?;
+            self.refs.push(RefOccurrence::Range {
+                span: (tok_start, c2_end),
+                c1: col,
+                r1: row,
+                abs_c1: abs_col,
+                abs_r1: abs_row,
+                c1_span: (tok_start, corner1_end),
+                c2,
+                r2,
+                abs_c2,
+                abs_r2,
+                c2_span: (c2_start, c2_end),
+            });
+            return Ok(FormulaExpr::Range {
+                c1: col,
+                r1: row,
+                c2,
+                r2,
+                abs_c1: abs_col,
+                abs_r1: abs_row,
+                abs_c2,
+                abs_r2,
+            });
+        }
+        self.refs.push(RefOccurrence::Cell {
+            span: (tok_start, corner1_end),
+            col,
+            row,
+            abs_col,
+            abs_row,
+        });
+        Ok(FormulaExpr::CellRef {
+            col,
+            row,
+            abs_col,
+            abs_row,
+        })
     }
 
     fn parse_ident_or_ref(&mut self) -> Result<FormulaExpr, String> {
+        let tok_start = self.pos;
         let abs_col = self.consume('$');
         let mut name = String::new();
         while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
@@ -301,28 +396,8 @@ impl FormulaParser {
             let row: u32 = trailing_digits
                 .parse()
                 .map_err(|e: std::num::ParseIntError| e.to_string())?;
-            self.skip_ws();
-            if self.peek() == Some(':') {
-                self.advance();
-                self.skip_ws();
-                let (c2, r2, abs_c2, abs_r2) = self.parse_ref_corner()?;
-                return Ok(FormulaExpr::Range {
-                    c1: col,
-                    r1: row,
-                    c2,
-                    r2,
-                    abs_c1: abs_col,
-                    abs_r1: abs_row,
-                    abs_c2,
-                    abs_r2,
-                });
-            }
-            return Ok(FormulaExpr::CellRef {
-                col,
-                row,
-                abs_col,
-                abs_row,
-            });
+            let corner1_end = self.pos;
+            return self.finish_ref(tok_start, corner1_end, col, row, abs_col, abs_row);
         }
 
         if !trailing_digits.is_empty() {
@@ -343,29 +418,8 @@ impl FormulaParser {
                 let row: u32 = trailing_digits
                     .parse()
                     .map_err(|e: std::num::ParseIntError| e.to_string())?;
-                self.skip_ws();
-                // Range: A1:B10
-                if self.peek() == Some(':') {
-                    self.advance();
-                    self.skip_ws();
-                    let (c2, r2, abs_c2, abs_r2) = self.parse_ref_corner()?;
-                    return Ok(FormulaExpr::Range {
-                        c1: col,
-                        r1: row,
-                        c2,
-                        r2,
-                        abs_c1: false,
-                        abs_r1: false,
-                        abs_c2,
-                        abs_r2,
-                    });
-                }
-                return Ok(FormulaExpr::CellRef {
-                    col,
-                    row,
-                    abs_col: false,
-                    abs_row: false,
-                });
+                let corner1_end = self.pos;
+                return self.finish_ref(tok_start, corner1_end, col, row, false, false);
             }
         }
 
@@ -415,6 +469,19 @@ fn col_letters_to_num(s: &str) -> u32 {
 
 /// Parse an Excel formula string (with or without a leading `=`).
 pub fn parse(formula: &str) -> Result<FormulaExpr, String> {
+    parse_with_refs(formula).map(|(expr, _)| expr)
+}
+
+/// Parse an Excel formula string, also returning every cell/range reference
+/// literally present in it (`RefOccurrence`), each with its exact char-offset
+/// span. Spans are relative to `formula.trim().trim_start_matches('=')` --
+/// the same normalization `parse` applies -- not to `formula` as passed in.
+/// `CellContent::formula` doesn't consistently carry a leading `=` (an XLSX-
+/// loaded formula never does; a VBA/Python-set one often does -- see
+/// `xlsx_cell_xml`'s defensive `.trim().trim_start_matches('=')` in
+/// `src/lib.rs`), so a caller that needs to splice a rewritten span back into
+/// the original stored string must apply the same normalization first.
+pub fn parse_with_refs(formula: &str) -> Result<(FormulaExpr, Vec<RefOccurrence>), String> {
     let input = formula.trim().trim_start_matches('=');
     let mut p = FormulaParser::new(input);
     let expr = p.parse_expr()?;
@@ -426,7 +493,7 @@ pub fn parse(formula: &str) -> Result<FormulaExpr, String> {
             p.chars[p.pos..].iter().collect::<String>()
         ))
     } else {
-        Ok(expr)
+        Ok((expr, p.refs))
     }
 }
 
@@ -570,6 +637,84 @@ mod tests {
         assert!(parse("=$1").is_err());
         assert!(parse("=$A").is_err());
         assert!(parse("=A1:$B").is_err());
+    }
+
+    #[test]
+    fn test_refs_single_cell_span() {
+        let (_, refs) = parse_with_refs("=A1+1").unwrap();
+        assert_eq!(
+            refs,
+            vec![RefOccurrence::Cell {
+                span: (0, 2),
+                col: 1,
+                row: 1,
+                abs_col: false,
+                abs_row: false,
+            }]
+        );
+        // The span must index exactly "A1" in the normalized (post `=`-strip) text.
+        let input = "A1+1";
+        let (start, end) = (0, 2);
+        assert_eq!(&input[start..end], "A1");
+    }
+
+    #[test]
+    fn test_refs_absolute_cell_span() {
+        let (_, refs) = parse_with_refs("=1+$A$1").unwrap();
+        assert_eq!(
+            refs,
+            vec![RefOccurrence::Cell {
+                span: (2, 6),
+                col: 1,
+                row: 1,
+                abs_col: true,
+                abs_row: true,
+            }]
+        );
+        let input = "1+$A$1";
+        assert_eq!(&input[2..6], "$A$1");
+    }
+
+    #[test]
+    fn test_refs_range_spans() {
+        let (_, refs) = parse_with_refs("=SUM($A1:B$10)").unwrap();
+        assert_eq!(
+            refs,
+            vec![RefOccurrence::Range {
+                span: (4, 12),
+                c1: 1,
+                r1: 1,
+                abs_c1: true,
+                abs_r1: false,
+                c1_span: (4, 7),
+                c2: 2,
+                r2: 10,
+                abs_c2: false,
+                abs_r2: true,
+                c2_span: (8, 12),
+            }]
+        );
+        let input = "SUM($A1:B$10)";
+        assert_eq!(&input[4..12], "$A1:B$10");
+        assert_eq!(&input[4..7], "$A1");
+        assert_eq!(&input[8..12], "B$10");
+    }
+
+    #[test]
+    fn test_refs_multiple_occurrences_in_expression() {
+        let (_, refs) = parse_with_refs("=A1+B2*SUM(C1:D2)").unwrap();
+        let input = "A1+B2*SUM(C1:D2)";
+        let span_of = |r: &RefOccurrence| match r {
+            RefOccurrence::Cell { span, .. } => *span,
+            RefOccurrence::Range { span, .. } => *span,
+        };
+        assert_eq!(refs.len(), 3);
+        let (s0, e0) = span_of(&refs[0]);
+        let (s1, e1) = span_of(&refs[1]);
+        let (s2, e2) = span_of(&refs[2]);
+        assert_eq!(&input[s0..e0], "A1");
+        assert_eq!(&input[s1..e1], "B2");
+        assert_eq!(&input[s2..e2], "C1:D2");
     }
 
     #[test]
