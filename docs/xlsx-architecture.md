@@ -656,6 +656,15 @@ code path produced the stored string. Shared-formula follower cells (`<f t="shar
 si="N"/>`, no inline text) remain unresolved — a pre-existing, documented `reader.rs`
 limitation, unaffected by this fix.
 
+**Follow-up (0.14.0-A2 correctness round): formula cells with no cached value at all.**
+A narrower gap in the same area, found later: `populate_from_sheets`'s loop only ever
+walked `sheet_data.cells` (populated from `<v>`/inline-string content) — a `(row, col)`
+present only in `sheet_data.formulas` (a formula cell with no `<v>` sibling at all) was
+silently skipped, even though `xlsx_sheet_cells` had already parsed its formula text
+correctly. `xlsx_cell_xml` had the mirror-image gap on the write side: it treated
+`Variant::Empty` as "nothing worth writing" and dropped the whole `<c>` element,
+formula included. Fixed on both sides — see `CHANGELOG.md`'s `[Unreleased]` entry.
+
 **2. Orphaned relationships.** `xl/_rels/workbook.xml.rels` and `_rels/.rels` are both
 writer-owned — fully regenerated from a fixed template (`build_xlsx_workbook_rels`,
 `build_xlsx_root_rels`) that only ever emitted the relationships it already knew about

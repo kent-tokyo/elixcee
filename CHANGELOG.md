@@ -740,6 +740,43 @@ silently resolve to nothing rather than simply failing to parse as before.
 - 16+ new tests (rewriter targeting/quoting tests, VM wiring tests) plus a real
   save→reload integration test confirming the renamed qualifier persists through a file.
 
+### Root crate: fix silent formula loss for cells with no cached value
+
+Correctness fix, independent of the 0.14.0-A reference-rewrite work above (though
+discovered while writing its integration tests). A formula cell with no cached value —
+freshly typed and not yet recalculated, or a cross-sheet reference this engine
+deliberately doesn't evaluate (0.14.0-A2) — was silently dropped ENTIRELY on save,
+formula text included, whenever its value was `Variant::Empty`. "No cached result" and
+"no formula" are different things; this made a real formula vanish from the saved file
+with no error or warning. The bug was two-sided, on both the writer and the reader:
+
+- **Writer** (`xlsx_cell_xml`, `src/lib.rs`): a cell with `Variant::Empty` and a formula
+  now still emits `<c r="..."><f>...</f></c>` — no `<v>` element at all, rather than
+  fabricating a placeholder value (`<v>` is optional per the OOXML schema; this is also
+  what openpyxl itself does, modulo a self-closing `<v/>` it adds and elixcee doesn't
+  need to match). A cell with `Variant::Empty` and NO formula is still omitted entirely,
+  unchanged.
+- **Reader** (`Vm::populate_from_sheets`, `src/vm/mod.rs`): even before this fix, the XML
+  parser already correctly extracted a formula-only cell's `<f>` text into its own
+  `formulas` map, independent of whether `<v>` was present — but the cell-population loop
+  only ever walked the separate `cells` map (populated from `<v>`/inline-string content),
+  so a `(row, col)` present only in `formulas` was silently skipped, even for a real file
+  that already had this shape. A new second pass now inserts a `CellContent { formula,
+  value: Variant::Empty }` for every formula-only cell `cells` doesn't already cover.
+- Not a formula-evaluation or recalculation feature — the cell's value is `Variant::Empty`
+  before and after this fix; only its *survival* through save/reload changed.
+- 4 new integration tests (`tests/xlsx_roundtrip.rs`): the exact failure matrix
+  (`=IF(FALSE,1)`, a string-literal formula, a same-sheet reference, a cross-sheet
+  reference), an emission-matrix regression guard (formula+Integer/String/Boolean/Error
+  cached values still round-trip unchanged; a plain empty formula-less cell is still
+  omitted), and two consecutive saves not losing the formula the second time.
+- **Not verified against a real Excel-authored fixture** — no real fixture in this repo
+  contains a formula-only cell with no cached value, and authoring one requires actual
+  Microsoft Excel, which (as documented throughout this project's history) has no
+  scriptable path on this machine. The fix targets a schema-valid, openpyxl-observed
+  shape rather than a speculative one, but this remains open verification, not silently
+  claimed as done — see ROADMAP.md.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
