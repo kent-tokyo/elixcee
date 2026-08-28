@@ -3076,28 +3076,19 @@ fn check_real_fixture_output(
 /// again -- `insert_rows_on_sheet` is the only thing that ever calls the
 /// rewriter, and it's called exactly once here.
 ///
-/// The formula is inserted directly into the cell map (with a placeholder
-/// cached value, standing in for whatever `<v>` a real Excel-authored file
-/// would have cached alongside its `<f>`) rather than through
-/// `set_cell_formula` -- `set_cell_formula` also evaluates immediately, and
-/// `evaluate()` deliberately refuses any formula containing a sheet-qualified
-/// reference (cross-sheet formula *evaluation* isn't supported -- see
-/// `eval::references_another_sheet`), so it isn't a usable path for a
-/// cross-sheet formula's *text* today. This exercises the actual
+/// The formula is inserted directly into the cell map, cached value
+/// `Variant::Empty` (an unevaluated cross-sheet formula, matching what
+/// `evaluate()` actually leaves it at -- see `eval::references_another_sheet`)
+/// rather than through `set_cell_formula`, which also evaluates immediately
+/// and would reject this formula outright. This exercises the actual
 /// save/reload machinery a real Excel-authored file with such a formula
 /// would go through -- `reader.rs` loads `<f>`/`<v>` independently of each
 /// other and without evaluating anything, so a real file with this formula
-/// would load exactly the same way.
-///
-/// A placeholder NON-empty value is deliberately used, not `Variant::Empty`:
-/// `xlsx_cell_xml` (this file's own writer helper, `src/lib.rs`) silently
-/// drops a cell ENTIRELY -- formula text included -- whenever its value is
-/// `Variant::Empty`, regardless of whether a formula is present. Confirmed
-/// via a throwaway probe that this reproduces identically for a plain
-/// same-sheet formula (`=IF(FALSE,1)`) with no qualified reference involved
-/// at all -- a real, pre-existing writer gap, not something 0.14.0-A2
-/// introduced. Out of scope here (unrelated to reference rewriting); flagged
-/// in `tasks/todo.md` as discovered work rather than silently worked around.
+/// would load exactly the same way. `Variant::Empty` here also exercises the
+/// formula-with-empty-cached-value writer/reader fix (see
+/// `formula_cell_with_empty_cached_value_survives_save_and_reload` below) --
+/// this test would have needed a non-empty placeholder value to work around
+/// that bug before it was fixed.
 #[test]
 fn cross_sheet_formula_reference_survives_a_real_save_reload_round_trip() {
     use elixcee::vm::{CellContent, Variant};
@@ -3109,7 +3100,7 @@ fn cross_sheet_formula_reference_survives_a_real_save_reload_round_trip() {
         (1, 1),
         CellContent {
             formula: Some("=sheet1!A10+1".to_string()),
-            value: Variant::Integer(0), // placeholder cached value, see doc comment above
+            value: Variant::Empty,
         },
     );
     vm.set_active_sheet("Sheet1").unwrap();
@@ -3210,7 +3201,7 @@ fn sheet_rename_qualifier_rewrite_survives_a_real_save_reload_round_trip() {
         (1, 1),
         CellContent {
             formula: Some("=Sheet1!A10+1".to_string()),
-            value: Variant::Integer(0), // placeholder cached value, see note above
+            value: Variant::Empty,
         },
     );
     vm.set_active_sheet("Sheet1").unwrap();
@@ -3248,6 +3239,230 @@ fn sheet_rename_qualifier_rewrite_survives_a_real_save_reload_round_trip() {
         reloaded.sheet_names().iter().any(|n| n == "sales 2026"),
         "the renamed sheet's key must still resolve after reload: {:?}",
         reloaded.sheet_names()
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Pre-existing writer correctness bug, discovered while writing the 0.14.0-A2
+/// integration test above (unrelated to reference rewriting -- reproduces for
+/// an ordinary same-sheet formula with no cross-sheet reference at all).
+/// `xlsx_cell_xml` (`src/lib.rs`) treated `Variant::Empty` as "nothing worth
+/// writing" and skipped the WHOLE `<c>` element, formula text included, any
+/// time a formula cell's cached value happened to be `Variant::Empty` --
+/// silently dropping the formula on save. "No cached result" and "no formula"
+/// are different things; a formula cell must never be silently dropped just
+/// because it hasn't been (or can't be) evaluated.
+///
+/// Each case: build a formula-only cell (cached value `Variant::Empty`, as a
+/// freshly-typed/not-yet-recalculated cell, or an unevaluable cross-sheet
+/// reference, would have), save, confirm the raw XML still has a `<f>`
+/// element (the cell wasn't dropped), then reload and confirm the formula
+/// text survived exactly.
+#[test]
+fn formula_cell_with_empty_cached_value_survives_save_and_reload() {
+    use elixcee::vm::{CellContent, Variant};
+
+    let cases: &[&str] = &[
+        "IF(FALSE,1)",     // the exact case found during 0.14.0-A2 review
+        "IF(TRUE,\"\",1)", // string literal + escaping in the formula text
+        "A2",              // a plain same-sheet reference
+        "Sheet2!A1",       // cross-sheet: unevaluable, but the TEXT must still save
+    ];
+
+    for (idx, formula_body) in cases.iter().enumerate() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet2"); // somewhere for the Sheet2!A1 case to name
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some(format!("={formula_body}")),
+                value: Variant::Empty,
+            },
+        );
+
+        let path = tmp_path(&format!("formula_empty_cached_value_{idx}.xlsx"));
+        save_workbook(&vm, &path).expect("save should succeed");
+
+        let bytes = std::fs::read(&path).unwrap();
+        let entries = read_all_zip_entries(&bytes);
+        let sheet_xml = String::from_utf8(entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+        assert!(
+            sheet_xml.contains("<f>"),
+            "case {idx} (={formula_body}): the <c> element (and its <f>) must not be \
+             dropped just because the cached value is Empty: {sheet_xml}"
+        );
+
+        let mut reloaded = Vm::new();
+        reloaded
+            .load_workbook_file(&path)
+            .expect("save output should reload");
+        assert_eq!(
+            reloaded
+                .get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .and_then(|c| c.formula.clone()),
+            Some(formula_body.to_string()), // no leading '=' -- matches <f> element text
+            "case {idx}: formula text must survive a save + reload round trip"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Regression guard, matrix cases A/C/D/E/F from the bug above: a formula
+/// cell with a REAL cached value (any `Variant` the writer already handled
+/// correctly) must keep working exactly as before, and a plain empty cell
+/// with NO formula must still be omitted entirely -- the fix must only add
+/// the missing "formula present" case, not start emitting every empty cell.
+#[test]
+fn formula_cell_emission_matrix_around_the_empty_value_fix() {
+    use elixcee::vm::{CellContent, ExcelError, Variant};
+
+    let mut vm = Vm::new();
+    // A: no formula, Empty value -- must still be omitted (no regression).
+    vm.cells_mut().insert(
+        (1, 1),
+        CellContent {
+            formula: None,
+            value: Variant::Empty,
+        },
+    );
+    // C: formula + Integer cached value.
+    vm.cells_mut().insert(
+        (2, 1),
+        CellContent {
+            formula: Some("=1+1".to_string()),
+            value: Variant::Integer(2),
+        },
+    );
+    // D: formula + String cached value.
+    vm.cells_mut().insert(
+        (3, 1),
+        CellContent {
+            formula: Some("=\"hi\"".to_string()),
+            value: Variant::Str("hi".to_string()),
+        },
+    );
+    // E: formula + Boolean cached value.
+    vm.cells_mut().insert(
+        (4, 1),
+        CellContent {
+            formula: Some("=TRUE".to_string()),
+            value: Variant::Boolean(true),
+        },
+    );
+    // F: formula + Error cached value.
+    vm.cells_mut().insert(
+        (5, 1),
+        CellContent {
+            formula: Some("=1/0".to_string()),
+            value: Variant::Error(ExcelError::DivZero),
+        },
+    );
+
+    let path = tmp_path("formula_emission_matrix.xlsx");
+    save_workbook(&vm, &path).expect("save should succeed");
+
+    let bytes = std::fs::read(&path).unwrap();
+    let entries = read_all_zip_entries(&bytes);
+    let sheet_xml = String::from_utf8(entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(
+        !sheet_xml.contains("r=\"A1\""),
+        "A: an empty, formula-less cell must still be omitted entirely: {sheet_xml}"
+    );
+
+    let mut reloaded = Vm::new();
+    reloaded
+        .load_workbook_file(&path)
+        .expect("save output should reload");
+    let cells = reloaded.get_sheet_cells("sheet1").unwrap();
+    assert!(
+        cells.get(&(1, 1)).is_none(),
+        "A: still omitted after reload"
+    );
+    assert_eq!(
+        cells.get(&(2, 1)).unwrap().value,
+        Variant::Integer(2),
+        "C: cached Integer value must round-trip unchanged"
+    );
+    assert_eq!(
+        cells.get(&(3, 1)).unwrap().value,
+        Variant::Str("hi".to_string()),
+        "D: cached String value must round-trip unchanged"
+    );
+    assert_eq!(
+        cells.get(&(4, 1)).unwrap().value,
+        Variant::Boolean(true),
+        "E: cached Boolean value must round-trip unchanged"
+    );
+    assert_eq!(
+        cells.get(&(5, 1)).unwrap().value,
+        Variant::Error(ExcelError::DivZero),
+        "F: cached Error value must round-trip unchanged"
+    );
+    for (row, expected_formula) in [(2, "1+1"), (3, "\"hi\""), (4, "TRUE"), (5, "1/0")] {
+        assert_eq!(
+            cells.get(&(row, 1)).unwrap().formula,
+            Some(expected_formula.to_string()),
+            "row {row}: formula text must still round-trip unchanged"
+        );
+    }
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A formula cell with an empty cached value must survive not just one
+/// save→reload, but repeated ones -- save, reload, save again (in place, the
+/// realistic `--file foo.xlsx --output foo.xlsx` CLI usage), reload again.
+/// Nothing here evaluates the formula, so there's no risk of the SECOND save
+/// somehow computing a real value and papering over a regression in the fix
+/// -- the cached value stays `Variant::Empty` throughout, on purpose.
+#[test]
+fn formula_cell_with_empty_cached_value_survives_two_consecutive_saves() {
+    use elixcee::vm::{CellContent, Variant};
+
+    let mut vm = Vm::new();
+    vm.cells_mut().insert(
+        (1, 1),
+        CellContent {
+            formula: Some("=IF(FALSE,1)".to_string()),
+            value: Variant::Empty,
+        },
+    );
+
+    let path = tmp_path("formula_empty_value_double_save.xlsx");
+    save_workbook(&vm, &path).expect("first save should succeed");
+
+    let mut reloaded_once = Vm::new();
+    reloaded_once
+        .load_workbook_file(&path)
+        .expect("first save output should reload");
+    assert_eq!(
+        reloaded_once
+            .get_sheet_cells("sheet1")
+            .unwrap()
+            .get(&(1, 1))
+            .and_then(|c| c.formula.clone()),
+        Some("IF(FALSE,1)".to_string()),
+        "formula must survive the first save + reload"
+    );
+
+    save_workbook(&reloaded_once, &path).expect("second (in-place) save should succeed");
+
+    let mut reloaded_twice = Vm::new();
+    reloaded_twice
+        .load_workbook_file(&path)
+        .expect("second save output should reload");
+    assert_eq!(
+        reloaded_twice
+            .get_sheet_cells("sheet1")
+            .unwrap()
+            .get(&(1, 1))
+            .and_then(|c| c.formula.clone()),
+        Some("IF(FALSE,1)".to_string()),
+        "formula must still survive after a second consecutive save"
     );
 
     let _ = std::fs::remove_file(&path);
