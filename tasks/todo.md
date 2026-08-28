@@ -683,3 +683,23 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] ドキュメント同期：`internal_docs/ROADMAP.md`（0.14.0-A節、sheet rename項目を完了として整理、残りはrange moveのみ）、`internal_docs/openpyxl-gap-audit.md`（前ラウンドで記録した「dangling参照になる」という未修正の指摘を、今回で修正済みである旨に更新——ただし`<definedName>`テキストは引き続き対象外である点は維持）、`src/lib.rs`の`rename_sheet` docstring、`CHANGELOG.md [Unreleased]`。
 
 残作業：0.14.0-Aの「same-sheet insert/delete」「cross-sheet reference parsing/rewrite」「sheet rename qualifier rewrite」の3ラウンドはすべて完了。残るのはrange move（cut-paste追随、insert/deleteのindex-shiftモデルともrenameのqualifier-textモデルとも異なる「移動先を検出して追随する」モデルが必要）のみ。0.14.0-B（style/merge/hidden/row-height/column-width等のcell metadata transformation）は未着手のまま。
+
+## formula cell（cached value = Empty）のsave時消失バグ修正（PR #20、独立correctness fix）
+
+ユーザーの判定・指摘：「PR #18で発見済みの既存バグ（`xlsx_cell_xml`がformulaを持つセルでもcached valueがEmptyなら丸ごと出力しない）は、range moveより優先度が高い——silent formula lossだから」。指示された9段階の手順（再現テスト先行→emission条件の設計→formula×value組合せmatrix→formula text保持の確認→reader round-trip→実Excel検証→回帰テスト→ドキュメント→git運用）に厳密に従って実施。
+
+- [x] **再現固定**：修正前にfailing integration testを追加し、実際にredになることを確認してから着手（`formula_cell_with_empty_cached_value_survives_save_and_reload`、`formula_cell_emission_matrix_around_the_empty_value_fix`）。
+- [x] **research fork起動（実装前の事実確認）**：実Excel-authored fixture内に`<f>`があって`<v>`がないセルは存在するか（全fixtureを解凍・grepして確認——存在しなかった、formula付きセルは1件のみで通常の`<v>`あり）、reader.rsが現状その形をどう扱うか（コード直読——`<v>`なしでは`cells`マップに一切入らないため、`populate_from_sheets`が`cells`だけを走査する設計上、formula付きでも丸ごとdropされることを確認）、openpyxlが実際に出力する形（実行して確認——`<v />`という空self-closing要素を出力）。**この調査で、当初想定していたwriter単体のバグではなく、reader側にも独立した同根バグがあることが判明**（writerがどんな形で出力しても、現状のreaderはformula-onlyセルをload時に再びdropする）。
+- [x] **修正はwriter・reader両方**：
+  - writer（`xlsx_cell_xml`, `src/lib.rs`）：`Variant::Empty`かつformulaがSomeの場合、`<v>`要素を一切出さず`<c r="..."><f>...</f></c>`だけを出力するよう変更（推測でplaceholder値を`<v/>`に入れることはせず、「cached resultが存在しない」ことを`<v>`省略でそのまま表現——OOXMLスキーマ上`<v>`は元々optional）。formulaなし＋Emptyは従来どおり完全省略のまま。
+  - reader（`Vm::populate_from_sheets`, `src/vm/mod.rs`）：`sheet_data.cells`だけを走査する既存ループに加え、`sheet_data.formulas`にあって`cells`にない`(row,col)`を対象とする第二パスを追加、`CellContent{formula:Some(..), value:Variant::Empty}`を挿入。`xlsx_sheet_cells`自体（XML解析の状態機械）は変更不要——`<f>`テキストの抽出は`<v>`の有無と独立にすでに正しく動いていたため。
+- [x] **formula×value matrix**：formula+Integer/String/Boolean/Errorの既存動作が無回帰であることを1テストで確認（`formula_cell_emission_matrix_around_the_empty_value_fix`）。shared formula follower cell（`<f t="shared" si="N"/>`、自己終了）は元々このバグと無関係な別経路（`in_f`が立たずtextを捕まえない設計）であり、既存テスト（`xlsx_sheet_cells_shared_formula_follower_with_no_inline_text_captures_nothing`）が無回帰のままパスすることを確認。array formulaも同じ理由で対象外・無影響。
+- [x] **formula text保持**：leading `=`あり／なし、絶対参照、sheet-qualified参照、cross-sheet参照（評価不能でもtextは保存されるべき、という指摘どおり——`=Sheet2!A1`もテストケースに含めた）を新規テストで確認。writerはformulaを再parse・再serializeせず、既存文字列をそのまま使う設計は変更していない。
+- [x] **reader round-trip**：save→reload、save→reload→再save→reload（二重保存で消えないこと）、save-as／in-placeの双方を新規統合テストで確認。
+- [x] **実Excel検証**：実施不能——リポジトリ内の実Excel-authored fixtureにこの形（formula-onlyセル）の実例がゼロで、新規に作成するには実Excelが必要（このプロジェクトの標準的な既知の制約——スクリプト化可能な経路が存在しない）。「推測でplaceholderを追加しない」という指示に従い、実装したXML形は実Excelではなくopenpyxlの実出力（と、OOXMLスキーマ上`<v>`がoptionalであるという事実）を根拠にした——完了扱いにせず、CHANGELOG／ROADMAPに明示的な未検証事項として記録。
+- [x] **回帰テスト**：新規7件（失敗matrix4件を1テストにまとめたもの、emission matrix、二重保存）＋前ラウンドで`Variant::Integer(0)`というplaceholder回避策を使っていた既存統合テスト2件を、今回の修正により不要になったため`Variant::Empty`へ戻して整理。
+- [x] **全体検証**：`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1081+48件・0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）／`mechanical_check.py --self-test`／`compat/corpus`（581シナリオ：570 PASS＋8 EXPECTED_RUNTIME_ERROR＋2 EXPECTED_UNSUPPORTED＋1 NONDETERMINISTIC、0 UNEXPLAINED・0 MISMATCH、既存ベースラインと一致）／`scripts/check-versions.sh`（既知ドリフトのみ）、いずれもクリーン。`compat/differential-python`（maturin buildが必要、bulk range/sheet-ops APIのみを対象とし今回の変更箇所と無関係と判断し割愛）・`compat/vba-semantics`（VBA実行意味論のみを対象とし無関係と判断し割愛）はスコープ判断のうえ実行せず。
+- [x] **ドキュメント**：`CHANGELOG.md [Unreleased]`に独立サブセクション追加、`internal_docs/ROADMAP.md`（前ラウンドの「未修正」記述を「修正済み」に更新）、`docs/xlsx-architecture.md`（既存の「Formula flattening」節に今回の修正をfollow-upとして追記——同じ`populate_from_sheets`周りの過去の経緯と地続きであるため）、`tasks/todo.md`（本エントリ）。
+- [x] **git運用**：`fix/formula-empty-cached-value-roundtrip`ブランチで独立PR（#20）、range move・style移動・version bump・tag・publishは一切含めていない。
+
+残作業：実Excel検証は引き続き未実施（標準的な既知のブロッカー）。次はrange move（0.14.0-A4）——ユーザーからは「semantics調査・Excel oracle固定→formula rewriter→cell move API接続→metadata移動」の4段階に分けて進めるべきという提案あり。着手前にユーザーの指定を待つ。
