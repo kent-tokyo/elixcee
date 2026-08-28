@@ -640,3 +640,16 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] `internal_docs/ROADMAP.md`の`0.14.0-A`節を更新：エンジン部分（span記録＋リライタ）は完了として打ち消し線、残りは「`insert_rows_on_sheet`等への実際の配線・`update_references`フラグのAPI設計・cross-sheet構文（未着手のまま）」に絞って明記。
 
 残作業：`shift_references`は完成したが、`insert_rows_on_sheet`/`delete_rows_on_sheet`/`insert_cols_on_sheet`/`delete_cols_on_sheet`（`src/vm/mod.rs`）からまだ一切呼ばれていない——配線と、それをユーザーに見せるAPI（Python側の`update_references`引数等）の設計が次の実装対象。cross-sheet構文（`!`/`'`ハンドリング）・sheet rename・range moveは依然未着手。
+
+## 0.14.0-A 配線：`insert_rows_on_sheet`等4関数からshift_referencesを呼ぶ（PR #17）
+
+ユーザーの「wire shift_references into insert_rows_on_sheet/delete_rows_on_sheet etc.」を受けて実装。
+
+- [x] **設計判断（新規APIフラグなし）**：実Excelのrow/col insert/deleteに「参照を更新しないモード」は存在しない（`update_references`的なon/offスイッチは、ロードマップのplanファイルにあった`move_range`等の別APIの話であり、insert/delete自体には該当しない）ため、Python側のシグネチャは一切変更せず、`insert_rows_on_sheet`等4つのVMメソッド自体に無条件で組み込むのが実Excelの挙動に最も忠実と判断——新規スコープの追加ではなく、既存メソッドの是正として実施。
+- [x] **`rewrite_formulas_for_structural_edit`ヘルパー**：対象シートの「移動する・しないに関わらず」全formulaセルを走査し、`shift_references`で書き換え可能なものだけ書き換え、パース不能（主にcross-sheet参照）なものはそのまま放置——既存の「触られるまでstale」という状態を維持するだけで、新たな破損経路にはならないことを確認。4関数それぞれの先頭（既存の移動ロジックより前）で1回呼ぶ形で配線。
+- [x] **先頭`=`規約の保持を追加で発見・対応**：当初の実装ではshift_referencesの戻り値（`=`なし）をそのまま格納していたが、`set_cell_formula`経由の入力は`=`付きで保存される慣習があり、書き換えられた式だけ`=`が消えると`FORMULATEXT()`が触られた式と触られていない式とで異なる規約の文字列を返す実害を発見。元の式が`=`付きだったかを見て復元する処理を追加、対応するテストも修正。
+- [x] **キャッシュ済み`.value`は意図的に更新しない**：`recalculate_all`は元々どの構造編集の後でも自動起動されておらず（`Calc Mode`をManual→Automaticに切り替えた時だけ）、他セルの編集で依存先の値が古くなるのはこのエンジンの既存の一般的な性質。今回もその一般則を維持するだけとし、再計算はcallerの責務のまま——ドキュメント（`src/lib.rs`の4メソッドのdocstring）に明記。
+- [x] **テスト8件追加**：移動しないが参照先が動く式／自身が移動する式／削除帯に入って`#REF!`化／列軸のみが動くことの確認／別シートは影響を受けないことの確認／先頭`=`の保持／`=`なしの式は`=`を付与しない／cross-sheet参照でパース不能な式はそのまま放置。既存のreal-fixtureベースの回帰テスト（`insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidden_markers`、mergeとhiddenマーカーが動かないことを確認するテスト）は無変更のままパスすることを確認。
+- [x] `cargo test --workspace`（1030件・0 failed）・clippy・fmt・`check-versions.sh`、いずれもクリーン。`src/lib.rs`の4つのPython向けdocstringと`internal_docs/openpyxl-gap-audit.md`のP1 core 3節（「formula referencesもshiftしない」という記述）を実態に合わせて訂正。
+
+残作業：merged_ranges/sheet_visibility/cell_style_indices/cell_number_formatsは引き続き未shift（0.14.0-Bのスコープ）。cross-sheet構文・sheet rename・range moveは依然未着手。これで0.14.0-A「same-sheet insert/delete」スライスの実装は一区切り——次はユーザーの指定を待つ。
