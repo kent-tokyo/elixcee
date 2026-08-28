@@ -321,6 +321,82 @@ pub fn shift_references(
     Ok(Some(apply_patches(&input, patches)))
 }
 
+/// Would an unquoted sheet name written into a formula (`Name!A1`, no
+/// surrounding `'...'`) parse back out to exactly this `name`? Mirrors
+/// `FormulaParser::try_parse_sheet_qualifier`'s unquoted-branch acceptance
+/// grammar exactly (Unicode-aware first-letter/alphanumeric/`_`, same as
+/// there) -- this function only exists so that grammar has a single
+/// semantic inverse, not a second, independently-drifting copy of the rule.
+fn sheet_name_needs_quoting(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_alphabetic() || c == '_' => {}
+        _ => return true,
+    }
+    !chars.all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// Format `name` as a formula sheet-qualifier (no trailing `!`), quoting and
+/// `'`-escaping it only when required -- never preserves whatever quoting
+/// style the reference being replaced used, since that's the OLD name's
+/// business, not the new one's.
+fn format_sheet_qualifier(name: &str) -> String {
+    if sheet_name_needs_quoting(name) {
+        format!("'{}'", name.replace('\'', "''"))
+    } else {
+        name.to_string()
+    }
+}
+
+/// Rewrite every reference in `formula` qualified with `old_sheet_key`
+/// (case-insensitively, this codebase's own sheet-key convention) to name
+/// `new_sheet_name` instead -- only the qualifier text changes, coordinates
+/// are never touched. The replacement is quoted/escaped per Excel's own
+/// rules for `new_sheet_name` itself, regardless of how the old reference
+/// was written (an unquoted `Sheet1!A1` becomes `'New Name'!A1` if
+/// `new_sheet_name` needs quoting, and vice versa).
+///
+/// Unqualified references are never touched here: renaming a sheet doesn't
+/// change what a bare `A1` means to a formula already living ON it (still
+/// "this same sheet, whatever it's now called") -- only an explicit `!`
+/// qualifier can name a sheet by a text that might now be stale.
+///
+/// Returns `Ok(None)` when nothing in `formula` was qualified with
+/// `old_sheet_key`. Same normalization / leading-`=` / parse-error contract
+/// as `shift_references` -- see its doc comment; a formula this parser can't
+/// parse at all (external/3D references) must be left completely untouched
+/// by the caller on `Err`, same as there.
+pub fn rename_sheet_references(
+    formula: &str,
+    old_sheet_key: &str,
+    new_sheet_name: &str,
+) -> Result<Option<String>, String> {
+    let input = formula.trim().trim_start_matches('=').to_string();
+    let (_, refs) = parse_with_refs(&input)?;
+    if refs.is_empty() {
+        return Ok(None);
+    }
+
+    let new_qualifier = format_sheet_qualifier(new_sheet_name);
+    let mut patches: Vec<(usize, usize, String)> = Vec::new();
+    for r in &refs {
+        let sheet = match r {
+            RefOccurrence::Cell { sheet, .. } => sheet,
+            RefOccurrence::Range { sheet, .. } => sheet,
+        };
+        if let Some(q) = sheet
+            && q.normalized_name.to_lowercase() == old_sheet_key
+        {
+            patches.push((q.raw_span.0, q.raw_span.1, new_qualifier.clone()));
+        }
+    }
+
+    if patches.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(apply_patches(&input, patches)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,5 +733,99 @@ mod tests {
         // Elixcee's parser doesn't parse error literals at all (pre-existing,
         // unrelated to this round), so the whole formula is Err either way.
         assert!(shift_references("=#REF!+A10", S1, S1, RefAxis::Row, insert(5, 1)).is_err());
+    }
+
+    // ── sheet rename: qualifier rewrite ──────────────────────────────────
+
+    #[test]
+    fn rename_rewrites_a_qualifier_naming_the_renamed_sheet() {
+        assert_eq!(
+            rename_sheet_references("=Sheet1!A10+1", S1, "Data").unwrap(),
+            Some("Data!A10+1".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_never_touches_unqualified_references() {
+        // Formula lives ON the sheet being renamed -- a bare A10 still means
+        // "this same sheet", whatever it's now called.
+        assert_eq!(rename_sheet_references("=A10+1", S1, "Data").unwrap(), None);
+    }
+
+    #[test]
+    fn rename_never_touches_a_qualifier_naming_a_different_sheet() {
+        assert_eq!(
+            rename_sheet_references("=Sheet2!A10+1", S1, "Data").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn rename_quotes_the_new_name_when_it_needs_quoting() {
+        assert_eq!(
+            rename_sheet_references("=Sheet1!A10", S1, "Sales 2026").unwrap(),
+            Some("'Sales 2026'!A10".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_unquotes_when_the_new_name_no_longer_needs_it() {
+        assert_eq!(
+            rename_sheet_references("='Sales 2026'!A10", "sales 2026", "Sheet1").unwrap(),
+            Some("Sheet1!A10".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_escapes_an_apostrophe_in_the_new_name() {
+        assert_eq!(
+            rename_sheet_references("=Sheet1!A10", S1, "Bob's Data").unwrap(),
+            Some("'Bob''s Data'!A10".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_matches_the_old_qualifier_case_insensitively() {
+        assert_eq!(
+            rename_sheet_references("=SHEET1!A10", S1, "Data").unwrap(),
+            Some("Data!A10".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_rewrites_a_qualified_range_keeping_the_coordinates_untouched() {
+        assert_eq!(
+            rename_sheet_references("=SUM(Sheet1!A1:B10)", S1, "Data").unwrap(),
+            Some("SUM(Data!A1:B10)".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_only_rewrites_references_naming_the_renamed_sheet_among_several() {
+        assert_eq!(
+            rename_sheet_references("=Sheet1!A1+Sheet2!A1+A1", S1, "Data").unwrap(),
+            Some("Data!A1+Sheet2!A1+A1".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_case_only_still_rewrites_to_match_the_new_display_casing() {
+        // rename_sheet allows renaming "Sheet1" -> "SHEET1" (a pure casing
+        // change, same key) -- existing formula references should still
+        // pick up the new display casing, matching real Excel.
+        assert_eq!(
+            rename_sheet_references("=Sheet1!A1", S1, "SHEET1").unwrap(),
+            Some("SHEET1!A1".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_is_a_noop_when_nothing_references_the_renamed_sheet() {
+        assert_eq!(rename_sheet_references("=1+2", S1, "Data").unwrap(), None);
+    }
+
+    #[test]
+    fn rename_propagates_a_parse_error_instead_of_silently_ignoring_it() {
+        assert!(rename_sheet_references("=[Book2.xlsx]Sheet1!A1", S1, "Data").is_err());
     }
 }
