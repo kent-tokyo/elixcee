@@ -747,3 +747,12 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（0.14.0-A4をStage 1〜3完了・Stage 4未着手として整理）、`tasks/todo.md`（本エントリ）。
 
 残作業：Stage 4（metadata移動——styles/merges/hidden state等、0.14.0-Bとの統合可否を含む）は未着手。`move_range`は現状セルの内容とformula参照のみを移動し、書式・結合・非表示状態等は一切追従しない（意図的な、開示済みのスコープ外）。cross-sheet move（Stage 1のopen question B）も未着手のまま。次の一手についてはユーザーへ状況報告予定。
+
+## range move Stage 4の扱い：0.14.0-Bへ統合（ユーザー判断）
+
+`/greenlane`でのStage 3完了報告の中で、Stage 4（metadata移動）は「単独ラウンドとして進めるべきか、0.14.0-B（insert/delete側も同じ問題を抱えている既存の未着手マイルストーン）へ統合すべきか」という新規スコープ決定に該当するため、承認保留として報告——推奨案（0.14.0-Bへ統合）と代替案（単独Stage 4として継続）を提示。
+
+- [x] **ユーザー判断**：「Fold Stage 4 into 0.14.0-B」——推奨案採用。
+- [x] **ドキュメント反映**：`internal_docs/ROADMAP.md`の0.14.0-A4を完了（取り消し線）として整理し直し——「Stage 4は0.14.0-Bへ統合済み、0.14.0-A4自体はセル内容とformula参照の移動のみが最終スコープ」であることを明記。0.14.0-Bの節にも「insert/delete側の既存metadata未対応と、range moveのmetadata移動の両方を1つの機構でカバーする」旨を追記。`internal_docs/range-move-0.14.0-a4-design.md`のStatus・§6も同様に更新。
+
+残作業：0.14.0-A4（range move）はこれで完了扱い（同一シート内、セル内容とformula参照の移動のみ）。次のスコープは0.14.0-B（cell metadata transformation、insert/delete分とrange move分を1機構で統合設計）——ただし0.14.0-Bはまだ設計未着手の大きめのマイルストーンであり、着手前にユーザーへの確認を推奨。cross-sheet move（0.14.0-A4のopen question B）も引き続き未着手のまま、0.14.0-A4のスコープには含めない。
