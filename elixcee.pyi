@@ -460,6 +460,41 @@ class Vm:
         """
         ...
 
+    def move_range(
+        self,
+        addr: str,
+        rows: int = 0,
+        cols: int = 0,
+        sheet: str | None = None,
+    ) -> None:
+        """Moves the range at *addr* by *rows* rows and *cols* columns
+        (either may be negative, moving up/left) — same-sheet only.
+
+        A reference (unqualified, or qualified naming this sheet) whose
+        target cell falls inside *addr* follows the move to its new
+        location, regardless of whether the referencing formula's own cell
+        is inside or outside the moved range — matches real Excel's own
+        "reference tracks cell identity" behavior, not a relative-offset
+        rule. A range reference (e.g. inside a ``SUM``) with exactly one
+        corner inside the moved area has unconfirmed behavior in real
+        Excel; rather than guess, the **whole** move is rejected and
+        nothing changes.
+
+        Source and destination may overlap — handled atomically. A
+        pre-existing cell at the destination that isn't itself part of the
+        move is overwritten, matching real Excel's own paste behavior.
+
+        Does **not** move merges, styles, number formats, hidden rows/
+        columns, row heights, or column widths. Cached values are left
+        stale — call :meth:`recalculate` yourself if you need fresh
+        values. Cross-sheet moves are not supported.
+
+        Raises ``ValueError`` on a bad/oversized address, a destination
+        that would fall outside the sheet, an unknown *sheet*, or the
+        ambiguous range-reference case above.
+        """
+        ...
+
     def hidden_rows(self, sheet: str | None = None) -> list[int]:
         """Every hidden row number on a sheet, as a sorted list of 1-based
         row numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.

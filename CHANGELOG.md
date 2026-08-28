@@ -819,6 +819,52 @@ design decision this implements.
   multiple references in one formula, a reversed range reference (`B10:A1`), and parse
   errors still propagating as `Err`.
 
+### Root crate + Python: `move_range` (0.14.0-A4, Stage 3 of 4 — cell-move API)
+
+`Vm::move_range_on_sheet` and its Python-facing `move_range(addr, rows=0, cols=0,
+sheet=None)` wire up Stage 2's rewriter above to a real, callable move operation.
+Same-sheet only (see the design doc's disclosed cross-sheet open question). Verified
+against the actual built Python extension, not just `cargo test` — a reference following a
+move, an ambiguous move being rejected, and a real save→reload→recalculate round trip
+were all exercised through `maturin develop --release` and a real `.xlsx` file, not only
+unit-tested.
+
+- **Validate-before-mutate, matching `merge_cells`'s existing precedent**: every formula
+  cell on the sheet is scanned first via `formula::translate_references_for_move`, and the
+  *whole* move is rejected with `Err`/`ValueError` — before a single cell is touched — the
+  moment any formula reports `MoveRewrite::Ambiguous`. Only once the scan clears does
+  formula-reference rewriting apply, followed by the physical cell relocation.
+- **Source/destination overlap is handled atomically**: every source cell is read into a
+  scratch `Vec` and removed from the sheet before any destination write, so a move whose
+  destination overlaps its own source (e.g. shifting a column down by one row) can't
+  clobber a not-yet-relocated source cell mid-move. This is new plumbing, not a reuse of
+  `copy_areas_to_clipboard`/`ClipboardState` — that mechanism is copy-paste/values-only,
+  not formula-aware, and moving is not copying. A pre-existing cell at the destination
+  that isn't itself part of the move is silently overwritten, matching real Excel's own
+  paste behavior.
+- **Bounds validation lives at the Python-facing layer** (`src/lib.rs`), matching
+  `merge_cells`/`sort_range`'s existing division of responsibility with the `Vm` core: the
+  source address, and — this is the one genuinely new check this round needed — the
+  *destination* rectangle's far corner (`dest_r1 + (r2-r1)`, computed from `rows`/`cols`),
+  are both checked against Excel's real grid limits (1,048,576 rows / 16,384 columns)
+  before calling into `Vm`. Missing this would let a large source range moved near the
+  sheet edge translate some of its rows/columns past the real limit while silently
+  succeeding for the others — the destination's *far* corner, not just its near one, is
+  what actually needs checking.
+- Does **not** move `merged_ranges`/`sheet_visibility`/`cell_style_indices`/
+  `cell_number_formats` — the same disclosed 0.14.0-B gap `insert_rows_on_sheet` already
+  has, not new to this round. Cached `.value`s are left stale, same as every other
+  structural edit.
+- 11 new `Vm`-level unit tests (`src/vm/mod.rs`): plain-value relocation, a moved
+  formula's outside reference staying put, an outside formula following a reference into
+  the moved block, a moved formula's own internal reference using the same follow
+  mechanism, the ambiguous case rejecting the whole move with *nothing* mutated
+  (confirmed by re-reading every cell involved after the rejected call), a self-overlapping
+  move, overwriting a pre-existing unrelated destination cell, a zero-offset no-op, an
+  unknown-sheet error, a qualified reference to a different sheet staying untouched, and
+  merged ranges staying untouched.
+- New `elixcee.pyi` stub entry for `move_range`.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
