@@ -731,3 +731,19 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] ドキュメント同期：`CHANGELOG.md`（`[0.12.0]`節に新規サブセクション追加、Stage 3で配線されるまで未到達コードである旨明記）、`internal_docs/ROADMAP.md`（0.14.0-A4をStage 1・2完了、Stage 3・4未着手として整理）、`internal_docs/range-move-0.14.0-a4-design.md`のStatus更新、`tasks/todo.md`（本エントリ）。
 
 残作業：Stage 3（cell move API接続——`Vm`側のscan-before-mutateな2段階設計、source/destination重複時のバッファリング）とStage 4（metadata移動、0.14.0-Bとの統合可否を含む）は未着手。着手前にユーザーへ状況報告・確認予定。
+
+## range move Stage 3：cell move API接続（`/greenlane`で自律継続）
+
+ユーザーの`/greenlane`指示を受け、Stage 2完了時点でロードマップに残っていた次のGreen作業として着手（新規スコープの追加ではなく、既に4段階として承認済みの計画の続き）。
+
+- [x] **`Vm::move_range_on_sheet(key, source: formula::MoveRect, dest_r1, dest_c1)`**：既存の`merge_cells`の「検証してから初めて変更を適用する」設計を踏襲——先に対象シートの全formulaセルを`formula::translate_references_for_move`でスキャンし、`MoveRewrite::Ambiguous`を検出した時点で**一切何も変更せず**`Err`を返す。スキャンが全てクリアした場合のみ、formula参照の書き換え（既存のstructural edit系と同じ順序——物理移動より先）→物理的なセル移動、の順で適用。
+- [x] **重複source/destinationのatomic処理**：`copy_areas_to_clipboard`（VBAの`.Copy`/`.PasteSpecial`機構、コピー＆ペースト用でformula非対応）を再利用せず、新規にscratch bufferパターンを実装——source矩形内の全セルを一旦Vecへ読み出し・削除してから、初めてdestinationへ書き込む。これにより自己重複move（例：1行下へシフト、source/destinationが重なる）でも読み取り前に上書きされる事故を防止。
+- [x] **clippy対応**：8引数版（self, key, r1, c1, r2, c2, dest_r1, dest_c1）はtoo-many-arguments抵触——既存の`formula::MoveRect`をそのまま1パラメータとして受け取る設計に変更（`#[allow]`は使わず、既存の`finish_ref`と同じ理由）。
+- [x] **Python API `move_range(addr, rows=0, cols=0, sheet=None)`**：ROADMAP.mdの既存の暫定sketch（`rows=N, cols=M`というdelta形式）をそのまま採用——複数の妥当な設計案がある中でこの1つが既にドキュメント化・ユーザー自身が書いたものであるため、既存設計との一貫性を優先。境界値検証（`src/lib.rs`側）は既存の`merge_cells`/`sort_range`と同じ「Vm coreは信頼済み入力を前提、Python層でMAX_ROW/MAX_COLチェック」という責務分担を踏襲——ただし今回新たに必要になった検証として、destinationの近い角だけでなく**遠い角**（`dest_r1 + (r2-r1)`等）も境界内であることを確認する処理を追加（複数行/列にまたがるsourceをシート端近くへ移動した際、一部の行/列だけが上限を超えて静かに壊れる事故を防ぐため）。
+- [x] **テスト11件（`src/vm/mod.rs`）**：単純な値の物理移動、moveされたformula自身が持つ外部参照が不変であること、moveされたformulaの外側にある式が参照追従すること、moveされたformula自身の内部参照が同じfollowメカニズムで動くこと、ambiguousケースでmove全体が拒否され**何も変更されていない**ことの確認（formula・moveしようとしたセル・destinationセル全てを再読込して検証）、自己重複move、destinationの無関係な既存セルが上書きされること、offset=0のno-op、未知シートでのエラー、別シートへのqualified参照が触られないこと、merged_rangesが変更されないこと。
+- [x] **実際にビルドしたPython拡張での動作確認**：`cargo test`だけでなく`maturin develop --release`で実際にビルド・インストールし、Python経由で(1)参照追従（moveしたセルの値変更→recalculate→追従先の式が新しい値を反映）、(2)ambiguousケースの`ValueError`拒否と非変更の確認、(3)境界外destinationの`ValueError`拒否、(4)実際の`.xlsx`ファイルへのsave→reload→recalculateまでの完全なround trip、を実行して確認——ユニットテストだけでは検証できない「実際にPythonから呼び出した時の挙動」まで確認済み。
+- [x] **`elixcee.pyi`スタブ更新**：`move_range`のシグネチャ・docstringを追加（既存の`merge_cells`等と同じ手動メンテナンス方式に追随）。
+- [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1107+11件・0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）／`scripts/check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（0.14.0-A4をStage 1〜3完了・Stage 4未着手として整理）、`tasks/todo.md`（本エントリ）。
+
+残作業：Stage 4（metadata移動——styles/merges/hidden state等、0.14.0-Bとの統合可否を含む）は未着手。`move_range`は現状セルの内容とformula参照のみを移動し、書式・結合・非表示状態等は一切追従しない（意図的な、開示済みのスコープ外）。cross-sheet move（Stage 1のopen question B）も未着手のまま。次の一手についてはユーザーへ状況報告予定。

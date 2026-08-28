@@ -1164,6 +1164,127 @@ impl Vm {
         });
     }
 
+    /// Moves the rectangular range `(r1,c1)..(r2,c2)` on `key` so its
+    /// top-left corner lands at `(dest_r1, dest_c1)` -- 0.14.0-A4 Stage 3
+    /// (cell-move API), same-sheet only. See
+    /// `internal_docs/range-move-0.14.0-a4-design.md` for the semantics
+    /// research this implements (real Excel has no scriptable path on this
+    /// machine, so the design is sourced from Microsoft's own
+    /// documentation, not direct observation).
+    ///
+    /// Two-phase, matching `merge_cells`'s validate-before-mutating
+    /// precedent: **scan** every formula cell on `key` via
+    /// `formula::translate_references_for_move` first, and reject the
+    /// *whole* move with `Err` -- without touching a single cell -- the
+    /// moment any formula reports `MoveRewrite::Ambiguous` (a range
+    /// reference with exactly one corner inside the moved rectangle; real
+    /// Excel's behavior for this shape is confirmed only for a narrower
+    /// sub-case, see the design doc's §3/§5). Only once the scan finds no
+    /// `Ambiguous` case does **apply** run: formula references are rewritten
+    /// first (same ordering precedent as `rewrite_formulas_for_structural_edit`),
+    /// then cell contents are physically relocated.
+    ///
+    /// Source and destination may overlap. Every source cell is read into a
+    /// scratch `Vec` and removed from the sheet before any destination
+    /// write, so an overlapping move can't clobber a not-yet-relocated
+    /// source cell mid-move -- this is new plumbing, not a reuse of
+    /// `copy_areas_to_clipboard`/`ClipboardState` (that mechanism is
+    /// copy-paste/values-only, not formula-aware; moving is not copying). A
+    /// pre-existing cell at the destination that isn't itself part of the
+    /// move is silently overwritten, matching real Excel's own paste
+    /// behavior.
+    ///
+    /// Scoped to same-sheet moves only this round -- cross-sheet reference
+    /// following is an explicit, disclosed open question (design doc §4-B),
+    /// not attempted here. Does NOT move `merged_ranges`/`sheet_visibility`/
+    /// `cell_style_indices`/`cell_number_formats` -- 0.14.0-B/Stage 4's
+    /// scope, same disclosed gap `insert_rows_on_sheet` already has. Cached
+    /// `.value`s are left stale, same as every other structural edit in this
+    /// engine -- recalculation is always the caller's job.
+    ///
+    /// Caller contract (matches `sort_range_on_sheet`/`merge_cells`'s own
+    /// division of responsibility with `src/lib.rs`): `r1 <= r2`, `c1 <= c2`,
+    /// and every coordinate already validated against sheet bounds (`idx >=
+    /// 1`, `idx <= MAX_ROW`/`MAX_COL`) -- including the *destination*
+    /// rectangle's far corner, which the Python-facing wrapper must compute
+    /// and check itself (`dest_r1 + (r2 - r1)`, `dest_c1 + (c2 - c1)`) since
+    /// this method has no `MAX_ROW`/`MAX_COL` constant of its own to enforce
+    /// it. `key` must already be a valid, lowercased sheet key.
+    pub fn move_range_on_sheet(
+        &mut self,
+        key: &str,
+        source: formula::MoveRect,
+        dest_r1: u32,
+        dest_c1: u32,
+    ) -> Result<(), String> {
+        let formula::MoveRect { r1, c1, r2, c2 } = source;
+        debug_assert!(r1 <= r2 && c1 <= c2, "caller must pass a normalized rect");
+        let d_row = dest_r1 as i64 - r1 as i64;
+        let d_col = dest_c1 as i64 - c1 as i64;
+        if d_row == 0 && d_col == 0 {
+            return Ok(());
+        }
+
+        let Some(cells) = self.sheets.get(key) else {
+            return Err(format!("unknown sheet: {key}"));
+        };
+        let mut formula_updates: Vec<((u32, u32), String)> = Vec::new();
+        for (&pos, content) in cells.iter() {
+            let Some(f) = content.formula.as_ref() else {
+                continue;
+            };
+            match formula::translate_references_for_move(f, key, source, d_row, d_col) {
+                Ok(formula::MoveRewrite::Unchanged) | Err(_) => {}
+                Ok(formula::MoveRewrite::Rewritten(new_f)) => {
+                    let final_f = if f.trim_start().starts_with('=') {
+                        format!("={new_f}")
+                    } else {
+                        new_f
+                    };
+                    formula_updates.push((pos, final_f));
+                }
+                Ok(formula::MoveRewrite::Ambiguous) => {
+                    return Err(format!(
+                        "cannot move {}: a range reference has exactly one corner inside \
+                         the moved area, and real Excel's behavior for this shape is \
+                         unconfirmed -- move rejected rather than guessed at (see \
+                         internal_docs/range-move-0.14.0-a4-design.md)",
+                        crate::merge_rect_to_a1(&((r1, c1), (r2, c2))),
+                    ));
+                }
+            }
+        }
+
+        if let Some(cells) = self.sheets.get_mut(key) {
+            for (pos, new_f) in formula_updates {
+                if let Some(cell) = cells.get_mut(&pos) {
+                    cell.formula = Some(new_f);
+                }
+            }
+        }
+
+        let snapshot: Vec<((u32, u32), CellContent)> = self
+            .get_sheet_cells(key)
+            .into_iter()
+            .flatten()
+            .filter(|((row, col), _)| *row >= r1 && *row <= r2 && *col >= c1 && *col <= c2)
+            .map(|((row, col), v)| ((*row, *col), v.clone()))
+            .collect();
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return Ok(());
+        };
+        for (pos, _) in &snapshot {
+            cells.remove(pos);
+        }
+        for ((row, col), content) in snapshot {
+            let new_row = (row as i64 + d_row) as u32;
+            let new_col = (col as i64 + d_col) as u32;
+            cells.insert((new_row, new_col), content);
+        }
+
+        Ok(())
+    }
+
     /// `insert_rows`'s sheet-parameterized sibling (backs Python's
     /// `insert_rows(..., sheet=None)`). `insert_rows` below just forwards here with
     /// `key = active_sheet` -- VBA's `RowColInsert`/`RangeInsert` call sites don't
@@ -10116,6 +10237,313 @@ mod tests {
                 .unwrap()
                 .formula,
             Some("=H1+1".to_string())
+        );
+    }
+
+    // ── 0.14.0-A4 Stage 3: move_range_on_sheet ───────────────────────────
+
+    #[test]
+    fn move_range_on_sheet_relocates_plain_values() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![Variant::Integer(1), Variant::Integer(2)],
+                vec![Variant::Integer(3), Variant::Integer(4)],
+            ],
+        );
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 2,
+                c2: 2,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        assert!(!cells.contains_key(&(1, 1)));
+        assert!(!cells.contains_key(&(2, 2)));
+        assert_eq!(cells.get(&(10, 10)).unwrap().value, Variant::Integer(1));
+        assert_eq!(cells.get(&(10, 11)).unwrap().value, Variant::Integer(2));
+        assert_eq!(cells.get(&(11, 10)).unwrap().value, Variant::Integer(3));
+        assert_eq!(cells.get(&(11, 11)).unwrap().value, Variant::Integer(4));
+    }
+
+    #[test]
+    fn move_range_on_sheet_leaves_an_outside_reference_in_the_moved_formula_untouched() {
+        // A formula physically inside the moved block, referencing a cell
+        // OUTSIDE it -- design doc §1/§2: unaffected by the move, only the
+        // formula's own cell relocates.
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=Z9+1").unwrap();
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        assert!(!cells.contains_key(&(1, 1)));
+        assert_eq!(
+            cells.get(&(10, 10)).unwrap().formula,
+            Some("=Z9+1".to_string())
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_follows_a_reference_from_outside_the_moved_block() {
+        // A formula OUTSIDE the moved block, referencing INTO it -- must
+        // follow to the new location; the referencing formula's own cell
+        // does not move.
+        let mut vm = Vm::new();
+        vm.set_cell_formula(50, 50, "=A1+1").unwrap();
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        assert_eq!(
+            cells.get(&(50, 50)).unwrap().formula,
+            Some("=J10+1".to_string())
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_follows_an_internal_reference_via_the_same_mechanism() {
+        // A formula inside the moved block referencing ANOTHER cell also
+        // inside it -- design doc §1: the same follow mechanism as an
+        // external reference, not a separate relative-offset rule.
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=B1+1").unwrap(); // B1 = (1, 2), also inside the moved 1,1..2,2 block
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 2,
+                c2: 2,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        let moved = cells.get(&(10, 10)).unwrap();
+        assert_eq!(moved.formula, Some("=K10+1".to_string()));
+    }
+
+    #[test]
+    fn move_range_on_sheet_rejects_the_whole_move_on_an_ambiguous_range_reference() {
+        // SUM(A2:D2): only A2 (col 1, row 2) falls inside the moved 1x1
+        // rect at (2,1) -- exactly one corner inside, the unresolved case.
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=SUM(A2:D2)").unwrap();
+        vm.write_rect("sheet1", (2, 1), &[vec![Variant::Integer(42)]]);
+        let err = vm
+            .move_range_on_sheet(
+                "sheet1",
+                formula::MoveRect {
+                    r1: 2,
+                    c1: 1,
+                    r2: 2,
+                    c2: 1,
+                },
+                2,
+                2,
+            )
+            .unwrap_err();
+        assert!(err.contains("cannot move"), "unexpected message: {err}");
+        // Nothing was mutated -- the formula, the moved-attempt cell, and
+        // the destination are all exactly as before the rejected call.
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        assert_eq!(
+            cells.get(&(1, 1)).unwrap().formula,
+            Some("=SUM(A2:D2)".to_string())
+        );
+        assert_eq!(cells.get(&(2, 1)).unwrap().value, Variant::Integer(42));
+        assert!(!cells.contains_key(&(2, 2)));
+    }
+
+    #[test]
+    fn move_range_on_sheet_handles_a_self_overlapping_move_without_data_loss() {
+        // Move A1:A3 down by 1 row (to A2:A4) -- source and destination
+        // overlap (A2:A3 is in both). A naive cell-by-cell copy without a
+        // scratch buffer would clobber A2/A3 before reading them.
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![Variant::Integer(1)],
+                vec![Variant::Integer(2)],
+                vec![Variant::Integer(3)],
+            ],
+        );
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 3,
+                c2: 1,
+            },
+            2,
+            1,
+        )
+        .unwrap();
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        assert!(!cells.contains_key(&(1, 1)));
+        assert_eq!(cells.get(&(2, 1)).unwrap().value, Variant::Integer(1));
+        assert_eq!(cells.get(&(3, 1)).unwrap().value, Variant::Integer(2));
+        assert_eq!(cells.get(&(4, 1)).unwrap().value, Variant::Integer(3));
+    }
+
+    #[test]
+    fn move_range_on_sheet_overwrites_a_preexisting_destination_cell_not_part_of_the_move() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.write_rect("sheet1", (10, 10), &[vec![Variant::Integer(999)]]);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(10, 10))
+                .unwrap()
+                .value,
+            Variant::Integer(1)
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_with_zero_offset_is_a_noop() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.get_sheet_cells("sheet1")
+                .unwrap()
+                .get(&(1, 1))
+                .unwrap()
+                .value,
+            Variant::Integer(1)
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_rejects_an_unknown_sheet() {
+        let mut vm = Vm::new();
+        assert!(
+            vm.move_range_on_sheet(
+                "nonexistent",
+                formula::MoveRect {
+                    r1: 1,
+                    c1: 1,
+                    r2: 1,
+                    c2: 1
+                },
+                2,
+                2
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_never_touches_a_qualified_reference_to_a_different_sheet() {
+        // set_cell_formula evaluates immediately and can't author a new
+        // cross-sheet formula (0.14.0-A2's disclosed limitation) -- insert
+        // the cell directly, matching how a loaded XLSX formula is stored.
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.cells_mut().insert(
+            (5, 5),
+            CellContent {
+                formula: Some("=Other!A1+1".to_string()),
+                value: Variant::Empty,
+            },
+        );
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            20,
+            20,
+        )
+        .unwrap();
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        assert_eq!(
+            cells.get(&(5, 5)).unwrap().formula,
+            Some("=Other!A1+1".to_string())
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_does_not_shift_merged_ranges() {
+        // Disclosed 0.14.0-B/Stage-4 gap, same precedent as
+        // insert_rows_on_sheet -- merge geometry is untouched by a move.
+        let mut vm = Vm::new();
+        vm.merge_cells("sheet1", 1, 1, 1, 2).unwrap();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.merged_ranges.get("sheet1").unwrap(),
+            &vec![((1, 1), (1, 2))]
         );
     }
 
