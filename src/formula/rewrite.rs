@@ -47,7 +47,16 @@ pub enum StructuralEdit {
     Delete { at: u32, count: u32 },
 }
 
-enum CellShift {
+/// Generic outcome of shifting a single coordinate by a structural edit --
+/// not formula-specific despite living in this module (its historical home,
+/// alongside its own tests); `pub(crate)` so 0.14.0-B's cell-metadata
+/// transform can reuse the exact same arithmetic instead of re-deriving
+/// equivalent logic that could silently drift from this one (see
+/// `internal_docs/cell-metadata-transform-0.14.0-b-design.md` §6). What
+/// `Deleted` MEANS differs per consumer: a formula reference becomes
+/// `#REF!` text; a merge/style/hidden-interval entry is simply dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CellShift {
     Unchanged,
     Moved(u32),
     Deleted,
@@ -56,7 +65,7 @@ enum CellShift {
 /// A single cell reference's coordinate on the edited axis. Deletion of a
 /// row/column the reference points at is unconditionally `#REF!` -- unlike a
 /// range corner, there's no surviving neighbor for a single cell to clamp to.
-fn shift_cell_coord(idx: u32, edit: StructuralEdit) -> CellShift {
+pub(crate) fn shift_cell_coord(idx: u32, edit: StructuralEdit) -> CellShift {
     match edit {
         StructuralEdit::Insert { at, count } if count > 0 && idx >= at => {
             CellShift::Moved(idx + count)
@@ -74,7 +83,8 @@ fn shift_cell_coord(idx: u32, edit: StructuralEdit) -> CellShift {
 
 /// Lower bound of a range corner: on deletion, an index inside the deleted
 /// band clamps to `at` (the surviving row/col that slides into its place).
-fn shift_bound_low(idx: u32, edit: StructuralEdit) -> u32 {
+/// `pub(crate)`, same reuse reasoning as `CellShift`/`shift_cell_coord` above.
+pub(crate) fn shift_bound_low(idx: u32, edit: StructuralEdit) -> u32 {
     match edit {
         StructuralEdit::Insert { at, count } => {
             if idx >= at {
@@ -100,7 +110,8 @@ fn shift_bound_low(idx: u32, edit: StructuralEdit) -> u32 {
 /// Returned as `i64` so a range whose top clamps to `at` and whose bottom
 /// clamps to `at - 1` correctly reads as collapsed (`low > high`) even when
 /// `at` is 1 -- 0 is not a valid Excel row/col but is a valid sentinel here.
-fn shift_bound_high(idx: u32, edit: StructuralEdit) -> i64 {
+/// `pub(crate)`, same reuse reasoning as `CellShift`/`shift_cell_coord` above.
+pub(crate) fn shift_bound_high(idx: u32, edit: StructuralEdit) -> i64 {
     match edit {
         StructuralEdit::Insert { at, count } => {
             if idx >= at {
@@ -366,7 +377,10 @@ pub struct MoveRect {
 }
 
 impl MoveRect {
-    fn contains(&self, col: u32, row: u32) -> bool {
+    /// `pub(crate)`, same reuse reasoning as `CellShift`/`shift_cell_coord`
+    /// above -- 0.14.0-B's metadata transform needs the identical
+    /// corner-containment check for range-move, not a re-derived copy.
+    pub(crate) fn contains(&self, col: u32, row: u32) -> bool {
         row >= self.r1 && row <= self.r2 && col >= self.c1 && col <= self.c2
     }
 }

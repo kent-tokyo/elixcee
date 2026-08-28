@@ -771,3 +771,12 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] **advisor確認**：本格的な調査に入る前とドキュメント化前の2回、advisorに相談——1回目は調査方針の確認、2回目（本節冒頭に記載）は`cell_number_formats`の結論訂正・merge固有意味論の追加・Tier 3を「transformすべきものがない」ではなく「実在する開示済みギャップ」として書くべき、という3点の指摘を受け、すべて反映。
 
 残作業：本ラウンドは実装を一切行わず、スコーピングのみで完了（ユーザー自身の依頼どおり）。次はユーザーによるphased breakdownの承認待ち——承認され次第、Phase 1（共有プリミティブのpub(crate)化＋merge片コーナー縮小の実Excel挙動調査）から着手予定。
+
+## 0.14.0-B Phase 1：共有プリミティブの公開＋merge意味論調査（進行中）
+
+ユーザーの「start Phase 1 of 0.14.0-B」を受けて着手。Phase 1は2部構成（スコーピング文書§8の1番目の項目）。
+
+- [x] **共有座標シフトプリミティブの公開**：`src/formula/rewrite.rs`の`shift_cell_coord`/`shift_bound_low`/`shift_bound_high`（および`CellShift` enum、`MoveRect::contains`）を`private`から`pub(crate)`へ変更——振る舞いは一切変更せず、可視性のみの変更。`formula::mod.rs`への再エクスポートは今回あえて見送り（消費者がまだ存在せず、再エクスポートするとclippyのunused-import警告になるため——実際に最初に使うラウンド（merged_rangesのtransform実装）で追加する方針をコメントに明記）。全1107件のテストが無回帰で通過、`cargo fmt`/`clippy -D warnings`ともにクリーン。
+- [ ] **merge片コーナー縮小等の実Excel挙動調査**：range move Stage 1と同じ手法（実Excelがこのマシンでは動かせないため、Microsoft公式ドキュメント・Microsoft Learn/Support・Microsoft Community Hubのモデレーター確認済みスレッドを根拠にする）で、7つの具体的な質問（delete片コーナー重複時の縮小挙動／delete で1セルまで縮んだ場合の扱い／delete全体がmergeを覆う場合の破棄／insert がmerge内部に入る場合／insert がmergeの開始境界に入る場合／insert がmergeの終了直後境界に入る場合／cut-pasteでmergeの片コーナーだけが移動元に重なる場合）を調査するforkを起動済み（agent id: 内部管理、ユーザーには非開示）——結果待ち。
+
+残作業：merge意味論調査の結果を待って、findingsを`internal_docs/cell-metadata-transform-0.14.0-b-design.md`に反映し、Phase 2（merged_ranges transform実装）へ進む。
