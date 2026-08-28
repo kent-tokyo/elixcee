@@ -698,8 +698,8 @@ scope, not "cross-sheet formulas are supported":
   whole-workbook recalculation. `set_cell_formula` still can't be used to *author* a new
   cross-sheet formula (it evaluates immediately) — only a formula already present (e.g.
   loaded from a file) benefits from the rewrite. External workbook references
-  (`[Book2.xlsx]Sheet1!A1`), 3D references (`Sheet1:Sheet3!A1`), sheet rename
-  reference-following, and range move are all still unimplemented.
+  (`[Book2.xlsx]Sheet1!A1`), 3D references (`Sheet1:Sheet3!A1`), and range move are all
+  still unimplemented (sheet rename reference-following is a separate entry below).
 - Implemented as targeted text splicing over parser-tracked reference spans
   (`formula::parse_with_refs`/`shift_references`), not a general AST-to-formula-text
   serializer — everything outside a changed reference (operators, function names, literals,
@@ -714,6 +714,31 @@ scope, not "cross-sheet formulas are supported":
   whether a formula is present (reproduces for an ordinary same-sheet formula with no
   cross-sheet reference involved at all, e.g. `=IF(FALSE,1)`; pre-existing, not introduced by
   this work). Tracked as discovered work, not fixed here.
+
+### Root crate: `rename_sheet` rewrites formula qualifiers referencing the renamed sheet
+
+Follow-up to 0.14.0-A2 above, reusing its qualifier parser exactly as planned there.
+`rename_sheet` now rewrites every formula reference qualified with the OLD sheet name,
+workbook-wide, to the new one (`=Sheet1!A1` on any sheet becomes `=NewName!A1` after
+`Sheet1` is renamed to `NewName`) — requoted/escaped per the new name's own requirements
+(e.g. `'Sales 2026'!A1` when the new name needs quoting), regardless of how the old
+reference was written. Fixes a real dangling-reference gap 0.14.0-A2 introduced: once
+qualified references started parsing, a rename that left them unrewritten made them
+silently resolve to nothing rather than simply failing to parse as before.
+
+- Unqualified references are never touched, even on the renamed sheet itself — `=A1`
+  still means "this same sheet", whatever it's now called.
+- A case-only rename (`"Sheet1"` → `"SHEET1"`) still updates existing qualifiers to the
+  new display casing, matching real Excel.
+- A formula this parser can't parse at all (external workbook references, 3D references)
+  is left completely untouched, same as the structural-edit rewrite above.
+- `<definedName>` text referring to a sheet by name remains unrewritten — a separate
+  mechanism, still out of scope; see `internal_docs/openpyxl-gap-audit.md`.
+- New shared `Vm::rewrite_formulas_workbook_wide` helper backs both this and the
+  structural-edit rewrite (only what gets rewritten differs) — range move is its planned
+  third caller.
+- 16+ new tests (rewriter targeting/quoting tests, VM wiring tests) plus a real
+  save→reload integration test confirming the renamed qualifier persists through a file.
 
 ## [0.10.1] - 2026-08-24
 

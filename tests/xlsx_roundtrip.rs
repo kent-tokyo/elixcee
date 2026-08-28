@@ -3065,3 +3065,62 @@ fn cross_sheet_formula_reference_survives_a_real_save_reload_round_trip() {
     let _ = std::fs::remove_file(&save_as_path);
     let _ = std::fs::remove_file(&inplace_path);
 }
+
+/// Sheet-rename follow-up integration: a qualified formula reference survives
+/// a real save/reload round trip after the sheet it names is renamed, and
+/// picks up the new sheet's exact display casing/quoting -- same rationale
+/// for direct cell-map insertion (bypassing `set_cell_formula`) as the
+/// structural-edit integration test above.
+#[test]
+fn sheet_rename_qualifier_rewrite_survives_a_real_save_reload_round_trip() {
+    use elixcee::vm::{CellContent, Variant};
+
+    let mut vm = Vm::new(); // default/active sheet key is "sheet1"
+    vm.ensure_sheet("Sheet2");
+    vm.set_active_sheet("Sheet2").unwrap();
+    vm.cells_mut().insert(
+        (1, 1),
+        CellContent {
+            formula: Some("=Sheet1!A10+1".to_string()),
+            value: Variant::Integer(0), // placeholder cached value, see note above
+        },
+    );
+    vm.set_active_sheet("Sheet1").unwrap();
+
+    vm.rename_sheet("Sheet1", "Sales 2026").unwrap();
+    assert_eq!(
+        vm.get_sheet_cells("sheet2")
+            .unwrap()
+            .get(&(1, 1))
+            .unwrap()
+            .formula,
+        Some("='Sales 2026'!A10+1".to_string()),
+        "in-memory rewrite must have already happened before any save"
+    );
+
+    let path = tmp_path("sheet_rename_qualifier_rewrite.xlsx");
+    save_workbook(&vm, &path).expect("save should succeed");
+
+    let mut reloaded = Vm::new();
+    reloaded
+        .load_workbook_file(&path)
+        .expect("save output should reload");
+    assert_eq!(
+        reloaded
+            .get_sheet_cells("sheet2")
+            .unwrap()
+            .get(&(1, 1))
+            .unwrap()
+            .formula,
+        Some("'Sales 2026'!A10+1".to_string()), // no leading '=' -- matches <f> element text
+        "the renamed qualifier must survive a save + reload round trip"
+    );
+    // The renamed sheet's own tab name persisted too (not just the formula).
+    assert!(
+        reloaded.sheet_names().iter().any(|n| n == "sales 2026"),
+        "the renamed sheet's key must still resolve after reload: {:?}",
+        reloaded.sheet_names()
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
