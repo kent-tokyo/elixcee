@@ -3299,6 +3299,27 @@ impl Vm {
                     },
                 );
             }
+            // A formula cell with no cached value at all -- `<c r="A1"><f>1+1</f></c>`,
+            // no `<v>` sibling (a freshly-typed/not-yet-recalculated cell, or one
+            // `xlsx_cell_xml` now writes for a formula whose value is `Variant::Empty`,
+            // see its own doc comment) -- never gets an entry in `sheet_data.cells`
+            // (`xlsx_sheet_cells` only inserts there from `<v>`/inline-string content),
+            // so the loop above skips it entirely: `sheet_data.formulas` still has the
+            // text, but nothing ever reads `formulas` for a `(row, col)` `cells` doesn't
+            // already have. Without this, such a formula silently vanished on load, even
+            // though its text was successfully parsed one line up in `xlsx_sheet_cells`.
+            for (&(row, col), formula) in &sheet_data.formulas {
+                if sheet_data.cells.contains_key(&(row, col)) {
+                    continue; // already inserted above, with its real cached value
+                }
+                self.cells_mut().insert(
+                    (row, col),
+                    CellContent {
+                        formula: Some(formula.clone()),
+                        value: Variant::Empty,
+                    },
+                );
+            }
             self.active_sheet = prev;
             let key = sheet_data.name.to_lowercase();
             if !sheet_data.merged_ranges.is_empty() {

@@ -2705,11 +2705,18 @@ fn xlsx_cell_xml(
             f_tag,
             if *b { 1 } else { 0 }
         )),
-        Variant::Empty
-        | Variant::Null
-        | Variant::Array(_)
-        | Variant::VbaArray(_)
-        | Variant::Record(_) => None,
+        // A cell with no formula and no value carries no information worth writing --
+        // omitted (`formula.map` -> `None`), as before. A FORMULA cell whose cached
+        // value just happens to be Empty (freshly typed and not yet recalculated, or
+        // -- 0.14.0-A2 -- a cross-sheet reference this engine doesn't evaluate) is NOT
+        // the same as an empty cell and must never be silently dropped: "no cached
+        // result" and "no formula" are different things. No <v> element is written at
+        // all here, rather than fabricating a placeholder value -- valid per the OOXML
+        // schema (<v> is optional) and avoids inventing a number that was never
+        // computed. See `Vm::populate_from_sheets`'s matching reader-side fix -- a
+        // formula-only cell now round-trips correctly on reload too, not just on save.
+        Variant::Empty => formula.map(|_| format!("<c r=\"{}\"{}>{}</c>", cell_ref, s_attr, f_tag)),
+        Variant::Null | Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => None,
     }
 }
 
