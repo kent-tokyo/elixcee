@@ -1177,6 +1177,82 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Moves the range at *addr* by *rows* rows and *cols* columns (either
+    /// may be negative, moving up/left) — 0.14.0-A4, same-sheet only.
+    ///
+    /// A reference (unqualified, or qualified naming this sheet) whose
+    /// target cell falls inside *addr* follows the move to its new
+    /// location, regardless of whether the referencing formula's own cell
+    /// is inside or outside the moved range — matches real Excel's own
+    /// "reference tracks cell identity" behavior, not a relative-offset
+    /// rule. A range reference (e.g. inside a ``SUM``) with exactly one
+    /// corner inside the moved area has unconfirmed behavior in real Excel
+    /// (see ``internal_docs/range-move-0.14.0-a4-design.md``); rather than
+    /// guess, the **whole** move is rejected and nothing changes.
+    ///
+    /// Source and destination may overlap — handled atomically, not with a
+    /// naive cell-by-cell copy. A pre-existing cell at the destination that
+    /// isn't itself part of the move is overwritten, matching real Excel's
+    /// own paste behavior.
+    ///
+    /// Does **not** move merges, styles, number formats, hidden rows/
+    /// columns, row heights, or column widths — a disclosed limitation, see
+    /// ROADMAP.md's 0.14.0-B. Cached values are left stale, same as every
+    /// other structural edit — call recalculation yourself if you need
+    /// fresh values.
+    ///
+    /// Cross-sheet moves are not supported this round (a qualified
+    /// reference naming a *different* sheet is always left untouched, even
+    /// if the mechanics above sound like they'd otherwise apply).
+    ///
+    /// Raises ``ValueError`` on a bad/oversized address, a destination that
+    /// would fall outside the sheet, an unknown *sheet*, or the ambiguous
+    /// range-reference case above.
+    #[pyo3(signature = (addr, rows = 0, cols = 0, sheet = None))]
+    fn move_range(
+        &mut self,
+        addr: &str,
+        rows: i64,
+        cols: i64,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        const MAX_COL: u32 = 16_384;
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        if r2 > MAX_ROW || c2 > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "range exceeds sheet bounds (max row {MAX_ROW}, max col {MAX_COL}), got row {r2}, col {c2}"
+            )));
+        }
+        let dest_r1 = r1 as i64 + rows;
+        let dest_c1 = c1 as i64 + cols;
+        let dest_r2 = r2 as i64 + rows;
+        let dest_c2 = c2 as i64 + cols;
+        if dest_r1 < 1 || dest_c1 < 1 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "move destination is out of bounds (row/col must stay >= 1)".to_string(),
+            ));
+        }
+        if dest_r2 > MAX_ROW as i64 || dest_c2 > MAX_COL as i64 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "move destination exceeds sheet bounds (max row {MAX_ROW}, max col {MAX_COL})"
+            )));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .move_range_on_sheet(
+                &key,
+                formula::MoveRect { r1, c1, r2, c2 },
+                dest_r1 as u32,
+                dest_c1 as u32,
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Every hidden row number on a sheet, as a sorted list of 1-based row
     /// numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.
     ///
