@@ -777,6 +777,48 @@ with no error or warning. The bug was two-sided, on both the writer and the read
   shape rather than a speculative one, but this remains open verification, not silently
   claimed as done — see ROADMAP.md.
 
+### Root crate: range-move formula-reference translation (0.14.0-A4, Stage 2 of 4)
+
+`formula::translate_references_for_move` — the formula rewriter for a same-sheet range
+move (cut-paste tracking). Not yet wired into `Vm`; no `move_range` API exists yet, so
+this function has no caller in this round (Stage 3, "cell move API接続", wires it up).
+Semantics researched and confirmed against real Microsoft documentation before writing
+any code (real Excel has no scriptable path on this machine, same standing constraint as
+above) — see `internal_docs/range-move-0.14.0-a4-design.md` for the full research and the
+design decision this implements.
+
+- Every reference (unqualified, or qualified naming the moved sheet itself) whose target
+  cell falls inside the move's source rectangle translates by the move offset — this is
+  the SAME mechanism whether the referencing formula's own cell is inside or outside the
+  moved rectangle, matching real Microsoft's documented behavior ("the cell references
+  within the formula stay the same" for what's left behind; a reference elsewhere
+  "follows" a cell that moved) rather than two separate internal/external rules. `$`
+  absolute-reference flags are preserved through the translation, matching real Excel.
+- A range reference (e.g. `SUM(A2:D2)`) with **both** corners inside the source rectangle
+  translates as a whole. **Neither** corner inside is a no-op. **Exactly one** corner
+  inside — confirmed by Microsoft Community Hub as a real, narrower-than-expected shrink
+  behavior in the one specific sub-case where the destination is still inside the same
+  range, unconfirmed for the general case — is reported as `MoveRewrite::Ambiguous`
+  rather than guessed at; the eventual `move_range` caller (Stage 3) must reject the
+  *entire* move when this occurs, not just skip the one formula, since real Excel's
+  correct output for this shape is unverified and a silent wrong guess would change what
+  a formula computes (same severity class as the empty-cached-value bug above).
+- Scoped to same-sheet moves only this round, deliberately not extended to workbook-wide
+  qualified-reference following the way 0.14.0-A2 extended insert/delete — whether the
+  "follows" mechanism applies identically across sheets is itself one of the design doc's
+  disclosed open questions (§4-B), not assumed. Cross-sheet range move is an explicit,
+  disclosed follow-up, not attempted here.
+- A formula this parser can't parse at all (external workbook references, 3D references)
+  is reported as `Err`, same non-fatal "leave this formula untouched" contract as
+  `shift_references`/`rename_sheet_references` — distinct from `Ambiguous`, which is
+  fatal to the whole move.
+- 16 new unit tests in `src/formula/rewrite.rs` covering: inside/outside/both-corners/
+  one-corner-ambiguous cases, absolute-flag preservation, a moved formula's own internal
+  reference (still uses the same follow mechanism, not a separate relative-offset rule),
+  negative offsets (move up/left), self-qualified vs. other-sheet-qualified references,
+  multiple references in one formula, a reversed range reference (`B10:A1`), and parse
+  errors still propagating as `Err`.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted

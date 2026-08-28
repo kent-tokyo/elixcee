@@ -23,10 +23,14 @@
 //! (see `eval::references_another_sheet`) -- this module only rewrites text,
 //! it never reads a cell's value.
 //!
-//! Scope, matching what was explicitly approved for this round: row/column
-//! insert/delete only. Sheet rename and range move are separate, larger
-//! follow-up projects that reuse this qualifier parsing (see
-//! `internal_docs/ROADMAP.md`'s 0.14.0-A note).
+//! Also covers sheet rename (`rename_sheet_references`, qualifier-text-only
+//! rewrite) and same-sheet range move (`translate_references_for_move`,
+//! 0.14.0-A4 -- reference-identity tracking, see its own doc comment and
+//! `internal_docs/range-move-0.14.0-a4-design.md` for the semantics
+//! research behind its design). Range move is scoped to same-sheet moves
+//! only this round; workbook-wide qualified-reference following for a moved
+//! range is a follow-up, matching how 0.14.0-A2 extended insert/delete from
+//! same-sheet to workbook-wide after the same-sheet case shipped first.
 
 use super::eval::col_to_letter;
 use super::parser::{RefOccurrence, parse_with_refs};
@@ -346,6 +350,169 @@ fn format_sheet_qualifier(name: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// A rectangular range on one sheet, 1-indexed, inclusive on both corners.
+/// `r1 <= r2` and `c1 <= c2` is a precondition the caller must normalize
+/// before constructing this -- unlike a formula's own reference (which may
+/// legitimately be written reversed, e.g. `B10:A1`, and is handled as such
+/// below), a move's source rectangle has no such ambiguity to preserve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MoveRect {
+    pub r1: u32,
+    pub c1: u32,
+    pub r2: u32,
+    pub c2: u32,
+}
+
+impl MoveRect {
+    fn contains(&self, col: u32, row: u32) -> bool {
+        row >= self.r1 && row <= self.r2 && col >= self.c1 && col <= self.c2
+    }
+}
+
+/// Outcome of translating one formula's references for a range move.
+/// Deliberately not `Result<Option<String>, String>` like
+/// `shift_references`/`rename_sheet_references` above -- range move has a
+/// third, genuinely different "leave this formula alone" case that the
+/// other two rewrites don't: a range reference with exactly one corner
+/// inside the moved rectangle. Real Excel's behavior for that shape is only
+/// confirmed for one narrow sub-case (destination still inside the same
+/// range, where the range shrinks rather than follows -- see
+/// `internal_docs/range-move-0.14.0-a4-design.md` §3) and left unconfirmed
+/// for the general case (§4-A), so this rewrite refuses to guess. Unlike a
+/// genuine parse failure (`Err`, external/3D refs, same as the other two
+/// rewrites -- non-fatal, caller skips just this formula), `Ambiguous` must
+/// reject the WHOLE move, not just this one formula -- collapsing it into
+/// `Ok(None)` would let the caller silently treat "don't know" the same as
+/// "nothing to do."
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoveRewrite {
+    Unchanged,
+    Rewritten(String),
+    Ambiguous,
+}
+
+/// Rewrite `formula`'s references for a same-sheet range move: `source` is
+/// moving by `(d_row, d_col)` on `move_sheet_key`. `formula` must itself be
+/// hosted on `move_sheet_key` -- range move is scoped to same-sheet moves
+/// for this round (`internal_docs/range-move-0.14.0-a4-design.md` §5), so
+/// unlike `shift_references` this is never called workbook-wide; a caller
+/// iterating other sheets' formulas has nothing to rewrite here by
+/// construction (an unqualified reference on another sheet can't possibly
+/// name this sheet's cells, and a qualified reference naming THIS sheet from
+/// elsewhere is explicitly out of scope -- see the design doc's cross-sheet
+/// open question).
+///
+/// Every reference (unqualified, or qualified naming `move_sheet_key`
+/// itself) whose target cell falls inside `source` is translated by the move
+/// offset -- this applies uniformly whether the referencing formula's own
+/// cell is inside or outside `source`, matching real Excel's single
+/// "reference tracks cell identity" mechanism (design doc §1), not two
+/// separate "internal" and "external" rules. A reference targeting outside
+/// `source`, or qualified naming a different sheet, is left untouched.
+///
+/// A range reference with both corners inside `source` translates as a
+/// whole (every cell in it moved together). Both corners outside is a
+/// no-op. Exactly one corner inside is the unresolved case above --
+/// `Ok(MoveRewrite::Ambiguous)`.
+///
+/// `d_row`/`d_col` of `(0, 0)` is always `Unchanged` without parsing.
+pub fn translate_references_for_move(
+    formula: &str,
+    move_sheet_key: &str,
+    source: MoveRect,
+    d_row: i64,
+    d_col: i64,
+) -> Result<MoveRewrite, String> {
+    if d_row == 0 && d_col == 0 {
+        return Ok(MoveRewrite::Unchanged);
+    }
+
+    let input = formula.trim().trim_start_matches('=').to_string();
+    let (_, refs) = parse_with_refs(&input)?;
+    if refs.is_empty() {
+        return Ok(MoveRewrite::Unchanged);
+    }
+
+    // Reused with host==edited==move_sheet_key: `ref_targets_edited_sheet`
+    // already encodes exactly the "unqualified or self-qualified" rule this
+    // needs (an unqualified ref always matches when host==edited; a
+    // qualifier only matches when it names that same sheet) -- see its own
+    // doc comment above.
+    let targets_move_sheet = |sheet: &Option<super::ast::SheetQualifier>| -> bool {
+        ref_targets_edited_sheet(sheet, move_sheet_key, move_sheet_key)
+    };
+
+    let mut patches: Vec<(usize, usize, String)> = Vec::new();
+    for r in &refs {
+        match r {
+            RefOccurrence::Cell {
+                span,
+                col,
+                row,
+                abs_col,
+                abs_row,
+                sheet,
+            } => {
+                if !targets_move_sheet(sheet) || !source.contains(*col, *row) {
+                    continue;
+                }
+                let new_col = (*col as i64 + d_col) as u32;
+                let new_row = (*row as i64 + d_row) as u32;
+                patches.push((
+                    span.0,
+                    span.1,
+                    format_cell_ref(new_col, new_row, *abs_col, *abs_row),
+                ));
+            }
+            RefOccurrence::Range {
+                c1,
+                r1,
+                abs_c1,
+                abs_r1,
+                c1_span,
+                c2,
+                r2,
+                abs_c2,
+                abs_r2,
+                c2_span,
+                sheet,
+                ..
+            } => {
+                if !targets_move_sheet(sheet) {
+                    continue;
+                }
+                let c1_inside = source.contains(*c1, *r1);
+                let c2_inside = source.contains(*c2, *r2);
+                match (c1_inside, c2_inside) {
+                    (false, false) => {}
+                    (true, true) => {
+                        let new_c1 = (*c1 as i64 + d_col) as u32;
+                        let new_r1 = (*r1 as i64 + d_row) as u32;
+                        patches.push((
+                            c1_span.0,
+                            c1_span.1,
+                            format_cell_ref(new_c1, new_r1, *abs_c1, *abs_r1),
+                        ));
+                        let new_c2 = (*c2 as i64 + d_col) as u32;
+                        let new_r2 = (*r2 as i64 + d_row) as u32;
+                        patches.push((
+                            c2_span.0,
+                            c2_span.1,
+                            format_cell_ref(new_c2, new_r2, *abs_c2, *abs_r2),
+                        ));
+                    }
+                    (true, false) | (false, true) => return Ok(MoveRewrite::Ambiguous),
+                }
+            }
+        }
+    }
+
+    if patches.is_empty() {
+        return Ok(MoveRewrite::Unchanged);
+    }
+    Ok(MoveRewrite::Rewritten(apply_patches(&input, patches)))
 }
 
 /// Rewrite every reference in `formula` qualified with `old_sheet_key`
@@ -827,5 +994,156 @@ mod tests {
     #[test]
     fn rename_propagates_a_parse_error_instead_of_silently_ignoring_it() {
         assert!(rename_sheet_references("=[Book2.xlsx]Sheet1!A1", S1, "Data").is_err());
+    }
+
+    // ── range move: reference-identity translation ──────────────────────
+
+    fn rect(r1: u32, c1: u32, r2: u32, c2: u32) -> MoveRect {
+        MoveRect { r1, c1, r2, c2 }
+    }
+    fn move_same_sheet(
+        formula: &str,
+        source: MoveRect,
+        d_row: i64,
+        d_col: i64,
+    ) -> Result<MoveRewrite, String> {
+        translate_references_for_move(formula, S1, source, d_row, d_col)
+    }
+
+    #[test]
+    fn zero_offset_is_unchanged_without_parsing() {
+        // "=A1+" would fail to parse if it were parsed -- confirms the
+        // (0,0) short-circuit happens before parse_with_refs runs.
+        assert_eq!(
+            move_same_sheet("=A1+", rect(1, 1, 5, 5), 0, 0).unwrap(),
+            MoveRewrite::Unchanged
+        );
+    }
+
+    #[test]
+    fn cell_ref_inside_the_source_rect_follows_the_move() {
+        // Move A1:E5 down 2, right 1: a reference to B2 (inside) follows to C4.
+        assert_eq!(
+            move_same_sheet("=B2+1", rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Rewritten("C4+1".to_string())
+        );
+    }
+
+    #[test]
+    fn cell_ref_outside_the_source_rect_is_unchanged() {
+        assert_eq!(
+            move_same_sheet("=Z9+1", rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Unchanged
+        );
+    }
+
+    #[test]
+    fn absolute_flags_are_preserved_through_a_move() {
+        assert_eq!(
+            move_same_sheet("=$B$2", rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Rewritten("$C$4".to_string())
+        );
+    }
+
+    #[test]
+    fn a_formula_hosted_inside_the_moved_block_still_follows_its_own_internal_ref() {
+        // Design doc §1: a formula physically inside the moved block that
+        // references another cell also inside it uses the SAME mechanism as
+        // an external formula following a moved cell -- not a separate
+        // relative-offset translation.
+        assert_eq!(
+            move_same_sheet("=B3+1", rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Rewritten("C5+1".to_string())
+        );
+    }
+
+    #[test]
+    fn range_reference_fully_inside_the_source_rect_translates_as_a_whole() {
+        assert_eq!(
+            move_same_sheet("=SUM(B2:C3)", rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Rewritten("SUM(C4:D5)".to_string())
+        );
+    }
+
+    #[test]
+    fn range_reference_fully_outside_the_source_rect_is_unchanged() {
+        assert_eq!(
+            move_same_sheet("=SUM(Y1:Z2)", rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Unchanged
+        );
+    }
+
+    #[test]
+    fn range_reference_with_exactly_one_corner_inside_is_ambiguous() {
+        // A2:D2, only A2 falls inside the moved rectangle -- real Excel's
+        // behavior here is confirmed only for the narrow "destination still
+        // inside the same range" sub-case (design doc §3) and unconfirmed
+        // in general (§4-A); refuse rather than guess.
+        assert_eq!(
+            move_same_sheet("=SUM(A2:D2)", rect(2, 1, 2, 1), 0, 1).unwrap(),
+            MoveRewrite::Ambiguous
+        );
+        // Same shape with the inside corner on the other side.
+        assert_eq!(
+            move_same_sheet("=SUM(A2:D2)", rect(2, 4, 2, 4), 0, 1).unwrap(),
+            MoveRewrite::Ambiguous
+        );
+    }
+
+    #[test]
+    fn multiple_references_only_the_ones_inside_the_rect_translate() {
+        assert_eq!(
+            move_same_sheet("=B2+Z9+SUM(B2:C3)", rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Rewritten("C4+Z9+SUM(C4:D5)".to_string())
+        );
+    }
+
+    #[test]
+    fn no_reference_touches_the_source_rect_is_unchanged() {
+        assert_eq!(
+            move_same_sheet("=1+2", rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_negative_offset_moves_references_up_and_left() {
+        assert_eq!(
+            move_same_sheet("=C4", rect(1, 1, 5, 5), -2, -1).unwrap(),
+            MoveRewrite::Rewritten("B2".to_string())
+        );
+    }
+
+    #[test]
+    fn self_qualified_reference_naming_the_move_sheet_still_translates() {
+        assert_eq!(
+            translate_references_for_move("=Sheet1!B2", S1, rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Rewritten("Sheet1!C4".to_string())
+        );
+    }
+
+    #[test]
+    fn qualified_reference_to_a_different_sheet_is_never_touched_by_a_move() {
+        assert_eq!(
+            move_same_sheet("=Sheet2!B2", rect(1, 1, 5, 5), 2, 1).unwrap(),
+            MoveRewrite::Unchanged
+        );
+    }
+
+    #[test]
+    fn move_propagates_a_parse_error_instead_of_silently_ignoring_it() {
+        assert!(move_same_sheet("=[Book2.xlsx]Sheet1!A1", rect(1, 1, 5, 5), 2, 1).is_err());
+        assert!(move_same_sheet("=A1+", rect(1, 1, 5, 5), 2, 1).is_err());
+    }
+
+    #[test]
+    fn a_reversed_range_reference_is_handled_by_corner_not_by_sort_order() {
+        // B10:A1 written reversed -- corner containment is checked exactly
+        // as parsed (c1=B,r1=10 / c2=A,r2=1), not normalized min/max first.
+        // Both corners inside a rect covering both -> whole thing translates.
+        assert_eq!(
+            move_same_sheet("=SUM(B10:A1)", rect(1, 1, 10, 2), 0, 2).unwrap(),
+            MoveRewrite::Rewritten("SUM(D10:C1)".to_string())
+        );
     }
 }

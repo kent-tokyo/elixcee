@@ -703,3 +703,31 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] **git運用**：`fix/formula-empty-cached-value-roundtrip`ブランチで独立PR（#20）、range move・style移動・version bump・tag・publishは一切含めていない。
 
 残作業：実Excel検証は引き続き未実施（標準的な既知のブロッカー）。次はrange move（0.14.0-A4）——ユーザーからは「semantics調査・Excel oracle固定→formula rewriter→cell move API接続→metadata移動」の4段階に分けて進めるべきという提案あり。着手前にユーザーの指定を待つ。
+
+## range move Stage 1：semantics調査・Excel oracle固定
+
+ユーザーの「4段階（semantics調査・Excel oracle固定→formula rewriter→cell move API接続→metadata移動）に分けて進める」を受け、Stage 1から着手。
+
+- [x] **research fork起動**：実Excelはこのマシンでスクリプト実行できないため（標準的な既知の制約）、Microsoft公式ドキュメント・Microsoft Community Hubスレッドを根拠に、cut-paste移動時の参照追随ルールを8つの具体的な質問で調査するforkを起動（コード・設計文書は一切書かせず、事実確認のみに限定）。
+- [x] **統一モデルの発見**：当初「moved blockの内部参照は相対shift、外部からの参照はfollow」という2つの別メカニズムを想定していたが、Microsoft公式ドキュメントの記述（"cell references within the formula stay the same"）と複数ソースの裏付けから、実際は「参照はセルのidentityを追跡し、そのセルが動けば（式の内側・外側を問わず）追随する」という単一メカニズムであることが判明——これがStage 2の設計の土台になった。
+- [x] **確認できた3件**（高確信度）：移動した式自身が持つ、移動範囲**外**への参照は不変。ワークブック内のどこからでも、移動した**セル**を指す参照は新しい位置に追随。`$`絶対参照フラグは移動で一切変化しない。
+- [x] **確認できたが範囲が狭い1件**：range参照（`SUM($A$2:$D$2)`）の片方のコーナーだけを、同じrange内の別セルへ移動すると、追随せずrangeが内側に縮小する（`SUM($B$2:$D$2)`）——Microsoft Community HubでMicrosoft関係者本人が"That's by design!"と明言。ただし移動先が元のrange**外**の場合の挙動は未確認（根拠となる資料が見つからなかった）。
+- [x] **明示的にunresolvedとして扱った3件**（推測で解決せず、open questionとして記録）：(A)上記のrange corner移動が元range外へ出た場合の挙動、(B)cross-sheet移動でも同じfollowメカニズムが働くか（推論のみ、直接の裏付けなし）、(C)通常のmove操作から`#REF!`が発生し得るか（根拠となる資料なし）。
+- [x] **設計文書化**：`internal_docs/range-move-0.14.0-a4-design.md`を新規作成、確認済み事項・オープンな疑問点・Stage 2以降への推奨設計（「片方のコーナーだけがsource矩形内にあるrange参照は、move操作全体を拒否する」——ROADMAP.mdの既存方針「関連オブジェクトを更新できない場合は操作全体を拒否する」にすでに合致）を記録。
+- [x] **ユーザー確認**：AskUserQuestionで2点確認——(1)曖昧ケースの扱いは「move全体を拒否」を採用（推奨案どおり）、(2)残る未確認事項について実Excel検証を試みるかは「検証せず、保守的設計のまま進める」を採用（推奨案どおり）。両方ともユーザーが推奨案を選択、2026-08-28付けで設計文書のStatusに記録。
+
+残作業：Stage 1完了。次はStage 2（formula rewriter実装）。
+
+## range move Stage 2：formula rewriter実装
+
+Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
+
+- [x] **`formula::translate_references_for_move(formula, move_sheet_key, source: MoveRect, d_row, d_col)`**：`src/formula/rewrite.rs`に追加。既存の`shift_references`/`rename_sheet_references`と異なり戻り値は`Result<MoveRewrite, String>`という専用enum（`Unchanged`/`Rewritten(String)`/`Ambiguous`）——「この式は関係ない」と「わからないので推測しない」を同じ`Ok(None)`に潰すと、呼び出し側が両者を区別できなくなるため（`Ambiguous`はmove操作全体を拒否すべき致命的なケース、パース不能は他の2つのrewriteと同じ非致命的スキップ）。
+- [x] **参照ごとの判定**：単一セル参照はsource矩形内なら`(d_row, d_col)`だけ平行移動。Range参照は両コーナーとも矩形内なら全体を平行移動、両コーナーとも矩形外ならno-op、片方だけ矩形内なら`Ambiguous`を返す。sheet qualifierの判定は既存の`ref_targets_edited_sheet`をhost==edited==move_sheet_keyの形で再利用（unqualified参照とmove対象シート自身へのself-qualified参照は対象、他シートへのqualified参照は常に無関係）。
+- [x] **スコープ**：今回は同一シート内の移動のみ——moveされるシートに置かれている式だけを対象とし、workbook全体を跨いだqualified参照追随（0.14.0-A2がinsert/deleteに対して行った拡張）はこのラウンドではあえて行わない。cross-sheet追随の可否自体がStage 1のopen question（§4-B）であり、確認できていない前提の上に実装を積むリスクを避けた。
+- [x] **テスト16件新規**：内側/外側/両コーナー/片コーナーambiguous、絶対フラグ保持、moveされたセル自身に置かれた式が内部参照も同じfollowメカニズムで動くこと（相対offset計算という別ルールではない）、負のoffset（上/左への移動）、self-qualified参照とother-sheet-qualified参照の区別、複数参照混在、逆順range参照（`B10:A1`）、パースエラーの伝播。
+- [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1096+54件・0 failed）／`cargo check --features python --lib`（環境のstale `VIRTUAL_ENV`を明示的に上書きして実行）／`cargo audit`（脆弱性なし）、いずれもクリーン。`check-versions.sh`は既知の`elixcee-types`ドリフトのみ検出、想定通り。差分/corpus/vba-semantics系のcompatスイートは、今回の変更が`Vm`からまだ一切呼ばれない純粋関数の追加のみ（configurationやXLSX I/O経路に触れていない）であることを理由に割愛（判断根拠を明記）。
+- [x] **ホスト環境メモ（作業に無関係、実害あり）**：作業中に`cargo build`が"No space left on device"で失敗——確認したところホストのAPFSコンテナ空き容量が一時的に127MiBまで低下していた（`df -h /`）。`diskutil apfs list`でコンテナ全体では約4.6-4.9GB空きがあることを確認、再試行で解消（一過性のスパイクだった可能性——APFSローカルスナップショットの自動パージ等）。破壊的なクリーンアップは一切行わず、読み取り専用の調査のみで様子見。ユーザーへの明示的な報告推奨事項として残す：ボリューム使用率が highで、再発の可能性がある。
+- [x] ドキュメント同期：`CHANGELOG.md`（`[0.12.0]`節に新規サブセクション追加、Stage 3で配線されるまで未到達コードである旨明記）、`internal_docs/ROADMAP.md`（0.14.0-A4をStage 1・2完了、Stage 3・4未着手として整理）、`internal_docs/range-move-0.14.0-a4-design.md`のStatus更新、`tasks/todo.md`（本エントリ）。
+
+残作業：Stage 3（cell move API接続——`Vm`側のscan-before-mutateな2段階設計、source/destination重複時のバッファリング）とStage 4（metadata移動、0.14.0-Bとの統合可否を含む）は未着手。着手前にユーザーへ状況報告・確認予定。
