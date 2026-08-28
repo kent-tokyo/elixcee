@@ -616,3 +616,15 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] **コミット・push**：ドキュメントのみの変更のため、このセッション内の既存慣行（`ccd450a`等の直接masterへのdocsコミット）に倣い、承認を追加で求めずmasterへ直接commit・push。
 
 残作業：なし。新ロードマップの`0.13.0`（Fidelity Closure）以降の実装着手は、新規スコープ決定に該当するため、ユーザーの明示的な指定を待つ。
+
+## 0.14.0-A（Formula reference transformer）着手：スコープ再検証とサブシステム1実装
+
+ユーザーの「ROADMAPにそって開発を続けて」を受け、`0.13.0`がブロック中（Mac Excel手動承認・実fixture、いずれもユーザーが今回は対応せず「別のものを選んで」と回答）のため`0.14.0-A`へピボット。着手前に、このセッションで繰り返し確認してきた「ロードマップ文書は実装コストを過小評価する」パターンに従い、read-only research forkでソースを直接検証。
+
+- [x] **research fork起動（read-only、実装禁止）**：`0.14.0-A`のロードマップ記述（`$A$1`/`Sheet1!A1`等を既存サポート済みとして扱う）を`src/formula/parser.rs`/`ast.rs`/`src/vm/mod.rs`と突き合わせ。結果：実際にパースできるのは裸の`A1`/`A1:B20`のみ。`$`絶対参照もシート修飾（`!`/`'`）も現状ハードパースエラー。formulaは生文字列で保存されAST→text serializerは皆無。`insert_rows_on_sheet`等の構造編集は`HashMap`キーのみ移動し、formula文字列側は一切追随しない。最も狭い同一シート内シフトのスライスでさえ、(1) `$`絶対フラグ付きAST、(2) ASTリライタ、(3) AST→textシリアライザの3サブシステムをゼロから必要とする、という結論。
+- [x] **ユーザーへ報告・AskUserQuestion**：ロードマップの`0.14.0-A`該当節をこの検証結果で訂正（`internal_docs/ROADMAP.md`、Supported節を書き換え、削除された範囲に落ちる参照は`#REF!`になるべきという設計論点も明記）。続けて実装スコープを確認：「$絶対参照の前提のみ」「same-sheetスライス全体（複数ラウンド）」「別のものを選ぶ」の3択を提示。ユーザーは「Full same-sheet slice, multi-round」を選択——複数ラウンドに分けてよいことを明示的に許容。
+- [x] **サブシステム1実装：`$`絶対参照パース**（PR #15、`feature/0.14.0-a-abs-ref-parsing`）。`FormulaExpr::CellRef`/`Range`に`abs_col`/`abs_row`（Rangeは角ごとに`abs_c1`/`abs_r1`/`abs_c2`/`abs_r2`）を追加。パーサは`parse_ident_or_ref`の先頭で`$`を読み、列文字の後にもう一つ`$`を読む二段構え、range第2corner用に`parse_ref_corner`ヘルパーを新設（`A1:$B$10`のような片側のみ絶対も正しく処理）。評価（`eval.rs`）は無変更——`$`は値に影響しない。コンパイラが列挙した16箇所の既存パターンマッチ（`..`未使用）を機械的に修正、既存parser testの構造体リテラルも新フィールドに追随。新規テスト3件（`test_absolute_cell_ref`/`test_absolute_range_mixed_corners`/`test_absolute_ref_errors`）追加。
+- [x] `cargo test --workspace`（1004+件・0 failed）、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`、いずれもクリーン。`check-versions.sh`は既知の`elixcee-types`ドリフト（本PR無関係）のみ検出、想定通り。
+- [x] **次サブシステムの事前調査（未実装）**：ASTベースの汎用シリアライザではなく、パーサが各CellRef/Range出現のテキストspan（文字オフセット）を副産物として記録し、リライタはそのspanだけを元の文字列に対して置換する設計の方が、無関係な部分（演算子・関数名・数値表記・空白）を一切変更せずに済み、より安全でコード量も少ないと判断（この判断はレビュー可能な内部実装詳細であり、新規スコープ決定ではないため単独で採用）。ただしこの設計を実装する前に、`CellContent.formula`の保存規約が統一されていないことを確認：XLSX読み込み経由（`reader.rs`のformulas収集）は先頭`=`なし（OOXML `<f>`要素の生テキスト）、`Vm::set_cell_formula`経由（Python/VBA API）は呼び出し側が`=`を付けたまま渡すことが多く、書き込み側（`src/lib.rs`の`xlsx_cell_xml`）が両対応のため`.trim().trim_start_matches('=')`で防御的に正規化している。span設計はこの不統一を前提に、`formula::parse`と同じ正規化後のオフセット空間で座標を持たせ、リライタ側で同じ正規化を再適用する契約にする必要がある——次ラウンドの実装前提として記録。
+
+残作業：`0.14.0-A`サブシステム2（span記録付きパース）以降、および同一シート内insert/delete時のリライタ本体・削除帯に落ちた参照の`#REF!`化・cross-sheet構文は未着手。複数ラウンドで継続する前提でユーザー承認済み。
