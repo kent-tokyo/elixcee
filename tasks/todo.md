@@ -670,3 +670,16 @@ D2（生存sheetの`.rels`をoriginal part名のままrelationship ID不変で�
 - [x] ドキュメント同期：`internal_docs/ROADMAP.md`の0.14.0-A節（A2完了・残りをsheet rename/range moveのみに整理）、`internal_docs/openpyxl-gap-audit.md`（P1 core 3節の更新、および`rename_sheet`の副作用に関する既存記述——「cross-sheet構文がないので数式は壊れない」という主張が今回で誤りになったため訂正、rename後にqualifierが古いシート名を指したままdangling参照になる新たなリスクを明記）、`src/lib.rs`の4メソッドdocstring（"cross-sheet formulas supported"という曖昧な表現を避け、unqualified/qualified/evaluation/external-3Dを明確に区別）、`CHANGELOG.md [Unreleased]`。
 
 残作業：cross-sheet構文のparsing/rewriteは完了。sheet rename時のqualifier書き換え（次の独立ラウンドとして計画済み、このラウンドのparserを再利用）とrange move（cut-paste追随）は未着手。cross-sheet formula **evaluation**（他シートの値を読む計算）は意図的に対象外のまま。発見された`xlsx_cell_xml`のEmpty値セル欠落バグは別Issueとして扱う（version bump・tag・publishは今回一切行っていない）。
+
+## sheet rename時のqualifier書き換え（PR #19）
+
+ユーザーの「sheet rename 時の qualifier 書き換え」を受け、0.14.0-A2で計画済みだった次ラウンドを実装。
+
+- [x] **`formula::rename_sheet_references(formula, old_key, new_name)`**：qualifierのspanだけを置換、座標は一切触らない。新しい名前の引用符要否は`sheet_name_needs_quoting`——パーサ自身の`try_parse_sheet_qualifier`のunquoted受理文法（先頭`is_alphabetic()||'_'`、以降`is_alphanumeric()||'_'`）を寸分違わずミラーする設計とし、「書く側のルール」と「読む側のルール」が別々にドリフトしないようにした。unqualified参照は——rename対象シート自身に置かれた式であっても——一切変更しない（`A1`はrename後も「このシート」を指すのは変わらないため）。大文字小文字だけのrename（"Sheet1"→"SHEET1"）でも既存qualifierの表示ケースを新しい方に更新する（実Excelの挙動に合わせた）。
+- [x] **共通化**：`rewrite_formulas_for_structural_edit`と処理の骨格（全シートを1回だけ走査・先頭`=`の復元・collect後にapply）が完全に一致していたため、`Vm::rewrite_formulas_workbook_wide<F>`という共通ヘルパーへ抽出し、両方がこれを呼ぶ形に変更。range move実装時の3人目の呼び出し元になる想定（ROADMAP.mdに明記）。
+- [x] **`rename_sheet`への配線**：11個のper-sheet map再キーより前に`rewrite_qualifiers_for_rename(old_key, new_name)`を呼ぶ。既存の`defined_names_may_be_stale`フラグ設定はそのまま維持——`<definedName>`のテキスト書き換えは引き続きスコープ外（別メカニズムであり、rename時は`<definedNames>`要素ごとdropする既存の対処のまま）。
+- [x] **テスト**：rewrite側12件（rename基本・unqualified不変・別シート宛て不変・引用符要否双方向・エスケープ・大文字小文字非依存・range・複数参照混在・case-onlyでも書き換わる・no-op・parse失敗伝播）、VM側4件（別シートからのqualifier書き換え・rename対象シート自身のunqualifiedは不変・別シート宛てqualifierは不変・新しい名前が引用符必要な場合）、real xlsx save→reload統合テスト1件（renamed qualifierがファイルを介して永続することを確認）。
+- [x] `cargo fmt`/`cargo clippy --workspace --all-targets -- -D warnings`/`cargo test --workspace`（1081+45件・0 failed）/`cargo check --features python --lib`/`cargo audit`（脆弱性なし）/`mechanical_check.py --self-test`/`check-versions.sh`（既知ドリフトのみ）、いずれもクリーン。
+- [x] ドキュメント同期：`internal_docs/ROADMAP.md`（0.14.0-A節、sheet rename項目を完了として整理、残りはrange moveのみ）、`internal_docs/openpyxl-gap-audit.md`（前ラウンドで記録した「dangling参照になる」という未修正の指摘を、今回で修正済みである旨に更新——ただし`<definedName>`テキストは引き続き対象外である点は維持）、`src/lib.rs`の`rename_sheet` docstring、`CHANGELOG.md [Unreleased]`。
+
+残作業：0.14.0-Aの「same-sheet insert/delete」「cross-sheet reference parsing/rewrite」「sheet rename qualifier rewrite」の3ラウンドはすべて完了。残るのはrange move（cut-paste追随、insert/deleteのindex-shiftモデルともrenameのqualifier-textモデルとも異なる「移動先を検出して追随する」モデルが必要）のみ。0.14.0-B（style/merge/hidden/row-height/column-width等のcell metadata transformation）は未着手のまま。
