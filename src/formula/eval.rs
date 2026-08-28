@@ -43,7 +43,7 @@ pub fn evaluate(
         FormulaExpr::Number(n) => Ok(as_integer_if_whole(*n)),
         FormulaExpr::Str(s) => Ok(Variant::Str(s.clone())),
         FormulaExpr::Bool(b) => Ok(Variant::Boolean(*b)),
-        FormulaExpr::CellRef { col, row } => Ok(cells
+        FormulaExpr::CellRef { col, row, .. } => Ok(cells
             .get(&(*row, *col))
             .map(|c| c.value.clone())
             .unwrap_or(Variant::Empty)),
@@ -217,7 +217,7 @@ fn collect_values(
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Vec<Variant>, String> {
     match expr {
-        FormulaExpr::Range { c1, r1, c2, r2 } => {
+        FormulaExpr::Range { c1, r1, c2, r2, .. } => {
             let (rmin, rmax) = (r1.min(r2), r1.max(r2));
             let (cmin, cmax) = (c1.min(c2), c1.max(c2));
             let rows = (rmax - rmin + 1) as u64;
@@ -503,7 +503,7 @@ fn eval_func(
 macro_rules! range_nums_fast {
     ($args:expr, $cells:expr) => {{
         if $args.len() == 1 {
-            if let FormulaExpr::Range { c1, r1, c2, r2 } = &$args[0] {
+            if let FormulaExpr::Range { c1, r1, c2, r2, .. } = &$args[0] {
                 let mut nums: Vec<f64> = vec![];
                 for row in *r1..=*r2 {
                     for col in *c1..=*c2 {
@@ -534,7 +534,7 @@ fn func_sum(
 ) -> Result<Variant, String> {
     // Fast path: single Range — iterate cell refs without cloning into Vec<Variant>
     if args.len() == 1
-        && let FormulaExpr::Range { c1, r1, c2, r2 } = &args[0]
+        && let FormulaExpr::Range { c1, r1, c2, r2, .. } = &args[0]
     {
         let mut sum = 0f64;
         for row in *r1..=*r2 {
@@ -955,7 +955,7 @@ fn apply_text_format(n: f64, fmt: &str) -> String {
 
 fn require_range(expr: &FormulaExpr, fname: &str) -> Result<(u32, u32, u32, u32), String> {
     match expr {
-        FormulaExpr::Range { c1, r1, c2, r2 } => Ok((*c1, *r1, *c2, *r2)),
+        FormulaExpr::Range { c1, r1, c2, r2, .. } => Ok((*c1, *r1, *c2, *r2)),
         _ => Err(format!("{}: table argument must be a range", fname)),
     }
 }
@@ -3447,7 +3447,7 @@ fn func_formulatext(
         return Err("FORMULATEXT requires 1 argument".into());
     }
     let (row, col) = match &args[0] {
-        FormulaExpr::CellRef { row, col } => (*row, *col),
+        FormulaExpr::CellRef { row, col, .. } => (*row, *col),
         FormulaExpr::Range { r1, c1, .. } => (*r1, *c1),
         _ => return Ok(Variant::Error(ExcelError::Value)),
     };
@@ -3477,7 +3477,7 @@ fn func_cell(
     let info = to_str(&evaluate(&args[0], cells)?).to_lowercase();
     let (row, col) = if args.len() == 2 {
         match &args[1] {
-            FormulaExpr::CellRef { row, col } => (*row, *col),
+            FormulaExpr::CellRef { row, col, .. } => (*row, *col),
             FormulaExpr::Range { r1, c1, .. } => (*r1, *c1),
             _ => (1u32, 1u32),
         }
@@ -4237,7 +4237,7 @@ fn func_byrow(
     }
     let lambda = &args[1];
     match &args[0] {
-        FormulaExpr::Range { c1, r1, c2, r2 } => {
+        FormulaExpr::Range { c1, r1, c2, r2, .. } => {
             let result: Result<Vec<Variant>, String> = (*r1..=*r2)
                 .map(|row| {
                     let row_vals: Vec<Variant> =
@@ -4263,7 +4263,7 @@ fn func_bycol(
     }
     let lambda = &args[1];
     match &args[0] {
-        FormulaExpr::Range { c1, r1, c2, r2 } => {
+        FormulaExpr::Range { c1, r1, c2, r2, .. } => {
             let result: Result<Vec<Variant>, String> = (*c1..=*c2)
                 .map(|col| {
                     let col_vals: Vec<Variant> =
@@ -4313,7 +4313,7 @@ fn func_offset(
     }
     // First arg must be a cell/range reference expression — read coords without evaluating
     let (base_row, base_col): (u32, u32) = match args.first() {
-        Some(FormulaExpr::CellRef { row, col }) => (*row, *col),
+        Some(FormulaExpr::CellRef { row, col, .. }) => (*row, *col),
         Some(FormulaExpr::Range { r1, c1, .. }) => (*r1, *c1),
         _ => return Err("OFFSET: first argument must be a cell reference".into()),
     };
@@ -4404,7 +4404,7 @@ fn func_filter(
     let include = eval_as_bool_array(&args[1], cells)?;
 
     match &args[0] {
-        FormulaExpr::Range { c1, r1, c2, r2 } => {
+        FormulaExpr::Range { c1, r1, c2, r2, .. } => {
             let data_rows = (*r2 - *r1 + 1) as usize;
             if include.len() != data_rows {
                 return Err(format!(
@@ -4560,7 +4560,7 @@ fn func_transpose(
         return Err("TRANSPOSE requires 1 argument".into());
     }
     match &args[0] {
-        FormulaExpr::Range { c1, r1, c2, r2 } => {
+        FormulaExpr::Range { c1, r1, c2, r2, .. } => {
             let rows = (*r2 - *r1 + 1) as usize;
             let cols = (*c2 - *c1 + 1) as usize;
             let mut result = vec![Variant::Empty; rows * cols];

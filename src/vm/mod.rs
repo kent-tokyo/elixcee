@@ -5638,8 +5638,8 @@ fn nested_set(target: &mut Variant, fields: &[String], value: Variant) {
 fn extract_cell_refs(expr: &formula::FormulaExpr) -> HashSet<(u32, u32)> {
     use formula::FormulaExpr::*;
     match expr {
-        CellRef { col, row } => [(*row, *col)].into(),
-        Range { c1, r1, c2, r2 } => {
+        CellRef { col, row, .. } => [(*row, *col)].into(),
+        Range { c1, r1, c2, r2, .. } => {
             let mut s = HashSet::new();
             for r in *r1..=*r2 {
                 for c in *c1..=*c2 {
