@@ -185,6 +185,7 @@ impl FormulaParser {
             Some('"') => self.parse_string(),
             Some(c) if c.is_ascii_digit() => self.parse_number(),
             Some(c) if c.is_ascii_alphabetic() => self.parse_ident_or_ref(),
+            Some('$') => self.parse_ident_or_ref(),
             Some(c) => Err(format!("Unexpected character: '{}'", c)),
             None => Err("Unexpected end of formula".into()),
         }
@@ -230,25 +231,98 @@ impl FormulaParser {
             .map_err(|e| e.to_string())
     }
 
-    fn parse_ident_or_ref(&mut self) -> Result<FormulaExpr, String> {
+    /// Parse one side of a range (`[$]COL[$]ROW`), e.g. the `B10` in `A1:B10`
+    /// or the `$B$10` in `A1:$B$10`. Always a cell reference — a range corner
+    /// is never a function name.
+    fn parse_ref_corner(&mut self) -> Result<(u32, u32, bool, bool), String> {
+        let abs_col = self.consume('$');
         let mut name = String::new();
         while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
             name.push(self.advance().unwrap().to_ascii_uppercase());
         }
-        // Support dot-separated function names (e.g. MODE.MULT, NETWORKDAYS.INTL)
-        while self.peek() == Some('.')
-            && matches!(self.chars.get(self.pos + 1), Some(c) if c.is_ascii_alphabetic())
-        {
-            name.push(self.advance().unwrap()); // consume '.'
-            while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
-                name.push(self.advance().unwrap().to_ascii_uppercase());
+        if name.is_empty() {
+            return Err("Expected column letters in range".into());
+        }
+        let abs_row = self.consume('$');
+        let mut row_s = String::new();
+        while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+            row_s.push(self.advance().unwrap());
+        }
+        if row_s.is_empty() {
+            return Err(format!("Expected row number after '{}' in range", name));
+        }
+        let col = col_letters_to_num(&name);
+        let row: u32 = row_s
+            .parse()
+            .map_err(|e: std::num::ParseIntError| e.to_string())?;
+        Ok((col, row, abs_col, abs_row))
+    }
+
+    fn parse_ident_or_ref(&mut self) -> Result<FormulaExpr, String> {
+        let abs_col = self.consume('$');
+        let mut name = String::new();
+        while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
+            name.push(self.advance().unwrap().to_ascii_uppercase());
+        }
+        if abs_col && name.is_empty() {
+            return Err("Expected column letters after '$'".into());
+        }
+
+        // A leading '$' can only start a cell reference, never a function name,
+        // so dot-separated function names (MODE.MULT) don't apply here.
+        if !abs_col {
+            // Support dot-separated function names (e.g. MODE.MULT, NETWORKDAYS.INTL)
+            while self.peek() == Some('.')
+                && matches!(self.chars.get(self.pos + 1), Some(c) if c.is_ascii_alphabetic())
+            {
+                name.push(self.advance().unwrap()); // consume '.'
+                while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
+                    name.push(self.advance().unwrap().to_ascii_uppercase());
+                }
             }
         }
+
+        let abs_row = self.consume('$');
 
         // Collect trailing digits: could be cell-ref row (A1) or part of function name (LOG10, ATAN2)
         let mut trailing_digits = String::new();
         while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
             trailing_digits.push(self.advance().unwrap());
+        }
+
+        if abs_col || abs_row {
+            // A '$' was seen anywhere in this token: it can only be a cell
+            // reference, never a function name (Excel identifiers never
+            // contain '$').
+            if trailing_digits.is_empty() {
+                return Err(format!("Expected row number after '{}'", name));
+            }
+            let col = col_letters_to_num(&name);
+            let row: u32 = trailing_digits
+                .parse()
+                .map_err(|e: std::num::ParseIntError| e.to_string())?;
+            self.skip_ws();
+            if self.peek() == Some(':') {
+                self.advance();
+                self.skip_ws();
+                let (c2, r2, abs_c2, abs_r2) = self.parse_ref_corner()?;
+                return Ok(FormulaExpr::Range {
+                    c1: col,
+                    r1: row,
+                    c2,
+                    r2,
+                    abs_c1: abs_col,
+                    abs_r1: abs_row,
+                    abs_c2,
+                    abs_r2,
+                });
+            }
+            return Ok(FormulaExpr::CellRef {
+                col,
+                row,
+                abs_col,
+                abs_row,
+            });
         }
 
         if !trailing_digits.is_empty() {
@@ -274,26 +348,24 @@ impl FormulaParser {
                 if self.peek() == Some(':') {
                     self.advance();
                     self.skip_ws();
-                    let mut name2 = String::new();
-                    while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
-                        name2.push(self.advance().unwrap().to_ascii_uppercase());
-                    }
-                    let col2 = col_letters_to_num(&name2);
-                    let mut row2_s = String::new();
-                    while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                        row2_s.push(self.advance().unwrap());
-                    }
-                    let row2: u32 = row2_s
-                        .parse()
-                        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+                    let (c2, r2, abs_c2, abs_r2) = self.parse_ref_corner()?;
                     return Ok(FormulaExpr::Range {
                         c1: col,
                         r1: row,
-                        c2: col2,
-                        r2: row2,
+                        c2,
+                        r2,
+                        abs_c1: false,
+                        abs_r1: false,
+                        abs_c2,
+                        abs_r2,
                     });
                 }
-                return Ok(FormulaExpr::CellRef { col, row });
+                return Ok(FormulaExpr::CellRef {
+                    col,
+                    row,
+                    abs_col: false,
+                    abs_row: false,
+                });
             }
         }
 
@@ -388,15 +460,30 @@ mod tests {
     fn test_cell_ref() {
         assert_eq!(
             parse("=A1").unwrap(),
-            FormulaExpr::CellRef { col: 1, row: 1 }
+            FormulaExpr::CellRef {
+                col: 1,
+                row: 1,
+                abs_col: false,
+                abs_row: false
+            }
         );
         assert_eq!(
             parse("=B3").unwrap(),
-            FormulaExpr::CellRef { col: 2, row: 3 }
+            FormulaExpr::CellRef {
+                col: 2,
+                row: 3,
+                abs_col: false,
+                abs_row: false
+            }
         );
         assert_eq!(
             parse("=AA1").unwrap(),
-            FormulaExpr::CellRef { col: 27, row: 1 }
+            FormulaExpr::CellRef {
+                col: 27,
+                row: 1,
+                abs_col: false,
+                abs_row: false
+            }
         );
     }
 
@@ -408,9 +495,81 @@ mod tests {
                 c1: 1,
                 r1: 1,
                 c2: 2,
-                r2: 10
+                r2: 10,
+                abs_c1: false,
+                abs_r1: false,
+                abs_c2: false,
+                abs_r2: false,
             }
         );
+    }
+
+    #[test]
+    fn test_absolute_cell_ref() {
+        assert_eq!(
+            parse("=$A$1").unwrap(),
+            FormulaExpr::CellRef {
+                col: 1,
+                row: 1,
+                abs_col: true,
+                abs_row: true
+            }
+        );
+        assert_eq!(
+            parse("=A$1").unwrap(),
+            FormulaExpr::CellRef {
+                col: 1,
+                row: 1,
+                abs_col: false,
+                abs_row: true
+            }
+        );
+        assert_eq!(
+            parse("=$A1").unwrap(),
+            FormulaExpr::CellRef {
+                col: 1,
+                row: 1,
+                abs_col: true,
+                abs_row: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_absolute_range_mixed_corners() {
+        assert_eq!(
+            parse("=$A1:B$10").unwrap(),
+            FormulaExpr::Range {
+                c1: 1,
+                r1: 1,
+                c2: 2,
+                r2: 10,
+                abs_c1: true,
+                abs_r1: false,
+                abs_c2: false,
+                abs_r2: true,
+            }
+        );
+        assert_eq!(
+            parse("=$A$1:$B$10").unwrap(),
+            FormulaExpr::Range {
+                c1: 1,
+                r1: 1,
+                c2: 2,
+                r2: 10,
+                abs_c1: true,
+                abs_r1: true,
+                abs_c2: true,
+                abs_r2: true,
+            }
+        );
+    }
+
+    #[test]
+    fn test_absolute_ref_errors() {
+        assert!(parse("=$1").is_err());
+        assert!(parse("=$A").is_err());
+        assert!(parse("=A1:$B").is_err());
     }
 
     #[test]
@@ -440,7 +599,11 @@ mod tests {
                     c1: 1,
                     r1: 1,
                     c2: 1,
-                    r2: 3
+                    r2: 3,
+                    abs_c1: false,
+                    abs_r1: false,
+                    abs_c2: false,
+                    abs_r2: false,
                 }],
             }
         );
@@ -507,11 +670,21 @@ mod tests {
         // Cell references with the same letter+digit pattern must still work
         assert_eq!(
             parse("=A1").unwrap(),
-            FormulaExpr::CellRef { col: 1, row: 1 }
+            FormulaExpr::CellRef {
+                col: 1,
+                row: 1,
+                abs_col: false,
+                abs_row: false
+            }
         );
         assert_eq!(
             parse("=B10").unwrap(),
-            FormulaExpr::CellRef { col: 2, row: 10 }
+            FormulaExpr::CellRef {
+                col: 2,
+                row: 10,
+                abs_col: false,
+                abs_row: false
+            }
         );
     }
 }
