@@ -1063,7 +1063,11 @@ fn rename_sheet_round_trips_merge_and_hidden_metadata_on_the_real_fixture() {
 /// `<definedNames>` content, confirmed by
 /// `real_excel_workbook_metadata_survives_a_save`'s own sibling test file.
 #[test]
-fn rename_sheet_drops_defined_names_that_would_reference_the_old_name() {
+fn rename_sheet_rewrites_defined_names_that_reference_the_old_name() {
+    // Superseded: this used to pin the wholesale-drop behavior (dropping the whole
+    // <definedNames> block once a rename made any name's text stale). It's now
+    // surgically rewritten instead -- see
+    // internal_docs/defined-names-rename-preservation-scoping.md.
     let source_path = real_fixture("fixture4_hyperlink_comment_name.xlsm");
     let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
     let fixture_entries = read_all_zip_entries(&fixture_bytes);
@@ -1084,9 +1088,50 @@ fn rename_sheet_drops_defined_names_that_would_reference_the_old_name() {
     let output_entries = read_all_zip_entries(&output_bytes);
     let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
     assert!(
-        !out_wb.contains("<definedNames>"),
-        "definedNames must be dropped entirely once a sheet is renamed, not carried \
-         through referencing a sheet name that no longer exists: {out_wb}"
+        out_wb.contains("<definedNames>") && out_wb.contains("Renamed!$F$5"),
+        "definedNames must survive a rename with its stale sheet-qualifier rewritten to \
+         the new name, not dropped or left stale: {out_wb}"
+    );
+    assert!(
+        !out_wb.contains("Sheet1!$F$5"),
+        "the OLD sheet name must not survive the rewrite: {out_wb}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// Rename-preservation against fixture5's real, real-Excel-verified
+/// `_xlnm.Print_Area` (see `internal_docs/xlsx-worksheet-preservation-0.10.0-design.md`'s
+/// 0.10.0-C section) -- confirms the fix covers the builtin print-area name, not just a
+/// plain user-defined one, on genuine Excel-authored bytes rather than a synthetic fixture.
+#[test]
+fn rename_sheet_rewrites_a_real_print_area_defined_name() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
+    let fixture_entries = read_all_zip_entries(&fixture_bytes);
+    let source_wb = String::from_utf8(fixture_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        source_wb.contains("_xlnm.Print_Area") && source_wb.contains("Sheet1!$E$3"),
+        "fixture no longer contains the expected Print_Area -- test needs updating: {source_wb}"
+    );
+
+    let output_path = tmp_path("rename_sheet_print_area_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.rename_sheet("Sheet1", "Renamed").unwrap();
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    assert!(
+        out_wb.contains("_xlnm.Print_Area") && out_wb.contains("Renamed!$E$3"),
+        "Print_Area must survive the rename with its sheet-qualifier rewritten: {out_wb}"
+    );
+    assert!(
+        !out_wb.contains("Sheet1!$E$3"),
+        "the OLD sheet name must not survive the rewrite: {out_wb}"
     );
 
     let _ = std::fs::remove_file(&output_path);

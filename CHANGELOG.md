@@ -1033,6 +1033,36 @@ only, no new `Vm` state or Python API (create/remove/filter-type API is `0.16.0`
   `filterColumn` with real filter values, and a same-sheet merge + unrelated cell edit
   (schema-position + no-collateral-damage check).
 
+### Root crate: `rename_sheet` rewrites `<definedNames>` text instead of dropping it wholesale
+
+Scoped and implemented after 0.14.0-C's retirement
+(`internal_docs/defined-names-rename-preservation-scoping.md`): `rename_sheet` used to set
+`defined_names_may_be_stale`, dropping the entire `<definedNames>` passthrough on ANY
+rename, even for a name that never referenced the renamed sheet. It now rewrites each
+`<definedName>`'s stale sheet-qualifier text in place, per name — `move_sheet`'s own
+`localSheetId`-staleness case (a different, position-based failure mode) is unchanged and
+still drops wholesale, since no state tracks the original load-time sheet-position order to
+recompute it against.
+
+- New `Vm.sheet_renames_since_load: HashMap<String, String>` (original lowercased name →
+  current display name, collapsing a sheet renamed more than once to one entry) — needed
+  because `<definedNames>` is never mirrored into `Vm` state, only re-read from the
+  *original* source file's raw bytes at save time.
+- Two-path rewrite per `<definedName>` value: the existing formula-reference rewriter
+  (`rename_sheet_references`, unchanged) handles a plain reference and a genuine
+  formula-valued name; a new, narrower reference-list grammar
+  (`rewrite_reference_list_for_renames`) covers what that can't parse at all —
+  comma-separated multi-area lists and full-row/full-column references
+  (`Sheet1!$1:$3,Sheet1!$A:$A`), the near-universal real shape of `_xlnm.Print_Titles` and a
+  common shape for `_xlnm.Print_Area`. A value neither path can confirm safe is dropped
+  individually (not the whole block) only if it plausibly mentions a renamed sheet at all.
+- Real-fixture verified: `fixture4`'s genuine `Sheet1!$F$5` named range and `fixture5`'s
+  real, real-Excel-verified `_xlnm.Print_Area` (`Sheet1!$E$3`) both now survive a rename
+  with the qualifier rewritten, previously both were dropped outright.
+- Print_Titles' full-row/full-column shape verified against a real `openpyxl`-authored
+  fixture (`ws.print_title_rows`/`print_title_cols`), including a second save-reload cycle
+  with no further rename.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted

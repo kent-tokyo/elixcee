@@ -15,3 +15,7 @@ pub use rewrite::{
 // reused (not reimplemented) by 0.14.0-B's cell-metadata transform; see
 // internal_docs/cell-metadata-transform-0.14.0-b-design.md §6.
 pub(crate) use rewrite::{CellShift, shift_bound_high, shift_bound_low, shift_cell_coord};
+// `pub(crate)`, not `pub` -- internal to `save_xlsx_impl`'s `<definedNames>`
+// rename-preservation pass (`src/lib.rs`), see
+// internal_docs/defined-names-rename-preservation-scoping.md.
+pub(crate) use rewrite::{DefinedNameRewrite, rewrite_defined_name_for_renames};
