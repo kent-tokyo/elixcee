@@ -24,7 +24,7 @@ use vm::{Variant, Vm, WorksheetOrigin};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 #[cfg(feature = "python")]
 use vm::{ExcelError, serial_to_display};
 
@@ -1284,6 +1284,63 @@ impl PyVm {
             .get(&key)
             .map(|ranges| ranges.iter().map(merge_rect_to_a1).collect())
             .unwrap_or_default())
+    }
+
+    /// Every table defined on *sheet* (defaults to the active sheet), read-only
+    /// (0.16.0-A1). Each table is a dict:
+    ///
+    /// ``{"name": ..., "display_name": ..., "ref": "A1:C4", "header_row_count": 1,
+    /// "totals_row_count": 0, "totals_row_shown": False, "style_name": ...,
+    /// "auto_filter_ref": "A1:C4" or None, "columns": [...]}``
+    ///
+    /// Each column is ``{"id": ..., "name": ..., "totals_row_function": ...,
+    /// "totals_row_label": ..., "calculated_column_formula": ...}`` — string fields
+    /// are ``None`` when the attribute is absent in the source file.
+    ///
+    /// Read-only: there's no create/edit/delete table API yet (separate future
+    /// phases). Structured references (``Table1[@Qty]``) are entirely out of
+    /// scope — ``calculated_column_formula`` is the raw, unparsed formula text,
+    /// never evaluated. An unmodified table survives every save unchanged
+    /// regardless of whether this method is ever called.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown.
+    #[pyo3(signature = (sheet = None))]
+    fn tables(&self, py: Python<'_>, sheet: Option<&str>) -> PyResult<Py<PyAny>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let list = PyList::empty(py);
+        for t in self.inner.tables.get(&key).into_iter().flatten() {
+            let dict = PyDict::new(py);
+            dict.set_item("name", &t.name)?;
+            dict.set_item("display_name", &t.display_name)?;
+            dict.set_item("ref", merge_rect_to_a1(&t.ref_range))?;
+            dict.set_item("header_row_count", t.header_row_count)?;
+            dict.set_item("totals_row_count", t.totals_row_count)?;
+            dict.set_item("totals_row_shown", t.totals_row_shown)?;
+            dict.set_item("style_name", t.style_name.as_deref())?;
+            dict.set_item(
+                "auto_filter_ref",
+                t.auto_filter_ref.as_ref().map(merge_rect_to_a1),
+            )?;
+            let cols = PyList::empty(py);
+            for c in &t.columns {
+                let cd = PyDict::new(py);
+                cd.set_item("id", c.id.as_deref())?;
+                cd.set_item("name", &c.name)?;
+                cd.set_item("totals_row_function", c.totals_row_function.as_deref())?;
+                cd.set_item("totals_row_label", c.totals_row_label.as_deref())?;
+                cd.set_item(
+                    "calculated_column_formula",
+                    c.calculated_column_formula.as_deref(),
+                )?;
+                cols.append(cd)?;
+            }
+            dict.set_item("columns", cols)?;
+            list.append(dict)?;
+        }
+        Ok(list.into_any().unbind())
     }
 
     /// Creates a merge over *addr*. Rejects a single-cell address (nothing

@@ -1375,6 +1375,54 @@ the output had zero `conditionalFormatting` occurrences, while `dataValidations`
   `openpyxl`-authored synthetic fixture) round-trips both; an unrelated `set_style` call
   (mutates `<cellXfs>`, never `<dxfs>`) leaves a preserved rule's `dxfId` untouched.
 
+### Root crate: read-only `tables()` — 0.16.0-A1, Tables' first slice
+
+First sub-phase of `0.16.0-A` (Tables), itself the first sub-phase of the
+`0.16.0 — Tables, Filters and Rules` milestone (its own single roadmap line turned out to
+bundle six differently-sized features, per a dedicated scoping pass — this slice is the
+smallest, lowest-risk one: parse an existing table into real `Vm` state and expose it
+read-only, with zero change to the write path).
+
+- `vm.tables(sheet=None)` — every table on a sheet as a list of dicts (name,
+  `display_name`, `ref`, header/totals-row info, `style_name`, the nested `autoFilter`'s
+  `ref` if present, and a `columns` list). Parses `xl/tables/tableN.xml` via each sheet's
+  own `.rels` file (`<tablePart r:id="...">` → `../tables/tableN.xml`, resolved the same
+  way any other worksheet-scoped relationship is) — `xlsx_rels` generalized from a
+  worksheet-only filter to take a `Type` suffix, reused for `"/table"`.
+- **The headline finding, not just an implementation note**: preserving an UNMODIFIED
+  table through an otherwise-unrelated save already worked before this PR, for free — the
+  generic unknown-part passthrough loop, automatic content-type carry-over, the existing
+  `rels_survived`-gated `<tableParts>` splice, and the existing generic
+  deleted-sheet-reachability pruning all already handle it with zero table-specific code.
+  This PR is a pure `Vm`-side READ projection on top of that — it does not touch, and must
+  not change, that existing byte-identical-when-unchanged guarantee.
+- Structured references (`Table1[@Qty]`, `[#Totals]`) and calculated-column *authoring*
+  are entirely out of scope, mirroring 0.14.0-A's own cross-sheet-formula-evaluation
+  exclusion — nothing in this codebase's formula parser has any structured-reference
+  grammar today, and building it would be comparably large to everything else in Tables
+  combined. `TableColumn::calculated_column_formula` is captured as raw, unparsed,
+  unevaluated text; an *existing* calculated column survives verbatim.
+- New `Vm.tables: HashMap<sheet, Vec<TableDef>>`, shifted on any structural edit (BOTH
+  axes, like `merged_ranges` — a table's `ref` is a 2D rect, not a row/column-only
+  dimension) via `shift_tables_for_structural_edit`/`shift_table_rect` (the same clamp
+  arithmetic as `shift_merge_rect`, minus its merge-specific single-cell-collapse rule —
+  a table has no "must span 2+ cells" invariant). `rename_sheet` now re-keys 19 per-sheet
+  maps (up from 18); `remove_sheet`/`copy_sheet` extended to match.
+- **Bug caught by the real-fixture verification itself, fixed before merge**: the first
+  cut only shifted a table's own `ref`, leaving a nested `<autoFilter>`'s `ref` stale
+  after a structural edit — found by the verification script, not assumed correct. Fixed:
+  `auto_filter_ref` now shifts identically to `ref_range` (or drops if it collapses on its
+  own), with a dedicated regression test.
+- Verified against `fixture3_table_validation_conditional.xlsm`'s real, complete table
+  (`テーブル1`, 3 columns, `TableStyleMedium2`, a nested bare `<autoFilter>`): `tables()`
+  matches every real field; an unmodified table's `table1.xml` bytes survive an unrelated
+  save byte-identical (and a second save-reload cycle); `openpyxl` still opens the result
+  and still sees the table; a row insert above the table shifts both `ref` and
+  `auto_filter_ref` correctly; a column insert shifts the column axis only.
+- 0.16.0-A2 (edit an existing table) and 0.16.0-A3 (create a new table from scratch, the
+  three-part linkage built from nothing) remain, per the scoping doc's own recommended
+  split.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted

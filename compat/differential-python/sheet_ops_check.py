@@ -79,6 +79,17 @@ FIXTURE4 = os.path.join(
     "fixture4_hyperlink_comment_name.xlsm",
 )
 
+# The one real Excel-authored fixture with a genuine, complete <table> -- used for
+# 0.16.0-A1's read-only tables() coverage.
+FIXTURE3 = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "oracle-excel-com",
+    "fixtures",
+    "pristine",
+    "fixture3_table_validation_conditional.xlsm",
+)
+
 
 class RenameSheetAgreesWithOpenpyxl(unittest.TestCase):
     def test_rename_sheet_agrees_with_openpyxl_after_a_round_trip(self):
@@ -758,6 +769,65 @@ class SetStyleAgreesWithOpenpyxl(unittest.TestCase):
             ws = openpyxl.load_workbook(out2).active
             self.assertTrue(ws["A1"].font.bold)
             self.assertEqual(ws["A1"].fill.fgColor.rgb, "FF00FF00")
+
+
+class TablesAgreeWithOpenpyxl(unittest.TestCase):
+    # 0.16.0-A1: read-only tables() against fixture3's real, complete table
+    # (name/displayName "テーブル1", 3 columns, TableStyleMedium2, a nested bare
+    # <autoFilter>). No create/edit/delete API yet -- that's 0.16.0-A2/A3.
+    def test_tables_reports_fixture3s_real_table_data(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        tables = vm.tables("Sheet1")
+        self.assertEqual(len(tables), 1)
+        t = tables[0]
+        self.assertEqual(t["name"], "テーブル1")
+        self.assertEqual(t["display_name"], "テーブル1")
+        self.assertEqual(t["ref"], "A1:C4")
+        self.assertEqual(t["header_row_count"], 1)
+        self.assertEqual(t["totals_row_count"], 0)
+        self.assertFalse(t["totals_row_shown"])
+        self.assertEqual(t["style_name"], "TableStyleMedium2")
+        self.assertEqual(t["auto_filter_ref"], "A1:C4")
+        self.assertEqual([c["name"] for c in t["columns"]], ["Name", "Qty", "Status"])
+        self.assertTrue(all(c["calculated_column_formula"] is None for c in t["columns"]))
+
+    def test_an_unmodified_table_survives_an_unrelated_save_byte_identical(self):
+        with zipfile.ZipFile(FIXTURE3) as z:
+            source_table_xml = z.read("xl/tables/table1.xml")
+
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.set_cell(10, 10, 999)  # unrelated, nowhere near the table
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "tables_out.xlsx")
+            vm.save_workbook(out)
+            with zipfile.ZipFile(out) as z:
+                out_table_xml = z.read("xl/tables/table1.xml")
+            self.assertEqual(out_table_xml, source_table_xml)
+
+            ws2 = openpyxl.load_workbook(out)["Sheet1"]
+            self.assertIn("テーブル1", ws2.tables)
+
+            # Second save-reload cycle must not drift.
+            vm2 = elixcee.load_workbook(out)
+            out2 = os.path.join(d, "tables_out2.xlsx")
+            vm2.save_workbook(out2)
+            with zipfile.ZipFile(out2) as z:
+                self.assertEqual(z.read("xl/tables/table1.xml"), source_table_xml)
+
+    def test_a_row_insert_above_the_table_shifts_its_reported_ref_and_auto_filter(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.insert_rows(1, amount=2, sheet="Sheet1")
+        t = vm.tables("Sheet1")[0]
+        self.assertEqual(t["ref"], "A3:C6")
+        # Regression: the nested <autoFilter> covers the same area as the table's own
+        # ref in every real fixture -- it must shift identically, not go stale.
+        self.assertEqual(t["auto_filter_ref"], "A3:C6")
+
+    def test_a_column_insert_before_the_table_shifts_its_reported_ref(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.insert_cols(1, amount=1, sheet="Sheet1")
+        t = vm.tables("Sheet1")[0]
+        self.assertEqual(t["ref"], "B1:D4")
 
 
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):
