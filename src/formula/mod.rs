@@ -14,4 +14,4 @@ pub use rewrite::{
 // `pub(crate)`, not `pub` -- these are 0.14.0-A/A4's own internal arithmetic,
 // reused (not reimplemented) by 0.14.0-B's cell-metadata transform; see
 // internal_docs/cell-metadata-transform-0.14.0-b-design.md §6.
-pub(crate) use rewrite::{shift_bound_high, shift_bound_low};
+pub(crate) use rewrite::{CellShift, shift_bound_high, shift_bound_low, shift_cell_coord};

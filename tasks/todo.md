@@ -816,3 +816,18 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（0.14.0-B節をPhase 1〜3完了として整理）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus、`tasks/todo.md`（本エントリ）。
 
 残作業：Phase 4（`cell_style_indices`/`cell_number_formats`のtransform）が未着手。この2つは共に`HashMap<sheet, HashMap<(row,col), V>>`という単一セルキー形状であり、mergeやhidden intervalとは異なり「範囲」ではなく「個別セルのキー」を移動させる必要がある——Phase 1で`pub(crate)`化したが再エクスポートを見送っていた`CellShift`/`shift_cell_coord`（単一セル座標用、range用の`shift_bound_low`/`shift_bound_high`とは別物）がこのPhaseで初めて必要になる見込み。
+
+## 0.14.0-B Phase 4：cell_style_indices/cell_number_formats transform実装（Tier 1完了）
+
+ユーザーの`/greenlane`（継続）を受け、既承認済みのphased breakdownの最終フェーズとして着手——新規スコープ決定は不要。
+
+- [x] **`formula::mod.rs`の再エクスポート追加**：Phase 1で`pub(crate)`化していた`CellShift`/`shift_cell_coord`を`formula::`直下から使えるよう追加（`shift_bound_low`/`shift_bound_high`と同じ再エクスポート方式）——merge/hidden intervalは「範囲の両端」を扱うため`shift_bound_low`/`shift_bound_high`を使ったが、style/number formatは「個別セル1点」のキーなので、formulaの単一セル参照と同じ`shift_cell_coord`が対応する。
+- [x] **`shift_keyed_cell_map<V>(map, axis, edit)`**：`cell_style_indices`と`cell_number_formats`が全く同じ`HashMap<(row,col), V>`形状であるため、ジェネリック関数1つで両方に対応。`CellShift::Deleted`のキーはdrop（そのセル自体が消えたため）。
+- [x] **`translate_keyed_cell_map<V>(map, source, d_row, d_col)`**：range move用。styleやnumber formatは「そのセルに属する」性質なので、`CellContent`自体と同じように、セルが移動すれば一緒に移動する設計——mergeと違い「片方だけ重複」というambiguousケースは原理的に存在しない（1点はsource矩形の内か外かのどちらかしかあり得ない）。移動先に既存の無関係なエントリがあった場合の上書きは、`HashMap`のイテレーション順に依存しないよう「stationaryを先にinsertし、movedを後からinsertして上書きする」という順序で決定的にした。
+- [x] **配線**：4つのinsert/delete系メソッドに`shift_cell_metadata_for_structural_edit`（内部で両マップを処理）を追加。`move_range_on_sheet`にも両マップのtranslate呼び出しを追加（mergeのようなscan-then-rejectは不要——ambiguousケースが存在しないため）。
+- [x] **新規テスト8件**：insert時の挿入点以降/以前でのstyle index shift、delete時の削除帯内でのdrop、delete後のnumber format shift、insert_colsでcolumn成分のみがshiftすること、move_rangeでのsource内translate／source外不変／移動先の既存エントリを決定的に上書きすることの確認。
+- [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1132件、0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）、いずれもクリーン。既存テストへの回帰は今回発生せず（Phase 2/3と異なり、これらのフィールドを「不変」と明示的に検証していた既存テストが存在しなかったため）。
+- [x] **実際にビルドしたPython拡張での動作確認**：`cell_style_indices`/`cell_number_formats`はPythonから書き込めない（loadしたファイルからのみ populated）ため、openpyxlで日付書式付きセルを作成→elixceeでload→`insert_rows`実行→書式が正しい新セルへ移動し旧セルからは消えていることを確認→実際の`.xlsx`へsave→reloadして書式が保持されていることまで確認。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション、「Tier 1完了」と明記）、`internal_docs/ROADMAP.md`（0.14.0-Bの節をTier 1完了として整理し直し）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus、`tasks/todo.md`（本エントリ）。
+
+残作業：0.14.0-BのTier 1（merged_ranges/sheet_visibility/cell_style_indices/cell_number_formats）はこれで完了。残るはTier 2（row_heights/column_widths——writerが現状save時に無条件でdropするため、先にwriter側のバグを直すべきかというsequencing判断が設計文書§7で未確定のまま）とTier 3（comments/hyperlinks/data-validation/conditional-formatting——0.16.0/0.17.0の領分）。次の一手についてはユーザーへの確認を推奨。

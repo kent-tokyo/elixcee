@@ -1203,6 +1203,26 @@ impl Vm {
             .collect();
     }
 
+    /// Shifts `key`'s per-cell style indices and number formats for a
+    /// structural edit (0.14.0-B Phase 4) -- `shift_keyed_cell_map`, see its
+    /// own doc comment. Unlike merges/hidden intervals, both maps use the
+    /// exact same per-cell shape, so one generic helper backs both calls.
+    fn shift_cell_metadata_for_structural_edit(
+        &mut self,
+        key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        if let Some(styles) = self.cell_style_indices.get(key) {
+            let shifted = shift_keyed_cell_map(styles, axis, edit);
+            self.cell_style_indices.insert(key.to_string(), shifted);
+        }
+        if let Some(formats) = self.cell_number_formats.get(key) {
+            let shifted = shift_keyed_cell_map(formats, axis, edit);
+            self.cell_number_formats.insert(key.to_string(), shifted);
+        }
+    }
+
     /// Rewrites every formula reference qualified with `old_key` (workbook-wide,
     /// regardless of which sheet hosts the formula) to name `new_name` instead --
     /// `formula::rename_sheet_references`, see its own doc comment for the exact
@@ -1246,12 +1266,16 @@ impl Vm {
     ///
     /// Scoped to same-sheet moves only this round -- cross-sheet reference
     /// following is an explicit, disclosed open question (design doc §4-B),
-    /// not attempted here. `merged_ranges` now moves too (0.14.0-B Phase 2,
-    /// see `plan_merge_move`'s own doc comment) -- a merge fully inside
-    /// `source` translates as a whole, a merge with only partial overlap
-    /// rejects the whole move (same "reject rather than guess" precedent as
-    /// `MoveRewrite::Ambiguous`). `sheet_visibility`/`cell_style_indices`/
-    /// `cell_number_formats` don't move yet -- later 0.14.0-B phases. Cached
+    /// not attempted here. `merged_ranges` moves too (0.14.0-B Phase 2, see
+    /// `plan_merge_move`'s own doc comment) -- a merge fully inside `source`
+    /// translates as a whole, a merge with only partial overlap rejects the
+    /// whole move (same "reject rather than guess" precedent as
+    /// `MoveRewrite::Ambiguous`). Per-cell styles and number formats move
+    /// with their cell too (0.14.0-B Phase 4, see `translate_keyed_cell_map`)
+    /// -- no ambiguous-overlap case is possible there, a point is either
+    /// inside `source` or it isn't. `sheet_visibility` (hidden row/column
+    /// state) deliberately never moves here -- it belongs to the row/column
+    /// itself, not to the cell content that moves through it. Cached
     /// `.value`s are left stale, same as every other structural edit in this
     /// engine -- recalculation is always the caller's job.
     ///
@@ -1330,6 +1354,19 @@ impl Vm {
             self.merged_ranges.insert(key.to_string(), new_merges);
         }
 
+        // A style/number-format belongs to the cell it's on, so it moves
+        // with it -- same "relocate whatever's keyed by a moved position"
+        // semantics as the CellContent snapshot below, no ambiguous-overlap
+        // case possible (a point is either inside `source` or it isn't).
+        if let Some(styles) = self.cell_style_indices.get(key) {
+            let translated = translate_keyed_cell_map(styles, source, d_row, d_col);
+            self.cell_style_indices.insert(key.to_string(), translated);
+        }
+        if let Some(formats) = self.cell_number_formats.get(key) {
+            let translated = translate_keyed_cell_map(formats, source, d_row, d_col);
+            self.cell_number_formats.insert(key.to_string(), translated);
+        }
+
         let snapshot: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -1357,17 +1394,19 @@ impl Vm {
     /// `key = active_sheet` -- VBA's `RowColInsert`/`RangeInsert` call sites don't
     /// change at all. Shifts same-sheet formula cell-references (0.14.0-A -- see
     /// `rewrite_formulas_for_structural_edit`), merges (0.14.0-B Phase 2 -- see
-    /// `shift_merged_ranges_for_structural_edit`), and same-axis hidden row/column
-    /// intervals (0.14.0-B Phase 3 -- see `shift_hidden_intervals_for_structural_edit`).
-    /// `cell_style_indices`/`cell_number_formats` still don't shift -- a pre-existing
-    /// VBA-engine limitation, now Python-reachable; see ROADMAP.md's known gaps.
-    /// Cached `.value`s are left stale, same as any other edit -- callers that need
-    /// fresh values already call `recalculate_all()` themselves.
+    /// `shift_merged_ranges_for_structural_edit`), same-axis hidden row/column
+    /// intervals (0.14.0-B Phase 3 -- see `shift_hidden_intervals_for_structural_edit`),
+    /// and per-cell styles/number formats (0.14.0-B Phase 4 -- see
+    /// `shift_cell_metadata_for_structural_edit`). All four of 0.14.0-B's Tier 1
+    /// metadata fields now shift on structural edit. Cached `.value`s are left stale,
+    /// same as any other edit -- callers that need fresh values already call
+    /// `recalculate_all()` themselves.
     pub fn insert_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         let edit = formula::StructuralEdit::Insert { at: first, count };
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -1409,6 +1448,7 @@ impl Vm {
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1447,6 +1487,7 @@ impl Vm {
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1478,6 +1519,7 @@ impl Vm {
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -5923,6 +5965,77 @@ fn shift_interval(interval: Interval, edit: formula::StructuralEdit) -> Option<I
         start: new_low,
         end: new_high as u32,
     })
+}
+
+/// Shifts a `HashMap<(row, col), V>` keyed exactly like `cell_style_indices`/
+/// `cell_number_formats` (0.14.0-B Phase 4) for a structural edit, reusing
+/// `formula::shift_cell_coord` -- the SAME single-cell-coordinate primitive
+/// a formula `CellRef` already uses, unlike `shift_merge_rect`/
+/// `shift_interval` above (which shift a *range's* two corners). A key
+/// whose target cell falls inside a deleted band is dropped entirely --
+/// there's no surviving cell for its style/format to belong to. Two
+/// distinct surviving keys can never collide post-shift: `shift_cell_coord`
+/// is injective and order-preserving on the surviving indices (before the
+/// edited band maps to itself, after it maps to a strictly lower/higher
+/// index, and the two ranges never overlap).
+fn shift_keyed_cell_map<V: Clone>(
+    map: &HashMap<(u32, u32), V>,
+    axis: formula::RefAxis,
+    edit: formula::StructuralEdit,
+) -> HashMap<(u32, u32), V> {
+    let mut result = HashMap::new();
+    for (&(row, col), value) in map {
+        let idx = match axis {
+            formula::RefAxis::Row => row,
+            formula::RefAxis::Col => col,
+        };
+        match formula::shift_cell_coord(idx, edit) {
+            formula::CellShift::Unchanged => {
+                result.insert((row, col), value.clone());
+            }
+            formula::CellShift::Deleted => {}
+            formula::CellShift::Moved(new_idx) => {
+                let new_pos = match axis {
+                    formula::RefAxis::Row => (new_idx, col),
+                    formula::RefAxis::Col => (row, new_idx),
+                };
+                result.insert(new_pos, value.clone());
+            }
+        }
+    }
+    result
+}
+
+/// Relocates every entry of a `HashMap<(row, col), V>` (matching
+/// `cell_style_indices`/`cell_number_formats`'s shape) whose key falls
+/// inside `source` by `(d_row, d_col)` -- a style/number-format belongs to
+/// the cell it's on, so it moves with it, exactly like `CellContent` itself
+/// does in `move_range_on_sheet`'s own snapshot/relocate loop. A
+/// pre-existing entry at the destination that isn't itself part of the
+/// move is overwritten (moved entries are applied AFTER stationary ones
+/// below, so this is deterministic regardless of `HashMap` iteration
+/// order) -- matching `CellContent`'s own overwrite behavior on a move.
+fn translate_keyed_cell_map<V: Clone>(
+    map: &HashMap<(u32, u32), V>,
+    source: formula::MoveRect,
+    d_row: i64,
+    d_col: i64,
+) -> HashMap<(u32, u32), V> {
+    let mut result = HashMap::new();
+    let mut moved: Vec<((u32, u32), V)> = Vec::new();
+    for (&(row, col), value) in map {
+        if source.contains(col, row) {
+            let new_row = (row as i64 + d_row) as u32;
+            let new_col = (col as i64 + d_col) as u32;
+            moved.push(((new_row, new_col), value.clone()));
+        } else {
+            result.insert((row, col), value.clone());
+        }
+    }
+    for (pos, value) in moved {
+        result.insert(pos, value);
+    }
+    result
 }
 
 /// Plans how `merges` transform for a range move of `source` by `(d_row,
@@ -10961,6 +11074,158 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![5]);
+    }
+
+    // ── 0.14.0-B Phase 4: cell_style_indices/cell_number_formats transform ──
+
+    #[test]
+    fn insert_rows_on_sheet_shifts_a_style_index_at_or_after_the_insertion_point() {
+        let mut vm = Vm::new();
+        vm.cell_style_indices
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((10, 3), 5);
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        let styles = vm.cell_style_indices.get("sheet1").unwrap();
+        assert!(!styles.contains_key(&(10, 3)));
+        assert_eq!(styles.get(&(12, 3)), Some(&5));
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_does_not_shift_a_style_index_before_the_insertion_point() {
+        let mut vm = Vm::new();
+        vm.cell_style_indices
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((3, 3), 5);
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(
+            vm.cell_style_indices.get("sheet1").unwrap().get(&(3, 3)),
+            Some(&5)
+        );
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_drops_a_style_index_inside_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.cell_style_indices
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((6, 3), 5);
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        assert!(
+            !vm.cell_style_indices
+                .get("sheet1")
+                .unwrap()
+                .contains_key(&(6, 3))
+        );
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_shifts_a_number_format_after_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.cell_number_formats
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((10, 3), "yyyy-mm-dd".to_string());
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        let formats = vm.cell_number_formats.get("sheet1").unwrap();
+        assert!(!formats.contains_key(&(10, 3)));
+        assert_eq!(formats.get(&(8, 3)), Some(&"yyyy-mm-dd".to_string()));
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_shifts_the_column_component_only() {
+        let mut vm = Vm::new();
+        vm.cell_style_indices
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((5, 3), 7);
+        vm.insert_cols_on_sheet("sheet1", 2, 1);
+        let styles = vm.cell_style_indices.get("sheet1").unwrap();
+        assert!(!styles.contains_key(&(5, 3)));
+        assert_eq!(styles.get(&(5, 4)), Some(&7));
+    }
+
+    #[test]
+    fn move_range_on_sheet_translates_a_style_index_inside_the_source() {
+        let mut vm = Vm::new();
+        vm.cell_style_indices
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((1, 1), 9);
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        let styles = vm.cell_style_indices.get("sheet1").unwrap();
+        assert!(!styles.contains_key(&(1, 1)));
+        assert_eq!(styles.get(&(10, 10)), Some(&9));
+    }
+
+    #[test]
+    fn move_range_on_sheet_leaves_a_style_index_outside_the_source_untouched() {
+        let mut vm = Vm::new();
+        vm.cell_style_indices
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((50, 50), 9);
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.cell_style_indices.get("sheet1").unwrap().get(&(50, 50)),
+            Some(&9)
+        );
+    }
+
+    #[test]
+    fn move_range_on_sheet_moved_style_index_overwrites_a_stationary_one_at_the_destination() {
+        let mut vm = Vm::new();
+        vm.cell_style_indices
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((1, 1), 1); // moving
+        vm.cell_style_indices
+            .get_mut("sheet1")
+            .unwrap()
+            .insert((10, 10), 999); // stationary, in the way
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.cell_style_indices.get("sheet1").unwrap().get(&(10, 10)),
+            Some(&1)
+        );
     }
 
     #[test]
