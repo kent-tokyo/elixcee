@@ -345,6 +345,10 @@ type RangeBounds = ((u32, u32), (u32, u32));
 /// for `resolve_pending_number_formats`'s "effective" (edits applied) return value.
 type StyleIndexMap = std::collections::HashMap<String, std::collections::HashMap<(u32, u32), u32>>;
 
+/// `<cols>` emission's merge-by-exact-range accumulator (`build_xlsx_sheet`) --
+/// `(hidden, width, style)`, one entry per exact `(min,max)` range.
+type ColAttrsMap = std::collections::BTreeMap<(u32, u32), (bool, Option<f64>, Option<u32>)>;
+
 /// Validates and parses a single-area A1 range address for the bulk-range
 /// Python API (`get_range`/`set_range`). Deliberately NOT a new A1 parser —
 /// delegates to `crate::types::parse_range_addr` for the actual grammar.
@@ -1582,6 +1586,129 @@ impl PyVm {
         Ok(())
     }
 
+    /// Sets 1-based *row*'s DEFAULT style (0.15.0-C2) — applies to any cell in *row*
+    /// that carries no explicit style of its own; a cell's own :meth:`set_style` always
+    /// wins over its row's default. Same argument shapes, safety model, and deferred-
+    /// write behavior as :meth:`set_style` (font/fill/border/alignment/protection/
+    /// named_style, literal-RGB-only colors, resolved at :meth:`save_workbook` time) —
+    /// see that method's own docstring for the full per-argument reference. Out of
+    /// scope: theme-relative color minting, copy-style, named-style creation — same
+    /// exclusions as :meth:`set_style`.
+    ///
+    /// Parameters
+    /// ----------
+    /// row:
+    ///     1-based row number.
+    /// font, fill, border, alignment, protection:
+    ///     Optional dicts, see :meth:`set_style`.
+    /// named_style:
+    ///     Optional existing style name, see :meth:`set_style`.
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; does **not** change the
+    ///     active sheet when given.
+    ///
+    /// Raises ``ValueError`` if *row* is 0 or exceeds Excel's own grid limit
+    /// (1,048,576 rows), an unknown *sheet*, no arguments given, or a malformed
+    /// font/fill/border/alignment/protection value — same validation as
+    /// :meth:`set_style`.
+    #[pyo3(signature = (row, font=None, fill=None, border=None, alignment=None, protection=None, named_style=None, sheet=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_row_style(
+        &mut self,
+        row: u32,
+        font: Option<&Bound<'_, PyDict>>,
+        fill: Option<&Bound<'_, PyDict>>,
+        border: Option<&Bound<'_, PyDict>>,
+        alignment: Option<&Bound<'_, PyDict>>,
+        protection: Option<&Bound<'_, PyDict>>,
+        named_style: Option<&str>,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        const MAX_ROW: u32 = 1_048_576;
+        if font.is_none()
+            && fill.is_none()
+            && border.is_none()
+            && alignment.is_none()
+            && protection.is_none()
+            && named_style.is_none()
+        {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "set_row_style requires at least one of font/fill/border/alignment/protection/named_style",
+            ));
+        }
+        if row == 0 || row > MAX_ROW {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "row must be between 1 and 1_048_576",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let edit = StyleAttrEdit {
+            font: font.map(extract_font_edit).transpose()?,
+            fill: fill.map(extract_fill_edit).transpose()?,
+            border: border.map(extract_border_edit).transpose()?,
+            alignment: alignment.map(extract_alignment_edit).transpose()?,
+            protection: protection.map(extract_protection_edit).transpose()?,
+            named_style: named_style.map(str::to_string),
+        };
+        self.inner.set_row_style_on_sheet(&key, row, &edit);
+        Ok(())
+    }
+
+    /// Column-axis mirror of :meth:`set_row_style` — sets 1-based *col*'s DEFAULT style
+    /// (0.15.0-C2). See that method's own docstring for the full argument reference.
+    ///
+    /// Raises ``ValueError`` if *col* is 0 or exceeds Excel's own grid limit
+    /// (16,384 columns), an unknown *sheet*, no arguments given, or a malformed
+    /// font/fill/border/alignment/protection value.
+    #[pyo3(signature = (col, font=None, fill=None, border=None, alignment=None, protection=None, named_style=None, sheet=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_column_style(
+        &mut self,
+        col: u32,
+        font: Option<&Bound<'_, PyDict>>,
+        fill: Option<&Bound<'_, PyDict>>,
+        border: Option<&Bound<'_, PyDict>>,
+        alignment: Option<&Bound<'_, PyDict>>,
+        protection: Option<&Bound<'_, PyDict>>,
+        named_style: Option<&str>,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        const MAX_COL: u32 = 16_384;
+        if font.is_none()
+            && fill.is_none()
+            && border.is_none()
+            && alignment.is_none()
+            && protection.is_none()
+            && named_style.is_none()
+        {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "set_column_style requires at least one of font/fill/border/alignment/protection/named_style",
+            ));
+        }
+        if col == 0 || col > MAX_COL {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "col must be between 1 and 16_384",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let edit = StyleAttrEdit {
+            font: font.map(extract_font_edit).transpose()?,
+            fill: fill.map(extract_fill_edit).transpose()?,
+            border: border.map(extract_border_edit).transpose()?,
+            alignment: alignment.map(extract_alignment_edit).transpose()?,
+            protection: protection.map(extract_protection_edit).transpose()?,
+            named_style: named_style.map(str::to_string),
+        };
+        self.inner.set_column_style_on_sheet(&key, col, &edit);
+        Ok(())
+    }
+
     /// Copies *source*'s complete style (font, fill, border, number format, alignment,
     /// and protection — everything, matching Excel's own "Format Painter") onto every
     /// cell in *dest* -- 0.15.0-C1. Picks up whatever *source*'s style resolves to at
@@ -2591,16 +2718,34 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             effective_style_indices = Some(indices);
         }
     }
-    // `copy_style` (0.15.0-C1) resolution, CHAINED LAST -- pure index aliasing against
-    // whatever the two passes above already resolved (see
-    // `resolve_pending_style_copies`'s own doc comment). Never produces new styles.xml
-    // bytes, so `new_styles_bytes` is deliberately left untouched here.
+    // `copy_style` (0.15.0-C1) resolution, CHAINED after the two passes above -- pure
+    // index aliasing (see `resolve_pending_style_copies`'s own doc comment). Never
+    // produces new styles.xml bytes, so `new_styles_bytes` is deliberately left
+    // untouched here.
     {
         let chained_indices: &StyleIndexMap = effective_style_indices
             .as_ref()
             .unwrap_or(&vm.cell_style_indices);
         if let Some(indices) = resolve_pending_style_copies(vm, chained_indices) {
             effective_style_indices = Some(indices);
+        }
+    }
+    // `set_row_style`/`set_column_style` (0.15.0-C2) resolution, CHAINED LAST -- shares
+    // the same font/fill/border/cellXf tables `resolve_pending_style_attrs` may have
+    // already grown above (see `resolve_pending_row_column_styles`'s own doc comment).
+    let mut effective_row_styles: Option<RowStyleIndexMap> = None;
+    let mut effective_column_styles: Option<ColumnStyleRangeMap> = None;
+    {
+        let chained_source: &[u8] = new_styles_bytes.as_deref().unwrap_or(styles_source);
+        if let Some((new_xml, rows, cols)) = resolve_pending_row_column_styles(
+            vm,
+            chained_source,
+            &vm.row_styles,
+            &vm.column_styles,
+        )? {
+            new_styles_bytes = Some(new_xml.into_bytes());
+            effective_row_styles = Some(rows);
+            effective_column_styles = Some(cols);
         }
     }
 
@@ -2610,6 +2755,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         let style_override = effective_style_indices
             .as_ref()
             .and_then(|m| m.get(&sheet_name.to_lowercase()));
+        let row_style_override = effective_row_styles
+            .as_ref()
+            .and_then(|m| m.get(&sheet_name.to_lowercase()));
+        let column_style_override = effective_column_styles
+            .as_ref()
+            .and_then(|m| m.get(&sheet_name.to_lowercase()))
+            .map(|v| v.as_slice());
         // .and_then(ensure_r_prefix_bound): same reasoning as workbook_root_attrs above --
         // this sheet's own tableParts/drawing/legacyDrawing/hyperlinks r:id restoration
         // below always hardcodes the literal `r:` prefix, so the source's root attrs must
@@ -2682,7 +2834,16 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         zip.start_file(plan.output_part_name.as_str(), deflated)
             .map_err(|e| e.to_string())?;
         zip.write_all(
-            build_xlsx_sheet(vm, sheet_name, &str_index, &fragments, style_override).as_bytes(),
+            build_xlsx_sheet(
+                vm,
+                sheet_name,
+                &str_index,
+                &fragments,
+                style_override,
+                row_style_override,
+                column_style_override,
+            )
+            .as_bytes(),
         )
         .map_err(|e| e.to_string())?;
     }
@@ -2890,136 +3051,44 @@ fn resolve_pending_number_formats(
 /// the usual order below. Returns `Err` (aborting the whole save) if the requested name
 /// isn't in this file's `<cellStyles>` -- no minting fallback, matching 0.15.0-C's
 /// decision to exclude named-style CREATE from this phase entirely.
-fn resolve_pending_style_attrs(
-    vm: &Vm,
-    starting_styles: &[u8],
-    starting_indices: &StyleIndexMap,
-) -> Result<Option<(String, StyleIndexMap)>, String> {
-    if vm.pending_style_attrs.values().all(|m| m.is_empty()) {
-        return Ok(None);
-    }
-    let xml = String::from_utf8_lossy(starting_styles).into_owned();
-
-    let mut fonts = reader::extract_records(&xml, "fonts", "font");
+/// Extracts the four style-table lists a `StyleAttrEdit` can touch, with the same
+/// single-default-entry fallback `resolve_pending_style_attrs` always used when a table
+/// is entirely absent (a from-scratch `Vm()`'s minimal `XLSX_STYLES`, or a genuinely
+/// malformed source) -- shared by every resolve pass that mints/reuses font/fill/
+/// border/cellXf records (`resolve_pending_style_attrs`,
+/// `resolve_pending_row_column_styles`), so both always see identical starting tables.
+fn extract_style_tables(xml: &str) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    let mut fonts = reader::extract_records(xml, "fonts", "font");
     if fonts.is_empty() {
         fonts.push("<font/>".to_string());
     }
-    let mut fills = reader::extract_records(&xml, "fills", "fill");
+    let mut fills = reader::extract_records(xml, "fills", "fill");
     if fills.is_empty() {
         fills.push("<fill><patternFill patternType=\"none\"/></fill>".to_string());
     }
-    let mut borders = reader::extract_records(&xml, "borders", "border");
+    let mut borders = reader::extract_records(xml, "borders", "border");
     if borders.is_empty() {
         borders.push("<border><left/><right/><top/><bottom/><diagonal/></border>".to_string());
     }
-    let mut xfs = reader::extract_cell_xfs(&xml);
+    let mut xfs = reader::extract_cell_xfs(xml);
     if xfs.is_empty() {
         xfs.push("<xf/>".to_string());
     }
-    let cell_style_xfs = reader::extract_records(&xml, "cellStyleXfs", "xf");
+    (fonts, fills, borders, xfs)
+}
 
-    let mut effective = starting_indices.clone();
-
-    for (sheet_key, edits) in &vm.pending_style_attrs {
-        if edits.is_empty() {
-            continue;
-        }
-        let sheet_indices = effective.entry(sheet_key.clone()).or_default();
-        for (&(row, col), edit) in edits {
-            let current_index = sheet_indices.get(&(row, col)).copied().unwrap_or(0) as usize;
-            let mut current_xf = xfs
-                .get(current_index)
-                .cloned()
-                .unwrap_or_else(|| "<xf/>".to_string());
-
-            if let Some(name) = &edit.named_style {
-                let xf_id = reader::named_style_xf_id(&xml, name).ok_or_else(|| {
-                    format!("named style '{name}' not found in this file's <cellStyles>")
-                })?;
-                let style_xf = cell_style_xfs
-                    .get(xf_id as usize)
-                    .cloned()
-                    .unwrap_or_else(|| "<xf/>".to_string());
-                current_xf = reader::with_attr(&style_xf, "xfId", &xf_id.to_string());
-            }
-
-            if let Some(font_edit) = &edit.font {
-                let font_id = reader::span_attr_u32(&current_xf, "fontId") as usize;
-                let current_font = fonts
-                    .get(font_id)
-                    .cloned()
-                    .unwrap_or_else(|| "<font/>".to_string());
-                let candidate = reader::with_font_edit(&current_font, font_edit);
-                let new_font_id = match fonts.iter().position(|f| f == &candidate) {
-                    Some(i) => i as u32,
-                    None => {
-                        fonts.push(candidate);
-                        (fonts.len() - 1) as u32
-                    }
-                };
-                current_xf = reader::with_attr(&current_xf, "fontId", &new_font_id.to_string());
-                current_xf = reader::with_attr(&current_xf, "applyFont", "1");
-            }
-            if let Some(fill_edit) = &edit.fill {
-                let candidate = reader::build_solid_fill(&fill_edit.color_argb);
-                let new_fill_id = match fills.iter().position(|f| f == &candidate) {
-                    Some(i) => i as u32,
-                    None => {
-                        fills.push(candidate);
-                        (fills.len() - 1) as u32
-                    }
-                };
-                current_xf = reader::with_attr(&current_xf, "fillId", &new_fill_id.to_string());
-                current_xf = reader::with_attr(&current_xf, "applyFill", "1");
-            }
-            if let Some(border_edit) = &edit.border {
-                let border_id = reader::span_attr_u32(&current_xf, "borderId") as usize;
-                let current_border = borders.get(border_id).cloned().unwrap_or_else(|| {
-                    "<border><left/><right/><top/><bottom/><diagonal/></border>".to_string()
-                });
-                let candidate = reader::with_border_edit(&current_border, border_edit);
-                let new_border_id = match borders.iter().position(|b| b == &candidate) {
-                    Some(i) => i as u32,
-                    None => {
-                        borders.push(candidate);
-                        (borders.len() - 1) as u32
-                    }
-                };
-                current_xf = reader::with_attr(&current_xf, "borderId", &new_border_id.to_string());
-                current_xf = reader::with_attr(&current_xf, "applyBorder", "1");
-            }
-            if let Some(alignment_edit) = &edit.alignment {
-                let new_alignment = reader::merged_alignment_span(&current_xf, alignment_edit);
-                current_xf = reader::with_ordered_child(
-                    &current_xf,
-                    "alignment",
-                    &reader::XF_CHILD_ORDER,
-                    Some(&new_alignment),
-                );
-                current_xf = reader::with_attr(&current_xf, "applyAlignment", "1");
-            }
-            if let Some(protection_edit) = &edit.protection {
-                let new_protection = reader::merged_protection_span(&current_xf, protection_edit);
-                current_xf = reader::with_ordered_child(
-                    &current_xf,
-                    "protection",
-                    &reader::XF_CHILD_ORDER,
-                    Some(&new_protection),
-                );
-                current_xf = reader::with_attr(&current_xf, "applyProtection", "1");
-            }
-
-            let new_index = match xfs.iter().position(|xf| xf == &current_xf) {
-                Some(i) => i as u32,
-                None => {
-                    xfs.push(current_xf);
-                    (xfs.len() - 1) as u32
-                }
-            };
-            sheet_indices.insert((row, col), new_index);
-        }
-    }
-
+/// Re-serializes the four style tables back into `xml`'s `<styleSheet>`, replacing each
+/// existing `<fonts>`/`<fills>`/`<borders>`/`<cellXfs>` element wholesale (or inserting
+/// one at the correct schema position if the source never had it at all -- defensive
+/// fallback only, every real file and `XLSX_STYLES` itself always has all four). Shared
+/// by every resolve pass that can grow these tables.
+fn reserialize_style_tables(
+    xml: String,
+    fonts: &[String],
+    fills: &[String],
+    borders: &[String],
+    xfs: &[String],
+) -> String {
     let mut new_xml = xml;
     let new_fonts = format!(
         "<fonts count=\"{}\">{}</fonts>",
@@ -3059,8 +3128,253 @@ fn resolve_pending_style_attrs(
         Some(old) => new_xml.replacen(old.as_str(), &new_cell_xfs, 1),
         None => new_xml.replacen("</styleSheet>", &format!("{new_cell_xfs}</styleSheet>"), 1),
     };
+    new_xml
+}
 
+/// Applies one `StyleAttrEdit` against `current_xf_index`'s existing `<xf>` record --
+/// clones it, merges in only the requested font/fill/border/alignment/protection/
+/// named-style properties, find-or-appends the result, and returns its index. Shared by
+/// `resolve_pending_style_attrs` (per-cell, 0.15.0-B) and
+/// `resolve_pending_row_column_styles` (per-row/-column, 0.15.0-C2) -- both need the
+/// identical clone-merge-dedup logic; only WHERE the resulting index gets stored
+/// afterward differs between the two callers.
+#[allow(clippy::too_many_arguments)]
+fn apply_style_edit_to_xf(
+    current_xf_index: usize,
+    edit: &vm::StyleAttrEdit,
+    xfs: &mut Vec<String>,
+    fonts: &mut Vec<String>,
+    fills: &mut Vec<String>,
+    borders: &mut Vec<String>,
+    cell_style_xfs: &[String],
+    xml: &str,
+) -> Result<u32, String> {
+    let mut current_xf = xfs
+        .get(current_xf_index)
+        .cloned()
+        .unwrap_or_else(|| "<xf/>".to_string());
+
+    if let Some(name) = &edit.named_style {
+        let xf_id = reader::named_style_xf_id(xml, name)
+            .ok_or_else(|| format!("named style '{name}' not found in this file's <cellStyles>"))?;
+        let style_xf = cell_style_xfs
+            .get(xf_id as usize)
+            .cloned()
+            .unwrap_or_else(|| "<xf/>".to_string());
+        current_xf = reader::with_attr(&style_xf, "xfId", &xf_id.to_string());
+    }
+
+    if let Some(font_edit) = &edit.font {
+        let font_id = reader::span_attr_u32(&current_xf, "fontId") as usize;
+        let current_font = fonts
+            .get(font_id)
+            .cloned()
+            .unwrap_or_else(|| "<font/>".to_string());
+        let candidate = reader::with_font_edit(&current_font, font_edit);
+        let new_font_id = match fonts.iter().position(|f| f == &candidate) {
+            Some(i) => i as u32,
+            None => {
+                fonts.push(candidate);
+                (fonts.len() - 1) as u32
+            }
+        };
+        current_xf = reader::with_attr(&current_xf, "fontId", &new_font_id.to_string());
+        current_xf = reader::with_attr(&current_xf, "applyFont", "1");
+    }
+    if let Some(fill_edit) = &edit.fill {
+        let candidate = reader::build_solid_fill(&fill_edit.color_argb);
+        let new_fill_id = match fills.iter().position(|f| f == &candidate) {
+            Some(i) => i as u32,
+            None => {
+                fills.push(candidate);
+                (fills.len() - 1) as u32
+            }
+        };
+        current_xf = reader::with_attr(&current_xf, "fillId", &new_fill_id.to_string());
+        current_xf = reader::with_attr(&current_xf, "applyFill", "1");
+    }
+    if let Some(border_edit) = &edit.border {
+        let border_id = reader::span_attr_u32(&current_xf, "borderId") as usize;
+        let current_border = borders.get(border_id).cloned().unwrap_or_else(|| {
+            "<border><left/><right/><top/><bottom/><diagonal/></border>".to_string()
+        });
+        let candidate = reader::with_border_edit(&current_border, border_edit);
+        let new_border_id = match borders.iter().position(|b| b == &candidate) {
+            Some(i) => i as u32,
+            None => {
+                borders.push(candidate);
+                (borders.len() - 1) as u32
+            }
+        };
+        current_xf = reader::with_attr(&current_xf, "borderId", &new_border_id.to_string());
+        current_xf = reader::with_attr(&current_xf, "applyBorder", "1");
+    }
+    if let Some(alignment_edit) = &edit.alignment {
+        let new_alignment = reader::merged_alignment_span(&current_xf, alignment_edit);
+        current_xf = reader::with_ordered_child(
+            &current_xf,
+            "alignment",
+            &reader::XF_CHILD_ORDER,
+            Some(&new_alignment),
+        );
+        current_xf = reader::with_attr(&current_xf, "applyAlignment", "1");
+    }
+    if let Some(protection_edit) = &edit.protection {
+        let new_protection = reader::merged_protection_span(&current_xf, protection_edit);
+        current_xf = reader::with_ordered_child(
+            &current_xf,
+            "protection",
+            &reader::XF_CHILD_ORDER,
+            Some(&new_protection),
+        );
+        current_xf = reader::with_attr(&current_xf, "applyProtection", "1");
+    }
+
+    Ok(match xfs.iter().position(|xf| xf == &current_xf) {
+        Some(i) => i as u32,
+        None => {
+            xfs.push(current_xf);
+            (xfs.len() - 1) as u32
+        }
+    })
+}
+
+fn resolve_pending_style_attrs(
+    vm: &Vm,
+    starting_styles: &[u8],
+    starting_indices: &StyleIndexMap,
+) -> Result<Option<(String, StyleIndexMap)>, String> {
+    if vm.pending_style_attrs.values().all(|m| m.is_empty()) {
+        return Ok(None);
+    }
+    let xml = String::from_utf8_lossy(starting_styles).into_owned();
+    let (mut fonts, mut fills, mut borders, mut xfs) = extract_style_tables(&xml);
+    let cell_style_xfs = reader::extract_records(&xml, "cellStyleXfs", "xf");
+
+    let mut effective = starting_indices.clone();
+
+    for (sheet_key, edits) in &vm.pending_style_attrs {
+        if edits.is_empty() {
+            continue;
+        }
+        let sheet_indices = effective.entry(sheet_key.clone()).or_default();
+        for (&(row, col), edit) in edits {
+            let current_index = sheet_indices.get(&(row, col)).copied().unwrap_or(0) as usize;
+            let new_index = apply_style_edit_to_xf(
+                current_index,
+                edit,
+                &mut xfs,
+                &mut fonts,
+                &mut fills,
+                &mut borders,
+                &cell_style_xfs,
+                &xml,
+            )?;
+            sheet_indices.insert((row, col), new_index);
+        }
+    }
+
+    let new_xml = reserialize_style_tables(xml, &fonts, &fills, &borders, &xfs);
     Ok(Some((new_xml, effective)))
+}
+
+type RowStyleIndexMap = std::collections::HashMap<String, std::collections::HashMap<u32, u32>>;
+type ColumnStyleRangeMap = std::collections::HashMap<String, Vec<(u32, u32, u32)>>;
+
+/// Resolves `vm.pending_row_styles`/`vm.pending_column_styles` (`set_row_style`/
+/// `set_column_style`, 0.15.0-C2) -- chained after `resolve_pending_style_attrs` at save
+/// time, sharing the SAME font/fill/border/cellXf tables (both mint into the same
+/// `<cellXfs>`, so an independent pass starting fresh here would risk near-duplicate
+/// records or index collisions with whatever the cell-level pass just appended -- same
+/// "must chain, not run independently" reasoning as `resolve_pending_style_attrs`'s own
+/// doc comment against `resolve_pending_number_formats`).
+///
+/// Row styles resolve like `pending_style_attrs`'s per-cell case (a plain per-row index
+/// map). Column styles are range-shaped (`(min, max, style_index)`, like
+/// `column_widths`) -- setting ONE column's style splits any existing range that
+/// contains it into up to two remaining sub-ranges (before/after), then appends a fresh
+/// singleton `(col, col, new_index)` for the touched column, mirroring how real Excel
+/// itself fragments a `<cols>` run when an individual column's formatting changes.
+fn resolve_pending_row_column_styles(
+    vm: &Vm,
+    starting_styles: &[u8],
+    starting_row_styles: &RowStyleIndexMap,
+    starting_column_styles: &ColumnStyleRangeMap,
+) -> Result<Option<(String, RowStyleIndexMap, ColumnStyleRangeMap)>, String> {
+    if vm.pending_row_styles.values().all(|m| m.is_empty())
+        && vm.pending_column_styles.values().all(|m| m.is_empty())
+    {
+        return Ok(None);
+    }
+    let xml = String::from_utf8_lossy(starting_styles).into_owned();
+    let (mut fonts, mut fills, mut borders, mut xfs) = extract_style_tables(&xml);
+    let cell_style_xfs = reader::extract_records(&xml, "cellStyleXfs", "xf");
+
+    let mut effective_rows = starting_row_styles.clone();
+    let mut effective_cols = starting_column_styles.clone();
+
+    for (sheet_key, edits) in &vm.pending_row_styles {
+        if edits.is_empty() {
+            continue;
+        }
+        let sheet_rows = effective_rows.entry(sheet_key.clone()).or_default();
+        for (&row, edit) in edits {
+            let current_index = sheet_rows.get(&row).copied().unwrap_or(0) as usize;
+            let new_index = apply_style_edit_to_xf(
+                current_index,
+                edit,
+                &mut xfs,
+                &mut fonts,
+                &mut fills,
+                &mut borders,
+                &cell_style_xfs,
+                &xml,
+            )?;
+            sheet_rows.insert(row, new_index);
+        }
+    }
+
+    for (sheet_key, edits) in &vm.pending_column_styles {
+        if edits.is_empty() {
+            continue;
+        }
+        let sheet_cols = effective_cols.entry(sheet_key.clone()).or_default();
+        for (&col, edit) in edits {
+            let current_index = sheet_cols
+                .iter()
+                .find(|&&(min, max, _)| min <= col && col <= max)
+                .map(|&(_, _, s)| s)
+                .unwrap_or(0) as usize;
+            let new_index = apply_style_edit_to_xf(
+                current_index,
+                edit,
+                &mut xfs,
+                &mut fonts,
+                &mut fills,
+                &mut borders,
+                &cell_style_xfs,
+                &xml,
+            )?;
+            let mut remaining: Vec<(u32, u32, u32)> = Vec::with_capacity(sheet_cols.len() + 1);
+            for &(min, max, style) in sheet_cols.iter() {
+                if col < min || col > max {
+                    remaining.push((min, max, style));
+                    continue;
+                }
+                if min < col {
+                    remaining.push((min, col - 1, style));
+                }
+                if col < max {
+                    remaining.push((col + 1, max, style));
+                }
+            }
+            remaining.push((col, col, new_index));
+            *sheet_cols = remaining;
+        }
+    }
+
+    let new_xml = reserialize_style_tables(xml, &fonts, &fills, &borders, &xfs);
+    Ok(Some((new_xml, effective_rows, effective_cols)))
 }
 
 /// Resolves `vm.pending_style_copies` (`copy_style`, 0.15.0-C1) against `starting_indices`
@@ -3392,6 +3706,8 @@ fn build_xlsx_sheet(
     str_index: &std::collections::HashMap<String, usize>,
     fragments: &OpaqueWorksheetFragments,
     style_override: Option<&std::collections::HashMap<(u32, u32), u32>>,
+    row_style_override: Option<&std::collections::HashMap<u32, u32>>,
+    column_style_override: Option<&[(u32, u32, u32)]>,
 ) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
     match fragments.root_attrs {
@@ -3436,6 +3752,12 @@ fn build_xlsx_sheet(
     let hidden_rows = visibility.map(|v| v.hidden_rows.as_slice()).unwrap_or(&[]);
     let row_heights = vm.row_heights.get(&sheet_key);
     let column_widths = vm.column_widths.get(&sheet_key);
+    // `row_style_override`/`column_style_override` (0.15.0-C2) follow the exact same
+    // present-for-every-sheet-whenever-anything-is-pending-anywhere convention as
+    // `style_override` above.
+    let row_styles = row_style_override.or_else(|| vm.row_styles.get(&sheet_key));
+    let column_styles =
+        column_style_override.or_else(|| vm.column_styles.get(&sheet_key).map(|v| v.as_slice()));
 
     // <cols> — schema-ordered before <sheetData>. Merged by exact (min,max)
     // range rather than emitted as two independent passes: a source `<col>`
@@ -3450,8 +3772,7 @@ fn build_xlsx_sheet(
     // "Implementation notes for P2: row height / column width") land as
     // separate `<col>` elements, same as those independent, unmerged
     // real-world shapes.
-    let mut col_attrs: std::collections::BTreeMap<(u32, u32), (bool, Option<f64>)> =
-        std::collections::BTreeMap::new();
+    let mut col_attrs: ColAttrsMap = std::collections::BTreeMap::new();
     for iv in hidden_columns {
         col_attrs.entry((iv.start, iv.end)).or_default().0 = true;
     }
@@ -3460,15 +3781,25 @@ fn build_xlsx_sheet(
             col_attrs.entry((min, max)).or_default().1 = Some(width);
         }
     }
+    // `style=` (0.15.0-C2) merges onto the same exact-range convention as hidden/width
+    // above -- a style range that doesn't share its exact (min,max) with a hidden/width
+    // range lands as its own separate `<col>` element, same as the pre-existing
+    // hidden/width mismatch case already does.
+    if let Some(styles) = column_styles {
+        for &(min, max, style) in styles {
+            col_attrs.entry((min, max)).or_default().2 = Some(style);
+        }
+    }
     if !col_attrs.is_empty() {
         out.push_str("<cols>\n");
-        for ((min, max), (hidden, width)) in col_attrs {
+        for ((min, max), (hidden, width, style)) in col_attrs {
             let width_attr = width
                 .map(|w| format!(" customWidth=\"1\" width=\"{w}\""))
                 .unwrap_or_default();
+            let style_attr = style.map(|s| format!(" style=\"{s}\"")).unwrap_or_default();
             let hidden_attr = if hidden { " hidden=\"1\"" } else { "" };
             out.push_str(&format!(
-                "<col min=\"{min}\" max=\"{max}\"{width_attr}{hidden_attr}/>\n"
+                "<col min=\"{min}\" max=\"{max}\"{width_attr}{style_attr}{hidden_attr}/>\n"
             ));
         }
         out.push_str("</cols>\n");
@@ -3500,6 +3831,11 @@ fn build_xlsx_sheet(
                 by_row.entry(r).or_default();
             }
         }
+        if let Some(styles) = row_styles {
+            for &r in styles.keys() {
+                by_row.entry(r).or_default();
+            }
+        }
         for (row, mut row_cells) in by_row {
             row_cells.sort_by_key(|&(&(_, c), _)| c);
             let row_hidden = hidden_rows
@@ -3510,8 +3846,14 @@ fn build_xlsx_sheet(
                 .and_then(|m| m.get(&row))
                 .map(|ht| format!(" customHeight=\"1\" ht=\"{ht}\""))
                 .unwrap_or_default();
+            let style_attr = row_styles
+                .and_then(|m| m.get(&row))
+                .map(|s| format!(" s=\"{s}\" customFormat=\"1\""))
+                .unwrap_or_default();
 
-            out.push_str(&format!("<row r=\"{row}\"{height_attr}{hidden_attr}>\n"));
+            out.push_str(&format!(
+                "<row r=\"{row}\"{height_attr}{style_attr}{hidden_attr}>\n"
+            ));
             for (&(r, c), content) in row_cells {
                 let cell_ref = format!("{}{}", xlsx_col_letters(c), r);
                 let style_idx = style_indices.and_then(|m| m.get(&(r, c)).copied());
@@ -4702,6 +5044,165 @@ mod tests {
         assert_eq!(effective["sheet1"][&(3, 3)], 9);
     }
 
+    // ── 0.15.0-C2: resolve_pending_row_column_styles ─────────────────────────────
+
+    #[test]
+    fn resolve_pending_row_column_styles_returns_none_with_no_pending_edits() {
+        let vm = Vm::new();
+        assert!(
+            resolve_pending_row_column_styles(
+                &vm,
+                XLSX_STYLES.as_bytes(),
+                &vm.row_styles,
+                &vm.column_styles
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn resolve_pending_row_column_styles_resolves_a_row_style() {
+        let mut vm = Vm::new();
+        vm.set_row_style_on_sheet(
+            "sheet1",
+            3,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        let (new_xml, rows, cols) = resolve_pending_row_column_styles(
+            &vm,
+            XLSX_STYLES.as_bytes(),
+            &vm.row_styles,
+            &vm.column_styles,
+        )
+        .unwrap()
+        .expect("pending row edit");
+        assert!(new_xml.contains("<b val=\"1\"/>"));
+        assert_ne!(rows["sheet1"][&3], 0);
+        assert!(cols.is_empty() || cols["sheet1"].is_empty());
+    }
+
+    #[test]
+    fn resolve_pending_row_column_styles_resolves_a_column_style() {
+        let mut vm = Vm::new();
+        vm.set_column_style_on_sheet(
+            "sheet1",
+            2,
+            &style_attr_edit(StyleAttrEdit {
+                fill: Some(FillEdit {
+                    color_argb: "FF4472C4".to_string(),
+                }),
+                ..Default::default()
+            }),
+        );
+        let (new_xml, _, cols) = resolve_pending_row_column_styles(
+            &vm,
+            XLSX_STYLES.as_bytes(),
+            &vm.row_styles,
+            &vm.column_styles,
+        )
+        .unwrap()
+        .expect("pending column edit");
+        assert!(new_xml.contains("<fgColor rgb=\"FF4472C4\"/>"));
+        assert_eq!(cols["sheet1"], vec![(2, 2, 1)]);
+    }
+
+    #[test]
+    fn resolve_pending_row_column_styles_splits_an_existing_column_range_when_setting_one_column() {
+        let mut vm = Vm::new();
+        vm.column_styles
+            .insert("sheet1".to_string(), vec![(1, 10, 3u32)]);
+        vm.set_column_style_on_sheet(
+            "sheet1",
+            5,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        let (_, _, cols) = resolve_pending_row_column_styles(
+            &vm,
+            XLSX_STYLES.as_bytes(),
+            &vm.row_styles,
+            &vm.column_styles,
+        )
+        .unwrap()
+        .expect("pending column edit");
+        let mut ranges = cols["sheet1"].clone();
+        ranges.sort();
+        // The (1,10,3) range splits into (1,4,3) and (6,10,3), plus a fresh (5,5,new)
+        // singleton for the touched column -- columns 1-4 and 6-10 keep the ORIGINAL
+        // style index 3 unchanged, only column 5 gets the new one.
+        assert_eq!(ranges.len(), 3);
+        assert!(ranges.contains(&(1, 4, 3)));
+        assert!(ranges.contains(&(6, 10, 3)));
+        let touched = ranges
+            .iter()
+            .find(|&&(min, max, _)| min == 5 && max == 5)
+            .expect("a (5,5,_) singleton for the touched column");
+        assert_ne!(touched.2, 3);
+    }
+
+    #[test]
+    fn resolve_pending_row_column_styles_chains_onto_the_style_attrs_passs_own_output() {
+        // The mandatory chaining fix (0.15.0-B's own Finding 1, extended here): a cell
+        // touched by set_style AND a row touched by set_row_style before one save must
+        // resolve into the SAME cellXfs/fonts/fills/borders tables, not two independent
+        // ones that could mint near-duplicate records or collide on index.
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        vm.set_row_style_on_sheet(
+            "sheet1",
+            9,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        let starting_indices = vm.cell_style_indices.clone();
+        let (style_attrs_xml, style_attrs_effective) =
+            resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &starting_indices)
+                .unwrap()
+                .expect("pending style edit");
+        let (_, rows, _) = resolve_pending_row_column_styles(
+            &vm,
+            style_attrs_xml.as_bytes(),
+            &vm.row_styles,
+            &vm.column_styles,
+        )
+        .unwrap()
+        .expect("pending row edit");
+        // Both edits request the identical bold-only change, so they must dedup onto
+        // the SAME cellXf index the cell-level pass already minted -- not a second,
+        // near-duplicate record.
+        assert_eq!(rows["sheet1"][&9], style_attrs_effective["sheet1"][&(1, 1)]);
+    }
+
     #[test]
     fn copy_style_on_a_from_scratch_vm_survives_a_save_and_reload() {
         let mut vm = Vm::new();
@@ -4814,6 +5315,206 @@ mod tests {
         assert!(styles_xml.contains("<b val=\"1\"/>"));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn set_row_style_and_set_column_style_survive_a_save_and_reload() {
+        let mut vm = Vm::new();
+        vm.set_row_style_on_sheet(
+            "sheet1",
+            3,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        vm.set_column_style_on_sheet(
+            "sheet1",
+            2,
+            &style_attr_edit(StyleAttrEdit {
+                fill: Some(FillEdit {
+                    color_argb: "FF4472C4".to_string(),
+                }),
+                ..Default::default()
+            }),
+        );
+
+        let path = "/tmp/elixcee_test_row_column_style_from_scratch.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+
+        let bytes = std::fs::read(path).expect("read output");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open zip");
+        let mut styles_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("xl/styles.xml").expect("styles.xml"),
+            &mut styles_xml,
+        )
+        .expect("read styles.xml");
+        assert!(styles_xml.contains("<b val=\"1\"/>"));
+        assert!(styles_xml.contains("<fgColor rgb=\"FF4472C4\"/>"));
+
+        let mut sheet_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("xl/worksheets/sheet1.xml").expect("sheet1.xml"),
+            &mut sheet_xml,
+        )
+        .expect("read sheet1.xml");
+        assert!(sheet_xml.contains("customFormat=\"1\""));
+        assert!(sheet_xml.contains("<row r=\"3\""));
+        assert!(sheet_xml.contains("<col min=\"2\" max=\"2\""));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_cells_own_set_style_wins_over_its_rows_default_style_on_reload() {
+        // Real Excel precedence: a cell's own explicit s= always overrides its row's
+        // customFormat default -- this project's job is only to persist both facts
+        // independently (row_styles vs. cell_style_indices are separate fields), never
+        // to resolve precedence itself.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (3, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Str("own style".to_string()),
+            },
+        );
+        vm.set_style_on_sheet(
+            "sheet1",
+            3,
+            1,
+            3,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    italic: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        vm.set_row_style_on_sheet(
+            "sheet1",
+            3,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+
+        let path = "/tmp/elixcee_test_row_style_vs_cell_style_precedence.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+
+        let bytes = std::fs::read(path).expect("read output");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open zip");
+        let mut sheet_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("xl/worksheets/sheet1.xml").expect("sheet1.xml"),
+            &mut sheet_xml,
+        )
+        .expect("read sheet1.xml");
+        // The <row> element carries the row's own default style index...
+        let row_style = sheet_xml
+            .split("<row r=\"3\"")
+            .nth(1)
+            .and_then(|s| s.split('>').next())
+            .and_then(|s| s.split("s=\"").nth(1))
+            .and_then(|s| s.split('"').next())
+            .expect("row 3 has an s= attribute")
+            .to_string();
+        // ...and the cell keeps its OWN, different style index, not the row's.
+        let cell_style = sheet_xml
+            .split("r=\"A3\"")
+            .nth(1)
+            .and_then(|s| s.split('>').next())
+            .and_then(|s| s.split("s=\"").nth(1))
+            .and_then(|s| s.split('"').next())
+            .expect("A3 has an s= attribute");
+        assert_ne!(row_style, cell_style);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_shifts_row_styles() {
+        let mut vm = Vm::new();
+        vm.row_styles.insert(
+            "sheet1".to_string(),
+            std::collections::HashMap::from([(5u32, 3u32)]),
+        );
+        vm.insert_rows_on_sheet("sheet1", 1, 2);
+        assert_eq!(vm.row_styles.get("sheet1").unwrap().get(&7), Some(&3));
+        assert!(!vm.row_styles.get("sheet1").unwrap().contains_key(&5));
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_drops_a_row_style_inside_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.row_styles.insert(
+            "sheet1".to_string(),
+            std::collections::HashMap::from([(5u32, 3u32)]),
+        );
+        vm.delete_rows_on_sheet("sheet1", 4, 3);
+        assert!(vm.row_styles.get("sheet1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_shifts_column_styles() {
+        let mut vm = Vm::new();
+        vm.column_styles
+            .insert("sheet1".to_string(), vec![(3, 5, 3u32)]);
+        vm.insert_cols_on_sheet("sheet1", 1, 2);
+        assert_eq!(vm.column_styles.get("sheet1").unwrap(), &vec![(5, 7, 3)]);
+    }
+
+    #[test]
+    fn rename_sheet_re_keys_row_styles_and_column_styles() {
+        let mut vm = Vm::new();
+        vm.row_styles.insert(
+            "sheet1".to_string(),
+            std::collections::HashMap::from([(3u32, 5u32)]),
+        );
+        vm.column_styles
+            .insert("sheet1".to_string(), vec![(1, 2, 7)]);
+        vm.pending_row_styles.insert(
+            "sheet1".to_string(),
+            std::collections::HashMap::from([(9u32, StyleAttrEdit::default())]),
+        );
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+        assert!(!vm.row_styles.contains_key("sheet1"));
+        assert_eq!(vm.row_styles.get("renamed").unwrap().get(&3), Some(&5));
+        assert_eq!(vm.column_styles.get("renamed").unwrap(), &vec![(1, 2, 7)]);
+        assert!(
+            vm.pending_row_styles
+                .get("renamed")
+                .unwrap()
+                .contains_key(&9)
+        );
+    }
+
+    #[test]
+    fn remove_sheet_clears_row_styles_and_column_styles() {
+        // delete_sheet no-ops on the ACTIVE sheet (matches every other remove_sheet
+        // test in this codebase) -- "Sheet1" stays active by construction, so create
+        // and delete a second, non-active sheet instead.
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet2");
+        vm.row_styles.insert(
+            "sheet2".to_string(),
+            std::collections::HashMap::from([(3u32, 5u32)]),
+        );
+        vm.column_styles
+            .insert("sheet2".to_string(), vec![(1, 2, 7)]);
+        vm.delete_sheet("Sheet2").unwrap();
+        assert!(!vm.row_styles.contains_key("sheet2"));
+        assert!(!vm.column_styles.contains_key("sheet2"));
     }
 
     #[test]

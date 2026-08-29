@@ -194,6 +194,8 @@ mod tests {
             sheet_state: None,
             row_heights: HashMap::new(),
             column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
         }
     }
 

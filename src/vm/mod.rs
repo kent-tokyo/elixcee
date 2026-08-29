@@ -727,6 +727,43 @@ pub struct StyleAttrEdit {
     pub named_style: Option<String>,
 }
 
+/// Merges `edit`'s fields onto `existing` in place -- shared by `set_style_on_sheet`
+/// (per-cell), `set_row_style_on_sheet`, and `set_column_style_on_sheet` (0.15.0-C2),
+/// since all three need the identical "don't overwrite a field already pending from an
+/// earlier call" contract described on `StyleAttrEdit`'s own doc comment.
+fn merge_style_attr_edit(existing: &mut StyleAttrEdit, edit: &StyleAttrEdit) {
+    if let Some(font) = &edit.font {
+        existing
+            .font
+            .get_or_insert_with(Default::default)
+            .merge_from(font);
+    }
+    if edit.fill.is_some() {
+        existing.fill = edit.fill.clone();
+    }
+    if let Some(border) = &edit.border {
+        existing
+            .border
+            .get_or_insert_with(Default::default)
+            .merge_from(border);
+    }
+    if let Some(alignment) = &edit.alignment {
+        existing
+            .alignment
+            .get_or_insert_with(Default::default)
+            .merge_from(alignment);
+    }
+    if let Some(protection) = &edit.protection {
+        existing
+            .protection
+            .get_or_insert_with(Default::default)
+            .merge_from(protection);
+    }
+    if edit.named_style.is_some() {
+        existing.named_style = edit.named_style.clone();
+    }
+}
+
 pub struct Vm {
     /// Per-sheet cell storage. Key is sheet name (lowercase for lookup).
     sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
@@ -946,6 +983,16 @@ pub struct Vm {
     /// `copy_style` call -- a deliberate, documented fixed-pass-order rule (like the
     /// number-format/style-attrs chain itself), not true call-order tracking.
     pub(crate) pending_style_copies: StyleCopyMap,
+    /// Rows with a `set_row_style` edit since load (0.15.0-C2), not yet resolved --
+    /// keyed by sheet then 1-based row index, same deferred-to-save-time shape as
+    /// `pending_style_attrs` (reuses the exact same `StyleAttrEdit`/merge machinery,
+    /// just stored against a row instead of a cell). Chained into the SAME styles.xml
+    /// resolve pass as `pending_style_attrs` (`resolve_pending_row_column_styles`,
+    /// `src/lib.rs`) rather than an independent one, for the same silent-drop-risk
+    /// reason `pending_style_attrs`'s own doc comment explains.
+    pub(crate) pending_row_styles: HashMap<String, HashMap<u32, StyleAttrEdit>>,
+    /// Column-axis mirror of `pending_row_styles` -- see that field's own doc comment.
+    pub(crate) pending_column_styles: HashMap<String, HashMap<u32, StyleAttrEdit>>,
     /// Per-sheet whole-tab visibility (P2), keyed the same way as `merged_ranges`.
     /// Populated by `populate_from_sheets` from the reader's `WorkbookSheet::
     /// sheet_state`; sparse like `merged_ranges`/`sheet_visibility` -- only sheets
@@ -977,6 +1024,19 @@ pub struct Vm {
     /// status as `row_heights` above, on the column axis instead
     /// (`shift_column_widths_for_structural_edit`).
     pub(crate) column_widths: HashMap<String, Vec<(u32, u32, f64)>>,
+    /// Per-sheet, per-row default style index (0.15.0-C2), keyed the same way as
+    /// `row_heights`. Populated by `populate_from_sheets` from the reader's
+    /// `WorkbookSheet::row_styles`. Write API: `set_row_style` (deferred via
+    /// `pending_row_styles`, resolved at save time same as `set_style`). Shifts on a
+    /// row-axis structural edit (`shift_row_styles_for_structural_edit`), same as
+    /// `row_heights`; deliberately NOT touched by `move_range_on_sheet`, same
+    /// reasoning as `row_heights`/`sheet_visibility` -- a row's default style belongs
+    /// to the row, not to cell content moving through it.
+    pub(crate) row_styles: HashMap<String, HashMap<u32, u32>>,
+    /// Column-axis mirror of `row_styles` -- see that field's own doc comment.
+    /// Write API: `set_column_style`. Shifts via
+    /// `shift_column_styles_for_structural_edit`, same as `column_widths`.
+    pub(crate) column_styles: HashMap<String, Vec<(u32, u32, u32)>>,
     /// Per-sheet origin facts (0.10.0-A), keyed the same way as `merged_ranges`.
     /// Populated unconditionally by `populate_from_sheets` for every sheet that came from
     /// a real `WorkbookSheet` (unlike `merged_ranges`/`sheet_visibility`/
@@ -1085,9 +1145,13 @@ impl Vm {
             pending_number_formats: HashMap::new(),
             pending_style_attrs: HashMap::new(),
             pending_style_copies: HashMap::new(),
+            pending_row_styles: HashMap::new(),
+            pending_column_styles: HashMap::new(),
             sheet_states: HashMap::new(),
             row_heights: HashMap::new(),
             column_widths: HashMap::new(),
+            row_styles: HashMap::new(),
+            column_styles: HashMap::new(),
             worksheet_origins: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
@@ -1406,6 +1470,54 @@ impl Vm {
         self.column_widths.insert(key.to_string(), shifted);
     }
 
+    /// Row-axis mirror of `shift_row_heights_for_structural_edit`, for `row_styles`
+    /// (0.15.0-C2) instead of `row_heights` -- identical shift logic, just a `u32`
+    /// style index carried through instead of an `f64` height.
+    fn shift_row_styles_for_structural_edit(&mut self, key: &str, edit: formula::StructuralEdit) {
+        let Some(styles) = self.row_styles.get(key) else {
+            return;
+        };
+        let mut shifted = HashMap::new();
+        for (&row, &style) in styles {
+            match formula::shift_cell_coord(row, edit) {
+                formula::CellShift::Unchanged => {
+                    shifted.insert(row, style);
+                }
+                formula::CellShift::Deleted => {}
+                formula::CellShift::Moved(new_row) => {
+                    shifted.insert(new_row, style);
+                }
+            }
+        }
+        self.row_styles.insert(key.to_string(), shifted);
+    }
+
+    /// Column-axis mirror of `shift_column_widths_for_structural_edit`, for
+    /// `column_styles` (0.15.0-C2) instead of `column_widths` -- identical shift
+    /// logic, just a `u32` style index carried through instead of an `f64` width.
+    fn shift_column_styles_for_structural_edit(
+        &mut self,
+        key: &str,
+        edit: formula::StructuralEdit,
+    ) {
+        let Some(styles) = self.column_styles.get(key) else {
+            return;
+        };
+        let shifted: Vec<(u32, u32, u32)> = styles
+            .iter()
+            .filter_map(|&(min, max, style)| {
+                let new_low = formula::shift_bound_low(min, edit);
+                let new_high = formula::shift_bound_high(max, edit);
+                if new_low as i64 > new_high {
+                    None
+                } else {
+                    Some((new_low, new_high as u32, style))
+                }
+            })
+            .collect();
+        self.column_styles.insert(key.to_string(), shifted);
+    }
+
     /// Rewrites every formula reference qualified with `old_key` (workbook-wide,
     /// regardless of which sheet hosts the formula) to name `new_name` instead --
     /// `formula::rename_sheet_references`, see its own doc comment for the exact
@@ -1603,6 +1715,7 @@ impl Vm {
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_row_heights_for_structural_edit(key, edit);
+        self.shift_row_styles_for_structural_edit(key, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -1646,6 +1759,7 @@ impl Vm {
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_row_heights_for_structural_edit(key, edit);
+        self.shift_row_styles_for_structural_edit(key, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1686,6 +1800,7 @@ impl Vm {
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_column_widths_for_structural_edit(key, edit);
+        self.shift_column_styles_for_structural_edit(key, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1719,6 +1834,7 @@ impl Vm {
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_column_widths_for_structural_edit(key, edit);
+        self.shift_column_styles_for_structural_edit(key, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -2181,38 +2297,31 @@ impl Vm {
         for row in r1..=r2 {
             for col in c1..=c2 {
                 let existing = pending.entry((row, col)).or_default();
-                if let Some(font) = &edit.font {
-                    existing
-                        .font
-                        .get_or_insert_with(Default::default)
-                        .merge_from(font);
-                }
-                if edit.fill.is_some() {
-                    existing.fill = edit.fill.clone();
-                }
-                if let Some(border) = &edit.border {
-                    existing
-                        .border
-                        .get_or_insert_with(Default::default)
-                        .merge_from(border);
-                }
-                if let Some(alignment) = &edit.alignment {
-                    existing
-                        .alignment
-                        .get_or_insert_with(Default::default)
-                        .merge_from(alignment);
-                }
-                if let Some(protection) = &edit.protection {
-                    existing
-                        .protection
-                        .get_or_insert_with(Default::default)
-                        .merge_from(protection);
-                }
-                if edit.named_style.is_some() {
-                    existing.named_style = edit.named_style.clone();
-                }
+                merge_style_attr_edit(existing, edit);
             }
         }
+    }
+
+    /// Records a `set_row_style` request for 1-based `row` on `key` (0.15.0-C2) --
+    /// same deferred-to-save-time pending-edit log and same merge-onto-existing
+    /// semantics as `set_style_on_sheet`, just keyed by row instead of `(row, col)`.
+    /// Resolved by `resolve_pending_row_column_styles` (`src/lib.rs`), chained after
+    /// `resolve_pending_style_attrs` at save time.
+    pub fn set_row_style_on_sheet(&mut self, key: &str, row: u32, edit: &StyleAttrEdit) {
+        let pending = self.pending_row_styles.entry(key.to_string()).or_default();
+        let existing = pending.entry(row).or_default();
+        merge_style_attr_edit(existing, edit);
+    }
+
+    /// Column-axis mirror of `set_row_style_on_sheet` -- see that method's own doc
+    /// comment.
+    pub fn set_column_style_on_sheet(&mut self, key: &str, col: u32, edit: &StyleAttrEdit) {
+        let pending = self
+            .pending_column_styles
+            .entry(key.to_string())
+            .or_default();
+        let existing = pending.entry(col).or_default();
+        merge_style_attr_edit(existing, edit);
     }
 
     /// Records a `copy_style` request (0.15.0-C1): every cell in `(r1,c1)..(r2,c2)` on
@@ -2815,9 +2924,13 @@ impl Vm {
             self.pending_number_formats.remove(key);
             self.pending_style_attrs.remove(key);
             self.pending_style_copies.remove(key);
+            self.pending_row_styles.remove(key);
+            self.pending_column_styles.remove(key);
             self.sheet_states.remove(key);
             self.row_heights.remove(key);
             self.column_widths.remove(key);
+            self.row_styles.remove(key);
+            self.column_styles.remove(key);
         }
         Ok(())
     }
@@ -2836,15 +2949,13 @@ impl Vm {
         self.remove_sheet(&key, name)
     }
 
-    /// Renames a sheet, atomically re-keying all fourteen lowercase-keyed per-sheet `Vm`
+    /// Renames a sheet, atomically re-keying all eighteen lowercase-keyed per-sheet `Vm`
     /// maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
     /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
     /// `cell_number_formats`, `pending_number_formats`, `pending_style_attrs`,
-    /// `pending_style_copies` (0.15.0-C1), `sheet_states`, `row_heights`,
-    /// `column_widths`, `worksheet_origins` -- the previous "twelve" count here had
-    /// silently gone stale since 0.15.0-B added `pending_style_attrs` without updating
-    /// this comment; corrected alongside adding `pending_style_copies`). Each gets one
-    /// explicit
+    /// `pending_style_copies` (0.15.0-C1), `pending_row_styles`, `pending_column_styles`
+    /// (0.15.0-C2), `sheet_states`, `row_heights`, `column_widths`, `row_styles`,
+    /// `column_styles`, `worksheet_origins`). Each gets one explicit
     /// remove+insert line rather than a generic "walk every map" helper: the maps
     /// have different value types, a truly generic helper needs a macro or
     /// trait-object indirection to cross that, and with exactly one call site a
@@ -2949,6 +3060,12 @@ impl Vm {
         if let Some(v) = self.pending_style_copies.remove(&old_key) {
             self.pending_style_copies.insert(new_key.clone(), v);
         }
+        if let Some(v) = self.pending_row_styles.remove(&old_key) {
+            self.pending_row_styles.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.pending_column_styles.remove(&old_key) {
+            self.pending_column_styles.insert(new_key.clone(), v);
+        }
         // 8. `sheet_states`.
         if let Some(v) = self.sheet_states.remove(&old_key) {
             self.sheet_states.insert(new_key.clone(), v);
@@ -2959,6 +3076,12 @@ impl Vm {
         }
         if let Some(v) = self.column_widths.remove(&old_key) {
             self.column_widths.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.row_styles.remove(&old_key) {
+            self.row_styles.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.column_styles.remove(&old_key) {
+            self.column_styles.insert(new_key.clone(), v);
         }
         // 11. `worksheet_origins` -- re-key AND update `original_display_name` to the
         //    NEW name; `save_xlsx_impl` reads this field (not the lowercased key) to
@@ -3055,6 +3178,12 @@ impl Vm {
         if let Some(v) = self.pending_style_copies.get(&source_key).cloned() {
             self.pending_style_copies.insert(new_key.clone(), v);
         }
+        if let Some(v) = self.pending_row_styles.get(&source_key).cloned() {
+            self.pending_row_styles.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.pending_column_styles.get(&source_key).cloned() {
+            self.pending_column_styles.insert(new_key.clone(), v);
+        }
         if let Some(&v) = self.sheet_states.get(&source_key) {
             self.sheet_states.insert(new_key.clone(), v);
         }
@@ -3063,6 +3192,12 @@ impl Vm {
         }
         if let Some(v) = self.column_widths.get(&source_key).cloned() {
             self.column_widths.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.row_styles.get(&source_key).cloned() {
+            self.row_styles.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.column_styles.get(&source_key).cloned() {
+            self.column_styles.insert(new_key.clone(), v);
         }
         self.worksheet_origins.insert(
             new_key,
@@ -3974,6 +4109,14 @@ impl Vm {
             if !sheet_data.column_widths.is_empty() {
                 self.column_widths
                     .insert(key.clone(), sheet_data.column_widths.clone());
+            }
+            if !sheet_data.row_styles.is_empty() {
+                self.row_styles
+                    .insert(key.clone(), sheet_data.row_styles.clone());
+            }
+            if !sheet_data.column_styles.is_empty() {
+                self.column_styles
+                    .insert(key.clone(), sheet_data.column_styles.clone());
             }
             self.worksheet_origins.insert(
                 key.clone(),
@@ -10835,6 +10978,8 @@ mod tests {
                 sheet_state: Some("hidden".to_string()),
                 row_heights: HashMap::new(),
                 column_widths: Vec::new(),
+                row_styles: HashMap::new(),
+                column_styles: Vec::new(),
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -10851,6 +10996,8 @@ mod tests {
                 sheet_state: None,
                 row_heights: HashMap::new(),
                 column_widths: Vec::new(),
+                row_styles: HashMap::new(),
+                column_styles: Vec::new(),
             },
         ];
         let mut vm = Vm::new();
@@ -10914,11 +11061,39 @@ mod tests {
             sheet_state: None,
             row_heights: HashMap::from([(3u32, 45.0)]),
             column_widths: vec![(1, 2, 8.43)],
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
         assert_eq!(vm.row_height_on_sheet("sheet1", 3), Some(45.0));
         assert_eq!(vm.column_width_on_sheet("sheet1", 1), Some(8.43));
+    }
+
+    #[test]
+    fn populate_from_sheets_threads_row_styles_and_column_styles_into_the_vm() {
+        let sheets = vec![WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells: HashMap::new(),
+            sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
+            sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
+            row_styles: HashMap::from([(3u32, 5u32)]),
+            column_styles: vec![(1, 2, 7u32)],
+        }];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+        assert_eq!(vm.row_styles.get("sheet1").unwrap().get(&3), Some(&5));
+        assert_eq!(vm.column_styles.get("sheet1").unwrap(), &vec![(1, 2, 7)]);
     }
 
     #[test]
@@ -10938,6 +11113,8 @@ mod tests {
             sheet_state: None,
             row_heights: HashMap::new(),
             column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -13474,6 +13651,8 @@ mod tests {
             sheet_state: None,
             row_heights: HashMap::new(),
             column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -13513,6 +13692,8 @@ mod tests {
                 sheet_state: None,
                 row_heights: HashMap::new(),
                 column_widths: Vec::new(),
+                row_styles: HashMap::new(),
+                column_styles: Vec::new(),
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -13529,6 +13710,8 @@ mod tests {
                 sheet_state: None,
                 row_heights: HashMap::new(),
                 column_widths: Vec::new(),
+                row_styles: HashMap::new(),
+                column_styles: Vec::new(),
             },
         ];
 
@@ -13567,6 +13750,8 @@ mod tests {
             sheet_state: None,
             row_heights: HashMap::new(),
             column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -14483,6 +14668,8 @@ mod tests {
             sheet_state: None,
             row_heights: HashMap::new(),
             column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -14586,6 +14773,8 @@ mod tests {
             sheet_state: None,
             row_heights: HashMap::new(),
             column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -14626,6 +14815,8 @@ mod tests {
             sheet_state: None,
             row_heights: HashMap::new(),
             column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -14655,6 +14846,8 @@ mod tests {
             sheet_state: None,
             row_heights: HashMap::new(),
             column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
