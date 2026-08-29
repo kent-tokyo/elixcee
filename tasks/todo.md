@@ -1013,4 +1013,15 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] **検証**：新規Rustユニットテスト（`parse_table_xml`の実shape抽出/デフォルト値/calculated column/エラーケース6件、`xlsx_table_part_rids`2件、`Vm`側の構造編集シフト/populate_from_sheets/rename・delete・copy_sheetのre-key/クリア9件、auto_filter_ref回帰テスト1件）。既存`WorkbookSheet`構造体リテラル全14箇所（`src/reader.rs`・`src/vm/mod.rs`・`src/snapshot.rs`・`crates/elixcee-wasm/src/lib.rs`）へ新フィールド追加。`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`(1273件全pass)／`cargo check --features python --lib`／`cargo audit`(脆弱性なし)／`scripts/check-versions.sh`(既知のドリフトのみ)、いずれもクリーン。worktree内に独自の`.venv`を新規構築し`maturin develop --release`で実ビルド。`compat/differential-python/sheet_ops_check.py`へ新規テストクラス`TablesAgreeWithOpenpyxl`（4件）を追加、既存35件と合わせ全39件pass。使い捨ての検証スクリプトはこのテストクラスへ統合済みで削除。
 - [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`・`compat/differential-python/sheet_ops_check.py`は本worktree内で更新済み。`internal_docs/ROADMAP.md`（gitignore対象、worktreeにチェックアウトされないためこのworktreeからは編集不可）への反映——`0.16.0-A`セクション内の`A1`チェックボックスを完了に、`A2`（既存テーブル編集）/`A3`（新規テーブル作成、実fixture根拠なしのため別途例外確認が必要）が残作業である旨——は親エージェント側で実施が必要。
 
+## 値なし・書式済みセルが保存時に完全消失するバグの修正（known-gap 29）
+
+`/greenlane`再実行時、0.16.0のTables実装が別worktreeで並走中に、独立して着手したGreen作業（既にROADMAP.mdへ開示済みの2件の既知gap、29と30）のうち1件目。isolated worktreeで実施。
+
+- [x] **バグの実地確認（修正前に再現、修正を鵜呑みにせず）**：`fixture1_values_styles_merge_hidden.xlsm`の実際の`B1:C1`（マージセルのアンカー、`s="2"`、値なし）をロード→保存し、出力の`<row r="1">`に`A1`しか含まれず`B1`/`C1`が完全に欠落することを新規Rust統合テストで確認してから修正に着手。
+- [x] **根本原因**：`populate_from_sheets`は`cells`（値マップ）へ実際の`<v>`/formula由来のエントリしか挿入しないが、`cell_style_indices`はraw `s="N"`属性から無条件に埋まる（そのフィールド自身のdoc commentに明記済み）。`build_xlsx_sheet`のセル出力ループは`cells`のキーのみを走査していたため、値を持たないが`s=`を持つセルはループにすら現れず、`<c>`要素ごと——スタイルごと——毎回のsaveで静かに消失していた。
+- [x] **修正**：`by_row`の値型を`Vec<(u32, Option<&vm::CellContent>)>`へ変更し、`cells`に無いが`style_indices`（`resolve_pending_number_formats`/`resolve_pending_style_attrs`の解決結果を反映した実効マップ——`set_number_format`/`set_style`で新規に値なしセルへスタイルを付けた場合もこれ一本でカバーされる）に存在するキーを`(col, None)`として追加。出力ループ側で`content`が`None`の場合は`xlsx_cell_xml`を経由せず直接`<c r="..." s="N"/>`を合成——実Excel自身の「書式済み・空セル」の形そのもの。`xlsx_cell_xml`自体（`Variant::Empty`の扱い含む）は一切変更していない。
+- [x] **実fixture検証**：`fixture1`の実`B1`/`C1`（マージセルアンカー、値なし、`s="2"`）で新規Rust統合テスト`a_value_less_pre_formatted_cell_survives_a_save`を追加——修正前にfailすることを確認済みのうえで修正し、pass化。2回連続save-reloadサイクルでも劣化しないことも同テストで確認。
+- [x] **検証**：`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`(1258件全pass、新規1件追加)／`cargo check --features python --lib`／`cargo audit`(脆弱性なし)／`scripts/check-versions.sh`(既知の`elixcee-types`ドリフトのみ)、いずれもクリーン。この修正は実fixtureを通したRust統合テストで直接検証済み（Python側が辿るのと同じ`Vm::load_workbook_file`/`save_workbook`経路）のため、本フィックスに限り追加のmaturinビルドは省略（冗長と判断）。
+- [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`は本worktree内で更新済み。`internal_docs/ROADMAP.md`のknown-gap 29を`[x]`済みに更新——は親エージェント側で実施が必要。
+
 残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。

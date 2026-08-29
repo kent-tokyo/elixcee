@@ -1400,6 +1400,25 @@ read-only, with zero change to the write path).
   three-part linkage built from nothing) remain, per the scoping doc's own recommended
   split.
 
+### Root crate: fix a value-less, pre-formatted cell being dropped from the worksheet entirely on save
+
+`build_xlsx_sheet`'s cell-emission loop was built purely from `Vm`'s value map, but a
+value-less cell (e.g. a merged-cell anchor styled but never given a value — `fixture1`'s
+own `B1:C1`) never gets a value-map entry at all; only `cell_style_indices` (populated
+unconditionally from the raw `s="N"` attribute on load) knows it exists. The cell's own
+`<c>` element, and its style, silently vanished on every save regardless of
+`set_number_format`/`set_style`.
+
+- Fixed by also consulting the RESOLVED effective style-index map (the same map that
+  already accounts for any pending `set_number_format`/`set_style` edit) when building
+  the per-row cell list, synthesizing a value-less `<c r="..." s="N"/>` for any cell
+  present there but absent from the value map — matching real Excel's own shape for a
+  formatted-but-empty cell.
+- Verified against `fixture1_values_styles_merge_hidden.xlsm`'s real `B1`/`C1` (both
+  value-less, `s="2"`, the merged-cell anchor pair): reproduced the drop on the
+  pre-fix code first, confirmed both cells now survive an otherwise-unrelated save and a
+  second save-reload cycle.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
