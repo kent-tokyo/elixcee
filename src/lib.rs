@@ -2326,7 +2326,7 @@ const XLSX_STYLES: &str = concat!(
     "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
     "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
     "<fonts><font/></fonts>\n",
-    "<fills><fill/><fill/></fills>\n",
+    "<fills><fill><patternFill/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>\n",
     "<borders><border/></borders>\n",
     "<cellStyleXfs><xf/></cellStyleXfs>\n",
     "<cellXfs><xf/></cellXfs>\n",

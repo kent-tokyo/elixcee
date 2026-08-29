@@ -1070,6 +1070,20 @@ behavior (no merge/hidden-marker/style/number-format/dimension shifting on struc
 no merge/style/number-format translation on range move) — stale since those transforms
 shipped. Corrected to describe what each method actually does today.
 
+### Root crate: fix a from-scratch `Vm()`'s minimal `styles.xml` rejected by `openpyxl` on reopen
+
+`XLSX_STYLES` (the minimal stylesheet a from-scratch `elixcee.Vm()` — no loaded source file —
+emits, since it has no real `styles.xml` to pass through) had two bare `<fill/>` elements with
+no `<patternFill>`/`<gradientFill>` child. `openpyxl.load_workbook()` rejected this on reopen
+with `TypeError: expected <class 'openpyxl.styles.fills.Fill'>`. Fixed to match openpyxl's own
+from-scratch default shape exactly (verified against a real `openpyxl.Workbook()` save):
+`<fill><patternFill/></fill>` (index 0), `<fill><patternFill patternType="gray125"/></fill>`
+(index 1). The other bare elements in the same minimal stylesheet (`<font/>`, `<border/>`,
+`<xf/>`) do not trigger the same rejection — confirmed by a full from-scratch-save → openpyxl-
+reopen → openpyxl-resave → reopen round trip, left as-is. Covered by a new differential-python
+test (`FromScratchVmProducesAnOpenpyxlReadableStylesheet`); a stale comment in the same test
+file (and this method's own module docstring) describing the bug as still-open is corrected.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
