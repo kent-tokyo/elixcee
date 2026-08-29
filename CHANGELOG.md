@@ -1442,6 +1442,23 @@ unconditionally from the raw `s="N"` attribute on load) knows it exists. The cel
   pre-fix code first, confirmed both cells now survive an otherwise-unrelated save and a
   second save-reload cycle.
 
+### Root crate: fix a from-scratch `Vm()` triggering openpyxl's "no default style" warning on reopen
+
+A from-scratch `Vm()`'s minimal `XLSX_STYLES` had no `<cellStyles>` element at all —
+schema-legal, but `openpyxl.load_workbook()` raises `UserWarning: Workbook contains no
+default style` on reopen. Non-fatal, no data loss, but spurious for every from-scratch
+`Vm()` save with zero style edits.
+
+- Reproduced first: dumped a real from-scratch `Vm()`'s save and confirmed the warning
+  fires against the actual output bytes, not a hand-built approximation.
+- Compared against a real `openpyxl.Workbook()`'s own from-scratch default `xl/styles.xml`
+  directly — it always includes `<cellStyles count="1"><cellStyle name="Normal" xfId="0"
+  builtinId="0" hidden="0"/></cellStyles>`, positioned right after `<cellXfs>` (matching
+  `CT_Stylesheet`'s real child sequence). Added the equivalent to `XLSX_STYLES`, using the
+  English `"Normal"` name (real Excel/openpyxl's own from-scratch default), not a
+  locale-varied loaded-file name.
+- Re-confirmed against the same real output bytes: the warning is gone.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
