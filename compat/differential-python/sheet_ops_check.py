@@ -52,6 +52,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import zipfile
 
 import elixcee
 import openpyxl
@@ -382,6 +383,97 @@ class RowHeightAndColumnWidthAgreeWithOpenpyxl(unittest.TestCase):
             vm3 = elixcee.load_workbook(out2)
             self.assertEqual(vm3.row_height(5), 30.5)
             self.assertEqual(vm3.column_width(2), 12.5)
+
+
+class AutoFilterSurvivesAnElixceeSave(unittest.TestCase):
+    # Was a disclosed known gap (ROADMAP.md known-gap 28, found while scoping
+    # 0.14.0-C): `<autoFilter>` has no `r:id` at all, unlike tableParts/drawing, so
+    # it needed no rels_survived gate -- but it was ALSO not one of the
+    # unconditionally-restored opaque fragments (sheetFormatPr/dataValidations/
+    # pageMargins/...), so it was silently destroyed on every elixcee save, not
+    # merely stale. Fixed as a byte-preservation-only passthrough fragment -- see
+    # CHANGELOG.md. elixcee has no auto_filter read/write API of its own (this is
+    # preservation only, not new feature support -- create/remove/filter-type API
+    # is 0.16.0), so this reads back through openpyxl on both sides rather than
+    # comparing against an elixcee-side getter.
+    def test_autofilter_ref_survives_an_elixcee_save(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_src.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws["A1"] = "h"
+            ws.auto_filter.ref = "A1:C10"
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            out = os.path.join(d, "af_out.xlsx")
+            vm.save_workbook(out)
+
+            wb2 = openpyxl.load_workbook(out)
+            self.assertEqual(wb2.active.auto_filter.ref, "A1:C10")
+
+            # A second save must not re-drop or duplicate it.
+            vm2 = elixcee.load_workbook(out)
+            out2 = os.path.join(d, "af_out2.xlsx")
+            vm2.save_workbook(out2)
+            wb3 = openpyxl.load_workbook(out2)
+            self.assertEqual(wb3.active.auto_filter.ref, "A1:C10")
+
+    def test_autofilter_with_a_filter_column_survives_an_elixcee_save(self):
+        # Child <filterColumn>/<filters>/<filter> content must round-trip too, not
+        # just the container's own `ref` attribute -- extract_raw_element captures
+        # the whole element span verbatim, so this also guards against a future
+        # regression that tried to reconstruct the container from parsed parts.
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_cols_src.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.auto_filter.ref = "A1:C10"
+            ws.auto_filter.add_filter_column(0, ["foo", "bar"], blank=False)
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            out = os.path.join(d, "af_cols_out.xlsx")
+            vm.save_workbook(out)
+
+            ws2 = openpyxl.load_workbook(out).active
+            self.assertEqual(ws2.auto_filter.ref, "A1:C10")
+            self.assertEqual(len(ws2.auto_filter.filterColumn), 1)
+            col = ws2.auto_filter.filterColumn[0]
+            self.assertEqual(col.colId, 0)
+            self.assertEqual(sorted(col.filters.filter), ["bar", "foo"])
+
+    def test_autofilter_survives_an_unrelated_cell_edit_and_a_real_merge(self):
+        # Confirms schema position too: CT_Worksheet orders autoFilter BEFORE
+        # mergeCells (verified against openpyxl's own writer, worksheet/_writer.py's
+        # write_tail) -- an otherwise-correct-looking swap would produce a file
+        # real Excel silently "repairs" by dropping the misordered element, even
+        # though every byte is present.
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_merge_src.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws["A1"] = "h"
+            ws.merge_cells("D1:E1")
+            ws.auto_filter.ref = "A1:C10"
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            vm.set_range("A2", [["unrelated edit"]])
+            out = os.path.join(d, "af_merge_out.xlsx")
+            vm.save_workbook(out)
+
+            xml = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            af_pos = xml.find("<autoFilter")
+            mc_pos = xml.find("<mergeCells")
+            self.assertNotEqual(af_pos, -1)
+            self.assertNotEqual(mc_pos, -1)
+            self.assertLess(af_pos, mc_pos)
+
+            ws2 = openpyxl.load_workbook(out).active
+            self.assertEqual(ws2.auto_filter.ref, "A1:C10")
+            self.assertEqual(ws2["A2"].value, "unrelated edit")
+            self.assertIn("D1:E1", [str(r) for r in ws2.merged_cells.ranges])
 
 
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):

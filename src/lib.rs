@@ -2144,6 +2144,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         let sheet_views = source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetViews"));
         let sheet_format_pr =
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetFormatPr"));
+        let auto_filter = source_xml.and_then(|xml| reader::extract_raw_element(xml, "autoFilter"));
         let phonetic_pr = source_xml.and_then(|xml| reader::extract_raw_element(xml, "phoneticPr"));
         let data_validations =
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "dataValidations"));
@@ -2190,6 +2191,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             sheet_pr: sheet_pr.as_deref(),
             sheet_views: sheet_views.as_deref(),
             sheet_format_pr: sheet_format_pr.as_deref(),
+            auto_filter: auto_filter.as_deref(),
             phonetic_pr: phonetic_pr.as_deref(),
             data_validations: data_validations.as_deref(),
             hyperlinks: &hyperlinks,
@@ -2511,6 +2513,14 @@ struct OpaqueWorksheetFragments<'a> {
     /// `<sheetViews>` (freeze panes via `<pane>`, active-cell `<selection>`).
     sheet_views: Option<&'a str>,
     sheet_format_pr: Option<&'a str>,
+    /// `<autoFilter ref="..."><filterColumn .../>...</autoFilter>` -- unlike
+    /// `table_parts`/`drawing`/`legacy_drawing` below, `CT_AutoFilter` has no `r:id` at
+    /// all (confirmed against openpyxl's own writer, `worksheet/_writer.py`'s
+    /// `write_tail` schema-order docstring and `write_filter`), so it needs no
+    /// `rels_survived` gate -- same unconditional-passthrough treatment as
+    /// `data_validations` below. Byte-preservation only: no structured `Vm` state, no
+    /// create/remove/filter-type API (that's `0.16.0`, see ROADMAP.md's known gap 28).
+    auto_filter: Option<&'a str>,
     phonetic_pr: Option<&'a str>,
     data_validations: Option<&'a str>,
     /// Raw `<hyperlink .../>` spans (see `reader::extract_hyperlinks`) — NOT the whole
@@ -2678,6 +2688,17 @@ fn build_xlsx_sheet(
     }
 
     out.push_str("</sheetData>\n");
+
+    // <autoFilter> — schema-ordered after <sheetData>/before <mergeCells> (CT_Worksheet's
+    // real sequence has sheetCalcPr/sheetProtection/protectedRanges/scenarios/autoFilter
+    // between sheetData and mergeCells; none of the earlier ones are emitted here, but
+    // autoFilter itself is byte-preserved verbatim — see `OpaqueWorksheetFragments::
+    // auto_filter`'s doc comment). Verified against openpyxl's own writer order
+    // (`worksheet/_writer.py`'s `write_tail`), not guessed.
+    if let Some(af) = fragments.auto_filter {
+        out.push_str(af);
+        out.push('\n');
+    }
 
     // <mergeCells> — schema-ordered after <sheetData>.
     if let Some(merges) = vm.merged_ranges.get(&sheet_key)
