@@ -1128,6 +1128,273 @@ mod opaque_fragment_tests {
         }
     }
 
+    // ── 0.15.0-B: extract_records / with_attr generalization ────────────────────
+
+    #[test]
+    fn extract_records_generalizes_to_fonts_and_fills() {
+        let xml = concat!(
+            "<styleSheet><fonts count=\"2\"><font/>",
+            "<font><b val=\"1\"/><sz val=\"14\"/></font></fonts>",
+            "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>",
+            "</styleSheet>",
+        );
+        assert_eq!(
+            extract_records(xml, "fonts", "font"),
+            vec![
+                "<font/>".to_string(),
+                "<font><b val=\"1\"/><sz val=\"14\"/></font>".to_string(),
+            ]
+        );
+        assert_eq!(
+            extract_records(xml, "fills", "fill"),
+            vec!["<fill><patternFill patternType=\"none\"/></fill>".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_records_matches_extract_cell_xfs_for_cellxfs() {
+        let xml = "<styleSheet><cellXfs count=\"1\"><xf fontId=\"1\"/></cellXfs></styleSheet>";
+        assert_eq!(extract_records(xml, "cellXfs", "xf"), extract_cell_xfs(xml));
+    }
+
+    #[test]
+    fn with_attr_matches_with_num_fmt_id_for_numfmtid() {
+        let xf = "<xf numFmtId=\"9\" fontId=\"2\"/>";
+        assert_eq!(with_attr(xf, "numFmtId", "4"), with_num_fmt_id(xf, 4));
+    }
+
+    #[test]
+    fn with_attr_sets_a_new_attribute_on_a_self_closing_span() {
+        assert_eq!(
+            with_attr("<xf fontId=\"0\"/>", "applyFont", "1"),
+            "<xf fontId=\"0\" applyFont=\"1\"/>"
+        );
+    }
+
+    #[test]
+    fn with_attr_preserves_children_on_a_non_self_closing_span() {
+        let out = with_attr(
+            "<xf fillId=\"0\"><alignment vertical=\"center\"/></xf>",
+            "fillId",
+            "3",
+        );
+        assert!(out.contains("fillId=\"3\""));
+        assert!(out.ends_with("<alignment vertical=\"center\"/></xf>"));
+    }
+
+    #[test]
+    fn span_attr_u32_reads_an_existing_attribute() {
+        assert_eq!(
+            span_attr_u32("<xf fontId=\"7\" borderId=\"2\"/>", "fontId"),
+            7
+        );
+    }
+
+    #[test]
+    fn span_attr_u32_defaults_to_zero_when_absent() {
+        assert_eq!(span_attr_u32("<xf/>", "fontId"), 0);
+    }
+
+    // ── 0.15.0-B: with_child / with_ordered_child ────────────────────────────────
+
+    #[test]
+    fn with_child_inserts_into_a_bare_self_closing_parent() {
+        assert_eq!(
+            with_child("<font/>", "b", Some("<b val=\"1\"/>")),
+            "<font><b val=\"1\"/></font>"
+        );
+    }
+
+    #[test]
+    fn with_child_appends_to_an_existing_non_self_closing_parent() {
+        assert_eq!(
+            with_child("<font><sz val=\"11\"/></font>", "b", Some("<b val=\"1\"/>")),
+            "<font><sz val=\"11\"/><b val=\"1\"/></font>"
+        );
+    }
+
+    #[test]
+    fn with_child_replaces_an_existing_child_in_place() {
+        assert_eq!(
+            with_child(
+                "<font><b val=\"1\"/><sz val=\"11\"/></font>",
+                "sz",
+                Some("<sz val=\"14\"/>")
+            ),
+            "<font><b val=\"1\"/><sz val=\"14\"/></font>"
+        );
+    }
+
+    #[test]
+    fn with_child_removes_an_existing_child_when_given_none() {
+        assert_eq!(
+            with_child("<font><b val=\"1\"/><sz val=\"11\"/></font>", "b", None),
+            "<font><sz val=\"11\"/></font>"
+        );
+    }
+
+    #[test]
+    fn with_child_remove_is_a_noop_when_child_absent() {
+        assert_eq!(
+            with_child("<font><sz val=\"11\"/></font>", "b", None),
+            "<font><sz val=\"11\"/></font>"
+        );
+    }
+
+    #[test]
+    fn with_ordered_child_inserts_at_correct_position_among_present_siblings() {
+        // "top" (order index 2) inserted where only "left" (index 0) exists must land
+        // AFTER left, matching real CT_Border sequence order, not appended blindly.
+        let out = with_ordered_child(
+            "<border><left style=\"thin\"/></border>",
+            "top",
+            &BORDER_SIDE_ORDER,
+            Some("<top style=\"thick\"/>"),
+        );
+        assert_eq!(
+            out,
+            "<border><left style=\"thin\"/><top style=\"thick\"/></border>"
+        );
+    }
+
+    #[test]
+    fn with_ordered_child_inserts_before_a_later_sibling_when_earlier_is_added() {
+        // "left" (index 0) inserted where only "top" (index 2) exists must land BEFORE
+        // top, not after it.
+        let out = with_ordered_child(
+            "<border><top style=\"thick\"/></border>",
+            "left",
+            &BORDER_SIDE_ORDER,
+            Some("<left style=\"thin\"/>"),
+        );
+        assert_eq!(
+            out,
+            "<border><left style=\"thin\"/><top style=\"thick\"/></border>"
+        );
+    }
+
+    #[test]
+    fn with_ordered_child_replaces_in_place_keeping_position() {
+        let out = with_ordered_child(
+            "<xf><alignment vertical=\"center\"/><protection locked=\"1\"/></xf>",
+            "alignment",
+            &XF_CHILD_ORDER,
+            Some("<alignment horizontal=\"center\"/>"),
+        );
+        assert_eq!(
+            out,
+            "<xf><alignment horizontal=\"center\"/><protection locked=\"1\"/></xf>"
+        );
+    }
+
+    // ── 0.15.0-B: font/border/alignment/protection merge primitives ─────────────
+
+    #[test]
+    fn with_font_edit_only_touches_requested_properties() {
+        // fixture4/6's real, in-use hyperlink font shape: underlined, theme-colored, sized.
+        let font = "<font><u/><sz val=\"12\"/><color theme=\"10\"/><name val=\"Calibri\"/></font>";
+        let edit = FontEdit {
+            bold: Some(true),
+            ..Default::default()
+        };
+        let out = with_font_edit(font, &edit);
+        assert!(out.contains("<b val=\"1\"/>"));
+        assert!(out.contains("<u/>"));
+        assert!(out.contains("<color theme=\"10\"/>"));
+        assert!(out.contains("<sz val=\"12\"/>"));
+        assert!(out.contains("<name val=\"Calibri\"/>"));
+    }
+
+    #[test]
+    fn with_font_edit_replaces_an_existing_property() {
+        let font = "<font><sz val=\"11\"/></font>";
+        let edit = FontEdit {
+            size: Some(14.0),
+            ..Default::default()
+        };
+        let out = with_font_edit(font, &edit);
+        assert!(out.contains("<sz val=\"14\"/>"));
+        assert!(!out.contains("val=\"11\""));
+    }
+
+    #[test]
+    fn with_font_edit_bold_false_writes_explicit_val_zero_not_a_removal() {
+        let out = with_font_edit(
+            "<font/>",
+            &FontEdit {
+                bold: Some(false),
+                ..Default::default()
+            },
+        );
+        assert_eq!(out, "<font><b val=\"0\"/></font>");
+    }
+
+    #[test]
+    fn build_solid_fill_uses_fgcolor_and_indexed_64_bgcolor_sentinel() {
+        assert_eq!(
+            build_solid_fill("FF4472C4"),
+            "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF4472C4\"/><bgColor indexed=\"64\"/></patternFill></fill>"
+        );
+    }
+
+    #[test]
+    fn with_border_edit_touches_only_the_requested_side() {
+        let border = "<border><left style=\"thin\"/><right/><top/><bottom/><diagonal/></border>";
+        let edit = BorderEdit {
+            top: Some(BorderSideEdit {
+                style: Some("thick".to_string()),
+                color_argb: Some("FF000000".to_string()),
+            }),
+            ..Default::default()
+        };
+        let out = with_border_edit(border, &edit);
+        assert!(out.contains("<left style=\"thin\"/>"));
+        assert!(out.contains("<top style=\"thick\"><color rgb=\"FF000000\"/></top>"));
+        assert!(out.contains("<right/>"));
+        assert!(out.contains("<bottom/>"));
+        assert!(out.contains("<diagonal/>"));
+    }
+
+    #[test]
+    fn merged_alignment_span_preserves_existing_vertical_when_setting_horizontal() {
+        // Every real fixture's <xf> already carries vertical="center" -- setting
+        // horizontal must not silently drop it.
+        let xf = "<xf><alignment vertical=\"center\"/></xf>";
+        let edit = AlignmentEdit {
+            horizontal: Some("center".to_string()),
+            ..Default::default()
+        };
+        let out = merged_alignment_span(xf, &edit);
+        assert!(out.contains("vertical=\"center\""));
+        assert!(out.contains("horizontal=\"center\""));
+    }
+
+    #[test]
+    fn merged_alignment_span_creates_a_fresh_alignment_when_none_exists() {
+        let out = merged_alignment_span(
+            "<xf/>",
+            &AlignmentEdit {
+                wrap_text: Some(true),
+                ..Default::default()
+            },
+        );
+        assert_eq!(out, "<alignment wrapText=\"1\"/>");
+    }
+
+    #[test]
+    fn merged_protection_span_merges_onto_existing() {
+        let xf = "<xf><protection locked=\"1\"/></xf>";
+        let out = merged_protection_span(
+            xf,
+            &ProtectionEdit {
+                hidden: Some(true),
+                ..Default::default()
+            },
+        );
+        assert!(out.contains("locked=\"1\""));
+        assert!(out.contains("hidden=\"1\""));
+    }
+
     #[test]
     fn root_tag_has_rid_false_for_a_relationship_free_page_setup() {
         // fixture5_chart_image_freeze_print.xlsm's real shape.
@@ -1576,62 +1843,71 @@ pub(crate) fn resolve_number_format_id(
     ResolvedNumFmt::New(next)
 }
 
-/// Extracts the raw, byte-for-byte `<xf .../>`/`<xf>...</xf>` spans inside `xml`'s
-/// `<cellXfs>...</cellXfs>` container, in document order -- a cell's `s="N"` is a 0-based
-/// index into this list, same convention as `XlsxStyles::cell_xfs` above, but keeping the
-/// FULL raw span (attributes and any `<alignment>`/`<protection>` children) rather than
-/// just the `numFmtId`, since `set_number_format`'s find-or-append write path needs to
-/// clone a record with everything else preserved verbatim. Unlike `extract_hyperlinks`'s
-/// `<hyperlink>` (always self-closing per its real XSD), `<xf>` can have children, so both
-/// forms are handled, matching `extract_defined_name_elements`'s approach. Empty if
-/// `<cellXfs>` is absent or has no `<xf>` children.
-pub(crate) fn extract_cell_xfs(xml: &str) -> Vec<String> {
-    let Some(container) = extract_raw_element(xml, "cellXfs") else {
+/// Extracts the raw, byte-for-byte `<record .../>`/`<record>...</record>` spans directly
+/// inside `xml`'s `<container>...</container>` element, in document order. Generalized
+/// from 0.15.0-A's `set_number_format`-only `extract_cell_xfs` (kept below as a thin
+/// wrapper for its own call sites/tests) once 0.15.0-B's font/fill/border needed the exact
+/// same extraction shape for `<fonts>`/`<fills>`/`<borders>` -- real duplication removed,
+/// not a speculative generalization. Handles both self-closing and child-bearing forms
+/// (matching `extract_defined_name_elements`'s approach). Empty if `container` is absent
+/// or has no `record` children.
+pub(crate) fn extract_records(xml: &str, container: &str, record: &str) -> Vec<String> {
+    let Some(container_span) = extract_raw_element(xml, container) else {
         return Vec::new();
     };
     let mut out = Vec::new();
     let mut search_from = 0;
     while let Some((tag_start, tag_close_rel, full_name)) =
-        find_next_open_tag(&container, search_from)
+        find_next_open_tag(&container_span, search_from)
     {
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != "xf" {
+        if full_name.rsplit(':').next().unwrap_or(&full_name) != record {
             search_from = tag_start + 1;
             continue;
         }
         let name_end = tag_start + 1 + full_name.len();
         let start_tag_end = name_end + tag_close_rel + 1;
-        let self_closing = container[name_end..name_end + tag_close_rel]
+        let self_closing = container_span[name_end..name_end + tag_close_rel]
             .trim_end()
             .ends_with('/');
         if self_closing {
-            out.push(container[tag_start..start_tag_end].to_string());
+            out.push(container_span[tag_start..start_tag_end].to_string());
             search_from = start_tag_end;
             continue;
         }
         let close_tag = format!("</{}>", full_name);
-        let Some(end_rel) = container[start_tag_end..].find(&close_tag) else {
+        let Some(end_rel) = container_span[start_tag_end..].find(&close_tag) else {
             break;
         };
         let end = start_tag_end + end_rel + close_tag.len();
-        out.push(container[tag_start..end].to_string());
+        out.push(container_span[tag_start..end].to_string());
         search_from = end;
     }
     out
 }
 
-/// Clones a raw `<xf>` span (as returned by `extract_cell_xfs`) with its `numFmtId`
-/// attribute set to `new_id` -- added if absent (matching a bare `<xf/>`'s implicit
-/// General/id-0), replaced if present -- and every OTHER attribute and child element
-/// preserved verbatim. This is `set_number_format`'s core safety primitive: it never
-/// needs to understand what `fontId`/`fillId`/`borderId`/`<alignment>`/`<protection>` mean
-/// (that's 0.15.0-B/C's job), only copy them into the new record unchanged.
-pub(crate) fn with_num_fmt_id(xf_span: &str, new_id: u32) -> String {
-    let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(xf_span, 0) else {
-        return xf_span.to_string();
+/// `extract_records(xml, "cellXfs", "xf")` -- a cell's `s="N"` is a 0-based index into
+/// this list. Named/kept separately from `extract_records` since every 0.15.0-A call site
+/// already spells this name.
+pub(crate) fn extract_cell_xfs(xml: &str) -> Vec<String> {
+    extract_records(xml, "cellXfs", "xf")
+}
+
+/// Clones `span` (any self-closing-or-not element span, e.g. from `extract_records`) with
+/// `attr_name` set to `attr_value` -- added if absent, replaced if present -- and every
+/// OTHER attribute and child element preserved verbatim. This is 0.15.0-A/B's shared core
+/// safety primitive: it never needs to understand what any other attribute or child means,
+/// only copy it into the new record unchanged. Generalized from 0.15.0-A's
+/// `numFmtId`-only `with_num_fmt_id` (kept below as a thin wrapper) once 0.15.0-B needed
+/// the identical shape for `fontId`/`fillId`/`borderId`/`applyFont`/`applyFill`/
+/// `applyBorder`/`applyAlignment`/`applyProtection`/alignment's and protection's own
+/// attributes.
+pub(crate) fn with_attr(span: &str, attr_name: &str, attr_value: &str) -> String {
+    let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(span, 0) else {
+        return span.to_string();
     };
     let name_end = tag_start + 1 + full_name.len();
     let tag_close_abs = name_end + tag_close_rel;
-    let raw_attrs = &xf_span[name_end..tag_close_abs];
+    let raw_attrs = &span[name_end..tag_close_abs];
     let self_closing = raw_attrs.trim_end().ends_with('/');
     let attrs_str = if self_closing {
         raw_attrs.trim_end().strip_suffix('/').unwrap_or(raw_attrs)
@@ -1640,7 +1916,7 @@ pub(crate) fn with_num_fmt_id(xf_span: &str, new_id: u32) -> String {
     };
     let mut new_attrs = String::new();
     for a in parse_attrs(attrs_str) {
-        if a.name.rsplit(':').next() == Some("numFmtId") {
+        if a.name.rsplit(':').next() == Some(attr_name) {
             continue;
         }
         new_attrs.push(' ');
@@ -1649,12 +1925,457 @@ pub(crate) fn with_num_fmt_id(xf_span: &str, new_id: u32) -> String {
         new_attrs.push_str(&crate::xml_escape(&a.value));
         new_attrs.push('"');
     }
-    new_attrs.push_str(&format!(" numFmtId=\"{new_id}\""));
+    new_attrs.push_str(&format!(
+        " {attr_name}=\"{}\"",
+        crate::xml_escape(attr_value)
+    ));
     if self_closing {
         format!("<{full_name}{new_attrs}/>")
     } else {
-        format!("<{full_name}{new_attrs}{}", &xf_span[tag_close_abs..])
+        format!("<{full_name}{new_attrs}{}", &span[tag_close_abs..])
     }
+}
+
+/// Reads `attr_name` off `span`'s own opening tag as a `u32`, defaulting to 0 when absent
+/// or unparseable -- matching this codebase's existing "index 0 is the implicit default"
+/// convention for `fontId`/`fillId`/`borderId` (a bare `<xf/>` with no explicit pointer
+/// means "the first/default record", same as a cell with no `s="N"` meaning style index 0).
+pub(crate) fn span_attr_u32(span: &str, attr_name: &str) -> u32 {
+    let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(span, 0) else {
+        return 0;
+    };
+    let name_end = tag_start + 1 + full_name.len();
+    let raw_attrs = &span[name_end..name_end + tag_close_rel];
+    let attrs_str = raw_attrs.trim_end().strip_suffix('/').unwrap_or(raw_attrs);
+    attr_get(&parse_attrs(attrs_str), attr_name)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+pub(crate) fn with_num_fmt_id(xf_span: &str, new_id: u32) -> String {
+    with_attr(xf_span, "numFmtId", &new_id.to_string())
+}
+
+/// Clones `parent_span` with its `child_tag` child upserted: `Some(new_child)` replaces an
+/// existing `child_tag` child (found via `extract_raw_element`, so `child_tag` must not
+/// self-nest -- true for every 0.15.0-B target) or appends one at the very end if absent
+/// (promoting a self-closing parent to an open/close pair when a child must be added where
+/// none exists); `None` removes an existing `child_tag` child if present, a no-op
+/// otherwise. Order among siblings is not schema-significant here -- CT_Font's
+/// `EG_FontProperty` is an unordered choice group, confirmed empirically: a real
+/// `openpyxl`-authored file emits two different fonts with two different child orders in
+/// the same `styleSheet` and reopens fine either way. Use `with_ordered_child` instead for
+/// a genuinely order-significant sequence (`<border>`'s sides, `<xf>`'s
+/// alignment/protection).
+pub(crate) fn with_child(parent_span: &str, child_tag: &str, new_child: Option<&str>) -> String {
+    let existing = extract_raw_element(parent_span, child_tag);
+    match (new_child, existing) {
+        (Some(new_child), Some(old)) => parent_span.replacen(old.as_str(), new_child, 1),
+        (Some(new_child), None) => insert_before_close(parent_span, new_child),
+        (None, Some(old)) => parent_span.replacen(&old, "", 1),
+        (None, None) => parent_span.to_string(),
+    }
+}
+
+/// Same upsert/remove semantics as `with_child`, but a freshly-inserted child is placed at
+/// its correct position among `order` (which must list every sibling this codebase ever
+/// writes for this parent, in real schema sequence order) rather than always last --
+/// `<border>`'s `left/right/top/bottom/diagonal` and `<xf>`'s `alignment`/`protection` are
+/// both genuine ordered `xsd:sequence`s (unlike `<font>`'s children, see `with_child`).
+/// Replacing an EXISTING child keeps its current position unchanged (already correct).
+pub(crate) fn with_ordered_child(
+    parent_span: &str,
+    child_tag: &str,
+    order: &[&str],
+    new_child: Option<&str>,
+) -> String {
+    let existing = extract_raw_element(parent_span, child_tag);
+    let Some(new_child) = new_child else {
+        return match existing {
+            Some(old) => parent_span.replacen(&old, "", 1),
+            None => parent_span.to_string(),
+        };
+    };
+    if let Some(old) = &existing {
+        return parent_span.replacen(old.as_str(), new_child, 1);
+    }
+    if let Some(pos) = order.iter().position(|s| *s == child_tag) {
+        for later in &order[pos + 1..] {
+            if let Some(later_span) = extract_raw_element(parent_span, later) {
+                return parent_span.replacen(
+                    later_span.as_str(),
+                    &format!("{new_child}{later_span}"),
+                    1,
+                );
+            }
+        }
+    }
+    insert_before_close(parent_span, new_child)
+}
+
+/// Inserts `new_child` as the last child of `parent_span`, promoting a self-closing
+/// element (`<font/>`) to an open/close pair (`<font>{new_child}</font>`) when it has no
+/// children yet, or splicing just before the existing closing tag otherwise. Shared tail
+/// of `with_child`/`with_ordered_child`'s insert-when-absent case.
+fn insert_before_close(parent_span: &str, new_child: &str) -> String {
+    let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(parent_span, 0) else {
+        return parent_span.to_string();
+    };
+    let name_end = tag_start + 1 + full_name.len();
+    let tag_close_abs = name_end + tag_close_rel;
+    let self_closing = parent_span[name_end..tag_close_abs]
+        .trim_end()
+        .ends_with('/');
+    if self_closing {
+        let attrs = parent_span[name_end..tag_close_abs].trim_end();
+        let attrs = attrs.strip_suffix('/').unwrap_or(attrs);
+        format!("<{full_name}{attrs}>{new_child}</{full_name}>")
+    } else {
+        let close_tag = format!("</{full_name}>");
+        match parent_span.rfind(&close_tag) {
+            Some(pos) => format!(
+                "{}{}{}",
+                &parent_span[..pos],
+                new_child,
+                &parent_span[pos..]
+            ),
+            None => parent_span.to_string(),
+        }
+    }
+}
+
+/// CT_Border's real, order-significant side sequence -- see `with_ordered_child`.
+pub(crate) const BORDER_SIDE_ORDER: [&str; 5] = ["left", "right", "top", "bottom", "diagonal"];
+/// CT_Xf's real, order-significant `(alignment?, protection?, extLst?)` sequence (this
+/// codebase never writes `extLst`) -- see `with_ordered_child`.
+pub(crate) const XF_CHILD_ORDER: [&str; 2] = ["alignment", "protection"];
+
+/// 0.15.0-B `font={...}` request -- `None` on any field means "leave this property
+/// exactly as the cell's current font already has it," matching `set_number_format`'s own
+/// "only touch what was asked" contract. Booleans are written as an explicit
+/// `val="1"`/`val="0"` on their own child element rather than relying on
+/// presence-means-true/absence-means-false -- confirmed against a real `openpyxl`-authored
+/// file that a genuine Excel-ecosystem writer already does this (`<b val="1"/>`, not a bare
+/// `<b/>`), and `CT_BooleanProperty`'s own `val` attribute supports both explicit forms, so
+/// this is not a deviation from real-world convention, just the simpler of two valid ones
+/// (no separate "remove to mean false" logic needed).
+#[derive(Debug, Clone, Default)]
+pub struct FontEdit {
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    pub strike: Option<bool>,
+    pub size: Option<f64>,
+    /// Already-normalized 8-hex-digit ARGB (`"FFRRGGBB"`) -- normalization from a
+    /// caller-supplied 6-digit RGB happens at the Python-API boundary (`src/lib.rs`), not
+    /// here; this module only ever emits exactly what it's given.
+    pub color_argb: Option<String>,
+    pub name: Option<String>,
+}
+
+impl FontEdit {
+    /// Merges `other`'s explicitly-set (`Some`) fields onto `self`, leaving whatever
+    /// `other` left `None` untouched -- used when a cell already has a pending
+    /// `set_style(font=...)` edit and a later call, before the same save, sets more font
+    /// properties, so the earlier ones aren't lost (`Vm::pending_style_attrs`'s own
+    /// merge-not-overwrite contract).
+    pub(crate) fn merge_from(&mut self, other: &FontEdit) {
+        if other.bold.is_some() {
+            self.bold = other.bold;
+        }
+        if other.italic.is_some() {
+            self.italic = other.italic;
+        }
+        if other.underline.is_some() {
+            self.underline = other.underline;
+        }
+        if other.strike.is_some() {
+            self.strike = other.strike;
+        }
+        if other.size.is_some() {
+            self.size = other.size;
+        }
+        if other.color_argb.is_some() {
+            self.color_argb = other.color_argb.clone();
+        }
+        if other.name.is_some() {
+            self.name = other.name.clone();
+        }
+    }
+}
+
+/// CT_Font's real child sequence, restricted to the properties `FontEdit` supports (order
+/// among these is not schema-significant, see `with_child`, but a consistent order is
+/// still used for freshly-appended children rather than an arbitrary one).
+const FONT_CHILD_ORDER: [&str; 7] = ["name", "b", "i", "strike", "color", "sz", "u"];
+
+/// Clones `font_span` (from `extract_records(xml, "fonts", "font")`) with `edit` applied --
+/// every property `edit` leaves as `None` is preserved on the cloned record exactly as it
+/// was (0.15.0's "preserve unknown style attributes" safety requirement: cloning
+/// `fixture4`'s real in-use hyperlink font while only setting `bold` must keep its
+/// existing `<u/>`/`<color theme="10"/>`/`<name>`/`<sz>` untouched).
+pub(crate) fn with_font_edit(font_span: &str, edit: &FontEdit) -> String {
+    let mut out = font_span.to_string();
+    if let Some(b) = edit.bold {
+        out = with_child(
+            &out,
+            "b",
+            Some(&format!("<b val=\"{}\"/>", if b { 1 } else { 0 })),
+        );
+    }
+    if let Some(i) = edit.italic {
+        out = with_child(
+            &out,
+            "i",
+            Some(&format!("<i val=\"{}\"/>", if i { 1 } else { 0 })),
+        );
+    }
+    if let Some(u) = edit.underline {
+        out = with_child(
+            &out,
+            "u",
+            Some(if u {
+                "<u val=\"single\"/>"
+            } else {
+                "<u val=\"none\"/>"
+            }),
+        );
+    }
+    if let Some(s) = edit.strike {
+        out = with_child(
+            &out,
+            "strike",
+            Some(&format!("<strike val=\"{}\"/>", if s { 1 } else { 0 })),
+        );
+    }
+    if let Some(sz) = edit.size {
+        out = with_child(&out, "sz", Some(&format!("<sz val=\"{sz}\"/>")));
+    }
+    if let Some(color) = &edit.color_argb {
+        out = with_child(
+            &out,
+            "color",
+            Some(&format!("<color rgb=\"{}\"/>", crate::xml_escape(color))),
+        );
+    }
+    if let Some(name) = &edit.name {
+        out = with_child(
+            &out,
+            "name",
+            Some(&format!("<name val=\"{}\"/>", crate::xml_escape(name))),
+        );
+    }
+    let _ = &FONT_CHILD_ORDER; // documents the intended order; with_child always appends last (order-insignificant here).
+    out
+}
+
+/// Builds a brand-new `<fill>...</fill>` for a solid color -- 0.15.0-B deliberately
+/// REPLACES the whole record rather than merging (unlike font/border), since "set this
+/// cell's fill to solid color X" is a wholesale pattern-type change in real Excel's own
+/// UI, not a patch onto whatever pattern/gradient existed before. `bgColor
+/// indexed="64"` is the real, well-known Excel sentinel for "no second color" on a solid
+/// fill -- `fgColor` is the one visible color; a caller-supplied single color naturally
+/// maps to `fgColor` alone, matching how Excel's own single-color fill picker writes this
+/// shape. `color_argb` is already-normalized 8-hex-digit ARGB, same convention as
+/// `FontEdit::color_argb`.
+pub(crate) fn build_solid_fill(color_argb: &str) -> String {
+    format!(
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"{}\"/><bgColor indexed=\"64\"/></patternFill></fill>",
+        crate::xml_escape(color_argb)
+    )
+}
+
+/// One `<border>` side (`<left>`/`<right>`/`<top>`/`<bottom>`/`<diagonal>`) -- `None`
+/// fields preserve the side exactly as it already was, same "only touch what was asked"
+/// contract as `FontEdit`.
+#[derive(Debug, Clone, Default)]
+pub struct BorderSideEdit {
+    pub style: Option<String>,
+    pub color_argb: Option<String>,
+}
+
+/// 0.15.0-B `border={...}` request -- each side is independently optional; a side left
+/// `None` is preserved on the cloned `<border>` record exactly as it was.
+#[derive(Debug, Clone, Default)]
+pub struct BorderEdit {
+    pub left: Option<BorderSideEdit>,
+    pub right: Option<BorderSideEdit>,
+    pub top: Option<BorderSideEdit>,
+    pub bottom: Option<BorderSideEdit>,
+    pub diagonal: Option<BorderSideEdit>,
+}
+
+impl BorderEdit {
+    /// Merges `other`'s explicitly-set sides onto `self` -- a whole side (style + color
+    /// together) is the merge unit, matching `with_border_edit`'s own per-side
+    /// granularity. See `FontEdit::merge_from` for why this exists.
+    pub(crate) fn merge_from(&mut self, other: &BorderEdit) {
+        if other.left.is_some() {
+            self.left = other.left.clone();
+        }
+        if other.right.is_some() {
+            self.right = other.right.clone();
+        }
+        if other.top.is_some() {
+            self.top = other.top.clone();
+        }
+        if other.bottom.is_some() {
+            self.bottom = other.bottom.clone();
+        }
+        if other.diagonal.is_some() {
+            self.diagonal = other.diagonal.clone();
+        }
+    }
+}
+
+fn build_border_side_span(tag: &str, side: &BorderSideEdit) -> String {
+    let style_attr = side
+        .style
+        .as_ref()
+        .map(|s| format!(" style=\"{}\"", crate::xml_escape(s)))
+        .unwrap_or_default();
+    match &side.color_argb {
+        Some(color) => format!(
+            "<{tag}{style_attr}><color rgb=\"{}\"/></{tag}>",
+            crate::xml_escape(color)
+        ),
+        None if style_attr.is_empty() => format!("<{tag}/>"),
+        None => format!("<{tag}{style_attr}/>"),
+    }
+}
+
+/// Clones `border_span` (from `extract_records(xml, "borders", "border")`) with `edit`
+/// applied -- each requested side replaces (or inserts, at its correct schema position via
+/// `with_ordered_child`/`BORDER_SIDE_ORDER`) that side's span; every other side, present or
+/// absent, is preserved exactly as it was.
+pub(crate) fn with_border_edit(border_span: &str, edit: &BorderEdit) -> String {
+    let mut out = border_span.to_string();
+    if let Some(side) = &edit.left {
+        out = with_ordered_child(
+            &out,
+            "left",
+            &BORDER_SIDE_ORDER,
+            Some(&build_border_side_span("left", side)),
+        );
+    }
+    if let Some(side) = &edit.right {
+        out = with_ordered_child(
+            &out,
+            "right",
+            &BORDER_SIDE_ORDER,
+            Some(&build_border_side_span("right", side)),
+        );
+    }
+    if let Some(side) = &edit.top {
+        out = with_ordered_child(
+            &out,
+            "top",
+            &BORDER_SIDE_ORDER,
+            Some(&build_border_side_span("top", side)),
+        );
+    }
+    if let Some(side) = &edit.bottom {
+        out = with_ordered_child(
+            &out,
+            "bottom",
+            &BORDER_SIDE_ORDER,
+            Some(&build_border_side_span("bottom", side)),
+        );
+    }
+    if let Some(side) = &edit.diagonal {
+        out = with_ordered_child(
+            &out,
+            "diagonal",
+            &BORDER_SIDE_ORDER,
+            Some(&build_border_side_span("diagonal", side)),
+        );
+    }
+    out
+}
+
+/// 0.15.0-B `alignment={...}` request -- `None` fields preserve the cell's existing
+/// `<alignment>` attributes exactly (every real fixture in this project already carries
+/// `vertical="center"` on every `<xf>`; replacing wholesale instead of merging would
+/// silently drop it, a real "preserve unknown attributes" violation).
+#[derive(Debug, Clone, Default)]
+pub struct AlignmentEdit {
+    pub horizontal: Option<String>,
+    pub vertical: Option<String>,
+    pub wrap_text: Option<bool>,
+    pub indent: Option<u32>,
+}
+
+impl AlignmentEdit {
+    /// See `FontEdit::merge_from`.
+    pub(crate) fn merge_from(&mut self, other: &AlignmentEdit) {
+        if other.horizontal.is_some() {
+            self.horizontal = other.horizontal.clone();
+        }
+        if other.vertical.is_some() {
+            self.vertical = other.vertical.clone();
+        }
+        if other.wrap_text.is_some() {
+            self.wrap_text = other.wrap_text;
+        }
+        if other.indent.is_some() {
+            self.indent = other.indent;
+        }
+    }
+}
+
+/// 0.15.0-B `protection={...}` request -- same merge-not-replace contract as
+/// `AlignmentEdit`.
+#[derive(Debug, Clone, Default)]
+pub struct ProtectionEdit {
+    pub locked: Option<bool>,
+    pub hidden: Option<bool>,
+}
+
+impl ProtectionEdit {
+    /// See `FontEdit::merge_from`.
+    pub(crate) fn merge_from(&mut self, other: &ProtectionEdit) {
+        if other.locked.is_some() {
+            self.locked = other.locked;
+        }
+        if other.hidden.is_some() {
+            self.hidden = other.hidden;
+        }
+    }
+}
+
+/// Merges `edit` onto `xf_span`'s EXISTING `<alignment>` child (or a fresh `<alignment/>`
+/// if none exists yet) -- attribute-level merge via `with_attr`, not a wholesale replace.
+/// Returns just the new `<alignment .../>` span; the caller still has to splice it back
+/// into `xf_span` via `with_ordered_child`/`XF_CHILD_ORDER`.
+pub(crate) fn merged_alignment_span(xf_span: &str, edit: &AlignmentEdit) -> String {
+    let mut out =
+        extract_raw_element(xf_span, "alignment").unwrap_or_else(|| "<alignment/>".to_string());
+    if let Some(h) = &edit.horizontal {
+        out = with_attr(&out, "horizontal", h);
+    }
+    if let Some(v) = &edit.vertical {
+        out = with_attr(&out, "vertical", v);
+    }
+    if let Some(w) = edit.wrap_text {
+        out = with_attr(&out, "wrapText", if w { "1" } else { "0" });
+    }
+    if let Some(indent) = edit.indent {
+        out = with_attr(&out, "indent", &indent.to_string());
+    }
+    out
+}
+
+/// Same merge-onto-existing-child contract as `merged_alignment_span`, for `<protection>`.
+pub(crate) fn merged_protection_span(xf_span: &str, edit: &ProtectionEdit) -> String {
+    let mut out =
+        extract_raw_element(xf_span, "protection").unwrap_or_else(|| "<protection/>".to_string());
+    if let Some(l) = edit.locked {
+        out = with_attr(&out, "locked", if l { "1" } else { "0" });
+    }
+    if let Some(h) = edit.hidden {
+        out = with_attr(&out, "hidden", if h { "1" } else { "0" });
+    }
+    out
 }
 
 /// Parses a single worksheet XML into a 1-based (row, col) → SheetCell map,
