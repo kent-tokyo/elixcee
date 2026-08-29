@@ -917,3 +917,19 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 残作業：なし——この項目はこれで完結。`worksheet_origins`自体のstaleエントリ問題（シート削除後も残り続ける設計）は不具合ではなく意図的な仕様のため、対応不要。
 
 残作業：なし——この項目はこれで完結。
+
+## 0.15.0-A：Safe Style Engine 第一弾 — `set_number_format`
+
+ユーザーの「ROADMAP.mdに沿って開発を進めて」を受けた継続作業。事前にスコーピング（`internal_docs/style-engine-0.15.0-a-design.md`）を実施し、ユーザーから3点の承認（実装着手／style-explosion閾値なしで出荷／custom numFmt鋳造をこのプロジェクトの「実fixtureなしでwriterコードを書かない」というハードゲートの明示的例外として承認）を得た上で着手。isolated worktreeで実施。
+
+- [x] **設計**：`xl/styles.xml`は今まで100%不透明パススルー（読み込み元ファイルの生バイト、または新規`Vm()`向けの`XLSX_STYLES`定数）——スタイル自体を変更するVBA文が一つも存在しなかったため。`<cellXfs>`をper-`<xf>`の生スパン列（属性＋`<alignment>`/`<protection>`等の子要素を丸ごと文字列として保持、解釈しない）としてパースする方式を採用——`OpaqueWorksheetFragments`（hyperlinks/dataValidations/autoFilter）と同じ「生スパンを保持するだけで解釈しない」手法をcellXf単位に適用したもの。`<fonts>`/`<fills>`/`<borders>`/`<cellStyleXfs>`は一切パースせず不透明のまま。
+- [x] **numFmtId解決**：既存の読み取り専用`BUILTIN_NUMBER_FORMATS`/`resolve_number_format`を逆方向（フォーマット文字列→numFmtId）に反転した新関数`resolve_number_format_id`を追加——ビルトイン(0-49)一致→既存カスタム一致→新規カスタムID鋳造（164以降）の優先順で解決。
+- [x] **no-shared-style-mutation安全性**：セルのフォーマット変更は、現在の`<xf>`をクローンしてnumFmtIdだけ差し替えた候補を作り、既存の`<xf>`列から完全一致（バイト同一）するものを探して再利用、なければ新規追加——既存の`<xf>`は絶対にin-placeで変更しない。実際に「同じstyle index 0（General）を共有する2セルのうち1つだけフォーマット」というシナリオでPython経由の保存→再読込テストを行い、もう一方が汚染されないことを確認。
+- [x] **from-scratch Vm()との統一**：`XLSX_STYLES`は特別扱いせず、読み込みファイルの`passthrough_styles`と全く同じ`<numFmts>`+`<cellXfs>`形状の「開始文書」の一種として同一パイプラインで処理——保存呼び出しサイトの`.unwrap_or_else(...)`を「開始テキストの決定」と「編集が発生したか」の2つの独立した問いに分離する小さな再構成のみで実現、新規設計は不要だった（スコーピング時のFinding 3bの結論通り）。
+- [x] **即時読み取り一貫性**：`set_number_format`は`cell_number_formats`を即座に更新（保存前でも`get_cell_number_format`が新しい値を返す）が、実際の`<cellXfs>`/`<numFmts>`解決は保存時まで遅延（`Vm`自体は開始スタイル文書のバイト列を一切保持しないため）。新規`pending_number_formats`フィールド（`cell_number_formats`と同形）で保留中の編集を追跡——`rename_sheet`（12map目として追加）/`copy_sheet`/`remove_sheet`/構造編集シフト/range move全てに配線済み。
+- [x] **実fixture検証**：`fixture1_values_styles_merge_hidden.xlsm`の実在する`numFmtId="4"`（`#,##0.00`）を別セルに適用し、重複作成ではなく再利用されることを確認。カスタムnumFmt鋳造パスは実Excel fixtureが存在しないため、ユーザー承認済みの例外としてopenpyxl作成の合成fixtureで検証（実openpyxl再読込で例外なし、フォーマット文字列一致を確認）。
+- [x] **検証**：新規Rust単体テスト29件（`extract_cell_xfs`/`with_num_fmt_id`/`resolve_number_format_id`のreader.rsテスト15件、`resolve_pending_number_formats`のlib.rsテスト10件、`pending_number_formats`の配線テスト4件、既存の`rename_sheet`/`copy_sheet`/`remove_sheet`テストのmap数更新）。`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`（python featureあり／なし両方）／`cargo test --workspace`（1188件全pass）／`cargo audit`（脆弱性なし）／`scripts/check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。worktree内に独自の`.venv`を構築し`maturin develop --release`で実ビルド、Python検証スクリプトで15項目（dedup、カスタムnumFmt鋳造、no-shared-mutation安全性、2回連続保存の安定性、保存前即時読み取り一貫性など）全てpass。
+- [x] **新規発見（未修正、既存の別の不具合）**：値を一度も持たないセルはbuild_xlsx_sheetのセル出力ループから完全に除外される（`Vm`の値マップに存在するセルしか`<c>`要素を出力しない）ため、値のないセルに`set_number_format`を呼んでも保存時に消える——`get_cell_number_format`は即座に編集を反映するため一見成功したように見えるのが罠。readerは`<c s="N">`のstyle indexを値の有無に関わらず`raw_style_indices`へ捕捉しているため、これは`set_number_format`固有ではなく、読み込みファイル自身の「値のない事前フォーマット済みセル」も同じ理由で保存のたびに消えている、既存の（今回初めて発見・開示した）writer全体の制約。0.15.0-A自体のスコープを超える一般的な書き込みループの拡張が必要なため、今回は修正せず開示のみ（`set_number_format`のdocstringとROADMAP.md known-gap 29に記載）。
+- [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`は本worktree内で更新済み。`internal_docs/ROADMAP.md`（gitignore対象、worktreeにチェックアウトされないためこのworktreeからは編集不可）への反映——0.15.0-Aチェックボックスを完了に、known-gap 29として上記の値なしセル問題を追記——は親エージェント（メインの作業ディレクトリ）側で実施が必要。
+
+残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。

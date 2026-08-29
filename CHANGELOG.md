@@ -1109,6 +1109,64 @@ is deliberately **not** cleaned: `deleted_sheet_prunable_parts` and `no_sheet_wa
 so clearing it would blind both checks — confirmed the hard way, an initial version of
 this fix that cleaned all 8 broke both mechanisms until narrowed to 7.
 
+### Root crate: `set_number_format` — 0.15.0-A, Safe Style Engine's first slice
+
+`xl/styles.xml` was 100% opaque byte-for-byte passthrough until now (or the hardcoded
+`XLSX_STYLES` minimal default for a from-scratch `Vm()`) — no VBA statement in this VM
+ever mutated a cell's style, so nothing needed to parse it. `set_number_format(addr,
+format_code, sheet=None)` is the first thing that does, and it's real, from-scratch
+write-path work, not a thin wrapper:
+
+- `<cellXfs>` is parsed into opaque per-`<xf>` raw spans (attributes + any
+  `<alignment>`/`<protection>` children captured verbatim, never interpreted) — the same
+  "capture the raw span, don't parse it" shape already proven for `OpaqueWorksheetFragments`
+  (hyperlinks, data-validations, `autoFilter`), applied to per-cellXf records instead of
+  per-worksheet elements.
+- A target format string resolves to an existing built-in id (0-49), an existing custom
+  `<numFmt>` this file already defines, or a newly-minted custom id (164+, XML-escaped) —
+  inverting the read-only `resolve_number_format`/`BUILTIN_NUMBER_FORMATS` machinery that
+  already existed for reading.
+- **No shared-style mutation, ever**: setting a cell's format clones its current `<xf>`
+  with only `numFmtId` changed, then finds an existing byte-identical record to reuse or
+  appends a new one — an existing `<xf>` (possibly shared by many untouched cells) is
+  never mutated in place. Verified concretely: two cells sharing style index 0 (General)
+  on a from-scratch `Vm()`, only one formatted — the other survives a save+reload as
+  General, not silently corrupted to the new format.
+- The loaded-file and from-scratch-`Vm()` cases share one code path:
+  `resolve_pending_number_formats` treats `XLSX_STYLES` as just another starting document
+  with the exact same `<numFmts>`+`<cellXfs>` shape a loaded file has, resolved only when
+  a pending edit actually exists — the common (untouched) case still writes the original
+  bytes back byte-for-byte, unchanged.
+- Real-fixture verified for the common path: `fixture1_values_styles_merge_hidden.xlsm`'s
+  genuine `numFmtId="4"` (`#,##0.00`) is correctly reused, not duplicated, when the same
+  format is requested on a different cell. No real-Excel fixture has a *custom* `<numFmt>`
+  though — minting one is a deliberate, disclosed exception to this project's "no writer
+  code without a real fixture" hard gate (the same gate still blocking `set_row_height`/
+  `set_column_width`/hidden-sheet-write): `<numFmt numFmtId="N" formatCode="...">`'s shape
+  is unambiguous ECMA-376 §18.8.30 spec text with zero real-world producer variance to
+  discover, so an `openpyxl`-authored synthetic fixture, verified via a real
+  `openpyxl.load_workbook()` reopen, stands in.
+- Immediate read-after-write consistency: `get_cell_number_format` reflects a pending
+  edit right away, no save/reload needed — but the actual `<cellXfs>`/`<numFmts>`
+  resolution is deferred to `save_workbook()`, since the starting styles document (a
+  loaded file's raw bytes, or `XLSX_STYLES`) is only available there; `Vm` itself never
+  holds those bytes. Calling `save_workbook()` twice back to back re-resolves from the
+  exact same starting point both times — nothing is consumed or mutated persistently by
+  a save, so repeated saves are naturally idempotent.
+- **New, disclosed limitation** (pre-existing, not introduced by this change — confirmed
+  by checking the reader, which already captures a value-less cell's `s="N"` into
+  `raw_style_indices` regardless of whether it has content): a cell with no value by save
+  time has no persisted format on disk, even though a read right after `set_number_format`
+  still reports it — the writer only ever emits a `<c>` element for a cell present in
+  `Vm`'s value map. A loaded file's own genuinely empty, pre-formatted cell is dropped the
+  same way on any save today, completely independent of this feature. See ROADMAP.md's
+  known gaps.
+- Explicitly out of scope, per this milestone's own phase boundary: font/fill/border/
+  alignment/protection (0.15.0-B) and copy-style/named-style/theme (0.15.0-C) — every
+  other attribute on a cell's `<xf>` is copied verbatim, never interpreted. No
+  style-explosion diagnostic threshold either — deferred to whenever real usage data
+  exists to calibrate one against, ships without one for this first cut.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
