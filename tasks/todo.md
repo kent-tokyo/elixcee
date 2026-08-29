@@ -861,3 +861,16 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] ドキュメント同期：`CHANGELOG.md`、`internal_docs/ROADMAP.md`（0.14.0-B節をTier 1/2完了として整理・簡潔化）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus・§8、`tasks/todo.md`。
 
 残作業：0.14.0-Bは実質完了（Tier 3は0.16.0/0.17.0の領分）。次はユーザーの指示待ち。
+
+## 0.14.0-Cスコーピング → `<autoFilter>`保存時消失バグの修正（0.16.0を待たず独立実施）
+
+ユーザーの「scope 0.14.0-C」を受けたスコーピング調査の過程で、`<autoFilter>`が保存時に完全に消失する（staleではなく削除）ことを実openpyxlフィクスチャで実証。0.14.0-C自体は0.16.0/0.17.0への統合（マイルストーン廃止）が決定されたが、AutoFilterのこの1点だけは「即座に修正可能」と判断され、ユーザーが4択のAskUserQuestionで「Fix preservation now」を選択——0.16.0の完全なcreate/filter APIを待つ必要はなく、既存のopaque-fragment機構でbyte-preservationとして直せると判明したため。
+
+- [x] **調査**：`<autoFilter>`には`r:id`が一切ない（`table_parts`/`drawing`と違い関係参照を持たない）ことをopenpyxl自身のwriterソース（`worksheet/_writer.py`のスキーマ順コメント）で確認——`rels_survived`ゲートは不要、`dataValidations`/`pageMargins`と同じ無条件パススルー扱いでよいと判断。
+- [x] **スキーマ順の検証**：親からの当初の指示（「mergeCellsの後」）は誤りだったため、openpyxlの`write_tail`の実装順（`write_filter`が`write_merged_cells`より前）を直接読んで確認し、さらに実際にmergeとautoFilter両方を含む実フィクスチャをelixceeでround tripさせてXML中の出現順序を直接検証——ガイド文言を鵜呑みにせず一次情報で裏取りする、このプロジェクトの規律に従った。
+- [x] **実装**：`OpaqueWorksheetFragments`に`auto_filter`フィールドを追加、`reader::extract_raw_element(xml, "autoFilter")`で抽出、`build_xlsx_sheet`で`</sheetData>`直後・`<mergeCells>`直前に出力。既存のstructured `Vm`状態は一切追加せず（preservation onlyであり、create/remove/filter-type APIは引き続き0.16.0の領分）。
+- [x] **検証**：Rustユニットテストは追加せず——このクラスの機能（`sheetFormatPr`/`dataValidations`等）に単体の専用Rustテストが元々存在しない既存の規律と一致させ、代わりにcompat/differential-python/sheet_ops_check.pyに3件追加（refのみ、filterColumn付き、merge+無関係セル編集+スキーマ順の直接検証）——実openpyxlをoracleとする、このクラスの機能の既存テスト方式と一致。
+- [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1141件、0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）／`scripts/check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。`maturin develop --release`で実際にビルドし、Python differential test 21件（新規3件含む）全件pass。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（known-gap 28として追加）、`internal_docs/structured-object-transform-0.14.0-c-scoping.md`（Update note追加）、`internal_docs/openpyxl-gap-audit.md`（既存のAutoFilter行に「preservationは別途修正済み」の注記追加）。
+
+残作業：AutoFilterのVM-effect API（Python-native wrapper）自体は引き続き0.16.0の領分——今回はpreservationのみ。0.14.0-C自体の残り（defined-names/print-area rename保存の可能性）は別途スコーピング中。
