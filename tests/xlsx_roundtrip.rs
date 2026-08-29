@@ -956,6 +956,56 @@ fn range_autofilter_hidden_rows_survive_a_save() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+/// Known gap 29: a value-less, pre-formatted cell (a merged-cell anchor styled but never
+/// given a value is the common real shape -- `fixture1`'s own `B1:C1` merge, styled
+/// `s="2"`, with `A1` holding the real text) had no entry in `Vm`'s value map at all
+/// (`populate_from_sheets` only inserts a `cells` entry from a real `<v>`/formula, while
+/// `cell_style_indices` is populated unconditionally from the raw `s="N"` attribute), so
+/// `build_xlsx_sheet`'s cell-emission loop -- built purely from the value map -- silently
+/// dropped the `<c>` element, and the style with it, on every save.
+#[test]
+fn a_value_less_pre_formatted_cell_survives_a_save() {
+    let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
+    let output_path = tmp_path("value_less_styled_cell_output.xlsm");
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    save_workbook(&vm, &output_path).expect("save-as should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let out_sheet1 = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+
+    assert!(
+        out_sheet1.contains("<c r=\"B1\" s=\"2\"/>"),
+        "B1 (value-less, style index 2, merged-cell anchor) must survive as its own \
+         <c> element: {out_sheet1}"
+    );
+    assert!(
+        out_sheet1.contains("<c r=\"C1\" s=\"2\"/>"),
+        "C1 (value-less, style index 2, the other half of the merge) must survive too: \
+         {out_sheet1}"
+    );
+
+    // Second save-reload cycle: reload the just-saved output and save it again, confirming
+    // no drift/duplication on a no-op re-save.
+    let output_path2 = tmp_path("value_less_styled_cell_output2.xlsm");
+    let mut vm2 = Vm::new();
+    vm2.load_workbook_file(&output_path)
+        .expect("first output should reload");
+    save_workbook(&vm2, &output_path2).expect("second save-as should succeed");
+    let output_bytes2 = std::fs::read(&output_path2).unwrap();
+    let output_entries2 = read_all_zip_entries(&output_bytes2);
+    let out_sheet1_v2 =
+        String::from_utf8(output_entries2["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    assert!(out_sheet1_v2.contains("<c r=\"B1\" s=\"2\"/>"));
+    assert!(out_sheet1_v2.contains("<c r=\"C1\" s=\"2\"/>"));
+
+    let _ = std::fs::remove_file(&output_path);
+    let _ = std::fs::remove_file(&output_path2);
+}
+
 /// R1 (bulk worksheet range/row API, see docs/openpyxl-gap-audit.md): the new
 /// `Vm::write_rect`/`read_rect` are exercised directly here (no PyO3 needed --
 /// the test crate links `elixcee` as a lib), on a real fixture that already
