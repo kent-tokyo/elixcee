@@ -1316,6 +1316,42 @@ free nor required for this milestone; see `internal_docs/style-engine-0.15.0-c-d
   save, all three present after reload); a cell's own explicit style surviving distinct
   from its row's default; shared-style-mutation safety; a second save-reload cycle.
 
+### Root crate: fix `<conditionalFormatting>` being silently dropped on every save
+
+Found while scoping `0.16.0` (Tables, Filters and Rules) — the exact same bug shape as
+the `autoFilter` fix above, just never previously disclosed. Confirmed empirically:
+loaded `fixture3_table_validation_conditional.xlsm` (a real `cellIs` rule), saved, and
+the output had zero `conditionalFormatting` occurrences, while `dataValidations`/
+`tableParts` on the same fixture survived the same save fine.
+
+- Root cause: an existing comment in `build_xlsx_sheet` explained `conditionalFormatting`
+  needed "separate consideration" before joining the unconditional opaque-fragment list
+  (it can reference `xl/styles.xml`'s `<dxfs>` via `dxfId`), but that consideration was
+  never actually done — it simply never joined `phoneticPr`/`dataValidations`'s
+  passthrough loop, nor was it captured anywhere else.
+- Verified the "separate consideration" is a non-issue in practice: `<dxfs>` is never
+  referenced by any `<cellXfs>`/`<fonts>`/`<fills>`/`<borders>` resolve pass (0.15.0-A
+  through 0.15.0-C2) — each only ever `replacen`s the specific container it targets, so
+  every sibling element, including `<dxfs>`, is carried through byte-identical regardless
+  of any style mutation. A preserved rule's `dxfId` stays valid indefinitely.
+- Fixed the same way as `autoFilter`: added to `OpaqueWorksheetFragments` as an
+  unconditional, non-relationship-backed passthrough fragment. Unlike `autoFilter`/
+  `dataValidations` (each occurs at most once per sheet), `CT_Worksheet` allows
+  `conditionalFormatting` to repeat (one block per distinct range/rule-set) — a new
+  `reader::extract_all_raw_elements` captures every occurrence in document order, not
+  just the first, so a sheet with more than one conditional-formatting range doesn't
+  silently lose all but one.
+- Real schema position (immediately after `phoneticPr`, before `dataValidations`)
+  confirmed against `fixture3`'s and `fixture4`'s actual bytes, not just the pre-existing
+  comment's own claim — both agree on this order.
+- Preservation only, matching `autoFilter`'s own scope: no structured `Vm` state, no
+  create/edit API for conditional-formatting rules (that's real `0.16.0` feature work, a
+  separate, much larger effort covered by its own scoping doc).
+- Verified: `fixture3`'s real rule survives an otherwise-unrelated save and a second
+  save-reload cycle; a sheet with two distinct `conditionalFormatting` blocks (an
+  `openpyxl`-authored synthetic fixture) round-trips both; an unrelated `set_style` call
+  (mutates `<cellXfs>`, never `<dxfs>`) leaves a preserved rule's `dxfId` untouched.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
