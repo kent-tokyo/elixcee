@@ -1167,6 +1167,77 @@ write-path work, not a thin wrapper:
   style-explosion diagnostic threshold either — deferred to whenever real usage data
   exists to calibrate one against, ships without one for this first cut.
 
+### Root crate: `set_style` — 0.15.0-B, Safe Style Engine's second slice (font/fill/border/alignment/protection)
+
+`set_style(addr, font=None, fill=None, border=None, alignment=None, protection=None,
+sheet=None)`. Extends 0.15.0-A's `<cellXfs>`-only find-or-append into `<fonts>`/
+`<fills>`/`<borders>` too — three genuinely different record-merge shapes, not one
+generic trick reused three times:
+
+- **Font**: clones the cell's current `<font>` record, only touching the requested
+  properties (`bold`/`italic`/`underline`/`strike` as an explicit `val="1"`/`val="0"`
+  child — matches a real `openpyxl`-authored file's own convention, verified directly
+  rather than assumed; `size`/`color`/`name` as value children) — every other property
+  survives untouched. Verified against `fixture4`'s real, in-use hyperlink font
+  (underlined, theme-colored, sized): setting only `bold` leaves the theme color and
+  everything else exactly as they were.
+- **Fill**: `{"type": "solid", "color": "..."}` REPLACES the whole fill record rather
+  than merging (unlike font/border) — matches how Excel's own single-color fill picker
+  works, not a patch onto a prior gradient/pattern. `fgColor` gets the visible color,
+  `bgColor` gets the real `indexed="64"` "no second color" sentinel — the classic
+  fgColor/bgColor-for-solid-fills convention this project had never touched before,
+  confirmed against a real `openpyxl`-authored fixture's actual bytes before trusting it.
+  Only literal RGB/ARGB hex colors (6-digit RGB, alpha assumed opaque, or 8-digit ARGB) —
+  theme-relative color *minting* is 0.15.0-C's job; copying an existing theme color
+  forward when cloning a record that isn't being recolored stays free.
+- **Border**: clones the current `<border>`, touching only the named side(s)
+  (`left`/`right`/`top`/`bottom`/`diagonal`, each with `style`/`color`) — inserted at
+  their real, order-significant `CT_Border` schema position when a side is added fresh
+  (not just appended at the end), so an out-of-order side never risks a real Excel
+  repair warning.
+- **Alignment/protection**: unlike font/fill/border, these are inline `<xf>` children,
+  not a separate table — merged onto the EXISTING `<alignment>`/`<protection>` child's
+  attributes (not replaced wholesale), since every real fixture in this project already
+  carries `vertical="center"` on every `<xf>`; a naive replace would silently drop it.
+
+**Mandatory correctness fix, not optional cleanup**: 0.15.0-A's `resolve_pending_number_formats`
+ran exactly once per save, producing the one `(new_xml, effective_indices)` pair the
+final write used. Bolting `set_style`'s own resolve pass on independently, starting fresh
+from the same original bytes, would have silently discarded whichever of the two features
+ran first whenever one cell got both a `set_number_format` and a `set_style` edit before
+one save — a real silent-data-loss shape, not hypothetical (formatting a cell's number and
+its visual style together is an ordinary edit sequence). Fixed by chaining:
+`resolve_pending_style_attrs` now takes the number-format pass's own `(new_xml,
+effective_indices)` as ITS starting point instead of the raw bytes, so both passes'
+changes land in the final output. `pending_number_formats` itself (0.15.0-A, already
+shipped) is untouched — a new sibling `pending_style_attrs` field holds `set_style`'s own
+log, resolved second.
+
+Same "no shared-style mutation" safety as 0.15.0-A, now spanning four tables instead of
+one — verified concretely again with two cells sharing a style index, only one styled.
+`set_style` calls on the same cell before one save accumulate (a `fill=...` call after an
+earlier `font=...` call keeps both) rather than the later call wiping the earlier one.
+
+Real-fixture status, disclosed per-property rather than bundled into one blanket
+exception (font-authoring and vertical-alignment have real grounding; fill/border/
+protection/most-alignment properties have none in this project's fixtures — same profile
+as `set_row_height`/`set_column_width`'s still-open half): user granted the same
+ECMA-376-spec-text exception 0.15.0-A's custom-numFmt path got, for all four, verified via
+`openpyxl`-authored synthetic fixtures and real `openpyxl.load_workbook()` reopens.
+
+Explicitly out of scope: theme-relative color minting, copy-style/named-style (0.15.0-C),
+and the still-deferred style-explosion diagnostic threshold.
+
+**New, disclosed limitation, pre-existing and unrelated to this change** (found while
+verifying, on a plain from-scratch `Vm()` with zero style edits): `XLSX_STYLES` (the
+minimal default stylesheet for a from-scratch `Vm()`, since PR #32's `<fill>` fix) has no
+`<cellStyles>` element at all, unlike every real Excel/`openpyxl`-authored file — `CT_StyleSheet`
+allows this (`cellStyles` is optional), but `openpyxl.load_workbook()` emits a
+`UserWarning: Workbook contains no default style, apply openpyxl's default` on reopen. Not
+a data-loss bug (every real value/style survives; confirmed across every test in this
+round) and not a schema violation, just a cosmetic gap in the from-scratch default's
+completeness — not fixed here, out of this phase's scope. See ROADMAP.md's known gaps.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
