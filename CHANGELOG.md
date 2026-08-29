@@ -1272,6 +1272,50 @@ free nor required for this milestone; see `internal_docs/style-engine-0.15.0-c-d
   style, including its theme-colored font surviving intact; a second save-reload cycle for
   stability.
 
+### Root crate: `set_row_style`/`set_column_style` — 0.15.0-C2, row/column default style
+
+- `set_row_style(row, font=, fill=, border=, alignment=, protection=, named_style=,
+  sheet=)` / `set_column_style(col, ...)` — same kwarg shape as `set_style`, but sets an
+  entire row/column's DEFAULT style (`<row s=".." customFormat="1">` / `<col
+  style="..">`) rather than one cell range. A cell's own `set_style` always wins over its
+  row/column's default — this project's job is only to persist both facts independently
+  (`row_styles`/`column_styles` are separate `Vm` fields from `cell_style_indices`),
+  never to resolve precedence itself.
+- First row/column-level WRITE API in this project (`set_row_height`/`set_column_width`
+  still don't exist — read-only, still blocked on the same missing-real-fixture gate).
+  Reuses the exact `<xf>` find-or-append machinery `set_style` already built — a
+  row/column style resolves through the identical clone-merge-dedup pipeline, just
+  stored in `row_styles`/`column_styles` afterward instead of `cell_style_indices`.
+- Chained into the SAME styles.xml resolve pipeline as `set_number_format`/`set_style`
+  (not a fourth independent pass) — a cell touched by `set_style` and its row touched by
+  `set_row_style` before one save both resolve correctly against the same font/fill/
+  border/cellXf tables, matching the mandatory-chaining discipline 0.15.0-B's own scoping
+  established for the number-format/style-attrs pair.
+- `column_styles` is range-shaped (`(min, max, style_index)`, like `column_widths`) —
+  setting ONE column's style splits any existing range containing it into up to two
+  remaining sub-ranges (before/after) plus a fresh singleton for the touched column,
+  mirroring how real Excel itself fragments a `<cols>` run when one column's formatting
+  changes. `row_styles` is a plain per-row index map, like `row_heights`.
+- Shifts on structural edit via two new near-duplicates of
+  `shift_row_heights_for_structural_edit`/`shift_column_widths_for_structural_edit` (same
+  logic, `u32` style index instead of `f64` dimension). `rename_sheet`/`remove_sheet`/
+  `copy_sheet` extended to re-key/clear/copy the two new maps, following PR #33's own
+  per-sheet-map-list discipline from day one.
+- **Real-fixture verification exception, explicitly granted** (this project's usual
+  hard gate — no complex writer without a real Excel-authored fixture — is crossed here
+  with zero real-fixture grounding of any kind, the weakest evidentiary footing of any
+  style-engine phase so far; granted on the same basis as every prior exception this
+  session: `<col style>`/`<row customFormat>`'s attribute shape is unambiguous ECMA-376
+  spec text with no producer variance to discover). The real `openpyxl`-authored
+  attribute convention (`<row r=".." customFormat="1" s="..">`, `<col min=".." max=".."
+  style="..">`) was verified against real bytes before implementing, not assumed.
+- Verified: a real openpyxl-authored fixture's existing row/column default style
+  survives an otherwise-unrelated save; `set_row_style`/`set_column_style` on both a
+  from-scratch and a loaded `Vm()`, reopened cleanly with `openpyxl`; the mandatory
+  chaining case (`set_number_format` + `set_style` + `set_row_style` all before one
+  save, all three present after reload); a cell's own explicit style surviving distinct
+  from its row's default; shared-style-mutation safety; a second save-reload cycle.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
