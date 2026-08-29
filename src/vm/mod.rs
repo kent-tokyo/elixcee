@@ -685,6 +685,11 @@ fn expect_range_ref(obj: ObjectRef, context: &str) -> Result<RangeRef, String> {
     }
 }
 
+/// `pending_style_copies`' shape (0.15.0-C1) -- destination cell -> source cell, per
+/// sheet. Named to satisfy clippy's `type_complexity` lint, same convention as
+/// `src/lib.rs`'s `StyleIndexMap`.
+pub(crate) type StyleCopyMap = HashMap<String, HashMap<(u32, u32), (u32, u32)>>;
+
 /// 0.15.0-B `set_style` fill request -- literal RGB/ARGB only, matching this phase's
 /// scope decision (theme-relative color minting is 0.15.0-C's job; copying an existing
 /// theme color forward when a fill isn't touched at all stays free, since `set_style`
@@ -708,6 +713,18 @@ pub struct StyleAttrEdit {
     pub border: Option<reader::BorderEdit>,
     pub alignment: Option<reader::AlignmentEdit>,
     pub protection: Option<reader::ProtectionEdit>,
+    /// A named-style-by-name request (0.15.0-C1) -- e.g. `"Hyperlink"`. Unlike the other
+    /// five fields (which each touch one property of the cell's OWN direct `<xf>`), this
+    /// one REPLACES the whole candidate `<xf>` with a clone of the referenced
+    /// `<cellStyleXfs>` entry (plus `xfId` set to point at it) before any other pending
+    /// field on this same edit is applied -- matching real Excel's own behavior of baking
+    /// the named style's font/fill/border/numFmt/alignment/protection directly onto the
+    /// cell's `<cellXfs>` entry rather than relying on `xfId`-based inheritance alone
+    /// (confirmed against `fixture4`'s real `xfId="1"` cell, which also carries that
+    /// style's own `fontId="2"` explicitly). No minting fallback: applying a name this
+    /// file's `<cellStyles>` doesn't define is a `resolve_pending_style_attrs` error, not
+    /// a new style creation (0.15.0-C's named-style CREATE is explicitly out of scope).
+    pub named_style: Option<String>,
 }
 
 pub struct Vm {
@@ -907,7 +924,7 @@ pub struct Vm {
     /// reasoning as `pending_number_formats` (see that field's own doc comment; the
     /// starting `xl/styles.xml` document only exists at save time, so there's nothing to
     /// resolve against any earlier). Unlike `pending_number_formats`, a `StyleAttrEdit`
-    /// is itself a partial request (each of its five fields independently `Option`) --
+    /// is itself a partial request (each of its six fields independently `Option`) --
     /// `set_style_on_sheet` MERGES a new call's fields onto whatever's already pending
     /// for that cell rather than overwriting the whole entry, so `set_style(font=...)`
     /// followed later by `set_style(fill=...)` on the same cell before one save both
@@ -916,6 +933,19 @@ pub struct Vm {
     /// doc comment for why an independent second pass would silently drop whichever of
     /// the two features ran first on a cell touched by both.
     pub(crate) pending_style_attrs: HashMap<String, HashMap<(u32, u32), StyleAttrEdit>>,
+    /// Cells with a `copy_style` request since load (0.15.0-C1): destination cell
+    /// coordinate -> source cell coordinate, both on `key`. Deferred and chained LAST at
+    /// save time (`resolve_pending_style_copies`, `src/lib.rs`) -- AFTER both
+    /// `pending_number_formats` and `pending_style_attrs` resolve -- so a `copy_style`
+    /// call automatically picks up whatever the source cell resolves to from either of
+    /// those two features, without needing to understand which one (if any) produced it.
+    /// Pure index aliasing: the destination is pointed at exactly the same style index
+    /// the source resolves to, no new `<xf>`/font/fill/border record is ever minted for
+    /// this. Because it resolves last, it takes precedence over a `set_style`/
+    /// `set_number_format` edit on the SAME destination cell issued before the matching
+    /// `copy_style` call -- a deliberate, documented fixed-pass-order rule (like the
+    /// number-format/style-attrs chain itself), not true call-order tracking.
+    pub(crate) pending_style_copies: StyleCopyMap,
     /// Per-sheet whole-tab visibility (P2), keyed the same way as `merged_ranges`.
     /// Populated by `populate_from_sheets` from the reader's `WorkbookSheet::
     /// sheet_state`; sparse like `merged_ranges`/`sheet_visibility` -- only sheets
@@ -1054,6 +1084,7 @@ impl Vm {
             cell_number_formats: HashMap::new(),
             pending_number_formats: HashMap::new(),
             pending_style_attrs: HashMap::new(),
+            pending_style_copies: HashMap::new(),
             sheet_states: HashMap::new(),
             row_heights: HashMap::new(),
             column_widths: HashMap::new(),
@@ -1309,6 +1340,10 @@ impl Vm {
             let shifted = shift_keyed_cell_map(pending, axis, edit);
             self.pending_style_attrs.insert(key.to_string(), shifted);
         }
+        if let Some(pending) = self.pending_style_copies.get(key) {
+            let shifted = shift_style_copy_map(pending, axis, edit);
+            self.pending_style_copies.insert(key.to_string(), shifted);
+        }
     }
 
     /// Shifts `key`'s explicit row heights for a row-axis structural edit
@@ -1523,6 +1558,11 @@ impl Vm {
         if let Some(pending) = self.pending_style_attrs.get(key) {
             let translated = translate_keyed_cell_map(pending, source, d_row, d_col);
             self.pending_style_attrs.insert(key.to_string(), translated);
+        }
+        if let Some(pending) = self.pending_style_copies.get(key) {
+            let translated = translate_style_copy_map(pending, source, d_row, d_col);
+            self.pending_style_copies
+                .insert(key.to_string(), translated);
         }
 
         let snapshot: Vec<((u32, u32), CellContent)> = self
@@ -2168,6 +2208,38 @@ impl Vm {
                         .get_or_insert_with(Default::default)
                         .merge_from(protection);
                 }
+                if edit.named_style.is_some() {
+                    existing.named_style = edit.named_style.clone();
+                }
+            }
+        }
+    }
+
+    /// Records a `copy_style` request (0.15.0-C1): every cell in `(r1,c1)..(r2,c2)` on
+    /// `key` should end up with whatever style index `src` resolves to at save time.
+    /// Purely a pending-edit log, same deferred-to-save-time reasoning as
+    /// `set_number_format_on_sheet`/`set_style_on_sheet` -- see `pending_style_copies`'s
+    /// own doc comment for the resolution-order contract. A later `copy_style` call
+    /// targeting the same destination cell overwrites the earlier one (last call wins,
+    /// same as `set_number_format` re-targeting a cell), unlike `set_style`'s
+    /// merge-across-calls behavior, since "copy the whole style from X" and "copy the
+    /// whole style from Y" have nothing to merge.
+    pub fn copy_style_on_sheet(
+        &mut self,
+        key: &str,
+        src: (u32, u32),
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+    ) {
+        let pending = self
+            .pending_style_copies
+            .entry(key.to_string())
+            .or_default();
+        for row in r1..=r2 {
+            for col in c1..=c2 {
+                pending.insert((row, col), src);
             }
         }
     }
@@ -2742,6 +2814,7 @@ impl Vm {
             self.cell_number_formats.remove(key);
             self.pending_number_formats.remove(key);
             self.pending_style_attrs.remove(key);
+            self.pending_style_copies.remove(key);
             self.sheet_states.remove(key);
             self.row_heights.remove(key);
             self.column_widths.remove(key);
@@ -2763,11 +2836,15 @@ impl Vm {
         self.remove_sheet(&key, name)
     }
 
-    /// Renames a sheet, atomically re-keying all twelve lowercase-keyed per-sheet `Vm`
+    /// Renames a sheet, atomically re-keying all fourteen lowercase-keyed per-sheet `Vm`
     /// maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
     /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
-    /// `cell_number_formats`, `pending_number_formats`, `sheet_states`, `row_heights`,
-    /// `column_widths`, `worksheet_origins`). Each gets one explicit
+    /// `cell_number_formats`, `pending_number_formats`, `pending_style_attrs`,
+    /// `pending_style_copies` (0.15.0-C1), `sheet_states`, `row_heights`,
+    /// `column_widths`, `worksheet_origins` -- the previous "twelve" count here had
+    /// silently gone stale since 0.15.0-B added `pending_style_attrs` without updating
+    /// this comment; corrected alongside adding `pending_style_copies`). Each gets one
+    /// explicit
     /// remove+insert line rather than a generic "walk every map" helper: the maps
     /// have different value types, a truly generic helper needs a macro or
     /// trait-object indirection to cross that, and with exactly one call site a
@@ -2868,6 +2945,9 @@ impl Vm {
         }
         if let Some(v) = self.pending_style_attrs.remove(&old_key) {
             self.pending_style_attrs.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.pending_style_copies.remove(&old_key) {
+            self.pending_style_copies.insert(new_key.clone(), v);
         }
         // 8. `sheet_states`.
         if let Some(v) = self.sheet_states.remove(&old_key) {
@@ -2971,6 +3051,9 @@ impl Vm {
         }
         if let Some(v) = self.pending_style_attrs.get(&source_key).cloned() {
             self.pending_style_attrs.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.pending_style_copies.get(&source_key).cloned() {
+            self.pending_style_copies.insert(new_key.clone(), v);
         }
         if let Some(&v) = self.sheet_states.get(&source_key) {
             self.sheet_states.insert(new_key.clone(), v);
@@ -6335,6 +6418,69 @@ fn translate_keyed_cell_map<V: Clone>(
     }
     for (pos, value) in moved {
         result.insert(pos, value);
+    }
+    result
+}
+
+/// Shifts `pending_style_copies`' dest->source coordinate pairs for a structural edit
+/// (0.15.0-C1) -- unlike `shift_keyed_cell_map`'s opaque-value assumption, BOTH the map's
+/// key (destination) and its value (source) are cell coordinates on the same sheet, so
+/// both need shifting. A pair is dropped entirely if EITHER its destination or its source
+/// cell falls inside a deleted band -- a copy request with no surviving source (or no
+/// surviving destination) has nothing left to mean.
+fn shift_style_copy_map(
+    map: &HashMap<(u32, u32), (u32, u32)>,
+    axis: formula::RefAxis,
+    edit: formula::StructuralEdit,
+) -> HashMap<(u32, u32), (u32, u32)> {
+    let shift_one = |row: u32, col: u32| -> Option<(u32, u32)> {
+        let idx = match axis {
+            formula::RefAxis::Row => row,
+            formula::RefAxis::Col => col,
+        };
+        match formula::shift_cell_coord(idx, edit) {
+            formula::CellShift::Unchanged => Some((row, col)),
+            formula::CellShift::Deleted => None,
+            formula::CellShift::Moved(new_idx) => Some(match axis {
+                formula::RefAxis::Row => (new_idx, col),
+                formula::RefAxis::Col => (row, new_idx),
+            }),
+        }
+    };
+    let mut result = HashMap::new();
+    for (&(dest_row, dest_col), &(src_row, src_col)) in map {
+        if let (Some(new_dest), Some(new_src)) =
+            (shift_one(dest_row, dest_col), shift_one(src_row, src_col))
+        {
+            result.insert(new_dest, new_src);
+        }
+    }
+    result
+}
+
+/// Range-move counterpart to `shift_style_copy_map` -- translates whichever of a pair's
+/// destination/source coordinates fall inside the moved `source` rect by `(d_row, d_col)`,
+/// leaving the other alone if it doesn't. No ambiguous case (a point is either inside
+/// `source` or it isn't), same as `translate_keyed_cell_map`.
+fn translate_style_copy_map(
+    map: &HashMap<(u32, u32), (u32, u32)>,
+    source: formula::MoveRect,
+    d_row: i64,
+    d_col: i64,
+) -> HashMap<(u32, u32), (u32, u32)> {
+    let translate_one = |row: u32, col: u32| -> (u32, u32) {
+        if source.contains(col, row) {
+            ((row as i64 + d_row) as u32, (col as i64 + d_col) as u32)
+        } else {
+            (row, col)
+        }
+    };
+    let mut result = HashMap::new();
+    for (&(dest_row, dest_col), &(src_row, src_col)) in map {
+        result.insert(
+            translate_one(dest_row, dest_col),
+            translate_one(src_row, src_col),
+        );
     }
     result
 }
@@ -9972,7 +10118,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_sheet_cleans_all_nine_non_identity_per_sheet_maps() {
+    fn delete_sheet_cleans_all_ten_non_identity_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.ensure_sheet("Extra");
         vm.merged_ranges
@@ -10013,6 +10159,8 @@ mod tests {
             .insert("extra".to_string(), HashMap::from([(5u32, 30.0)]));
         vm.column_widths
             .insert("extra".to_string(), vec![(2, 4, 12.5)]);
+        vm.pending_style_copies
+            .insert("extra".to_string(), HashMap::from([((1, 1), (2, 2))]));
         assert!(vm.worksheet_origins.contains_key("extra"));
 
         vm.delete_sheet("Extra").unwrap();
@@ -10023,6 +10171,7 @@ mod tests {
         assert!(!vm.cell_number_formats.contains_key("extra"));
         assert!(!vm.pending_number_formats.contains_key("extra"));
         assert!(!vm.pending_style_attrs.contains_key("extra"));
+        assert!(!vm.pending_style_copies.contains_key("extra"));
         assert!(!vm.sheet_states.contains_key("extra"));
         assert!(!vm.row_heights.contains_key("extra"));
         assert!(!vm.column_widths.contains_key("extra"));
@@ -10082,7 +10231,7 @@ mod tests {
     // ── P1 core 3: Vm::rename_sheet / Vm::move_sheet ─────────────────────────
 
     #[test]
-    fn rename_sheet_updates_all_thirteen_per_sheet_maps() {
+    fn rename_sheet_updates_all_fourteen_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -10129,6 +10278,8 @@ mod tests {
             .insert("sheet1".to_string(), HashMap::from([(5u32, 30.0)]));
         vm.column_widths
             .insert("sheet1".to_string(), vec![(2, 4, 12.5)]);
+        vm.pending_style_copies
+            .insert("sheet1".to_string(), HashMap::from([((1, 1), (2, 2))]));
 
         vm.rename_sheet("Sheet1", "Renamed").unwrap();
 
@@ -10146,6 +10297,8 @@ mod tests {
         assert!(!vm.pending_number_formats.contains_key("sheet1"));
         assert!(vm.pending_style_attrs.contains_key("renamed"));
         assert!(!vm.pending_style_attrs.contains_key("sheet1"));
+        assert!(vm.pending_style_copies.contains_key("renamed"));
+        assert!(!vm.pending_style_copies.contains_key("sheet1"));
         assert_eq!(vm.sheet_states.get("renamed"), Some(&SheetState::Hidden));
         assert!(!vm.sheet_states.contains_key("sheet1"));
         assert_eq!(vm.row_height_on_sheet("renamed", 5), Some(30.0));
@@ -10430,7 +10583,7 @@ mod tests {
     // ── P2: copy_sheet ────────────────────────────────────────────────────
 
     #[test]
-    fn copy_sheet_duplicates_all_eleven_per_sheet_maps() {
+    fn copy_sheet_duplicates_all_twelve_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -10477,6 +10630,8 @@ mod tests {
             .insert("sheet1".to_string(), HashMap::from([(5u32, 30.0)]));
         vm.column_widths
             .insert("sheet1".to_string(), vec![(2, 4, 12.5)]);
+        vm.pending_style_copies
+            .insert("sheet1".to_string(), HashMap::from([((1, 1), (9, 9))]));
 
         vm.copy_sheet("Sheet1", "Copy").unwrap();
 
@@ -10488,6 +10643,7 @@ mod tests {
         assert!(vm.cell_number_formats.contains_key("sheet1"));
         assert!(vm.pending_number_formats.contains_key("sheet1"));
         assert!(vm.pending_style_attrs.contains_key("sheet1"));
+        assert!(vm.pending_style_copies.contains_key("sheet1"));
         assert_eq!(vm.sheet_states.get("sheet1"), Some(&SheetState::VeryHidden));
         assert_eq!(vm.row_height_on_sheet("sheet1", 5), Some(30.0));
         assert_eq!(vm.column_width_on_sheet("sheet1", 3), Some(12.5));
@@ -10509,6 +10665,7 @@ mod tests {
                 .bold,
             Some(true)
         );
+        assert_eq!(vm.pending_style_copies["copy"][&(1, 1)], (9, 9));
         assert_eq!(vm.sheet_states.get("copy"), Some(&SheetState::VeryHidden));
         assert_eq!(vm.row_height_on_sheet("copy", 5), Some(30.0));
         assert_eq!(vm.column_width_on_sheet("copy", 3), Some(12.5));
@@ -11798,6 +11955,66 @@ mod tests {
             pending[&(10, 10)].fill.as_ref().unwrap().color_argb,
             "FF00FF00"
         );
+    }
+
+    #[test]
+    fn copy_style_on_sheet_records_a_pending_copy_for_every_cell_in_the_range() {
+        let mut vm = Vm::new();
+        vm.copy_style_on_sheet("sheet1", (1, 1), 5, 5, 6, 6);
+        let pending = &vm.pending_style_copies["sheet1"];
+        assert_eq!(pending[&(5, 5)], (1, 1));
+        assert_eq!(pending[&(5, 6)], (1, 1));
+        assert_eq!(pending[&(6, 5)], (1, 1));
+        assert_eq!(pending[&(6, 6)], (1, 1));
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_shifts_a_pending_style_copy_too() {
+        let mut vm = Vm::new();
+        // Destination at row 10, source at row 20 -- both above the deleted band, both
+        // must shift up by 2.
+        vm.copy_style_on_sheet("sheet1", (20, 3), 10, 3, 10, 3);
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        let pending = vm.pending_style_copies.get("sheet1").unwrap();
+        assert!(!pending.contains_key(&(10, 3)));
+        assert_eq!(pending[&(8, 3)], (18, 3));
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_drops_a_pending_style_copy_whose_source_was_deleted() {
+        let mut vm = Vm::new();
+        // Source sits INSIDE the deleted band -- the copy request has nothing left to
+        // mean and must be dropped, not left pointing at a stale row.
+        vm.copy_style_on_sheet("sheet1", (6, 3), 10, 3, 10, 3);
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        let still_present = vm
+            .pending_style_copies
+            .get("sheet1")
+            .is_some_and(|p| p.contains_key(&(8, 3)));
+        assert!(!still_present);
+    }
+
+    #[test]
+    fn move_range_on_sheet_translates_a_pending_style_copy_too() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        // Destination at (1,1) will be moved; source at (50,50) stays put.
+        vm.copy_style_on_sheet("sheet1", (50, 50), 1, 1, 1, 1);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        let pending = vm.pending_style_copies.get("sheet1").unwrap();
+        assert!(!pending.contains_key(&(1, 1)));
+        assert_eq!(pending[&(10, 10)], (50, 50));
     }
 
     #[test]

@@ -1182,6 +1182,34 @@ mod opaque_fragment_tests {
         assert!(out.ends_with("<alignment vertical=\"center\"/></xf>"));
     }
 
+    // ── 0.15.0-C1: named-style lookup ────────────────────────────────────────────
+
+    #[test]
+    fn named_style_xf_id_finds_a_real_fixture_shaped_entry() {
+        let xml = concat!(
+            "<styleSheet><cellStyles count=\"2\">",
+            "<cellStyle name=\"ハイパーリンク\" xfId=\"1\" builtinId=\"8\"/>",
+            "<cellStyle name=\"標準\" xfId=\"0\" builtinId=\"0\"/>",
+            "</cellStyles></styleSheet>",
+        );
+        assert_eq!(named_style_xf_id(xml, "ハイパーリンク"), Some(1));
+        assert_eq!(named_style_xf_id(xml, "標準"), Some(0));
+    }
+
+    #[test]
+    fn named_style_xf_id_none_for_an_unknown_name() {
+        let xml = "<styleSheet><cellStyles count=\"1\"><cellStyle name=\"標準\" xfId=\"0\"/></cellStyles></styleSheet>";
+        assert_eq!(named_style_xf_id(xml, "Bad"), None);
+    }
+
+    #[test]
+    fn named_style_xf_id_none_with_no_cellstyles_element() {
+        assert_eq!(
+            named_style_xf_id("<styleSheet></styleSheet>", "Normal"),
+            None
+        );
+    }
+
     #[test]
     fn span_attr_u32_reads_an_existing_attribute() {
         assert_eq!(
@@ -1890,6 +1918,27 @@ pub(crate) fn extract_records(xml: &str, container: &str, record: &str) -> Vec<S
 /// already spells this name.
 pub(crate) fn extract_cell_xfs(xml: &str) -> Vec<String> {
     extract_records(xml, "cellXfs", "xf")
+}
+
+/// Looks up `name`'s `xfId` from `xml`'s `<cellStyles>` element (0.15.0-C1 named-style
+/// apply) -- `<cellStyle name="..." xfId="N" .../>` entries, matched by exact name.
+/// `xfId` is a 0-based index into `<cellStyleXfs>`, a second style table parallel to (but
+/// never confused with) `<cellXfs>`. `None` if `<cellStyles>` is absent or has no entry
+/// with this name.
+pub(crate) fn named_style_xf_id(xml: &str, name: &str) -> Option<u32> {
+    extract_records(xml, "cellStyles", "cellStyle")
+        .iter()
+        .find_map(|span| {
+            let (tag_start, tag_close_rel, full_name) = find_next_open_tag(span, 0)?;
+            let name_end = tag_start + 1 + full_name.len();
+            let raw_attrs = &span[name_end..name_end + tag_close_rel];
+            let attrs_str = raw_attrs.trim_end().strip_suffix('/').unwrap_or(raw_attrs);
+            let attrs = parse_attrs(attrs_str);
+            if attr_get(&attrs, "name") != Some(name) {
+                return None;
+            }
+            attr_get(&attrs, "xfId").and_then(|v| v.parse().ok())
+        })
 }
 
 /// Clones `span` (any self-closing-or-not element span, e.g. from `extract_records`) with
