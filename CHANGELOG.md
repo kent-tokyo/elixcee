@@ -1084,6 +1084,18 @@ reopen → openpyxl-resave → reopen round trip, left as-is. Covered by a new d
 test (`FromScratchVmProducesAnOpenpyxlReadableStylesheet`); a stale comment in the same test
 file (and this method's own module docstring) describing the bug as still-open is corrected.
 
+### Root crate: `delete_sheet`/VBA `Sheets(...).Delete` no longer leak stale entries into 7 per-sheet maps
+
+`remove_sheet` only ever cleaned `sheets`/`sheet_order` on delete, leaving a dead entry
+under the deleted sheet's old (lowercased) key in `merged_ranges`, `sheet_visibility`,
+`cell_style_indices`, `cell_number_formats`, `sheet_states`, `row_heights`, and
+`column_widths` — harmless today (the stale key is never looked up again), but real, and
+now fixed to mirror the same map list `rename_sheet` already re-keys. `worksheet_origins`
+is deliberately **not** cleaned: `deleted_sheet_prunable_parts` and `no_sheet_was_deleted`
+(`src/lib.rs`) both detect a deletion by diffing this map against the current sheet list,
+so clearing it would blind both checks — confirmed the hard way, an initial version of
+this fix that cleaned all 8 broke both mechanisms until narrowed to 7.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted

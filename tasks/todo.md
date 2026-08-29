@@ -903,3 +903,17 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（known-gap 17を修正済みとして更新）。
 
 残作業：なし——この項目はこれで完結。
+
+## known-gap 20：`remove_sheet`が7つのper-sheet mapへstaleエントリを残す（修正、PR独立実施）
+
+上記のknown-gap 17修正と並行して着手。`rename_sheet`が全11map（`sheets`/`sheet_order`/`active_sheet`/`merged_ranges`/`sheet_visibility`/`cell_style_indices`/`cell_number_formats`/`sheet_states`/`row_heights`/`column_widths`/`worksheet_origins`）を正しくre-keyしているのに対し、`remove_sheet`は`sheets`/`sheet_order`しか掃除していないという既知ギャップ（実害なし、staleキーは二度と参照されないため）。
+
+- [x] **実装（1回目、誤り）**：`rename_sheet`のre-keyリストをそのまま「削除版」として8map（`merged_ranges`/`sheet_visibility`/`cell_style_indices`/`cell_number_formats`/`sheet_states`/`row_heights`/`column_widths`/`worksheet_origins`）全てを`remove_sheet`でも`.remove(key)`する形で実装。
+- [x] **回帰発見**：`cargo test --workspace`で既存テスト2件が失敗——`deleting_a_sheet_prunes_its_exclusive_targets_but_keeps_shared_ones`と`defined_names_are_dropped_entirely_once_a_sheet_is_deleted`。原因を追跡し、`worksheet_origins`だけは他のmapと性質が異なると判明：`deleted_sheet_prunable_parts`（孤立`.rels`検出）と`no_sheet_was_deleted`（`<definedNames>`のwholesale drop判定）の両方が、このmapを「削除前の状態のまま残し、現在のシート一覧と突き合わせる」ことでシート削除を検知する設計になっていたため、即座にクリアすると両方の検知ロジックが機能しなくなる。
+- [x] **修正（2回目、正しい）**：`worksheet_origins`をクリア対象から除外し、7map（`merged_ranges`/`sheet_visibility`/`cell_style_indices`/`cell_number_formats`/`sheet_states`/`row_heights`/`column_widths`）のみ`remove_sheet`でクリアするよう修正。`protected_sheets`は`rename_sheet`と同じ理由（`check_sheet_not_protected`が事前に弾くため到達時点で必ず不在）でクリア不要。
+- [x] **検証**：新規Rustユニットテスト2件（`delete_sheet_cleans_all_seven_non_identity_per_sheet_maps`：7map全てにデータを入れて削除し、7map全てからキーが消えるが`worksheet_origins`は残ることを確認／`delete_sheet_of_the_active_sheet_no_ops_and_touches_no_map`：アクティブシート削除の既存no-op挙動が変わっていないことを確認）。修正後は`cargo test --workspace`で回帰した2件を含む全テストがpass。`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）／`scripts/check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。`maturin develop --release`で実ビルドし、Python経由でシート作成→データ投入（値・merge・hidden row）→別シートへ切替→削除→保存のフルサイクルを確認、クラッシュなし。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション、1回目の誤りとその発見過程も含めて記録）、`internal_docs/ROADMAP.md`（known-gap 20を修正済みとして更新、`rename_sheet`のdoc commentも「8map中7map」という正確な表現に修正）。
+
+残作業：なし——この項目はこれで完結。`worksheet_origins`自体のstaleエントリ問題（シート削除後も残り続ける設計）は不具合ではなく意図的な仕様のため、対応不要。
+
+残作業：なし——この項目はこれで完結。
