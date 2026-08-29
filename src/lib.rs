@@ -3879,11 +3879,31 @@ fn build_xlsx_sheet(
     out.push_str("<sheetData>\n");
 
     if let Some(cells) = vm.get_sheet_cells(sheet_name) {
-        // Group by row first to avoid O(max_row × total_cells) scanning.
-        let mut by_row: std::collections::BTreeMap<u32, Vec<_>> = std::collections::BTreeMap::new();
-        for (k @ &(r, c), v) in cells.iter() {
+        // Group by row first to avoid O(max_row × total_cells) scanning. `None` content
+        // marks a value-less cell carried only by `style_indices` (see below).
+        let mut by_row: std::collections::BTreeMap<u32, Vec<(u32, Option<&vm::CellContent>)>> =
+            std::collections::BTreeMap::new();
+        for (&(r, c), v) in cells.iter() {
             if r > 0 && c > 0 {
-                by_row.entry(r).or_default().push((k, v));
+                by_row.entry(r).or_default().push((c, Some(v)));
+            }
+        }
+        // A value-less, pre-formatted cell (e.g. a merged-cell anchor styled but never
+        // given a value — `fixture1`'s own `B1:C1`) has no entry in `cells` at all:
+        // `populate_from_sheets` only inserts a `cells` entry from a real `<v>`/formula,
+        // while `cell_style_indices` is populated unconditionally from the raw `s="N"`
+        // attribute (see that field's own doc comment). Without this, such a cell's own
+        // `<c>` element — and its style — was silently dropped on every save. `style_
+        // indices` here is already the RESOLVED effective map (`style_override` when any
+        // `set_number_format`/`set_style` edit is pending anywhere, falling back to
+        // `vm.cell_style_indices` otherwise), so a cell newly styled via one of those
+        // calls with no prior value is covered too, not just one preserved from the
+        // loaded source.
+        if let Some(styles) = style_indices {
+            for &(r, c) in styles.keys() {
+                if r > 0 && c > 0 && !cells.contains_key(&(r, c)) {
+                    by_row.entry(r).or_default().push((c, None));
+                }
             }
         }
         // A hidden row (or one with an explicit height) with no cell data
@@ -3908,7 +3928,7 @@ fn build_xlsx_sheet(
             }
         }
         for (row, mut row_cells) in by_row {
-            row_cells.sort_by_key(|&(&(_, c), _)| c);
+            row_cells.sort_by_key(|&(c, _)| c);
             let row_hidden = hidden_rows
                 .iter()
                 .any(|iv| iv.start <= row && row <= iv.end);
@@ -3925,18 +3945,29 @@ fn build_xlsx_sheet(
             out.push_str(&format!(
                 "<row r=\"{row}\"{height_attr}{style_attr}{hidden_attr}>\n"
             ));
-            for (&(r, c), content) in row_cells {
-                let cell_ref = format!("{}{}", xlsx_col_letters(c), r);
-                let style_idx = style_indices.and_then(|m| m.get(&(r, c)).copied());
-                if let Some(xml) = xlsx_cell_xml(
-                    &cell_ref,
-                    &content.value,
-                    str_index,
-                    style_idx,
-                    content.formula.as_deref(),
-                ) {
-                    out.push_str(&xml);
-                    out.push('\n');
+            for (c, content) in row_cells {
+                let cell_ref = format!("{}{}", xlsx_col_letters(c), row);
+                let style_idx = style_indices.and_then(|m| m.get(&(row, c)).copied());
+                match content {
+                    Some(content) => {
+                        if let Some(xml) = xlsx_cell_xml(
+                            &cell_ref,
+                            &content.value,
+                            str_index,
+                            style_idx,
+                            content.formula.as_deref(),
+                        ) {
+                            out.push_str(&xml);
+                            out.push('\n');
+                        }
+                    }
+                    // Value-less, style-only cell — matches real Excel's own
+                    // `<c r="A1" s="5"/>` shape for a formatted-but-empty cell.
+                    None => {
+                        if let Some(idx) = style_idx {
+                            out.push_str(&format!("<c r=\"{cell_ref}\" s=\"{idx}\"/>\n"));
+                        }
+                    }
                 }
             }
             out.push_str("</row>\n");
