@@ -1014,6 +1014,25 @@ Row heights reuse `shift_cell_coord` (single-index shape); column widths reuse
 single-column width is ordinary, unlike a merge). 8 new `Vm`-level unit tests; verified
 against the built Python extension including a save/reload round trip.
 
+### Root crate: fix `<autoFilter>` being silently dropped on every save
+
+Found while scoping 0.14.0-C (`internal_docs/structured-object-transform-0.14.0-c-scoping.md`):
+a loaded file's `<autoFilter>` was completely destroyed on every save, not merely stale —
+confirmed empirically against a real `openpyxl`-authored fixture. Fixed as byte-preservation
+only, no new `Vm` state or Python API (create/remove/filter-type API is `0.16.0`).
+
+- `<autoFilter>` has no `r:id` (confirmed against openpyxl's own writer schema-order
+  docstring, `worksheet/_writer.py`), unlike `tableParts`/`drawing`, so it needs no
+  `rels_survived` gate — same unconditional treatment as `sheetFormatPr`/`dataValidations`.
+  New `OpaqueWorksheetFragments::auto_filter` field, captured via the existing
+  `reader::extract_raw_element` and spliced back verbatim, whole-element (children included).
+- Schema position matters: `CT_Worksheet` orders `autoFilter` **before** `mergeCells`, not
+  after — verified against openpyxl's `write_tail` order, not guessed, and confirmed live
+  against a real round trip with both present.
+- 3 new differential-python tests (`AutoFilterSurvivesAnElixceeSave`): a bare `ref`, a
+  `filterColumn` with real filter values, and a same-sheet merge + unrelated cell edit
+  (schema-position + no-collateral-damage check).
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
