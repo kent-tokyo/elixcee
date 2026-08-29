@@ -52,7 +52,6 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-import zipfile
 
 import elixcee
 import openpyxl
@@ -345,12 +344,15 @@ class RowHeightAndColumnWidthAgreeWithOpenpyxl(unittest.TestCase):
             self.assertIsNone(ws2.row_dimensions[1].height)
             self.assertIsNone(vm.column_width(1))
 
-    def test_row_height_and_column_width_do_not_yet_survive_an_elixcee_save(self):
-        # Disclosed known gap, not a hypothetical: the writer unconditionally
-        # regenerates <row>/<cols> from hidden-row/column state alone, so a
-        # loaded row height / column width is dropped on EVERY save, not just
-        # sometimes. Pinned here so a future writer fix is a deliberate,
-        # visible change to this test, not a silent behavior shift.
+    def test_row_height_and_column_width_survive_an_elixcee_save(self):
+        # Was a disclosed known gap (see this test's old name/history): the
+        # writer used to unconditionally regenerate <row>/<cols> from
+        # hidden-row/column state alone, dropping a loaded row height/column
+        # width on EVERY save. Fixed -- see CHANGELOG.md. write support
+        # (set_row_height/set_column_width) is still deferred separately (no
+        # real fixture has genuine data to validate that API's own writer
+        # shape against, a different concern from preserving an
+        # already-loaded value through a save).
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "dims_src.xlsx")
             wb = openpyxl.Workbook()
@@ -367,25 +369,19 @@ class RowHeightAndColumnWidthAgreeWithOpenpyxl(unittest.TestCase):
             vm.save_workbook(out)
             wb2 = openpyxl.load_workbook(out)
             ws2 = wb2.active
-            self.assertIsNone(
-                ws2.row_dimensions[5].height,
-                "known gap: update this test (and ship set_row_height/"
-                "set_column_width) once the writer preserves ht=.../width=... "
-                "on save",
-            )
-            # column_dimensions[letter] auto-vivifies a default-width entry on
-            # first `[]` access (see the fixture-comparison test above), so
-            # checking the raw saved XML directly is the only reliable way to
-            # confirm customWidth="1" was actually dropped, not just masked
-            # by that access-time default.
-            with zipfile.ZipFile(out) as z:
-                sheet_xml = z.read("xl/worksheets/sheet1.xml").decode()
-            self.assertNotIn(
-                "customWidth",
-                sheet_xml,
-                "known gap: update this test (and ship set_column_width) once "
-                "the writer preserves width=... on save",
-            )
+            self.assertEqual(ws2.row_dimensions[5].height, 30.5)
+            self.assertEqual(ws2.column_dimensions["B"].width, 12.5)
+
+            vm2 = elixcee.load_workbook(out)
+            self.assertEqual(vm2.row_height(5), 30.5)
+            self.assertEqual(vm2.column_width(2), 12.5)
+
+            # A second save must not re-drop or duplicate the attributes.
+            out2 = os.path.join(d, "dims_out2.xlsx")
+            vm2.save_workbook(out2)
+            vm3 = elixcee.load_workbook(out2)
+            self.assertEqual(vm3.row_height(5), 30.5)
+            self.assertEqual(vm3.column_width(2), 12.5)
 
 
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):

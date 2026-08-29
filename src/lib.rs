@@ -2581,16 +2581,41 @@ fn build_xlsx_sheet(
         .map(|v| v.hidden_columns.as_slice())
         .unwrap_or(&[]);
     let hidden_rows = visibility.map(|v| v.hidden_rows.as_slice()).unwrap_or(&[]);
+    let row_heights = vm.row_heights.get(&sheet_key);
+    let column_widths = vm.column_widths.get(&sheet_key);
 
-    // <cols> — schema-ordered before <sheetData>. <col> natively supports a
-    // min/max range in one element, unlike <row> (see below), so no
-    // per-column expansion is needed.
-    if !hidden_columns.is_empty() {
+    // <cols> — schema-ordered before <sheetData>. Merged by exact (min,max)
+    // range rather than emitted as two independent passes: a source `<col>`
+    // can carry `hidden="1"` and `customWidth="1" width="..."` together on
+    // one element (the reader parses both attributes off the SAME element
+    // into these two separate maps -- see `reader.rs`'s `"col" =>` arm), and
+    // this is the inverse of that, restoring the combined shape when both
+    // maps agree on the same range rather than splitting it into two
+    // elements. A hidden interval and a width triple that DON'T share the
+    // same exact range (real producers don't always coalesce ranges either,
+    // confirmed via openpyxl -- see `internal_docs/openpyxl-gap-audit.md`'s
+    // "Implementation notes for P2: row height / column width") land as
+    // separate `<col>` elements, same as those independent, unmerged
+    // real-world shapes.
+    let mut col_attrs: std::collections::BTreeMap<(u32, u32), (bool, Option<f64>)> =
+        std::collections::BTreeMap::new();
+    for iv in hidden_columns {
+        col_attrs.entry((iv.start, iv.end)).or_default().0 = true;
+    }
+    if let Some(widths) = column_widths {
+        for &(min, max, width) in widths {
+            col_attrs.entry((min, max)).or_default().1 = Some(width);
+        }
+    }
+    if !col_attrs.is_empty() {
         out.push_str("<cols>\n");
-        for iv in hidden_columns {
+        for ((min, max), (hidden, width)) in col_attrs {
+            let width_attr = width
+                .map(|w| format!(" customWidth=\"1\" width=\"{w}\""))
+                .unwrap_or_default();
+            let hidden_attr = if hidden { " hidden=\"1\"" } else { "" };
             out.push_str(&format!(
-                "<col min=\"{}\" max=\"{}\" hidden=\"1\"/>\n",
-                iv.start, iv.end
+                "<col min=\"{min}\" max=\"{max}\"{width_attr}{hidden_attr}/>\n"
             ));
         }
         out.push_str("</cols>\n");
@@ -2606,13 +2631,19 @@ fn build_xlsx_sheet(
                 by_row.entry(r).or_default().push((k, v));
             }
         }
-        // A hidden row with no cell data still needs its own <row hidden="1"/>
-        // element to actually appear hidden to a real reader — hidden-ness is
-        // a <row> attribute, so an absent element is just default/visible.
-        // Expanded per-row (not min/max like <col>) because that's what a
-        // real <row>-element-per-row source already looks like.
+        // A hidden row (or one with an explicit height) with no cell data
+        // still needs its own <row .../> element for the attribute to
+        // actually apply to a real reader — hidden-ness/height are <row>
+        // attributes, so an absent element is just default/visible/
+        // default-height. Expanded per-row (not min/max like <col>) because
+        // that's what a real <row>-element-per-row source already looks like.
         for iv in hidden_rows {
             for r in iv.start..=iv.end {
+                by_row.entry(r).or_default();
+            }
+        }
+        if let Some(heights) = row_heights {
+            for &r in heights.keys() {
                 by_row.entry(r).or_default();
             }
         }
@@ -2622,8 +2653,12 @@ fn build_xlsx_sheet(
                 .iter()
                 .any(|iv| iv.start <= row && row <= iv.end);
             let hidden_attr = if row_hidden { " hidden=\"1\"" } else { "" };
+            let height_attr = row_heights
+                .and_then(|m| m.get(&row))
+                .map(|ht| format!(" customHeight=\"1\" ht=\"{ht}\""))
+                .unwrap_or_default();
 
-            out.push_str(&format!("<row r=\"{}\"{}>\n", row, hidden_attr));
+            out.push_str(&format!("<row r=\"{row}\"{height_attr}{hidden_attr}>\n"));
             for (&(r, c), content) in row_cells {
                 let cell_ref = format!("{}{}", xlsx_col_letters(c), r);
                 let style_idx = style_indices.and_then(|m| m.get(&(r, c)).copied());
@@ -3067,6 +3102,69 @@ mod tests {
         let range = wb.worksheet_range("sheet1").expect("sheet1 should exist");
         let cells: Vec<_> = range.cells().collect();
         assert!(!cells.is_empty(), "saved file should have cells");
+    }
+
+    #[test]
+    fn row_height_and_column_width_survive_a_save_and_reload() {
+        // Was previously dropped on EVERY save -- xlsx_worksheet_xml's
+        // <row>/<cols> emission was fully regenerated from Vm.sheet_visibility
+        // alone, not passthrough (see ROADMAP.md's known gaps, item 26, and
+        // internal_docs/openpyxl-gap-audit.md's "Implementation notes for P2:
+        // row height / column width"). No real fixture in this repo has a
+        // genuine custom row height/column width to build this test from (the
+        // same reason write support -- set_row_height/set_column_width -- is
+        // still deferred), so this constructs the Vm state directly rather
+        // than loading a file, matching this project's other pub(crate)-field
+        // unit tests. A row/column with BOTH a custom size AND hidden state
+        // (matching how a real <col>/<row> source element commonly carries
+        // both attributes together -- see reader.rs's "col" => arm) is
+        // included so the merged-attribute emission path is exercised too,
+        // not just the size-only path.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (5, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        vm.row_heights
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert(5, 30.5);
+        vm.row_heights
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert(10, 20.0);
+        vm.sheet_visibility
+            .entry("sheet1".to_string())
+            .or_default()
+            .hidden_rows
+            .push(vm::Interval { start: 10, end: 10 });
+        vm.column_widths
+            .entry("sheet1".to_string())
+            .or_default()
+            .push((2, 2, 12.5));
+
+        let path = "/tmp/elixcee_test_row_height_column_width_roundtrip.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+
+        let mut reloaded = Vm::new();
+        reloaded
+            .load_workbook_file(path)
+            .expect("reload should succeed");
+        let key = reloaded.resolve_sheet_key(None).unwrap();
+        assert_eq!(reloaded.row_height_on_sheet(&key, 5), Some(30.5));
+        assert_eq!(reloaded.column_width_on_sheet(&key, 2), Some(12.5));
+        // The row that's BOTH hidden and explicitly sized: both attributes
+        // must survive on the same <row> element, not just one of them.
+        assert_eq!(reloaded.row_height_on_sheet(&key, 10), Some(20.0));
+        assert_eq!(reloaded.hidden_rows_on_sheet(&key), vec![10]);
+        // A row/column with neither is still None, not a stray zero/default.
+        assert_eq!(reloaded.row_height_on_sheet(&key, 1), None);
+        assert_eq!(reloaded.column_width_on_sheet(&key, 1), None);
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

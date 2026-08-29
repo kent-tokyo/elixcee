@@ -964,6 +964,45 @@ the design doc entirely.
   to the correct new cell, the old cell's format correctly gone, and a real
   `save_workbook` → `load_workbook` round trip preserving it afterward.
 
+### Root crate: fix row height / column width being dropped on every save
+
+A loaded file's row heights and column widths were dropped on **every** save,
+unconditionally — a separate, pre-existing correctness bug from 0.14.0-B's own transform
+work above, requested and fixed directly rather than as part of that phased plan.
+`build_xlsx_sheet`'s `<row>`/`<cols>` emission was fully regenerated from
+`Vm.sheet_visibility` alone; it now also reads `Vm.row_heights`/`column_widths`.
+
+- `<row>` now carries `customHeight="1" ht="..."` and `<col>` carries
+  `customWidth="1" width="..."` merged onto the *same* element as `hidden="1"` when a
+  hidden interval and a size entry share the exact same `(min, max)` range — restoring the
+  combined shape a single source `<col>`/`<row>` element can carry (the reader already
+  parses both attributes off one element independently, unaffected by this change). A range
+  mismatch, or an unrelated entry appearing alone, lands as an independent, non-merged
+  element instead, matching how real producers (confirmed via `openpyxl`) don't always
+  coalesce ranges either.
+- This is a **preservation** fix — an already-loaded value now survives a save — not new
+  **write** support: `set_row_height`/`set_column_width` (authoring a brand-new value from
+  scratch) remain deferred. Zero real fixtures in this repo have genuine custom row
+  height/column width data to validate that from-scratch writer shape against, a different,
+  still-open question from correctly re-emitting a value the reader already extracts
+  correctly (same standing "no real fixture" constraint documented since P2's fifth slice).
+- New `Vm`-level unit test (`row_height_and_column_width_survive_a_save_and_reload`,
+  `src/lib.rs`) covering a row/column with both a custom size *and* hidden state together
+  (exercising the merged-attribute path, not just the size-only path), plus one with
+  neither (confirming no stray default value appears). The differential-python test that
+  pinned the old bug is inverted and renamed
+  (`test_row_height_and_column_width_survive_an_elixcee_save`) and now also exercises a
+  second save to confirm no re-drop or duplicate emission.
+- 6 pre-existing real-fixture integration tests updated: fixture1's hidden column D
+  (`width="0" hidden="1" customWidth="1"` in the source) now correctly round-trips its
+  `customWidth`/`width="0"` alongside `hidden="1"`, where the old, buggy writer only ever
+  emitted the `hidden="1"` half — the updated assertions reflect this as a genuine
+  correctness improvement, not a relaxed check.
+- Not verified against a real Excel-authored fixture with genuine data, for the reason
+  above — targets a schema-valid, `openpyxl`-observed shape, disclosed as such rather than
+  silently claimed as fully verified, matching the precedent set by the
+  formula-empty-cached-value fix.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
