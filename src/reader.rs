@@ -379,7 +379,7 @@ fn attr_is_true(attrs: &[Attr], name: &str) -> bool {
 // would otherwise rescan to the end of the string).
 const MAX_ENTITY_BODY_LEN: usize = 12;
 
-fn xml_unescape(s: &str) -> String {
+pub(crate) fn xml_unescape(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
     }
@@ -684,6 +684,59 @@ pub(crate) fn extract_hyperlinks(xml: &str, include_relationship_backed: bool) -
     out
 }
 
+/// Extracts each `<definedName ...>value</definedName>` child inside `xml`'s
+/// `<definedNames>...</definedNames>` container, as `(whole_element, (text_start, text_end))`
+/// pairs -- `text_start`/`text_end` are byte offsets INTO `whole_element` bounding just the
+/// inner value, so a caller rewriting that value can splice it back in via
+/// `format!("{}{}{}", &el[..text_start], new_value, &el[text_end..])` without touching the
+/// element's own attributes (`name`, `localSheetId`, `hidden`, ...). Empty if `<definedNames>`
+/// is absent or has no `<definedName>` children. Unlike `extract_hyperlinks`'s `<hyperlink>`
+/// (always self-closing per the real `CT_Hyperlink` XSD), `<definedName>`'s content is a
+/// required `ST_Formula` string (`CT_DefinedName`, never `minOccurs="0"`) -- a self-closing
+/// `<definedName/>` is invalid but handled defensively anyway, with an empty text span at the
+/// end of its own opening tag, matching this reader's general "don't crash on malformed input"
+/// posture; a `<definedName>` missing its closing tag stops the scan rather than misparsing
+/// whatever XML happens to follow.
+pub(crate) fn extract_defined_name_elements(xml: &str) -> Vec<(String, (usize, usize))> {
+    let Some(container) = extract_raw_element(xml, "definedNames") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut search_from = 0;
+    while let Some((tag_start, tag_close_rel, full_name)) =
+        find_next_open_tag(&container, search_from)
+    {
+        if full_name.rsplit(':').next().unwrap_or(&full_name) != "definedName" {
+            search_from = tag_start + 1;
+            continue;
+        }
+        let name_end = tag_start + 1 + full_name.len();
+        let start_tag_end = name_end + tag_close_rel + 1;
+        let self_closing = container[name_end..name_end + tag_close_rel]
+            .trim_end()
+            .ends_with('/');
+        if self_closing {
+            let el = container[tag_start..start_tag_end].to_string();
+            let end = el.len();
+            out.push((el, (end, end)));
+            search_from = start_tag_end;
+            continue;
+        }
+        let close_tag = format!("</{}>", full_name);
+        let Some(end_rel) = container[start_tag_end..].find(&close_tag) else {
+            break;
+        };
+        let text_end = start_tag_end + end_rel;
+        let end = text_end + close_tag.len();
+        out.push((
+            container[tag_start..end].to_string(),
+            (start_tag_end - tag_start, text_end - tag_start),
+        ));
+        search_from = end;
+    }
+    out
+}
+
 /// True iff `element_xml`'s own root tag (as returned by `extract_raw_element` -- the
 /// element's opening `<` at byte 0) carries an `r:id` attribute. Used to gate restoring a
 /// single element that COULD be relationship-backed but usually isn't (`<pageSetup>`,
@@ -936,6 +989,42 @@ mod opaque_fragment_tests {
         ];
         assert_eq!(extract_hyperlinks(xml, false), expected);
         assert_eq!(extract_hyperlinks(xml, true), expected);
+    }
+
+    #[test]
+    fn extract_defined_name_elements_returns_element_and_inner_text_span() {
+        let xml = concat!(
+            "<workbook><definedNames>",
+            "<definedName name=\"MyRange\">Sheet1!$A$1:$A$3</definedName>",
+            "<definedName name=\"Other\" localSheetId=\"0\">Sheet1!$B$1</definedName>",
+            "</definedNames></workbook>",
+        );
+        let elements = extract_defined_name_elements(xml);
+        assert_eq!(elements.len(), 2);
+        let (el0, (s0, e0)) = &elements[0];
+        assert_eq!(
+            el0,
+            "<definedName name=\"MyRange\">Sheet1!$A$1:$A$3</definedName>"
+        );
+        assert_eq!(&el0[*s0..*e0], "Sheet1!$A$1:$A$3");
+        let (el1, (s1, e1)) = &elements[1];
+        assert_eq!(
+            el1,
+            "<definedName name=\"Other\" localSheetId=\"0\">Sheet1!$B$1</definedName>"
+        );
+        assert_eq!(&el1[*s1..*e1], "Sheet1!$B$1");
+    }
+
+    #[test]
+    fn extract_defined_name_elements_empty_when_container_absent() {
+        let xml = "<workbook><sheets/></workbook>";
+        assert!(extract_defined_name_elements(xml).is_empty());
+    }
+
+    #[test]
+    fn extract_defined_name_elements_empty_when_no_children() {
+        let xml = "<workbook><definedNames/></workbook>";
+        assert!(extract_defined_name_elements(xml).is_empty());
     }
 
     #[test]
