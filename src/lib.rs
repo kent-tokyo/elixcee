@@ -949,9 +949,13 @@ impl PyVm {
     ///   ``Sheet1:Sheet3!A1``, and anything else outside same-workbook `A1`
     ///   syntax) is left exactly as-is rather than partially rewritten
     ///
-    /// Does **not** shift merged ranges, hidden-row markers, or cell
-    /// styles/number formats yet, and does not recompute any cached formula
-    /// value — call :meth:`recalculate` afterwards if you need fresh values
+    /// Also shifts merged ranges, hidden-row markers, per-cell
+    /// styles/number formats, and row heights on *sheet* the same way real
+    /// Excel does; range-move (:meth:`move_range`) deliberately does not
+    /// carry hidden-row markers or row heights along, since those belong to
+    /// the row itself, not to the moved cell content. Does not recompute any
+    /// cached formula value — call :meth:`recalculate` afterwards if you need
+    /// fresh values
     /// (note it recalculates the *active* sheet, so switch sheets first if
     /// the sheet you need refreshed isn't already active; a cross-sheet
     /// formula is skipped by recalculation entirely, same as one that fails
@@ -994,8 +998,9 @@ impl PyVm {
     /// *sheet* itself, and any sheet-qualified reference naming *sheet* from
     /// anywhere in the workbook, both shift; a reference into the deleted
     /// band becomes ``#REF!``; cross-sheet formula evaluation remains
-    /// unsupported. Same fidelity gap otherwise — does not shift merges,
-    /// hidden markers, or styles/number formats.
+    /// unsupported. Also shifts merged ranges, hidden-row markers, per-cell
+    /// styles/number formats, and row heights the same way :meth:`insert_rows`
+    /// documents in full.
     ///
     /// Parameters
     /// ----------
@@ -1030,9 +1035,12 @@ impl PyVm {
     /// ``Worksheet.insert_cols(idx, amount=1)`` naming/value semantics.
     ///
     /// Formula references are updated workbook-wide the same way
-    /// :meth:`insert_rows` documents in full, on the column axis; same
-    /// fidelity gap otherwise — does not shift merges, hidden markers, or
-    /// styles/number formats.
+    /// :meth:`insert_rows` documents in full, on the column axis. Also shifts
+    /// merged ranges, hidden-column markers, per-cell styles/number formats,
+    /// and column widths on *sheet* the same way real Excel does; range-move
+    /// (:meth:`move_range`) deliberately does not carry hidden-column markers
+    /// or column widths along, since those belong to the column itself, not
+    /// to the moved cell content.
     ///
     /// Parameters
     /// ----------
@@ -1068,8 +1076,9 @@ impl PyVm {
     ///
     /// Formula references are updated workbook-wide the same way
     /// :meth:`insert_rows` documents in full, on the column axis (a reference
-    /// into the deleted band becomes ``#REF!``); same fidelity gap otherwise —
-    /// does not shift merges, hidden markers, or styles/number formats.
+    /// into the deleted band becomes ``#REF!``). Also shifts merged ranges,
+    /// hidden-column markers, per-cell styles/number formats, and column
+    /// widths the same way :meth:`insert_cols` documents in full.
     ///
     /// Parameters
     /// ----------
@@ -1195,11 +1204,16 @@ impl PyVm {
     /// isn't itself part of the move is overwritten, matching real Excel's
     /// own paste behavior.
     ///
-    /// Does **not** move merges, styles, number formats, hidden rows/
-    /// columns, row heights, or column widths — a disclosed limitation, see
-    /// ROADMAP.md's 0.14.0-B. Cached values are left stale, same as every
-    /// other structural edit — call recalculation yourself if you need
-    /// fresh values.
+    /// Merged ranges, per-cell styles, and per-cell number formats inside
+    /// *addr* move with it, using the same inside/outside/ambiguous-corner
+    /// rules as formula references above (a merge with exactly one corner
+    /// inside the moved area is rejected the same way an ambiguous range
+    /// reference is). Does **not** move hidden-row/column markers, row
+    /// heights, or column widths — those belong to the row/column itself,
+    /// not to the moved cell content, matching real Excel's own paste
+    /// behavior; see ROADMAP.md's 0.14.0-B. Cached values are left stale,
+    /// same as every other structural edit — call recalculation yourself if
+    /// you need fresh values.
     ///
     /// Cross-sheet moves are not supported this round (a qualified
     /// reference naming a *different* sheet is always left untouched, even
