@@ -7,7 +7,7 @@ use crate::parser::ast::{
     SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp,
 };
 use crate::parser::{self, EntrypointResolution};
-use crate::reader::{self, SheetCell, WorkbookSheet};
+use crate::reader::{self, SheetCell, TableDef, WorkbookSheet};
 
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
 /// address helpers below are physically defined in `elixcee-types` (Phase
@@ -1037,6 +1037,17 @@ pub struct Vm {
     /// Write API: `set_column_style`. Shifts via
     /// `shift_column_styles_for_structural_edit`, same as `column_widths`.
     pub(crate) column_styles: HashMap<String, Vec<(u32, u32, u32)>>,
+    /// Per-sheet tables (0.16.0-A1), keyed the same way as `merged_ranges`. Populated
+    /// by `populate_from_sheets` from the reader's `WorkbookSheet::tables`. Read-only:
+    /// there's no create/edit/delete API yet (0.16.0-A2/A3, separate future phases) --
+    /// an unmodified table's real bytes keep surviving via the existing generic
+    /// passthrough regardless of whether this field is populated (see
+    /// `internal_docs/tables-0.16.0-a-design.md` Finding 2). Shifts on any structural
+    /// edit (`shift_tables_for_structural_edit`) on BOTH axes, like `merged_ranges` --
+    /// a table's `ref` is a 2D rect, not a row- or column-only dimension. Deliberately
+    /// NOT touched by `move_range_on_sheet`: table-range-tracking through a cell move
+    /// is real future work (0.16.0-A2/A3's own scope), not implicitly covered here.
+    pub(crate) tables: HashMap<String, Vec<TableDef>>,
     /// Per-sheet origin facts (0.10.0-A), keyed the same way as `merged_ranges`.
     /// Populated unconditionally by `populate_from_sheets` for every sheet that came from
     /// a real `WorkbookSheet` (unlike `merged_ranges`/`sheet_visibility`/
@@ -1152,6 +1163,7 @@ impl Vm {
             column_widths: HashMap::new(),
             row_styles: HashMap::new(),
             column_styles: HashMap::new(),
+            tables: HashMap::new(),
             worksheet_origins: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
@@ -1346,6 +1358,44 @@ impl Vm {
             .filter_map(|&rect| shift_merge_rect(rect, axis, edit))
             .collect();
         self.merged_ranges.insert(key.to_string(), shifted);
+    }
+
+    /// Shifts every table's `ref` on `key` for a row/col structural edit (0.16.0-A1) --
+    /// `shift_table_rect`, same 2D-rect shape as `shift_merged_ranges_for_structural_edit`
+    /// above but WITHOUT that function's merge-specific single-cell-collapse rule (a
+    /// table has no "must span at least 2 cells" invariant the way a merge does). A
+    /// table whose range collapses entirely (fully inside a deleted band) is dropped.
+    /// Read-only bookkeeping only -- 0.16.0-A1 has no table-editing API yet, this just
+    /// keeps `tables()` reporting a table's real current position after an edit.
+    fn shift_tables_for_structural_edit(
+        &mut self,
+        key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        let Some(tables) = self.tables.get(key) else {
+            return;
+        };
+        let shifted: Vec<TableDef> = tables
+            .iter()
+            .filter_map(|t| {
+                let new_ref = shift_table_rect(t.ref_range, axis, edit)?;
+                // The nested `<autoFilter>` (if present) covers the same area as the
+                // table's own `ref` in every real fixture seen so far -- shift it
+                // identically rather than leaving it stale. Dropped (not just left as
+                // the pre-edit value) if it collapses on its own, same policy as the
+                // table's own ref.
+                let new_auto_filter_ref = t
+                    .auto_filter_ref
+                    .and_then(|r| shift_table_rect(r, axis, edit));
+                Some(TableDef {
+                    ref_range: new_ref,
+                    auto_filter_ref: new_auto_filter_ref,
+                    ..t.clone()
+                })
+            })
+            .collect();
+        self.tables.insert(key.to_string(), shifted);
     }
 
     /// Shifts `key`'s hidden-row/column intervals for a structural edit
@@ -1712,6 +1762,7 @@ impl Vm {
         let edit = formula::StructuralEdit::Insert { at: first, count };
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_row_heights_for_structural_edit(key, edit);
@@ -1756,6 +1807,7 @@ impl Vm {
         let edit = formula::StructuralEdit::Delete { at: first, count };
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_row_heights_for_structural_edit(key, edit);
@@ -1797,6 +1849,7 @@ impl Vm {
         let edit = formula::StructuralEdit::Delete { at: first, count };
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_column_widths_for_structural_edit(key, edit);
@@ -1831,6 +1884,7 @@ impl Vm {
         let edit = formula::StructuralEdit::Insert { at: first, count };
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_column_widths_for_structural_edit(key, edit);
@@ -2931,6 +2985,7 @@ impl Vm {
             self.column_widths.remove(key);
             self.row_styles.remove(key);
             self.column_styles.remove(key);
+            self.tables.remove(key);
         }
         Ok(())
     }
@@ -2949,13 +3004,13 @@ impl Vm {
         self.remove_sheet(&key, name)
     }
 
-    /// Renames a sheet, atomically re-keying all eighteen lowercase-keyed per-sheet `Vm`
+    /// Renames a sheet, atomically re-keying all nineteen lowercase-keyed per-sheet `Vm`
     /// maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
     /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
     /// `cell_number_formats`, `pending_number_formats`, `pending_style_attrs`,
     /// `pending_style_copies` (0.15.0-C1), `pending_row_styles`, `pending_column_styles`
     /// (0.15.0-C2), `sheet_states`, `row_heights`, `column_widths`, `row_styles`,
-    /// `column_styles`, `worksheet_origins`). Each gets one explicit
+    /// `column_styles`, `tables` (0.16.0-A1), `worksheet_origins`). Each gets one explicit
     /// remove+insert line rather than a generic "walk every map" helper: the maps
     /// have different value types, a truly generic helper needs a macro or
     /// trait-object indirection to cross that, and with exactly one call site a
@@ -3083,6 +3138,9 @@ impl Vm {
         if let Some(v) = self.column_styles.remove(&old_key) {
             self.column_styles.insert(new_key.clone(), v);
         }
+        if let Some(v) = self.tables.remove(&old_key) {
+            self.tables.insert(new_key.clone(), v);
+        }
         // 11. `worksheet_origins` -- re-key AND update `original_display_name` to the
         //    NEW name; `save_xlsx_impl` reads this field (not the lowercased key) to
         //    write `<sheet name="...">` on save.
@@ -3198,6 +3256,9 @@ impl Vm {
         }
         if let Some(v) = self.column_styles.get(&source_key).cloned() {
             self.column_styles.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.tables.get(&source_key).cloned() {
+            self.tables.insert(new_key.clone(), v);
         }
         self.worksheet_origins.insert(
             new_key,
@@ -4117,6 +4178,9 @@ impl Vm {
             if !sheet_data.column_styles.is_empty() {
                 self.column_styles
                     .insert(key.clone(), sheet_data.column_styles.clone());
+            }
+            if !sheet_data.tables.is_empty() {
+                self.tables.insert(key.clone(), sheet_data.tables.clone());
             }
             self.worksheet_origins.insert(
                 key.clone(),
@@ -6472,6 +6536,33 @@ fn shift_merge_rect(
         return None;
     }
     Some(new_rect)
+}
+
+/// Shifts a table's `ref` rect for a structural edit (0.16.0-A1) -- same per-axis
+/// clamp arithmetic as `shift_merge_rect` above, but WITHOUT that function's
+/// merge-specific single-cell-collapse rule (a table has no "must span at least 2
+/// cells" invariant). Drops only if the range collapses entirely (the whole `ref`
+/// fell inside a deleted band).
+fn shift_table_rect(
+    rect: MergeRect,
+    axis: formula::RefAxis,
+    edit: formula::StructuralEdit,
+) -> Option<MergeRect> {
+    let ((r1, c1), (r2, c2)) = rect;
+    let (low, high) = match axis {
+        formula::RefAxis::Row => (r1, r2),
+        formula::RefAxis::Col => (c1, c2),
+    };
+    let new_low = formula::shift_bound_low(low, edit);
+    let new_high = formula::shift_bound_high(high, edit);
+    if new_low as i64 > new_high {
+        return None;
+    }
+    let new_high = new_high as u32;
+    Some(match axis {
+        formula::RefAxis::Row => ((new_low, c1), (new_high, c2)),
+        formula::RefAxis::Col => ((r1, new_low), (r2, new_high)),
+    })
 }
 
 /// Shifts a hidden-row/column `Interval` for a structural edit, reusing the
@@ -10980,6 +11071,7 @@ mod tests {
                 column_widths: Vec::new(),
                 row_styles: HashMap::new(),
                 column_styles: Vec::new(),
+                tables: Vec::new(),
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -10998,6 +11090,7 @@ mod tests {
                 column_widths: Vec::new(),
                 row_styles: HashMap::new(),
                 column_styles: Vec::new(),
+                tables: Vec::new(),
             },
         ];
         let mut vm = Vm::new();
@@ -11063,6 +11156,7 @@ mod tests {
             column_widths: vec![(1, 2, 8.43)],
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
+            tables: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11089,6 +11183,7 @@ mod tests {
             column_widths: Vec::new(),
             row_styles: HashMap::from([(3u32, 5u32)]),
             column_styles: vec![(1, 2, 7u32)],
+            tables: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11115,6 +11210,7 @@ mod tests {
             column_widths: Vec::new(),
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
+            tables: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -13653,6 +13749,7 @@ mod tests {
             column_widths: Vec::new(),
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
+            tables: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -13694,6 +13791,7 @@ mod tests {
                 column_widths: Vec::new(),
                 row_styles: HashMap::new(),
                 column_styles: Vec::new(),
+                tables: Vec::new(),
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -13712,6 +13810,7 @@ mod tests {
                 column_widths: Vec::new(),
                 row_styles: HashMap::new(),
                 column_styles: Vec::new(),
+                tables: Vec::new(),
             },
         ];
 
@@ -13752,6 +13851,7 @@ mod tests {
             column_widths: Vec::new(),
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
+            tables: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -14670,6 +14770,7 @@ mod tests {
             column_widths: Vec::new(),
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
+            tables: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -14775,6 +14876,7 @@ mod tests {
             column_widths: Vec::new(),
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
+            tables: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -14817,6 +14919,7 @@ mod tests {
             column_widths: Vec::new(),
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
+            tables: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -14848,6 +14951,7 @@ mod tests {
             column_widths: Vec::new(),
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
+            tables: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -16115,5 +16219,167 @@ mod tests {
             .map(|ci| rows.iter().map(|row| row[ci].clone()).collect())
             .collect();
         assert_eq!(cols, transposed_rows);
+    }
+
+    // ── 0.16.0-A1: tables (read-only parse + structural-edit shift) ─────────
+
+    fn sample_table(ref_range: MergeRect) -> TableDef {
+        TableDef {
+            name: "Table1".to_string(),
+            display_name: "Table1".to_string(),
+            ref_range,
+            header_row_count: 1,
+            totals_row_count: 0,
+            totals_row_shown: true,
+            columns: vec![],
+            style_name: None,
+            auto_filter_ref: None,
+        }
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_shifts_a_tables_ref_below_the_insertion_point() {
+        let mut vm = Vm::new();
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((10, 1), (13, 3)))]);
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(
+            vm.tables.get("sheet1").unwrap()[0].ref_range,
+            ((12, 1), (15, 3))
+        );
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_shifts_a_tables_nested_auto_filter_ref_too() {
+        // Regression: a real Excel table's nested <autoFilter> covers the same area as
+        // the table's own ref -- shifting only ref_range and leaving auto_filter_ref
+        // stale (found via the real-fixture verification script, fixture3) would report
+        // a table whose reported filter range no longer matches its own reported range.
+        let mut vm = Vm::new();
+        let mut t = sample_table(((1, 1), (4, 3)));
+        t.auto_filter_ref = Some(((1, 1), (4, 3)));
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        vm.insert_rows_on_sheet("sheet1", 1, 2);
+        let shifted = &vm.tables.get("sheet1").unwrap()[0];
+        assert_eq!(shifted.ref_range, ((3, 1), (6, 3)));
+        assert_eq!(shifted.auto_filter_ref, Some(((3, 1), (6, 3))));
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_shifts_a_tables_ref_on_the_column_axis_only() {
+        let mut vm = Vm::new();
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((1, 5), (4, 7)))]);
+        vm.insert_cols_on_sheet("sheet1", 2, 1);
+        assert_eq!(
+            vm.tables.get("sheet1").unwrap()[0].ref_range,
+            ((1, 6), (4, 8))
+        );
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_drops_a_table_whose_range_collapses_entirely() {
+        let mut vm = Vm::new();
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((3, 1), (4, 2)))]);
+        vm.delete_rows_on_sheet("sheet1", 1, 10);
+        assert!(vm.tables.get("sheet1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_never_shifts_a_table_on_a_different_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.tables
+            .insert("other".to_string(), vec![sample_table(((10, 1), (13, 3)))]);
+        vm.insert_rows_on_sheet("sheet1", 1, 5);
+        assert_eq!(
+            vm.tables.get("other").unwrap()[0].ref_range,
+            ((10, 1), (13, 3))
+        );
+    }
+
+    #[test]
+    fn populate_from_sheets_threads_tables_into_the_vm() {
+        let sheets = vec![WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells: HashMap::new(),
+            sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
+            sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
+            tables: vec![sample_table(((1, 1), (4, 3)))],
+        }];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+        let tables = vm.tables.get("sheet1").unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].name, "Table1");
+    }
+
+    #[test]
+    fn populate_from_sheets_does_not_create_a_tables_entry_when_a_sheet_has_none() {
+        let sheets = vec![WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells: HashMap::new(),
+            sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
+            sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
+            tables: Vec::new(),
+        }];
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(sheets);
+        assert!(!vm.tables.contains_key("sheet1"));
+    }
+
+    #[test]
+    fn rename_sheet_rekeys_tables() {
+        let mut vm = Vm::new(); // "sheet1" is active by default
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((1, 1), (4, 3)))]);
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+        assert!(!vm.tables.contains_key("sheet1"));
+        assert_eq!(vm.tables.get("renamed").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn delete_sheet_clears_tables_on_a_non_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Extra");
+        vm.tables
+            .insert("extra".to_string(), vec![sample_table(((1, 1), (4, 3)))]);
+        vm.delete_sheet("Extra").unwrap();
+        assert!(!vm.tables.contains_key("extra"));
+    }
+
+    #[test]
+    fn copy_sheet_copies_tables_and_leaves_the_source_untouched() {
+        let mut vm = Vm::new();
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((1, 1), (4, 3)))]);
+        vm.copy_sheet("Sheet1", "Copy").unwrap();
+        assert_eq!(vm.tables.get("copy").unwrap().len(), 1);
+        assert_eq!(vm.tables.get("sheet1").unwrap().len(), 1);
     }
 }

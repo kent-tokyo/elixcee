@@ -271,6 +271,7 @@ mod tests {
                 column_widths: Vec::new(),
                 row_styles: HashMap::new(),
                 column_styles: Vec::new(),
+                tables: Vec::new(),
             },
             formulas: HashMap::new(),
             dimension: None,

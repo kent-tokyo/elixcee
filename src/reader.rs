@@ -108,6 +108,56 @@ pub struct WorkbookSheet {
     /// style_index)`, from `<col min=".." max=".." style=".."/>`. Always
     /// empty for `.ods`.
     pub column_styles: Vec<(u32, u32, u32)>,
+    /// Tables defined on this sheet (0.16.0-A1), parsed from each `xl/tables/tableN.xml`
+    /// part the sheet's own `<tableParts>` links to. Read-only: this is a pure `Vm`-side
+    /// projection, not a writer input -- an unmodified table's bytes keep surviving via
+    /// the existing generic unknown-part passthrough + `OpaqueWorksheetFragments::
+    /// table_parts` splice exactly as before this field existed (see
+    /// `internal_docs/tables-0.16.0-a-design.md` Finding 2). Structured references
+    /// (`Table1[@Qty]`) are out of scope entirely -- `TableColumn::
+    /// calculated_column_formula` is captured as raw, unparsed text. Always empty for
+    /// `.ods` (no table concept there).
+    pub tables: Vec<TableDef>,
+}
+
+/// One `<tableColumn>` entry inside a `<table>`'s `<tableColumns>` (0.16.0-A1).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableColumn {
+    pub id: Option<String>,
+    pub name: String,
+    pub totals_row_function: Option<String>,
+    pub totals_row_label: Option<String>,
+    /// Raw `<calculatedColumnFormula>` text, unparsed and unevaluated -- structured
+    /// references are out of scope for 0.16.0-A (see `TableDef`'s own doc comment).
+    pub calculated_column_formula: Option<String>,
+}
+
+/// A parsed `xl/tables/tableN.xml` part (0.16.0-A1), read-only. `<fonts>`/`<fills>`/
+/// `<borders>`-style deep interpretation is never needed here -- only the table's own
+/// structural metadata is modeled.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableDef {
+    pub name: String,
+    /// Distinct from `name` in real Excel (the identifier structured references and
+    /// the UI use, unique workbook-wide) -- defaults to `name` when the `displayName`
+    /// attribute happens to be absent (real Excel always writes both, but nothing
+    /// technically requires it).
+    pub display_name: String,
+    /// 1-based inclusive `(top-left, bottom-right)`, from `ref="A1:C4"`.
+    pub ref_range: MergeRect,
+    /// Defaults to 1 per ECMA-376 §18.5.1.2 when the `headerRowCount` attribute is
+    /// absent (no fixture in this repo exercises a non-default value).
+    pub header_row_count: u32,
+    pub totals_row_count: u32,
+    /// Defaults to `true` per the `CT_Table` XSD when the `totalsRowShown` attribute
+    /// is absent (real Excel/`fixture3` always writes it explicitly either way).
+    pub totals_row_shown: bool,
+    pub columns: Vec<TableColumn>,
+    /// `<tableStyleInfo name="...">`'s name, when present.
+    pub style_name: Option<String>,
+    /// The table's own nested `<autoFilter ref="...">`, when present -- structural
+    /// only, no filter-criteria parsing (that's 0.16.0-B).
+    pub auto_filter_ref: Option<MergeRect>,
 }
 
 pub enum SheetCell {
@@ -1581,7 +1631,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
     let date1904 = xlsx_workbook_date1904(&wb_xml);
 
     let rels_xml = zip_read_text(&mut archive, "xl/_rels/workbook.xml.rels")?;
-    let rels = xlsx_rels(&rels_xml);
+    let rels = xlsx_rels(&rels_xml, "/worksheet");
 
     let shared: Vec<String> = match zip_read_text(&mut archive, "xl/sharedStrings.xml") {
         Ok(xml) => xlsx_shared_strings(&xml),
@@ -1617,6 +1667,31 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 resolve_number_format(fmt_id, &styles.number_formats).map(|code| (pos, code))
             })
             .collect();
+        // Tables (0.16.0-A1): resolved via the sheet's OWN `.rels` file, not the
+        // workbook-level `rels` map above -- a `<tablePart r:id="...">` is scoped to
+        // this one sheet, same OPC convention as hyperlinks/drawings. Tolerant of a
+        // missing `.rels`/unresolvable target/unparseable table part -- each just
+        // contributes nothing, matching this reader's convention elsewhere.
+        let mut tables = Vec::new();
+        let table_rids = xlsx_table_part_rids(&sheet_xml);
+        if !table_rids.is_empty()
+            && let Ok(sheet_rels_xml) =
+                zip_read_text(&mut archive, &crate::part_rels_name(&zip_path))
+        {
+            let table_rels = xlsx_rels(&sheet_rels_xml, "/table");
+            let base = crate::rels_target_dir(&crate::part_rels_name(&zip_path)).to_string();
+            for rid in &table_rids {
+                let Some(target) = table_rels.get(rid) else {
+                    continue;
+                };
+                let resolved = crate::normalize_part_path(&format!("{base}{target}"));
+                if let Ok(table_xml) = zip_read_text(&mut archive, &resolved)
+                    && let Some(t) = parse_table_xml(&table_xml)
+                {
+                    tables.push(t);
+                }
+            }
+        }
         sheets.push(BufferSheet {
             sheet: WorkbookSheet {
                 name,
@@ -1635,6 +1710,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 column_widths: sheet_data.column_widths,
                 row_styles: sheet_data.row_styles,
                 column_styles: sheet_data.column_styles,
+                tables,
             },
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
@@ -1728,8 +1804,10 @@ pub(crate) fn xlsx_defined_names(xml: &str) -> Vec<(String, String)> {
     result
 }
 
-/// Returns `{rId → target_path}` for worksheet relationships.
-fn xlsx_rels(xml: &str) -> HashMap<String, String> {
+/// Returns `{rId → target_path}` for relationships whose `Type` ends with
+/// `type_suffix` (e.g. `"/worksheet"`, `"/table"` — 0.16.0-A1 generalized this from a
+/// worksheet-only filter once a second relationship type needed the identical parse).
+fn xlsx_rels(xml: &str, type_suffix: &str) -> HashMap<String, String> {
     let mut iter = XmlIter::new(xml);
     let mut map = HashMap::new();
     while let Some(ev) = iter.next_ev() {
@@ -1741,7 +1819,7 @@ fn xlsx_rels(xml: &str) -> HashMap<String, String> {
                     attr_get(attrs, "Type"),
                     attr_get(attrs, "Target"),
                 )
-                && ty.ends_with("/worksheet")
+                && ty.ends_with(type_suffix)
             {
                 map.insert(id.to_string(), target.to_string());
             }
@@ -2887,6 +2965,212 @@ fn parse_dimension_ref(s: &str) -> Option<MergeRect> {
     }
 }
 
+/// Extracts each `<tablePart r:id="...">`'s relationship id from a worksheet's
+/// `<tableParts>` element (0.16.0-A1), in document order. Empty if the sheet has no
+/// `<tableParts>` at all.
+fn xlsx_table_part_rids(sheet_xml: &str) -> Vec<String> {
+    let Some(tp) = extract_raw_element(sheet_xml, "tableParts") else {
+        return Vec::new();
+    };
+    let mut iter = XmlIter::new(&tp);
+    let mut rids = Vec::new();
+    while let Some(ev) = iter.next_ev() {
+        if let Ev::SelfClose(ref tag, ref attrs) = ev
+            && tag.split(':').next_back() == Some("tablePart")
+            && let Some(rid) = attr_get(attrs, "id")
+        {
+            rids.push(rid.to_string());
+        }
+    }
+    rids
+}
+
+/// Parses one `xl/tables/tableN.xml` part's real content into a `TableDef` (0.16.0-A1).
+/// `None` if the document has no `<table ref="...">` with a parseable `ref` -- a
+/// malformed table part is simply dropped rather than surfacing an error, matching this
+/// reader's existing tolerant convention for every other optional/opaque fragment.
+fn parse_table_xml(xml: &str) -> Option<TableDef> {
+    let mut iter = XmlIter::new(xml);
+    let mut table: Option<TableDef> = None;
+    let mut cur_column: Option<TableColumn> = None;
+    let mut in_calc_formula = false;
+    let mut calc_formula_text = String::new();
+
+    while let Some(ev) = iter.next_ev() {
+        match ev {
+            Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                match local {
+                    "table" => {
+                        let name = attr_get(attrs, "name").unwrap_or("").to_string();
+                        let display_name =
+                            attr_get(attrs, "displayName").unwrap_or(&name).to_string();
+                        if let Some(ref_range) = attr_get(attrs, "ref").and_then(parse_merge_ref) {
+                            table = Some(TableDef {
+                                name,
+                                display_name,
+                                ref_range,
+                                header_row_count: attr_get(attrs, "headerRowCount")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(1),
+                                totals_row_count: attr_get(attrs, "totalsRowCount")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0),
+                                totals_row_shown: attr_get(attrs, "totalsRowShown")
+                                    .map(|v| matches!(v, "1" | "true" | "TRUE"))
+                                    .unwrap_or(true),
+                                columns: Vec::new(),
+                                style_name: None,
+                                auto_filter_ref: None,
+                            });
+                        }
+                    }
+                    "tableColumn" => {
+                        cur_column = Some(TableColumn {
+                            id: attr_get(attrs, "id").map(|s| s.to_string()),
+                            name: attr_get(attrs, "name").unwrap_or("").to_string(),
+                            totals_row_function: attr_get(attrs, "totalsRowFunction")
+                                .map(|s| s.to_string()),
+                            totals_row_label: attr_get(attrs, "totalsRowLabel")
+                                .map(|s| s.to_string()),
+                            calculated_column_formula: None,
+                        });
+                        if matches!(ev, Ev::SelfClose(_, _))
+                            && let (Some(t), Some(c)) = (table.as_mut(), cur_column.take())
+                        {
+                            t.columns.push(c);
+                        }
+                    }
+                    "calculatedColumnFormula" if !matches!(ev, Ev::SelfClose(_, _)) => {
+                        in_calc_formula = true;
+                        calc_formula_text.clear();
+                    }
+                    "tableStyleInfo" => {
+                        if let Some(t) = table.as_mut() {
+                            t.style_name = attr_get(attrs, "name").map(|s| s.to_string());
+                        }
+                    }
+                    "autoFilter" => {
+                        if let Some(t) = table.as_mut() {
+                            t.auto_filter_ref = attr_get(attrs, "ref").and_then(parse_merge_ref);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ev::Close(ref tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                match local {
+                    "calculatedColumnFormula" if in_calc_formula => {
+                        if let Some(c) = cur_column.as_mut() {
+                            c.calculated_column_formula = Some(calc_formula_text.clone());
+                        }
+                        in_calc_formula = false;
+                    }
+                    "tableColumn" => {
+                        if let (Some(t), Some(c)) = (table.as_mut(), cur_column.take()) {
+                            t.columns.push(c);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ev::Text(ref text) => {
+                if in_calc_formula {
+                    calc_formula_text.push_str(text);
+                }
+            }
+        }
+    }
+    table
+}
+
+#[cfg(test)]
+mod table_parsing_tests {
+    use super::*;
+
+    const REAL_TABLE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1"
+  name="Table1" displayName="Table1" ref="A1:C4" totalsRowShown="0">
+  <autoFilter ref="A1:C4"/>
+  <tableColumns count="3">
+    <tableColumn id="1" name="Name"/>
+    <tableColumn id="2" name="Qty"/>
+    <tableColumn id="3" name="Status"/>
+  </tableColumns>
+  <tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0"
+    showRowStripes="1" showColumnStripes="0"/>
+</table>"#;
+
+    #[test]
+    fn parse_table_xml_extracts_every_field_from_a_real_shape() {
+        let t = parse_table_xml(REAL_TABLE_XML).unwrap();
+        assert_eq!(t.name, "Table1");
+        assert_eq!(t.display_name, "Table1");
+        assert_eq!(t.ref_range, ((1, 1), (4, 3)));
+        assert_eq!(t.header_row_count, 1); // absent -> spec default
+        assert_eq!(t.totals_row_count, 0);
+        assert!(!t.totals_row_shown); // explicit totalsRowShown="0"
+        assert_eq!(t.style_name.as_deref(), Some("TableStyleMedium2"));
+        assert_eq!(t.auto_filter_ref, Some(((1, 1), (4, 3))));
+        assert_eq!(t.columns.len(), 3);
+        assert_eq!(t.columns[0].name, "Name");
+        assert_eq!(t.columns[1].name, "Qty");
+        assert_eq!(t.columns[2].name, "Status");
+        assert!(
+            t.columns
+                .iter()
+                .all(|c| c.calculated_column_formula.is_none())
+        );
+    }
+
+    #[test]
+    fn parse_table_xml_defaults_totals_row_shown_to_true_when_absent() {
+        let xml = r#"<table name="T" displayName="T" ref="A1:B2">
+          <tableColumns count="1"><tableColumn id="1" name="X"/></tableColumns>
+        </table>"#;
+        let t = parse_table_xml(xml).unwrap();
+        assert!(t.totals_row_shown);
+        assert!(t.auto_filter_ref.is_none());
+        assert!(t.style_name.is_none());
+    }
+
+    #[test]
+    fn parse_table_xml_captures_a_calculated_column_formula_as_raw_text() {
+        let xml = r#"<table name="T" displayName="T" ref="A1:B2">
+          <tableColumns count="1">
+            <tableColumn id="1" name="Total">
+              <calculatedColumnFormula>[@Qty]*[@Price]</calculatedColumnFormula>
+            </tableColumn>
+          </tableColumns>
+        </table>"#;
+        let t = parse_table_xml(xml).unwrap();
+        assert_eq!(
+            t.columns[0].calculated_column_formula.as_deref(),
+            Some("[@Qty]*[@Price]")
+        );
+    }
+
+    #[test]
+    fn parse_table_xml_returns_none_when_ref_is_missing_or_unparseable() {
+        assert!(parse_table_xml(r#"<table name="T" displayName="T"/>"#).is_none());
+        assert!(parse_table_xml(r#"<table name="T" displayName="T" ref="A1"/>"#).is_none());
+    }
+
+    #[test]
+    fn xlsx_table_part_rids_extracts_every_id_in_document_order() {
+        let sheet_xml = r#"<worksheet><tableParts count="2">
+          <tablePart r:id="rId3"/><tablePart r:id="rId7"/>
+        </tableParts></worksheet>"#;
+        assert_eq!(xlsx_table_part_rids(sheet_xml), vec!["rId3", "rId7"]);
+    }
+
+    #[test]
+    fn xlsx_table_part_rids_is_empty_without_a_tableparts_element() {
+        assert!(xlsx_table_part_rids("<worksheet></worksheet>").is_empty());
+    }
+}
+
 // ── ODS reader ────────────────────────────────────────────────────────────────
 
 fn read_ods(path: &str) -> Result<Vec<WorkbookSheet>, String> {
@@ -2943,6 +3227,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             column_widths: Vec::new(),
                             row_styles: HashMap::new(),
                             column_styles: Vec::new(),
+                            tables: Vec::new(),
                         });
                         in_sheet = true;
                         row = 0;
