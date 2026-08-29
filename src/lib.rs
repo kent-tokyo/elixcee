@@ -17,6 +17,8 @@ pub use elixcee_types as types;
 
 #[cfg(any(feature = "python", test))]
 use vm::CellContent;
+#[cfg(any(feature = "python", test))]
+use vm::{FillEdit, StyleAttrEdit};
 use vm::{Variant, Vm, WorksheetOrigin};
 
 #[cfg(feature = "python")]
@@ -179,6 +181,153 @@ fn py_to_variant(obj: &Bound<'_, PyAny>) -> PyResult<Variant> {
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
         "Unsupported cell value type",
     ))
+}
+
+// ── `set_style` (0.15.0-B) — dict-to-Edit-struct parsing ────────────────────────
+
+/// Normalizes a caller-supplied color string to 8-hex-digit ARGB (real Excel's own
+/// `rgb="..."` attribute shape) -- accepts a 6-digit RGB (alpha assumed fully opaque,
+/// `"FF"`) or an already-8-digit ARGB, with or without a leading `#`. Case-insensitive
+/// on input, always emits uppercase (matching Excel/openpyxl's own convention, confirmed
+/// against a real openpyxl-authored fixture).
+#[cfg(feature = "python")]
+fn normalize_color_hex(input: &str) -> PyResult<String> {
+    let s = input.trim().trim_start_matches('#');
+    let is_hex = !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit());
+    match s.len() {
+        6 if is_hex => Ok(format!("FF{}", s.to_uppercase())),
+        8 if is_hex => Ok(s.to_uppercase()),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "color must be a 6-digit RGB or 8-digit ARGB hex string, got {input:?}"
+        ))),
+    }
+}
+
+/// Extracts `dict[key]` as `String`, `TypeError` on a wrong-typed value, `None` if absent.
+#[cfg(feature = "python")]
+fn dict_str(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
+    match dict.get_item(key)? {
+        Some(v) => Ok(Some(v.extract().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!("{key:?} must be a string"))
+        })?)),
+        None => Ok(None),
+    }
+}
+
+#[cfg(feature = "python")]
+fn dict_bool(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<bool>> {
+    match dict.get_item(key)? {
+        Some(v) => Ok(Some(v.extract().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!("{key:?} must be a bool"))
+        })?)),
+        None => Ok(None),
+    }
+}
+
+#[cfg(feature = "python")]
+fn dict_f64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f64>> {
+    match dict.get_item(key)? {
+        Some(v) => Ok(Some(v.extract().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!("{key:?} must be a number"))
+        })?)),
+        None => Ok(None),
+    }
+}
+
+#[cfg(feature = "python")]
+fn dict_u32(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<u32>> {
+    match dict.get_item(key)? {
+        Some(v) => Ok(Some(v.extract().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                "{key:?} must be a non-negative integer"
+            ))
+        })?)),
+        None => Ok(None),
+    }
+}
+
+#[cfg(feature = "python")]
+fn dict_color(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
+    match dict_str(dict, key)? {
+        Some(s) => Ok(Some(normalize_color_hex(&s)?)),
+        None => Ok(None),
+    }
+}
+
+#[cfg(feature = "python")]
+fn extract_font_edit(dict: &Bound<'_, PyDict>) -> PyResult<reader::FontEdit> {
+    Ok(reader::FontEdit {
+        bold: dict_bool(dict, "bold")?,
+        italic: dict_bool(dict, "italic")?,
+        underline: dict_bool(dict, "underline")?,
+        strike: dict_bool(dict, "strike")?,
+        size: dict_f64(dict, "size")?,
+        color_argb: dict_color(dict, "color")?,
+        name: dict_str(dict, "name")?,
+    })
+}
+
+#[cfg(feature = "python")]
+fn extract_fill_edit(dict: &Bound<'_, PyDict>) -> PyResult<FillEdit> {
+    let fill_type = dict_str(dict, "type")?.unwrap_or_else(|| "solid".to_string());
+    if fill_type != "solid" {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "fill['type'] {fill_type:?} not supported yet -- only \"solid\" is implemented \
+             (0.15.0-B); gradient/pattern fills are a future milestone"
+        )));
+    }
+    let color_argb = dict_color(dict, "color")?.ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("fill requires a 'color'")
+    })?;
+    Ok(FillEdit { color_argb })
+}
+
+#[cfg(feature = "python")]
+fn extract_border_side_edit(
+    dict: &Bound<'_, PyDict>,
+    side_name: &str,
+) -> PyResult<Option<reader::BorderSideEdit>> {
+    let Some(side_val) = dict.get_item(side_name)? else {
+        return Ok(None);
+    };
+    let side_dict = side_val.cast::<PyDict>().map_err(|_| {
+        PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+            "border[{side_name:?}] must be a dict"
+        ))
+    })?;
+    Ok(Some(reader::BorderSideEdit {
+        style: dict_str(side_dict, "style")?,
+        color_argb: dict_color(side_dict, "color")?,
+    }))
+}
+
+#[cfg(feature = "python")]
+fn extract_border_edit(dict: &Bound<'_, PyDict>) -> PyResult<reader::BorderEdit> {
+    Ok(reader::BorderEdit {
+        left: extract_border_side_edit(dict, "left")?,
+        right: extract_border_side_edit(dict, "right")?,
+        top: extract_border_side_edit(dict, "top")?,
+        bottom: extract_border_side_edit(dict, "bottom")?,
+        diagonal: extract_border_side_edit(dict, "diagonal")?,
+    })
+}
+
+#[cfg(feature = "python")]
+fn extract_alignment_edit(dict: &Bound<'_, PyDict>) -> PyResult<reader::AlignmentEdit> {
+    Ok(reader::AlignmentEdit {
+        horizontal: dict_str(dict, "horizontal")?,
+        vertical: dict_str(dict, "vertical")?,
+        wrap_text: dict_bool(dict, "wrap_text")?,
+        indent: dict_u32(dict, "indent")?,
+    })
+}
+
+#[cfg(feature = "python")]
+fn extract_protection_edit(dict: &Bound<'_, PyDict>) -> PyResult<reader::ProtectionEdit> {
+    Ok(reader::ProtectionEdit {
+        locked: dict_bool(dict, "locked")?,
+        hidden: dict_bool(dict, "hidden")?,
+    })
 }
 
 // ── Bulk worksheet range/row API (R1) — address/shape validation ───────────────
@@ -1323,6 +1472,96 @@ impl PyVm {
         Ok(())
     }
 
+    /// Sets font/fill/border/alignment/protection properties on every cell in *addr* --
+    /// 0.15.0-B. At least one of *font*/*fill*/*border*/*alignment*/*protection* must be
+    /// given. Each is a dict of only the properties you want to change; anything a dict
+    /// doesn't mention is left exactly as that cell's current style already has it --
+    /// e.g. ``font={"bold": True}`` on a cell with an existing colored, sized font
+    /// changes only boldness, the color/size survive untouched. Calling this more than
+    /// once on the same cell before a save accumulates: a ``fill=...`` call after an
+    /// earlier ``font=...`` call keeps both.
+    ///
+    /// ``font`` keys: ``bold``, ``italic``, ``underline``, ``strike`` (all ``bool``),
+    /// ``size`` (number), ``color`` (hex string), ``name`` (string).
+    ///
+    /// ``fill`` keys: ``type`` (only ``"solid"`` is implemented — gradient/pattern fills
+    /// are a future milestone), ``color`` (hex string, required). Unlike the other four,
+    /// a fill request REPLACES the cell's whole fill record rather than merging onto it
+    /// (matches real Excel's own single-color fill picker).
+    ///
+    /// ``border`` keys: any of ``left``/``right``/``top``/``bottom``/``diagonal``, each
+    /// itself a dict with ``style`` (string, e.g. ``"thin"``/``"thick"``) and/or
+    /// ``color`` (hex string). Only the sides you name are touched.
+    ///
+    /// ``alignment`` keys: ``horizontal``, ``vertical`` (strings, e.g. ``"center"``),
+    /// ``wrap_text`` (``bool``), ``indent`` (non-negative integer).
+    ///
+    /// ``protection`` keys: ``locked``, ``hidden`` (both ``bool``).
+    ///
+    /// Color strings are a 6-digit RGB hex (``"4472C4"``, alpha assumed fully opaque) or
+    /// an 8-digit ARGB hex (``"FF4472C4"``), with or without a leading ``#``. Only
+    /// literal colors are supported — a theme-relative color (Excel's own theme palette)
+    /// can't be set this way; cloning a font/fill/border that already uses one and not
+    /// touching that specific property preserves it unchanged.
+    ///
+    /// Same safety/deferred-write model as :meth:`set_number_format`: never mutates a
+    /// style record shared with cells outside *addr*, and the underlying
+    /// ``xl/styles.xml`` write is deferred to :meth:`save_workbook`.
+    ///
+    /// Parameters
+    /// ----------
+    /// addr:
+    ///     A single-area A1 range, e.g. ``"A1:D1"``, or a single cell.
+    /// font, fill, border, alignment, protection:
+    ///     Optional dicts, see above. At least one must be given.
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; does **not** change the
+    ///     active sheet when given.
+    ///
+    /// Raises ``ValueError`` on a bad/oversized address, an unknown *sheet*, no
+    /// arguments given, an unsupported ``fill['type']``, a missing required key
+    /// (``fill`` needs ``color``), or a malformed color string. Raises ``TypeError`` on
+    /// a wrong-typed value within a dict.
+    #[pyo3(signature = (addr, font=None, fill=None, border=None, alignment=None, protection=None, sheet=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_style(
+        &mut self,
+        addr: &str,
+        font: Option<&Bound<'_, PyDict>>,
+        fill: Option<&Bound<'_, PyDict>>,
+        border: Option<&Bound<'_, PyDict>>,
+        alignment: Option<&Bound<'_, PyDict>>,
+        protection: Option<&Bound<'_, PyDict>>,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        if font.is_none()
+            && fill.is_none()
+            && border.is_none()
+            && alignment.is_none()
+            && protection.is_none()
+        {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "set_style requires at least one of font/fill/border/alignment/protection",
+            ));
+        }
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+
+        let edit = StyleAttrEdit {
+            font: font.map(extract_font_edit).transpose()?,
+            fill: fill.map(extract_fill_edit).transpose()?,
+            border: border.map(extract_border_edit).transpose()?,
+            alignment: alignment.map(extract_alignment_edit).transpose()?,
+            protection: protection.map(extract_protection_edit).transpose()?,
+        };
+        self.inner.set_style_on_sheet(&key, r1, c1, r2, c2, &edit);
+        Ok(())
+    }
+
     /// Every hidden row number on a sheet, as a sorted list of 1-based row
     /// numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.
     ///
@@ -2269,6 +2508,22 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         new_styles_bytes = Some(new_xml.into_bytes());
         effective_style_indices = Some(indices);
     }
+    // `set_style` (0.15.0-B) resolution, CHAINED after the number-format pass above (see
+    // `resolve_pending_style_attrs`'s own doc comment for why an independent second pass
+    // starting fresh from `styles_source` would silently discard whichever of the two
+    // features ran first on a cell touched by both).
+    {
+        let chained_source: &[u8] = new_styles_bytes.as_deref().unwrap_or(styles_source);
+        let chained_indices: &StyleIndexMap = effective_style_indices
+            .as_ref()
+            .unwrap_or(&vm.cell_style_indices);
+        if let Some((new_xml, indices)) =
+            resolve_pending_style_attrs(vm, chained_source, chained_indices)
+        {
+            new_styles_bytes = Some(new_xml.into_bytes());
+            effective_style_indices = Some(indices);
+        }
+    }
 
     for plan in &worksheet_plans {
         let sheet_name = &plan.sheet_key;
@@ -2521,6 +2776,185 @@ fn resolve_pending_number_formats(
             }
         };
     }
+
+    Some((new_xml, effective))
+}
+
+/// Resolves `vm.pending_style_attrs` (`set_style`, 0.15.0-B) against `starting_styles` and
+/// `starting_indices` -- unlike `resolve_pending_number_formats`, these are NOT always
+/// `vm.cell_style_indices`/the raw passthrough bytes: `save_xlsx_impl` chains this call
+/// AFTER `resolve_pending_number_formats`, passing that pass's own `(new_xml, effective)`
+/// output back in here, so a cell touched by BOTH `set_number_format` and `set_style`
+/// before one save gets both changes rather than one silently overwriting the other (an
+/// independent second pass starting fresh from the original bytes would only ever see
+/// one). Returns `None` when there's nothing pending, so the caller writes
+/// `starting_styles` straight through unchanged.
+///
+/// Same "no shared-style mutation" contract as the number-format pass, now spanning FOUR
+/// tables instead of one: `<fonts>`/`<fills>`/`<borders>` are found-or-appended (via
+/// `reader::with_font_edit`/`build_solid_fill`/`with_border_edit` + a byte-comparison
+/// dedup, same conservative under-dedupe-never-over-dedupe bias), then `<cellXfs>` is
+/// found-or-appended pointing at the resulting font/fill/border indices --
+/// `<cellStyleXfs>` is never touched. Literal RGB/ARGB colors only; a font/fill/border
+/// that already carries a theme-relative color (`<color theme="N"/>`) keeps it verbatim
+/// when that property isn't the one being edited (0.15.0-C's job to mint a new one).
+fn resolve_pending_style_attrs(
+    vm: &Vm,
+    starting_styles: &[u8],
+    starting_indices: &StyleIndexMap,
+) -> Option<(String, StyleIndexMap)> {
+    if vm.pending_style_attrs.values().all(|m| m.is_empty()) {
+        return None;
+    }
+    let xml = String::from_utf8_lossy(starting_styles).into_owned();
+
+    let mut fonts = reader::extract_records(&xml, "fonts", "font");
+    if fonts.is_empty() {
+        fonts.push("<font/>".to_string());
+    }
+    let mut fills = reader::extract_records(&xml, "fills", "fill");
+    if fills.is_empty() {
+        fills.push("<fill><patternFill patternType=\"none\"/></fill>".to_string());
+    }
+    let mut borders = reader::extract_records(&xml, "borders", "border");
+    if borders.is_empty() {
+        borders.push("<border><left/><right/><top/><bottom/><diagonal/></border>".to_string());
+    }
+    let mut xfs = reader::extract_cell_xfs(&xml);
+    if xfs.is_empty() {
+        xfs.push("<xf/>".to_string());
+    }
+
+    let mut effective = starting_indices.clone();
+
+    for (sheet_key, edits) in &vm.pending_style_attrs {
+        if edits.is_empty() {
+            continue;
+        }
+        let sheet_indices = effective.entry(sheet_key.clone()).or_default();
+        for (&(row, col), edit) in edits {
+            let current_index = sheet_indices.get(&(row, col)).copied().unwrap_or(0) as usize;
+            let mut current_xf = xfs
+                .get(current_index)
+                .cloned()
+                .unwrap_or_else(|| "<xf/>".to_string());
+
+            if let Some(font_edit) = &edit.font {
+                let font_id = reader::span_attr_u32(&current_xf, "fontId") as usize;
+                let current_font = fonts
+                    .get(font_id)
+                    .cloned()
+                    .unwrap_or_else(|| "<font/>".to_string());
+                let candidate = reader::with_font_edit(&current_font, font_edit);
+                let new_font_id = match fonts.iter().position(|f| f == &candidate) {
+                    Some(i) => i as u32,
+                    None => {
+                        fonts.push(candidate);
+                        (fonts.len() - 1) as u32
+                    }
+                };
+                current_xf = reader::with_attr(&current_xf, "fontId", &new_font_id.to_string());
+                current_xf = reader::with_attr(&current_xf, "applyFont", "1");
+            }
+            if let Some(fill_edit) = &edit.fill {
+                let candidate = reader::build_solid_fill(&fill_edit.color_argb);
+                let new_fill_id = match fills.iter().position(|f| f == &candidate) {
+                    Some(i) => i as u32,
+                    None => {
+                        fills.push(candidate);
+                        (fills.len() - 1) as u32
+                    }
+                };
+                current_xf = reader::with_attr(&current_xf, "fillId", &new_fill_id.to_string());
+                current_xf = reader::with_attr(&current_xf, "applyFill", "1");
+            }
+            if let Some(border_edit) = &edit.border {
+                let border_id = reader::span_attr_u32(&current_xf, "borderId") as usize;
+                let current_border = borders.get(border_id).cloned().unwrap_or_else(|| {
+                    "<border><left/><right/><top/><bottom/><diagonal/></border>".to_string()
+                });
+                let candidate = reader::with_border_edit(&current_border, border_edit);
+                let new_border_id = match borders.iter().position(|b| b == &candidate) {
+                    Some(i) => i as u32,
+                    None => {
+                        borders.push(candidate);
+                        (borders.len() - 1) as u32
+                    }
+                };
+                current_xf = reader::with_attr(&current_xf, "borderId", &new_border_id.to_string());
+                current_xf = reader::with_attr(&current_xf, "applyBorder", "1");
+            }
+            if let Some(alignment_edit) = &edit.alignment {
+                let new_alignment = reader::merged_alignment_span(&current_xf, alignment_edit);
+                current_xf = reader::with_ordered_child(
+                    &current_xf,
+                    "alignment",
+                    &reader::XF_CHILD_ORDER,
+                    Some(&new_alignment),
+                );
+                current_xf = reader::with_attr(&current_xf, "applyAlignment", "1");
+            }
+            if let Some(protection_edit) = &edit.protection {
+                let new_protection = reader::merged_protection_span(&current_xf, protection_edit);
+                current_xf = reader::with_ordered_child(
+                    &current_xf,
+                    "protection",
+                    &reader::XF_CHILD_ORDER,
+                    Some(&new_protection),
+                );
+                current_xf = reader::with_attr(&current_xf, "applyProtection", "1");
+            }
+
+            let new_index = match xfs.iter().position(|xf| xf == &current_xf) {
+                Some(i) => i as u32,
+                None => {
+                    xfs.push(current_xf);
+                    (xfs.len() - 1) as u32
+                }
+            };
+            sheet_indices.insert((row, col), new_index);
+        }
+    }
+
+    let mut new_xml = xml;
+    let new_fonts = format!(
+        "<fonts count=\"{}\">{}</fonts>",
+        fonts.len(),
+        fonts.concat()
+    );
+    new_xml = match reader::extract_raw_element(&new_xml, "fonts") {
+        Some(old) => new_xml.replacen(old.as_str(), &new_fonts, 1),
+        // Schema order: fonts precedes fills. Defensive fallback only -- every real file
+        // and XLSX_STYLES itself always has <fonts>.
+        None => new_xml.replacen("<fills", &format!("{new_fonts}<fills"), 1),
+    };
+    let new_fills = format!(
+        "<fills count=\"{}\">{}</fills>",
+        fills.len(),
+        fills.concat()
+    );
+    new_xml = match reader::extract_raw_element(&new_xml, "fills") {
+        Some(old) => new_xml.replacen(old.as_str(), &new_fills, 1),
+        None => new_xml.replacen("<borders", &format!("{new_fills}<borders"), 1),
+    };
+    let new_borders = format!(
+        "<borders count=\"{}\">{}</borders>",
+        borders.len(),
+        borders.concat()
+    );
+    new_xml = match reader::extract_raw_element(&new_xml, "borders") {
+        Some(old) => new_xml.replacen(old.as_str(), &new_borders, 1),
+        None => new_xml.replacen("<cellStyleXfs", &format!("{new_borders}<cellStyleXfs"), 1),
+    };
+    let new_cell_xfs = format!(
+        "<cellXfs count=\"{}\">{}</cellXfs>",
+        xfs.len(),
+        xfs.concat()
+    );
+    new_xml = match reader::extract_raw_element(&new_xml, "cellXfs") {
+        Some(old) => new_xml.replacen(old.as_str(), &new_cell_xfs, 1),
+        None => new_xml.replacen("</styleSheet>", &format!("{new_cell_xfs}</styleSheet>"), 1),
+    };
 
     Some((new_xml, effective))
 }
@@ -3707,6 +4141,252 @@ mod tests {
         assert_eq!(vm.get_cell_number_format(1, 1), None);
         vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "0.00%");
         assert_eq!(vm.get_cell_number_format(1, 1), Some("0.00%"));
+    }
+
+    // ── 0.15.0-B: resolve_pending_style_attrs ────────────────────────────────────
+
+    fn style_attr_edit(edit: StyleAttrEdit) -> StyleAttrEdit {
+        edit
+    }
+
+    #[test]
+    fn resolve_pending_style_attrs_returns_none_with_no_pending_edits() {
+        let vm = Vm::new();
+        let indices = vm.cell_style_indices.clone();
+        assert!(resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &indices).is_none());
+    }
+
+    #[test]
+    fn resolve_pending_style_attrs_mints_a_new_font_preserving_other_properties() {
+        let source = concat!(
+            "<styleSheet>",
+            "<fonts count=\"1\"><font><sz val=\"11\"/><color rgb=\"FF112233\"/><name val=\"Calibri\"/></font></fonts>",
+            "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>",
+            "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>",
+            "<cellStyleXfs count=\"1\"><xf/></cellStyleXfs>",
+            "<cellXfs count=\"1\"><xf/></cellXfs>",
+            "</styleSheet>",
+        );
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        let indices = vm.cell_style_indices.clone();
+        let (new_xml, effective) =
+            resolve_pending_style_attrs(&vm, source.as_bytes(), &indices).expect("pending edit");
+        assert!(new_xml.contains("<b val=\"1\"/>"));
+        // Original font's other properties survive on the NEW cloned font record.
+        assert!(new_xml.contains("<color rgb=\"FF112233\"/>"));
+        assert!(new_xml.contains("<name val=\"Calibri\"/>"));
+        assert_ne!(effective["sheet1"][&(1, 1)], 0);
+    }
+
+    #[test]
+    fn resolve_pending_style_attrs_mints_a_solid_fill() {
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                fill: Some(FillEdit {
+                    color_argb: "FF4472C4".to_string(),
+                }),
+                ..Default::default()
+            }),
+        );
+        let indices = vm.cell_style_indices.clone();
+        let (new_xml, _) = resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &indices)
+            .expect("pending edit");
+        assert!(new_xml.contains("<fgColor rgb=\"FF4472C4\"/>"));
+        assert!(new_xml.contains("<bgColor indexed=\"64\"/>"));
+    }
+
+    #[test]
+    fn resolve_pending_style_attrs_reuses_a_font_dedup_not_a_duplicate() {
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        vm.set_style_on_sheet(
+            "sheet1",
+            5,
+            5,
+            5,
+            5,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        let indices = vm.cell_style_indices.clone();
+        let (_, effective) = resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &indices)
+            .expect("pending edit");
+        assert_eq!(effective["sheet1"][&(1, 1)], effective["sheet1"][&(5, 5)]);
+    }
+
+    #[test]
+    fn resolve_pending_style_attrs_never_mutates_the_index_of_an_untouched_cell() {
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        let indices = vm.cell_style_indices.clone();
+        let (_, effective) = resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &indices)
+            .expect("pending edit");
+        assert_ne!(effective["sheet1"][&(1, 1)], 0);
+        assert!(!effective.get("sheet1").unwrap().contains_key(&(2, 2)));
+    }
+
+    #[test]
+    fn resolve_pending_style_attrs_chains_onto_the_number_format_passs_own_output() {
+        // The mandatory chaining fix: a cell edited by BOTH set_number_format and
+        // set_style before one save must end up with both changes, not just
+        // whichever pass ran last starting fresh from the original bytes.
+        let mut vm = Vm::new();
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "#,##0.00");
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        let (numfmt_xml, numfmt_indices) =
+            resolve_pending_number_formats(&vm, XLSX_STYLES.as_bytes()).expect("pending edit");
+        let (final_xml, final_indices) =
+            resolve_pending_style_attrs(&vm, numfmt_xml.as_bytes(), &numfmt_indices)
+                .expect("pending edit");
+        let idx = final_indices["sheet1"][&(1, 1)] as usize;
+        let xfs = reader::extract_cell_xfs(&final_xml);
+        let xf = &xfs[idx];
+        assert!(xf.contains("numFmtId=\"4\""), "numFmtId lost: {xf}");
+        let font_id = reader::span_attr_u32(xf, "fontId") as usize;
+        let fonts = reader::extract_records(&final_xml, "fonts", "font");
+        assert!(
+            fonts[font_id].contains("<b val=\"1\"/>"),
+            "font edit lost: {}",
+            fonts[font_id]
+        );
+    }
+
+    #[test]
+    fn resolve_pending_style_attrs_alignment_merges_onto_a_real_fixture_shaped_xf() {
+        let source = concat!(
+            "<styleSheet>",
+            "<fonts count=\"1\"><font/></fonts>",
+            "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>",
+            "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>",
+            "<cellStyleXfs count=\"1\"><xf/></cellStyleXfs>",
+            "<cellXfs count=\"1\"><xf><alignment vertical=\"center\"/></xf></cellXfs>",
+            "</styleSheet>",
+        );
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                alignment: Some(reader::AlignmentEdit {
+                    horizontal: Some("center".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        let indices = vm.cell_style_indices.clone();
+        let (new_xml, _) =
+            resolve_pending_style_attrs(&vm, source.as_bytes(), &indices).expect("pending edit");
+        assert!(new_xml.contains("vertical=\"center\""));
+        assert!(new_xml.contains("horizontal=\"center\""));
+    }
+
+    #[test]
+    fn set_style_on_a_from_scratch_vm_survives_a_save_and_reload() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Str("hi".to_string()),
+            },
+        );
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+
+        let path = "/tmp/elixcee_test_set_style_from_scratch.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+
+        let bytes = std::fs::read(path).expect("read output");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open zip");
+        let mut styles_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("xl/styles.xml").expect("styles.xml"),
+            &mut styles_xml,
+        )
+        .expect("read styles.xml");
+        assert!(styles_xml.contains("<b val=\"1\"/>"));
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

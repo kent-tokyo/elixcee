@@ -685,6 +685,31 @@ fn expect_range_ref(obj: ObjectRef, context: &str) -> Result<RangeRef, String> {
     }
 }
 
+/// 0.15.0-B `set_style` fill request -- literal RGB/ARGB only, matching this phase's
+/// scope decision (theme-relative color minting is 0.15.0-C's job; copying an existing
+/// theme color forward when a fill isn't touched at all stays free, since `set_style`
+/// only ever replaces a fill it was actually asked to touch). `color_argb` is already
+/// normalized 8-hex-digit ARGB, same convention as `reader::FontEdit::color_argb` --
+/// normalization from a caller-supplied 6-digit RGB happens at the Python-API boundary.
+#[derive(Debug, Clone)]
+pub struct FillEdit {
+    pub color_argb: String,
+}
+
+/// One cell's accumulated `set_style` request (0.15.0-B) -- each field independently
+/// `Option`, so a cell can receive font/fill/border/alignment/protection edits across
+/// separate `set_style` calls before one save, all preserved. See
+/// `Vm::pending_style_attrs`'s own doc comment for the merge-not-overwrite contract
+/// `set_style_on_sheet` maintains when a cell already has a pending edit.
+#[derive(Debug, Clone, Default)]
+pub struct StyleAttrEdit {
+    pub font: Option<reader::FontEdit>,
+    pub fill: Option<FillEdit>,
+    pub border: Option<reader::BorderEdit>,
+    pub alignment: Option<reader::AlignmentEdit>,
+    pub protection: Option<reader::ProtectionEdit>,
+}
+
 pub struct Vm {
     /// Per-sheet cell storage. Key is sheet name (lowercase for lookup).
     sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
@@ -877,6 +902,20 @@ pub struct Vm {
     /// or cleared by a save, so calling `save_workbook()` twice in a row reproduces the
     /// exact same resolution both times.
     pub(crate) pending_number_formats: HashMap<String, HashMap<(u32, u32), String>>,
+    /// Cells with a `set_style` edit since load (0.15.0-B), not yet resolved into real
+    /// `font`/`fill`/`border`/`cellXf` records -- same deferred-to-save-time shape and
+    /// reasoning as `pending_number_formats` (see that field's own doc comment; the
+    /// starting `xl/styles.xml` document only exists at save time, so there's nothing to
+    /// resolve against any earlier). Unlike `pending_number_formats`, a `StyleAttrEdit`
+    /// is itself a partial request (each of its five fields independently `Option`) --
+    /// `set_style_on_sheet` MERGES a new call's fields onto whatever's already pending
+    /// for that cell rather than overwriting the whole entry, so `set_style(font=...)`
+    /// followed later by `set_style(fill=...)` on the same cell before one save both
+    /// take effect. Resolved by `resolve_pending_style_attrs` (`src/lib.rs`), chained
+    /// AFTER `resolve_pending_number_formats` at save time -- see that function's own
+    /// doc comment for why an independent second pass would silently drop whichever of
+    /// the two features ran first on a cell touched by both.
+    pub(crate) pending_style_attrs: HashMap<String, HashMap<(u32, u32), StyleAttrEdit>>,
     /// Per-sheet whole-tab visibility (P2), keyed the same way as `merged_ranges`.
     /// Populated by `populate_from_sheets` from the reader's `WorkbookSheet::
     /// sheet_state`; sparse like `merged_ranges`/`sheet_visibility` -- only sheets
@@ -1014,6 +1053,7 @@ impl Vm {
             cell_style_indices: HashMap::new(),
             cell_number_formats: HashMap::new(),
             pending_number_formats: HashMap::new(),
+            pending_style_attrs: HashMap::new(),
             sheet_states: HashMap::new(),
             row_heights: HashMap::new(),
             column_widths: HashMap::new(),
@@ -1265,6 +1305,10 @@ impl Vm {
             let shifted = shift_keyed_cell_map(pending, axis, edit);
             self.pending_number_formats.insert(key.to_string(), shifted);
         }
+        if let Some(pending) = self.pending_style_attrs.get(key) {
+            let shifted = shift_keyed_cell_map(pending, axis, edit);
+            self.pending_style_attrs.insert(key.to_string(), shifted);
+        }
     }
 
     /// Shifts `key`'s explicit row heights for a row-axis structural edit
@@ -1475,6 +1519,10 @@ impl Vm {
             let translated = translate_keyed_cell_map(pending, source, d_row, d_col);
             self.pending_number_formats
                 .insert(key.to_string(), translated);
+        }
+        if let Some(pending) = self.pending_style_attrs.get(key) {
+            let translated = translate_keyed_cell_map(pending, source, d_row, d_col);
+            self.pending_style_attrs.insert(key.to_string(), translated);
         }
 
         let snapshot: Vec<((u32, u32), CellContent)> = self
@@ -2069,6 +2117,61 @@ impl Vm {
         }
     }
 
+    /// Records a `set_style` request over `(r1,c1)..(r2,c2)` on `key` (0.15.0-B). Purely
+    /// a pending-edit log, same deferred-to-save-time reasoning as
+    /// `set_number_format_on_sheet` (the starting `xl/styles.xml` document `edit` would
+    /// need to resolve against only exists at save time). Unlike number-format, there is
+    /// no immediate-read side effect to maintain here -- no `get_cell_font`/`get_cell_style`
+    /// API exists yet for a caller to observe.
+    ///
+    /// MERGES `edit`'s fields onto whatever's already pending for each cell rather than
+    /// overwriting the whole entry -- see `StyleAttrEdit`'s own doc comment for why (a
+    /// `set_style(font=...)` call followed by a later `set_style(fill=...)` on the same
+    /// cell, before one save, must not lose the first call's font request).
+    pub fn set_style_on_sheet(
+        &mut self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+        edit: &StyleAttrEdit,
+    ) {
+        let pending = self.pending_style_attrs.entry(key.to_string()).or_default();
+        for row in r1..=r2 {
+            for col in c1..=c2 {
+                let existing = pending.entry((row, col)).or_default();
+                if let Some(font) = &edit.font {
+                    existing
+                        .font
+                        .get_or_insert_with(Default::default)
+                        .merge_from(font);
+                }
+                if edit.fill.is_some() {
+                    existing.fill = edit.fill.clone();
+                }
+                if let Some(border) = &edit.border {
+                    existing
+                        .border
+                        .get_or_insert_with(Default::default)
+                        .merge_from(border);
+                }
+                if let Some(alignment) = &edit.alignment {
+                    existing
+                        .alignment
+                        .get_or_insert_with(Default::default)
+                        .merge_from(alignment);
+                }
+                if let Some(protection) = &edit.protection {
+                    existing
+                        .protection
+                        .get_or_insert_with(Default::default)
+                        .merge_from(protection);
+                }
+            }
+        }
+    }
+
     /// Every hidden row number on `key`, flattened from `hidden_rows`'
     /// interval-run storage into individual 1-based row numbers, sorted and
     /// deduplicated. Expanded, not interval-form -- a pathological
@@ -2638,6 +2741,7 @@ impl Vm {
             self.cell_style_indices.remove(key);
             self.cell_number_formats.remove(key);
             self.pending_number_formats.remove(key);
+            self.pending_style_attrs.remove(key);
             self.sheet_states.remove(key);
             self.row_heights.remove(key);
             self.column_widths.remove(key);
@@ -2762,6 +2866,9 @@ impl Vm {
         if let Some(v) = self.pending_number_formats.remove(&old_key) {
             self.pending_number_formats.insert(new_key.clone(), v);
         }
+        if let Some(v) = self.pending_style_attrs.remove(&old_key) {
+            self.pending_style_attrs.insert(new_key.clone(), v);
+        }
         // 8. `sheet_states`.
         if let Some(v) = self.sheet_states.remove(&old_key) {
             self.sheet_states.insert(new_key.clone(), v);
@@ -2861,6 +2968,9 @@ impl Vm {
         }
         if let Some(v) = self.pending_number_formats.get(&source_key).cloned() {
             self.pending_number_formats.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.pending_style_attrs.get(&source_key).cloned() {
+            self.pending_style_attrs.insert(new_key.clone(), v);
         }
         if let Some(&v) = self.sheet_states.get(&source_key) {
             self.sheet_states.insert(new_key.clone(), v);
@@ -9862,7 +9972,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_sheet_cleans_all_eight_non_identity_per_sheet_maps() {
+    fn delete_sheet_cleans_all_nine_non_identity_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.ensure_sheet("Extra");
         vm.merged_ranges
@@ -9884,6 +9994,19 @@ mod tests {
             "extra".to_string(),
             HashMap::from([((1, 1), "0.00".to_string())]),
         );
+        vm.pending_style_attrs.insert(
+            "extra".to_string(),
+            HashMap::from([(
+                (1, 1),
+                StyleAttrEdit {
+                    font: Some(reader::FontEdit {
+                        bold: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )]),
+        );
         vm.sheet_states
             .insert("extra".to_string(), SheetState::Hidden);
         vm.row_heights
@@ -9899,6 +10022,7 @@ mod tests {
         assert!(!vm.cell_style_indices.contains_key("extra"));
         assert!(!vm.cell_number_formats.contains_key("extra"));
         assert!(!vm.pending_number_formats.contains_key("extra"));
+        assert!(!vm.pending_style_attrs.contains_key("extra"));
         assert!(!vm.sheet_states.contains_key("extra"));
         assert!(!vm.row_heights.contains_key("extra"));
         assert!(!vm.column_widths.contains_key("extra"));
@@ -9958,7 +10082,7 @@ mod tests {
     // ── P1 core 3: Vm::rename_sheet / Vm::move_sheet ─────────────────────────
 
     #[test]
-    fn rename_sheet_updates_all_twelve_per_sheet_maps() {
+    fn rename_sheet_updates_all_thirteen_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -9986,6 +10110,19 @@ mod tests {
             "sheet1".to_string(),
             HashMap::from([((1, 1), "0.00".to_string())]),
         );
+        vm.pending_style_attrs.insert(
+            "sheet1".to_string(),
+            HashMap::from([(
+                (1, 1),
+                StyleAttrEdit {
+                    font: Some(reader::FontEdit {
+                        bold: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )]),
+        );
         vm.sheet_states
             .insert("sheet1".to_string(), SheetState::Hidden);
         vm.row_heights
@@ -10007,6 +10144,8 @@ mod tests {
         assert!(!vm.cell_number_formats.contains_key("sheet1"));
         assert!(vm.pending_number_formats.contains_key("renamed"));
         assert!(!vm.pending_number_formats.contains_key("sheet1"));
+        assert!(vm.pending_style_attrs.contains_key("renamed"));
+        assert!(!vm.pending_style_attrs.contains_key("sheet1"));
         assert_eq!(vm.sheet_states.get("renamed"), Some(&SheetState::Hidden));
         assert!(!vm.sheet_states.contains_key("sheet1"));
         assert_eq!(vm.row_height_on_sheet("renamed", 5), Some(30.0));
@@ -10291,7 +10430,7 @@ mod tests {
     // ── P2: copy_sheet ────────────────────────────────────────────────────
 
     #[test]
-    fn copy_sheet_duplicates_all_ten_per_sheet_maps() {
+    fn copy_sheet_duplicates_all_eleven_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -10319,6 +10458,19 @@ mod tests {
             "sheet1".to_string(),
             HashMap::from([((1, 1), "0.00".to_string())]),
         );
+        vm.pending_style_attrs.insert(
+            "sheet1".to_string(),
+            HashMap::from([(
+                (1, 1),
+                StyleAttrEdit {
+                    font: Some(reader::FontEdit {
+                        bold: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )]),
+        );
         vm.sheet_states
             .insert("sheet1".to_string(), SheetState::VeryHidden);
         vm.row_heights
@@ -10335,6 +10487,7 @@ mod tests {
         assert!(vm.cell_style_indices.contains_key("sheet1"));
         assert!(vm.cell_number_formats.contains_key("sheet1"));
         assert!(vm.pending_number_formats.contains_key("sheet1"));
+        assert!(vm.pending_style_attrs.contains_key("sheet1"));
         assert_eq!(vm.sheet_states.get("sheet1"), Some(&SheetState::VeryHidden));
         assert_eq!(vm.row_height_on_sheet("sheet1", 5), Some(30.0));
         assert_eq!(vm.column_width_on_sheet("sheet1", 3), Some(12.5));
@@ -10348,6 +10501,14 @@ mod tests {
         assert_eq!(vm.cell_style_indices["copy"][&(1, 1)], 3);
         assert_eq!(vm.cell_number_formats["copy"][&(1, 1)], "0.00");
         assert_eq!(vm.pending_number_formats["copy"][&(1, 1)], "0.00");
+        assert_eq!(
+            vm.pending_style_attrs["copy"][&(1, 1)]
+                .font
+                .as_ref()
+                .unwrap()
+                .bold,
+            Some(true)
+        );
         assert_eq!(vm.sheet_states.get("copy"), Some(&SheetState::VeryHidden));
         assert_eq!(vm.row_height_on_sheet("copy", 5), Some(30.0));
         assert_eq!(vm.column_width_on_sheet("copy", 3), Some(12.5));
@@ -11450,6 +11611,193 @@ mod tests {
         let pending = vm.pending_number_formats.get("sheet1").unwrap();
         assert!(!pending.contains_key(&(10, 3)));
         assert_eq!(pending.get(&(8, 3)), Some(&"yyyy-mm-dd".to_string()));
+    }
+
+    // ── 0.15.0-B: Vm::set_style_on_sheet ─────────────────────────────────────────
+
+    #[test]
+    fn set_style_on_sheet_records_a_font_edit() {
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let pending = &vm.pending_style_attrs["sheet1"][&(1, 1)];
+        assert_eq!(pending.font.as_ref().unwrap().bold, Some(true));
+    }
+
+    #[test]
+    fn set_style_on_sheet_applies_to_every_cell_in_the_range() {
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            2,
+            2,
+            &StyleAttrEdit {
+                protection: Some(reader::ProtectionEdit {
+                    locked: Some(false),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let pending = &vm.pending_style_attrs["sheet1"];
+        for cell in [(1, 1), (1, 2), (2, 1), (2, 2)] {
+            assert_eq!(
+                pending[&cell].protection.as_ref().unwrap().locked,
+                Some(false)
+            );
+        }
+    }
+
+    #[test]
+    fn set_style_on_sheet_merges_across_calls_instead_of_overwriting() {
+        // A later fill-only call must not lose an earlier font-only call's request on
+        // the same cell.
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &StyleAttrEdit {
+                fill: Some(FillEdit {
+                    color_argb: "FF4472C4".to_string(),
+                }),
+                ..Default::default()
+            },
+        );
+        let pending = &vm.pending_style_attrs["sheet1"][&(1, 1)];
+        assert_eq!(pending.font.as_ref().unwrap().bold, Some(true));
+        assert_eq!(pending.fill.as_ref().unwrap().color_argb, "FF4472C4");
+    }
+
+    #[test]
+    fn set_style_on_sheet_merges_font_sub_fields_across_calls() {
+        // A later call setting only `color` on the SAME sub-struct (font) must not lose
+        // an earlier call's `bold` on that same sub-struct.
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    color_argb: Some("FFFF0000".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let font = vm.pending_style_attrs["sheet1"][&(1, 1)]
+            .font
+            .as_ref()
+            .unwrap();
+        assert_eq!(font.bold, Some(true));
+        assert_eq!(font.color_argb, Some("FFFF0000".to_string()));
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_shifts_a_pending_style_attr_edit_too() {
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            10,
+            3,
+            10,
+            3,
+            &StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        let pending = vm.pending_style_attrs.get("sheet1").unwrap();
+        assert!(!pending.contains_key(&(10, 3)));
+        assert_eq!(pending[&(8, 3)].font.as_ref().unwrap().bold, Some(true));
+    }
+
+    #[test]
+    fn move_range_on_sheet_translates_a_pending_style_attr_edit_too() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &StyleAttrEdit {
+                fill: Some(FillEdit {
+                    color_argb: "FF00FF00".to_string(),
+                }),
+                ..Default::default()
+            },
+        );
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        let pending = vm.pending_style_attrs.get("sheet1").unwrap();
+        assert!(!pending.contains_key(&(1, 1)));
+        assert_eq!(
+            pending[&(10, 10)].fill.as_ref().unwrap().color_argb,
+            "FF00FF00"
+        );
     }
 
     #[test]

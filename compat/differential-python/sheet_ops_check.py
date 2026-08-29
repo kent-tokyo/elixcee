@@ -510,6 +510,145 @@ class FromScratchVmProducesAnOpenpyxlReadableStylesheet(unittest.TestCase):
             self.assertEqual(ws2["A1"].value, "hello")
 
 
+class SetStyleAgreesWithOpenpyxl(unittest.TestCase):
+    # 0.15.0-B: `set_style(font=..., fill=..., border=..., alignment=..., protection=...)`.
+    # xl/styles.xml was 100% opaque passthrough until 0.15.0-A/B; <fonts>/<fills>/
+    # <borders> are now found-or-appended the same way <cellXfs>/<numFmts> already
+    # were. Fill/border/protection/most-alignment properties have NO real Excel
+    # fixture in this repo (ROADMAP.md's 0.15.0-B entry) -- user-granted exception to
+    # this project's usual "no writer without a real fixture" gate, same basis as
+    # 0.15.0-A's custom-numFmt path: unambiguous ECMA-376 spec shape, no producer
+    # variance. So every case here is verified via openpyxl (a second, independent
+    # OOXML consumer) rather than a real-Excel-authored source file.
+    def test_font_bold_survives_a_save_and_reopens_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "font.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, "hi")
+            vm.set_style("A1", font={"bold": True})
+            vm.save_workbook(out)
+            ws = openpyxl.load_workbook(out).active
+            self.assertTrue(ws["A1"].font.bold)
+
+    def test_font_edit_preserves_a_real_theme_colored_underlined_font(self):
+        # fixture4's real, in-use hyperlink font: underlined, theme-colored, sized --
+        # cloning it while only setting `bold` must not lose the other properties.
+        fixture = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "oracle-excel-com",
+            "fixtures",
+            "pristine",
+            "fixture4_hyperlink_comment_name.xlsm",
+        )
+        with tempfile.TemporaryDirectory() as d:
+            vm = elixcee.load_workbook(fixture)
+            out = os.path.join(d, "font_theme.xlsm")
+            vm.set_style("A1", font={"bold": True})
+            vm.save_workbook(out)
+            xml = zipfile.ZipFile(out).read("xl/styles.xml").decode()
+            self.assertIn('theme="10"', xml)
+
+    def test_solid_fill_uses_fgcolor_and_indexed_64_bgcolor(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "fill.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, "hi")
+            vm.set_style("A1", fill={"type": "solid", "color": "4472C4"})
+            vm.save_workbook(out)
+            ws = openpyxl.load_workbook(out).active
+            self.assertEqual(ws["A1"].fill.fgColor.rgb, "FF4472C4")
+
+    def test_border_touches_only_the_requested_side(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "border.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, "hi")
+            vm.set_style("A1", border={"top": {"style": "thick", "color": "FF000000"}})
+            vm.save_workbook(out)
+            ws = openpyxl.load_workbook(out).active
+            self.assertEqual(ws["A1"].border.top.style, "thick")
+            left = ws["A1"].border.left
+            self.assertTrue(left is None or left.style is None)
+
+    def test_alignment_merges_onto_an_existing_attribute_not_replace(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "align.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, "hi")
+            vm.set_style("A1", alignment={"vertical": "center"})
+            vm.set_style("A1", alignment={"horizontal": "center"})
+            vm.save_workbook(out)
+            ws = openpyxl.load_workbook(out).active
+            self.assertEqual(ws["A1"].alignment.vertical, "center")
+            self.assertEqual(ws["A1"].alignment.horizontal, "center")
+
+    def test_protection_locked_and_hidden(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "protect.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, "hi")
+            vm.set_style("A1", protection={"locked": False, "hidden": True})
+            vm.save_workbook(out)
+            ws = openpyxl.load_workbook(out).active
+            self.assertFalse(ws["A1"].protection.locked)
+            self.assertTrue(ws["A1"].protection.hidden)
+
+    def test_two_calls_on_the_same_cell_accumulate_instead_of_overwriting(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "accum.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, "hi")
+            vm.set_style("A1", font={"bold": True})
+            vm.set_style("A1", fill={"type": "solid", "color": "00FF00"})
+            vm.save_workbook(out)
+            ws = openpyxl.load_workbook(out).active
+            self.assertTrue(ws["A1"].font.bold)
+            self.assertEqual(ws["A1"].fill.fgColor.rgb, "FF00FF00")
+
+    def test_set_number_format_and_set_style_on_the_same_cell_both_survive(self):
+        # The chaining fix: 0.15.0-A's own resolve pass must not be silently
+        # overwritten by 0.15.0-B's, or vice versa, when both touch one cell before
+        # a single save.
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "chain.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, 1234.5)
+            vm.set_number_format("A1", "#,##0.00")
+            vm.set_style("A1", font={"bold": True})
+            vm.save_workbook(out)
+            ws = openpyxl.load_workbook(out).active
+            self.assertEqual(ws["A1"].number_format, "#,##0.00")
+            self.assertTrue(ws["A1"].font.bold)
+
+    def test_does_not_mutate_a_style_shared_with_an_untouched_cell(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "safety.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, "a")
+            vm.set_cell(2, 1, "b")
+            vm.set_style("A1", font={"bold": True})
+            vm.save_workbook(out)
+            ws = openpyxl.load_workbook(out).active
+            self.assertTrue(ws["A1"].font.bold)
+            self.assertIsNot(ws["A2"].font.bold, True)
+
+    def test_a_second_save_reload_cycle_is_stable(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "once.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, "hi")
+            vm.set_style("A1", font={"bold": True}, fill={"type": "solid", "color": "00FF00"})
+            vm.save_workbook(out)
+
+            out2 = os.path.join(d, "twice.xlsx")
+            vm2 = elixcee.load_workbook(out)
+            vm2.save_workbook(out2)
+            ws = openpyxl.load_workbook(out2).active
+            self.assertTrue(ws["A1"].font.bold)
+            self.assertEqual(ws["A1"].fill.fgColor.rgb, "FF00FF00")
+
+
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):
     # Pins the PyO3-layer bound checks that have no Rust unit test of their
     # own (they live in #[cfg(feature = "python")] glue, not Vm-core logic) --
