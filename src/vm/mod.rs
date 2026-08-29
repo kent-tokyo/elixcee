@@ -7,7 +7,7 @@ use crate::parser::ast::{
     SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp,
 };
 use crate::parser::{self, EntrypointResolution};
-use crate::reader::{self, SheetCell, TableDef, WorkbookSheet};
+use crate::reader::{self, SheetCell, TableColumn, TableDef, TableEditOp, WorkbookSheet};
 
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
 /// address helpers below are physically defined in `elixcee-types` (Phase
@@ -1388,14 +1388,183 @@ impl Vm {
                 let new_auto_filter_ref = t
                     .auto_filter_ref
                     .and_then(|r| shift_table_rect(r, axis, edit));
-                Some(TableDef {
+                let mut new_t = TableDef {
                     ref_range: new_ref,
                     auto_filter_ref: new_auto_filter_ref,
                     ..t.clone()
-                })
+                };
+                // 0.16.0-A2: persist the shift, closing the gap 0.16.0-A1 left behind
+                // (in-memory `tables()` already reported it correctly; the saved file
+                // never did). Recorded even if `source_part` is empty -- the writer
+                // simply has nothing to patch in that case, same as any other edit on
+                // a table with no real source part.
+                new_t.pending_edits.push(TableEditOp::Resize(new_ref));
+                if let Some(afr) = new_auto_filter_ref {
+                    new_t.pending_edits.push(TableEditOp::ResizeAutoFilter(afr));
+                }
+                Some(new_t)
             })
             .collect();
         self.tables.insert(key.to_string(), shifted);
+    }
+
+    /// Edits an existing table on `key` (0.16.0-A2) -- rename (`display_name`), resize
+    /// (`ref_range`), restyle, totals-row show/hide, and column add/remove. `name` matches
+    /// against the table's CURRENT `display_name` first, falling back to its legacy `name`
+    /// (the two are usually identical; only `display_name` is ever mutated by this call,
+    /// so `name` stays a stable lookup key across renames).
+    ///
+    /// Mutates the matched `TableDef`'s typed fields directly and immediately (no
+    /// `pending_*` deferred-resolution needed here, unlike `set_style_on_sheet` -- each
+    /// `<table>` is its own independent record, never shared/interned the way `<cellXfs>`
+    /// is), so `tables()` reflects every change right away. The corresponding
+    /// `TableEditOp`s are ALSO recorded on `pending_edits`, applied against the table's
+    /// original raw bytes at save time (`reader::apply_table_edits`) -- see
+    /// `internal_docs/tables-0.16.0-a-design.md`'s A2 Addendum for why a full
+    /// reserialize-from-struct isn't safe (`id`/`xr:uid`/`xr3:uid` and attribute order
+    /// would be silently dropped).
+    ///
+    /// Column ADD only ever appends at the table's right edge (widening `ref` by one
+    /// column); column REMOVE accepts any existing column by name, narrows `ref` by one
+    /// column, and -- matching real Excel's own UI behavior -- deletes every cell in that
+    /// column's full range within the table (header row through totals row, not just the
+    /// data rows) and shifts every column to its right left by one to close the gap.
+    /// Validated fully (every requested column name exists) before any mutation happens,
+    /// matching this codebase's "all-or-nothing" convention for multi-part edits
+    /// (`set_range`).
+    ///
+    /// Structured references/calculated-column authoring remain out of scope entirely
+    /// (milestone-wide exclusion) -- a newly added column has no
+    /// `calculated_column_formula`, and an existing one's formula text is left untouched
+    /// by every operation here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn edit_table_on_sheet(
+        &mut self,
+        key: &str,
+        name: &str,
+        display_name: Option<&str>,
+        ref_range: Option<MergeRect>,
+        style_name: Option<&str>,
+        totals_row_shown: Option<bool>,
+        add_columns: &[String],
+        remove_columns: &[String],
+    ) -> Result<(), String> {
+        let Some(tables) = self.tables.get(key) else {
+            return Err(format!("Sheet '{key}' has no tables"));
+        };
+        let Some(idx) = tables
+            .iter()
+            .position(|t| t.display_name == name || t.name == name)
+        else {
+            return Err(format!("Table '{name}' not found on sheet '{key}'"));
+        };
+        // Validate every requested removal BEFORE mutating anything -- an unknown column
+        // name must reject the whole call, not partially apply.
+        for col_name in remove_columns {
+            if !tables[idx].columns.iter().any(|c| &c.name == col_name) {
+                return Err(format!("Column '{col_name}' not found on table '{name}'"));
+            }
+        }
+
+        // Column removals shift cell data -- collected here (needs the table's CURRENT
+        // ref/column-position state, computed one removal at a time since each shifts
+        // subsequent positions) and applied after the table mutation below releases its
+        // borrow into `self.tables`. `orig_c2` is the table's right boundary BEFORE this
+        // removal narrows it -- the shift bound, not "shift until an empty cell", since a
+        // legitimately blank cell inside the table's own data must not stop the shift early.
+        let mut cell_shifts: Vec<(u32, u32, u32, u32)> = Vec::new(); // (abs_col_removed, row1, row2, orig_c2)
+
+        let tables = self.tables.get_mut(key).expect("checked above");
+        let table = &mut tables[idx];
+
+        if let Some(dn) = display_name {
+            table.display_name = dn.to_string();
+            table
+                .pending_edits
+                .push(TableEditOp::SetDisplayName(dn.to_string()));
+        }
+        if let Some(rect) = ref_range {
+            table.ref_range = rect;
+            table.pending_edits.push(TableEditOp::Resize(rect));
+        }
+        if let Some(sn) = style_name {
+            table.style_name = Some(sn.to_string());
+            table
+                .pending_edits
+                .push(TableEditOp::SetStyle(Some(sn.to_string())));
+        }
+        if let Some(shown) = totals_row_shown {
+            table.totals_row_shown = shown;
+            table
+                .pending_edits
+                .push(TableEditOp::SetTotalsRowShown(shown));
+        }
+        for col_name in remove_columns {
+            let pos = table
+                .columns
+                .iter()
+                .position(|c| &c.name == col_name)
+                .expect("validated above");
+            let ((r1, c1), (r2, c2)) = table.ref_range;
+            let abs_col = c1 + pos as u32;
+            table.columns.remove(pos);
+            table.ref_range = ((r1, c1), (r2, c2.saturating_sub(1)));
+            table
+                .pending_edits
+                .push(TableEditOp::RemoveColumn(col_name.clone()));
+            // `RemoveColumn`'s own XML patch only touches `<tableColumns>` -- the root
+            // `ref` needs its own explicit op, same as any other resize.
+            table
+                .pending_edits
+                .push(TableEditOp::Resize(table.ref_range));
+            cell_shifts.push((abs_col, r1, r2, c2));
+        }
+        for col_name in add_columns {
+            table.columns.push(TableColumn {
+                id: None,
+                name: col_name.clone(),
+                totals_row_function: None,
+                totals_row_label: None,
+                calculated_column_formula: None,
+            });
+            let ((r1, c1), (r2, c2)) = table.ref_range;
+            table.ref_range = ((r1, c1), (r2, c2 + 1));
+            table
+                .pending_edits
+                .push(TableEditOp::AddColumn(col_name.clone()));
+            // Same as RemoveColumn: AddColumn's own XML patch only touches
+            // `<tableColumns>`, ref needs its own explicit resize op.
+            table
+                .pending_edits
+                .push(TableEditOp::Resize(table.ref_range));
+        }
+
+        // Apply each removal's cell-data delete + left-shift, in request order. Full
+        // `CellContent` (formula text included, not just a resolved value) is moved via
+        // direct HashMap remove/insert -- `read_rect`/`write_rect` only carry `Variant`
+        // values and would silently drop a shifted cell's formula. Shifts exactly
+        // `[abs_col+1, orig_c2]`, never further -- bounded by the table's own original
+        // width, not by scanning for the first empty cell (a legitimately blank cell
+        // inside the table's own data must not stop the shift early).
+        let Some(cells) = self.sheet_cells_mut(key) else {
+            return Ok(());
+        };
+        for (abs_col, r1, r2, orig_c2) in cell_shifts {
+            for row in r1..=r2 {
+                cells.remove(&(row, abs_col));
+                for col in (abs_col + 1)..=orig_c2 {
+                    match cells.remove(&(row, col)) {
+                        Some(v) => {
+                            cells.insert((row, col - 1), v);
+                        }
+                        None => {
+                            cells.remove(&(row, col - 1));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Shifts `key`'s hidden-row/column intervals for a structural edit
@@ -16234,6 +16403,8 @@ mod tests {
             columns: vec![],
             style_name: None,
             auto_filter_ref: None,
+            source_part: String::new(),
+            pending_edits: Vec::new(),
         }
     }
 
@@ -16263,6 +16434,241 @@ mod tests {
         let shifted = &vm.tables.get("sheet1").unwrap()[0];
         assert_eq!(shifted.ref_range, ((3, 1), (6, 3)));
         assert_eq!(shifted.auto_filter_ref, Some(((3, 1), (6, 3))));
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_records_a_persistable_edit_for_the_shifted_table() {
+        // Regression: 0.16.0-A1's structural-edit shift updated in-memory `ref_range`/
+        // `auto_filter_ref` (so `tables()` reported correctly) but never recorded
+        // anything for the writer to persist -- the on-disk table1.xml stayed stale.
+        // 0.16.0-A2 closes this by pushing the same TableEditOps a real `edit_table`
+        // resize would.
+        let mut vm = Vm::new();
+        let mut t = sample_table(((1, 1), (4, 3)));
+        t.auto_filter_ref = Some(((1, 1), (4, 3)));
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        vm.insert_rows_on_sheet("sheet1", 1, 2);
+        let edits = &vm.tables.get("sheet1").unwrap()[0].pending_edits;
+        assert!(
+            edits
+                .iter()
+                .any(|e| matches!(e, TableEditOp::Resize(((3, 1), (6, 3)))))
+        );
+        assert!(
+            edits
+                .iter()
+                .any(|e| matches!(e, TableEditOp::ResizeAutoFilter(((3, 1), (6, 3)))))
+        );
+    }
+
+    #[test]
+    fn edit_table_on_sheet_renames_resizes_restyles_and_toggles_totals_row() {
+        let mut vm = Vm::new();
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((1, 1), (4, 3)))]);
+        vm.edit_table_on_sheet(
+            "sheet1",
+            "Table1",
+            Some("Renamed"),
+            Some(((1, 1), (5, 3))),
+            Some("TableStyleLight1"),
+            Some(false),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let t = &vm.tables.get("sheet1").unwrap()[0];
+        assert_eq!(t.display_name, "Renamed");
+        assert_eq!(t.ref_range, ((1, 1), (5, 3)));
+        assert_eq!(t.style_name.as_deref(), Some("TableStyleLight1"));
+        assert!(!t.totals_row_shown);
+        // Every requested change is also recorded for the writer.
+        assert_eq!(t.pending_edits.len(), 4);
+    }
+
+    #[test]
+    fn edit_table_on_sheet_rejects_an_unknown_table_name() {
+        let mut vm = Vm::new();
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((1, 1), (4, 3)))]);
+        let err = vm
+            .edit_table_on_sheet("sheet1", "NoSuchTable", None, None, None, None, &[], &[])
+            .unwrap_err();
+        assert!(err.contains("NoSuchTable"));
+    }
+
+    #[test]
+    fn edit_table_on_sheet_add_column_appends_and_widens_ref() {
+        let mut vm = Vm::new();
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((1, 1), (4, 3)))]);
+        vm.edit_table_on_sheet(
+            "sheet1",
+            "Table1",
+            None,
+            None,
+            None,
+            None,
+            &["Total".to_string()],
+            &[],
+        )
+        .unwrap();
+        let t = &vm.tables.get("sheet1").unwrap()[0];
+        assert_eq!(t.ref_range, ((1, 1), (4, 4)));
+        assert_eq!(t.columns.len(), 1);
+        assert_eq!(t.columns[0].name, "Total");
+        // Regression: AddColumn's own XML patch only touches <tableColumns> -- the
+        // widened ref must ALSO be recorded via its own Resize op, or the persisted
+        // file's <table ref="..."> attribute goes stale while the in-memory struct
+        // (and thus `tables()`) reports the correct, wider value.
+        assert!(
+            t.pending_edits
+                .iter()
+                .any(|e| matches!(e, TableEditOp::Resize(((1, 1), (4, 4)))))
+        );
+    }
+
+    fn table_with_columns(names: &[&str], ref_range: MergeRect) -> TableDef {
+        let mut t = sample_table(ref_range);
+        t.columns = names
+            .iter()
+            .map(|n| TableColumn {
+                id: None,
+                name: n.to_string(),
+                totals_row_function: None,
+                totals_row_label: None,
+                calculated_column_formula: None,
+            })
+            .collect();
+        t
+    }
+
+    #[test]
+    fn edit_table_on_sheet_remove_column_deletes_cells_and_shifts_the_rest_left() {
+        // 3-column table (A=col1..C=col3), header row 1 + one data row 2, removing the
+        // MIDDLE column "B" -- the tricky case: column C's data must shift into B's old
+        // slot, formula and all, not just its resolved value.
+        let mut vm = Vm::new();
+        vm.tables.insert(
+            "sheet1".to_string(),
+            vec![table_with_columns(&["A", "B", "C"], ((1, 1), (2, 3)))],
+        );
+        {
+            let cells = vm.sheet_cells_mut("sheet1").unwrap();
+            cells.insert(
+                (2, 2),
+                CellContent {
+                    formula: None,
+                    value: Variant::Str("b-value".to_string()),
+                },
+            );
+            cells.insert(
+                (2, 3),
+                CellContent {
+                    formula: Some("=1+1".to_string()),
+                    value: Variant::Integer(2),
+                },
+            );
+        }
+        vm.edit_table_on_sheet(
+            "sheet1",
+            "Table1",
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &["B".to_string()],
+        )
+        .unwrap();
+        let t = &vm.tables.get("sheet1").unwrap()[0];
+        assert_eq!(t.ref_range, ((1, 1), (2, 2)));
+        assert_eq!(
+            t.columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A", "C"]
+        );
+        // Same regression as the AddColumn case above: RemoveColumn's XML patch only
+        // touches <tableColumns>, the narrowed ref needs its own Resize op.
+        assert!(
+            t.pending_edits
+                .iter()
+                .any(|e| matches!(e, TableEditOp::Resize(((1, 1), (2, 2)))))
+        );
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        // C's original content (formula included) landed at column 2, B's old slot.
+        let moved = cells.get(&(2, 2)).unwrap();
+        assert_eq!(moved.formula.as_deref(), Some("=1+1"));
+        assert_eq!(moved.value, Variant::Integer(2));
+        // Column 3 (the vacated slot after the shift) is empty, not a stale duplicate.
+        assert!(cells.get(&(2, 3)).is_none());
+    }
+
+    #[test]
+    fn edit_table_on_sheet_remove_column_leaves_a_legitimately_blank_cell_alone_mid_shift() {
+        // Regression: an earlier draft shifted columns by "copy until the source cell is
+        // empty," which would stop early on a genuinely blank cell inside the table's
+        // own data instead of continuing to the table's real right edge.
+        let mut vm = Vm::new();
+        vm.tables.insert(
+            "sheet1".to_string(),
+            vec![table_with_columns(&["A", "B", "C", "D"], ((1, 1), (2, 4)))],
+        );
+        {
+            let cells = vm.sheet_cells_mut("sheet1").unwrap();
+            // Column C (col 3) is left genuinely blank -- no cell inserted at all.
+            cells.insert(
+                (2, 4),
+                CellContent {
+                    formula: None,
+                    value: Variant::Str("d-value".to_string()),
+                },
+            );
+        }
+        vm.edit_table_on_sheet(
+            "sheet1",
+            "Table1",
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &["A".to_string()],
+        )
+        .unwrap();
+        let cells = vm.get_sheet_cells("sheet1").unwrap();
+        // D's value must still reach column 3 (its new slot) despite C being blank.
+        assert_eq!(
+            cells.get(&(2, 3)).unwrap().value,
+            Variant::Str("d-value".to_string())
+        );
+        assert!(cells.get(&(2, 4)).is_none());
+    }
+
+    #[test]
+    fn edit_table_on_sheet_rejects_removing_an_unknown_column_without_touching_anything() {
+        let mut vm = Vm::new();
+        vm.tables.insert(
+            "sheet1".to_string(),
+            vec![table_with_columns(&["A", "B"], ((1, 1), (2, 2)))],
+        );
+        let err = vm
+            .edit_table_on_sheet(
+                "sheet1",
+                "Table1",
+                Some("ShouldNotApply"),
+                None,
+                None,
+                None,
+                &[],
+                &["NoSuchColumn".to_string()],
+            )
+            .unwrap_err();
+        assert!(err.contains("NoSuchColumn"));
+        // All-or-nothing: the rename in the same call must not have partially applied.
+        assert_eq!(vm.tables.get("sheet1").unwrap()[0].display_name, "Table1");
     }
 
     #[test]

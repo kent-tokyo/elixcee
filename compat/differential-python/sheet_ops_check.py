@@ -53,6 +53,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import warnings
 import zipfile
 
 import elixcee
@@ -828,6 +829,108 @@ class TablesAgreeWithOpenpyxl(unittest.TestCase):
         vm.insert_cols(1, amount=1, sheet="Sheet1")
         t = vm.tables("Sheet1")[0]
         self.assertEqual(t["ref"], "B1:D4")
+
+    # 0.16.0-A2: edit_table -- rename/resize/restyle/totals-row/column add-remove.
+    def test_edit_table_rename_preserves_id_and_survives_openpyxl_reopen(self):
+        with zipfile.ZipFile(FIXTURE3) as z:
+            source_table_xml = z.read("xl/tables/table1.xml").decode("utf-8")
+
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.edit_table("テーブル1", display_name="Renamed")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out.xlsx")
+            vm.save_workbook(out)
+            t = elixcee.load_workbook(out).tables("Sheet1")[0]
+            self.assertEqual(t["display_name"], "Renamed")
+            with zipfile.ZipFile(out) as z:
+                out_xml = z.read("xl/tables/table1.xml").decode("utf-8")
+            # id/xr:uid untouched -- surgical patch, not a reserialize.
+            self.assertIn('id="1"', out_xml)
+            for tok in ("xr:uid=", "xr3:uid="):
+                if tok in source_table_xml:
+                    self.assertEqual(
+                        source_table_xml.count(tok), out_xml.count(tok)
+                    )
+            openpyxl.load_workbook(out)  # must not raise
+
+    def test_edit_table_resize_only_touches_the_tables_own_ref(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.edit_table("テーブル1", ref="A1:C5")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out.xlsx")
+            vm.save_workbook(out)
+            t = elixcee.load_workbook(out).tables("Sheet1")[0]
+            self.assertEqual(t["ref"], "A1:C5")
+            self.assertEqual(t["auto_filter_ref"], "A1:C4")  # unaffected
+            openpyxl.load_workbook(out)
+
+    def test_edit_table_style_and_totals_row_toggle(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.edit_table("テーブル1", style_name="TableStyleLight8", totals_row_shown=True)
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out.xlsx")
+            vm.save_workbook(out)
+            t = elixcee.load_workbook(out).tables("Sheet1")[0]
+            self.assertEqual(t["style_name"], "TableStyleLight8")
+            self.assertTrue(t["totals_row_shown"])
+            openpyxl.load_workbook(out)
+
+    def test_edit_table_add_column_appends_at_the_right_edge_and_widens_ref(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.edit_table("テーブル1", add_columns=["Total"])
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out.xlsx")
+            vm.save_workbook(out)
+            t = elixcee.load_workbook(out).tables("Sheet1")[0]
+            self.assertEqual(
+                [c["name"] for c in t["columns"]], ["Name", "Qty", "Status", "Total"]
+            )
+            self.assertEqual(t["ref"], "A1:D4")  # widened, not left stale
+            openpyxl.load_workbook(out)
+
+    def test_edit_table_remove_column_deletes_and_shifts_cell_data_left(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        before_status = [vm.get_range(f"C{r}:C{r}", sheet="Sheet1")[0][0] for r in range(1, 5)]
+        vm.edit_table("テーブル1", remove_columns=["Qty"])
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out.xlsx")
+            vm.save_workbook(out)
+            vm2 = elixcee.load_workbook(out)
+            t = vm2.tables("Sheet1")[0]
+            self.assertEqual([c["name"] for c in t["columns"]], ["Name", "Status"])
+            self.assertEqual(t["ref"], "A1:B4")  # narrowed, not left stale
+            after_b = [vm2.get_range(f"B{r}:B{r}", sheet="Sheet1")[0][0] for r in range(1, 5)]
+            self.assertEqual(after_b, before_status)  # Status shifted from C into B
+            after_c = [vm2.get_range(f"C{r}:C{r}", sheet="Sheet1")[0][0] for r in range(1, 5)]
+            self.assertTrue(all(v is None for v in after_c))  # vacated, not duplicated
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                openpyxl.load_workbook(out)
+                self.assertEqual(w, [])
+
+    def test_edit_table_rejects_unknown_table_or_column_name(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        with self.assertRaises(ValueError):
+            vm.edit_table("NoSuchTable")
+        with self.assertRaises(ValueError):
+            vm.edit_table("テーブル1", remove_columns=["NoSuchColumn"])
+
+    def test_a_structural_edit_shift_is_now_persisted_to_the_saved_file(self):
+        # Regression: 0.16.0-A1's shift updated tables()'s report but never reached the
+        # saved xl/tables/tableN.xml -- 0.16.0-A2 closes this as part of building the
+        # write path 0.16.0-A1 deliberately left untouched.
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.insert_rows(1, amount=2, sheet="Sheet1")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out.xlsx")
+            vm.save_workbook(out)
+            with zipfile.ZipFile(out) as z:
+                out_xml = z.read("xl/tables/table1.xml").decode("utf-8")
+            self.assertIn('ref="A3:C6"', out_xml)
+            t = elixcee.load_workbook(out).tables("Sheet1")[0]
+            self.assertEqual(t["ref"], "A3:C6")
+            self.assertEqual(t["auto_filter_ref"], "A3:C6")
+            openpyxl.load_workbook(out)
 
 
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):
