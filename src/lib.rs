@@ -1823,6 +1823,53 @@ fn carry_over_rels(
         .collect()
 }
 
+/// Rewrites `container_xml` (the raw `<definedNames>...</definedNames>` blob already
+/// cleared to pass through -- see the deletion/move gate right above this function's only
+/// call site) for every sheet rename in `renames`, splicing each `<definedName>` element's
+/// value via `formula::rewrite_defined_name_for_renames` instead of leaving stale text or
+/// dropping the whole container. `CT_DefinedNames` has no attributes of its own (confirmed
+/// against the real XSD -- just a sequence of `<definedName>` children), so the wrapper tag
+/// is always emitted plain; `None` if nothing survives (every child individually dropped) or
+/// if `container_xml` has no `<definedName>` children to rewrite (malformed/empty -- passed
+/// through unchanged is wrong once a rename makes rewriting necessary, but there's nothing
+/// here to rewrite, so the caller's fallback of just not using this path is equivalent).
+///
+/// `extract_defined_name_elements`'s spans are raw XML text, not the value a formula parser
+/// understands (e.g. a concatenation `&` is `&amp;` on the wire) -- unescaped via
+/// `reader::xml_unescape` before handing to `formula::rewrite_defined_name_for_renames`, and
+/// a genuinely rewritten result is escaped back via `xml_escape` before splicing in. An
+/// unchanged value is spliced back RAW (not round-tripped through unescape+escape), so a
+/// source file's own escaping style (e.g. `&#38;` vs `&amp;`, both valid XML for the same
+/// character) survives byte-for-byte when nothing about it needed to change.
+fn rewrite_defined_names_xml(
+    container_xml: &str,
+    renames: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let elements = reader::extract_defined_name_elements(container_xml);
+    if elements.is_empty() {
+        return None;
+    }
+    let mut rebuilt = String::new();
+    for (el, (text_start, text_end)) in &elements {
+        let raw_value = &el[*text_start..*text_end];
+        let unescaped = reader::xml_unescape(raw_value);
+        match formula::rewrite_defined_name_for_renames(&unescaped, renames) {
+            formula::DefinedNameRewrite::Unchanged => rebuilt.push_str(el),
+            formula::DefinedNameRewrite::Rewritten(new_value) => {
+                rebuilt.push_str(&el[..*text_start]);
+                rebuilt.push_str(&xml_escape(&new_value));
+                rebuilt.push_str(&el[*text_end..]);
+            }
+            formula::DefinedNameRewrite::Drop => {}
+        }
+    }
+    if rebuilt.is_empty() {
+        None
+    } else {
+        Some(format!("<definedNames>{}</definedNames>", rebuilt))
+    }
+}
+
 fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     use std::collections::HashMap;
     use std::io::{Cursor, Write};
@@ -2094,22 +2141,30 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     // rather than carried through stale. See OpaqueWorkbookFragments' doc comment.
     // Also dropped if `defined_names_may_be_stale` is set: `move_sheet` reordering
     // `sheet_order` invalidates a positional `localSheetId` exactly like a deletion
-    // does, even though every sheet is still present; `rename_sheet` can leave a
-    // <definedName>'s TEXT (e.g. "Sheet1!$F$5") referencing a name that no longer
-    // exists, even though nothing about position changed. (VBA's
-    // `Sheets.Add(before:=...)` can shift positions the same way without tripping
-    // either check -- a narrower, pre-existing gap this doesn't close; see
-    // ROADMAP.md's known gaps.)
+    // does, even though every sheet is still present. (VBA's `Sheets.Add(before:=...)`
+    // can shift positions the same way without tripping either check -- a narrower,
+    // pre-existing gap this doesn't close; see ROADMAP.md's known gaps.)
+    //
+    // `rename_sheet` no longer forces this wholesale drop -- see
+    // `vm.sheet_renames_since_load` and `rewrite_defined_names_xml` below, which rewrite
+    // a <definedName>'s stale sheet-qualifier TEXT (e.g. "Sheet1!$F$5") in place instead.
     let no_sheet_was_deleted = vm
         .worksheet_origins
         .keys()
         .all(|original_key| vm.sheet_order.contains(original_key));
-    let defined_names = if no_sheet_was_deleted && !vm.defined_names_may_be_stale {
+    let defined_names_raw = if no_sheet_was_deleted && !vm.defined_names_may_be_stale {
         workbook_source_xml
             .as_deref()
             .and_then(|xml| reader::extract_raw_element(xml, "definedNames"))
     } else {
         None
+    };
+    let defined_names = if vm.sheet_renames_since_load.is_empty() {
+        defined_names_raw
+    } else {
+        defined_names_raw
+            .as_deref()
+            .and_then(|xml| rewrite_defined_names_xml(xml, &vm.sheet_renames_since_load))
     };
     let workbook_fragments = OpaqueWorkbookFragments {
         root_attrs: workbook_root_attrs.as_deref(),
@@ -3123,6 +3178,88 @@ mod tests {
         let range = wb.worksheet_range("sheet1").expect("sheet1 should exist");
         let cells: Vec<_> = range.cells().collect();
         assert!(!cells.is_empty(), "saved file should have cells");
+    }
+
+    #[test]
+    fn rewrite_defined_names_xml_rewrites_only_the_renamed_qualifier() {
+        let xml = concat!(
+            "<definedNames>",
+            "<definedName name=\"MyRange\">Sheet1!$A$1:$A$3</definedName>",
+            "<definedName name=\"Other\">Sheet2!$B$1</definedName>",
+            "</definedNames>",
+        );
+        let renames: std::collections::HashMap<String, String> =
+            [("sheet1".to_string(), "Renamed".to_string())]
+                .into_iter()
+                .collect();
+        let out = rewrite_defined_names_xml(xml, &renames).unwrap();
+        assert!(out.contains("<definedName name=\"MyRange\">Renamed!$A$1:$A$3</definedName>"));
+        assert!(out.contains("<definedName name=\"Other\">Sheet2!$B$1</definedName>"));
+    }
+
+    #[test]
+    fn rewrite_defined_names_xml_preserves_print_titles_full_row_and_column() {
+        let xml = concat!(
+            "<definedNames>",
+            "<definedName name=\"_xlnm.Print_Titles\" localSheetId=\"0\">",
+            "Sheet1!$1:$3,Sheet1!$A:$A</definedName>",
+            "</definedNames>",
+        );
+        let renames: std::collections::HashMap<String, String> =
+            [("sheet1".to_string(), "Data".to_string())]
+                .into_iter()
+                .collect();
+        let out = rewrite_defined_names_xml(xml, &renames).unwrap();
+        assert!(out.contains("Data!$1:$3,Data!$A:$A"));
+    }
+
+    #[test]
+    fn rewrite_defined_names_xml_unescapes_and_reescapes_a_formula_value() {
+        // Raw wire form of a value containing `&` -- must be unescaped before
+        // `formula::rewrite_defined_name_for_renames` sees it (a literal "&amp;" isn't
+        // valid formula syntax) and re-escaped in the rewritten result.
+        let xml = concat!(
+            "<definedNames>",
+            "<definedName name=\"X\">Sheet1!$A$1 &amp; \"text\"</definedName>",
+            "</definedNames>",
+        );
+        let renames: std::collections::HashMap<String, String> =
+            [("sheet1".to_string(), "Renamed".to_string())]
+                .into_iter()
+                .collect();
+        let out = rewrite_defined_names_xml(xml, &renames).unwrap();
+        assert!(out.contains("Renamed!$A$1 &amp; &quot;text&quot;"));
+    }
+
+    #[test]
+    fn rewrite_defined_names_xml_drops_only_the_unconfirmable_name() {
+        let xml = concat!(
+            "<definedNames>",
+            "<definedName name=\"Dynamic\">OFFSET(Sheet1!$A$1,0,0,COUNTA(Sheet1!$A:$A),1)</definedName>",
+            "<definedName name=\"Plain\">Sheet1!$B$1</definedName>",
+            "</definedNames>",
+        );
+        let renames: std::collections::HashMap<String, String> =
+            [("sheet1".to_string(), "Renamed".to_string())]
+                .into_iter()
+                .collect();
+        let out = rewrite_defined_names_xml(xml, &renames).unwrap();
+        assert!(!out.contains("Dynamic"));
+        assert!(out.contains("<definedName name=\"Plain\">Renamed!$B$1</definedName>"));
+    }
+
+    #[test]
+    fn rewrite_defined_names_xml_returns_none_when_every_name_is_dropped() {
+        let xml = concat!(
+            "<definedNames>",
+            "<definedName name=\"Dynamic\">OFFSET(Sheet1!$A$1,0,0,COUNTA(Sheet1!$A:$A),1)</definedName>",
+            "</definedNames>",
+        );
+        let renames: std::collections::HashMap<String, String> =
+            [("sheet1".to_string(), "Renamed".to_string())]
+                .into_iter()
+                .collect();
+        assert_eq!(rewrite_defined_names_xml(xml, &renames), None);
     }
 
     #[test]

@@ -874,3 +874,19 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（known-gap 28として追加）、`internal_docs/structured-object-transform-0.14.0-c-scoping.md`（Update note追加）、`internal_docs/openpyxl-gap-audit.md`（既存のAutoFilter行に「preservationは別途修正済み」の注記追加）。
 
 残作業：AutoFilterのVM-effect API（Python-native wrapper）自体は引き続き0.16.0の領分——今回はpreservationのみ。0.14.0-C自体の残り（defined-names/print-area rename保存の可能性）は別途スコーピング中。
+
+## defined-names rename保存の狭いスコープ調査 → 実装（PR、独立実施）
+
+上記のAutoFilter対応と並行して着手した「defined-names/print-area rename保存の可能性」のスコーピングが完了し、ユーザーが「Implement now as standalone PR」を選択したことを受けて実装。
+
+- [x] **スコーピング**：`internal_docs/defined-names-rename-preservation-scoping.md`を新規作成。rename（case 1）はPR #19の`rename_sheet_references`をほぼそのまま再利用できるが、`_xlnm.Print_Titles`の実際の形（`Sheet1!$1:$3,Sheet1!$A:$A`という全行/全列参照のコンマ区切りリスト）は既存のformula parserが一切パースできないと判明——`parse_expr`はトップレベルのコンマ非対応、`parse_ref_corner`は列文字と行番号の両方を必須とするため全行/全列参照が構文エラーになる。move（case 2）とdelete（case 3）は`localSheetId`の位置ベース再計算が必要で、0.10.0-C設計時に「実装コストが高すぎる」として既に一度見送られた判断がそのまま今も有効と確認——scope外に据え置き。
+- [x] **設計判断**：既存の`FormulaParser`（`parse_expr`/`parse_primary`等、実際の数式評価・書き換え全体で使われる共有パーサー）には一切手を加えず、`<definedName>`のTEXT専用の独立した軽量パーサーを新規に書く方針を選択——共有パーサーの改修は「実際の数式評価を不安定化させるリスク」があり、親から「もしリスクが見積もりより大きければ立ち止まって報告せよ」と明示的に指示されていたため、慎重に検討。結論：範囲は狭く（コンマ区切り参照リストのみ、関数呼び出し・演算子は非対応と明示）、共有パーサーには触れないため、報告せず実装を継続。
+- [x] **実装**：
+  - `Vm.sheet_renames_since_load: HashMap<String,String>`（load時点の元シート名→現在の表示名、複数回renameは1エントリに収束）を新規追加。`rename_sheet`はこれまで`defined_names_may_be_stale`をセットしていたが、代わりにこのmapへ記録するよう変更（`move_sheet`側のセットは変更なし——原因が異なる：move側は位置ベースで再計算する術がなく、rename側はTEXTを書き換えられるようになったため）。
+  - `formula::rewrite_defined_name_for_renames`（`src/formula/rewrite.rs`）：まず既存の`rename_sheet_references`（一般的な数式・単一参照に対応）を試し、失敗した場合のみ新規の`rewrite_reference_list_for_renames`（コンマ区切り参照リスト専用、全行/全列参照にも対応）にフォールバック。どちらも判定できない値は、rename対象シート名を含む可能性がある場合のみ個別にdrop（ブロック全体ではなく1エントリのみ）。
+  - `reader::extract_defined_name_elements`：`<definedName>`要素ごとにTEXTのスパンを抽出する新規リーダー関数（`extract_hyperlinks`と同じ手法だが、`<hyperlink>`と異なりTEXT内容を持つ点が異なる）。
+  - `src/lib.rs`の`rewrite_defined_names_xml`：上記を組み合わせ、save時に`<definedNames>`のrenameによる書き換えを実施。XMLエンティティのescape/unescape（`&amp;`等）も正しく処理——生のXML断片をそのままformula parserに渡すと`&amp;`を演算子`&`として解釈できないバグになるところだったが、既存の`xml_unescape`/`xml_escape`を再利用して解決。
+- [x] **検証**：Rustユニットテスト27件新規追加（`formula::rewrite`15件、`reader`3件、`vm`4件の書き換え・回帰pin、`lib.rs`5件のオーケストレーション）＋`tests/xlsx_roundtrip.rs`に実fixtureベース2件（1件は新規、1件は既存テストの更新）。既存テスト`rename_sheet_and_move_sheet_both_flag_defined_names_as_possibly_stale`と`rename_sheet_drops_defined_names_that_would_reference_the_old_name`は、古い（drop一択の）挙動をpinしていたため、新しい正しい挙動を検証するよう更新（退行ではなく改善の反映、このセッション恒例のパターン）。`cargo fmt`／`clippy -D warnings`／`cargo test --lib`（1164件、0 failed）・`tests/xlsx_roundtrip.rs`（49件、うち新規1件・更新1件）／`cargo check --features python`／`cargo audit`／`check-versions.sh`（既知のドリフトのみ）、いずれもクリーン。`maturin develop --release`で実ビルドし、実openpyxlで作成したPrint_Titles付きfixtureと実fixture4/5の両方でrename→save→reload→2回目saveのフルサイクルを確認。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（known-gap 21をpartially-fixedとして更新、0.16.0節のdefined-names項からrename言及を除去）、`internal_docs/defined-names-rename-preservation-scoping.md`（Update note追加）。
+
+残作業：move（`localSheetId`再計算）とdelete（部分保存）は引き続き0.16.0の領分——今回はrenameのみ。

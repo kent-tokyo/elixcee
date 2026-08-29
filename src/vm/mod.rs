@@ -753,19 +753,36 @@ pub struct Vm {
     row_cols: HashMap<u32, BTreeSet<u32>>,
     /// Set to true whenever cells change; triggers index rebuild on next End query.
     cell_index_dirty: bool,
-    /// Set to true by `move_sheet` and `rename_sheet`; once true, `save_xlsx_impl`
-    /// drops any `<definedNames>` passthrough even if no sheet was deleted. Two
-    /// distinct reasons feed this one flag: a `<definedName localSheetId="N">` is
-    /// positional, so `move_sheet` reordering `sheet_order` can silently invalidate
-    /// it; separately, a `<definedName>`'s TEXT can reference a sheet by name (e.g.
-    /// `Sheet1!$F$5`), so `rename_sheet` can leave that text dangling even though
-    /// nothing about *position* changed. Neither case is worth trying to fix
-    /// surgically (rewriting `localSheetId`s, or parsing and rewriting a sheet name
-    /// out of arbitrary defined-name formula text) -- dropped wholesale instead,
-    /// matching the exact same choice already made for a deleted sheet. Never reset
-    /// -- once a session has reordered or renamed a sheet, that workbook's original
-    /// `<definedNames>` can no longer be trusted for its remaining lifetime.
+    /// Set to true by `move_sheet` only; once true, `save_xlsx_impl` drops any
+    /// `<definedNames>` passthrough even if no sheet was deleted. A
+    /// `<definedName localSheetId="N">` is positional, so reordering
+    /// `sheet_order` can silently invalidate it -- rewriting `localSheetId`s
+    /// against the original load-time position order isn't done (no state
+    /// tracks that order today; see
+    /// `internal_docs/defined-names-rename-preservation-scoping.md`'s case 2),
+    /// so dropped wholesale instead, matching the same choice already made
+    /// for a deleted sheet. Never reset -- once a session has reordered a
+    /// sheet, that workbook's original `<definedNames>` can no longer be
+    /// trusted for its remaining lifetime. `rename_sheet` used to also set
+    /// this (a `<definedName>`'s TEXT can reference a sheet by name and go
+    /// stale on rename even without a position change) -- it now instead
+    /// tracks the rename in `sheet_renames_since_load` so `save_xlsx_impl` can
+    /// rewrite that text surgically rather than dropping the whole block.
     pub(crate) defined_names_may_be_stale: bool,
+    /// Sheet renames since load, keyed by each renamed sheet's ORIGINAL
+    /// lowercased name (as it appears in `<definedName>` text inside the
+    /// source file's raw, unmutated `xl/workbook.xml`, re-read fresh at every
+    /// save -- `<definedNames>` is never mirrored into `Vm` state, see
+    /// `save_xlsx_impl`), valued by that sheet's CURRENT display name. Lets
+    /// `save_xlsx_impl` rewrite a `<definedName>`'s stale sheet-qualifier text
+    /// in place instead of dropping the whole `<definedNames>` passthrough on
+    /// any rename (unlike `defined_names_may_be_stale` above, which still
+    /// covers `move_sheet`'s different, position-based staleness). A sheet
+    /// renamed more than once in one session collapses to a single entry
+    /// mapping its original name straight to its final name -- see
+    /// `rename_sheet`'s insertion logic, which detects and updates an
+    /// existing entry rather than chaining a second hop.
+    pub(crate) sheet_renames_since_load: HashMap<String, String>,
     /// Wall-clock deadline for loop execution (Milestone B5a's `test-workbook`
     /// timeout guard). `None` (the default) means no limit — every existing
     /// caller (run-mode, `check`, `snapshot`, Python bindings) is unaffected.
@@ -967,6 +984,7 @@ impl Vm {
             row_cols: HashMap::new(),
             cell_index_dirty: true,
             defined_names_may_be_stale: false,
+            sheet_renames_since_load: HashMap::new(),
             deadline: None,
             loop_iters: 0,
             strict_resolution: false,
@@ -2599,9 +2617,7 @@ impl Vm {
     /// Known, deliberate non-goals (see ROADMAP.md known gaps): does not validate
     /// Excel's 31-char length limit, illegal characters (`: \ / ? * [ ]`), or
     /// reserved names -- matches `set_sheet`'s pre-existing total lack of name
-    /// validation. Does not rewrite `<definedName>` text that refers to this sheet
-    /// by its OLD name -- that mechanism stays out of scope, unlike cell formulas
-    /// below (see `defined_names_may_be_stale`'s own comment further down).
+    /// validation.
     ///
     /// Formula cell-references naming this sheet by its OLD name, workbook-wide,
     /// ARE rewritten to the new one (0.14.0-A2 follow-up --
@@ -2611,6 +2627,15 @@ impl Vm {
     /// rename doesn't change). A formula this parser can't parse at all (external
     /// workbook references, 3D references) is left completely untouched, same as
     /// 0.14.0-A's structural-edit rewrite.
+    ///
+    /// A loaded file's `<definedName>` TEXT that refers to this sheet by its OLD
+    /// name is also tracked here (`sheet_renames_since_load`) so `save_xlsx_impl`
+    /// can rewrite it at save time instead of dropping the whole `<definedNames>`
+    /// passthrough -- see that field's own doc comment for the rewrite-vs-drop
+    /// rules (a value `formula::parse_with_refs` can't parse at all, e.g. an
+    /// unsupported full-column reference inside a dynamic named range's formula,
+    /// is dropped individually rather than left stale or taking the rest of
+    /// `<definedNames>` down with it).
     pub fn rename_sheet(&mut self, old_name: &str, new_name: &str) -> Result<(), String> {
         let old_key = old_name.to_lowercase();
         if !self.sheets.contains_key(&old_key) {
@@ -2676,12 +2701,24 @@ impl Vm {
         // rejected this call if `old_key` were a member, so it's guaranteed absent
         // here -- a re-key step would be unreachable dead code, not a defensive one.
         //
-        // A <definedName>'s TEXT can reference a sheet by name (e.g. "Sheet1!$F$5"),
-        // and this rename doesn't rewrite that text -- so any surviving
-        // <definedNames> passthrough could now dangle. Set unconditionally, even for
-        // a same-name/case-only rename, matching this flag's existing coarse-grained
-        // "drop rather than try to prove it's still safe" precedent.
-        self.defined_names_may_be_stale = true;
+        // Track this rename so `save_xlsx_impl` can rewrite any `<definedName>` TEXT
+        // that names this sheet (e.g. "Sheet1!$F$5") instead of leaving it stale or
+        // dropping the whole `<definedNames>` passthrough. If `old_key` is itself
+        // already a rename TARGET from earlier this session (this sheet was renamed
+        // more than once), update that original entry in place rather than chaining
+        // a second hop -- otherwise the first entry's value would point at a name
+        // that no longer exists, and nothing would point at the final one.
+        match self
+            .sheet_renames_since_load
+            .values_mut()
+            .find(|current| current.to_lowercase() == old_key)
+        {
+            Some(current) => *current = new_name.to_string(),
+            None => {
+                self.sheet_renames_since_load
+                    .insert(old_key, new_name.to_string());
+            }
+        }
         Ok(())
     }
 
@@ -3516,10 +3553,12 @@ impl Vm {
     /// `loaded_workbook_path` is set once, at load time, and never updated
     /// by a save -- so after `save_workbook(new_path)`, this still reads
     /// the original source file, not `new_path`, and will not reflect
-    /// edits made since loading (including a rename/move that set
+    /// edits made since loading (including a `move_sheet` that set
     /// `defined_names_may_be_stale` and caused a later save to drop
-    /// `<definedNames>` entirely -- this method has no way to know that
-    /// happened and keeps reporting the pre-drop names from the source).
+    /// `<definedNames>` entirely, or a `rename_sheet` that caused a later
+    /// save to rewrite some names' sheet-qualifiers and drop others -- this
+    /// method has no way to know any of that happened and keeps reporting
+    /// the original, pre-edit names from the source).
     ///
     /// Sheet-scoped and workbook-scoped names are not distinguished --
     /// both flatten into the same map under their own `name` attribute,
@@ -9950,22 +9989,63 @@ mod tests {
     }
 
     #[test]
-    fn rename_sheet_and_move_sheet_both_flag_defined_names_as_possibly_stale() {
-        // A rename can leave a <definedName>'s TEXT dangling (e.g. "Sheet1!$F$5"
-        // after "Sheet1" is renamed); a reorder can invalidate a positional
-        // localSheetId. Both set the same flag -- caught in review after an
-        // earlier version of this fix only covered move_sheet, missing that
-        // rename_sheet needed to set it too.
+    fn move_sheet_flags_defined_names_as_possibly_stale() {
+        // A reorder can invalidate a positional localSheetId -- no state tracks the
+        // original load-time sheet order to recompute it against, so the whole
+        // <definedNames> passthrough is dropped instead (see the field's own doc
+        // comment for why this differs from rename_sheet below).
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        assert!(!vm.defined_names_may_be_stale);
+        vm.move_sheet("B", 0).unwrap();
+        assert!(vm.defined_names_may_be_stale);
+    }
+
+    #[test]
+    fn rename_sheet_no_longer_flags_defined_names_as_stale_but_tracks_the_rename() {
+        // Superseded behavior: rename_sheet used to set `defined_names_may_be_stale`
+        // too (dropping <definedNames> wholesale on any rename), since a
+        // <definedName>'s TEXT can dangle after a rename. It now instead tracks the
+        // rename so `save_xlsx_impl` can rewrite that text surgically -- see
+        // `internal_docs/defined-names-rename-preservation-scoping.md`.
         let mut vm = Vm::new();
         assert!(!vm.defined_names_may_be_stale);
+        assert!(vm.sheet_renames_since_load.is_empty());
         vm.rename_sheet("Sheet1", "Renamed").unwrap();
-        assert!(vm.defined_names_may_be_stale);
+        assert!(!vm.defined_names_may_be_stale);
+        assert_eq!(
+            vm.sheet_renames_since_load.get("sheet1"),
+            Some(&"Renamed".to_string())
+        );
+    }
 
-        let mut vm2 = Vm::new();
-        vm2.ensure_sheet("B");
-        assert!(!vm2.defined_names_may_be_stale);
-        vm2.move_sheet("B", 0).unwrap();
-        assert!(vm2.defined_names_may_be_stale);
+    #[test]
+    fn rename_sheet_twice_collapses_to_one_entry_mapping_original_to_final_name() {
+        let mut vm = Vm::new();
+        vm.rename_sheet("Sheet1", "Middle").unwrap();
+        vm.rename_sheet("Middle", "Final").unwrap();
+        assert_eq!(vm.sheet_renames_since_load.len(), 1);
+        assert_eq!(
+            vm.sheet_renames_since_load.get("sheet1"),
+            Some(&"Final".to_string())
+        );
+    }
+
+    #[test]
+    fn rename_sheet_tracks_each_distinct_sheet_separately() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("B");
+        vm.rename_sheet("Sheet1", "First").unwrap();
+        vm.rename_sheet("B", "Second").unwrap();
+        assert_eq!(vm.sheet_renames_since_load.len(), 2);
+        assert_eq!(
+            vm.sheet_renames_since_load.get("sheet1"),
+            Some(&"First".to_string())
+        );
+        assert_eq!(
+            vm.sheet_renames_since_load.get("b"),
+            Some(&"Second".to_string())
+        );
     }
 
     // ── 0.14.0-A2 follow-up: rename_sheet rewrites qualifier references ─────

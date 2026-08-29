@@ -32,6 +32,8 @@
 //! range is a follow-up, matching how 0.14.0-A2 extended insert/delete from
 //! same-sheet to workbook-wide after the same-sheet case shipped first.
 
+use std::collections::HashMap;
+
 use super::eval::col_to_letter;
 use super::parser::{RefOccurrence, parse_with_refs};
 
@@ -576,6 +578,207 @@ pub fn rename_sheet_references(
         return Ok(None);
     }
     Ok(Some(apply_patches(&input, patches)))
+}
+
+/// Outcome of `rewrite_defined_name_for_renames` for one `<definedName>`
+/// value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DefinedNameRewrite {
+    /// No tracked rename affects this value -- pass its original text
+    /// through unmodified.
+    Unchanged,
+    /// At least one tracked rename's old sheet-qualifier was found and
+    /// rewritten; carries the new value.
+    Rewritten(String),
+    /// This value could not be confirmed either way (parses under neither
+    /// `parse_with_refs` nor the narrower reference-list grammar below) and
+    /// its text plausibly names one of the renamed sheets -- drop this ONE
+    /// `<definedName>` element rather than risk leaving it stale, matching
+    /// the wholesale-drop precedent this narrows from a whole-file decision
+    /// down to a single name.
+    Drop,
+}
+
+/// Rewrites a `<definedName>` element's raw text value for every sheet rename
+/// tracked in `renames` (`Vm::sheet_renames_since_load`: original lowercased
+/// name -> current display name). Named ranges, and the `_xlnm.Print_Area`/
+/// `_xlnm.Print_Titles` builtins, share this exact same text shape (see
+/// `internal_docs/defined-names-rename-preservation-scoping.md`).
+///
+/// Two paths, tried in order:
+/// 1. The general formula-reference rewriter (`rename_sheet_references`,
+///    itself just `parse_with_refs` plus a qualifier patch) -- handles a
+///    plain single reference/range and a genuine formula-valued name (e.g. a
+///    dynamic named range using `OFFSET`/`INDEX`), the same machinery already
+///    used for formula cells on rename. Can't parse a full-row/full-column
+///    reference or a top-level comma-separated multi-area list.
+/// 2. If that fails to parse the value at all, `rewrite_reference_list_for_renames`:
+///    a narrower grammar covering exactly what path 1 is missing --
+///    comma-separated, optionally sheet-qualified cell/range/full-row/
+///    full-column references, nothing else. This is what real Print_Area
+///    (often multi-area) and Print_Titles (almost always full-row and/or
+///    full-column) values actually look like.
+///
+/// If NEITHER path can make sense of the value, it's left alone only when
+/// none of the tracked renames' old names plausibly appear in it at all;
+/// otherwise it's dropped individually (`Drop`) -- e.g. a dynamic named
+/// range's formula that embeds an unsupported full-column reference inside a
+/// function call, which path 2's grammar correctly refuses (a function call
+/// is not a bare reference list, and text-splicing a qualifier inside syntax
+/// this function doesn't understand is unsafe).
+pub(crate) fn rewrite_defined_name_for_renames(
+    value: &str,
+    renames: &HashMap<String, String>,
+) -> DefinedNameRewrite {
+    if renames.is_empty() {
+        return DefinedNameRewrite::Unchanged;
+    }
+
+    let mut current = value.to_string();
+    let mut changed = false;
+    let mut general_path_failed = false;
+    for (old_key, new_name) in renames {
+        match rename_sheet_references(&current, old_key, new_name) {
+            Ok(Some(rewritten)) => {
+                current = rewritten;
+                changed = true;
+            }
+            Ok(None) => {}
+            Err(_) => {
+                general_path_failed = true;
+                break;
+            }
+        }
+    }
+    if !general_path_failed {
+        return if changed {
+            DefinedNameRewrite::Rewritten(current)
+        } else {
+            DefinedNameRewrite::Unchanged
+        };
+    }
+
+    match rewrite_reference_list_for_renames(value, renames) {
+        Some(rewritten) if rewritten != value => DefinedNameRewrite::Rewritten(rewritten),
+        Some(_) => DefinedNameRewrite::Unchanged,
+        None => {
+            let lower = value.to_lowercase();
+            if renames.keys().any(|old_key| lower.contains(old_key)) {
+                DefinedNameRewrite::Drop
+            } else {
+                DefinedNameRewrite::Unchanged
+            }
+        }
+    }
+}
+
+/// A comma-separated reference-list rewrite: every item is optionally
+/// sheet-qualified, followed by nothing but column letters / row digits /
+/// `$` / `:` -- covers a plain multi-area reference and Print_Titles' full-row
+/// (`$1:$3`) / full-column (`$A:$A`) shapes, none of which `parse_with_refs`
+/// accepts. Returns `None` -- not "unchanged" -- the instant any item falls
+/// outside this narrow grammar, since that means the value is something this
+/// function doesn't understand (already tried and failed as a general formula
+/// via the caller's first path) and text-splicing inside it would be a guess.
+fn rewrite_reference_list_for_renames(
+    value: &str,
+    renames: &HashMap<String, String>,
+) -> Option<String> {
+    let mut out_items = Vec::with_capacity(value.matches(',').count() + 1);
+    for item in value.split(',') {
+        let trimmed = item.trim();
+        match scan_leading_qualifier(trimmed) {
+            Some((raw_qualifier, normalized, rest)) => {
+                if !is_bare_reference_body(&rest) {
+                    return None;
+                }
+                match renames.get(&normalized) {
+                    Some(new_name) => {
+                        out_items.push(format!("{}!{}", format_sheet_qualifier(new_name), rest));
+                    }
+                    None => out_items.push(format!("{}{}", raw_qualifier, rest)),
+                }
+            }
+            None => {
+                if !is_bare_reference_body(trimmed) {
+                    return None;
+                }
+                out_items.push(trimmed.to_string());
+            }
+        }
+    }
+    Some(out_items.join(","))
+}
+
+/// `true` iff every char is a bare reference component (column letters, row
+/// digits, `$`, `:`) -- deliberately excludes `(`, operators, and quotes, so
+/// a genuine function call or expression is rejected rather than
+/// misinterpreted as a reference. Empty is rejected too (a comma-list with an
+/// empty item, e.g. a trailing comma, isn't valid reference-list syntax).
+fn is_bare_reference_body(body: &str) -> bool {
+    !body.is_empty()
+        && body
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '$' || c == ':')
+}
+
+/// Scans `item`'s leading `Sheet!` / `'Sheet Name'!` qualifier, duplicating
+/// (in miniature) the exact same quoting rule as
+/// `FormulaParser::try_parse_sheet_qualifier` (`''` inside a quoted name is a
+/// literal `'`; an unquoted name is Unicode-alphanumeric-or-`_`) -- not reused
+/// directly since that method is private and tied to full formula-expression
+/// parsing, whereas this runs on bare `<definedName>` text that is never a
+/// full formula. Returns `(raw_qualifier_including_bang, normalized_lowercase_name,
+/// rest_of_item)`, or `None` if `item` has no qualifier at all (not an error --
+/// it simply isn't rewritten).
+fn scan_leading_qualifier(item: &str) -> Option<(String, String, String)> {
+    let chars: Vec<char> = item.chars().collect();
+    let (qualifier_len, normalized) = if chars.first() == Some(&'\'') {
+        let mut i = 1;
+        let mut normalized = String::new();
+        loop {
+            match chars.get(i) {
+                Some('\'') if chars.get(i + 1) == Some(&'\'') => {
+                    normalized.push('\'');
+                    i += 2;
+                }
+                Some('\'') => {
+                    i += 1;
+                    break;
+                }
+                Some(c) => {
+                    normalized.push(*c);
+                    i += 1;
+                }
+                None => return None,
+            }
+        }
+        if chars.get(i) != Some(&'!') {
+            return None;
+        }
+        (i + 1, normalized)
+    } else if chars
+        .first()
+        .is_some_and(|c| c.is_alphabetic() || *c == '_')
+    {
+        let mut i = 0;
+        while chars
+            .get(i)
+            .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+        {
+            i += 1;
+        }
+        if chars.get(i) != Some(&'!') {
+            return None;
+        }
+        let normalized = chars[0..i].iter().collect::<String>();
+        (i + 1, normalized)
+    } else {
+        return None;
+    };
+    let raw_qualifier: String = chars[0..qualifier_len].iter().collect();
+    let rest: String = chars[qualifier_len..].iter().collect();
+    Some((raw_qualifier, normalized.to_lowercase(), rest))
 }
 
 #[cfg(test)]
@@ -1158,6 +1361,145 @@ mod tests {
         assert_eq!(
             move_same_sheet("=SUM(B10:A1)", rect(1, 1, 10, 2), 0, 2).unwrap(),
             MoveRewrite::Rewritten("SUM(D10:C1)".to_string())
+        );
+    }
+
+    fn renames(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn defined_name_plain_reference_rewritten_via_the_general_path() {
+        assert_eq!(
+            rewrite_defined_name_for_renames("Sheet1!$F$5", &renames(&[("sheet1", "NewName")])),
+            DefinedNameRewrite::Rewritten("NewName!$F$5".to_string())
+        );
+    }
+
+    #[test]
+    fn defined_name_referencing_an_unrelated_sheet_is_unchanged() {
+        assert_eq!(
+            rewrite_defined_name_for_renames("Sheet2!$F$5", &renames(&[("sheet1", "NewName")])),
+            DefinedNameRewrite::Unchanged
+        );
+    }
+
+    #[test]
+    fn defined_name_with_no_tracked_renames_is_unchanged() {
+        assert_eq!(
+            rewrite_defined_name_for_renames("Sheet1!$F$5", &HashMap::new()),
+            DefinedNameRewrite::Unchanged
+        );
+    }
+
+    #[test]
+    fn defined_name_print_titles_style_full_row_and_column_rewritten() {
+        // Print_Titles' real-world shape: a full-row spec and a full-column spec,
+        // comma-joined, both qualified to the same sheet -- exactly what
+        // `parse_with_refs` cannot parse (no top-level comma, no full-row/column refs).
+        assert_eq!(
+            rewrite_defined_name_for_renames(
+                "Sheet1!$1:$3,Sheet1!$A:$A",
+                &renames(&[("sheet1", "Data")])
+            ),
+            DefinedNameRewrite::Rewritten("Data!$1:$3,Data!$A:$A".to_string())
+        );
+    }
+
+    #[test]
+    fn defined_name_multi_area_print_area_rewritten() {
+        assert_eq!(
+            rewrite_defined_name_for_renames(
+                "Sheet1!$A$1:$B$2,Sheet1!$D$1:$E$2",
+                &renames(&[("sheet1", "Renamed")])
+            ),
+            DefinedNameRewrite::Rewritten("Renamed!$A$1:$B$2,Renamed!$D$1:$E$2".to_string())
+        );
+    }
+
+    #[test]
+    fn defined_name_multi_area_only_rewrites_the_matching_sheet() {
+        assert_eq!(
+            rewrite_defined_name_for_renames(
+                "Sheet1!$A$1,Sheet2!$B$2",
+                &renames(&[("sheet1", "Renamed")])
+            ),
+            DefinedNameRewrite::Rewritten("Renamed!$A$1,Sheet2!$B$2".to_string())
+        );
+    }
+
+    #[test]
+    fn defined_name_quoted_sheet_name_with_escaped_quote_rewritten() {
+        assert_eq!(
+            rewrite_defined_name_for_renames(
+                "'My ''Old'' Sheet'!$A$1:$B$2",
+                &renames(&[("my 'old' sheet", "New Sheet")])
+            ),
+            DefinedNameRewrite::Rewritten("'New Sheet'!$A$1:$B$2".to_string())
+        );
+    }
+
+    #[test]
+    fn defined_name_multi_area_with_no_matching_rename_is_unchanged() {
+        assert_eq!(
+            rewrite_defined_name_for_renames(
+                "Sheet2!$1:$3,Sheet2!$A:$A",
+                &renames(&[("sheet1", "Data")])
+            ),
+            DefinedNameRewrite::Unchanged
+        );
+    }
+
+    #[test]
+    fn defined_name_unparseable_value_mentioning_the_renamed_sheet_is_dropped() {
+        // A dynamic named range embedding a full-column reference inside a function
+        // call -- not a bare reference list (rejected by the `(` inside it), and not
+        // parseable by `parse_with_refs` either (full-column ref). Mentions the
+        // renamed sheet, so it can't be confirmed safe to leave untouched.
+        assert_eq!(
+            rewrite_defined_name_for_renames(
+                "OFFSET(Sheet1!$A$1,0,0,COUNTA(Sheet1!$A:$A),1)",
+                &renames(&[("sheet1", "Data")])
+            ),
+            DefinedNameRewrite::Drop
+        );
+    }
+
+    #[test]
+    fn defined_name_unparseable_value_not_mentioning_any_renamed_sheet_is_unchanged() {
+        assert_eq!(
+            rewrite_defined_name_for_renames(
+                "OFFSET(Sheet3!$A$1,0,0,COUNTA(Sheet3!$A:$A),1)",
+                &renames(&[("sheet1", "Data")])
+            ),
+            DefinedNameRewrite::Unchanged
+        );
+    }
+
+    #[test]
+    fn defined_name_dynamic_range_with_simple_refs_rewritten_via_general_path() {
+        // No full-column/row refs here, so `parse_with_refs` handles the whole
+        // formula -- the general path, not the reference-list fallback.
+        assert_eq!(
+            rewrite_defined_name_for_renames(
+                "OFFSET(Sheet1!$A$1,0,0,10,1)",
+                &renames(&[("sheet1", "Data")])
+            ),
+            DefinedNameRewrite::Rewritten("OFFSET(Data!$A$1,0,0,10,1)".to_string())
+        );
+    }
+
+    #[test]
+    fn defined_name_multiple_renames_chained_in_one_pass() {
+        assert_eq!(
+            rewrite_defined_name_for_renames(
+                "Sheet1!$A$1,Sheet2!$B$2",
+                &renames(&[("sheet1", "First"), ("sheet2", "Second")])
+            ),
+            DefinedNameRewrite::Rewritten("First!$A$1,Second!$B$2".to_string())
         );
     }
 }
