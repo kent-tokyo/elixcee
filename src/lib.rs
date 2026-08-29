@@ -1813,6 +1813,88 @@ impl PyVm {
         Ok(())
     }
 
+    /// Edits an existing table (0.16.0-A2) — rename, resize, restyle, totals-row
+    /// show/hide, and column add/remove. Every parameter but *name* defaults to "don't
+    /// change" — pass only what you want to edit.
+    ///
+    /// *name* matches the table's current ``display_name`` first, falling back to its
+    /// legacy ``name`` — the two are normally identical; only ``display_name`` is ever
+    /// changed by *display_name* here.
+    ///
+    /// *add_columns* only ever appends new, empty columns at the table's right edge
+    /// (no mid-table insertion). *remove_columns* accepts any existing column by name,
+    /// in any position — matching real Excel's own UI behavior, this **deletes every
+    /// cell value in that column's full range within the table** (header row through
+    /// totals row, not just the data rows) and shifts every column to its right left by
+    /// one to close the gap. The whole call is validated before anything is touched: an
+    /// unknown column name in *remove_columns* rejects the entire call, not just that
+    /// one column.
+    ///
+    /// Not supported: creating a new table (0.16.0-A3, separate future phase),
+    /// structured references or calculated-column authoring (out of scope for all of
+    /// 0.16.0-A — an existing calculated column's formula text is left untouched),
+    /// mid-table column insertion, or removing/renaming the table's own ``name``
+    /// (only ``display_name`` is editable).
+    ///
+    /// Parameters
+    /// ----------
+    /// name:
+    ///     The table to edit, by its current ``display_name`` or ``name``.
+    /// sheet:
+    ///     Sheet the table is on. Defaults to the active sheet.
+    /// display_name:
+    ///     New display name, or ``None`` to leave unchanged.
+    /// ref:
+    ///     New bounding range, e.g. ``"A1:D10"``, or ``None`` to leave unchanged.
+    /// style_name:
+    ///     New table style name, or ``None`` to leave unchanged. There is no way to
+    ///     clear an existing style back to "none" in this version.
+    /// totals_row_shown:
+    ///     Show/hide the totals row, or ``None`` to leave unchanged.
+    /// add_columns:
+    ///     Names of new columns to append at the right edge, in order.
+    /// remove_columns:
+    ///     Names of existing columns to remove, in any order — see the data-loss note
+    ///     above.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown, *name* doesn't match any table on
+    /// it, *ref* is a bad address, or *remove_columns* names a column the table doesn't
+    /// have.
+    #[pyo3(signature = (name, sheet = None, display_name = None, r#ref = None, style_name = None, totals_row_shown = None, add_columns = None, remove_columns = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn edit_table(
+        &mut self,
+        name: &str,
+        sheet: Option<&str>,
+        display_name: Option<&str>,
+        r#ref: Option<&str>,
+        style_name: Option<&str>,
+        totals_row_shown: Option<bool>,
+        add_columns: Option<Vec<String>>,
+        remove_columns: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let ref_range = r#ref
+            .map(validate_range_addr)
+            .transpose()
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .edit_table_on_sheet(
+                &key,
+                name,
+                display_name,
+                ref_range,
+                style_name,
+                totals_row_shown,
+                &add_columns.unwrap_or_default(),
+                &remove_columns.unwrap_or_default(),
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Every hidden row number on a sheet, as a sorted list of 1-based row
     /// numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.
     ///
@@ -2563,6 +2645,18 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         let prunable_parts =
             deleted_sheet_prunable_parts(&raw_entries, &vm.worksheet_origins, &sheet_names);
 
+        // 0.16.0-A2: `edit_table`/structural-edit shifts record `TableEditOp`s against
+        // the table's own `source_part` rather than mutating `xl/tables/*.xml` directly
+        // (surgical patch, not reserialize -- see `TableDef::pending_edits`'s doc
+        // comment). Keyed by part path since each table part is 1:1 with one `TableDef`.
+        let table_edits: std::collections::HashMap<&str, &[reader::TableEditOp]> = vm
+            .tables
+            .values()
+            .flatten()
+            .filter(|t| !t.pending_edits.is_empty() && !t.source_part.is_empty())
+            .map(|t| (t.source_part.as_str(), t.pending_edits.as_slice()))
+            .collect();
+
         for (name, bytes) in &raw_entries {
             if is_writer_owned_part(name) {
                 continue;
@@ -2575,7 +2669,14 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             if prunable_parts.contains(name) {
                 continue;
             }
-            passthrough.push((name.clone(), bytes.clone()));
+            let bytes = match table_edits.get(name.as_str()) {
+                Some(edits) => {
+                    let xml = String::from_utf8_lossy(bytes);
+                    reader::apply_table_edits(&xml, edits).into_bytes()
+                }
+                None => bytes.clone(),
+            };
+            passthrough.push((name.clone(), bytes));
 
             // Resolve this part's real declared content type from the source's
             // own [Content_Types].xml — exact Override first, then extension
