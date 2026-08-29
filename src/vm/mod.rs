@@ -858,17 +858,22 @@ pub struct Vm {
     /// Per-sheet, per-row explicit height in points (P2), keyed the same way as
     /// `merged_ranges`. Populated by `populate_from_sheets` from the reader's
     /// `WorkbookSheet::row_heights`; sparse -- only rows with an explicit
-    /// `customHeight="1"` height get an entry. Read-only this round: the writer
-    /// unconditionally regenerates `<row>` from `sheet_visibility` alone, so a
-    /// loaded file's row heights are dropped on EVERY save today, not just
-    /// sometimes -- see docs/openpyxl-gap-audit.md and ROADMAP.md's known gaps.
+    /// `customHeight="1"` height get an entry. No Python write API yet
+    /// (`set_row_height` needs a real fixture with genuine custom-height data to
+    /// validate that from-scratch writer shape against, which this repo doesn't
+    /// have) -- but an already-loaded value now survives a save (writer fix,
+    /// see `ROADMAP.md`'s known gaps item 26) and shifts on a row-axis
+    /// structural edit (0.14.0-B Tier 2, `shift_row_heights_for_structural_edit`).
+    /// Deliberately NOT touched by `move_range_on_sheet` -- a row height belongs
+    /// to the row itself, not to the cell content that moves through it, same
+    /// reasoning as `sheet_visibility`.
     pub(crate) row_heights: HashMap<String, HashMap<u32, f64>>,
     /// Per-sheet column width ranges in "characters" (P2), 1-based inclusive
     /// `(min, max, width)`, keyed the same way as `merged_ranges`/`row_heights`.
     /// Populated by `populate_from_sheets` from the reader's
-    /// `WorkbookSheet::column_widths`. Read-only this round, same writer gap as
-    /// `row_heights` above (the writer unconditionally regenerates `<cols>`
-    /// from `sheet_visibility` alone).
+    /// `WorkbookSheet::column_widths`. Same write-API/preservation/transform
+    /// status as `row_heights` above, on the column axis instead
+    /// (`shift_column_widths_for_structural_edit`).
     pub(crate) column_widths: HashMap<String, Vec<(u32, u32, f64)>>,
     /// Per-sheet origin facts (0.10.0-A), keyed the same way as `merged_ranges`.
     /// Populated unconditionally by `populate_from_sheets` for every sheet that came from
@@ -1223,6 +1228,66 @@ impl Vm {
         }
     }
 
+    /// Shifts `key`'s explicit row heights for a row-axis structural edit
+    /// (0.14.0-B Tier 2). Row-axis only by construction -- unlike merges/
+    /// hidden intervals, a row height has no column dimension to be affected
+    /// by a column-axis edit, so this is only ever called from
+    /// `insert_rows_on_sheet`/`delete_rows_on_sheet`, never the `_cols_`
+    /// siblings. Reuses `formula::shift_cell_coord` (single-index shape,
+    /// matching `cell_style_indices`'s single-cell shape more than a range's).
+    /// No range-move counterpart -- a row height belongs to the row itself,
+    /// not to the cell content that moves through it, same reasoning as
+    /// `sheet_visibility` (0.14.0-B Phase 3).
+    fn shift_row_heights_for_structural_edit(&mut self, key: &str, edit: formula::StructuralEdit) {
+        let Some(heights) = self.row_heights.get(key) else {
+            return;
+        };
+        let mut shifted = HashMap::new();
+        for (&row, &height) in heights {
+            match formula::shift_cell_coord(row, edit) {
+                formula::CellShift::Unchanged => {
+                    shifted.insert(row, height);
+                }
+                formula::CellShift::Deleted => {}
+                formula::CellShift::Moved(new_row) => {
+                    shifted.insert(new_row, height);
+                }
+            }
+        }
+        self.row_heights.insert(key.to_string(), shifted);
+    }
+
+    /// Column-axis mirror of `shift_row_heights_for_structural_edit` --
+    /// column-axis only by construction, only ever called from
+    /// `insert_cols_on_sheet`/`delete_cols_on_sheet`. `column_widths` is
+    /// range-shaped (`(min, max, width)`, like `merged_ranges`'s column
+    /// dimension), so this reuses `shift_bound_low`/`shift_bound_high`
+    /// instead -- no degenerate-size drop needed, unlike a merge: a
+    /// single-column width entry is perfectly ordinary. No range-move
+    /// counterpart, same reasoning as row heights above.
+    fn shift_column_widths_for_structural_edit(
+        &mut self,
+        key: &str,
+        edit: formula::StructuralEdit,
+    ) {
+        let Some(widths) = self.column_widths.get(key) else {
+            return;
+        };
+        let shifted: Vec<(u32, u32, f64)> = widths
+            .iter()
+            .filter_map(|&(min, max, width)| {
+                let new_low = formula::shift_bound_low(min, edit);
+                let new_high = formula::shift_bound_high(max, edit);
+                if new_low as i64 > new_high {
+                    None
+                } else {
+                    Some((new_low, new_high as u32, width))
+                }
+            })
+            .collect();
+        self.column_widths.insert(key.to_string(), shifted);
+    }
+
     /// Rewrites every formula reference qualified with `old_key` (workbook-wide,
     /// regardless of which sheet hosts the formula) to name `new_name` instead --
     /// `formula::rename_sheet_references`, see its own doc comment for the exact
@@ -1274,8 +1339,9 @@ impl Vm {
     /// with their cell too (0.14.0-B Phase 4, see `translate_keyed_cell_map`)
     /// -- no ambiguous-overlap case is possible there, a point is either
     /// inside `source` or it isn't. `sheet_visibility` (hidden row/column
-    /// state) deliberately never moves here -- it belongs to the row/column
-    /// itself, not to the cell content that moves through it. Cached
+    /// state) and `row_heights`/`column_widths` (0.14.0-B Tier 2) deliberately
+    /// never move here -- all three belong to the row/column itself, not to
+    /// the cell content that moves through it. Cached
     /// `.value`s are left stale, same as every other structural edit in this
     /// engine -- recalculation is always the caller's job.
     ///
@@ -1393,13 +1459,10 @@ impl Vm {
     /// `insert_rows(..., sheet=None)`). `insert_rows` below just forwards here with
     /// `key = active_sheet` -- VBA's `RowColInsert`/`RangeInsert` call sites don't
     /// change at all. Shifts same-sheet formula cell-references (0.14.0-A -- see
-    /// `rewrite_formulas_for_structural_edit`), merges (0.14.0-B Phase 2 -- see
-    /// `shift_merged_ranges_for_structural_edit`), same-axis hidden row/column
-    /// intervals (0.14.0-B Phase 3 -- see `shift_hidden_intervals_for_structural_edit`),
-    /// and per-cell styles/number formats (0.14.0-B Phase 4 -- see
-    /// `shift_cell_metadata_for_structural_edit`). All four of 0.14.0-B's Tier 1
-    /// metadata fields now shift on structural edit. Cached `.value`s are left stale,
-    /// same as any other edit -- callers that need fresh values already call
+    /// `rewrite_formulas_for_structural_edit`), merges/hidden-intervals/styles/
+    /// number-formats (0.14.0-B Tier 1, all four fields), and row heights (0.14.0-B
+    /// Tier 2 -- see `shift_row_heights_for_structural_edit`). Cached `.value`s are
+    /// left stale, same as any other edit -- callers that need fresh values already call
     /// `recalculate_all()` themselves.
     pub fn insert_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         let edit = formula::StructuralEdit::Insert { at: first, count };
@@ -1407,6 +1470,7 @@ impl Vm {
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_row_heights_for_structural_edit(key, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -1449,6 +1513,7 @@ impl Vm {
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_row_heights_for_structural_edit(key, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1488,6 +1553,7 @@ impl Vm {
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_column_widths_for_structural_edit(key, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1520,6 +1586,7 @@ impl Vm {
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_column_widths_for_structural_edit(key, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -11226,6 +11293,121 @@ mod tests {
             vm.cell_style_indices.get("sheet1").unwrap().get(&(10, 10)),
             Some(&1)
         );
+    }
+
+    // ── 0.14.0-B Tier 2: row_heights/column_widths transform ─────────────
+
+    #[test]
+    fn insert_rows_on_sheet_shifts_a_row_height_at_or_after_the_insertion_point() {
+        let mut vm = Vm::new();
+        vm.row_heights
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert(10, 30.5);
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        let heights = vm.row_heights.get("sheet1").unwrap();
+        assert!(!heights.contains_key(&10));
+        assert_eq!(heights.get(&12), Some(&30.5));
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_drops_a_row_height_inside_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.row_heights
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert(5, 30.5);
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        assert!(!vm.row_heights.get("sheet1").unwrap().contains_key(&5));
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_never_touches_row_heights() {
+        let mut vm = Vm::new();
+        vm.row_heights
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert(10, 30.5);
+        vm.insert_cols_on_sheet("sheet1", 1, 5);
+        assert_eq!(vm.row_heights.get("sheet1").unwrap().get(&10), Some(&30.5));
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_shifts_a_column_width_at_or_after_the_insertion_point() {
+        let mut vm = Vm::new();
+        vm.column_widths
+            .entry("sheet1".to_string())
+            .or_default()
+            .push((10, 10, 12.5));
+        vm.insert_cols_on_sheet("sheet1", 5, 2);
+        assert_eq!(
+            vm.column_widths.get("sheet1").unwrap(),
+            &vec![(12, 12, 12.5)]
+        );
+    }
+
+    #[test]
+    fn delete_cols_on_sheet_shrinks_a_column_width_range_partially_overlapping_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.column_widths
+            .entry("sheet1".to_string())
+            .or_default()
+            .push((3, 6, 12.5)); // columns C:F
+        vm.delete_cols_on_sheet("sheet1", 4, 1); // delete column D only
+        assert_eq!(vm.column_widths.get("sheet1").unwrap(), &vec![(3, 5, 12.5)]);
+    }
+
+    #[test]
+    fn delete_cols_on_sheet_drops_a_column_width_entirely_covered_by_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.column_widths
+            .entry("sheet1".to_string())
+            .or_default()
+            .push((3, 4, 12.5));
+        vm.delete_cols_on_sheet("sheet1", 1, 10);
+        assert_eq!(vm.column_widths.get("sheet1").unwrap(), &Vec::new());
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_never_touches_column_widths() {
+        let mut vm = Vm::new();
+        vm.column_widths
+            .entry("sheet1".to_string())
+            .or_default()
+            .push((3, 4, 12.5));
+        vm.insert_rows_on_sheet("sheet1", 1, 5);
+        assert_eq!(vm.column_widths.get("sheet1").unwrap(), &vec![(3, 4, 12.5)]);
+    }
+
+    #[test]
+    fn move_range_on_sheet_never_touches_row_heights_or_column_widths() {
+        // Both belong to the row/column itself, not to the cell content
+        // moving through it -- a range move has nothing to do here, same
+        // reasoning already established for sheet_visibility (Phase 3).
+        let mut vm = Vm::new();
+        vm.row_heights
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert(5, 30.5);
+        vm.column_widths
+            .entry("sheet1".to_string())
+            .or_default()
+            .push((5, 5, 12.5));
+        vm.write_rect("sheet1", (5, 5), &[vec![Variant::Integer(1)]]);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 5,
+                c1: 5,
+                r2: 5,
+                c2: 5,
+            },
+            50,
+            50,
+        )
+        .unwrap();
+        assert_eq!(vm.row_heights.get("sheet1").unwrap().get(&5), Some(&30.5));
+        assert_eq!(vm.column_widths.get("sheet1").unwrap(), &vec![(5, 5, 12.5)]);
     }
 
     #[test]

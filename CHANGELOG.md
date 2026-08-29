@@ -1003,6 +1003,17 @@ work above, requested and fixed directly rather than as part of that phased plan
   silently claimed as fully verified, matching the precedent set by the
   formula-empty-cached-value fix.
 
+### Root crate: row height / column width transform (0.14.0-B Tier 2, unblocked by the fix above)
+
+`insert_rows`/`delete_rows` now shift `row_heights`; `insert_cols`/`delete_cols` now shift
+`column_widths` — the last two 0.14.0-B fields, closing Tier 2. Axis-only by construction
+(a row edit can't affect column widths and vice versa) and, like `sheet_visibility`, never
+touched by `move_range` — both belong to the row/column itself, not to moving cell content.
+Row heights reuse `shift_cell_coord` (single-index shape); column widths reuse
+`shift_bound_low`/`shift_bound_high` (range shape, no degenerate-size drop needed — a
+single-column width is ordinary, unlike a merge). 8 new `Vm`-level unit tests; verified
+against the built Python extension including a save/reload round trip.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
