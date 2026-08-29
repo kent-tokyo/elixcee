@@ -1006,7 +1006,7 @@ fn write_rect_on_a_real_fixture_survives_a_save_without_disturbing_existing_stat
         "the fixture's pre-existing B1:C1 merge must survive: {out_sheet1}"
     );
     assert!(
-        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        out_sheet1.contains(r#"min="4" max="4" customWidth="1" width="0" hidden="1""#),
         "the fixture's pre-existing hidden column D must survive: {out_sheet1}"
     );
     assert!(
@@ -1046,7 +1046,7 @@ fn rename_sheet_round_trips_merge_and_hidden_metadata_on_the_real_fixture() {
         "the fixture's pre-existing B1:C1 merge must survive a rename: {out_sheet1}"
     );
     assert!(
-        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        out_sheet1.contains(r#"min="4" max="4" customWidth="1" width="0" hidden="1""#),
         "the fixture's pre-existing hidden column D must survive a rename: {out_sheet1}"
     );
     assert!(
@@ -1150,7 +1150,7 @@ fn insert_rows_on_a_merged_and_hidden_row_sheet_shifts_the_merge_and_same_axis_h
         "the stale, pre-shift merge ref must not also still be present: {out_sheet1}"
     );
     assert!(
-        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        out_sheet1.contains(r#"min="4" max="4" customWidth="1" width="0" hidden="1""#),
         "hidden column D marker must be unchanged -- column shifting is not this axis: {out_sheet1}"
     );
     assert!(
@@ -1263,7 +1263,7 @@ fn sort_range_on_sheet_survives_a_save_and_does_not_disturb_unrelated_state() {
         "the fixture's pre-existing B1:C1 merge must survive a sort elsewhere on the sheet: {out_sheet1}"
     );
     assert!(
-        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        out_sheet1.contains(r#"min="4" max="4" customWidth="1" width="0" hidden="1""#),
         "the fixture's pre-existing hidden column D must survive a sort elsewhere on the sheet: {out_sheet1}"
     );
     assert!(
@@ -1310,7 +1310,7 @@ fn set_row_hidden_and_set_column_hidden_round_trip_on_the_real_fixture() {
         "the newly-hidden row 20 must be saved: {out_sheet1_1}"
     );
     assert!(
-        out_sheet1_1.contains(r#"min="4" max="4" hidden="1""#),
+        out_sheet1_1.contains(r#"min="4" max="4" customWidth="1" width="0" hidden="1""#),
         "the fixture's pre-existing hidden column D must survive: {out_sheet1_1}"
     );
     assert!(
@@ -1340,7 +1340,7 @@ fn set_row_hidden_and_set_column_hidden_round_trip_on_the_real_fixture() {
         "the fixture's pre-existing B1:C1 merge must survive unhiding an unrelated row: {out_sheet1_2}"
     );
     assert!(
-        out_sheet1_2.contains(r#"min="4" max="4" hidden="1""#),
+        out_sheet1_2.contains(r#"min="4" max="4" customWidth="1" width="0" hidden="1""#),
         "the fixture's pre-existing hidden column D must survive unhiding an unrelated row: {out_sheet1_2}"
     );
 
@@ -1383,7 +1383,7 @@ fn copy_sheet_round_trips_merge_and_hidden_metadata_on_the_real_fixture() {
         "the original's merge must survive being copied from: {out_sheet1}"
     );
     assert!(
-        out_sheet1.contains(r#"min="4" max="4" hidden="1""#),
+        out_sheet1.contains(r#"min="4" max="4" customWidth="1" width="0" hidden="1""#),
         "the original's hidden column must survive being copied from: {out_sheet1}"
     );
 
@@ -1404,7 +1404,7 @@ fn copy_sheet_round_trips_merge_and_hidden_metadata_on_the_real_fixture() {
         "the copy must carry the source's merge: {out_copy}"
     );
     assert!(
-        out_copy.contains(r#"min="4" max="4" hidden="1""#),
+        out_copy.contains(r#"min="4" max="4" customWidth="1" width="0" hidden="1""#),
         "the copy must carry the source's hidden column: {out_copy}"
     );
     assert!(

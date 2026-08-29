@@ -831,3 +831,21 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション、「Tier 1完了」と明記）、`internal_docs/ROADMAP.md`（0.14.0-Bの節をTier 1完了として整理し直し）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus、`tasks/todo.md`（本エントリ）。
 
 残作業：0.14.0-BのTier 1（merged_ranges/sheet_visibility/cell_style_indices/cell_number_formats）はこれで完了。残るはTier 2（row_heights/column_widths——writerが現状save時に無条件でdropするため、先にwriter側のバグを直すべきかというsequencing判断が設計文書§7で未確定のまま）とTier 3（comments/hyperlinks/data-validation/conditional-formatting——0.16.0/0.17.0の領分）。次の一手についてはユーザーへの確認を推奨。
+
+## row height/column width が保存時に常にdropされるバグの修正（0.14.0-Bとは独立、ユーザー直接依頼）
+
+ユーザーの「fix a separate row-height/column-width save bug」を受けて着手——0.14.0-B Tier 2の設計文書§7で指摘していた「先にwriter側のバグを直すべき」という推奨案そのものが、0.14.0-Bのphased breakdownの一部としてではなく、ユーザー自身の直接依頼として実行される形になった。
+
+- [x] **再現確認を先に実施**：既存のPython differential test（`test_row_height_and_column_width_do_not_yet_survive_an_elixcee_save`）を修正前に実行し、現状のバグ（save後にrow height/column widthが消える）を確認してから着手——このプロジェクト自身の「再現してから直す」規律に従った。
+- [x] **既存調査の再利用**：`internal_docs/openpyxl-gap-audit.md`の「Implementation notes for P2: row height / column width」に既にある詳細な事前調査（`customHeight`/`customWidth`が両方必要という確認済みの事実、実際のproducerがrangeを必ずしもcoalesceしないというopenpyxl確認済みの事実）をそのまま活用——新規調査は不要だった。
+- [x] **`build_xlsx_sheet`（`src/lib.rs`）の修正**：
+  - `<cols>`：`hidden_columns`（既存）と`column_widths`（新規）を`(min,max)`をキーとする`BTreeMap`へ統合してから出力——同じrangeを指す場合は1つの`<col>`要素にhidden/width両方の属性をまとめ（読み込み側が1つの`<col>`要素から両属性を独立に読み取れる設計と対称）、range が一致しない場合はそれぞれ独立した要素として出力（実producerも必ずしもcoalesceしないという既存確認済み事実と整合）。
+  - `<row>`：`row_heights`のエントリを持つ行も、cellデータがなくても`<row>`要素が出力されるよう、既存のhidden-row用の`by_row.entry(r).or_default()`パターンと同じ仕組みを追加。`customHeight="1" ht="..."`属性を既存の`hidden="1"`属性と同じ`<row>`要素上に併記。
+- [x] **新規Rustユニットテスト**（`src/lib.rs`の`mod tests`——`pub(crate)`フィールドに直接アクセスできる内部テストとして追加。`tests/xlsx_roundtrip.rs`は外部crateのためpub(crate)フィールドへアクセスできない）：`row_height_and_column_width_survive_a_save_and_reload`——hiddenかつ高さ指定ありの行（結合属性パス）、通常の列幅、どちらも未設定の行/列（stray defaultが出ないこと）を検証。save→reload後に`row_height_on_sheet`/`column_width_on_sheet`/`hidden_rows_on_sheet`で確認。
+- [x] **既存テスト6件の更新（回帰ではなく正しい改善）**：`tests/xlsx_roundtrip.rs`内の実fixtureベースの統合テスト6件が、fixture1の隠し列D（`width="0" hidden="1" customWidth="1"`という元々の実データ）に対する期待値`min="4" max="4" hidden="1"`のみをチェックしていたが、今回の修正でcustomWidth/width="0"も正しく保存されるようになったため、期待値を`min="4" max="4" customWidth="1" width="0" hidden="1"`へ更新——退行ではなく、元のfixtureデータをより忠実に往復できるようになったことの反映。
+- [x] **Python differential testの反転**：`test_row_height_and_column_width_do_not_yet_survive_an_elixcee_save`を`test_row_height_and_column_width_survive_an_elixcee_save`へリネームし、アサーションを反転（heightもwidthも保存後に残ることを確認）。さらに2回目のsaveでも消失・重複しないことを追加確認（save→reload→再save→reloadのチェーン）。未使用になった`zipfile` importも削除。
+- [x] **ドキュメント更新**：`internal_docs/ROADMAP.md`のknown gaps item 26を完了（取り消し線）として整理、0.14.0-B節にも「Tier 2のwriter側ブロッカーは解消済み、transform自体は未着手」と追記。`internal_docs/openpyxl-gap-audit.md`の「Implementation notes for P2: row height / column width」に修正済みである旨の新規パラグラフを追加（元の記述は「修正前の状態を説明したもの」として保持、履歴として残す）。`compat/differential-python/README.md`の「reads only, no elixcee save() round trip」という記述を訂正。`internal_docs/cell-metadata-transform-0.14.0-b-design.md`の§7・Statusも、writer gapが解消されTier 2 transform自体が着手可能になった旨を反映。
+- [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1133件、0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）、いずれもクリーン。
+- [x] **Python differential test一式を実際に実行して確認**：`bulk_range_check.py`（9件）・`sheet_ops_check.py`（18件、うち新規/更新2件含む）ともに全件pass——特に`test_sheet_state_does_not_yet_survive_an_elixcee_save`は今回のスコープ外として意図的に無変更のまま通過することを確認（sheet_stateは別の未修正ギャップであり、今回のrow height/column widthの修正と混同していないことの確認）。
+
+残作業：write支援（`set_row_height`/`set_column_width`）は引き続き未着手——実fixtureにgenuineなデータが存在しないというhard gateは今回の修正でも解消されていない（今回は「既にロードされた値の保存時保持」の修正であり、「新規に値を書き込むAPI」の追加ではないため、この2つは別問題として区別）。0.14.0-B Tier 2（row_heights/column_widthsのstructural edit/move transform）は、writer側のブロッカーが解消されたことで着手可能になったが、まだ未着手。

@@ -16,8 +16,11 @@ of the same fixtures — see `docs/openpyxl-gap-audit.md`:
   `merge_cells` (no openpyxl comparison needed for those). `sheet_state`'s
   and `row_height`/`column_width`'s fixtures are openpyxl-AUTHORED, not one
   of the real Excel fixtures (none has a hidden/veryHidden sheet or a
-  genuine custom row height/column width) — reads only, no elixcee save()
-  round trip (no writer support yet for either).
+  genuine custom row height/column width). `row_height`/`column_width` now
+  also cover an elixcee `save()` round trip (writer fix, no real-Excel
+  fixture to validate against, same standing constraint) — `sheet_state`
+  still doesn't (separate, still-open gap; `set_row_height`/
+  `set_column_width` write-support APIs also remain deferred).
 
 This is the one place in the repo with a genuine, disclosed new dependency:
 `openpyxl` is a **test-only oracle**, never a runtime dependency of the
