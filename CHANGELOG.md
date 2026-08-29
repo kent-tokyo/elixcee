@@ -1063,6 +1063,13 @@ recompute it against.
   fixture (`ws.print_title_rows`/`print_title_cols`), including a second save-reload cycle
   with no further rename.
 
+### Root crate: fix stale docstrings on `insert_rows`/`delete_rows`/`insert_cols`/`delete_cols`/`move_range`
+
+Doc-only, no behavior change. These five methods' docstrings still claimed the pre-0.14.0-A/B
+behavior (no merge/hidden-marker/style/number-format/dimension shifting on structural edit;
+no merge/style/number-format translation on range move) — stale since those transforms
+shipped. Corrected to describe what each method actually does today.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
