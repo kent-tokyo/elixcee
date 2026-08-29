@@ -936,6 +936,34 @@ which is 2D and can be affected on either axis.
 - `cell_style_indices`/`cell_number_formats` are 0.14.0-B's remaining Tier 1 fields, not
   yet transformed (next phase).
 
+### Root crate: per-cell style/number-format transform (0.14.0-B Phase 4, Tier 1 complete)
+
+`insert_rows`/`delete_rows`/`insert_cols`/`delete_cols`/`move_range` now transform
+`cell_style_indices` and `cell_number_formats` too — the last two of 0.14.0-B's four Tier 1
+fields (`merged_ranges`/`sheet_visibility` shipped in Phases 2/3). This closes Tier 1 of
+the design doc entirely.
+
+- Unlike merges/hidden intervals (both range-shaped), these two maps are keyed by exact
+  `(row, col)` — the same shape as a formula's single-cell reference, not a range — so they
+  reuse `formula::shift_cell_coord`/`CellShift` (now `pub(crate)`) instead of
+  `shift_bound_low`/`shift_bound_high`. A key whose target cell falls inside a deleted band
+  is dropped entirely — there's no surviving cell for its style/format to belong to.
+- One generic helper (`shift_keyed_cell_map<V>`) backs both maps for structural edit, since
+  they share the exact same `HashMap<(row, col), V>` shape.
+- **Range move**: a style/number-format belongs to the cell it's on, so it moves with it,
+  exactly like `CellContent` itself already does. Unlike merges, there's no
+  ambiguous-partial-overlap case possible here — a single cell is either inside the moved
+  rectangle or it isn't, no "in-between" shape exists for a point. A pre-existing entry at
+  the destination that isn't itself part of the move is overwritten (moved entries are
+  applied after stationary ones, so this is deterministic regardless of `HashMap` iteration
+  order), matching `CellContent`'s own overwrite behavior on a move.
+- 8 new `Vm`-level unit tests.
+- Verified through the actual built Python extension: since these two fields are read-only
+  from Python (populated only from a loaded file), verification used a real
+  `openpyxl`-authored fixture with a date-formatted cell — `insert_rows` moving the format
+  to the correct new cell, the old cell's format correctly gone, and a real
+  `save_workbook` → `load_workbook` round trip preserving it afterward.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
