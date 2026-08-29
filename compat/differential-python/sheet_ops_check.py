@@ -12,11 +12,12 @@ README.md for the one-time setup.
 Compares rename_sheet()/move_sheet()/copy_sheet()/merged_cells()/
 merge_cells()/unmerge_cells()/hidden_rows()/hidden_columns()/
 set_row_hidden()/set_column_hidden()/defined_names() against openpyxl's own
-read of the same real fixture after a save/reload round trip. Must build
-from FIXTURE via elixcee.load_workbook, not a bare elixcee.Vm() -- a
-from-scratch VM's minimal styles.xml emits a bare <fill/> that openpyxl's
-own reader rejects on reopen (a real, pre-existing, unrelated bug -- see
-ROADMAP.md's known gaps).
+read of the same real fixture after a save/reload round trip. Built from
+FIXTURE via elixcee.load_workbook throughout, matching the real-world usage
+these tests target -- a from-scratch elixcee.Vm()'s own minimal-styles.xml
+shape is covered separately by
+FromScratchVmProducesAnOpenpyxlReadableStylesheet below (its bare <fill/>
+rejected-on-reopen bug is fixed, see ROADMAP.md's known gaps).
 
 sheet_state() coverage uses an openpyxl-AUTHORED fixture, not a real
 Excel-authored one under compat/oracle-excel-com (none has a hidden/
@@ -474,6 +475,39 @@ class AutoFilterSurvivesAnElixceeSave(unittest.TestCase):
             self.assertEqual(ws2.auto_filter.ref, "A1:C10")
             self.assertEqual(ws2["A2"].value, "unrelated edit")
             self.assertIn("D1:E1", [str(r) for r in ws2.merged_cells.ranges])
+
+
+class FromScratchVmProducesAnOpenpyxlReadableStylesheet(unittest.TestCase):
+    # A bare elixcee.Vm() (no loaded source file) used to emit a minimal
+    # styles.xml with bare <fill/> elements -- no <patternFill>/<gradientFill>
+    # child -- which openpyxl's own reader rejects with
+    # TypeError: expected <class 'openpyxl.styles.fills.Fill'>. Fixed by
+    # matching openpyxl's own from-scratch default shape:
+    # <fill><patternFill/></fill> (index 0) and
+    # <fill><patternFill patternType="gray125"/></fill> (index 1).
+    def test_from_scratch_vm_save_reopens_cleanly_in_openpyxl(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "from_scratch.xlsx")
+            vm = elixcee.Vm()
+            vm.set_cell(1, 1, "hello")
+            vm.save_workbook(out)
+
+            xml = zipfile.ZipFile(out).read("xl/styles.xml").decode()
+            self.assertIn('<fill><patternFill/></fill>', xml)
+            self.assertIn(
+                '<fill><patternFill patternType="gray125"/></fill>', xml
+            )
+
+            ws = openpyxl.load_workbook(out).active
+            self.assertEqual(ws["A1"].value, "hello")
+
+            # A second save/reload cycle (openpyxl re-saving what it just
+            # read) must also round-trip cleanly -- confirms the shape isn't
+            # just tolerated once but genuinely well-formed.
+            out2 = os.path.join(d, "from_scratch_resaved.xlsx")
+            ws.parent.save(out2)
+            ws2 = openpyxl.load_workbook(out2).active
+            self.assertEqual(ws2["A1"].value, "hello")
 
 
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):
