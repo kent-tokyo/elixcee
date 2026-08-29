@@ -57,6 +57,7 @@ import zipfile
 
 import elixcee
 import openpyxl
+from openpyxl.formatting.rule import CellIsRule
 
 FIXTURE = os.path.join(
     os.path.dirname(__file__),
@@ -475,6 +476,116 @@ class AutoFilterSurvivesAnElixceeSave(unittest.TestCase):
             self.assertEqual(ws2.auto_filter.ref, "A1:C10")
             self.assertEqual(ws2["A2"].value, "unrelated edit")
             self.assertIn("D1:E1", [str(r) for r in ws2.merged_cells.ranges])
+
+
+class ConditionalFormattingSurvivesAnElixceeSave(unittest.TestCase):
+    # Found while scoping 0.16.0 (Tables, Filters and Rules): <conditionalFormatting>
+    # was silently dropped on EVERY elixcee save -- confirmed against a real fixture
+    # (compat/oracle-excel-com/fixtures/pristine/fixture3_table_validation_conditional.xlsm)
+    # before this fix. Same shape as the autoFilter fix above (a non-relationship-backed
+    # element, unconditional opaque-fragment passthrough), except a sheet can carry more
+    # than one <conditionalFormatting> block (one per range/rule-set), unlike autoFilter's
+    # single element -- see reader::extract_all_raw_elements. `<dxfs>` (in xl/styles.xml,
+    # which a rule's dxfId references) is never touched by any style-mutation resolve
+    # pass, so a preserved rule's dxfId stays valid regardless. No create/edit API here
+    # (that's real 0.16.0 feature work, a separate effort) -- preservation only.
+    def test_a_single_rule_survives_an_elixcee_save(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "cf_src.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws["A1"] = 5
+            rule = CellIsRule(
+                operator="greaterThan",
+                formula=["10"],
+                font=openpyxl.styles.Font(color="9C0006"),
+            )
+            ws.conditional_formatting.add("A1:A5", rule)
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            out = os.path.join(d, "cf_out.xlsx")
+            vm.save_workbook(out)
+
+            ws2 = openpyxl.load_workbook(out).active
+            rules = list(ws2.conditional_formatting)
+            self.assertEqual(len(rules), 1)
+            self.assertEqual(str(rules[0].sqref), "A1:A5")
+            cf_rules = ws2.conditional_formatting[str(rules[0].sqref)]
+            self.assertEqual(len(cf_rules), 1)
+            self.assertEqual(cf_rules[0].operator, "greaterThan")
+            self.assertEqual(cf_rules[0].formula, ["10"])
+
+            # A second save must not re-drop or duplicate it.
+            vm2 = elixcee.load_workbook(out)
+            out2 = os.path.join(d, "cf_out2.xlsx")
+            vm2.save_workbook(out2)
+            ws3 = openpyxl.load_workbook(out2).active
+            self.assertEqual(len(list(ws3.conditional_formatting)), 1)
+
+    def test_multiple_rule_blocks_all_survive(self):
+        # CT_Worksheet's conditionalFormatting is maxOccurs="unbounded" -- confirm more
+        # than one range/rule-set in the same sheet round-trips, not just the common
+        # single-block case every real fixture in this repo happens to have.
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "cf_multi_src.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws["A1"] = 5
+            ws["B1"] = -5
+            ws.conditional_formatting.add(
+                "A1:A5",
+                CellIsRule(operator="greaterThan", formula=["10"], font=openpyxl.styles.Font(color="9C0006")),
+            )
+            ws.conditional_formatting.add(
+                "B1:B5",
+                CellIsRule(operator="lessThan", formula=["0"], font=openpyxl.styles.Font(color="006100")),
+            )
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            out = os.path.join(d, "cf_multi_out.xlsx")
+            vm.save_workbook(out)
+
+            ws2 = openpyxl.load_workbook(out).active
+            sqrefs = {str(r.sqref) for r in ws2.conditional_formatting}
+            self.assertEqual(sqrefs, {"A1:A5", "B1:B5"})
+
+    def test_survives_an_unrelated_style_edit_and_confirms_schema_position(self):
+        # Confirms schema position (verified against fixture3/fixture4's real bytes:
+        # phoneticPr -> conditionalFormatting -> dataValidations) and that set_style
+        # (which mutates <cellXfs>, never <dxfs>) doesn't disturb a preserved rule's
+        # dxfId reference.
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "cf_style_src.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws["A1"] = 5
+            ws["C1"] = "unrelated"
+            ws.conditional_formatting.add(
+                "A1:A5",
+                CellIsRule(operator="greaterThan", formula=["10"], font=openpyxl.styles.Font(color="9C0006")),
+            )
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            vm.set_style("C1", font={"bold": True})
+            out = os.path.join(d, "cf_style_out.xlsx")
+            vm.save_workbook(out)
+
+            xml = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            cf_pos = xml.find("<conditionalFormatting")
+            dv_pos = xml.find("<dataValidations")
+            self.assertNotEqual(cf_pos, -1)
+            if dv_pos != -1:
+                self.assertLess(cf_pos, dv_pos)
+
+            ws2 = openpyxl.load_workbook(out).active
+            rules = list(ws2.conditional_formatting)
+            self.assertEqual(len(rules), 1)
+            cf_rules = ws2.conditional_formatting[str(rules[0].sqref)]
+            self.assertEqual(cf_rules[0].operator, "greaterThan")
+            self.assertTrue(ws2["C1"].font.bold)
 
 
 class FromScratchVmProducesAnOpenpyxlReadableStylesheet(unittest.TestCase):

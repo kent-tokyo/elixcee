@@ -2775,6 +2775,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "sheetFormatPr"));
         let auto_filter = source_xml.and_then(|xml| reader::extract_raw_element(xml, "autoFilter"));
         let phonetic_pr = source_xml.and_then(|xml| reader::extract_raw_element(xml, "phoneticPr"));
+        let conditional_formatting = source_xml
+            .map(|xml| reader::extract_all_raw_elements(xml, "conditionalFormatting"))
+            .unwrap_or_default();
         let data_validations =
             source_xml.and_then(|xml| reader::extract_raw_element(xml, "dataValidations"));
         let page_margins =
@@ -2822,6 +2825,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             sheet_format_pr: sheet_format_pr.as_deref(),
             auto_filter: auto_filter.as_deref(),
             phonetic_pr: phonetic_pr.as_deref(),
+            conditional_formatting: &conditional_formatting,
             data_validations: data_validations.as_deref(),
             hyperlinks: &hyperlinks,
             page_margins: page_margins.as_deref(),
@@ -3672,6 +3676,16 @@ struct OpaqueWorksheetFragments<'a> {
     /// create/remove/filter-type API (that's `0.16.0`, see ROADMAP.md's known gap 28).
     auto_filter: Option<&'a str>,
     phonetic_pr: Option<&'a str>,
+    /// Every top-level `<conditionalFormatting sqref="...">...</conditionalFormatting>`
+    /// block, in document order (`CT_Worksheet` allows more than one — one per distinct
+    /// range/rule-set is the common real shape, see `fixture3`/`fixture4`). Unconditional,
+    /// non-relationship-backed passthrough, same treatment as `data_validations` below —
+    /// a `dxfId` a rule references stays valid regardless of any style mutation, since
+    /// nothing in this codebase's `<cellXfs>`/`<fonts>`/`<fills>`/`<borders>` resolve
+    /// passes ever touches `xl/styles.xml`'s `<dxfs>` (verified: no `dxf` reference
+    /// anywhere in `resolve_pending_*`). Byte-preservation only: no structured `Vm`
+    /// state, no create/edit API (that's `0.16.0`, a separate, much larger effort).
+    conditional_formatting: &'a [String],
     data_validations: Option<&'a str>,
     /// Raw `<hyperlink .../>` spans (see `reader::extract_hyperlinks`) — NOT the whole
     /// source `<hyperlinks>` container. Location-only children are always included;
@@ -3900,17 +3914,24 @@ fn build_xlsx_sheet(
     }
 
     // CT_Worksheet order (§8): mergeCells, phoneticPr, conditionalFormatting,
-    // dataValidations, hyperlinks, printOptions, pageMargins, ... —
-    // conditionalFormatting/printOptions are deliberately never emitted here.
-    // conditionalFormatting can reference xl/styles.xml's <dxfs> via dxfId, so it needs
-    // separate consideration before being treated as a pure relationship-free opaque
-    // fragment (still covered by check_source_references()'s coarser structural checks).
-    // printOptions has no fixture evidence yet.
-    for fragment in [fragments.phonetic_pr, fragments.data_validations]
-        .into_iter()
-        .flatten()
-    {
-        out.push_str(fragment);
+    // dataValidations, hyperlinks, printOptions, pageMargins, ... — printOptions has no
+    // fixture evidence yet, still not emitted. conditionalFormatting's real position
+    // (immediately after phoneticPr, before dataValidations) is confirmed against real
+    // bytes, not just this comment's own claim — both fixture3 and fixture4 show exactly
+    // this order. `<dxfs>` (which a `dxfId` here may reference) is never touched by any
+    // `<cellXfs>`/`<fonts>`/`<fills>`/`<borders>` resolve pass, so a preserved rule's
+    // `dxfId` stays valid regardless of any style mutation — see
+    // `OpaqueWorksheetFragments::conditional_formatting`'s own doc comment.
+    if let Some(pp) = fragments.phonetic_pr {
+        out.push_str(pp);
+        out.push('\n');
+    }
+    for cf in fragments.conditional_formatting {
+        out.push_str(cf);
+        out.push('\n');
+    }
+    if let Some(dv) = fragments.data_validations {
+        out.push_str(dv);
         out.push('\n');
     }
 

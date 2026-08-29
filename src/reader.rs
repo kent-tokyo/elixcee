@@ -623,6 +623,44 @@ pub(crate) fn extract_raw_element(xml: &str, local_name: &str) -> Option<String>
     }
 }
 
+/// Extracts every raw, byte-for-byte `<local_name ..>...</local_name>`/`<local_name ../>`
+/// top-level element in `xml` matched by local name (namespace prefix ignored), in document
+/// order — unlike `extract_raw_element` above (first occurrence only), this is for elements
+/// `CT_Worksheet` allows to repeat (`maxOccurs="unbounded"`), e.g. `conditionalFormatting`:
+/// a worksheet commonly has one `<conditionalFormatting sqref="...">` block per distinct
+/// range/rule-set, unlike `sheetPr`/`sheetViews`/`dataValidations`/etc., which never repeat.
+/// Same non-self-nesting assumption as `extract_raw_element` (true for `conditionalFormatting`
+/// — its children are `cfRule`/`extLst`, never another `conditionalFormatting`). Stops the
+/// scan (rather than misparsing) if an opening tag's matching close tag is missing.
+pub(crate) fn extract_all_raw_elements(xml: &str, local_name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut search_from = 0;
+    while let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(xml, search_from) {
+        if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
+            search_from = tag_start + 1;
+            continue;
+        }
+        let name_end = tag_start + 1 + full_name.len();
+        let start_tag_end = name_end + tag_close_rel + 1;
+        let self_closing = xml[name_end..name_end + tag_close_rel]
+            .trim_end()
+            .ends_with('/');
+        if self_closing {
+            out.push(xml[tag_start..start_tag_end].to_string());
+            search_from = start_tag_end;
+            continue;
+        }
+        let close_tag = format!("</{}>", full_name);
+        let Some(end_rel) = xml[start_tag_end..].find(&close_tag) else {
+            break;
+        };
+        let end = start_tag_end + end_rel + close_tag.len();
+        out.push(xml[tag_start..end].to_string());
+        search_from = end;
+    }
+    out
+}
+
 /// Shared scan primitive for `extract_root_attrs`/`extract_raw_element`: finds the next
 /// opening or self-closing tag at or after byte offset `from` (skipping closing tags,
 /// comments, CDATA, and processing instructions/XML declarations), returning
@@ -913,6 +951,54 @@ mod opaque_fragment_tests {
         assert_eq!(
             extract_raw_element(xml, "sheetViews"),
             Some("<x:sheetViews><x:sheetView/></x:sheetViews>".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_all_raw_elements_returns_every_occurrence_in_document_order() {
+        // fixture3's real shape has exactly one, but CT_Worksheet allows more than one --
+        // a worksheet with two distinct conditional-formatting range/rule-sets.
+        let xml = concat!(
+            "<worksheet><sheetData/>",
+            "<conditionalFormatting sqref=\"A1:A5\">",
+            "<cfRule type=\"cellIs\" dxfId=\"0\" priority=\"1\" operator=\"greaterThan\">",
+            "<formula>10</formula></cfRule></conditionalFormatting>",
+            "<conditionalFormatting sqref=\"B1:B5\">",
+            "<cfRule type=\"cellIs\" dxfId=\"1\" priority=\"2\" operator=\"lessThan\">",
+            "<formula>0</formula></cfRule></conditionalFormatting>",
+            "</worksheet>",
+        );
+        let all = extract_all_raw_elements(xml, "conditionalFormatting");
+        assert_eq!(all.len(), 2);
+        assert!(all[0].starts_with("<conditionalFormatting sqref=\"A1:A5\">"));
+        assert!(all[0].ends_with("</conditionalFormatting>"));
+        assert!(all[1].starts_with("<conditionalFormatting sqref=\"B1:B5\">"));
+    }
+
+    #[test]
+    fn extract_all_raw_elements_returns_empty_when_absent() {
+        let xml = "<worksheet><sheetData/></worksheet>";
+        assert_eq!(
+            extract_all_raw_elements(xml, "conditionalFormatting"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn extract_all_raw_elements_handles_a_single_self_closing_occurrence() {
+        let xml = "<worksheet><conditionalFormatting sqref=\"A1\"/></worksheet>";
+        assert_eq!(
+            extract_all_raw_elements(xml, "conditionalFormatting"),
+            vec!["<conditionalFormatting sqref=\"A1\"/>".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_all_raw_elements_does_not_match_a_differently_named_element() {
+        let xml = "<worksheet><conditionalFormattingRule/></worksheet>";
+        assert_eq!(
+            extract_all_raw_elements(xml, "conditionalFormatting"),
+            Vec::<String>::new()
         );
     }
 

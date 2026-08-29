@@ -983,3 +983,19 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [ ] **ドキュメント同期(一部未完了——isolated worktreeの制約による)**：`CHANGELOG.md`は本worktree内で更新済み。`internal_docs/ROADMAP.md`(gitignore対象、worktreeにチェックアウトされないためこのworktreeからは編集不可)への反映——0.15.0-C2チェックボックスを完了に——は親エージェント側で実施が必要。
 
 残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。
+
+## `<conditionalFormatting>`保存時サイレントドロップの修正（0.16.0スコーピング中に発見）
+
+ユーザーの「0.16.0 — Tables, Filters and Rule」を受けた0.16.0スコーピングパスが副次的に発見した、既存の未開示バグの独立修正。`<conditionalFormatting>`が保存のたびに完全に消失していた——PR #29で修正した`autoFilter`と全く同じ形のバグだが、今まで一度も開示されていなかった。isolated worktreeで実施。
+
+- [x] **バグの実地確認**：`fixture3_table_validation_conditional.xlsm`（実在する`cellIs`ルール1件を持つ）をロードして保存し、出力に`conditionalFormatting`が一件も含まれないことを確認。同じfixtureの`dataValidations`/`tableParts`は同じ保存で正しく生き残ることも確認済み——`conditionalFormatting`だけが例外。
+- [x] **根本原因**：`build_xlsx_sheet`内の既存コメントが「`<dxfs>`経由のdxfId参照があるため、単純なopaque fragment扱いにする前に別途検討が必要」と説明していたが、その「別途検討」が実際には一度も行われないまま——`phoneticPr`/`dataValidations`のunconditional passthroughループに合流することもなく、他のどこにも捕捉されていなかった。
+- [x] **安全性の実地確認**：`<dxfs>`（styles.xml側）が0.15.0-A〜C2の`resolve_pending_*`系関数のいずれからも一切参照されていないことをコード上で確認——各関数は自分が対象とするコンテナだけを`replacen`で置換するため、`<dxfs>`を含む他の兄弟要素は常にバイト完全一致で素通りする。よってconditionalFormatting内のdxfId参照は、どんなstyle変更を行っても常に有効であり続ける。
+- [x] **修正**：`OpaqueWorksheetFragments`へ`conditional_formatting: &'a [String]`フィールドを新設し、`phonetic_pr`と`data_validations`の間で出力するよう配線。`autoFilter`/`dataValidations`は1シートに最大1個しか存在しないためOptionで表現できたが、`CT_Worksheet`は`conditionalFormatting`の複数出現（範囲/ルールセットごとに1ブロック）を許容するため、新規`reader::extract_all_raw_elements(xml, local_name)`（`extract_raw_element`の複数一致版、`find_next_open_tag`をループで回すだけの小さな一般化）を追加し、ドキュメント順で全出現を捕捉——1個しか無いという前提でOptionにしていたら、実際に複数ブロックを持つファイルでは最初の1個以外を静かに消失させていたはず。
+- [x] **スキーマ位置の実地確認**：既存コメントは「phoneticPrの直後、dataValidationsの前」と主張していたが、PR #29のautoFilter修正で同種の思い込みが誤りだったことがあった前例に倣い、鵜呑みにせず`fixture3`・`fixture4`両方の実バイト列で確認——両方とも`phoneticPr → conditionalFormatting → dataValidations`(またはhyperlinks)の順で、既存コメントの主張通りだった。
+- [x] **スコープ**：バイト保存のみ——構造化`Vm`状態も作成/編集APIも実装しない（それは別の、遥かに大規模な0.16.0本体の作業）。`autoFilter`修正と全く同じスコープの絞り方。
+- [x] **検証**：新規Rustユニットテスト4件（`extract_all_raw_elements`の複数出現/不在/自己終結/別名不一致）。`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`(1257件全pass)／`cargo check --features python --lib`／`cargo audit`(脆弱性なし)／`scripts/check-versions.sh`(既知の`elixcee-types`ドリフトのみ)、いずれもクリーン。worktree内に独自の`.venv`を新規構築し`maturin develop --release`で実ビルド。`compat/differential-python/sheet_ops_check.py`に新規テストクラス`ConditionalFormattingSurvivesAnElixceeSave`（3件：単一ルールの保存生存＋2回連続保存、複数ブロックの同時生存、無関係な`set_style`呼び出し後もdxfId参照が無傷であることとスキーマ位置の確認）を追加、既存35件と合わせ全件pass。
+- [x] **環境上の注意（今回も発生、既知の回避策で対応）**：共有ワーキングディレクトリの`.venv`が別プロジェクト(`oss_rust/elixcee`)を指す`VIRTUAL_ENV`環境変数を継承していたため、`maturin develop`が誤ったpython interpreterを探しにいって失敗——0.15.0-C1で判明済みの既知の環境問題と同一。本worktree内に独自の`.venv`を新規構築し、`unset VIRTUAL_ENV`を`maturin`と同一コマンド行で実行することで回避。
+- [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`・`compat/differential-python/sheet_ops_check.py`は本worktree内で更新済み。`internal_docs/ROADMAP.md`（gitignore対象、worktreeにチェックアウトされないためこのworktreeからは編集不可）への反映——新規known-gapとしてこの修正を記載（AutoFilter修正のknown-gap 28と同じ体裁）、および`0.16.0`セクション内のconditional formatting項目へ「保存時のバイト保存は独立して解決済み、create/edit APIは引き続き0.16.0本体の作業」という一行の相互参照追記——は親エージェント側で実施が必要。
+
+残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。
