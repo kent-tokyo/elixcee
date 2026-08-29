@@ -1173,6 +1173,36 @@ impl Vm {
         self.merged_ranges.insert(key.to_string(), shifted);
     }
 
+    /// Shifts `key`'s hidden-row/column intervals for a structural edit
+    /// (0.14.0-B Phase 3) -- only the axis actually being edited is
+    /// touched, since inserting/deleting rows can't affect which COLUMNS
+    /// are hidden and vice versa (unlike a merge, which is 2D and can be
+    /// affected on either axis). Reuses `shift_interval`'s clamp arithmetic
+    /// -- same primitive as merges/formula ranges, no degenerate-size drop
+    /// needed here (a hidden interval spanning a single row/column is
+    /// perfectly normal, unlike a 1-cell merge). No range-move counterpart:
+    /// hidden state belongs to the row/column itself, not to the cell
+    /// content that moves through it, so `move_range_on_sheet` (which only
+    /// relocates cell contents) has nothing to do with this map.
+    fn shift_hidden_intervals_for_structural_edit(
+        &mut self,
+        key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        let Some(vis) = self.sheet_visibility.get_mut(key) else {
+            return;
+        };
+        let intervals = match axis {
+            formula::RefAxis::Row => &mut vis.hidden_rows,
+            formula::RefAxis::Col => &mut vis.hidden_columns,
+        };
+        *intervals = intervals
+            .iter()
+            .filter_map(|&iv| shift_interval(iv, edit))
+            .collect();
+    }
+
     /// Rewrites every formula reference qualified with `old_key` (workbook-wide,
     /// regardless of which sheet hosts the formula) to name `new_name` instead --
     /// `formula::rename_sheet_references`, see its own doc comment for the exact
@@ -1326,8 +1356,9 @@ impl Vm {
     /// `insert_rows(..., sheet=None)`). `insert_rows` below just forwards here with
     /// `key = active_sheet` -- VBA's `RowColInsert`/`RangeInsert` call sites don't
     /// change at all. Shifts same-sheet formula cell-references (0.14.0-A -- see
-    /// `rewrite_formulas_for_structural_edit`) and merges (0.14.0-B -- see
-    /// `shift_merged_ranges_for_structural_edit`). `sheet_visibility`/
+    /// `rewrite_formulas_for_structural_edit`), merges (0.14.0-B Phase 2 -- see
+    /// `shift_merged_ranges_for_structural_edit`), and same-axis hidden row/column
+    /// intervals (0.14.0-B Phase 3 -- see `shift_hidden_intervals_for_structural_edit`).
     /// `cell_style_indices`/`cell_number_formats` still don't shift -- a pre-existing
     /// VBA-engine limitation, now Python-reachable; see ROADMAP.md's known gaps.
     /// Cached `.value`s are left stale, same as any other edit -- callers that need
@@ -1336,6 +1367,7 @@ impl Vm {
         let edit = formula::StructuralEdit::Insert { at: first, count };
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -1376,6 +1408,7 @@ impl Vm {
         let edit = formula::StructuralEdit::Delete { at: first, count };
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1413,6 +1446,7 @@ impl Vm {
         let edit = formula::StructuralEdit::Delete { at: first, count };
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         let last = first + count - 1;
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
@@ -1443,6 +1477,7 @@ impl Vm {
         let edit = formula::StructuralEdit::Insert { at: first, count };
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         let to_move: Vec<((u32, u32), CellContent)> = self
             .get_sheet_cells(key)
             .into_iter()
@@ -5868,6 +5903,26 @@ fn shift_merge_rect(
         return None;
     }
     Some(new_rect)
+}
+
+/// Shifts a hidden-row/column `Interval` for a structural edit, reusing the
+/// SAME `shift_bound_low`/`shift_bound_high` arithmetic as merges and
+/// formula ranges (0.14.0-B Phase 3). `None` if the interval collapses
+/// entirely (`low > high` -- the whole hidden band fell inside a deleted
+/// band). Unlike `shift_merge_rect`, there's no degenerate-single-unit drop
+/// case: a hidden interval spanning exactly one row/column is a perfectly
+/// ordinary state (`set_row_hidden`'s own single-unit intervals already
+/// look like this), not something this engine's own API refuses to create.
+fn shift_interval(interval: Interval, edit: formula::StructuralEdit) -> Option<Interval> {
+    let new_low = formula::shift_bound_low(interval.start, edit);
+    let new_high = formula::shift_bound_high(interval.end, edit);
+    if new_low as i64 > new_high {
+        return None;
+    }
+    Some(Interval {
+        start: new_low,
+        end: new_high as u32,
+    })
 }
 
 /// Plans how `merges` transform for a range move of `source` by `(d_row,
@@ -10822,6 +10877,90 @@ mod tests {
             vm.merged_ranges.get("sheet1").unwrap(),
             &vec![((1, 6), (2, 6))]
         );
+    }
+
+    // ── 0.14.0-B Phase 3: hidden-interval transform ──────────────────────
+
+    #[test]
+    fn insert_rows_on_sheet_shifts_a_hidden_row_at_or_after_the_insertion_point() {
+        let mut vm = Vm::new();
+        vm.set_row_hidden_on_sheet("sheet1", 10, true);
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![12]);
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_does_not_shift_a_hidden_row_before_the_insertion_point() {
+        let mut vm = Vm::new();
+        vm.set_row_hidden_on_sheet("sheet1", 3, true);
+        vm.insert_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![3]);
+    }
+
+    #[test]
+    fn insert_rows_on_sheet_never_touches_hidden_columns() {
+        let mut vm = Vm::new();
+        vm.set_column_hidden_on_sheet("sheet1", 4, true);
+        vm.insert_rows_on_sheet("sheet1", 1, 5);
+        assert_eq!(vm.hidden_columns_on_sheet("sheet1"), vec![4]);
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_shifts_a_hidden_row_after_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.set_row_hidden_on_sheet("sheet1", 10, true);
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![8]);
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_drops_a_hidden_row_entirely_inside_the_deleted_band() {
+        let mut vm = Vm::new();
+        vm.set_row_hidden_on_sheet("sheet1", 5, true);
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn delete_rows_on_sheet_shrinks_a_hidden_interval_partially_overlapping_the_deleted_band() {
+        let mut vm = Vm::new();
+        for row in 3..=6 {
+            vm.set_row_hidden_on_sheet("sheet1", row, true); // rows 3-6 hidden
+        }
+        vm.delete_rows_on_sheet("sheet1", 4, 1); // delete row 4 only
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![3, 4, 5]); // 3,5,6 shifted down by 1
+    }
+
+    #[test]
+    fn insert_cols_on_sheet_shifts_a_hidden_column_but_not_hidden_rows() {
+        let mut vm = Vm::new();
+        vm.set_column_hidden_on_sheet("sheet1", 10, true);
+        vm.set_row_hidden_on_sheet("sheet1", 10, true);
+        vm.insert_cols_on_sheet("sheet1", 5, 2);
+        assert_eq!(vm.hidden_columns_on_sheet("sheet1"), vec![12]);
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![10]);
+    }
+
+    #[test]
+    fn move_range_on_sheet_never_touches_hidden_rows_or_columns() {
+        // Hidden state belongs to the row/column itself, not to the cell
+        // content moving through it -- a range move has nothing to do here.
+        let mut vm = Vm::new();
+        vm.set_row_hidden_on_sheet("sheet1", 5, true);
+        vm.write_rect("sheet1", (5, 1), &[vec![Variant::Integer(1)]]);
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 5,
+                c1: 1,
+                r2: 5,
+                c2: 1,
+            },
+            50,
+            50,
+        )
+        .unwrap();
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![5]);
     }
 
     #[test]

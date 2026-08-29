@@ -1118,16 +1118,15 @@ fn defined_names_reads_the_real_fixtures_defined_name() {
     );
 }
 
-/// 0.14.0-B Phase 2 updated this: merges now shift on insert/delete
-/// (`shift_merged_ranges_for_structural_edit`), so B1:C1 (row 1) moves to
-/// B2:C2 when a row is inserted at row 1 -- previously this test pinned the
-/// opposite (merge NOT shifted) as the disclosed gap. Hidden-row/col
-/// markers still don't shift -- that's `sheet_visibility`, a later 0.14.0-B
-/// phase (ROADMAP.md's known gaps) -- so those assertions are unchanged. If
-/// this starts failing because hidden markers now shift too, update
-/// ROADMAP.md's known gaps and this test together.
+/// 0.14.0-B Phase 2/3 updated this: merges and same-axis hidden-row/col
+/// markers now shift on insert/delete (`shift_merged_ranges_for_structural_edit`,
+/// `shift_hidden_intervals_for_structural_edit`), so B1:C1 (row 1) moves to
+/// B2:C2 and hidden row 5 moves to row 6 when a row is inserted at row 1 --
+/// previously this test pinned the opposite (neither shifted) as the
+/// disclosed gap. Hidden COLUMN D is unaffected -- this is a row-axis
+/// insert, and column-hidden state only ever shifts on a column-axis edit.
 #[test]
-fn insert_rows_on_a_merged_and_hidden_row_sheet_shifts_the_merge_but_not_hidden_markers() {
+fn insert_rows_on_a_merged_and_hidden_row_sheet_shifts_the_merge_and_same_axis_hidden_marker() {
     let source_path = real_fixture("fixture1_values_styles_merge_hidden.xlsm");
     let output_path = tmp_path("insert_rows_on_sheet_output.xlsm");
 
@@ -1155,10 +1154,13 @@ fn insert_rows_on_a_merged_and_hidden_row_sheet_shifts_the_merge_but_not_hidden_
         "hidden column D marker must be unchanged -- column shifting is not this axis: {out_sheet1}"
     );
     assert!(
-        out_sheet1.contains(r#"<row r="5" hidden="1">"#)
-            || out_sheet1.contains(r#"<row r="5" hidden="1"/>"#),
-        "hidden row marker must still say row 5, NOT shifted to row 6 (sheet_visibility \
-         transform is a later 0.14.0-B phase, not yet implemented): {out_sheet1}"
+        out_sheet1.contains(r#"<row r="6" hidden="1">"#)
+            || out_sheet1.contains(r#"<row r="6" hidden="1"/>"#),
+        "hidden row marker must shift from row 5 to row 6: {out_sheet1}"
+    );
+    assert!(
+        !out_sheet1.contains(r#"<row r="5" hidden="1""#),
+        "the stale, pre-shift hidden-row marker must not also still be present: {out_sheet1}"
     );
 
     let _ = std::fs::remove_file(&output_path);
