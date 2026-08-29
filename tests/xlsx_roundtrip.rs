@@ -3571,3 +3571,39 @@ fn formula_cell_with_empty_cached_value_survives_two_consecutive_saves() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+/// Known gap 30: a from-scratch `Vm()`'s minimal `xl/styles.xml` had no `<cellStyles>`
+/// element at all -- schema-legal, but `openpyxl.load_workbook()` raises `UserWarning:
+/// Workbook contains no default style` on reopen. Confirmed by direct comparison: real
+/// `openpyxl.Workbook()`'s own from-scratch default `xl/styles.xml` always includes
+/// `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0" hidden="0"/>
+/// </cellStyles>`, positioned right after `<cellXfs>`.
+#[test]
+fn a_from_scratch_vm_emits_a_cell_styles_element() {
+    let vm = Vm::new();
+    let output_path = tmp_path("from_scratch_cell_styles_output.xlsx");
+    save_workbook(&vm, &output_path).expect("from-scratch save should succeed");
+
+    let output_bytes = std::fs::read(&output_path).unwrap();
+    let output_entries = read_all_zip_entries(&output_bytes);
+    let styles_xml = String::from_utf8(output_entries["xl/styles.xml"].clone()).unwrap();
+
+    assert!(
+        styles_xml.contains("<cellStyles"),
+        "a from-scratch Vm()'s styles.xml must declare a cellStyles element: {styles_xml}"
+    );
+    assert!(
+        styles_xml.contains("name=\"Normal\""),
+        "the default named style must be called \"Normal\", matching real Excel/openpyxl's \
+         own from-scratch default, not a locale-varied loaded-file name: {styles_xml}"
+    );
+    let cell_xfs_end = styles_xml.find("</cellXfs>").unwrap();
+    let cell_styles_start = styles_xml.find("<cellStyles").unwrap();
+    assert!(
+        cell_xfs_end < cell_styles_start,
+        "<cellStyles> must come after <cellXfs>, matching CT_Stylesheet's real child \
+         sequence: {styles_xml}"
+    );
+
+    let _ = std::fs::remove_file(&output_path);
+}

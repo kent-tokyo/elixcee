@@ -1025,3 +1025,18 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`は本worktree内で更新済み。`internal_docs/ROADMAP.md`のknown-gap 29を`[x]`済みに更新——は親エージェント側で実施が必要。
 
 残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。
+
+## 従スクラッチVm()がopenpyxlの「デフォルトスタイル無し」警告を発するバグの修正（known-gap 30）
+
+known-gap 29と同時に着手した2件目のGreen作業。isolated worktreeで実施。
+
+- [x] **バグの実地確認（修正前に再現）**：使い捨てのRustテストで実際の従スクラッチ`Vm::new().save_workbook()`の出力バイト列をダンプし、それをそのまま`openpyxl.load_workbook()`へ渡して`UserWarning: Workbook contains no default style`が実際に発火することを確認——手組みの近似ファイルではなく、実際の出力そのもので確認。
+- [x] **根本原因**：`XLSX_STYLES`（従スクラッチ`Vm()`用の最小`styles.xml`定数）に`<cellStyles>`要素が一切存在しなかった。スキーマ上は合法だが、openpyxlが再オープン時に警告を出す。
+- [x] **実openpyxl規約の実地確認**：ブリーフィングでは日本語ロケールの実fixtureの`<cellStyle name="標準" .../>`を参考として提示されていたが、それを鵜呑みにせず、実際に`openpyxl.Workbook()`（従スクラッチ）を生成してその`xl/styles.xml`を直接確認——`<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0" hidden="0"/></cellStyles>`（英語名"Normal"）が真の従スクラッチ規約であることを確認し、こちらを採用。スキーマ上の位置も`<cellXfs>`の直後（`CT_Stylesheet`の実際の子要素順序と一致）であることを確認。
+- [x] **修正**：`XLSX_STYLES`定数へ`<cellStyles><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>`を`</cellXfs>`の直後に追加。
+- [x] **実地再検証**：同じ手法（実際の保存バイト列をopenpyxlへ渡す）で、修正後は警告が0件になることを確認。
+- [x] **既存テストへの影響確認**：`XLSX_STYLES`を参照する既存のRustユニットテスト（`resolve_pending_number_formats_*`/`resolve_pending_style_attrs_*`系）が新しい`<cellStyles>`要素の追加によって壊れないことをフルテストスイートで確認——いずれも文字列の`contains`/`numFmtId`抽出等で`<cellStyles>`部分を見ておらず無傷。
+- [x] **検証**：新規Rust統合テスト`a_from_scratch_vm_emits_a_cell_styles_element`（`<cellStyles>`の存在・"Normal"という名前・`<cellXfs>`より後という schema位置の3点を検証）を恒久テストとして追加。`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`(1274件全pass)／`cargo check --features python --lib`／`cargo audit`(脆弱性なし)／`scripts/check-versions.sh`(既知の`elixcee-types`ドリフトのみ)、いずれもクリーン。本フィックスも実際の保存出力バイト列に対するopenpyxl検証で直接確認済みのため、追加のmaturinビルドは省略。
+- [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`は本worktree内で更新済み。`internal_docs/ROADMAP.md`のknown-gap 30を`[x]`済みに更新——は親エージェント側で実施が必要。
+
+残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。

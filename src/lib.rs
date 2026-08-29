@@ -2950,6 +2950,13 @@ fn build_xlsx_root_rels(carried_root_rels: &[(String, String)]) -> String {
     out
 }
 
+// `<cellStyles>`'s presence and its "Normal" entry match real `openpyxl.Workbook()`'s own
+// from-scratch default `xl/styles.xml` byte-for-byte (verified directly against a real
+// openpyxl-authored file, not assumed) -- schema position is after `<cellXfs>`, matching
+// `CT_Stylesheet`'s real child sequence (`cellStyleXfs, cellXfs, cellStyles, dxfs, ...`).
+// Without it, `openpyxl.load_workbook()` raises `UserWarning: Workbook contains no default
+// style` on reopen (known gap 30) -- schema-legal, non-fatal, but a spurious warning for
+// every from-scratch `Vm()` save with no style edits at all.
 const XLSX_STYLES: &str = concat!(
     "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
     "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
@@ -2958,6 +2965,7 @@ const XLSX_STYLES: &str = concat!(
     "<borders><border/></borders>\n",
     "<cellStyleXfs><xf/></cellStyleXfs>\n",
     "<cellXfs><xf/></cellXfs>\n",
+    "<cellStyles><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>\n",
     "</styleSheet>\n",
 );
 
