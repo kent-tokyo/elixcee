@@ -847,11 +847,10 @@ pub struct Vm {
     /// round-trip), keyed the same way as `merged_ranges`. Populated by
     /// `populate_from_sheets` from the reader's `WorkbookSheet::
     /// raw_style_indices`; used only by `save_xlsx_impl` (`src/lib.rs`) to
-    /// re-emit each surviving cell's original style index unchanged --
-    /// always correct for this VM to do, since no VBA statement here ever
-    /// mutates a cell's style (`Range.Interior.Color =`/`.NumberFormat =`
-    /// are explicit no-ops, see the tests of those same names below). Empty
-    /// for any sheet built purely in-VBA.
+    /// re-emit each surviving cell's original style index unchanged. Never
+    /// mutated by `set_number_format` directly -- see `pending_number_formats`
+    /// below for why the effective index a cell saves with can differ from
+    /// what's stored here without this map itself ever changing.
     pub(crate) cell_style_indices: HashMap<String, HashMap<(u32, u32), u32>>,
     /// Per-sheet, per-cell resolved number-format code string (GitHub #4), keyed the
     /// same way as `merged_ranges`/`cell_style_indices`. Populated by
@@ -859,8 +858,25 @@ pub struct Vm {
     /// read by `get_cell_number_format` (below) so a Python caller can tell a date-
     /// formatted cell's serial number apart from a plain number without a second,
     /// format-aware Excel library. Empty for any sheet built purely in-VBA or loaded
-    /// from `.ods`.
+    /// from `.ods`. `set_number_format` (0.15.0-A) updates this immediately (so a
+    /// read right after a write sees the new value without needing a save/reload
+    /// round trip) -- but does NOT resolve or touch a `numFmtId`/`cellXf` at call
+    /// time, see `pending_number_formats` below for where that actually happens.
     pub(crate) cell_number_formats: HashMap<String, HashMap<(u32, u32), String>>,
+    /// Cells with a `set_number_format` edit since load, not yet resolved into a real
+    /// `cellXf`/`numFmt` record -- keyed exactly like `cell_number_formats` (same
+    /// per-cell shape), but sparse: only cells actually touched by `set_number_format`,
+    /// not every cell with a known format. Resolution is deliberately deferred to save
+    /// time (`resolve_pending_number_formats`, `src/lib.rs`), the first point the
+    /// starting `xl/styles.xml` document (a loaded file's raw bytes, or `XLSX_STYLES`
+    /// for a from-scratch `Vm()`) is actually available -- `Vm` itself never holds
+    /// those bytes, so there is nothing to resolve against any earlier. Resolving at
+    /// save time from this log plus the untouched `cell_style_indices`/starting
+    /// document, rather than mutating a growing style table on every `set_number_format`
+    /// call, also makes repeated saves naturally idempotent: nothing here is consumed
+    /// or cleared by a save, so calling `save_workbook()` twice in a row reproduces the
+    /// exact same resolution both times.
+    pub(crate) pending_number_formats: HashMap<String, HashMap<(u32, u32), String>>,
     /// Per-sheet whole-tab visibility (P2), keyed the same way as `merged_ranges`.
     /// Populated by `populate_from_sheets` from the reader's `WorkbookSheet::
     /// sheet_state`; sparse like `merged_ranges`/`sheet_visibility` -- only sheets
@@ -997,6 +1013,7 @@ impl Vm {
             sheet_visibility: HashMap::new(),
             cell_style_indices: HashMap::new(),
             cell_number_formats: HashMap::new(),
+            pending_number_formats: HashMap::new(),
             sheet_states: HashMap::new(),
             row_heights: HashMap::new(),
             column_widths: HashMap::new(),
@@ -1244,6 +1261,10 @@ impl Vm {
             let shifted = shift_keyed_cell_map(formats, axis, edit);
             self.cell_number_formats.insert(key.to_string(), shifted);
         }
+        if let Some(pending) = self.pending_number_formats.get(key) {
+            let shifted = shift_keyed_cell_map(pending, axis, edit);
+            self.pending_number_formats.insert(key.to_string(), shifted);
+        }
     }
 
     /// Shifts `key`'s explicit row heights for a row-axis structural edit
@@ -1449,6 +1470,11 @@ impl Vm {
         if let Some(formats) = self.cell_number_formats.get(key) {
             let translated = translate_keyed_cell_map(formats, source, d_row, d_col);
             self.cell_number_formats.insert(key.to_string(), translated);
+        }
+        if let Some(pending) = self.pending_number_formats.get(key) {
+            let translated = translate_keyed_cell_map(pending, source, d_row, d_col);
+            self.pending_number_formats
+                .insert(key.to_string(), translated);
         }
 
         let snapshot: Vec<((u32, u32), CellContent)> = self
@@ -2010,6 +2036,37 @@ impl Vm {
             ));
         }
         Ok(())
+    }
+
+    /// Records a `set_number_format` request over `(r1,c1)..(r2,c2)` on `key` (0.15.0-A).
+    /// Updates `cell_number_formats` immediately, for read-after-write consistency
+    /// (`get_cell_number_format` sees the new value right away, no save/reload needed) --
+    /// but does NOT touch `cell_style_indices` or resolve a real `numFmtId`/`cellXf`
+    /// record here. That resolution needs the starting `xl/styles.xml` document, which
+    /// only exists at save time (see `pending_number_formats`'s own doc comment); this
+    /// method only records the request. No error path: the caller (`PyVm::set_number_format`)
+    /// already validated `key`/the address before calling in, matching
+    /// `insert_rows_on_sheet`'s convention for a method with nothing left to reject.
+    pub fn set_number_format_on_sheet(
+        &mut self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+        format_code: &str,
+    ) {
+        let formats = self.cell_number_formats.entry(key.to_string()).or_default();
+        let pending = self
+            .pending_number_formats
+            .entry(key.to_string())
+            .or_default();
+        for row in r1..=r2 {
+            for col in c1..=c2 {
+                formats.insert((row, col), format_code.to_string());
+                pending.insert((row, col), format_code.to_string());
+            }
+        }
     }
 
     /// Every hidden row number on `key`, flattened from `hidden_rows`'
@@ -2580,6 +2637,7 @@ impl Vm {
             self.sheet_visibility.remove(key);
             self.cell_style_indices.remove(key);
             self.cell_number_formats.remove(key);
+            self.pending_number_formats.remove(key);
             self.sheet_states.remove(key);
             self.row_heights.remove(key);
             self.column_widths.remove(key);
@@ -2601,18 +2659,17 @@ impl Vm {
         self.remove_sheet(&key, name)
     }
 
-    /// Renames a sheet, atomically re-keying all eleven lowercase-keyed per-sheet `Vm`
+    /// Renames a sheet, atomically re-keying all twelve lowercase-keyed per-sheet `Vm`
     /// maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
     /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
-    /// `cell_number_formats`, `sheet_states`, `row_heights`, `column_widths`,
-    /// `worksheet_origins`). Each gets one explicit
+    /// `cell_number_formats`, `pending_number_formats`, `sheet_states`, `row_heights`,
+    /// `column_widths`, `worksheet_origins`). Each gets one explicit
     /// remove+insert line rather than a generic "walk every map" helper: the maps
     /// have different value types, a truly generic helper needs a macro or
     /// trait-object indirection to cross that, and with exactly one call site a
-    /// helper would save nothing. `remove_sheet` (just above) now cleans seven of
-    /// these eight non-identity maps on delete, for the same reason --
-    /// `worksheet_origins` is the one deliberate exception, see its own doc
-    /// comment there.
+    /// helper would save nothing. `remove_sheet` (just above) cleans the
+    /// non-identity maps on delete, for the same reason -- `worksheet_origins` is
+    /// the one deliberate exception, see its own doc comment there.
     ///
     /// `protected_sheets` (a `HashSet`) is NOT re-keyed here -- it doesn't need to
     /// be. Renaming a protected sheet is rejected outright below, so `old_key` is
@@ -2701,6 +2758,9 @@ impl Vm {
         }
         if let Some(v) = self.cell_number_formats.remove(&old_key) {
             self.cell_number_formats.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.pending_number_formats.remove(&old_key) {
+            self.pending_number_formats.insert(new_key.clone(), v);
         }
         // 8. `sheet_states`.
         if let Some(v) = self.sheet_states.remove(&old_key) {
@@ -2798,6 +2858,9 @@ impl Vm {
         }
         if let Some(v) = self.cell_number_formats.get(&source_key).cloned() {
             self.cell_number_formats.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.pending_number_formats.get(&source_key).cloned() {
+            self.pending_number_formats.insert(new_key.clone(), v);
         }
         if let Some(&v) = self.sheet_states.get(&source_key) {
             self.sheet_states.insert(new_key.clone(), v);
@@ -9799,7 +9862,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_sheet_cleans_all_seven_non_identity_per_sheet_maps() {
+    fn delete_sheet_cleans_all_eight_non_identity_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.ensure_sheet("Extra");
         vm.merged_ranges
@@ -9817,6 +9880,10 @@ mod tests {
             "extra".to_string(),
             HashMap::from([((1, 1), "0.00".to_string())]),
         );
+        vm.pending_number_formats.insert(
+            "extra".to_string(),
+            HashMap::from([((1, 1), "0.00".to_string())]),
+        );
         vm.sheet_states
             .insert("extra".to_string(), SheetState::Hidden);
         vm.row_heights
@@ -9831,6 +9898,7 @@ mod tests {
         assert!(!vm.sheet_visibility.contains_key("extra"));
         assert!(!vm.cell_style_indices.contains_key("extra"));
         assert!(!vm.cell_number_formats.contains_key("extra"));
+        assert!(!vm.pending_number_formats.contains_key("extra"));
         assert!(!vm.sheet_states.contains_key("extra"));
         assert!(!vm.row_heights.contains_key("extra"));
         assert!(!vm.column_widths.contains_key("extra"));
@@ -9890,7 +9958,7 @@ mod tests {
     // ── P1 core 3: Vm::rename_sheet / Vm::move_sheet ─────────────────────────
 
     #[test]
-    fn rename_sheet_updates_all_eleven_per_sheet_maps() {
+    fn rename_sheet_updates_all_twelve_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -9914,6 +9982,10 @@ mod tests {
             "sheet1".to_string(),
             HashMap::from([((1, 1), "0.00".to_string())]),
         );
+        vm.pending_number_formats.insert(
+            "sheet1".to_string(),
+            HashMap::from([((1, 1), "0.00".to_string())]),
+        );
         vm.sheet_states
             .insert("sheet1".to_string(), SheetState::Hidden);
         vm.row_heights
@@ -9933,6 +10005,8 @@ mod tests {
         assert!(!vm.cell_style_indices.contains_key("sheet1"));
         assert!(vm.cell_number_formats.contains_key("renamed"));
         assert!(!vm.cell_number_formats.contains_key("sheet1"));
+        assert!(vm.pending_number_formats.contains_key("renamed"));
+        assert!(!vm.pending_number_formats.contains_key("sheet1"));
         assert_eq!(vm.sheet_states.get("renamed"), Some(&SheetState::Hidden));
         assert!(!vm.sheet_states.contains_key("sheet1"));
         assert_eq!(vm.row_height_on_sheet("renamed", 5), Some(30.0));
@@ -10217,7 +10291,7 @@ mod tests {
     // ── P2: copy_sheet ────────────────────────────────────────────────────
 
     #[test]
-    fn copy_sheet_duplicates_all_nine_per_sheet_maps() {
+    fn copy_sheet_duplicates_all_ten_per_sheet_maps() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
             (1, 1),
@@ -10241,6 +10315,10 @@ mod tests {
             "sheet1".to_string(),
             HashMap::from([((1, 1), "0.00".to_string())]),
         );
+        vm.pending_number_formats.insert(
+            "sheet1".to_string(),
+            HashMap::from([((1, 1), "0.00".to_string())]),
+        );
         vm.sheet_states
             .insert("sheet1".to_string(), SheetState::VeryHidden);
         vm.row_heights
@@ -10256,6 +10334,7 @@ mod tests {
         assert!(vm.sheet_visibility.contains_key("sheet1"));
         assert!(vm.cell_style_indices.contains_key("sheet1"));
         assert!(vm.cell_number_formats.contains_key("sheet1"));
+        assert!(vm.pending_number_formats.contains_key("sheet1"));
         assert_eq!(vm.sheet_states.get("sheet1"), Some(&SheetState::VeryHidden));
         assert_eq!(vm.row_height_on_sheet("sheet1", 5), Some(30.0));
         assert_eq!(vm.column_width_on_sheet("sheet1", 3), Some(12.5));
@@ -10268,6 +10347,7 @@ mod tests {
         );
         assert_eq!(vm.cell_style_indices["copy"][&(1, 1)], 3);
         assert_eq!(vm.cell_number_formats["copy"][&(1, 1)], "0.00");
+        assert_eq!(vm.pending_number_formats["copy"][&(1, 1)], "0.00");
         assert_eq!(vm.sheet_states.get("copy"), Some(&SheetState::VeryHidden));
         assert_eq!(vm.row_height_on_sheet("copy", 5), Some(30.0));
         assert_eq!(vm.column_width_on_sheet("copy", 3), Some(12.5));
@@ -11360,6 +11440,19 @@ mod tests {
     }
 
     #[test]
+    fn delete_rows_on_sheet_shifts_a_pending_number_format_edit_too() {
+        // A `set_number_format` edit not yet resolved into `cell_style_indices` (the
+        // resolution happens at save time) must still move with its cell on a
+        // structural edit, or the wrong cell gets the format once resolved.
+        let mut vm = Vm::new();
+        vm.set_number_format_on_sheet("sheet1", 10, 3, 10, 3, "yyyy-mm-dd");
+        vm.delete_rows_on_sheet("sheet1", 5, 2);
+        let pending = vm.pending_number_formats.get("sheet1").unwrap();
+        assert!(!pending.contains_key(&(10, 3)));
+        assert_eq!(pending.get(&(8, 3)), Some(&"yyyy-mm-dd".to_string()));
+    }
+
+    #[test]
     fn insert_cols_on_sheet_shifts_the_column_component_only() {
         let mut vm = Vm::new();
         vm.cell_style_indices
@@ -11395,6 +11488,28 @@ mod tests {
         let styles = vm.cell_style_indices.get("sheet1").unwrap();
         assert!(!styles.contains_key(&(1, 1)));
         assert_eq!(styles.get(&(10, 10)), Some(&9));
+    }
+
+    #[test]
+    fn move_range_on_sheet_translates_a_pending_number_format_edit_too() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "0%");
+        vm.move_range_on_sheet(
+            "sheet1",
+            formula::MoveRect {
+                r1: 1,
+                c1: 1,
+                r2: 1,
+                c2: 1,
+            },
+            10,
+            10,
+        )
+        .unwrap();
+        let pending = vm.pending_number_formats.get("sheet1").unwrap();
+        assert!(!pending.contains_key(&(1, 1)));
+        assert_eq!(pending.get(&(10, 10)), Some(&"0%".to_string()));
     }
 
     #[test]

@@ -1028,6 +1028,107 @@ mod opaque_fragment_tests {
     }
 
     #[test]
+    fn extract_cell_xfs_returns_self_closing_and_child_bearing_spans_verbatim() {
+        let xml = concat!(
+            "<styleSheet><cellXfs count=\"3\">",
+            "<xf/>",
+            "<xf numFmtId=\"4\" fontId=\"0\" fillId=\"0\" borderId=\"0\" applyNumberFormat=\"1\"/>",
+            "<xf numFmtId=\"0\" fontId=\"1\"><alignment horizontal=\"center\"/></xf>",
+            "</cellXfs></styleSheet>",
+        );
+        let xfs = extract_cell_xfs(xml);
+        assert_eq!(
+            xfs,
+            vec![
+                "<xf/>".to_string(),
+                "<xf numFmtId=\"4\" fontId=\"0\" fillId=\"0\" borderId=\"0\" applyNumberFormat=\"1\"/>"
+                    .to_string(),
+                "<xf numFmtId=\"0\" fontId=\"1\"><alignment horizontal=\"center\"/></xf>".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_cell_xfs_empty_when_container_absent() {
+        assert!(extract_cell_xfs("<styleSheet><fonts/></styleSheet>").is_empty());
+    }
+
+    #[test]
+    fn with_num_fmt_id_inserts_into_a_bare_self_closing_xf() {
+        assert_eq!(with_num_fmt_id("<xf/>", 4), "<xf numFmtId=\"4\"/>");
+    }
+
+    #[test]
+    fn with_num_fmt_id_replaces_an_existing_numfmtid_preserving_other_attrs() {
+        let xf = "<xf numFmtId=\"9\" fontId=\"2\" fillId=\"1\" applyNumberFormat=\"1\"/>";
+        let out = with_num_fmt_id(xf, 4);
+        // Order of the untouched attributes doesn't matter for correctness -- parse back
+        // out and compare as a set, matching how this function's own dedup caller treats
+        // equality (byte-identical strings from the same construction path).
+        let attrs = parse_attrs(&out[3..out.len() - 2]);
+        assert_eq!(attr_get(&attrs, "numFmtId"), Some("4"));
+        assert_eq!(attr_get(&attrs, "fontId"), Some("2"));
+        assert_eq!(attr_get(&attrs, "fillId"), Some("1"));
+        assert_eq!(attr_get(&attrs, "applyNumberFormat"), Some("1"));
+    }
+
+    #[test]
+    fn with_num_fmt_id_preserves_child_elements_on_a_non_self_closing_xf() {
+        let xf = "<xf numFmtId=\"0\" fontId=\"1\"><alignment horizontal=\"center\"/></xf>";
+        let out = with_num_fmt_id(xf, 14);
+        assert!(out.ends_with("<alignment horizontal=\"center\"/></xf>"));
+        assert!(out.contains("numFmtId=\"14\""));
+        assert!(!out.contains("numFmtId=\"0\""));
+    }
+
+    #[test]
+    fn with_num_fmt_id_is_idempotent_for_dedup_when_called_twice_on_the_same_input() {
+        // The find-or-append caller relies on two independently constructed candidates
+        // from the SAME source xf + same target id being byte-identical.
+        let xf = "<xf fontId=\"3\" borderId=\"2\"/>";
+        assert_eq!(with_num_fmt_id(xf, 7), with_num_fmt_id(xf, 7));
+    }
+
+    #[test]
+    fn resolve_number_format_id_reuses_a_builtin() {
+        let custom = HashMap::new();
+        match resolve_number_format_id("#,##0.00", &custom) {
+            ResolvedNumFmt::Existing(id) => assert_eq!(id, 4),
+            ResolvedNumFmt::New(_) => panic!("expected an existing builtin id"),
+        }
+    }
+
+    #[test]
+    fn resolve_number_format_id_reuses_an_existing_custom_entry() {
+        let mut custom = HashMap::new();
+        custom.insert(164, "0.00\"kg\"".to_string());
+        match resolve_number_format_id("0.00\"kg\"", &custom) {
+            ResolvedNumFmt::Existing(id) => assert_eq!(id, 164),
+            ResolvedNumFmt::New(_) => panic!("expected the existing custom id to be reused"),
+        }
+    }
+
+    #[test]
+    fn resolve_number_format_id_mints_164_when_no_custom_entries_exist() {
+        let custom = HashMap::new();
+        match resolve_number_format_id("0.00\"kg\"", &custom) {
+            ResolvedNumFmt::New(id) => assert_eq!(id, 164),
+            ResolvedNumFmt::Existing(_) => panic!("a genuinely custom format has no builtin match"),
+        }
+    }
+
+    #[test]
+    fn resolve_number_format_id_mints_one_past_the_highest_existing_custom_id() {
+        let mut custom = HashMap::new();
+        custom.insert(164, "0.00\"kg\"".to_string());
+        custom.insert(170, "0.00\"lb\"".to_string());
+        match resolve_number_format_id("[Red]0.00", &custom) {
+            ResolvedNumFmt::New(id) => assert_eq!(id, 171),
+            ResolvedNumFmt::Existing(_) => panic!("not a builtin or existing custom format"),
+        }
+    }
+
+    #[test]
     fn root_tag_has_rid_false_for_a_relationship_free_page_setup() {
         // fixture5_chart_image_freeze_print.xlsm's real shape.
         let xml = r#"<pageSetup paperSize="9" orientation="portrait" horizontalDpi="0" verticalDpi="0"/>"#;
@@ -1428,6 +1529,132 @@ fn resolve_number_format(num_fmt_id: u32, custom_formats: &HashMap<u32, String>)
         .iter()
         .find(|(id, _)| *id == num_fmt_id)
         .map(|(_, code)| code.to_string())
+}
+
+/// `xl/styles.xml`'s custom `<numFmt numFmtId="N" formatCode="...">` definitions --
+/// `xlsx_styles`'s own `number_formats` field, exposed narrowly (not the whole
+/// read-only-shaped `XlsxStyles` struct) for `set_number_format`'s write-direction lookup
+/// (`resolve_number_format_id` below).
+pub(crate) fn custom_number_formats(xml: &str) -> HashMap<u32, String> {
+    xlsx_styles(xml).number_formats
+}
+
+/// A target format-code string resolves to either an id some existing record (built-in or
+/// this file's own custom `<numFmt>`) already means, or a brand-new custom id this file
+/// has never used before.
+pub(crate) enum ResolvedNumFmt {
+    Existing(u32),
+    New(u32),
+}
+
+/// Inverts `resolve_number_format`: given a target format-code string, finds the
+/// `numFmtId` that already means it (checking the file's own custom definitions first,
+/// then the built-in 0-49 table -- matching `resolve_number_format`'s own priority), or
+/// mints the next free custom id (ECMA-376 §18.8.30: ids 0-163 are reserved/built-in:
+/// starts at 164, or one past the highest custom id this file already defines).
+pub(crate) fn resolve_number_format_id(
+    format_code: &str,
+    custom_formats: &HashMap<u32, String>,
+) -> ResolvedNumFmt {
+    if let Some((&id, _)) = custom_formats
+        .iter()
+        .find(|(_, code)| code.as_str() == format_code)
+    {
+        return ResolvedNumFmt::Existing(id);
+    }
+    if let Some((id, _)) = BUILTIN_NUMBER_FORMATS
+        .iter()
+        .find(|(_, code)| *code == format_code)
+    {
+        return ResolvedNumFmt::Existing(*id);
+    }
+    let next = custom_formats
+        .keys()
+        .copied()
+        .max()
+        .map_or(164, |m| m.max(163) + 1);
+    ResolvedNumFmt::New(next)
+}
+
+/// Extracts the raw, byte-for-byte `<xf .../>`/`<xf>...</xf>` spans inside `xml`'s
+/// `<cellXfs>...</cellXfs>` container, in document order -- a cell's `s="N"` is a 0-based
+/// index into this list, same convention as `XlsxStyles::cell_xfs` above, but keeping the
+/// FULL raw span (attributes and any `<alignment>`/`<protection>` children) rather than
+/// just the `numFmtId`, since `set_number_format`'s find-or-append write path needs to
+/// clone a record with everything else preserved verbatim. Unlike `extract_hyperlinks`'s
+/// `<hyperlink>` (always self-closing per its real XSD), `<xf>` can have children, so both
+/// forms are handled, matching `extract_defined_name_elements`'s approach. Empty if
+/// `<cellXfs>` is absent or has no `<xf>` children.
+pub(crate) fn extract_cell_xfs(xml: &str) -> Vec<String> {
+    let Some(container) = extract_raw_element(xml, "cellXfs") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut search_from = 0;
+    while let Some((tag_start, tag_close_rel, full_name)) =
+        find_next_open_tag(&container, search_from)
+    {
+        if full_name.rsplit(':').next().unwrap_or(&full_name) != "xf" {
+            search_from = tag_start + 1;
+            continue;
+        }
+        let name_end = tag_start + 1 + full_name.len();
+        let start_tag_end = name_end + tag_close_rel + 1;
+        let self_closing = container[name_end..name_end + tag_close_rel]
+            .trim_end()
+            .ends_with('/');
+        if self_closing {
+            out.push(container[tag_start..start_tag_end].to_string());
+            search_from = start_tag_end;
+            continue;
+        }
+        let close_tag = format!("</{}>", full_name);
+        let Some(end_rel) = container[start_tag_end..].find(&close_tag) else {
+            break;
+        };
+        let end = start_tag_end + end_rel + close_tag.len();
+        out.push(container[tag_start..end].to_string());
+        search_from = end;
+    }
+    out
+}
+
+/// Clones a raw `<xf>` span (as returned by `extract_cell_xfs`) with its `numFmtId`
+/// attribute set to `new_id` -- added if absent (matching a bare `<xf/>`'s implicit
+/// General/id-0), replaced if present -- and every OTHER attribute and child element
+/// preserved verbatim. This is `set_number_format`'s core safety primitive: it never
+/// needs to understand what `fontId`/`fillId`/`borderId`/`<alignment>`/`<protection>` mean
+/// (that's 0.15.0-B/C's job), only copy them into the new record unchanged.
+pub(crate) fn with_num_fmt_id(xf_span: &str, new_id: u32) -> String {
+    let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(xf_span, 0) else {
+        return xf_span.to_string();
+    };
+    let name_end = tag_start + 1 + full_name.len();
+    let tag_close_abs = name_end + tag_close_rel;
+    let raw_attrs = &xf_span[name_end..tag_close_abs];
+    let self_closing = raw_attrs.trim_end().ends_with('/');
+    let attrs_str = if self_closing {
+        raw_attrs.trim_end().strip_suffix('/').unwrap_or(raw_attrs)
+    } else {
+        raw_attrs
+    };
+    let mut new_attrs = String::new();
+    for a in parse_attrs(attrs_str) {
+        if a.name.rsplit(':').next() == Some("numFmtId") {
+            continue;
+        }
+        new_attrs.push(' ');
+        new_attrs.push_str(&a.name);
+        new_attrs.push_str("=\"");
+        new_attrs.push_str(&crate::xml_escape(&a.value));
+        new_attrs.push('"');
+    }
+    new_attrs.push_str(&format!(" numFmtId=\"{new_id}\""));
+    if self_closing {
+        format!("<{full_name}{new_attrs}/>")
+    } else {
+        format!("<{full_name}{new_attrs}{}", &xf_span[tag_close_abs..])
+    }
 }
 
 /// Parses a single worksheet XML into a 1-based (row, col) → SheetCell map,

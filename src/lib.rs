@@ -192,6 +192,10 @@ fn py_to_variant(obj: &Bound<'_, PyAny>) -> PyResult<Variant> {
 #[cfg_attr(not(feature = "python"), allow(dead_code))]
 type RangeBounds = ((u32, u32), (u32, u32));
 
+/// Per-sheet, per-cell style index -- `Vm::cell_style_indices`'s own shape, reused here
+/// for `resolve_pending_number_formats`'s "effective" (edits applied) return value.
+type StyleIndexMap = std::collections::HashMap<String, std::collections::HashMap<(u32, u32), u32>>;
+
 /// Validates and parses a single-area A1 range address for the bulk-range
 /// Python API (`get_range`/`set_range`). Deliberately NOT a new A1 parser —
 /// delegates to `crate::types::parse_range_addr` for the actual grammar.
@@ -1267,6 +1271,58 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Sets every cell in *addr* to *format_code* (e.g. ``"#,##0.00"``, ``"m/d/yyyy"``,
+    /// or a genuinely custom code like ``"0.00\"kg\""``) -- 0.15.0-A.
+    ///
+    /// An existing built-in (ids 0-49) or this file's own existing custom format is
+    /// reused if *format_code* already matches one exactly; otherwise a new custom
+    /// ``<numFmt>`` is minted on save. Every other style attribute on each cell (font,
+    /// fill, border, alignment, protection) is preserved unchanged -- setting those is
+    /// 0.15.0-B, not this method. Cells that already share a style index with cells
+    /// OUTSIDE *addr* never have that shared index mutated in place: each touched cell
+    /// gets a fresh or reused index of its own, so untouched cells elsewhere are
+    /// unaffected, even if they happened to look identical before this call.
+    ///
+    /// Takes effect immediately for reads (:meth:`get_cell_number_format` reflects the
+    /// new value right away), but the underlying ``xl/styles.xml`` write is deferred to
+    /// :meth:`save_workbook` -- calling this without ever saving has no on-disk effect.
+    ///
+    /// A cell that never receives a value (via :meth:`set_cell` or otherwise) by the
+    /// time you save has no persisted effect on disk, even though a read right after
+    /// this call still reports the new format -- the writer only emits a ``<c>``
+    /// element for a cell with actual content, a pre-existing limitation that predates
+    /// this method (a loaded file's own genuinely empty, pre-formatted cell is dropped
+    /// the same way on any save). See ROADMAP.md's known gaps.
+    ///
+    /// Parameters
+    /// ----------
+    /// addr:
+    ///     A single-area A1 range, e.g. ``"B2:B100"``, or a single cell.
+    /// format_code:
+    ///     The number-format code to apply.
+    /// sheet:
+    ///     Sheet to modify. Defaults to the active sheet; does **not** change the
+    ///     active sheet when given.
+    ///
+    /// Raises ``ValueError`` on a bad/oversized address or an unknown *sheet*.
+    #[pyo3(signature = (addr, format_code, sheet = None))]
+    fn set_number_format(
+        &mut self,
+        addr: &str,
+        format_code: &str,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .set_number_format_on_sheet(&key, r1, c1, r2, c2, format_code);
+        Ok(())
+    }
+
     /// Every hidden row number on a sheet, as a sorted list of 1-based row
     /// numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.
     ///
@@ -1953,12 +2009,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     // xl/styles.xml is writer-owned (never enters the generic `passthrough` loop
     // below, via `is_writer_owned_part`) but, unlike the other writer-owned parts,
     // its CONTENT is conditionally passed through rather than always regenerated
-    // from the hardcoded `XLSX_STYLES` minimal stylesheet -- safe because no VBA
-    // statement in this VM ever mutates a cell's style (see
-    // `Vm::cell_style_indices`'s doc comment), so the source's real style
-    // definitions (fonts/fills/borders/number formats) stay exactly correct for
-    // every surviving cell's re-emitted `s="N"` index. See
-    // `docs/xlsx-architecture.md`.
+    // from the hardcoded `XLSX_STYLES` minimal stylesheet -- these raw bytes are the
+    // starting point either way, byte-for-byte when nothing touched styles (still true
+    // for every VBA statement -- `Range.Interior.Color =`/`.NumberFormat =` remain
+    // explicit no-ops), or as `resolve_pending_number_formats`'s input when
+    // `set_number_format` (0.15.0-A) has pending edits. See `docs/xlsx-architecture.md`.
     let mut passthrough_styles: Option<Vec<u8>> = None;
     // Original worksheet XML text, keyed by lowercased sheet name (matching
     // `worksheet_origins`'/`sheet_names()`'s own key space) — the source for
@@ -2199,9 +2254,28 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     zip.write_all(build_xlsx_workbook_rels(&worksheet_plans, has_vba, &carried_rels).as_bytes())
         .map_err(|e| e.to_string())?;
 
+    // `set_number_format` (0.15.0-A) resolution -- see `resolve_pending_number_formats`'s
+    // own doc comment. `styles_source` is exactly the same starting document the final
+    // `xl/styles.xml` write below always used; resolving here (before the per-sheet loop)
+    // rather than at that write site is what lets each sheet's own `<c s="N">` emission
+    // below see the EFFECTIVE (possibly-edited) index instead of `vm.cell_style_indices`'
+    // original one.
+    let styles_source = passthrough_styles
+        .as_deref()
+        .unwrap_or_else(|| XLSX_STYLES.as_bytes());
+    let mut new_styles_bytes: Option<Vec<u8>> = None;
+    let mut effective_style_indices: Option<StyleIndexMap> = None;
+    if let Some((new_xml, indices)) = resolve_pending_number_formats(vm, styles_source) {
+        new_styles_bytes = Some(new_xml.into_bytes());
+        effective_style_indices = Some(indices);
+    }
+
     for plan in &worksheet_plans {
         let sheet_name = &plan.sheet_key;
         let source_xml = sheet_source_xml.get(&sheet_name.to_lowercase());
+        let style_override = effective_style_indices
+            .as_ref()
+            .and_then(|m| m.get(&sheet_name.to_lowercase()));
         // .and_then(ensure_r_prefix_bound): same reasoning as workbook_root_attrs above --
         // this sheet's own tableParts/drawing/legacyDrawing/hyperlinks r:id restoration
         // below always hardcodes the literal `r:` prefix, so the source's root attrs must
@@ -2273,8 +2347,10 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
         zip.start_file(plan.output_part_name.as_str(), deflated)
             .map_err(|e| e.to_string())?;
-        zip.write_all(build_xlsx_sheet(vm, sheet_name, &str_index, &fragments).as_bytes())
-            .map_err(|e| e.to_string())?;
+        zip.write_all(
+            build_xlsx_sheet(vm, sheet_name, &str_index, &fragments, style_override).as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     zip.start_file("xl/sharedStrings.xml", deflated)
@@ -2284,12 +2360,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
     zip.start_file("xl/styles.xml", deflated)
         .map_err(|e| e.to_string())?;
-    zip.write_all(
-        passthrough_styles
-            .as_deref()
-            .unwrap_or_else(|| XLSX_STYLES.as_bytes()),
-    )
-    .map_err(|e| e.to_string())?;
+    zip.write_all(new_styles_bytes.as_deref().unwrap_or(styles_source))
+        .map_err(|e| e.to_string())?;
 
     for (name, bytes) in &passthrough {
         zip.start_file(name.as_str(), deflated)
@@ -2332,6 +2404,126 @@ const XLSX_STYLES: &str = concat!(
     "<cellXfs><xf/></cellXfs>\n",
     "</styleSheet>\n",
 );
+
+/// Resolves `vm.pending_number_formats` (`set_number_format`, 0.15.0-A) against
+/// `starting_styles` -- a loaded file's real `xl/styles.xml` bytes, or `XLSX_STYLES` for a
+/// from-scratch `Vm()`; `save_xlsx_impl` picks whichever applies before calling this, the
+/// same `.unwrap_or_else(...)` resolution it always used, just no longer assumed to be the
+/// final answer. Returns `None` when there's nothing pending, so the caller can write
+/// `starting_styles` back byte-for-byte unchanged, exactly as every save did before
+/// `set_number_format` existed -- calling this at all, let alone its cost, is entirely
+/// skipped in the common case.
+///
+/// Never mutates an existing `<xf>` record in place: every edited cell gets a fresh or
+/// reused index found via `reader::with_num_fmt_id` + a byte-comparison dedup against
+/// every `<xf>` seen so far (conservative -- can under-dedupe on attribute-order
+/// differences, never over-dedupes two genuinely different records into one), since a
+/// `cellXf` index can be shared by cells this call was never asked to touch ("no
+/// shared-style mutation", 0.15.0's own safety requirement). `<fonts>`/`<fills>`/
+/// `<borders>`/`<cellStyleXfs>` are never parsed or altered; only `<numFmts>` (appended
+/// to, never rewritten) and `<cellXfs>` (existing entries copied byte-for-byte, new ones
+/// appended) change.
+///
+/// Returns the effective per-sheet style-index map alongside the new document text
+/// (a full clone of `vm.cell_style_indices` with just the touched cells overridden) --
+/// `vm.cell_style_indices` itself is never mutated here (`save_xlsx_impl` takes `&Vm`,
+/// not `&mut Vm`), so calling `save_workbook()` twice in a row re-resolves from the exact
+/// same starting point both times and produces identical output.
+fn resolve_pending_number_formats(
+    vm: &Vm,
+    starting_styles: &[u8],
+) -> Option<(String, StyleIndexMap)> {
+    if vm.pending_number_formats.values().all(|m| m.is_empty()) {
+        return None;
+    }
+    let xml = String::from_utf8_lossy(starting_styles).into_owned();
+
+    let cell_xfs_container = reader::extract_raw_element(&xml, "cellXfs");
+    let mut xfs = reader::extract_cell_xfs(&xml);
+    if xfs.is_empty() {
+        // No <cellXfs> at all, or an empty/self-closing one -- every cell's `s` still
+        // defaults to index 0, so synthesize the same bare record `XLSX_STYLES` itself
+        // ships, rather than leaving index 0 with nothing to clone from.
+        xfs.push("<xf/>".to_string());
+    }
+
+    let mut custom_formats = reader::custom_number_formats(&xml);
+    let numfmts_container = reader::extract_raw_element(&xml, "numFmts");
+    let mut new_numfmt_entries = String::new();
+
+    let mut effective = vm.cell_style_indices.clone();
+
+    for (sheet_key, edits) in &vm.pending_number_formats {
+        if edits.is_empty() {
+            continue;
+        }
+        let sheet_indices = effective.entry(sheet_key.clone()).or_default();
+        for (&(row, col), format_code) in edits {
+            let num_fmt_id = match reader::resolve_number_format_id(format_code, &custom_formats) {
+                reader::ResolvedNumFmt::Existing(id) => id,
+                reader::ResolvedNumFmt::New(id) => {
+                    custom_formats.insert(id, format_code.clone());
+                    new_numfmt_entries.push_str(&format!(
+                        "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>",
+                        xml_escape(format_code)
+                    ));
+                    id
+                }
+            };
+            let current_index = sheet_indices.get(&(row, col)).copied().unwrap_or(0) as usize;
+            let current_xf = xfs
+                .get(current_index)
+                .cloned()
+                .unwrap_or_else(|| "<xf/>".to_string());
+            let candidate = reader::with_num_fmt_id(&current_xf, num_fmt_id);
+            let new_index = match xfs.iter().position(|xf| xf == &candidate) {
+                Some(i) => i as u32,
+                None => {
+                    xfs.push(candidate);
+                    (xfs.len() - 1) as u32
+                }
+            };
+            sheet_indices.insert((row, col), new_index);
+        }
+    }
+
+    let new_cell_xfs = format!(
+        "<cellXfs count=\"{}\">{}</cellXfs>",
+        xfs.len(),
+        xfs.concat()
+    );
+    let mut new_xml = match &cell_xfs_container {
+        Some(container) => xml.replacen(container.as_str(), &new_cell_xfs, 1),
+        // CT_StyleSheet requires <cellXfs> in every real file; defensive fallback only.
+        None => xml.replacen("</styleSheet>", &format!("{new_cell_xfs}</styleSheet>"), 1),
+    };
+
+    if !new_numfmt_entries.is_empty() {
+        // `custom_formats` now holds every pre-existing custom entry plus every one
+        // minted this call -- its length is exactly the new <numFmts count="...">.
+        let final_count = custom_formats.len();
+        new_xml = match &numfmts_container {
+            Some(container) => {
+                let inner_start = container.find('>').map(|i| i + 1).unwrap_or(0);
+                let inner_end = container.rfind("</numFmts>").unwrap_or(container.len());
+                let inner = &container[inner_start..inner_end];
+                let rebuilt = format!(
+                    "<numFmts count=\"{final_count}\">{inner}{new_numfmt_entries}</numFmts>"
+                );
+                new_xml.replacen(container.as_str(), &rebuilt, 1)
+            }
+            None => {
+                let block =
+                    format!("<numFmts count=\"{final_count}\">{new_numfmt_entries}</numFmts>");
+                // Schema order: numFmts is the very first child of <styleSheet>, before
+                // <fonts> -- inserted right before it rather than appended at the end.
+                new_xml.replacen("<fonts", &format!("{block}<fonts"), 1)
+            }
+        };
+    }
+
+    Some((new_xml, effective))
+}
 
 fn build_xlsx_content_types(
     worksheet_plans: &[WorksheetOutputPlan],
@@ -2624,6 +2816,7 @@ fn build_xlsx_sheet(
     sheet_name: &str,
     str_index: &std::collections::HashMap<String, usize>,
     fragments: &OpaqueWorksheetFragments,
+    style_override: Option<&std::collections::HashMap<(u32, u32), u32>>,
 ) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
     match fragments.root_attrs {
@@ -2654,7 +2847,13 @@ fn build_xlsx_sheet(
     }
 
     let sheet_key = sheet_name.to_lowercase();
-    let style_indices = vm.cell_style_indices.get(&sheet_key);
+    // `style_override` (0.15.0-A `set_number_format`) is a full clone of
+    // `vm.cell_style_indices` with just the edited cells' indices replaced -- present
+    // for EVERY sheet whenever any pending edit exists anywhere in the workbook (styles
+    // are workbook-global), so a lookup miss here means this sheet genuinely has no
+    // style-index entries at all, same as the direct `vm.cell_style_indices` fallback
+    // would report.
+    let style_indices = style_override.or_else(|| vm.cell_style_indices.get(&sheet_key));
     let visibility = vm.sheet_visibility.get(&sheet_key);
     let hidden_columns = visibility
         .map(|v| v.hidden_columns.as_slice())
@@ -3128,7 +3327,7 @@ fn ods_cell_xml(v: &Variant) -> String {
     }
 }
 
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -3337,6 +3536,177 @@ mod tests {
         assert_eq!(reloaded.column_width_on_sheet(&key, 1), None);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn resolve_pending_number_formats_returns_none_with_no_pending_edits() {
+        let vm = Vm::new();
+        assert!(resolve_pending_number_formats(&vm, XLSX_STYLES.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn resolve_pending_number_formats_reuses_a_builtin_id_against_a_from_scratch_stylesheet() {
+        let mut vm = Vm::new();
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "#,##0.00");
+        let (new_xml, effective) =
+            resolve_pending_number_formats(&vm, XLSX_STYLES.as_bytes()).expect("pending edit");
+        // id 4 is BUILTIN_NUMBER_FORMATS' own "#,##0.00" -- no <numFmts> should be minted.
+        assert!(!new_xml.contains("<numFmts"));
+        assert!(new_xml.contains("numFmtId=\"4\""));
+        let idx = effective["sheet1"][&(1, 1)];
+        assert_ne!(idx, 0); // index 0 is the untouched bare <xf/>, General.
+    }
+
+    #[test]
+    fn resolve_pending_number_formats_mints_a_new_custom_numfmt_when_no_source_has_none() {
+        let mut vm = Vm::new();
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "0.00\"kg\"");
+        let (new_xml, _) =
+            resolve_pending_number_formats(&vm, XLSX_STYLES.as_bytes()).expect("pending edit");
+        assert!(new_xml.contains("<numFmts count=\"1\">"));
+        assert!(new_xml.contains("numFmtId=\"164\" formatCode=\"0.00&quot;kg&quot;\""));
+        assert!(new_xml.contains("numFmtId=\"164\"")); // used on the minted <xf> too.
+        // Schema order: <numFmts> must precede <fonts>.
+        assert!(new_xml.find("<numFmts").unwrap() < new_xml.find("<fonts").unwrap());
+    }
+
+    #[test]
+    fn resolve_pending_number_formats_appends_to_an_existing_numfmts_block_without_disturbing_it() {
+        let source = concat!(
+            "<styleSheet>",
+            "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"0.00&quot;kg&quot;\"/></numFmts>",
+            "<fonts><font/></fonts><fills><fill/></fills><borders><border/></borders>",
+            "<cellStyleXfs><xf/></cellStyleXfs>",
+            "<cellXfs count=\"1\"><xf/></cellXfs>",
+            "</styleSheet>",
+        );
+        let mut vm = Vm::new();
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "0.00\"lb\"");
+        let (new_xml, _) =
+            resolve_pending_number_formats(&vm, source.as_bytes()).expect("pending edit");
+        // The pre-existing 164/"kg" entry must survive untouched, and the new one gets 165.
+        assert!(new_xml.contains("numFmtId=\"164\" formatCode=\"0.00&quot;kg&quot;\""));
+        assert!(new_xml.contains("numFmtId=\"165\" formatCode=\"0.00&quot;lb&quot;\""));
+        assert!(new_xml.contains("<numFmts count=\"2\">"));
+    }
+
+    #[test]
+    fn resolve_pending_number_formats_reuses_an_existing_xf_dedup_not_a_duplicate() {
+        let mut vm = Vm::new();
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "#,##0.00");
+        vm.set_number_format_on_sheet("sheet1", 5, 5, 5, 5, "#,##0.00");
+        let (_, effective) =
+            resolve_pending_number_formats(&vm, XLSX_STYLES.as_bytes()).expect("pending edit");
+        // Two DIFFERENT cells asking for the SAME format must land on the SAME new index,
+        // not two separate ones -- both requests clone from the same source (bare <xf/>,
+        // index 0) with the same target numFmtId, so they're byte-identical candidates.
+        assert_eq!(effective["sheet1"][&(1, 1)], effective["sheet1"][&(5, 5)]);
+    }
+
+    #[test]
+    fn resolve_pending_number_formats_never_mutates_the_index_of_an_untouched_cell() {
+        // Two cells sharing style index 0 (both bare/General) on a from-scratch stylesheet
+        // -- only one is touched. The untouched one's effective index must stay 0 (its
+        // <xf> record, shared by both, is never mutated in place).
+        let mut vm = Vm::new();
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "0%");
+        let (_, effective) =
+            resolve_pending_number_formats(&vm, XLSX_STYLES.as_bytes()).expect("pending edit");
+        assert_ne!(effective["sheet1"][&(1, 1)], 0);
+        // (2,2) was never touched -- absent from the effective override map entirely,
+        // meaning callers fall back to `cell_style_indices` (still empty/0 for it).
+        assert!(!effective.get("sheet1").unwrap().contains_key(&(2, 2)));
+    }
+
+    #[test]
+    fn set_number_format_on_a_from_scratch_vm_survives_a_save_and_reload() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Float(1234.5),
+            },
+        );
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "#,##0.00");
+
+        let path = "/tmp/elixcee_test_set_number_format_from_scratch.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+
+        let mut reloaded = Vm::new();
+        reloaded
+            .load_workbook_file(path)
+            .expect("reload should succeed");
+        assert_eq!(reloaded.get_cell_number_format(1, 1), Some("#,##0.00"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn set_number_format_mints_a_custom_numfmt_that_survives_a_save_and_reload() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Float(2.5),
+            },
+        );
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "0.00\"kg\"");
+
+        let path = "/tmp/elixcee_test_set_number_format_custom.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+
+        let mut reloaded = Vm::new();
+        reloaded
+            .load_workbook_file(path)
+            .expect("reload should succeed");
+        assert_eq!(reloaded.get_cell_number_format(1, 1), Some("0.00\"kg\""));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn set_number_format_leaves_an_untouched_sibling_cell_unaffected_after_a_reload() {
+        // The concrete "no shared-style mutation" regression: two cells start sharing
+        // style index 0 (both General, from-scratch default). Only one gets a format.
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Float(1.0),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Float(2.0),
+            },
+        );
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "0%");
+
+        let path = "/tmp/elixcee_test_set_number_format_sibling_unaffected.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+
+        let mut reloaded = Vm::new();
+        reloaded
+            .load_workbook_file(path)
+            .expect("reload should succeed");
+        assert_eq!(reloaded.get_cell_number_format(1, 1), Some("0%"));
+        // General has no format string to report at all -- must stay None, not "0%".
+        assert_eq!(reloaded.get_cell_number_format(2, 1), None);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn set_number_format_get_cell_number_format_reflects_the_edit_before_any_save() {
+        let mut vm = Vm::new();
+        assert_eq!(vm.get_cell_number_format(1, 1), None);
+        vm.set_number_format_on_sheet("sheet1", 1, 1, 1, 1, "0.00%");
+        assert_eq!(vm.get_cell_number_format(1, 1), Some("0.00%"));
     }
 
     #[test]
