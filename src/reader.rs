@@ -99,6 +99,15 @@ pub struct WorkbookSheet {
     /// customWidth="1"/>` -- same `customWidth="1"`-required caveat as
     /// `row_heights`. Always empty for `.ods` (deferred, same as `hidden_columns`).
     pub column_widths: Vec<(u32, u32, f64)>,
+    /// Per-row default style index (0.15.0-C2), from `<row r=".." s=".."
+    /// customFormat="1">` -- `customFormat="1"` is required for `s` to mean
+    /// "this row's own default style", same required-flag caveat as
+    /// `row_heights`' `customHeight`. Always empty for `.ods`.
+    pub row_styles: HashMap<u32, u32>,
+    /// Column default-style ranges (0.15.0-C2), 1-based inclusive `(min, max,
+    /// style_index)`, from `<col min=".." max=".." style=".."/>`. Always
+    /// empty for `.ods`.
+    pub column_styles: Vec<(u32, u32, u32)>,
 }
 
 pub enum SheetCell {
@@ -1538,6 +1547,8 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 sheet_state,
                 row_heights: sheet_data.row_heights,
                 column_widths: sheet_data.column_widths,
+                row_styles: sheet_data.row_styles,
+                column_styles: sheet_data.column_styles,
             },
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
@@ -2456,6 +2467,10 @@ struct XlsxSheetData {
     /// `row_heights`' `customHeight`. Already range-shaped in the XML, no
     /// coalescing needed, same as `hidden_columns`.
     column_widths: Vec<(u32, u32, f64)>,
+    /// Per-row default style index (0.15.0-C2) — see `WorkbookSheet::row_styles`.
+    row_styles: HashMap<u32, u32>,
+    /// Column default-style ranges (0.15.0-C2) — see `WorkbookSheet::column_styles`.
+    column_styles: Vec<(u32, u32, u32)>,
     /// Per-cell raw `<f>` formula text — see `BufferSheet::formulas`.
     formulas: HashMap<(u32, u32), String>,
     /// The worksheet's declared `<dimension>`, when present and trusted —
@@ -2476,6 +2491,8 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     let mut pending_hidden_row_run: Option<(u32, u32)> = None;
     let mut row_heights: HashMap<u32, f64> = HashMap::new();
     let mut column_widths: Vec<(u32, u32, f64)> = Vec::new();
+    let mut row_styles: HashMap<u32, u32> = HashMap::new();
+    let mut column_styles: Vec<(u32, u32, u32)> = Vec::new();
     let mut formulas: HashMap<(u32, u32), String> = HashMap::new();
     let mut dimension: Option<MergeRect> = None;
     let mut style_ids: HashMap<(u32, u32), u32> = HashMap::new();
@@ -2524,6 +2541,14 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                         {
                             row_heights.insert(cur_row, ht);
                         }
+                        // `customFormat="1"` is required for `s` to mean "this row's own
+                        // default style" (0.15.0-C2), same required-flag convention as
+                        // `customHeight`/`ht` above.
+                        if attr_is_true(attrs, "customFormat")
+                            && let Some(s) = attr_get(attrs, "s").and_then(|s| s.parse().ok())
+                        {
+                            row_styles.insert(cur_row, s);
+                        }
                     }
                     "col" => {
                         if attr_is_true(attrs, "hidden") {
@@ -2539,6 +2564,16 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                             let width = attr_get(attrs, "width").and_then(|s| s.parse().ok());
                             if let (Some(min), Some(max), Some(width)) = (min, max, width) {
                                 column_widths.push((min, max, width));
+                            }
+                        }
+                        // `style="N"` (0.15.0-C2) needs no required-flag guard the way
+                        // `hidden`/`customWidth` do -- its own presence IS the signal,
+                        // matching real Excel's own `<col style>` convention.
+                        if let Some(style) = attr_get(attrs, "style").and_then(|s| s.parse().ok()) {
+                            let min = attr_get(attrs, "min").and_then(|s| s.parse().ok());
+                            let max = attr_get(attrs, "max").and_then(|s| s.parse().ok());
+                            if let (Some(min), Some(max)) = (min, max) {
+                                column_styles.push((min, max, style));
                             }
                         }
                     }
@@ -2684,6 +2719,8 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
         hidden_columns,
         row_heights,
         column_widths,
+        row_styles,
+        column_styles,
         formulas,
         dimension,
         style_ids,
@@ -2818,6 +2855,8 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             sheet_state: None,
                             row_heights: HashMap::new(),
                             column_widths: Vec::new(),
+                            row_styles: HashMap::new(),
+                            column_styles: Vec::new(),
                         });
                         in_sheet = true;
                         row = 0;
