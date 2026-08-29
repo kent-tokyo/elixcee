@@ -800,3 +800,19 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション、PR #22時点の「merged ranges staying untouched」という記述を今回上書きする旨を明記）、`internal_docs/ROADMAP.md`（0.14.0-B節をPhase 1・2完了として整理）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus、`tasks/todo.md`（本エントリ）。
 
 残作業：Phase 3（`sheet_visibility`の行/列非表示区間のtransform）とPhase 4（`cell_style_indices`/`cell_number_formats`のtransform）が未着手。着手前にユーザーへの確認を推奨（ただし新規スコープではなく既に承認済みのphased breakdownの続きなので、`/greenlane`的な文脈では続行可）。
+
+## 0.14.0-B Phase 3：sheet_visibility（行/列非表示区間）transform実装
+
+ユーザーの`/greenlane`（2回目）を受け、既承認済みのphased breakdownの続きとして着手——新規スコープの判断は不要（Phase 2で導入した仕組みをもう一つのTier 1フィールドへ適用するだけ）。
+
+- [x] **`shift_interval(interval, edit)`**（`src/vm/mod.rs`）：merge・formula rangeと同じ`shift_bound_low`/`shift_bound_high`を再利用する純粋関数。mergeと異なり「両軸とも1単位に縮退したらdrop」という特殊ルールは不要——非表示区間が1行/1列だけを覆うのはごく普通の状態（`set_row_hidden`自体が単一unit区間を作る設計）であり、この機構自身が禁止しているものではないため。区間が完全に崩壊した場合（`low > high`）のみdrop。
+- [x] **`shift_hidden_intervals_for_structural_edit`**：編集対象の軸（row/col）に対応する方（`hidden_rows`または`hidden_columns`）だけを変換し、もう一方には一切触れない——mergeは2次元で両軸の影響を受け得るが、非表示状態は軸ごとに完全独立（row insertがcolumnの非表示状態に影響することはあり得ない）という性質の違いを反映。
+- [x] **range move側は意図的に未実装**：非表示状態は「その行/列自体」に属する性質であり、そこを通過するセルの内容とは無関係——range moveはセル内容の移動のみを扱うため、`move_range_on_sheet`側には何も追加しないのが正しい設計と判断（研究や確認を要する論点ではなく、性質上の帰結）。テストで明示的に確認。
+- [x] **配線**：4つのinsert/delete系メソッドに`shift_hidden_intervals_for_structural_edit`をmerge変換の直後に追加。
+- [x] **既存テストの更新**：Phase 2で更新済みのreal fixture統合テスト（`insert_rows_on_a_merged_and_hidden_row_sheet_shifts_the_merge_but_not_hidden_markers`）を再度更新——今回の実装でhidden row markerもshiftするようになったため、テスト名・アサーションを新しい正しい挙動（同一軸のhidden markerはshiftする、別軸は不変）に合わせて修正。
+- [x] **新規テスト7件**：insert時の挿入点以降/以前でのhidden row shift、insert_rowsがhidden columnsに一切触れないこと、delete時の削除帯より後ろでのshift、削除帯に完全に入った場合のdrop、削除帯に部分的に重なる区間の縮小（複数の単一unit区間が個別にshift/dropされることを確認）、insert_colsでのhidden column shiftとhidden rowsの不変性、move_rangeがhidden状態に一切触れないこと。
+- [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1124件+統合テスト、0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）／`scripts/check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。
+- [x] **実際にビルドしたPython拡張での動作確認**：`maturin develop --release`で実際にビルド・インストールし、Pythonから(1)`insert_rows`によるhidden row shift、(2)`delete_rows`がhidden columnに触れないこと、(3)`move_range`がhidden行に一切触れないこと、(4)実際の`.xlsx`ファイルへのsave→reload round tripを実行して確認。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（0.14.0-B節をPhase 1〜3完了として整理）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus、`tasks/todo.md`（本エントリ）。
+
+残作業：Phase 4（`cell_style_indices`/`cell_number_formats`のtransform）が未着手。この2つは共に`HashMap<sheet, HashMap<(row,col), V>>`という単一セルキー形状であり、mergeやhidden intervalとは異なり「範囲」ではなく「個別セルのキー」を移動させる必要がある——Phase 1で`pub(crate)`化したが再エクスポートを見送っていた`CellShift`/`shift_cell_coord`（単一セル座標用、range用の`shift_bound_low`/`shift_bound_high`とは別物）がこのPhaseで初めて必要になる見込み。
