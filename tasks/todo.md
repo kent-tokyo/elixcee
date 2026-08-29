@@ -777,6 +777,42 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 ユーザーの「start Phase 1 of 0.14.0-B」を受けて着手。Phase 1は2部構成（スコーピング文書§8の1番目の項目）。
 
 - [x] **共有座標シフトプリミティブの公開**：`src/formula/rewrite.rs`の`shift_cell_coord`/`shift_bound_low`/`shift_bound_high`（および`CellShift` enum、`MoveRect::contains`）を`private`から`pub(crate)`へ変更——振る舞いは一切変更せず、可視性のみの変更。`formula::mod.rs`への再エクスポートは今回あえて見送り（消費者がまだ存在せず、再エクスポートするとclippyのunused-import警告になるため——実際に最初に使うラウンド（merged_rangesのtransform実装）で追加する方針をコメントに明記）。全1107件のテストが無回帰で通過、`cargo fmt`/`clippy -D warnings`ともにクリーン。
-- [ ] **merge片コーナー縮小等の実Excel挙動調査**：range move Stage 1と同じ手法（実Excelがこのマシンでは動かせないため、Microsoft公式ドキュメント・Microsoft Learn/Support・Microsoft Community Hubのモデレーター確認済みスレッドを根拠にする）で、7つの具体的な質問（delete片コーナー重複時の縮小挙動／delete で1セルまで縮んだ場合の扱い／delete全体がmergeを覆う場合の破棄／insert がmerge内部に入る場合／insert がmergeの開始境界に入る場合／insert がmergeの終了直後境界に入る場合／cut-pasteでmergeの片コーナーだけが移動元に重なる場合）を調査するforkを起動済み（agent id: 内部管理、ユーザーには非開示）——結果待ち。
+- [x] **merge片コーナー縮小等の実Excel挙動調査（完了、ただしrange move Stage 1より確信度が低い結果）**：7つの質問を調査したforkが完了。結果：
+  - 高確信度：deleteでmerge全体が削除帯に完全に覆われる場合は単純に破棄（自明なケース）。
+  - 中確信度：merge と交差するfull row/column deleteは一般にブロックされない／insertがmerge内部に厳密に入る場合はmergeが拡張される（Microsoft Supportが自分の環境で再現）。
+  - 低確信度（非Microsoft・単一ソース）：insertがmergeの開始境界に入る場合はmerge全体がそのままシフト／終了直後境界への挿入は無関係（後者は根拠なしの推論のみ）。
+  - **未確認（最重要）**：delete がmergeの一部だけを削除帯に含む場合（最も一般的なケースのはず）に縮小後の形状がどうなるか——Microsoft公式ドキュメントにこの操作専用の記事が存在せず、コミュニティの間接的証拠（あるボランティアモデレーターのVBA回避策のコード設計）しか見つからなかった。同様に、1セルまで縮んだ場合にExcelがmergeを黙って解除するのか拒否するのか、という点も未確認（そもそも「1セルmergeをExcelが禁止する」という前提自体の裏付けも見つからず）。cut-pasteでmergeの片コーナーだけが移動元に重なるケースも同様に未確認。
+- [x] **設計文書の更新**：`internal_docs/cell-metadata-transform-0.14.0-b-design.md`の§5・§7を実際の調査結果に基づいて全面改稿。range move Stage 1との違いを明記——今回は「コアの挙動自体」が未確認であり、周辺的なopen questionではない。§7では3つの実際的な選択肢（(1)formula range と同じclamp演算を「実Excel未検証」と明示した上で適用、(2)部分重複するedit自体を拒否、(3)確認済みケースのみtransformし部分重複ケースは現状維持で開示）を提示——今回は技術的な判断ではなくプロダクトのリスク許容度の判断であるため、あえて推奨案を出さずユーザー判断を仰ぐ方針とした。
 
-残作業：merge意味論調査の結果を待って、findingsを`internal_docs/cell-metadata-transform-0.14.0-b-design.md`に反映し、Phase 2（merged_ranges transform実装）へ進む。
+残作業：§7の3択についてユーザーの判断待ち。決定後、Phase 2（merged_ranges transform実装）へ進む。
+
+## 0.14.0-B Phase 2：merged_ranges transform実装
+
+ユーザーが§7の3択から「formula rangeと同じclamp演算を適用（未検証と明示）」を選択したことを受けて実装。
+
+- [x] **`shift_merge_rect(rect, axis, edit)`**（`src/vm/mod.rs`）：Phase 1で`pub(crate)`化した`formula::shift_bound_low`/`shift_bound_high`をそのまま再利用し、編集対象の軸（row/col）だけをclampする純粋関数。結果が`low > high`（完全崩壊）または両軸とも1セルに縮退した場合は`None`（drop）を返す——後者は実Excelの挙動とは無関係に、`merge_cells`自身が既に単一セルmergeを拒否しているルールとの整合性から導出（研究結果に依存しない設計上の帰結）。
+- [x] **`plan_merge_move(merges, source, d_row, d_col)`**：range move用のscan関数。各mergeについて両コーナーが`source`矩形内かどうかを判定——両方内側なら平行移動、両方外側なら不変、片方だけなら「実Excel未確認」を理由にmove全体を拒否（`MoveRewrite::Ambiguous`と同じ「推測しない」方針をmergeにも適用——これはこの研究の結果ではなく、range move自体が既に採用している既存方針の一貫適用）。移動後のmergeが既存の無関係なmergeと重なる場合も同様に拒否（`merge_cells`自身の重複禁止ルールに由来、研究結果とは無関係）。
+- [x] **配線**：`insert_rows_on_sheet`/`delete_rows_on_sheet`/`insert_cols_on_sheet`/`delete_cols_on_sheet`に`shift_merged_ranges_for_structural_edit`を追加。`move_range_on_sheet`にmergeスキャンを追加——formulaスキャンと同じ「全スキャンが成功して初めてどちらのapplyも実行する」というatomicity要件を維持（`plan_merge_move`の`?`は両方のapply blockより前に配置）。
+- [x] **既存テストの更新**：`move_range_on_sheet_does_not_shift_merged_ranges`（旧・merge不変を確認するテスト）と、real fixtureベースの統合テスト`insert_rows_on_a_merged_and_hidden_row_sheet_does_not_shift_the_merge_or_hidden_markers`は、今回の実装によって前提が変わったため、新しい正しい挙動（mergeはshiftする、hidden row/col markerは引き続きshiftしない——これは別フェーズのスコープ）を検証するテストに置き換え。
+- [x] **新規テスト9件**：move_rangeでのsource内完全translate／source外不変／片コーナー重複での全体拒否（何も変更されていないことまで確認）／既存mergeと重なる移動先の拒否、insert_rows/insert_colsでのshift、insertがmerge内部に入る場合の拡張、deleteでの部分重複縮小、deleteで1セルまで縮んだ場合のdrop、delete全体がmergeを覆う場合のdrop。
+- [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1116件+既存の統合テスト、0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）／`scripts/check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。
+- [x] **実際にビルドしたPython拡張での動作確認**：`maturin develop --release`で実際にビルド・インストールし、Pythonから(1)`insert_rows`によるmerge shift、(2)`move_range`によるmerge translate、(3)片コーナー重複moveの拒否と非変更の確認、(4)実際の`.xlsx`ファイルへのsave→reloadまでのround tripを実行して確認。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション、PR #22時点の「merged ranges staying untouched」という記述を今回上書きする旨を明記）、`internal_docs/ROADMAP.md`（0.14.0-B節をPhase 1・2完了として整理）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus、`tasks/todo.md`（本エントリ）。
+
+残作業：Phase 3（`sheet_visibility`の行/列非表示区間のtransform）とPhase 4（`cell_style_indices`/`cell_number_formats`のtransform）が未着手。着手前にユーザーへの確認を推奨（ただし新規スコープではなく既に承認済みのphased breakdownの続きなので、`/greenlane`的な文脈では続行可）。
+
+## 0.14.0-B Phase 3：sheet_visibility（行/列非表示区間）transform実装
+
+ユーザーの`/greenlane`（2回目）を受け、既承認済みのphased breakdownの続きとして着手——新規スコープの判断は不要（Phase 2で導入した仕組みをもう一つのTier 1フィールドへ適用するだけ）。
+
+- [x] **`shift_interval(interval, edit)`**（`src/vm/mod.rs`）：merge・formula rangeと同じ`shift_bound_low`/`shift_bound_high`を再利用する純粋関数。mergeと異なり「両軸とも1単位に縮退したらdrop」という特殊ルールは不要——非表示区間が1行/1列だけを覆うのはごく普通の状態（`set_row_hidden`自体が単一unit区間を作る設計）であり、この機構自身が禁止しているものではないため。区間が完全に崩壊した場合（`low > high`）のみdrop。
+- [x] **`shift_hidden_intervals_for_structural_edit`**：編集対象の軸（row/col）に対応する方（`hidden_rows`または`hidden_columns`）だけを変換し、もう一方には一切触れない——mergeは2次元で両軸の影響を受け得るが、非表示状態は軸ごとに完全独立（row insertがcolumnの非表示状態に影響することはあり得ない）という性質の違いを反映。
+- [x] **range move側は意図的に未実装**：非表示状態は「その行/列自体」に属する性質であり、そこを通過するセルの内容とは無関係——range moveはセル内容の移動のみを扱うため、`move_range_on_sheet`側には何も追加しないのが正しい設計と判断（研究や確認を要する論点ではなく、性質上の帰結）。テストで明示的に確認。
+- [x] **配線**：4つのinsert/delete系メソッドに`shift_hidden_intervals_for_structural_edit`をmerge変換の直後に追加。
+- [x] **既存テストの更新**：Phase 2で更新済みのreal fixture統合テスト（`insert_rows_on_a_merged_and_hidden_row_sheet_shifts_the_merge_but_not_hidden_markers`）を再度更新——今回の実装でhidden row markerもshiftするようになったため、テスト名・アサーションを新しい正しい挙動（同一軸のhidden markerはshiftする、別軸は不変）に合わせて修正。
+- [x] **新規テスト7件**：insert時の挿入点以降/以前でのhidden row shift、insert_rowsがhidden columnsに一切触れないこと、delete時の削除帯より後ろでのshift、削除帯に完全に入った場合のdrop、削除帯に部分的に重なる区間の縮小（複数の単一unit区間が個別にshift/dropされることを確認）、insert_colsでのhidden column shiftとhidden rowsの不変性、move_rangeがhidden状態に一切触れないこと。
+- [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1124件+統合テスト、0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）／`scripts/check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。
+- [x] **実際にビルドしたPython拡張での動作確認**：`maturin develop --release`で実際にビルド・インストールし、Pythonから(1)`insert_rows`によるhidden row shift、(2)`delete_rows`がhidden columnに触れないこと、(3)`move_range`がhidden行に一切触れないこと、(4)実際の`.xlsx`ファイルへのsave→reload round tripを実行して確認。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（0.14.0-B節をPhase 1〜3完了として整理）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus、`tasks/todo.md`（本エントリ）。
+
+残作業：Phase 4（`cell_style_indices`/`cell_number_formats`のtransform）が未着手。この2つは共に`HashMap<sheet, HashMap<(row,col), V>>`という単一セルキー形状であり、mergeやhidden intervalとは異なり「範囲」ではなく「個別セルのキー」を移動させる必要がある——Phase 1で`pub(crate)`化したが再エクスポートを見送っていた`CellShift`/`shift_cell_coord`（単一セル座標用、range用の`shift_bound_low`/`shift_bound_high`とは別物）がこのPhaseで初めて必要になる見込み。

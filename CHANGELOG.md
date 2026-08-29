@@ -911,6 +911,31 @@ machine can't run Excel); see `internal_docs/cell-metadata-transform-0.14.0-b-de
   integration test that had pinned the OLD "merges are not shifted" behavior as the
   disclosed gap this round closes (both now assert the new, correct behavior instead).
 
+### Root crate: hidden row/column interval transform on structural edit (0.14.0-B Phase 3)
+
+`insert_rows`/`delete_rows`/`insert_cols`/`delete_cols` now transform `sheet_visibility`'s
+hidden-row/column intervals too. Only the axis actually being edited is touched — a row
+insert/delete can't affect which *columns* are hidden and vice versa, unlike a merge,
+which is 2D and can be affected on either axis.
+
+- Reuses the exact same `shift_bound_low`/`shift_bound_high` arithmetic as merges and
+  formula ranges. Unlike a merge, there's no degenerate-size drop case — a hidden interval
+  spanning a single row or column is a perfectly ordinary state (`set_row_hidden`'s own
+  intervals already look like this), not something this engine's own API refuses to
+  create — so an interval only disappears here if the clamp collapses it entirely (the
+  whole hidden band fell inside a deleted band).
+- **No range-move counterpart, deliberately** — hidden state belongs to the row/column
+  itself, not to the cell content that moves through it, so `move_range_on_sheet` (which
+  only relocates cell contents) has nothing to do with this map. Confirmed with a test
+  that moving a range over a hidden row leaves that row's hidden state untouched.
+- 7 new `Vm`-level unit tests, plus one updated real-fixture integration test (the same one
+  Phase 2 updated) to assert the hidden row now shifts alongside the merge.
+- Verified through the actual built Python extension: `insert_rows` shifting a hidden row,
+  `delete_rows` leaving an unrelated hidden column alone, `move_range` never touching
+  hidden state, and a real `save_workbook` → `load_workbook` round trip.
+- `cell_style_indices`/`cell_number_formats` are 0.14.0-B's remaining Tier 1 fields, not
+  yet transformed (next phase).
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
