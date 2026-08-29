@@ -848,4 +848,16 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] `cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`（1133件、0 failed）／`cargo check --features python --lib`／`cargo audit`（脆弱性なし）、いずれもクリーン。
 - [x] **Python differential test一式を実際に実行して確認**：`bulk_range_check.py`（9件）・`sheet_ops_check.py`（18件、うち新規/更新2件含む）ともに全件pass——特に`test_sheet_state_does_not_yet_survive_an_elixcee_save`は今回のスコープ外として意図的に無変更のまま通過することを確認（sheet_stateは別の未修正ギャップであり、今回のrow height/column widthの修正と混同していないことの確認）。
 
-残作業：write支援（`set_row_height`/`set_column_width`）は引き続き未着手——実fixtureにgenuineなデータが存在しないというhard gateは今回の修正でも解消されていない（今回は「既にロードされた値の保存時保持」の修正であり、「新規に値を書き込むAPI」の追加ではないため、この2つは別問題として区別）。0.14.0-B Tier 2（row_heights/column_widthsのstructural edit/move transform）は、writer側のブロッカーが解消されたことで着手可能になったが、まだ未着手。
+残作業：write支援（`set_row_height`/`set_column_width`）は引き続き未着手——実fixtureにgenuineなデータが存在しないというhard gateは今回の修正でも解消されていない（今回は「既にロードされた値の保存時保持」の修正であり、「新規に値を書き込むAPI」の追加ではないため、この2つは別問題として区別）。0.14.0-B Tier 2（row_heights/column_widthsのstructural edit/move transform）は、writer側のブロッカーが解消されたことで着手可能になった。
+
+## 0.14.0-B Tier 2：row_heights/column_widths transform実装（Tier 1/2完了）
+
+`/greenlane`継続——writer側修正で解消済みのブロッカーの続きとして着手、新規スコープ決定は不要。
+
+- [x] **`shift_row_heights_for_structural_edit`**：`row_heights`（`HashMap<u32,f64>`、単一行キー）を`shift_cell_coord`でshift。row軸専用（`insert_rows_on_sheet`/`delete_rows_on_sheet`からのみ呼ぶ）。
+- [x] **`shift_column_widths_for_structural_edit`**：`column_widths`（`Vec<(min,max,width)>`、range形状）を`shift_bound_low`/`shift_bound_high`でshift。col軸専用。mergeと異なり単一列に縮んでもdrop不要（普通の状態のため）。
+- [x] **range moveは意図的に非対応**：`sheet_visibility`（Phase 3）と同じ理由——行の高さ/列の幅はセルではなく行/列自体に属するため、`move_range_on_sheet`は一切変更なし。
+- [x] 新規テスト8件、`cargo test --workspace`（1141件、0 failed）／fmt／clippy／audit全てクリーン。`maturin develop --release`で実際にビルドし、insert_rows/insert_colsそれぞれの軸独立性とsave→reload round tripをPythonから確認。
+- [x] ドキュメント同期：`CHANGELOG.md`、`internal_docs/ROADMAP.md`（0.14.0-B節をTier 1/2完了として整理・簡潔化）、`internal_docs/cell-metadata-transform-0.14.0-b-design.md`のStatus・§8、`tasks/todo.md`。
+
+残作業：0.14.0-Bは実質完了（Tier 3は0.16.0/0.17.0の領分）。次はユーザーの指示待ち。
