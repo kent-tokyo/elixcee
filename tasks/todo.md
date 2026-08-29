@@ -890,3 +890,16 @@ Stage 1で確認・ユーザー承認済みの設計をそのまま実装。
 - [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（known-gap 21をpartially-fixedとして更新、0.16.0節のdefined-names項からrename言及を除去）、`internal_docs/defined-names-rename-preservation-scoping.md`（Update note追加）。
 
 残作業：move（`localSheetId`再計算）とdelete（部分保存）は引き続き0.16.0の領分——今回はrenameのみ。
+
+## known-gap 17：from-scratch Vm()の最小styles.xmlがopenpyxlでreopen不可（修正、PR独立実施）
+
+ユーザーの「ROADMAP.mdに沿って開発を進めて」を受けた継続作業。既知ギャップ一覧の棚卸し中に発見した、real-Excel検証もfixtureも不要な小さく独立した修正——新規スコープ決定なしで着手。
+
+- [x] **バグの再現**：`elixcee.Vm()`（load_workbookなしの新規VM）でセルに値を設定し保存、`openpyxl.load_workbook()`で再読込すると`TypeError: expected <class 'openpyxl.styles.fills.Fill'>`で失敗することを実際に確認。原因は`XLSX_STYLES`定数（`src/lib.rs`）の`<fills><fill/><fill/></fills>`——`<patternFill>`/`<gradientFill>`子要素を持たない空の`<fill/>`が2つ。
+- [x] **正しい形の検証**：憶測で決め打ちせず、実際に`openpyxl.Workbook()`を新規作成・保存して`xl/styles.xml`の実バイトを確認——index 0は`<fill><patternFill/></fill>`（属性なし、"none"ではない）、index 1は`<fill><patternFill patternType="gray125"/></fill>`と判明。当初の想定（index 0に`patternType="none"`を付与）は誤りだったため、実物に合わせて修正。
+- [x] **他の空要素の確認**：`<font/>`／`<border/>`／`<xf/>`も同様に空だが、修正後のfrom-scratch保存→openpyxl再読込→再保存→再読込のフルラウンドトリップで例外が出ないことを確認——これらは対象外のまま。
+- [x] **実装**：`XLSX_STYLES`の`<fills>`行のみ変更（1行）。
+- [x] **検証**：`compat/differential-python/sheet_ops_check.py`に新規テストクラス`FromScratchVmProducesAnOpenpyxlReadableStylesheet`を追加（fills内容の直接検証＋openpyxl再読込＋2回目保存サイクル）。同ファイルのモジュールdocstring内にあった「既知の未修正バグ」という古い記述も修正済みの内容に更新。`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`／`cargo test --workspace`／`cargo check --features python --lib`／`cargo audit`／`scripts/check-versions.sh`（既知の`elixcee-types`ドリフトのみ）、いずれもクリーン。`maturin develop --release`で実ビルドし、Python differential test 22件（新規1件含む）全件pass。
+- [x] ドキュメント同期：`CHANGELOG.md`（新規サブセクション）、`internal_docs/ROADMAP.md`（known-gap 17を修正済みとして更新）。
+
+残作業：なし——この項目はこれで完結。
