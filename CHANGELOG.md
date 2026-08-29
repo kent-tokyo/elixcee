@@ -1459,6 +1459,63 @@ default style` on reopen. Non-fatal, no data loss, but spurious for every from-s
   locale-varied loaded-file name.
 - Re-confirmed against the same real output bytes: the warning is gone.
 
+### Root crate: `edit_table` — 0.16.0-A2, Tables' second slice
+
+Second sub-phase of `0.16.0-A` (Tables). Builds the write path 0.16.0-A1 deliberately left
+untouched (a pure read projection) — the first real mutation capability for tables.
+
+- `vm.edit_table(name, sheet=None, display_name=None, ref=None, style_name=None,
+  totals_row_shown=None, add_columns=None, remove_columns=None)` — every parameter but
+  *name* defaults to "don't change." Matches the table by its current `display_name`,
+  falling back to `name` (only `display_name` is ever mutated, so `name` stays a stable
+  lookup key across renames).
+- **Write path: surgical patch of the original raw bytes, not a reserialize.** `TableDef`/
+  `TableColumn` are lossy read projections (no `id`, no Microsoft `xr:uid`/`xr3:uid`
+  extension GUIDs, no original attribute order) — confirmed real fixtures carry both GUID
+  kinds on every `<table>`/`<tableColumn>`. A full reserialize would silently drop them.
+  Instead, every edit is recorded as a `TableEditOp` and applied against `table1.xml`'s
+  own original bytes at save time via `with_attr`/`with_ordered_child` (0.15.0-B/C's
+  existing primitives, unchanged) — each op touches only the specific attribute/child it
+  changes, leaving everything else (including every untouched column's own GUID)
+  byte-identical.
+- No `pending_*`/deferred-resolution pattern needed, unlike 0.15.0's style engine — a
+  `<table>` isn't an interned, shared-by-index record the way `<cellXfs>`/`<fonts>` are,
+  so an edit mutates `Vm.tables` directly and immediately; `tables()` reflects it right
+  away.
+- **`add_columns`** only ever appends at the table's right edge (no mid-table insertion),
+  assigning a fresh id via the same max-existing-id-plus-one scan already used for custom
+  `<numFmt>` ids. **`remove_columns`** accepts any existing column by name, in any
+  position — matching real Excel's own UI behavior, this deletes every cell value in that
+  column's full range within the table (header row through totals row) and shifts every
+  column to its right left by one via direct cell-map manipulation (not `read_rect`/
+  `write_rect`, which only carry a resolved value and would silently drop a shifted
+  cell's formula). The whole call validates every column name up front — an unknown name
+  in `remove_columns` rejects the entire call, nothing partially applies.
+- **Bug caught by the real-fixture verification script, fixed before merge**: the first
+  cut updated `ref_range` in memory for `add_columns`/`remove_columns` but never recorded
+  a `Resize` op for the writer — `tables()` reported the correct widened/narrowed range,
+  but the saved file's `<table ref="...">` stayed stale. Fixed by pushing an explicit
+  `Resize` op alongside every `add_columns`/`remove_columns` change, with a dedicated
+  regression test pinning it.
+- **Closes a real gap 0.16.0-A1 left behind**: `shift_tables_for_structural_edit` already
+  updated `Vm.tables`' in-memory `ref`/`auto_filter_ref` on every row/column insert/delete
+  (so `tables()` reported correctly), but since 0.16.0-A1's write path was untouched
+  passthrough, the shift never reached the saved file. Now closed for free, as part of
+  building the write path anyway — the same shift now also records `Resize`/
+  `ResizeAutoFilter` ops.
+- Structured references/calculated-column authoring remain out of scope (milestone-wide
+  exclusion, unchanged) — a newly added column has no `calculated_column_formula`; an
+  existing one's formula text is left untouched by every operation here.
+- Verified against `fixture3_table_validation_conditional.xlsm`'s real table: rename
+  (id/`xr:uid`/`xr3:uid` preserved), resize (nested `autoFilter` ref unaffected), style
+  change, totals-row toggle, add-column (ref widened, fresh id), remove-column (ref
+  narrowed, cell data correctly shifted left including a formula cell — pinned with a
+  dedicated "legitimately blank cell mid-shift" regression test, since an earlier draft's
+  "shift until an empty cell" approach would have stopped early on real blank table
+  data), unknown-name/unknown-column rejection, the structural-edit-shift persistence
+  fix, and a second save-reload cycle. `openpyxl` reopens every result cleanly, with no
+  warnings on the column-removal case specifically.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted

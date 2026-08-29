@@ -158,6 +158,131 @@ pub struct TableDef {
     /// The table's own nested `<autoFilter ref="...">`, when present -- structural
     /// only, no filter-criteria parsing (that's 0.16.0-B).
     pub auto_filter_ref: Option<MergeRect>,
+    /// Normalized `xl/tables/tableN.xml` part path this table was parsed from
+    /// (0.16.0-A2) -- lets the writer find the right `raw_entries` key to surgically
+    /// patch. Empty for a table built programmatically (never happens today -- no
+    /// table-creation API exists yet, 0.16.0-A3).
+    pub source_part: String,
+    /// Edits requested via `edit_table` since load, applied against `source_part`'s
+    /// RAW bytes at save time (`apply_table_edits`) rather than reserializing this
+    /// struct -- `TableDef`/`TableColumn` are lossy read projections (no `id`,
+    /// `xr:uid`/`xr3:uid` extension GUIDs, or original attribute order), so a full
+    /// reserialize would silently drop them. See
+    /// `internal_docs/tables-0.16.0-a-design.md`'s A2 Addendum.
+    pub(crate) pending_edits: Vec<TableEditOp>,
+}
+
+/// One requested change to a table, recorded at `edit_table` call time and applied,
+/// in order, against the table's original raw XML bytes at save time (0.16.0-A2).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TableEditOp {
+    SetDisplayName(String),
+    Resize(MergeRect),
+    /// The nested `<autoFilter ref="...">`'s own `ref`, kept in sync with `Resize`
+    /// whenever a structural edit shifts both together (`shift_tables_for_structural_edit`)
+    /// -- closes a real gap 0.16.0-A1 left behind: the in-memory shift was already
+    /// correct, but never reached the saved file. See the A2 Addendum.
+    ResizeAutoFilter(MergeRect),
+    SetStyle(Option<String>),
+    SetTotalsRowShown(bool),
+    AddColumn(String),
+    RemoveColumn(String),
+}
+
+fn col_letters(mut col: u32) -> String {
+    let mut s = String::new();
+    while col > 0 {
+        let rem = ((col - 1) % 26) as u8;
+        s.push((b'A' + rem) as char);
+        col = (col - 1) / 26;
+    }
+    s.chars().rev().collect()
+}
+
+fn format_merge_ref(rect: &MergeRect) -> String {
+    let ((r1, c1), (r2, c2)) = *rect;
+    format!("{}{}:{}{}", col_letters(c1), r1, col_letters(c2), r2)
+}
+
+fn span_attr_str(span: &str, attr_name: &str) -> Option<String> {
+    let (tag_start, tag_close_rel, full_name) = find_next_open_tag(span, 0)?;
+    let name_end = tag_start + 1 + full_name.len();
+    let raw_attrs = &span[name_end..name_end + tag_close_rel];
+    let attrs_str = raw_attrs.trim_end().strip_suffix('/').unwrap_or(raw_attrs);
+    attr_get(&parse_attrs(attrs_str), attr_name).map(|s| s.to_string())
+}
+
+/// Order of `<table>`'s own top-level children per ECMA-376 `CT_Table`'s sequence,
+/// as confirmed against real bytes (`autoFilter` -> `tableColumns` -> `tableStyleInfo`;
+/// `sortState` -- unseen in any fixture -- placed per spec sequence, not independently
+/// verified). Shared by every `with_ordered_child` call in `apply_table_edits`.
+const TABLE_CHILD_ORDER: &[&str] = &["autoFilter", "sortState", "tableColumns", "tableStyleInfo"];
+
+/// Applies `edits` in order against `table_xml` (the table's ORIGINAL raw bytes),
+/// returning the patched document. Surgical, not a reserialize: every op touches only
+/// the specific attribute/child it changes via `with_attr`/`with_ordered_child`,
+/// leaving `id`, `xr:uid`/`xr3:uid`, attribute order, and every untouched column's
+/// raw span byte-identical. See `TableDef::pending_edits`.
+pub(crate) fn apply_table_edits(table_xml: &str, edits: &[TableEditOp]) -> String {
+    let mut xml = table_xml.to_string();
+    for edit in edits {
+        xml = match edit {
+            TableEditOp::SetDisplayName(name) => with_attr(&xml, "displayName", name),
+            TableEditOp::Resize(rect) => with_attr(&xml, "ref", &format_merge_ref(rect)),
+            TableEditOp::ResizeAutoFilter(rect) => match extract_raw_element(&xml, "autoFilter") {
+                Some(old) => {
+                    let new_child = with_attr(&old, "ref", &format_merge_ref(rect));
+                    with_ordered_child(&xml, "autoFilter", TABLE_CHILD_ORDER, Some(&new_child))
+                }
+                None => xml,
+            },
+            TableEditOp::SetStyle(Some(name)) => {
+                let new_child = match extract_raw_element(&xml, "tableStyleInfo") {
+                    Some(old) => with_attr(&old, "name", name),
+                    None => format!("<tableStyleInfo name=\"{}\"/>", crate::xml_escape(name)),
+                };
+                with_ordered_child(&xml, "tableStyleInfo", TABLE_CHILD_ORDER, Some(&new_child))
+            }
+            TableEditOp::SetStyle(None) => {
+                with_ordered_child(&xml, "tableStyleInfo", TABLE_CHILD_ORDER, None)
+            }
+            TableEditOp::SetTotalsRowShown(shown) => {
+                with_attr(&xml, "totalsRowShown", if *shown { "1" } else { "0" })
+            }
+            TableEditOp::AddColumn(name) => {
+                let mut spans = extract_records(&xml, "tableColumns", "tableColumn");
+                let next_id = spans
+                    .iter()
+                    .filter_map(|s| span_attr_str(s, "id").and_then(|v| v.parse::<u32>().ok()))
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                spans.push(format!(
+                    "<tableColumn id=\"{next_id}\" name=\"{}\"/>",
+                    crate::xml_escape(name)
+                ));
+                let new_child = format!(
+                    "<tableColumns count=\"{}\">{}</tableColumns>",
+                    spans.len(),
+                    spans.concat()
+                );
+                with_ordered_child(&xml, "tableColumns", TABLE_CHILD_ORDER, Some(&new_child))
+            }
+            TableEditOp::RemoveColumn(name) => {
+                let spans: Vec<String> = extract_records(&xml, "tableColumns", "tableColumn")
+                    .into_iter()
+                    .filter(|s| span_attr_str(s, "name").as_deref() != Some(name.as_str()))
+                    .collect();
+                let new_child = format!(
+                    "<tableColumns count=\"{}\">{}</tableColumns>",
+                    spans.len(),
+                    spans.concat()
+                );
+                with_ordered_child(&xml, "tableColumns", TABLE_CHILD_ORDER, Some(&new_child))
+            }
+        };
+    }
+    xml
 }
 
 pub enum SheetCell {
@@ -1686,8 +1811,9 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 };
                 let resolved = crate::normalize_part_path(&format!("{base}{target}"));
                 if let Ok(table_xml) = zip_read_text(&mut archive, &resolved)
-                    && let Some(t) = parse_table_xml(&table_xml)
+                    && let Some(mut t) = parse_table_xml(&table_xml)
                 {
+                    t.source_part = resolved;
                     tables.push(t);
                 }
             }
@@ -3022,6 +3148,8 @@ fn parse_table_xml(xml: &str) -> Option<TableDef> {
                                 columns: Vec::new(),
                                 style_name: None,
                                 auto_filter_ref: None,
+                                source_part: String::new(),
+                                pending_edits: Vec::new(),
                             });
                         }
                     }
@@ -3101,6 +3229,108 @@ mod table_parsing_tests {
   <tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0"
     showRowStripes="1" showColumnStripes="0"/>
 </table>"#;
+
+    // Mirrors a real fixture's shape more closely than REAL_TABLE_XML: the Microsoft
+    // xr:uid/xr3:uid extension GUIDs every real `<table>`/`<tableColumn>` carries
+    // (0.16.0-A2's whole reason for a surgical patch instead of reserialize-from-struct).
+    const TABLE_XML_WITH_GUIDS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1"
+  xr:uid="{00000000-0001-0000-0000-000000000001}" name="Table1" displayName="Table1"
+  ref="A1:C4" totalsRowShown="0">
+  <autoFilter ref="A1:C4"/>
+  <tableColumns count="3">
+    <tableColumn id="1" xr3:uid="{00000000-0001-0000-0000-000000000002}" name="Name"/>
+    <tableColumn id="2" xr3:uid="{00000000-0001-0000-0000-000000000003}" name="Qty"/>
+    <tableColumn id="3" xr3:uid="{00000000-0001-0000-0000-000000000004}" name="Status"/>
+  </tableColumns>
+  <tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0"
+    showRowStripes="1" showColumnStripes="0"/>
+</table>"#;
+
+    #[test]
+    fn apply_table_edits_rename_preserves_id_and_guid_untouched() {
+        let out = apply_table_edits(
+            TABLE_XML_WITH_GUIDS,
+            &[TableEditOp::SetDisplayName("Renamed".to_string())],
+        );
+        assert!(out.contains(r#"displayName="Renamed""#));
+        assert!(out.contains(r#"id="1""#));
+        assert!(out.contains(r#"xr:uid="{00000000-0001-0000-0000-000000000001}""#));
+        // Untouched columns keep their own xr3:uid GUIDs verbatim.
+        assert!(out.contains(r#"xr3:uid="{00000000-0001-0000-0000-000000000002}""#));
+        assert!(out.contains(r#"xr3:uid="{00000000-0001-0000-0000-000000000003}""#));
+        assert!(out.contains(r#"xr3:uid="{00000000-0001-0000-0000-000000000004}""#));
+    }
+
+    #[test]
+    fn apply_table_edits_resize_updates_only_ref() {
+        let out = apply_table_edits(REAL_TABLE_XML, &[TableEditOp::Resize(((1, 1), (5, 3)))]);
+        let t = parse_table_xml(&out).unwrap();
+        assert_eq!(t.ref_range, ((1, 1), (5, 3)));
+        // The nested autoFilter's own ref is a SEPARATE op -- resizing the table alone
+        // must not accidentally touch it.
+        assert_eq!(t.auto_filter_ref, Some(((1, 1), (4, 3))));
+    }
+
+    #[test]
+    fn apply_table_edits_resize_auto_filter_updates_only_the_nested_ref() {
+        let out = apply_table_edits(
+            REAL_TABLE_XML,
+            &[TableEditOp::ResizeAutoFilter(((1, 1), (5, 3)))],
+        );
+        let t = parse_table_xml(&out).unwrap();
+        assert_eq!(t.ref_range, ((1, 1), (4, 3)));
+        assert_eq!(t.auto_filter_ref, Some(((1, 1), (5, 3))));
+    }
+
+    #[test]
+    fn apply_table_edits_set_style_replaces_the_whole_element() {
+        let out = apply_table_edits(
+            REAL_TABLE_XML,
+            &[TableEditOp::SetStyle(Some("TableStyleLight1".to_string()))],
+        );
+        let t = parse_table_xml(&out).unwrap();
+        assert_eq!(t.style_name.as_deref(), Some("TableStyleLight1"));
+    }
+
+    #[test]
+    fn apply_table_edits_set_totals_row_shown() {
+        let out = apply_table_edits(REAL_TABLE_XML, &[TableEditOp::SetTotalsRowShown(true)]);
+        let t = parse_table_xml(&out).unwrap();
+        assert!(t.totals_row_shown);
+    }
+
+    #[test]
+    fn apply_table_edits_add_column_assigns_a_fresh_id_and_preserves_existing_guids() {
+        let out = apply_table_edits(
+            TABLE_XML_WITH_GUIDS,
+            &[TableEditOp::AddColumn("Total".to_string())],
+        );
+        let t = parse_table_xml(&out).unwrap();
+        assert_eq!(t.columns.len(), 4);
+        assert_eq!(t.columns[3].name, "Total");
+        assert_eq!(t.columns[3].id.as_deref(), Some("4")); // max existing id (3) + 1
+        assert!(out.contains(r#"xr3:uid="{00000000-0001-0000-0000-000000000002}""#));
+        assert!(out.contains(r#"count="4""#));
+    }
+
+    #[test]
+    fn apply_table_edits_remove_column_drops_only_the_named_one() {
+        let out = apply_table_edits(
+            TABLE_XML_WITH_GUIDS,
+            &[TableEditOp::RemoveColumn("Qty".to_string())],
+        );
+        let t = parse_table_xml(&out).unwrap();
+        assert_eq!(t.columns.len(), 2);
+        assert_eq!(t.columns[0].name, "Name");
+        assert_eq!(t.columns[1].name, "Status");
+        // The surviving columns' own GUIDs are untouched -- Qty's own span is gone,
+        // Name's and Status's are byte-identical, not renumbered.
+        assert!(out.contains(r#"xr3:uid="{00000000-0001-0000-0000-000000000002}""#));
+        assert!(out.contains(r#"xr3:uid="{00000000-0001-0000-0000-000000000004}""#));
+        assert!(!out.contains(r#"xr3:uid="{00000000-0001-0000-0000-000000000003}""#));
+        assert!(out.contains(r#"count="2""#));
+    }
 
     #[test]
     fn parse_table_xml_extracts_every_field_from_a_real_shape() {

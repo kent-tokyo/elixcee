@@ -1040,3 +1040,20 @@ known-gap 29と同時に着手した2件目のGreen作業。isolated worktreeで
 - [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`は本worktree内で更新済み。`internal_docs/ROADMAP.md`のknown-gap 30を`[x]`済みに更新——は親エージェント側で実施が必要。
 
 残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。
+
+## 0.16.0-A2：Tables 第二弾 — 既存テーブルの編集（`edit_table`）
+
+0.16.0-A1（読み取り専用`tables()`）の追加スコーピングパスで確定した設計に基づく実装。`edit_table(name, sheet=None, display_name=None, ref=None, style_name=None, totals_row_shown=None, add_columns=None, remove_columns=None)`——A1が意図的に手を付けなかった書き込みパスを初めて構築する。isolated worktreeで実施。
+
+- [x] **書き込み方式の確定：構造体からの再構成ではなく、元の生バイト列への外科的パッチ**。`TableDef`/`TableColumn`は情報が欠落した読み取り専用の投影——`id`属性、Microsoft拡張の`xr:uid`/`xr3:uid` GUID、元の属性順序を一切保持していない（実fixtureでは`<table>`/`<tableColumn>`いずれも両GUIDを持つことを確認済み）。構造体から素直に再構成すると、これらが編集の副作用として静かに消失する。そこで各編集を`TableEditOp`として記録し、保存時に`table1.xml`自身の元バイト列へ`with_attr`/`with_ordered_child`（0.15.0-B/Cで既に存在するプリミティブ、無改造で流用）を適用——各opは自分が変更する属性/子要素だけに触れ、他の全て（触れていない各カラム自身のGUID含む）はバイト完全一致のまま。
+- [x] **`pending_*`系の遅延解決パターンは不要**：`<cellXfs>`/`<fonts>`のようにインデックス共有される intern テーブルではなく、`<table>`は他から参照されない独立レコードのため、編集は`Vm.tables`へ即座かつ直接反映——`tables()`は呼び出し直後から正しい値を返す。
+- [x] **`add_columns`**：テーブルの右端への追加のみ（中間挿入は非対応）、新規idは既存最大値+1（`<numFmt>`のカスタムidスキャンと同じパターン）。**`remove_columns`**：任意位置のカラムを名前で削除可能——実Excelのカラム削除UIと同じ挙動として、対象カラムのヘッダー行〜集計行までの全セル値を削除し、右側の各カラムを1つ左へシフト。シフトは`read_rect`/`write_rect`ではなく直接セルマップ操作で実施——前者は解決済みの値しか運ばず、シフト対象セルの数式を静かに失う。呼び出し全体を事前に検証（`remove_columns`内に存在しない列名が1つでもあれば呼び出し全体を拒否、部分適用はしない）。
+- [x] **実fixture検証スクリプトが検出し、マージ前に修正したバグ**：初版は`add_columns`/`remove_columns`で`ref_range`をメモリ上では正しく拡縮していたが、書き込み側の`Resize` opを一切積んでいなかった——`tables()`は正しい値を報告するのに、保存後のファイルの`<table ref="...">`は古いままという食い違い。`add_columns`/`remove_columns`双方の処理へ明示的な`TableEditOp::Resize`追加で修正、専用の回帰テストで固定。
+- [x] **0.16.0-A1が残していたギャップの解消**：`shift_tables_for_structural_edit`は既にメモリ上の`ref`/`auto_filter_ref`を正しくシフトしていた（`tables()`は正しく報告）が、A1の書き込みパスが素通しのままだったため、保存後のファイルにはシフトが一切反映されていなかった。今回、書き込みパスを構築するのと同じ機構（`Resize`/`ResizeAutoFilter` opを同じ関数からも記録）でこのギャップも無償で解消。
+- [x] **構造化参照・calculated column authoringは引き続きスコープ外**（0.16.0-A全体の既定方針、変更なし）。
+- [x] **実装中に発見・修正した2件目のバグ（自己レビューで検出、実fixture検証前に修正）**：カラム削除時のシフトロジックの初版は「移動元セルが空になるまでコピーを続ける」という判定を使っていた——これはテーブル自身のデータ内に正当な空セルが存在する場合、そこでシフトを誤って打ち切ってしまう。実際のテーブル右端(`orig_c2`、削除前の右境界)を使った固定範囲シフトへ修正し、「シフト中間に正当な空セルがあっても打ち切らない」ことを検証する専用回帰テストを追加。
+- [x] **実fixture検証**：`fixture3_table_validation_conditional.xlsm`の実テーブルに対し、rename（id/`xr:uid`/`xr3:uid`が保持されること）、resize（ネストした`autoFilter`のrefは無関係のまま）、style変更、totals row切替、add_columns（ref拡張・新規id）、remove_columns（ref縮小・セルデータの正しい左シフト、数式セルも含む）、不明なテーブル名/カラム名の拒否、構造編集シフトの永続化修正、2回連続保存の安定性を確認。全結果を`openpyxl.load_workbook()`で再オープンし、column-removalケースでは警告0件であることも確認。
+- [x] **検証**：新規Rustユニットテスト14件（`apply_table_edits`の各opごとの動作+GUID保持8件、`edit_table_on_sheet`の基本動作/エラー/カラム追加削除/セルシフト/回帰6件）。`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`（python feature込みでも確認）／`cargo test --workspace`(1287件全pass、新規14件)／`cargo audit`(脆弱性なし)／`scripts/check-versions.sh`(既知の`elixcee-types`ドリフトのみ)、いずれもクリーン。worktree内に独自の`.venv`を新規構築し`maturin develop --release`で実ビルド。`compat/differential-python/sheet_ops_check.py`の既存`TablesAgreeWithOpenpyxl`クラスへ新規テスト7件を追加、既存39件と合わせ全46件pass。使い捨ての検証スクリプトはこのテストクラスへ統合済みで削除。
+- [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`・`compat/differential-python/sheet_ops_check.py`は本worktree内で更新済み。`internal_docs/ROADMAP.md`（gitignore対象、worktreeにチェックアウトされないためこのworktreeからは編集不可）への反映——`0.16.0-A`セクション内の`A2`チェックボックスを完了に、A1が残していた構造編集シフト永続化ギャップもA2で解消済みである旨の追記、`A3`（新規テーブル作成、実fixture根拠なしのため別途例外確認が必要）が残作業である旨——は親エージェント側で実施が必要。
+
+残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。
