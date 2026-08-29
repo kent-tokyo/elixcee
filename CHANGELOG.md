@@ -1225,6 +1225,53 @@ a data-loss bug (every real value/style survives; confirmed across every test in
 round) and not a schema violation, just a cosmetic gap in the from-scratch default's
 completeness — not fixed here, out of this phase's scope. See ROADMAP.md's known gaps.
 
+### Root crate: `copy_style` and `set_style(..., named_style=...)` — 0.15.0-C1
+
+The roadmap's single `0.15.0-C` line bundled five differently-sized features (copy style,
+row/column default style, named style, theme-color resolution); scoping split it before
+implementation, same discipline as every prior phase. This ships the two small,
+well-grounded pieces — `copy_style` and named-style APPLY — as their own sub-phase.
+Row/column default style and theme-color mint/read remain unscheduled (real work, neither
+free nor required for this milestone; see `internal_docs/style-engine-0.15.0-c-design.md`).
+
+- **`copy_style(source, dest, sheet=None)`**: copies a single cell's complete style (font,
+  fill, border, number format, alignment, protection — everything, matching Excel's own
+  Format Painter) onto every cell in `dest`. Pure index aliasing — `dest` cells simply
+  point at whatever style index `source` resolves to, no new `<xf>`/font/fill/border
+  record is ever minted. Resolved LAST at save time, after `set_number_format`'s and
+  `set_style`'s own passes, so it automatically picks up a `set_style`/`set_number_format`
+  edit made on `source` earlier in the same session, even before any save — verified
+  concretely (style a cell, copy it immediately, confirm the copy shows the NEW style, not
+  a stale one). A later `copy_style`/`set_style`/`set_number_format` call on the same
+  destination cell always wins, but between two different features on the same cell,
+  `copy_style` always applies last regardless of call order — a documented fixed-pass-
+  order rule, not true chronological tracking.
+- **`set_style(..., named_style="...")`**: points a cell at an EXISTING named style
+  already defined in the loaded file's own `<cellStyles>` (e.g. `"Hyperlink"`, or a real
+  file's own locale-specific spelling — Japanese-authored files spell it "ハイパーリンク").
+  Bakes the named style's font/fill/border/number-format/alignment/protection directly
+  onto the cell's `<cellXfs>` entry AND sets `xfId` — matching real Excel's own behavior,
+  confirmed against `fixture4`'s real `xfId="1"`/`fontId="2"` cell (a naive xfId-only
+  pointer-set would rely on inheritance real Excel itself doesn't use). Resolved FIRST on
+  a `set_style` call, so `named_style="Hyperlink", font={"bold": True}` on the same call
+  bakes the named style in, then bolds on top of it — verified against the real fixture.
+  Defining a brand-new/undocumented named style is explicitly out of scope (Excel's own
+  ~20-30 builtin style definitions are product design choices, not spec text — a
+  categorically weaker basis for a real-fixture-gate exception than every prior one this
+  project has granted; would need real fixture evidence per builtin style, which this
+  project doesn't have beyond `builtinId` 0/8). An unknown name raises at
+  `save_workbook()` time (deferred resolution, like every other style edit) — surfaces as
+  `OSError`, since `save_workbook` maps every save failure to that regardless of cause,
+  not `ValueError` as a first draft of this docstring incorrectly claimed before real
+  verification caught it.
+- Same "no shared-style mutation" safety as 0.15.0-A/B, reverified for `copy_style`
+  specifically: retargeting one cell's style never touches another cell still sharing the
+  cell's OLD style index.
+- Real-fixture verified end to end: `copy_style` against `fixture1`'s real number-format
+  dedup case; `named_style` apply against `fixture4`'s real, in-use "ハイパーリンク"
+  style, including its theme-colored font surviving intact; a second save-reload cycle for
+  stability.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted

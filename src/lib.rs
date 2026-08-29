@@ -1472,9 +1472,10 @@ impl PyVm {
         Ok(())
     }
 
-    /// Sets font/fill/border/alignment/protection properties on every cell in *addr* --
-    /// 0.15.0-B. At least one of *font*/*fill*/*border*/*alignment*/*protection* must be
-    /// given. Each is a dict of only the properties you want to change; anything a dict
+    /// Sets font/fill/border/alignment/protection properties, and/or an existing named
+    /// style, on every cell in *addr* -- 0.15.0-B/C1. At least one of *font*/*fill*/
+    /// *border*/*alignment*/*protection*/*named_style* must be given. Each of the five
+    /// dict arguments carries only the properties you want to change; anything a dict
     /// doesn't mention is left exactly as that cell's current style already has it --
     /// e.g. ``font={"bold": True}`` on a cell with an existing colored, sized font
     /// changes only boldness, the color/size survive untouched. Calling this more than
@@ -1498,6 +1499,18 @@ impl PyVm {
     ///
     /// ``protection`` keys: ``locked``, ``hidden`` (both ``bool``).
     ///
+    /// ``named_style`` (0.15.0-C1): a style name already defined in the LOADED file's own
+    /// ``<cellStyles>`` (e.g. ``"Hyperlink"``, in whatever language the file itself uses
+    /// for it — real Japanese-locale files spell it ``"ハイパーリンク"``). Bakes that
+    /// style's font/fill/border/number-format/alignment/protection directly onto the
+    /// cell, matching real Excel's own behavior — resolved FIRST, before any of the other
+    /// five arguments on the same call, which then apply on top of it if also given.
+    /// Raises ``OSError`` from :meth:`save_workbook` (not immediately — resolution is
+    /// deferred like every other style edit, and :meth:`save_workbook` maps every save
+    /// failure to ``OSError`` regardless of cause) if the name doesn't exist in this
+    /// file. Defining a brand-new named style that doesn't already exist is not
+    /// supported — only applying one the file already has.
+    ///
     /// Color strings are a 6-digit RGB hex (``"4472C4"``, alpha assumed fully opaque) or
     /// an 8-digit ARGB hex (``"FF4472C4"``), with or without a leading ``#``. Only
     /// literal colors are supported — a theme-relative color (Excel's own theme palette)
@@ -1513,7 +1526,10 @@ impl PyVm {
     /// addr:
     ///     A single-area A1 range, e.g. ``"A1:D1"``, or a single cell.
     /// font, fill, border, alignment, protection:
-    ///     Optional dicts, see above. At least one must be given.
+    ///     Optional dicts, see above.
+    /// named_style:
+    ///     Optional existing style name, see above. At least one of the six arguments
+    ///     must be given.
     /// sheet:
     ///     Sheet to modify. Defaults to the active sheet; does **not** change the
     ///     active sheet when given.
@@ -1521,8 +1537,9 @@ impl PyVm {
     /// Raises ``ValueError`` on a bad/oversized address, an unknown *sheet*, no
     /// arguments given, an unsupported ``fill['type']``, a missing required key
     /// (``fill`` needs ``color``), or a malformed color string. Raises ``TypeError`` on
-    /// a wrong-typed value within a dict.
-    #[pyo3(signature = (addr, font=None, fill=None, border=None, alignment=None, protection=None, sheet=None))]
+    /// a wrong-typed value within a dict. An unknown *named_style* is NOT caught here —
+    /// see above, it surfaces as ``OSError`` from :meth:`save_workbook` instead.
+    #[pyo3(signature = (addr, font=None, fill=None, border=None, alignment=None, protection=None, named_style=None, sheet=None))]
     #[allow(clippy::too_many_arguments)]
     fn set_style(
         &mut self,
@@ -1532,6 +1549,7 @@ impl PyVm {
         border: Option<&Bound<'_, PyDict>>,
         alignment: Option<&Bound<'_, PyDict>>,
         protection: Option<&Bound<'_, PyDict>>,
+        named_style: Option<&str>,
         sheet: Option<&str>,
     ) -> PyResult<()> {
         if font.is_none()
@@ -1539,9 +1557,10 @@ impl PyVm {
             && border.is_none()
             && alignment.is_none()
             && protection.is_none()
+            && named_style.is_none()
         {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "set_style requires at least one of font/fill/border/alignment/protection",
+                "set_style requires at least one of font/fill/border/alignment/protection/named_style",
             ));
         }
         let ((r1, c1), (r2, c2)) =
@@ -1557,8 +1576,56 @@ impl PyVm {
             border: border.map(extract_border_edit).transpose()?,
             alignment: alignment.map(extract_alignment_edit).transpose()?,
             protection: protection.map(extract_protection_edit).transpose()?,
+            named_style: named_style.map(str::to_string),
         };
         self.inner.set_style_on_sheet(&key, r1, c1, r2, c2, &edit);
+        Ok(())
+    }
+
+    /// Copies *source*'s complete style (font, fill, border, number format, alignment,
+    /// and protection — everything, matching Excel's own "Format Painter") onto every
+    /// cell in *dest* -- 0.15.0-C1. Picks up whatever *source*'s style resolves to at
+    /// save time, including a `set_style`/`set_number_format` edit made on *source*
+    /// itself earlier in the same session, even if not yet saved — no need to save
+    /// between editing *source* and copying it. No new style record is ever created:
+    /// *dest* cells simply point at the same underlying style as *source*, exactly what
+    /// multiple cells sharing one style already means in the file format.
+    ///
+    /// A later `copy_style`/`set_style`/`set_number_format` call targeting the same
+    /// destination cell before the next save always wins over an earlier one on that
+    /// cell — but between two DIFFERENT features touching the same cell before one save,
+    /// `copy_style` always takes effect last regardless of call order (it's resolved
+    /// after every other pending style edit at save time).
+    ///
+    /// Parameters
+    /// ----------
+    /// source:
+    ///     A single cell address, e.g. ``"A1"``.
+    /// dest:
+    ///     A single-area A1 range, e.g. ``"A2:A20"``, or a single cell.
+    /// sheet:
+    ///     Sheet both *source* and *dest* are on. Defaults to the active sheet; does
+    ///     **not** change the active sheet when given.
+    ///
+    /// Raises ``ValueError`` if *source* isn't exactly one cell, on a bad/oversized
+    /// *dest* address, or an unknown *sheet*.
+    #[pyo3(signature = (source, dest, sheet = None))]
+    fn copy_style(&mut self, source: &str, dest: &str, sheet: Option<&str>) -> PyResult<()> {
+        let (src_start, src_end) =
+            validate_range_addr(source).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        if src_start != src_end {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "copy_style's source must be exactly one cell",
+            ));
+        }
+        let ((r1, c1), (r2, c2)) =
+            validate_range_addr(dest).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .copy_style_on_sheet(&key, src_start, r1, c1, r2, c2);
         Ok(())
     }
 
@@ -2518,9 +2585,21 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             .as_ref()
             .unwrap_or(&vm.cell_style_indices);
         if let Some((new_xml, indices)) =
-            resolve_pending_style_attrs(vm, chained_source, chained_indices)
+            resolve_pending_style_attrs(vm, chained_source, chained_indices)?
         {
             new_styles_bytes = Some(new_xml.into_bytes());
+            effective_style_indices = Some(indices);
+        }
+    }
+    // `copy_style` (0.15.0-C1) resolution, CHAINED LAST -- pure index aliasing against
+    // whatever the two passes above already resolved (see
+    // `resolve_pending_style_copies`'s own doc comment). Never produces new styles.xml
+    // bytes, so `new_styles_bytes` is deliberately left untouched here.
+    {
+        let chained_indices: &StyleIndexMap = effective_style_indices
+            .as_ref()
+            .unwrap_or(&vm.cell_style_indices);
+        if let Some(indices) = resolve_pending_style_copies(vm, chained_indices) {
             effective_style_indices = Some(indices);
         }
     }
@@ -2795,16 +2874,29 @@ fn resolve_pending_number_formats(
 /// `reader::with_font_edit`/`build_solid_fill`/`with_border_edit` + a byte-comparison
 /// dedup, same conservative under-dedupe-never-over-dedupe bias), then `<cellXfs>` is
 /// found-or-appended pointing at the resulting font/fill/border indices --
-/// `<cellStyleXfs>` is never touched. Literal RGB/ARGB colors only; a font/fill/border
-/// that already carries a theme-relative color (`<color theme="N"/>`) keeps it verbatim
-/// when that property isn't the one being edited (0.15.0-C's job to mint a new one).
+/// `<cellStyleXfs>` itself is never mutated, only READ (see the `named_style` case below).
+/// Literal RGB/ARGB colors only; a font/fill/border that already carries a theme-relative
+/// color (`<color theme="N"/>`) keeps it verbatim when that property isn't the one being
+/// edited (0.15.0-C's job to mint a new one).
+///
+/// A pending `named_style` request (0.15.0-C1) is resolved FIRST in the per-cell loop,
+/// before any of the other five fields on the same edit: it looks the name up against
+/// `<cellStyles>`, then REPLACES the candidate `<xf>` wholesale with a clone of the
+/// referenced `<cellStyleXfs>` entry (plus `xfId` set) -- matching real Excel's own
+/// behavior of baking the named style's font/fill/border/numFmt/alignment/protection
+/// directly onto the cell's own `<cellXfs>` entry, confirmed against a real fixture (see
+/// `StyleAttrEdit::named_style`'s own doc comment). Any font/fill/border/alignment/
+/// protection ALSO requested on the same edit then applies on top of that replacement, in
+/// the usual order below. Returns `Err` (aborting the whole save) if the requested name
+/// isn't in this file's `<cellStyles>` -- no minting fallback, matching 0.15.0-C's
+/// decision to exclude named-style CREATE from this phase entirely.
 fn resolve_pending_style_attrs(
     vm: &Vm,
     starting_styles: &[u8],
     starting_indices: &StyleIndexMap,
-) -> Option<(String, StyleIndexMap)> {
+) -> Result<Option<(String, StyleIndexMap)>, String> {
     if vm.pending_style_attrs.values().all(|m| m.is_empty()) {
-        return None;
+        return Ok(None);
     }
     let xml = String::from_utf8_lossy(starting_styles).into_owned();
 
@@ -2824,6 +2916,7 @@ fn resolve_pending_style_attrs(
     if xfs.is_empty() {
         xfs.push("<xf/>".to_string());
     }
+    let cell_style_xfs = reader::extract_records(&xml, "cellStyleXfs", "xf");
 
     let mut effective = starting_indices.clone();
 
@@ -2838,6 +2931,17 @@ fn resolve_pending_style_attrs(
                 .get(current_index)
                 .cloned()
                 .unwrap_or_else(|| "<xf/>".to_string());
+
+            if let Some(name) = &edit.named_style {
+                let xf_id = reader::named_style_xf_id(&xml, name).ok_or_else(|| {
+                    format!("named style '{name}' not found in this file's <cellStyles>")
+                })?;
+                let style_xf = cell_style_xfs
+                    .get(xf_id as usize)
+                    .cloned()
+                    .unwrap_or_else(|| "<xf/>".to_string());
+                current_xf = reader::with_attr(&style_xf, "xfId", &xf_id.to_string());
+            }
 
             if let Some(font_edit) = &edit.font {
                 let font_id = reader::span_attr_u32(&current_xf, "fontId") as usize;
@@ -2956,7 +3060,44 @@ fn resolve_pending_style_attrs(
         None => new_xml.replacen("</styleSheet>", &format!("{new_cell_xfs}</styleSheet>"), 1),
     };
 
-    Some((new_xml, effective))
+    Ok(Some((new_xml, effective)))
+}
+
+/// Resolves `vm.pending_style_copies` (`copy_style`, 0.15.0-C1) against `starting_indices`
+/// -- chained LAST at save time, after BOTH `resolve_pending_number_formats` and
+/// `resolve_pending_style_attrs`, so a `copy_style` call picks up whatever the source cell
+/// resolved to from either of those passes automatically (see `Vm::pending_style_copies`'s
+/// own doc comment). Pure index aliasing: a destination cell is pointed at EXACTLY the
+/// same style index the source cell already resolves to -- multiple cells sharing one
+/// index is exactly what a style table already supports, so this never mints a new
+/// `<xf>`/font/fill/border/numFmt record and never touches the styles.xml bytes
+/// themselves. Returns `None` when there's nothing pending, so the caller reuses
+/// `starting_indices`/`starting_styles` unchanged.
+///
+/// Snapshots each sheet's indices before applying any copy in that sheet's batch, rather
+/// than reading and writing the same live map -- so if one `copy_style` call's destination
+/// happens to be another (same-batch) call's source, resolution isn't order-dependent on
+/// `HashMap` iteration order.
+fn resolve_pending_style_copies(
+    vm: &Vm,
+    starting_indices: &StyleIndexMap,
+) -> Option<StyleIndexMap> {
+    if vm.pending_style_copies.values().all(|m| m.is_empty()) {
+        return None;
+    }
+    let mut effective = starting_indices.clone();
+    for (sheet_key, copies) in &vm.pending_style_copies {
+        if copies.is_empty() {
+            continue;
+        }
+        let source_snapshot = effective.get(sheet_key).cloned().unwrap_or_default();
+        let sheet_indices = effective.entry(sheet_key.clone()).or_default();
+        for (&dest, &src) in copies {
+            let src_index = source_snapshot.get(&src).copied().unwrap_or(0);
+            sheet_indices.insert(dest, src_index);
+        }
+    }
+    Some(effective)
 }
 
 fn build_xlsx_content_types(
@@ -4153,7 +4294,11 @@ mod tests {
     fn resolve_pending_style_attrs_returns_none_with_no_pending_edits() {
         let vm = Vm::new();
         let indices = vm.cell_style_indices.clone();
-        assert!(resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &indices).is_none());
+        assert!(
+            resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &indices)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -4183,8 +4328,9 @@ mod tests {
             }),
         );
         let indices = vm.cell_style_indices.clone();
-        let (new_xml, effective) =
-            resolve_pending_style_attrs(&vm, source.as_bytes(), &indices).expect("pending edit");
+        let (new_xml, effective) = resolve_pending_style_attrs(&vm, source.as_bytes(), &indices)
+            .unwrap()
+            .expect("pending edit");
         assert!(new_xml.contains("<b val=\"1\"/>"));
         // Original font's other properties survive on the NEW cloned font record.
         assert!(new_xml.contains("<color rgb=\"FF112233\"/>"));
@@ -4210,6 +4356,7 @@ mod tests {
         );
         let indices = vm.cell_style_indices.clone();
         let (new_xml, _) = resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &indices)
+            .unwrap()
             .expect("pending edit");
         assert!(new_xml.contains("<fgColor rgb=\"FF4472C4\"/>"));
         assert!(new_xml.contains("<bgColor indexed=\"64\"/>"));
@@ -4248,6 +4395,7 @@ mod tests {
         );
         let indices = vm.cell_style_indices.clone();
         let (_, effective) = resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &indices)
+            .unwrap()
             .expect("pending edit");
         assert_eq!(effective["sheet1"][&(1, 1)], effective["sheet1"][&(5, 5)]);
     }
@@ -4271,6 +4419,7 @@ mod tests {
         );
         let indices = vm.cell_style_indices.clone();
         let (_, effective) = resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &indices)
+            .unwrap()
             .expect("pending edit");
         assert_ne!(effective["sheet1"][&(1, 1)], 0);
         assert!(!effective.get("sheet1").unwrap().contains_key(&(2, 2)));
@@ -4301,6 +4450,7 @@ mod tests {
             resolve_pending_number_formats(&vm, XLSX_STYLES.as_bytes()).expect("pending edit");
         let (final_xml, final_indices) =
             resolve_pending_style_attrs(&vm, numfmt_xml.as_bytes(), &numfmt_indices)
+                .unwrap()
                 .expect("pending edit");
         let idx = final_indices["sheet1"][&(1, 1)] as usize;
         let xfs = reader::extract_cell_xfs(&final_xml);
@@ -4342,10 +4492,287 @@ mod tests {
             }),
         );
         let indices = vm.cell_style_indices.clone();
-        let (new_xml, _) =
-            resolve_pending_style_attrs(&vm, source.as_bytes(), &indices).expect("pending edit");
+        let (new_xml, _) = resolve_pending_style_attrs(&vm, source.as_bytes(), &indices)
+            .unwrap()
+            .expect("pending edit");
         assert!(new_xml.contains("vertical=\"center\""));
         assert!(new_xml.contains("horizontal=\"center\""));
+    }
+
+    // ── 0.15.0-C1: named-style apply, copy_style ─────────────────────────────────
+
+    /// `fixture4_hyperlink_comment_name.xlsm`'s real `xl/styles.xml` shape (font
+    /// index/xfId/cellStyle name verified directly against that fixture).
+    const FIXTURE4_SHAPED_STYLES: &str = concat!(
+        "<styleSheet>",
+        "<fonts count=\"3\">",
+        "<font><sz val=\"12\"/><color theme=\"1\"/><name val=\"游ゴシック\"/></font>",
+        "<font><sz val=\"6\"/><name val=\"游ゴシック\"/></font>",
+        "<font><u/><sz val=\"12\"/><color theme=\"10\"/><name val=\"游ゴシック\"/></font>",
+        "</fonts>",
+        "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>",
+        "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>",
+        "<cellStyleXfs count=\"2\">",
+        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"><alignment vertical=\"center\"/></xf>",
+        "<xf numFmtId=\"0\" fontId=\"2\" fillId=\"0\" borderId=\"0\" applyNumberFormat=\"0\" \
+           applyFill=\"0\" applyBorder=\"0\" applyAlignment=\"0\" applyProtection=\"0\">\
+           <alignment vertical=\"center\"/></xf>",
+        "</cellStyleXfs>",
+        "<cellXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\">\
+           <alignment vertical=\"center\"/></xf></cellXfs>",
+        "<cellStyles count=\"2\">",
+        "<cellStyle name=\"ハイパーリンク\" xfId=\"1\" builtinId=\"8\"/>",
+        "<cellStyle name=\"標準\" xfId=\"0\" builtinId=\"0\"/>",
+        "</cellStyles>",
+        "</styleSheet>",
+    );
+
+    #[test]
+    fn resolve_pending_style_attrs_applies_a_real_fixture_shaped_named_style() {
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                named_style: Some("ハイパーリンク".to_string()),
+                ..Default::default()
+            }),
+        );
+        let indices = vm.cell_style_indices.clone();
+        let (new_xml, effective) =
+            resolve_pending_style_attrs(&vm, FIXTURE4_SHAPED_STYLES.as_bytes(), &indices)
+                .unwrap()
+                .expect("pending edit");
+        let idx = effective["sheet1"][&(1, 1)] as usize;
+        let xfs = reader::extract_cell_xfs(&new_xml);
+        let xf = &xfs[idx];
+        // Matches real Excel's own behavior: the named style's fontId is baked directly
+        // onto the cell's cellXfs entry, not left to xfId-based inheritance alone.
+        assert!(xf.contains("xfId=\"1\""), "xfId not set: {xf}");
+        assert_eq!(
+            reader::span_attr_u32(xf, "fontId"),
+            2,
+            "fontId not baked in: {xf}"
+        );
+    }
+
+    #[test]
+    fn resolve_pending_style_attrs_errors_on_an_unknown_named_style() {
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                named_style: Some("Bad".to_string()),
+                ..Default::default()
+            }),
+        );
+        let indices = vm.cell_style_indices.clone();
+        let err = resolve_pending_style_attrs(&vm, FIXTURE4_SHAPED_STYLES.as_bytes(), &indices)
+            .unwrap_err();
+        assert!(
+            err.contains("Bad"),
+            "error should name the missing style: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_pending_style_attrs_applies_named_style_before_other_fields_on_the_same_edit() {
+        // font=bold on the SAME edit as named_style must apply ON TOP of the named
+        // style's own baked-in font, not be discarded by it.
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                named_style: Some("ハイパーリンク".to_string()),
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        let indices = vm.cell_style_indices.clone();
+        let (new_xml, effective) =
+            resolve_pending_style_attrs(&vm, FIXTURE4_SHAPED_STYLES.as_bytes(), &indices)
+                .unwrap()
+                .expect("pending edit");
+        let idx = effective["sheet1"][&(1, 1)] as usize;
+        let xfs = reader::extract_cell_xfs(&new_xml);
+        let xf = &xfs[idx];
+        assert!(xf.contains("xfId=\"1\""), "named style lost: {xf}");
+        let font_id = reader::span_attr_u32(xf, "fontId") as usize;
+        let fonts = reader::extract_records(&new_xml, "fonts", "font");
+        // Cloned from font index 2 (the hyperlink font: underlined, theme-colored) with
+        // bold ADDED, not replaced by a from-scratch font.
+        assert!(fonts[font_id].contains("<b/>") || fonts[font_id].contains("<b val=\"1\"/>"));
+        assert!(
+            fonts[font_id].contains("<u/>"),
+            "underline lost: {}",
+            fonts[font_id]
+        );
+        assert!(
+            fonts[font_id].contains("theme=\"10\""),
+            "theme color lost: {}",
+            fonts[font_id]
+        );
+    }
+
+    #[test]
+    fn resolve_pending_style_copies_returns_none_with_no_pending_edits() {
+        let vm = Vm::new();
+        let indices = vm.cell_style_indices.clone();
+        assert!(resolve_pending_style_copies(&vm, &indices).is_none());
+    }
+
+    #[test]
+    fn resolve_pending_style_copies_points_dest_at_the_resolved_source_index() {
+        let mut vm = Vm::new();
+        vm.cell_style_indices.insert(
+            "sheet1".to_string(),
+            std::collections::HashMap::from([((1, 1), 7u32)]),
+        );
+        vm.copy_style_on_sheet("sheet1", (1, 1), 2, 2, 2, 2);
+        let indices = vm.cell_style_indices.clone();
+        let effective = resolve_pending_style_copies(&vm, &indices).expect("pending copy");
+        assert_eq!(effective["sheet1"][&(2, 2)], 7);
+        // Source cell itself is untouched.
+        assert_eq!(effective["sheet1"][&(1, 1)], 7);
+    }
+
+    #[test]
+    fn resolve_pending_style_copies_picks_up_a_pending_edit_on_the_source_not_just_its_resolved_index()
+     {
+        // The critical Finding-1-shaped case: set_style on the source, then copy_style
+        // from it, before any save -- the copy must see the NEW style, not the stale
+        // pre-edit one. Simulated here by chaining resolve_pending_style_attrs's own
+        // output into resolve_pending_style_copies, exactly like save_xlsx_impl does.
+        let mut vm = Vm::new();
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        vm.copy_style_on_sheet("sheet1", (1, 1), 2, 2, 2, 2);
+
+        let starting_indices = vm.cell_style_indices.clone();
+        let (_, style_attrs_effective) =
+            resolve_pending_style_attrs(&vm, XLSX_STYLES.as_bytes(), &starting_indices)
+                .unwrap()
+                .expect("pending style edit");
+        let final_effective =
+            resolve_pending_style_copies(&vm, &style_attrs_effective).expect("pending copy");
+        assert_eq!(
+            final_effective["sheet1"][&(2, 2)],
+            style_attrs_effective["sheet1"][&(1, 1)],
+            "copy_style should point at the source's NEWLY resolved (bold) index, not a stale one"
+        );
+        assert_ne!(final_effective["sheet1"][&(2, 2)], 0);
+    }
+
+    #[test]
+    fn resolve_pending_style_copies_never_mutates_an_untouched_cell() {
+        let mut vm = Vm::new();
+        vm.cell_style_indices.insert(
+            "sheet1".to_string(),
+            std::collections::HashMap::from([((1, 1), 7u32), ((3, 3), 9u32)]),
+        );
+        vm.copy_style_on_sheet("sheet1", (1, 1), 2, 2, 2, 2);
+        let indices = vm.cell_style_indices.clone();
+        let effective = resolve_pending_style_copies(&vm, &indices).expect("pending copy");
+        assert_eq!(effective["sheet1"][&(3, 3)], 9);
+    }
+
+    #[test]
+    fn copy_style_on_a_from_scratch_vm_survives_a_save_and_reload() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Str("styled".to_string()),
+            },
+        );
+        vm.cells_mut().insert(
+            (2, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Str("plain".to_string()),
+            },
+        );
+        vm.set_style_on_sheet(
+            "sheet1",
+            1,
+            1,
+            1,
+            1,
+            &style_attr_edit(StyleAttrEdit {
+                font: Some(reader::FontEdit {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        vm.copy_style_on_sheet("sheet1", (1, 1), 2, 2, 2, 2);
+
+        let path = "/tmp/elixcee_test_copy_style_from_scratch.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+
+        let bytes = std::fs::read(path).expect("read output");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open zip");
+        let mut styles_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("xl/styles.xml").expect("styles.xml"),
+            &mut styles_xml,
+        )
+        .expect("read styles.xml");
+        assert!(styles_xml.contains("<b val=\"1\"/>"));
+
+        let mut sheet_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("xl/worksheets/sheet1.xml").expect("sheet1.xml"),
+            &mut sheet_xml,
+        )
+        .expect("read sheet1.xml");
+        // Both cells must share the SAME non-default style index.
+        let a1_style = sheet_xml
+            .split("r=\"A1\"")
+            .nth(1)
+            .and_then(|s| s.split('>').next())
+            .and_then(|s| s.split("s=\"").nth(1))
+            .and_then(|s| s.split('"').next())
+            .expect("A1 has an s= attribute");
+        let b2_style = sheet_xml
+            .split("r=\"B2\"")
+            .nth(1)
+            .and_then(|s| s.split('>').next())
+            .and_then(|s| s.split("s=\"").nth(1))
+            .and_then(|s| s.split('"').next())
+            .expect("B2 has an s= attribute");
+        assert_eq!(a1_style, b2_style);
+        assert_ne!(a1_style, "0");
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
