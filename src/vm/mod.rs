@@ -2557,11 +2557,32 @@ impl Vm {
     /// pre-existing, deliberate limitation of the VBA path (real Excel allows deleting
     /// the active sheet and re-activates another one; this VM doesn't attempt that),
     /// preserved as-is rather than fixed as a side effect of this refactor.
+    /// Deletes `key`'s cell map and cleans every other per-sheet `Vm` map that
+    /// would otherwise keep a dead entry under the deleted sheet's old key --
+    /// the delete-side counterpart to `rename_sheet`'s re-key list just above.
+    /// `protected_sheets` needs no cleanup: `check_sheet_not_protected` above
+    /// already rejects the call if `key` is a member, so it's guaranteed
+    /// absent here, same reasoning `rename_sheet` uses for the same map.
+    ///
+    /// Deliberately does NOT clean `worksheet_origins`: unlike every other map
+    /// here, it's consulted precisely BECAUSE a sheet is now gone --
+    /// `deleted_sheet_prunable_parts` (`src/lib.rs`) diffs it against the
+    /// current sheet list to find a deleted sheet's now-orphaned `.rels`
+    /// targets, and `no_sheet_was_deleted` (`src/lib.rs`) does the same diff to
+    /// decide whether `<definedNames>` must be dropped wholesale. Clearing the
+    /// deleted sheet's entry would make both checks blind to the deletion.
     fn remove_sheet(&mut self, key: &str, display: &str) -> Result<(), String> {
         self.check_sheet_not_protected(key, display)?;
         if key != self.active_sheet {
             self.sheets.remove(key);
             self.sheet_order.retain(|n| n != key);
+            self.merged_ranges.remove(key);
+            self.sheet_visibility.remove(key);
+            self.cell_style_indices.remove(key);
+            self.cell_number_formats.remove(key);
+            self.sheet_states.remove(key);
+            self.row_heights.remove(key);
+            self.column_widths.remove(key);
         }
         Ok(())
     }
@@ -2588,9 +2609,10 @@ impl Vm {
     /// remove+insert line rather than a generic "walk every map" helper: the maps
     /// have different value types, a truly generic helper needs a macro or
     /// trait-object indirection to cross that, and with exactly one call site a
-    /// helper would save nothing. `remove_sheet`'s own, separate, pre-existing leak
-    /// of 6 of these maps on delete is NOT touched here (see ROADMAP.md's known
-    /// gaps -- left unfixed by deliberate choice, not missed).
+    /// helper would save nothing. `remove_sheet` (just above) now cleans seven of
+    /// these eight non-identity maps on delete, for the same reason --
+    /// `worksheet_origins` is the one deliberate exception, see its own doc
+    /// comment there.
     ///
     /// `protected_sheets` (a `HashSet`) is NOT re-keyed here -- it doesn't need to
     /// be. Renaming a protected sheet is rejected outright below, so `old_key` is
@@ -9774,6 +9796,62 @@ mod tests {
         vm.delete_sheet("Extra").unwrap();
         assert!(!vm.sheet_names().contains(&"extra".to_string()));
         assert!(!vm.sheet_order.contains(&"extra".to_string()));
+    }
+
+    #[test]
+    fn delete_sheet_cleans_all_seven_non_identity_per_sheet_maps() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Extra");
+        vm.merged_ranges
+            .insert("extra".to_string(), vec![((1, 2), (1, 4))]);
+        vm.sheet_visibility.insert(
+            "extra".to_string(),
+            SheetVisibility {
+                hidden_rows: vec![Interval { start: 5, end: 5 }],
+                hidden_columns: vec![],
+            },
+        );
+        vm.cell_style_indices
+            .insert("extra".to_string(), HashMap::from([((1, 1), 3u32)]));
+        vm.cell_number_formats.insert(
+            "extra".to_string(),
+            HashMap::from([((1, 1), "0.00".to_string())]),
+        );
+        vm.sheet_states
+            .insert("extra".to_string(), SheetState::Hidden);
+        vm.row_heights
+            .insert("extra".to_string(), HashMap::from([(5u32, 30.0)]));
+        vm.column_widths
+            .insert("extra".to_string(), vec![(2, 4, 12.5)]);
+        assert!(vm.worksheet_origins.contains_key("extra"));
+
+        vm.delete_sheet("Extra").unwrap();
+
+        assert!(!vm.merged_ranges.contains_key("extra"));
+        assert!(!vm.sheet_visibility.contains_key("extra"));
+        assert!(!vm.cell_style_indices.contains_key("extra"));
+        assert!(!vm.cell_number_formats.contains_key("extra"));
+        assert!(!vm.sheet_states.contains_key("extra"));
+        assert!(!vm.row_heights.contains_key("extra"));
+        assert!(!vm.column_widths.contains_key("extra"));
+        // worksheet_origins deliberately survives -- deleted_sheet_prunable_parts and
+        // no_sheet_was_deleted (src/lib.rs) both detect the deletion by diffing this
+        // map against the current sheet list; clearing it would blind both checks.
+        assert!(vm.worksheet_origins.contains_key("extra"));
+    }
+
+    #[test]
+    fn delete_sheet_of_the_active_sheet_no_ops_and_touches_no_map() {
+        let mut vm = Vm::new(); // "sheet1" is active by default
+        vm.merged_ranges
+            .insert("sheet1".to_string(), vec![((1, 2), (1, 4))]);
+
+        // Deleting the active sheet is a documented silent no-op (see remove_sheet) --
+        // must not clear any map either.
+        vm.remove_sheet("sheet1", "Sheet1").unwrap();
+
+        assert!(vm.sheets.contains_key("sheet1"));
+        assert!(vm.merged_ranges.contains_key("sheet1"));
     }
 
     #[test]
