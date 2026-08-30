@@ -327,6 +327,25 @@ impl PyStreamWriter {
         self.close()?;
         Ok(false)
     }
+
+    /// Number of rows accepted and retained until `close()`.
+    #[getter]
+    fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Estimated bytes retained by pending rows.
+    #[getter]
+    fn pending_bytes(&self) -> usize {
+        self.pending_bytes
+    }
+
+    /// Maximum estimated pending-row budget for this writer.
+    #[getter]
+    fn max_pending_bytes(&self) -> usize {
+        self.max_pending_bytes
+    }
+
     fn append(&mut self, values: &Bound<'_, PyAny>) -> PyResult<()> {
         if !self.active {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
