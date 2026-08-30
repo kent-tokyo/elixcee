@@ -7,10 +7,15 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 ## Current state
 
-`elixcee` **0.13.0** (Rust crate + Python package), `elixcee-types` **0.4.0**,
+`elixcee` **0.15.0 release candidate** (Rust crate + Python package), `elixcee-types`
+**0.4.0**,
 `elixcee-wasm` **0.1.0** (never published to crates.io by design — `publish = false`).
-`0.13.0` carries the eight independent Python API items from `0.12.0` plus the completed
-safe-round-trip and typed-error-cell work. `0.12.0` added eight independent Python API items against `docs/openpyxl-gap-audit.md`'s
+`0.15.0` adds the Safe Style Engine: safe number-format, cell-style, style-copy, named-style,
+and row/column default-style editing. `0.14.0` adds dependency-aware structural edits:
+formula-reference rewriting, safe `move_range`, metadata transforms, and worksheet
+AutoFilter preservation. `0.13.0` carries
+the eight independent Python API items from `0.12.0` plus the completed safe-round-trip and
+typed-error-cell work. `0.12.0` added eight independent Python API items against `docs/openpyxl-gap-audit.md`'s
 priority list (R1, P1 core 3, P1 remainder, and P2's first five slices) plus a `FIND()`
 crash fix — see `CHANGELOG.md`'s `[0.12.0]` for the full account. Minor, not patch: real
 new API surface throughout, nothing removed or changed. Cut from a `release-0.10.0`-branch
@@ -663,6 +668,200 @@ false` (publish-ready) paired with `"version": "0.0.0-development"` (the placeho
 meant to actually publish) — without cross-checking its version against `Cargo.toml`, since
 `@elixcee/xlsx` versions independently by design.
 
+## Competitive roadmap: exceed xlwings, openpyxl, and ClosedXML
+
+This is the product-level roadmap. The release-specific plan below remains the
+implementation ledger; this section defines what “beyond the alternatives” means and
+which evidence is required before claiming it.
+
+The destination is broader than a VBA runner: **elixcee is intended to become a
+cross-platform, Excel-compatible general-purpose library**. VBA execution is the initial
+differentiator, but the long-term product must also cover workbook creation, reading,
+editing, calculation, formatting, charts, tables, validation, printing, inspection,
+testing, and safe round-tripping through one consistent model. “Excel-compatible” means a
+documented supported profile with evidence, not an unlimited promise to reimplement every
+desktop Excel UI feature.
+
+### Positioning and the comparison baseline
+
+The target is not feature-count parity with Excel's desktop UI. It is a reproducible,
+headless Excel platform for creating, inspecting, calculating, transforming, testing, and
+automating workbooks:
+
+| Competitor | Strength to respect | elixcee must win on |
+|---|---|---|
+| **xlwings** | Excellent Python-to-Excel object-model bridge, pandas/NumPy integration, and UDF workflow | No Excel process, deterministic server/CI/WASM execution, native VBA execution, and a full file-native object model |
+| **openpyxl** | Mature Python `.xlsx` object model and broad workbook editing surface | Formula calculation, VBA execution, lossless `.xlsm` preservation, typed diagnostics, and faster bulk operations |
+| **ClosedXML** | Productive .NET API and strong workbook creation/editing ergonomics | Cross-language embedding, Rust/WASM deployment, VBA compatibility, Excel-semantic calculation, and safer round-trips |
+
+xlwings' open-source automation path requires Excel on Windows/macOS, while its separate
+File Reader is the no-Excel option; openpyxl does not evaluate formulas; and ClosedXML is
+a .NET library for reading, manipulating, and writing Excel files without the Excel
+application. These are complementary strengths, not claims that any one library is
+universally inferior. See the [xlwings installation documentation](https://docs.xlwings.org/en/0.36.2/installation.html),
+[openpyxl documentation](https://openpyxl.readthedocs.io/en/stable/), and
+[ClosedXML documentation](https://docs.closedxml.io/en/latest/).
+
+### The six product pillars
+
+1. **Headless execution** — run supported VBA and formulas on Linux, macOS, Windows,
+   containers, CI, and WASM without starting Excel or LibreOffice.
+2. **Correctness with evidence** — Excel differential tests, typed runtime errors, explicit
+   unsupported-feature diagnostics, property-based tests, and zero silent corruption.
+3. **Safe workbook transformation** — preserve macros, relationships, styles, drawings,
+   tables, validations, comments, names, and unknown OOXML while changing only requested
+   content.
+4. **Complete workbook model** — cells, formulas, styles, dimensions, sheets, tables,
+   charts, drawings, names, validation, comments, hyperlinks, printing, protection, and
+   relationships exposed through a coherent API.
+5. **Automation and analysis** — VBA, formula calculation, workbook snapshots/diffs,
+   dependency inspection, linting, property-based workbook tests, and migration tooling.
+6. **Systems-level performance and embedding** — Rust core, zero-copy/bulk range APIs,
+   bounded memory, parallel batch execution, Python/Node/WASM bindings, and reproducible
+   benchmarks.
+
+### Phase decomposition
+
+Each phase has a shippable user outcome and a hard exit gate. A phase is not complete when
+the API exists; it is complete when behavior, compatibility, performance, and failure
+modes are measured.
+
+#### Phase 0 — Competitive contract and benchmark harness
+
+- Freeze a supported-profile matrix for VBA, formulas, OOXML features, file formats, and
+  bindings; every unsupported item must have a stable diagnostic code.
+- Build repeatable benchmarks and representative fixtures for three workloads: bulk data
+  transformation, formula-heavy reporting, and macro-enabled round-trip editing.
+- Add apples-to-apples runners for elixcee, xlwings (Excel-backed and File Reader where
+  applicable), openpyxl, and ClosedXML, measuring cold start, throughput, peak RSS, output
+  correctness, and workbook repair warnings.
+
+**Exit gate:** benchmark results are versioned, workloads are reproducible, and no claim in
+this roadmap lacks a defined metric and fixture.
+
+#### Phase 1 — General workbook foundation and fast bulk core
+
+- Make `read_range`/`write_range` the primary path; add typed batch operations for values,
+  formulas, styles, and metadata with minimal Python/JS crossing.
+- Implement streaming/partial loading, sparse-sheet storage, cancellation, progress, and
+  configurable memory limits.
+- Add a stable workbook snapshot/diff format so callers can inspect exactly what changed.
+- Define a unified workbook object model for `.xlsx`, `.xlsm`, and supported `.ods` data,
+  with explicit capabilities for read-only, editable, calculated, and preserved state.
+- Add workbook creation APIs, sheet lifecycle operations, cell/range values, formulas,
+  styles, dimensions, merges, names, hyperlinks, comments, and protection metadata.
+
+**Exit gate:** on the benchmark corpus, bulk reads/writes beat openpyxl and ClosedXML on
+throughput and peak memory, while output remains semantically equivalent and deterministic.
+
+#### Phase 2 — Formula engine and calculation service
+
+- Complete the independent formula AST, dependency graph, dirty tracking, circular-reference
+  policy, calculation modes, shared/array/dynamic-array formulas, and cached-value policy.
+- Prioritize the high-value function families used in reporting: lookup, date/time, text,
+  logical, aggregation, conditional aggregation, error, and financial functions.
+- Support A1 and R1C1 references, cross-sheet/workbook references where safe, locale-aware
+  parsing, structured references, and explicit unsupported-function diagnostics.
+- Expose calculation as a first-class service: calculate one cell, one range, one sheet, or
+  the whole workbook; inspect dependencies; recalculate selectively; and choose whether to
+  retain, invalidate, or regenerate cached values.
+
+**Exit gate:** 98%+ semantic agreement on the supported formula corpus against Excel, zero
+silent formula flattening, and a documented result for every unsupported construct.
+
+#### Phase 3 — VBA compatibility for data-processing macros
+
+- Expand the parser/VM around real macro usage: procedures, ByRef/default arguments, object
+  members, arrays, collections, dates, errors, type coercion, and workbook/sheet/range
+  operations.
+- Add a compatibility layer for common Excel object-model calls that are meaningful in a
+  headless runtime; classify UI-only calls as skip, stub, or explicit error by policy.
+- Add source locations, trace mode, deterministic clock/randomness controls, timeouts,
+  instruction budgets, and resumable diagnostics.
+
+**Exit gate:** 95%+ agreement with Excel on the supported VBA corpus, 0 silently-wrong
+results, and all unsupported syntax/calls rejected or classified before production use.
+
+#### Phase 4 — Full workbook authoring and lossless OOXML preservation
+
+- Finish relationship-graph-safe preservation for tables, data validation, conditional
+  formatting, hyperlinks, comments, drawings, charts, images, names, print settings,
+  tables, hidden state, dimensions, styles, and macro projects.
+- Separate writer-owned nodes from opaque passthrough nodes; preserve unknown parts and
+  namespaces; remove only unreachable parts after mutations.
+- Add safe mutation APIs for styles, merges, rows/columns, sheet lifecycle, names, tables,
+  validations, filters, comments, and hyperlinks.
+- Add high-value authoring features: conditional formatting, page setup/print areas,
+  autofilters, structured tables, charts, images, drawings, comments/notes, data
+  validation, workbook protection, and controlled style-table deduplication.
+- Add a clear distinction between “create a new workbook,” “edit known features,” and
+  “preserve unknown features,” so callers can choose convenience versus fidelity.
+
+**Exit gate:** 30+ real Excel-authored fixtures, 0 Excel repair warnings, 0 supported-property
+losses, 0 orphaned relationships, and successful save-as plus in-place `.xlsx`/`.xlsm` cycles.
+
+#### Phase 5 — Production-grade multi-language library and tooling
+
+- Expose the same semantic model across Rust, Python, JavaScript/Node, and WASM; use typed
+  values, structured errors, async/streaming APIs, and bulk operations consistently.
+- Provide a small high-level API for openpyxl/xlwings migrations, plus an explicit low-level
+  API for lossless OOXML control; publish migration guides and capability discovery.
+- Add worker-safe execution, concurrency limits, cancellation, sandboxed external links,
+  and stable JSON schemas.
+- Ship companion tools: CLI inspection/conversion, workbook diff, formula/dependency
+  reports, VBA static analysis, fixture generation, and migration helpers from openpyxl,
+  xlwings, and ClosedXML.
+
+**Exit gate:** fresh-environment smoke tests pass for every binding, API behavior matches the
+  contract, and a real Node/browser consumer plus a Python service run without Excel.
+
+#### Phase 6 — Security, scale, and operational reliability
+
+- Enforce ZIP-bomb, XML-size, entry-count, decompression-ratio, relationship-depth, and
+  formula-resource limits; make external links and macros opt-in and auditable.
+- Add fuzzing, corpus minimization, crash promotion, OOM/hang classification, deterministic
+  replay, SBOM, dependency/license scanning, signed artifacts, and reproducible builds.
+- Optimize 100 MB–1 GB workbooks, million-cell sheets, and 100-workbook batches with
+  parallelism that does not change results.
+
+**Exit gate:** security suite has no known high-severity issue, resource limits are enforced,
+and scale benchmarks meet published latency/RSS budgets without correctness regressions.
+
+#### Phase 7 — Supported Excel Library Profile 1.0 and migration proof
+
+- Freeze the supported VBA/formula/workbook profile and semver/deprecation policy.
+- Publish comparison reports, fixture hashes, benchmark methodology, and known limitations.
+- Document three migrations: an openpyxl formula/report pipeline, a ClosedXML server-side
+  transformation, and an xlwings macro workflow, including cases where elixcee is not the
+  right tool.
+- Publish separate profiles for file I/O, calculation, workbook authoring, VBA execution,
+  preservation, and UI-adjacent features, rather than one vague compatibility label.
+
+**Exit gate:** external users can reproduce the results, no silent data loss is known inside
+the profile, and the product can honestly claim: “Excel-compatible headless execution and
+safe workbook transformation for the documented data-processing profile.”
+
+### Competitive scorecard
+
+The release scorecard must be reported by workload, not by a single synthetic number:
+
+| Dimension | Target before 1.0 |
+|---|---|
+| Excel dependency | None for the supported profile |
+| VBA supported-case agreement | ≥95% vs. real Excel |
+| Formula supported-case agreement | ≥98% vs. real Excel |
+| Supported OOXML loss on round-trip | 0 |
+| Excel repair warnings | 0 |
+| Silent wrong results | 0 |
+| Bulk throughput / peak RSS | Better than openpyxl and ClosedXML on published corpus |
+| Cold-start and batch execution | Better than Excel-process automation on published corpus |
+| Deployment | Python, Node, WASM, Linux/macOS/Windows |
+
+The old 0.9.0–1.0.0 release plan below maps onto these phases: 0.10.0–0.12.0 primarily
+cover Phases 1–4, 0.13.0–0.15.0 cover structural editing, preservation foundations, and
+safe style editing, and the remaining work should be tracked against
+the gates above rather than against version numbers alone.
+
 ## Roadmap: 0.9.0 → 1.0.0
 
 Basic policy going forward: not "add more VBA syntax," but three pillars, in order —
@@ -943,6 +1142,40 @@ rather than a silent no-op.
   panic/OOM/hang outcomes distinctly.
 - **Distribution**: SBOM, build provenance, reproducible builds, checksums, signed releases,
   dependency license audit, vulnerability scanning.
+
+### 0.14.0 — Dependency-Aware Structural Editing — **shipped**
+
+Released as `v0.14.0` on 2026-08-30. Formula references, safe range moves, worksheet
+metadata transforms, AutoFilter preservation, and defined-name rename handling are
+implemented and covered by the local Rust/Python/XLSX verification suites. Real-Excel
+reopen after a chained edit remains an explicit environmental follow-up because this
+workspace has no Excel installation.
+
+### 0.15.0 — Safe Style Engine — **in progress**
+
+**Goal**: edit workbook formatting without mutating shared style records or corrupting
+`styles.xml`, while preserving unknown attributes and deduplicating equivalent records.
+
+- [x] Number-format editing via `set_number_format`.
+- [x] Font, fill, border, alignment, and protection editing via `set_style`.
+- [x] Style copying and existing named-style application.
+- [x] Row and column default-style editing.
+- [x] Chained pending-style resolution for combined number-format and visual-style edits.
+- [ ] Theme-color minting and effective theme-color resolution (deferred; requires a
+  structured `theme1.xml`/DrawingML model and is not required for the safe-style core).
+
+**Verification status**: workspace Rust tests, clippy, release build, Python compatibility
+tests, and XLSX differential tests pass. Verification against real Excel-generated style
+edits remains limited by the absence of an Excel installation; the current style writer
+uses the documented ECMA-376-compatible shapes and openpyxl-authored fixtures.
+
+**Release gate**:
+
+- [x] No in-place mutation of shared style records.
+- [x] Existing style attributes and unknown XML content remain preserved for supported edits.
+- [x] Equivalent style records are reused instead of duplicated where applicable.
+- [x] Combined pending style edits resolve deterministically in one save.
+- [ ] Real-Excel reopen and visual rendering verification.
 
 ### 1.0.0 — Stable Supported Profile
 

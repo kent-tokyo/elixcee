@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.15.0] - 2026-08-30
+
+Safe Style Engine for controlled workbook formatting edits. Added `set_number_format`,
+`set_style` for font/fill/border/alignment/protection, `copy_style`, named-style
+application, and row/column default styles. Style records are deduplicated and existing
+shared styles are never mutated in place; pending edits are chained through one safe
+resolution pipeline so combined formatting changes are preserved.
+
+Theme-color minting and effective theme-color resolution remain out of scope.
+
 ## [0.14.0] - 2026-08-30
 
 Dependency-aware structural editing for formulas and cell metadata. Row/column
