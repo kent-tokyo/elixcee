@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.0] - 2026-08-30
+
+Dependency-aware structural editing for formulas and cell metadata. Row/column
+insert-delete now rewrites same-sheet and sheet-qualified formula references, and
+sheet rename updates qualified formulas and defined names. Added safe same-sheet
+`move_range` with formula translation and atomic validation. Structural edits and
+range moves now preserve or transform merged ranges, hidden row/column intervals,
+cell styles, number formats, row heights, and column widths. XLSX save/reload also
+preserves formula cells without cached values and worksheet AutoFilter metadata.
+
+The release deliberately excludes structured table, data-validation, chart, and
+comment editing; those remain later milestones.
+
 ## [0.12.0] - 2026-08-27
 
 Root `elixcee` (Rust crate + Python package) only -- `elixcee-types`/`elixcee-wasm`/
