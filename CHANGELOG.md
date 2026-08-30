@@ -1493,6 +1493,42 @@ untouched (a pure read projection) — the first real mutation capability for ta
   fix, and a second save-reload cycle. `openpyxl` reopens every result cleanly, with no
   warnings on the column-removal case specifically.
 
+### Root crate: data validation — 0.16.0-C
+
+`vm.add_data_validation(sqref, validation_type, ...)` / `remove_data_validation(index, ...)`
+/ `data_validations(sheet=None)` — creates, removes, and lists `<dataValidation>` rules.
+Persist-only: rule definitions are created/persisted for Excel itself to evaluate, exactly
+matching openpyxl's own non-evaluating behavior — no rule is ever checked against a cell's
+actual value.
+
+- All 6 validation types (`list`, `whole`, `decimal`, `date`, `time`, `textLength`,
+  `custom`), every operator, and multi-area `sqref` (space-delimited, distinct from
+  `<definedName>`'s comma-delimited grammar) are supported in this one slice.
+- `DataValidationRule::raw_span` is the write-time source of truth — an existing rule's
+  bytes (including real extension GUIDs like `xr:uid`, confirmed on `fixture3`'s own real
+  rule) are never reserialized from parsed fields, only surgically patched (`with_attr`,
+  reused unchanged from 0.15.0-B/C) when a structural edit actually shifts its `sqref`.
+  An untouched sheet's `<dataValidations>` still passes through byte-identical exactly as
+  before this feature existed — verified directly (an unrelated `set_cell` edit leaves the
+  fragment byte-for-byte unchanged), not just claimed.
+- New per-sheet `Vm.data_validations_touched` gates the regenerate-vs-passthrough choice at
+  save time — mirrors `pending_number_formats`/`pending_style_attrs`'s "only reserialize
+  what's actually pending" discipline, applied per-sheet since `<dataValidations>` lives in
+  the worksheet's own XML, not a shared workbook-wide part. A sheet-copy is marked touched
+  unconditionally (it has no original worksheet XML of its own to fall back to) — this also
+  fixes a real pre-existing gap: `copy_sheet` previously dropped a copied sheet's data
+  validation entirely, since only `Vm` state (not raw XML fragments) survives a copy.
+- Verification exception granted for 5 of the 6 types/every operator/multi-area `sqref`
+  (only the real fixture's one `list`/single-area example has real-Excel grounding) — same
+  basis as every prior style-engine/table exception this session: unambiguous, fixed-
+  vocabulary ECMA-376 spec text (`ST_DataValidationType`/`ST_DataValidationOperator`/
+  `ST_Sqref`), no producer variance to discover. Verified via real `openpyxl`-authored
+  synthetic fixtures for each type, round-tripped through elixcee and reopened.
+- Structural-edit shift reuses `shift_table_rect`'s exact 2D-rect arithmetic (no new
+  primitive) — verified end-to-end: an `insert_rows` shifting a rule's `sqref` is reflected
+  in the ON-DISK file, not just the in-memory `data_validations()` read, closing the same
+  class of gap 0.16.0-A1's own table `ref` shift needed a regression test for.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted

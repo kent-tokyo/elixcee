@@ -391,6 +391,33 @@ fn validate_range_addr(addr: &str) -> Result<RangeBounds, String> {
     Ok((start, end))
 }
 
+/// Splits and validates an `add_data_validation`-style multi-area `sqref` string
+/// ("A1:A10 C1:C10", SPACE-delimited, matching real Excel's own convention — distinct
+/// from `validate_range_addr`'s single-area, comma-rejecting contract) into its
+/// individual `RangeBounds`. Fails closed on the FIRST bad token (whole call rejected,
+/// nothing added) rather than silently dropping unparseable areas, unlike the tolerant
+/// LOAD-time `reader::parse_sqref` — this is user-facing API input, held to the same
+/// validated-before-touching-anything bar as `set_range`'s own shape check.
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
+fn parse_sqref_areas(sqref: &str) -> Result<Vec<RangeBounds>, String> {
+    const MAX_ROW: u32 = 1_048_576;
+    const MAX_COL: u32 = 16_384;
+    let areas: Result<Vec<RangeBounds>, String> =
+        sqref.split_whitespace().map(validate_range_addr).collect();
+    let areas = areas?;
+    if areas.is_empty() {
+        return Err(format!("sqref must not be empty: {sqref:?}"));
+    }
+    for &(_, (r2, c2)) in &areas {
+        if r2 > MAX_ROW || c2 > MAX_COL {
+            return Err(format!(
+                "sqref area exceeds sheet bounds (max row {MAX_ROW}, max col {MAX_COL}), got row {r2}, col {c2}"
+            ));
+        }
+    }
+    Ok(areas)
+}
+
 /// Validates a Python-supplied nested-list grid's shape against `set_range`'s
 /// target rect, given each already-extracted outer-list row's length in
 /// order. Two distinct failure messages: ragged input (row lengths disagree
@@ -1895,6 +1922,159 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Adds a data-validation rule to *sqref* (0.16.0-C), returning its index in that
+    /// sheet's rule list (stable until removed via :meth:`remove_data_validation`).
+    ///
+    /// This creates/persists a valid rule DEFINITION for Excel itself to enforce on
+    /// open — it does **not** evaluate the rule against any cell's current value,
+    /// matching openpyxl's own non-evaluating behavior (this project's own
+    /// ``VBA``-side ``Range.Validation`` statements are separately, immediately
+    /// evaluated at runtime; this method has nothing to do with that).
+    ///
+    /// Parameters
+    /// ----------
+    /// sqref:
+    ///     One or more single-area A1 ranges, space-separated (e.g. ``"A1:A10"`` or
+    ///     ``"A1:A10 C1:C10"``), matching real Excel's own multi-area validation
+    ///     target convention. Each area may be a single cell or a range.
+    /// validation_type:
+    ///     One of ``"list"``, ``"whole"``, ``"decimal"``, ``"date"``, ``"time"``,
+    ///     ``"textLength"``, ``"custom"``.
+    /// operator:
+    ///     One of ``"between"``, ``"notBetween"``, ``"equal"``, ``"notEqual"``,
+    ///     ``"greaterThan"``, ``"lessThan"``, ``"greaterThanOrEqual"``,
+    ///     ``"lessThanOrEqual"`` — meaningful for every *validation_type* except
+    ///     ``"list"``/``"custom"``, which ignore it. Not validated against
+    ///     *validation_type* — persisted as given.
+    /// formula1, formula2:
+    ///     Raw, unevaluated formula/literal text (e.g. ``formula1='"Yes,No,Maybe"'``
+    ///     for a literal ``list``, or ``formula1="10"`` for a ``whole``/``between``
+    ///     lower bound). *formula2* is only meaningful for the ``between``/
+    ///     ``notBetween`` operators.
+    /// allow_blank:
+    ///     Whether a blank cell passes validation regardless of the rule. Defaults
+    ///     to ``True``, matching real Excel's own "New Validation" dialog default.
+    /// prompt_title, prompt:
+    ///     Optional input-message text shown when the cell is selected. The input
+    ///     message is shown at all only when either is given.
+    /// error_style:
+    ///     One of ``"stop"``, ``"warning"``, ``"information"``. Error-blocking is
+    ///     always enabled on an added rule (matching real Excel's own default) —
+    ///     there is no way to add a rule with error-checking disabled.
+    /// error_title, error:
+    ///     Optional custom error-dialog text; the default (empty) title/message is
+    ///     used when omitted.
+    /// sheet:
+    ///     Sheet to add the rule to. Defaults to the active sheet; does **not**
+    ///     change the active sheet when given.
+    ///
+    /// Raises ``ValueError`` if *sqref* is empty or contains a bad/oversized address,
+    /// or *sheet* is unknown.
+    #[pyo3(signature = (
+        sqref, validation_type, operator = None, formula1 = None, formula2 = None,
+        allow_blank = true, prompt_title = None, prompt = None, error_style = None,
+        error_title = None, error = None, sheet = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_data_validation(
+        &mut self,
+        sqref: &str,
+        validation_type: &str,
+        operator: Option<&str>,
+        formula1: Option<&str>,
+        formula2: Option<&str>,
+        allow_blank: bool,
+        prompt_title: Option<&str>,
+        prompt: Option<&str>,
+        error_style: Option<&str>,
+        error_title: Option<&str>,
+        error: Option<&str>,
+        sheet: Option<&str>,
+    ) -> PyResult<usize> {
+        let areas =
+            parse_sqref_areas(sqref).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let spec = reader::DataValidationSpec {
+            validation_type: validation_type.to_string(),
+            operator: operator.map(str::to_string),
+            formula1: formula1.map(str::to_string),
+            formula2: formula2.map(str::to_string),
+            allow_blank,
+            show_input_message: prompt_title.is_some() || prompt.is_some(),
+            prompt_title: prompt_title.map(str::to_string),
+            prompt: prompt.map(str::to_string),
+            // Real Excel's own "New Validation" dialog defaults error-blocking ON even
+            // before any custom title/message is set -- an added rule is presumed
+            // meant to actually be enforced.
+            show_error_message: true,
+            error_style: error_style.map(str::to_string),
+            error_title: error_title.map(str::to_string),
+            error: error.map(str::to_string),
+        };
+        Ok(self.inner.add_data_validation_on_sheet(&key, areas, spec))
+    }
+
+    /// Removes the data-validation rule at *index* (from :meth:`add_data_validation`'s
+    /// return value, or a position in :meth:`data_validations`' own listing) on *sheet*.
+    ///
+    /// Raises ``ValueError`` if *index* is out of range or *sheet* is unknown.
+    #[pyo3(signature = (index, sheet = None))]
+    fn remove_data_validation(&mut self, index: usize, sheet: Option<&str>) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .remove_data_validation_on_sheet(&key, index)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Every data-validation rule on *sheet* (defaults to the active sheet),
+    /// read-only, in list order (index in this list matches
+    /// :meth:`remove_data_validation`'s own *index*). Each rule is a dict:
+    ///
+    /// ``{"validation_type": ..., "operator": ..., "formula1": ..., "formula2": ...,
+    /// "allow_blank": ..., "prompt_title": ..., "prompt": ..., "error_style": ...,
+    /// "error_title": ..., "error": ..., "sqref": ["A1:A10", ...]}``
+    ///
+    /// String/bool fields are ``None``/``False`` when the underlying attribute is
+    /// absent. This method never evaluates a rule against any cell's value — see
+    /// :meth:`add_data_validation`'s own docstring for that scope boundary.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown.
+    #[pyo3(signature = (sheet = None))]
+    fn data_validations(&self, py: Python<'_>, sheet: Option<&str>) -> PyResult<Py<PyAny>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let list = PyList::empty(py);
+        for r in self.inner.data_validations.get(&key).into_iter().flatten() {
+            let dict = PyDict::new(py);
+            dict.set_item("validation_type", &r.validation_type)?;
+            dict.set_item("operator", r.operator.as_deref())?;
+            dict.set_item("formula1", r.formula1.as_deref())?;
+            dict.set_item("formula2", r.formula2.as_deref())?;
+            dict.set_item("allow_blank", r.allow_blank)?;
+            dict.set_item("prompt_title", r.prompt_title.as_deref())?;
+            dict.set_item("prompt", r.prompt.as_deref())?;
+            dict.set_item("error_style", r.error_style.as_deref())?;
+            dict.set_item("error_title", r.error_title.as_deref())?;
+            dict.set_item("error", r.error.as_deref())?;
+            dict.set_item(
+                "sqref",
+                r.sqref
+                    .iter()
+                    .map(|rect| format_sqref(std::slice::from_ref(rect)))
+                    .collect::<Vec<_>>(),
+            )?;
+            list.append(dict)?;
+        }
+        Ok(list.into_any().unbind())
+    }
     /// Every hidden row number on a sheet, as a sorted list of 1-based row
     /// numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.
     ///
@@ -4127,8 +4307,19 @@ fn build_xlsx_sheet(
         out.push_str(cf);
         out.push('\n');
     }
-    if let Some(dv) = fragments.data_validations {
-        out.push_str(dv);
+    // 0.16.0-C: an untouched sheet's `<dataValidations>` passes through byte-identical
+    // exactly as before this feature existed (`fragments.data_validations`, captured
+    // from `source_xml` same as every other opaque fragment above); a touched one
+    // (add/remove/a real structural-edit shift, or a copy with no source XML at all) is
+    // regenerated from current `Vm` state instead. See `resolve_data_validations_for_sheet`'s
+    // own doc comment.
+    let dv_output = if vm.data_validations_touched.contains(&sheet_key) {
+        resolve_data_validations_for_sheet(vm, &sheet_key, fragments.data_validations)
+    } else {
+        fragments.data_validations.map(str::to_string)
+    };
+    if let Some(dv) = dv_output {
+        out.push_str(&dv);
         out.push('\n');
     }
 
@@ -4320,6 +4511,147 @@ fn merge_rect_to_a1(rect: &((u32, u32), (u32, u32))) -> String {
         xlsx_col_letters(c2),
         r2
     )
+}
+
+/// Formats data-validation-style `sqref` areas back to `ST_Sqref` notation (0.16.0-C):
+/// one SPACE-delimited token per range, a single-cell area omitting the colon ("E1", not
+/// "E1:E1") to match real Excel's own convention (confirmed against `fixture3`'s real
+/// `sqref="E1"`) -- distinct from `merge_rect_to_a1`, which always includes the colon.
+pub(crate) fn format_sqref(ranges: &[RangeBounds]) -> String {
+    ranges
+        .iter()
+        .map(|&((r1, c1), (r2, c2))| {
+            if (r1, c1) == (r2, c2) {
+                format!("{}{}", xlsx_col_letters(c1), r1)
+            } else {
+                merge_rect_to_a1(&((r1, c1), (r2, c2)))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Builds a brand-new `<dataValidation>` element from `add_data_validation`'s own
+/// fields (0.16.0-C) -- used only for a genuinely NEW rule, which has no prior
+/// `raw_span` to preserve unknown attributes of (there are none yet). An existing rule's
+/// `raw_span`, by contrast, is only ever surgically patched (`reader::with_attr`), never
+/// rebuilt this way -- see `DataValidationRule`'s own doc comment.
+pub(crate) fn build_data_validation_span(
+    spec: &reader::DataValidationSpec,
+    sqref: &[RangeBounds],
+) -> String {
+    let mut attrs = format!(" type=\"{}\"", xml_escape(&spec.validation_type));
+    if let Some(op) = &spec.operator {
+        attrs.push_str(&format!(" operator=\"{}\"", xml_escape(op)));
+    }
+    if spec.allow_blank {
+        attrs.push_str(" allowBlank=\"1\"");
+    }
+    if spec.show_input_message {
+        attrs.push_str(" showInputMessage=\"1\"");
+    }
+    if spec.show_error_message {
+        attrs.push_str(" showErrorMessage=\"1\"");
+    }
+    if let Some(es) = &spec.error_style {
+        attrs.push_str(&format!(" errorStyle=\"{}\"", xml_escape(es)));
+    }
+    if let Some(t) = &spec.error_title {
+        attrs.push_str(&format!(" errorTitle=\"{}\"", xml_escape(t)));
+    }
+    if let Some(e) = &spec.error {
+        attrs.push_str(&format!(" error=\"{}\"", xml_escape(e)));
+    }
+    if let Some(t) = &spec.prompt_title {
+        attrs.push_str(&format!(" promptTitle=\"{}\"", xml_escape(t)));
+    }
+    if let Some(p) = &spec.prompt {
+        attrs.push_str(&format!(" prompt=\"{}\"", xml_escape(p)));
+    }
+    attrs.push_str(&format!(" sqref=\"{}\"", xml_escape(&format_sqref(sqref))));
+
+    let mut body = String::new();
+    if let Some(f1) = &spec.formula1 {
+        body.push_str(&format!("<formula1>{}</formula1>", xml_escape(f1)));
+    }
+    if let Some(f2) = &spec.formula2 {
+        body.push_str(&format!("<formula2>{}</formula2>", xml_escape(f2)));
+    }
+    if body.is_empty() {
+        format!("<dataValidation{attrs}/>")
+    } else {
+        format!("<dataValidation{attrs}>{body}</dataValidation>")
+    }
+}
+
+/// Rebuilds a counted container element (e.g. `<dataValidations count="N">...`) with
+/// `count` set to `new_count` and `body` as its new inner content, preserving every
+/// OTHER attribute the ORIGINAL container had (if any) -- e.g. a real `disablePrompts`/
+/// `xWindow`/`yWindow` on `<dataValidations>` itself, which a naive count-only
+/// reconstruction would otherwise silently drop. Reuses `reader::with_attr` rather than
+/// reimplementing attribute-merging: synthesizes the original's own attributes as a bare
+/// self-closing tag, lets `with_attr` upsert `count` on it, then wraps `body` in the
+/// result. `original` absent (no such container existed in the source at all) falls back
+/// to a plain `count`-only tag.
+fn rebuild_counted_container(
+    original: Option<&str>,
+    container_tag: &str,
+    new_count: usize,
+    body: &str,
+) -> String {
+    let attrs_only = original
+        .and_then(|span| {
+            let open_end = span.find('>')?;
+            span[..open_end].strip_prefix(&format!("<{container_tag}"))
+        })
+        .map(|raw| raw.trim_end().strip_suffix('/').unwrap_or(raw).to_string())
+        .unwrap_or_default();
+    let synthetic = format!("<{container_tag}{attrs_only}/>");
+    let with_count = reader::with_attr(&synthetic, "count", &new_count.to_string());
+    let open = with_count
+        .trim_end()
+        .strip_suffix("/>")
+        .unwrap_or(&with_count);
+    format!("{open}>{body}</{container_tag}>")
+}
+
+/// Regenerates `<dataValidations>` for a sheet whose rules were touched (add/remove/a
+/// real structural-edit shift, or a sheet-copy landing with no original XML of its own)
+/// since load -- `vm.data_validations_touched` gates whether this runs at all (see
+/// `build_xlsx_sheet`'s own call site: an untouched sheet's original fragment is passed
+/// through byte-identical instead, this function is never even called for it). Each
+/// rule's `raw_span` is used as-is UNLESS `dirty` (a structural-edit shift updated its
+/// parsed `sqref` but not yet its `raw_span`), in which case exactly the `sqref`
+/// attribute is patched via `with_attr`, preserving every other attribute/child
+/// (including extension GUIDs like a real `xr:uid`) byte-for-byte. `None` when every
+/// rule was removed -- `CT_DataValidations`' own `<dataValidation>` child is
+/// `minOccurs="1"` (same convention already confirmed for `<hyperlinks>`), so an empty
+/// container must be omitted entirely, not emitted as `<dataValidations count="0"/>`.
+fn resolve_data_validations_for_sheet(
+    vm: &Vm,
+    sheet_key: &str,
+    original: Option<&str>,
+) -> Option<String> {
+    let rules = vm.data_validations.get(sheet_key)?;
+    if rules.is_empty() {
+        return None;
+    }
+    let body: String = rules
+        .iter()
+        .map(|r| {
+            if r.dirty {
+                reader::with_attr(&r.raw_span, "sqref", &format_sqref(&r.sqref))
+            } else {
+                r.raw_span.clone()
+            }
+        })
+        .collect();
+    Some(rebuild_counted_container(
+        original,
+        "dataValidations",
+        rules.len(),
+        &body,
+    ))
 }
 
 // ── ODS write ────────────────────────────────────────────────────────────────

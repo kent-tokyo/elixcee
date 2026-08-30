@@ -118,6 +118,175 @@ pub struct WorkbookSheet {
     /// calculated_column_formula` is captured as raw, unparsed text. Always empty for
     /// `.ods` (no table concept there).
     pub tables: Vec<TableDef>,
+    /// Data-validation rules defined directly inside this sheet's own XML (0.16.0-C,
+    /// no separate part/relationship, unlike `tables` above). Read-only at parse time,
+    /// like `tables`; `Vm::add_data_validation_on_sheet`/`remove_data_validation_on_sheet`
+    /// mutate the `Vm`-side copy afterward. Always empty for `.ods`.
+    pub data_validations: Vec<DataValidationRule>,
+}
+
+/// One `<dataValidation>` record (0.16.0-C), parsed from a raw span `extract_records`
+/// already isolated. `raw_span` is the write-time source of truth: it preserves every
+/// attribute/child this struct doesn't model (e.g. the real `xr:uid` extension GUID seen
+/// on `fixture3`'s own data validation) byte-for-byte for anything not explicitly
+/// re-patched. `dirty` marks a rule whose `sqref` has been shifted since `raw_span` was
+/// captured (a structural edit) -- the writer only re-patches `raw_span` (via
+/// `with_attr`, touching just the `sqref` attribute) for `dirty` rules, so an untouched
+/// rule's bytes never move at all. Freshly-added rules (`add_data_validation_on_sheet`)
+/// build `raw_span` directly from the given fields and are never `dirty` -- there is
+/// nothing stale to reconcile.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DataValidationRule {
+    pub validation_type: String,
+    pub operator: Option<String>,
+    /// Raw `<formula1>` text, unparsed and unevaluated -- a `list` type's formula1 is
+    /// often a literal comma-separated string (`"Yes,No,Maybe"`) rather than a cell
+    /// reference; this project's own persist-only scope for 0.16.0 never needs to tell
+    /// the two apart.
+    pub formula1: Option<String>,
+    pub formula2: Option<String>,
+    pub allow_blank: bool,
+    pub show_input_message: bool,
+    pub prompt_title: Option<String>,
+    pub prompt: Option<String>,
+    pub show_error_message: bool,
+    pub error_style: Option<String>,
+    pub error_title: Option<String>,
+    pub error: Option<String>,
+    /// Parsed `sqref` areas, 1-based inclusive rects -- `ST_Sqref` is a SPACE-delimited
+    /// list of ranges (distinct from `<definedName>`'s comma-delimited multi-area
+    /// grammar), each of which may be a single cell (`"E1"`, no colon, confirmed against
+    /// `fixture3`'s real `sqref="E1"`) or a range (`"A1:C4"`).
+    pub sqref: Vec<MergeRect>,
+    pub dirty: bool,
+    pub raw_span: String,
+}
+
+/// Fields for a NEW data-validation rule (`Vm::add_data_validation_on_sheet`), grouped
+/// into one struct to keep that method's (and `build_data_validation_span`'s, `src/
+/// lib.rs`) signature small -- mirrors `StyleAttrEdit`'s own grouping of `set_style`'s
+/// many optional fields. `show_input_message`/`show_error_message` are deliberately NOT
+/// separate fields here: the caller-facing `add_data_validation` derives them from
+/// whether a prompt/error message was actually given (see that method's own doc
+/// comment), so by the time a `DataValidationSpec` exists they're already resolved and
+/// live on `DataValidationRule` directly, not duplicated here.
+#[derive(Clone, Debug)]
+pub struct DataValidationSpec {
+    pub validation_type: String,
+    pub operator: Option<String>,
+    pub formula1: Option<String>,
+    pub formula2: Option<String>,
+    pub allow_blank: bool,
+    pub show_input_message: bool,
+    pub prompt_title: Option<String>,
+    pub prompt: Option<String>,
+    pub show_error_message: bool,
+    pub error_style: Option<String>,
+    pub error_title: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Splits and parses an `ST_Sqref` value ("A1:B2 D5") into its individual 1-based
+/// inclusive ranges, tolerant of any unparseable token (skipped, not fatal) -- matches
+/// this reader's existing "contributes nothing" tolerance elsewhere (e.g. an
+/// unresolvable table part). Uses `elixcee_types::parse_range_addr`'s own single-cell-or-
+/// range convention, not `parse_merge_ref`'s colon-required one -- a real `sqref` token
+/// commonly has no colon at all.
+fn parse_sqref(s: &str) -> Vec<MergeRect> {
+    s.split_whitespace()
+        .filter_map(elixcee_types::parse_range_addr)
+        .collect()
+}
+
+fn parse_data_validation_xml(span: &str) -> Option<DataValidationRule> {
+    let mut iter = XmlIter::new(span);
+    let mut rule: Option<DataValidationRule> = None;
+    let mut in_formula1 = false;
+    let mut in_formula2 = false;
+    let mut f1_text = String::new();
+    let mut f2_text = String::new();
+
+    let as_bool = |attrs: &[Attr], name: &str| {
+        attr_get(attrs, name)
+            .map(|v| matches!(v, "1" | "true" | "TRUE"))
+            .unwrap_or(false)
+    };
+
+    while let Some(ev) = iter.next_ev() {
+        match ev {
+            Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                match local {
+                    "dataValidation" => {
+                        rule = Some(DataValidationRule {
+                            validation_type: attr_get(attrs, "type").unwrap_or("none").to_string(),
+                            operator: attr_get(attrs, "operator").map(|s| s.to_string()),
+                            formula1: None,
+                            formula2: None,
+                            allow_blank: as_bool(attrs, "allowBlank"),
+                            show_input_message: as_bool(attrs, "showInputMessage"),
+                            prompt_title: attr_get(attrs, "promptTitle").map(|s| s.to_string()),
+                            prompt: attr_get(attrs, "prompt").map(|s| s.to_string()),
+                            show_error_message: as_bool(attrs, "showErrorMessage"),
+                            error_style: attr_get(attrs, "errorStyle").map(|s| s.to_string()),
+                            error_title: attr_get(attrs, "errorTitle").map(|s| s.to_string()),
+                            error: attr_get(attrs, "error").map(|s| s.to_string()),
+                            sqref: attr_get(attrs, "sqref")
+                                .map(parse_sqref)
+                                .unwrap_or_default(),
+                            dirty: false,
+                            raw_span: span.to_string(),
+                        });
+                    }
+                    "formula1" if !matches!(ev, Ev::SelfClose(_, _)) => {
+                        in_formula1 = true;
+                        f1_text.clear();
+                    }
+                    "formula2" if !matches!(ev, Ev::SelfClose(_, _)) => {
+                        in_formula2 = true;
+                        f2_text.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Ev::Close(ref tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                match local {
+                    "formula1" if in_formula1 => {
+                        if let Some(r) = rule.as_mut() {
+                            r.formula1 = Some(f1_text.clone());
+                        }
+                        in_formula1 = false;
+                    }
+                    "formula2" if in_formula2 => {
+                        if let Some(r) = rule.as_mut() {
+                            r.formula2 = Some(f2_text.clone());
+                        }
+                        in_formula2 = false;
+                    }
+                    _ => {}
+                }
+            }
+            Ev::Text(ref text) => {
+                if in_formula1 {
+                    f1_text.push_str(text);
+                } else if in_formula2 {
+                    f2_text.push_str(text);
+                }
+            }
+        }
+    }
+    rule
+}
+
+/// Parses every `<dataValidation>` record inside `sheet_xml`'s `<dataValidations>`
+/// container (0.16.0-C), tolerant of any single record that fails to parse (skipped, not
+/// fatal). Empty when the sheet has no `<dataValidations>` at all.
+pub(crate) fn xlsx_data_validations(sheet_xml: &str) -> Vec<DataValidationRule> {
+    extract_records(sheet_xml, "dataValidations", "dataValidation")
+        .iter()
+        .filter_map(|span| parse_data_validation_xml(span))
+        .collect()
 }
 
 /// One `<tableColumn>` entry inside a `<table>`'s `<tableColumns>` (0.16.0-A1).
@@ -1818,6 +1987,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 }
             }
         }
+        let data_validations = xlsx_data_validations(&sheet_xml);
         sheets.push(BufferSheet {
             sheet: WorkbookSheet {
                 name,
@@ -1837,6 +2007,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 row_styles: sheet_data.row_styles,
                 column_styles: sheet_data.column_styles,
                 tables,
+                data_validations,
             },
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
@@ -3401,6 +3572,76 @@ mod table_parsing_tests {
     }
 }
 
+#[cfg(test)]
+mod data_validation_parsing_tests {
+    use super::*;
+
+    const REAL_LIST_DV: &str = r#"<dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="E1" xr:uid="{BF4C2CDE-5B18-5247-880B-6E29EFBEE104}"><formula1>"Yes,No,Maybe"</formula1></dataValidation></dataValidations>"#;
+
+    #[test]
+    fn xlsx_data_validations_extracts_every_field_from_a_real_shape() {
+        let sheet_xml = format!("<worksheet>{REAL_LIST_DV}</worksheet>");
+        let rules = xlsx_data_validations(&sheet_xml);
+        assert_eq!(rules.len(), 1);
+        let r = &rules[0];
+        assert_eq!(r.validation_type, "list");
+        assert_eq!(r.operator, None);
+        assert_eq!(r.formula1.as_deref(), Some(r#""Yes,No,Maybe""#));
+        assert_eq!(r.formula2, None);
+        assert!(r.allow_blank);
+        assert!(r.show_input_message);
+        assert!(r.show_error_message);
+        assert_eq!(r.sqref, vec![((1, 5), (1, 5))]);
+        assert!(!r.dirty);
+        assert!(r.raw_span.contains("xr:uid"));
+    }
+
+    #[test]
+    fn xlsx_data_validations_is_empty_without_a_datavalidations_element() {
+        assert!(xlsx_data_validations("<worksheet></worksheet>").is_empty());
+    }
+
+    #[test]
+    fn xlsx_data_validations_reads_an_operator_and_two_formulas() {
+        let sheet_xml = r#"<worksheet><dataValidations count="1"><dataValidation type="whole" operator="between" allowBlank="0" sqref="A1:A5"><formula1>1</formula1><formula2>10</formula2></dataValidation></dataValidations></worksheet>"#;
+        let rules = xlsx_data_validations(sheet_xml);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].operator.as_deref(), Some("between"));
+        assert_eq!(rules[0].formula1.as_deref(), Some("1"));
+        assert_eq!(rules[0].formula2.as_deref(), Some("10"));
+        assert!(!rules[0].allow_blank);
+        assert_eq!(rules[0].sqref, vec![((1, 1), (5, 1))]);
+    }
+
+    #[test]
+    fn xlsx_data_validations_reads_multiple_records_in_document_order() {
+        let sheet_xml = r#"<worksheet><dataValidations count="2"><dataValidation type="list" sqref="A1"><formula1>"X,Y"</formula1></dataValidation><dataValidation type="custom" sqref="B1"><formula1>ISNUMBER(B1)</formula1></dataValidation></dataValidations></worksheet>"#;
+        let rules = xlsx_data_validations(sheet_xml);
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].validation_type, "list");
+        assert_eq!(rules[1].validation_type, "custom");
+    }
+
+    #[test]
+    fn parse_sqref_handles_single_cell_and_multi_area() {
+        assert_eq!(parse_sqref("E1"), vec![((1, 5), (1, 5))]);
+        assert_eq!(
+            parse_sqref("A1:A5 C1:C5"),
+            vec![((1, 1), (5, 1)), ((1, 3), (5, 3))]
+        );
+    }
+
+    #[test]
+    fn parse_sqref_tolerates_an_unparseable_token() {
+        // Real-world tolerance, matching this reader's convention elsewhere: a bad
+        // token contributes nothing rather than failing the whole parse.
+        assert_eq!(
+            parse_sqref("A1 !!! C1"),
+            vec![((1, 1), (1, 1)), ((1, 3), (1, 3))]
+        );
+    }
+}
+
 // ── ODS reader ────────────────────────────────────────────────────────────────
 
 fn read_ods(path: &str) -> Result<Vec<WorkbookSheet>, String> {
@@ -3458,6 +3699,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             row_styles: HashMap::new(),
                             column_styles: Vec::new(),
                             tables: Vec::new(),
+                            data_validations: Vec::new(),
                         });
                         in_sheet = true;
                         row = 0;
