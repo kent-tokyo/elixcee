@@ -3355,6 +3355,10 @@ pub(crate) fn merged_protection_span(xf_span: &str, edit: &ProtectionEdit) -> St
 /// type grew, so this sidesteps a repeat of that churn.
 pub(crate) struct XlsxSheetData {
     pub(crate) cells: HashMap<(u32, u32), SheetCell>,
+    /// The first worksheet row encountered. This is kept separately from `cells`
+    /// because a valid `<row r="N"/>` has no cell entries at all.
+    #[cfg_attr(not(feature = "python"), allow(dead_code))]
+    pub(crate) first_row: Option<u32>,
     merged_ranges: Vec<MergeRect>,
     /// Hidden row intervals, 1-based inclusive `(start, end)` — coalesced
     /// from consecutive `<row r=".." hidden="1">` tags (Milestone B7b).
@@ -3406,6 +3410,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     let mut dimension: Option<MergeRect> = None;
     let mut style_ids: HashMap<(u32, u32), u32> = HashMap::new();
     let mut raw_style_indices: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut first_row: Option<u32> = None;
     let mut cur_row: u32 = 0;
     let mut cur_col: u32 = 0;
     let mut cur_type = String::new();
@@ -3430,6 +3435,9 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                     "row" => {
                         if let Some(r) = attr_get(attrs, "r") {
                             cur_row = r.parse().unwrap_or(0);
+                            if first_row.is_none() && cur_row != 0 {
+                                first_row = Some(cur_row);
+                            }
                         }
                         let hidden = attr_is_true(attrs, "hidden");
                         if hidden {
@@ -3623,6 +3631,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     }
     XlsxSheetData {
         cells,
+        first_row,
         merged_ranges,
         hidden_rows,
         hidden_columns,

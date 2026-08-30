@@ -1,4 +1,4 @@
-//! Forward-only row streaming for large XLSX files (0.22.0).
+//! Forward-only row streaming for large XLSX files (0.23.0).
 //!
 //! The normal `Vm` intentionally remains a random-access, fully mutable model. This
 //! module provides a separate pipeline API whose worker owns the ZIP entry and sends
@@ -32,6 +32,35 @@ fn append_row_token(row_buf: &mut Vec<u8>, token: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Resolve a worksheet relationship target relative to `xl/`, as required by
+/// OOXML package relationships. ZIP entry names always use `/`, so doing this
+/// explicitly also keeps `..` from producing a name that can never be found.
+fn resolve_xlsx_target(target: &str) -> Result<String, String> {
+    let base = if target.starts_with('/') {
+        target.trim_start_matches('/').to_string()
+    } else {
+        format!("xl/{target}")
+    };
+    let mut parts = Vec::new();
+    for part in base.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err(format!("worksheet relationship escapes ZIP root: {target}"));
+                }
+            }
+            part => parts.push(part),
+        }
+    }
+    if parts.is_empty() {
+        return Err(format!(
+            "worksheet relationship has an empty target: {target}"
+        ));
+    }
+    Ok(parts.join("/"))
+}
+
 fn sheet_target(path: &str, requested: Option<&str>) -> Result<(String, Vec<String>), String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -54,12 +83,7 @@ fn sheet_target(path: &str, requested: Option<&str>) -> Result<(String, Vec<Stri
     let target = rels
         .get(&chosen.1)
         .ok_or_else(|| format!("worksheet relationship is missing for {}", chosen.0))?;
-    let zip_path = target.strip_prefix('/').unwrap_or(target);
-    let zip_path = if target.starts_with('/') {
-        zip_path.to_string()
-    } else {
-        format!("xl/{target}")
-    };
+    let zip_path = resolve_xlsx_target(target)?;
     Ok((zip_path, names))
 }
 
@@ -75,7 +99,7 @@ fn cell_variant(cell: &SheetCell) -> Variant {
 
 fn row_from_xml(xml: &str, shared: &[String]) -> Option<(u32, Vec<Variant>)> {
     let parsed = reader::xlsx_sheet_cells_for_stream(xml, shared);
-    let (&(row, _), _) = parsed.cells.iter().next()?;
+    let row = parsed.first_row?;
     let max_col = parsed.cells.keys().map(|(_, col)| *col).max().unwrap_or(0);
     let mut out = vec![Variant::Empty; max_col as usize];
     for ((_, col), cell) in parsed.cells {
@@ -84,6 +108,14 @@ fn row_from_xml(xml: &str, shared: &[String]) -> Option<(u32, Vec<Variant>)> {
         }
     }
     Some((row, out))
+}
+
+fn is_row_close(token: &[u8]) -> bool {
+    let token = token.trim_ascii_start();
+    let Some(rest) = token.strip_prefix(b"</row") else {
+        return false;
+    };
+    rest.iter().all(|b| b.is_ascii_whitespace() || *b == b'>') && rest.contains(&b'>')
 }
 
 fn stream_rows(
@@ -125,12 +157,18 @@ fn stream_rows(
                         row_buf.clear();
                         append_row_token(&mut row_buf, &token)?;
                         if trimmed.ends_with(b"/>") {
+                            if let Ok(xml) = std::str::from_utf8(&row_buf)
+                                && let Some((_, row)) = row_from_xml(xml, &shared)
+                                && tx.send(Ok(row)).is_err()
+                            {
+                                return Ok(());
+                            }
                             in_row = false;
                         }
                     }
                 } else {
                     append_row_token(&mut row_buf, &token)?;
-                    if token.trim_ascii_start().starts_with(b"</row>") {
+                    if is_row_close(&token) {
                         if let Ok(xml) = std::str::from_utf8(&row_buf) {
                             let wrapped =
                                 format!("<worksheet><sheetData>{xml}</sheetData></worksheet>");
@@ -281,7 +319,7 @@ impl PyStreamWriter {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_STREAM_ROW_BYTES, append_row_token, row_from_xml};
+    use super::{MAX_STREAM_ROW_BYTES, append_row_token, resolve_xlsx_target, row_from_xml};
     use crate::Variant;
 
     #[test]
@@ -302,6 +340,36 @@ mod tests {
         let xml = r#"<worksheet><sheetData><row r="2"><c r="A2" t="inlineStr"><is><t>hello</t></is></c></row></sheetData></worksheet>"#;
         let (_, row) = row_from_xml(xml, &[]).expect("row");
         assert!(matches!(&row[0], Variant::Str(value) if value == "hello"));
+    }
+
+    #[test]
+    fn row_parser_keeps_an_empty_row() {
+        let xml = r#"<worksheet><sheetData><row r="9"/></sheetData></worksheet>"#;
+        assert_eq!(row_from_xml(xml, &[]), Some((9, vec![])));
+    }
+
+    #[test]
+    fn row_parser_accepts_whitespace_in_row_close_tag() {
+        let xml = r#"<worksheet><sheetData><row r="2"><c r="A2"><v>7</v></c></row ></sheetData></worksheet>"#;
+        let (_, row) = row_from_xml(xml, &[]).expect("row");
+        assert!(matches!(row.first(), Some(Variant::Integer(7))));
+    }
+
+    #[test]
+    fn worksheet_relationship_targets_are_normalized() {
+        assert_eq!(
+            resolve_xlsx_target("worksheets/sheet1.xml").unwrap(),
+            "xl/worksheets/sheet1.xml"
+        );
+        assert_eq!(
+            resolve_xlsx_target("../worksheets/sheet1.xml").unwrap(),
+            "worksheets/sheet1.xml"
+        );
+        assert_eq!(
+            resolve_xlsx_target("/xl/worksheets/sheet1.xml").unwrap(),
+            "xl/worksheets/sheet1.xml"
+        );
+        assert!(resolve_xlsx_target("../../outside.xml").is_err());
     }
 
     #[test]
