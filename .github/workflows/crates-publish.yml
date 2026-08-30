@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Tag or ref to publish from (e.g. v0.3.0)"
+        description: "Tag or ref to publish from (e.g. v0.13.0)"
         required: true
-        default: "v0.3.0"
+        default: "v0.13.0"
 
 permissions:
   contents: read
@@ -29,7 +29,7 @@ jobs:
 
       # elixcee-types has no dependency on elixcee, so it can publish standalone.
       # Idempotent across releases: elixcee-types changes far less often than
-      # elixcee itself (this run is the first time it doesn't — still 0.1.0),
+      # elixcee itself (this run publishes 0.4.0 alongside elixcee 0.13.0),
       # so most runs of this workflow should skip this step rather than fail
       # on crates.io's "already uploaded" error for a version already live.
       - name: cargo publish -p elixcee-types (skips if this version is already live)

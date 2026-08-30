@@ -7,14 +7,14 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 ## Current state
 
-`elixcee` **0.12.0** (Rust crate + Python package), `elixcee-types` **0.3.0** (unchanged),
+`elixcee` **0.13.0** (Rust crate + Python package), `elixcee-types` **0.4.0**,
 `elixcee-wasm` **0.1.0** (never published to crates.io by design — `publish = false`).
-`0.12.0` adds eight independent Python API items against `docs/openpyxl-gap-audit.md`'s
+`0.13.0` carries the eight independent Python API items from `0.12.0` plus the completed
+safe-round-trip and typed-error-cell work. `0.12.0` added eight independent Python API items against `docs/openpyxl-gap-audit.md`'s
 priority list (R1, P1 core 3, P1 remainder, and P2's first five slices) plus a `FIND()`
 crash fix — see `CHANGELOG.md`'s `[0.12.0]` for the full account. Minor, not patch: real
 new API surface throughout, nothing removed or changed. Cut from a `release-0.10.0`-branch
-base, deliberately excluding `master`'s own still-unreleased `0.10.0-D`/`t="e"` work (see
-this file's "Packaging note" below). `@elixcee/xlsx` is unchanged:
+base, while `0.13.0` applies the previously excluded preservation work. `@elixcee/xlsx` is unchanged:
 `read()`/`readFile()`/`readFileSync()` and `write()`/`writeFile()`/`writeFileSync()` are both
 implemented and differential-tested, but the package is still
 `0.0.0-development`/`private: true`/unpublished — no `npm publish` has happened (confirmed
@@ -242,13 +242,11 @@ fixes against the published wheel and closed issue #1 themselves — no action n
 repo's side.
 
 `0.10.0-D` (relationship-backed features, the actual fix for `SOURCE_REFERENCE_LOSS`) and
-the `t="e"` error-cell fix (Known gaps item 14, above) are both **still unreleased,
-sitting on `master` only** — this release (`0.12.0`, the R1-through-P2-fifth-slice batch
+the `t="e"` error-cell fix (Known gaps item 14, above) are included in **0.13.0** — this
+release carries the R1-through-P2-fifth-slice batch
 described above) was deliberately cut from a `release-0.10.0`-branch base plus
-cherry-picked gap-audit work, not from `master`'s tip, precisely so it would not drag in
-this still-unverified work by accident (the same reasoning `0.11.0` used before it — see
-`0.11.0`'s own entry above). Neither ships until each clears its own real-Excel
-verification, done by hand against real Excel (this `Vm` has no way to drive that itself):
+cherry-picked gap-audit work and the preservation/error-cell fixes. Direct real-Excel
+reopen verification remains unavailable in this environment (the `Vm` cannot drive Excel):
 
 - `0.10.0-D`, per element: a table survives; an external hyperlink still works; a
   drawing/chart/image still displays; a comment/note survives; plain `<pageSetup>` is
@@ -258,28 +256,16 @@ verification, done by hand against real Excel (this `Vm` has no way to drive tha
   text — a formula referencing it and `ISERROR()` both need to see it as an error; and the
   type survives a save → reopen → save cycle, not just the first save.
 
-As of `master`'s own tip (not this release), `0.10.0-D`'s `D1` (the `WorksheetOutputPlan`
+As of this release, `0.10.0-D`'s `D1` (the `WorksheetOutputPlan`
 output plan) and every relationship-backed element with real fixture evidence —
 `<tableParts>`, `<drawing>`, `<legacyDrawing>`, `<hyperlinks>` (including r:id-backed ones),
 `D4` (deleted-sheet reachability cleanup), and plain `<pageSetup>` — are implemented and
-mechanical-check-verified, just not yet real-Excel reopen-verified. Whichever release
-eventually carries this work (`0.12.1`, `0.13.0`, or otherwise) is not decided in advance;
-it depends on what that verification turns up.
+mechanical-check-verified, but not direct real-Excel reopen-verified.
 
-**Packaging note for whoever ships that future release**: `master`'s tip cannot be `cargo
-publish`ed as-is — `t="e"`'s `ExcelError::FromStr`/`biff_code()` (added to
-`crates/elixcee-types`) were never accompanied by an `elixcee-types` version bump, so the
-copy live on crates.io (`0.3.0`) doesn't have them, and `cargo publish -p elixcee`'s own
-verification build (which resolves `elixcee-types` from the registry, not the local
-workspace path) fails with `error[E0599]: no variant, associated function, or constant
-named 'from_str' found for enum 'ExcelError'`. Confirmed live via the crates.io API during
-`0.11.0`'s release, and reconfirmed via a `cargo publish --dry-run` while preparing
-`0.12.0` (whose own release line excludes `t="e"` and hits no such error). Bump
-`crates/elixcee-types/Cargo.toml` and the root `Cargo.toml`'s dependency pin to `0.3.1`
-and publish `elixcee-types` first, in the same `crates-publish.yml` run, before that
-future milestone's own release — `scripts/check-versions.sh` does not currently catch
-this class of gap (it doesn't check `elixcee-types`'s version at all), so this needs a
-human/agent to remember it explicitly rather than relying on CI.
+**Packaging note:** `elixcee-types` is now versioned at `0.4.0` and the root dependency pin
+matches it. Publish `elixcee-types` before publishing the root crate because registry
+verification resolves this dependency from crates.io rather than the local path. The
+external publish itself is intentionally outside this local preparation.
 
 ## Known gaps
 
@@ -528,7 +514,7 @@ human/agent to remember it explicitly rather than relying on CI.
     the matching fix: error cells now come back as `{t:"e", v:<BIFF code>, w:<string>}`,
     the real `xlsx` oracle's own shape. Verified against fixture5's real `D8` cell (both
     the Rust round-trip and a real CLI save) and a new differential case. See
-    `CHANGELOG.md`'s `[Unreleased]` for the full account.
+    `CHANGELOG.md`'s `[0.13.0]` for the release account.
 
 16. **R1's bulk range/row API disclosed, not fixed, two pre-existing gaps and one new
     limitation of its own** — see `docs/openpyxl-gap-audit.md`'s "Implementation notes for

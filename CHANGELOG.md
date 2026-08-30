@@ -99,6 +99,31 @@ both fixed at the source**:
   Node-only `zlib` access) is a different problem from bug 1's (ESM+Node package
   externalization) and needs a different solution.
 
+## [0.13.0] - 2026-08-30
+
+Root `elixcee` and `elixcee-types` release. This release promotes the previously
+unreleased safe-round-trip and typed Excel-error work into the supported package line.
+
+### Added
+
+- Origin-based worksheet output planning: existing worksheet parts retain their original
+  `sheetN.xml` names, preventing worksheet relationships from drifting after edits.
+- Preservation of relationship-backed worksheet content, including tables, drawings,
+  legacy drawings, hyperlinks, plain page setup, and exclusively-reachable parts from
+  deleted sheets.
+- Real Excel error cells (`t="e"`) now remain typed errors through load, save, and reload;
+  the same behavior is exposed by the WASM/XLSX reader.
+- `elixcee-types` `0.4.0`, containing the shared error parsing and BIFF-code mapping needed
+  by the new round-trip behavior.
+
+### Verification
+
+- Rust workspace tests and XLSX round-trip integration tests pass.
+- Relationship reachability and error-cell differential checks pass for the repository's
+  fixtures.
+- Direct reopen verification in Microsoft Excel remains a documented limitation because
+  the release environment has no Windows/Excel automation.
+
 ## [0.12.0] - 2026-08-27
 
 Root `elixcee` (Rust crate + Python package) only -- `@elixcee/xlsx` and the CI

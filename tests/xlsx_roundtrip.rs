@@ -367,12 +367,13 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
         Some(&table_bytes)
     );
 
-    // (iv) stale non-sequential worksheet part must NOT survive
+    // (iv) the non-sequential worksheet part is the existing sheet's origin and
+    // must remain the output location after the D1 origin-based plan.
     assert!(
-        !output_entries.contains_key("xl/worksheets/sheet3.xml"),
-        "stale original worksheet part must not appear alongside the regenerated sheet1.xml"
+        output_entries.contains_key("xl/worksheets/sheet3.xml"),
+        "the existing worksheet must retain its original part name"
     );
-    assert!(output_entries.contains_key("xl/worksheets/sheet1.xml"));
+    assert!(!output_entries.contains_key("xl/worksheets/sheet1.xml"));
 
     // (v) + (vi) content-types: macro-enabled root override, vbaProject resolvable,
     // and every part actually present in the output resolves via the output's
@@ -397,7 +398,7 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
     }
 
     // Style-index preservation (Milestone: safe round-trip, slice 2).
-    let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet3.xml"].clone()).unwrap();
     let a1_tag = &sheet_xml[sheet_xml.find("<c r=\"A1\"").unwrap()..];
     let a1_tag = &a1_tag[..a1_tag.find('>').unwrap() + 1];
     assert!(
@@ -529,7 +530,7 @@ fn xlsm_roundtrip_in_place_save_preserves_vba_project() {
         Some(&styles_bytes),
         "xl/styles.xml must also survive an in-place overwrite byte-identical"
     );
-    let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet3.xml"].clone()).unwrap();
     let a1_tag = &sheet_xml[sheet_xml.find("<c r=\"A1\"").unwrap()..];
     let a1_tag = &a1_tag[..a1_tag.find('>').unwrap() + 1];
     assert!(
