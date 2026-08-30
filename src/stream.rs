@@ -38,10 +38,14 @@ fn estimated_variant_bytes(value: &Variant) -> usize {
     }
 }
 
-fn append_row_token(row_buf: &mut Vec<u8>, token: &[u8]) -> Result<(), String> {
-    if row_buf.len().saturating_add(token.len()) > MAX_STREAM_ROW_BYTES {
+fn append_row_token(
+    row_buf: &mut Vec<u8>,
+    token: &[u8],
+    max_row_bytes: usize,
+) -> Result<(), String> {
+    if row_buf.len().saturating_add(token.len()) > max_row_bytes {
         return Err(format!(
-            "worksheet row exceeds the streaming limit of {MAX_STREAM_ROW_BYTES} bytes"
+            "worksheet row exceeds the streaming limit of {max_row_bytes} bytes"
         ));
     }
     row_buf.extend_from_slice(token);
@@ -137,6 +141,7 @@ fn is_row_close(token: &[u8]) -> bool {
 fn stream_rows(
     path: String,
     sheet: Option<String>,
+    max_row_bytes: usize,
 ) -> Result<Receiver<Result<(u32, Vec<Variant>), String>>, String> {
     let (zip_path, _) = sheet_target(&path, sheet.as_deref())?;
     let (tx, rx) = mpsc::sync_channel(2);
@@ -171,7 +176,7 @@ fn stream_rows(
                     {
                         in_row = true;
                         row_buf.clear();
-                        append_row_token(&mut row_buf, &token)?;
+                        append_row_token(&mut row_buf, &token, max_row_bytes)?;
                         if trimmed.ends_with(b"/>") {
                             if let Ok(xml) = std::str::from_utf8(&row_buf)
                                 && let Some((row_number, row)) = row_from_xml(xml, &shared)
@@ -183,7 +188,7 @@ fn stream_rows(
                         }
                     }
                 } else {
-                    append_row_token(&mut row_buf, &token)?;
+                    append_row_token(&mut row_buf, &token, max_row_bytes)?;
                     if is_row_close(&token) {
                         if let Ok(xml) = std::str::from_utf8(&row_buf) {
                             let wrapped =
@@ -215,6 +220,14 @@ fn validate_max_rows(max_rows: Option<usize>) -> Result<(), &'static str> {
     }
 }
 
+fn validate_max_row_bytes(max_row_bytes: Option<usize>) -> Result<(), &'static str> {
+    if max_row_bytes == Some(0) {
+        Err("max_row_bytes must be greater than zero")
+    } else {
+        Ok(())
+    }
+}
+
 #[pyclass(name = "StreamReader")]
 pub struct PyStreamReader {
     receiver: Option<RowReceiver>,
@@ -230,10 +243,17 @@ pub(crate) fn stream_reader_from_path(
     sheet: Option<&str>,
     include_row_numbers: bool,
     max_rows: Option<usize>,
+    max_row_bytes: Option<usize>,
 ) -> PyResult<PyStreamReader> {
     validate_max_rows(max_rows).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-    let receiver = stream_rows(path.to_string(), sheet.map(str::to_string))
-        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
+    validate_max_row_bytes(max_row_bytes)
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+    let receiver = stream_rows(
+        path.to_string(),
+        sheet.map(str::to_string),
+        max_row_bytes.unwrap_or(MAX_STREAM_ROW_BYTES),
+    )
+    .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
     Ok(PyStreamReader {
         receiver: Some(Mutex::new(receiver)),
         include_row_numbers,
@@ -245,14 +265,15 @@ pub(crate) fn stream_reader_from_path(
 #[pymethods]
 impl PyStreamReader {
     #[new]
-    #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None))]
+    #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None))]
     fn new(
         path: &str,
         sheet: Option<&str>,
         include_row_numbers: bool,
         max_rows: Option<usize>,
+        max_row_bytes: Option<usize>,
     ) -> PyResult<Self> {
-        stream_reader_from_path(path, sheet, include_row_numbers, max_rows)
+        stream_reader_from_path(path, sheet, include_row_numbers, max_rows, max_row_bytes)
     }
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
@@ -433,7 +454,8 @@ impl PyStreamWriter {
 mod tests {
     use super::{
         MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
-        resolve_xlsx_target, row_from_xml, stream_writer_from_path, validate_max_rows,
+        resolve_xlsx_target, row_from_xml, stream_writer_from_path, validate_max_row_bytes,
+        validate_max_rows,
     };
     use crate::Variant;
 
@@ -490,10 +512,10 @@ mod tests {
     #[test]
     fn streaming_row_buffer_rejects_unbounded_rows() {
         let mut row = Vec::new();
-        assert!(append_row_token(&mut row, &[b'x'; 1024]).is_ok());
+        assert!(append_row_token(&mut row, &[b'x'; 1024], MAX_STREAM_ROW_BYTES).is_ok());
         let remaining = MAX_STREAM_ROW_BYTES - row.len();
-        assert!(append_row_token(&mut row, &vec![b'x'; remaining]).is_ok());
-        assert!(append_row_token(&mut row, b"x").is_err());
+        assert!(append_row_token(&mut row, &vec![b'x'; remaining], MAX_STREAM_ROW_BYTES).is_ok());
+        assert!(append_row_token(&mut row, b"x", MAX_STREAM_ROW_BYTES).is_err());
     }
 
     #[test]
@@ -525,5 +547,18 @@ mod tests {
     fn streaming_reader_rejects_a_zero_row_budget_before_opening_the_file() {
         let err = validate_max_rows(Some(0)).expect_err("zero row budget must be rejected");
         assert_eq!(err, "max_rows must be greater than zero");
+    }
+
+    #[test]
+    fn streaming_reader_rejects_a_zero_row_byte_budget_before_opening_the_file() {
+        let err = validate_max_row_bytes(Some(0)).expect_err("zero byte budget must be rejected");
+        assert_eq!(err, "max_row_bytes must be greater than zero");
+    }
+
+    #[test]
+    fn streaming_row_buffer_honors_a_custom_byte_budget() {
+        let mut row = Vec::new();
+        assert!(append_row_token(&mut row, b"1234", 4).is_ok());
+        assert!(append_row_token(&mut row, b"5", 4).is_err());
     }
 }

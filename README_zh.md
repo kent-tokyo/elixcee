@@ -58,6 +58,7 @@ VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 对于大型 XLSX/XLSM 文件，可使用 `open_stream(path, sheet=None)` 逐行读取；设置
 `include_row_numbers=True` 后返回 `(行号, 值)` 元组，也可用 `max_rows=N` 限制读取行数，
+或用 `max_row_bytes=N` 限制单行 XML 缓冲区大小，
 `create_stream(path)` 提供 XLSX 追加式写入器。
 
 ## 开发
