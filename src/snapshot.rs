@@ -197,6 +197,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }
     }
 

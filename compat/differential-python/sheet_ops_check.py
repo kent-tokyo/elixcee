@@ -933,6 +933,133 @@ class TablesAgreeWithOpenpyxl(unittest.TestCase):
             openpyxl.load_workbook(out)
 
 
+class DataValidationAgreesWithOpenpyxl(unittest.TestCase):
+    # 0.16.0-C: add_data_validation()/remove_data_validation()/data_validations()
+    # against fixture3's real, complete <dataValidation type="list" sqref="E1"
+    # xr:uid="{...}">, plus openpyxl-authored synthetic fixtures for the 5
+    # validation types/multi-area sqref this project has no real-Excel example of
+    # (granted verification exception, same basis as every prior style-engine/table
+    # exception this session -- see internal_docs/data-validation-0.16.0-c-design.md).
+    def test_data_validations_reports_fixture3s_real_rule(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        rules = vm.data_validations("Sheet1")
+        self.assertEqual(len(rules), 1)
+        r = rules[0]
+        self.assertEqual(r["validation_type"], "list")
+        self.assertEqual(r["sqref"], ["E1"])
+        self.assertEqual(r["formula1"], '"Yes,No,Maybe"')
+
+    def test_an_unmodified_rule_survives_an_unrelated_save_byte_identical(self):
+        xml_before = zipfile.ZipFile(FIXTURE3).read("xl/worksheets/sheet1.xml").decode()
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.set_cell(10, 10, 999)  # unrelated, nowhere near the rule
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "dv_out.xlsx")
+            vm.save_workbook(out)
+            xml_after = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+
+            def dv_span(xml):
+                start = xml.index("<dataValidations")
+                end = xml.index("</dataValidations>") + len("</dataValidations>")
+                return xml[start:end]
+
+            self.assertEqual(dv_span(xml_before), dv_span(xml_after))
+
+    def test_add_a_list_rule_and_reopen_with_openpyxl(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        idx = vm.add_data_validation("B1:B5", "list", formula1='"A,B,C"', sheet="Sheet1")
+        self.assertEqual(idx, 1)  # fixture3 already has one real rule (index 0)
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "dv_add.xlsx")
+            vm.save_workbook(out)
+            rules = openpyxl.load_workbook(out).active.data_validations.dataValidation
+            self.assertEqual(len(rules), 2)
+            self.assertEqual(sorted(r.type for r in rules), ["list", "list"])
+            self.assertEqual(sorted(str(r.sqref) for r in rules), ["B1:B5", "E1"])
+
+    def test_remove_the_only_rule_omits_the_container_entirely(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.remove_data_validation(0, sheet="Sheet1")
+        self.assertEqual(vm.data_validations("Sheet1"), [])
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "dv_removed.xlsx")
+            vm.save_workbook(out)
+            xml = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            self.assertNotIn("dataValidations", xml)
+            # Must not raise/warn on reopen -- an empty <dataValidations/> would be
+            # invalid OOXML (CT_DataValidations' own child is minOccurs="1").
+            openpyxl.load_workbook(out)
+
+    def test_every_validation_type_round_trips_through_a_synthetic_fixture(self):
+        cases = [
+            ("whole", dict(type="whole", operator="between", formula1="1", formula2="10")),
+            ("decimal", dict(type="decimal", operator="greaterThan", formula1="0.5")),
+            ("date", dict(type="date", operator="lessThan", formula1="2025-01-01")),
+            ("time", dict(type="time", operator="lessThanOrEqual", formula1="0.5")),
+            ("textLength", dict(type="textLength", operator="equal", formula1="5")),
+            ("custom", dict(type="custom", formula1="ISNUMBER(A1)")),
+        ]
+        for name, kwargs in cases:
+            with self.subTest(validation_type=name), tempfile.TemporaryDirectory() as d:
+                from openpyxl.worksheet.datavalidation import DataValidation
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                dv = DataValidation(**kwargs)
+                dv.add("A1:A2")
+                ws.add_data_validation(dv)
+                ws["A1"] = 1
+                src = os.path.join(d, f"dv_{name}_src.xlsx")
+                wb.save(src)
+
+                vm = elixcee.load_workbook(src)
+                rules = vm.data_validations()
+                self.assertEqual(len(rules), 1)
+                self.assertEqual(rules[0]["validation_type"], kwargs["type"])
+
+                out = os.path.join(d, f"dv_{name}_out.xlsx")
+                vm.save_workbook(out)
+                reopened = openpyxl.load_workbook(out).active.data_validations.dataValidation
+                self.assertEqual(len(reopened), 1)
+                self.assertEqual(reopened[0].type, kwargs["type"])
+
+    def test_multi_area_sqref_round_trips(self):
+        vm = elixcee.Vm()
+        vm.set_cell(1, 1, 1)
+        vm.add_data_validation("A1:A5 C1:C5", "whole", operator="greaterThan", formula1="0")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "dv_multiarea.xlsx")
+            vm.save_workbook(out)
+            rule = openpyxl.load_workbook(out).active.data_validations.dataValidation[0]
+            self.assertIn(str(rule.sqref), ("A1:A5 C1:C5", "C1:C5 A1:A5"))
+
+    def test_a_structural_edit_shift_is_persisted_to_disk_not_just_in_memory(self):
+        # The critical regression: shift_data_validations_for_structural_edit only
+        # updates in-memory `sqref` immediately -- the ON-DISK bytes only reflect it
+        # once `dirty` routes through `resolve_data_validations_for_sheet` at save
+        # time. A bug here would leave the saved file stale while the in-memory read
+        # API reports the correct (but never-persisted) shifted range.
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.insert_rows(1, amount=1, sheet="Sheet1")
+        self.assertEqual(vm.data_validations("Sheet1")[0]["sqref"], ["E2"])
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "dv_shift.xlsx")
+            vm.save_workbook(out)
+            xml = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            self.assertIn('sqref="E2"', xml)
+            self.assertNotIn('sqref="E1"', xml)
+            rule = openpyxl.load_workbook(out).active.data_validations.dataValidation[0]
+            self.assertEqual(str(rule.sqref), "E2")
+
+            # Second save-reload cycle must not drift or duplicate.
+            vm2 = elixcee.load_workbook(out)
+            out2 = os.path.join(d, "dv_shift2.xlsx")
+            vm2.save_workbook(out2)
+            rules2 = openpyxl.load_workbook(out2).active.data_validations.dataValidation
+            self.assertEqual(len(rules2), 1)
+            self.assertEqual(str(rules2[0].sqref), "E2")
+
+
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):
     # Pins the PyO3-layer bound checks that have no Rust unit test of their
     # own (they live in #[cfg(feature = "python")] glue, not Vm-core logic) --
