@@ -6,6 +6,8 @@ pub mod formula;
 pub mod parser;
 pub mod reader;
 pub mod snapshot;
+#[cfg(feature = "python")]
+pub mod stream;
 pub mod testworkbook;
 pub mod vm;
 
@@ -2931,6 +2933,19 @@ pub fn save_workbook(vm: &Vm, path: &str) -> Result<(), String> {
     save_workbook_impl(vm, path)
 }
 
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (path, sheet = None))]
+fn open_stream(path: &str, sheet: Option<&str>) -> PyResult<stream::PyStreamReader> {
+    stream::stream_reader_from_path(path, sheet)
+}
+
+#[cfg(feature = "python")]
+#[pyfunction]
+fn create_stream(path: &str) -> PyResult<stream::PyStreamWriter> {
+    stream::stream_writer_from_path(path)
+}
+
 fn save_workbook_impl(vm: &Vm, path: &str) -> Result<(), String> {
     if path.to_lowercase().ends_with(".ods") {
         return save_ods_impl(vm, path);
@@ -5774,7 +5789,9 @@ pub(crate) fn xml_escape(s: &str) -> String {
 #[pymodule]
 mod elixcee {
     #[pymodule_export]
-    use super::{PyExcelError, PyVm, hello, load_workbook, run_macro};
+    use super::stream::{PyStreamReader, PyStreamWriter};
+    #[pymodule_export]
+    use super::{PyExcelError, PyVm, create_stream, hello, load_workbook, open_stream, run_macro};
 }
 
 #[cfg(test)]

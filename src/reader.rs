@@ -1215,6 +1215,38 @@ fn zip_read_text<R: Read + Seek>(
     Ok(s)
 }
 
+#[cfg(feature = "python")]
+pub(crate) fn validate_zip_archive_for_stream<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<(), String> {
+    validate_zip_archive(archive)
+}
+#[cfg(feature = "python")]
+pub(crate) fn zip_read_text_for_stream<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+) -> Result<String, String> {
+    zip_read_text(archive, name)
+}
+#[cfg(feature = "python")]
+pub(crate) fn xlsx_workbook_sheets_for_stream(
+    xml: &str,
+) -> Vec<(String, String, Option<String>, Option<String>)> {
+    xlsx_workbook_sheets(xml)
+}
+#[cfg(feature = "python")]
+pub(crate) fn xlsx_rels_for_stream(xml: &str, suffix: &str) -> HashMap<String, String> {
+    xlsx_rels(xml, suffix)
+}
+#[cfg(feature = "python")]
+pub(crate) fn xlsx_sheet_cells_for_stream(xml: &str, shared: &[String]) -> XlsxSheetData {
+    xlsx_sheet_cells(xml, shared, &[])
+}
+#[cfg(feature = "python")]
+pub(crate) fn xlsx_shared_strings_for_stream(xml: &str) -> Vec<String> {
+    xlsx_shared_strings(xml)
+}
+
 // ── Raw ZIP passthrough (Milestone: safe round-trip) ───────────────────────────
 
 /// Every ZIP entry's decompressed bytes, keyed by entry name — used only by
@@ -3321,8 +3353,8 @@ pub(crate) fn merged_protection_span(xf_span: &str, edit: &ProtectionEdit) -> St
 /// A small return struct, not a growing bare tuple — B6c2 hit a
 /// `clippy::type_complexity` error the first time this function's return
 /// type grew, so this sidesteps a repeat of that churn.
-struct XlsxSheetData {
-    cells: HashMap<(u32, u32), SheetCell>,
+pub(crate) struct XlsxSheetData {
+    pub(crate) cells: HashMap<(u32, u32), SheetCell>,
     merged_ranges: Vec<MergeRect>,
     /// Hidden row intervals, 1-based inclusive `(start, end)` — coalesced
     /// from consecutive `<row r=".." hidden="1">` tags (Milestone B7b).
