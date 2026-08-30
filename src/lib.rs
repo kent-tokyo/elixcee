@@ -2946,8 +2946,9 @@ fn open_stream(
 
 #[cfg(feature = "python")]
 #[pyfunction]
-fn create_stream(path: &str) -> PyResult<stream::PyStreamWriter> {
-    stream::stream_writer_from_path(path)
+#[pyo3(signature = (path, max_pending_bytes = None))]
+fn create_stream(path: &str, max_pending_bytes: Option<usize>) -> PyResult<stream::PyStreamWriter> {
+    stream::stream_writer_from_path(path, max_pending_bytes)
 }
 
 fn save_workbook_impl(vm: &Vm, path: &str) -> Result<(), String> {

@@ -285,14 +285,25 @@ pub struct PyStreamWriter {
     path: String,
     rows: Vec<Vec<Variant>>,
     pending_bytes: usize,
+    max_pending_bytes: usize,
     active: bool,
 }
 
-pub(crate) fn stream_writer_from_path(path: &str) -> PyResult<PyStreamWriter> {
+pub(crate) fn stream_writer_from_path(
+    path: &str,
+    max_pending_bytes: Option<usize>,
+) -> PyResult<PyStreamWriter> {
+    let max_pending_bytes = max_pending_bytes.unwrap_or(MAX_STREAM_WRITER_BYTES);
+    if max_pending_bytes == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "max_pending_bytes must be greater than zero",
+        ));
+    }
     Ok(PyStreamWriter {
         path: path.to_string(),
         rows: Vec::new(),
         pending_bytes: 0,
+        max_pending_bytes,
         active: true,
     })
 }
@@ -300,8 +311,9 @@ pub(crate) fn stream_writer_from_path(path: &str) -> PyResult<PyStreamWriter> {
 #[pymethods]
 impl PyStreamWriter {
     #[new]
-    fn new(path: &str) -> PyResult<Self> {
-        stream_writer_from_path(path)
+    #[pyo3(signature = (path, max_pending_bytes = None))]
+    fn new(path: &str, max_pending_bytes: Option<usize>) -> PyResult<Self> {
+        stream_writer_from_path(path, max_pending_bytes)
     }
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
@@ -331,9 +343,10 @@ impl PyStreamWriter {
             ));
         }
         let row_bytes = row.iter().map(estimated_variant_bytes).sum::<usize>();
-        if self.pending_bytes.saturating_add(row_bytes) > MAX_STREAM_WRITER_BYTES {
+        if self.pending_bytes.saturating_add(row_bytes) > self.max_pending_bytes {
             return Err(PyErr::new::<pyo3::exceptions::PyMemoryError, _>(format!(
-                "stream writer pending rows exceed the limit of {MAX_STREAM_WRITER_BYTES} bytes"
+                "stream writer pending rows exceed the limit of {} bytes",
+                self.max_pending_bytes
             )));
         }
         self.pending_bytes = self.pending_bytes.saturating_add(row_bytes);
