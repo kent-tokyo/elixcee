@@ -1,4 +1,4 @@
-//! Forward-only row streaming for large XLSX files (0.21.1).
+//! Forward-only row streaming for large XLSX files (0.22.0).
 //!
 //! The normal `Vm` intentionally remains a random-access, fully mutable model. This
 //! module provides a separate pipeline API whose worker owns the ZIP entry and sends
@@ -18,6 +18,19 @@ use crate::reader::{self, SheetCell};
 use crate::{Variant, variant_to_py};
 
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
+/// Refuse an unterminated or hostile worksheet row before it can grow without bound.
+/// This keeps the forward-only API bounded even when given malformed XML.
+const MAX_STREAM_ROW_BYTES: usize = 16 * 1024 * 1024;
+
+fn append_row_token(row_buf: &mut Vec<u8>, token: &[u8]) -> Result<(), String> {
+    if row_buf.len().saturating_add(token.len()) > MAX_STREAM_ROW_BYTES {
+        return Err(format!(
+            "worksheet row exceeds the streaming limit of {MAX_STREAM_ROW_BYTES} bytes"
+        ));
+    }
+    row_buf.extend_from_slice(token);
+    Ok(())
+}
 
 fn sheet_target(path: &str, requested: Option<&str>) -> Result<(String, Vec<String>), String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
@@ -110,13 +123,13 @@ fn stream_rows(
                     {
                         in_row = true;
                         row_buf.clear();
-                        row_buf.extend_from_slice(&token);
+                        append_row_token(&mut row_buf, &token)?;
                         if trimmed.ends_with(b"/>") {
                             in_row = false;
                         }
                     }
                 } else {
-                    row_buf.extend_from_slice(&token);
+                    append_row_token(&mut row_buf, &token)?;
                     if token.trim_ascii_start().starts_with(b"</row>") {
                         if let Ok(xml) = std::str::from_utf8(&row_buf) {
                             let wrapped =
@@ -268,7 +281,7 @@ impl PyStreamWriter {
 
 #[cfg(test)]
 mod tests {
-    use super::row_from_xml;
+    use super::{MAX_STREAM_ROW_BYTES, append_row_token, row_from_xml};
     use crate::Variant;
 
     #[test]
@@ -289,5 +302,14 @@ mod tests {
         let xml = r#"<worksheet><sheetData><row r="2"><c r="A2" t="inlineStr"><is><t>hello</t></is></c></row></sheetData></worksheet>"#;
         let (_, row) = row_from_xml(xml, &[]).expect("row");
         assert!(matches!(&row[0], Variant::Str(value) if value == "hello"));
+    }
+
+    #[test]
+    fn streaming_row_buffer_rejects_unbounded_rows() {
+        let mut row = Vec::new();
+        assert!(append_row_token(&mut row, &[b'x'; 1024]).is_ok());
+        let remaining = MAX_STREAM_ROW_BYTES - row.len();
+        assert!(append_row_token(&mut row, &vec![b'x'; remaining]).is_ok());
+        assert!(append_row_token(&mut row, b"x").is_err());
     }
 }
