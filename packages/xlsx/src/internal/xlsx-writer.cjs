@@ -85,7 +85,8 @@ const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 
 // ---- [Content_Types].xml / _rels ----
 
-function buildContentTypes(sheetCount) {
+function buildContentTypes(sheetCount, commentSheets) {
+  const comments = new Set(commentSheets || []);
   const overrides = [
     '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
   ];
@@ -93,6 +94,14 @@ function buildContentTypes(sheetCount) {
     overrides.push(
       `<Override PartName="/xl/worksheets/sheet${i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`
     );
+  }
+  if (comments.size) {
+    overrides.push('<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>');
+    for (const i of [...comments].sort((a, b) => a - b)) {
+      overrides.push(
+        `<Override PartName="/xl/comments${i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>`
+      );
+    }
   }
   overrides.push(
     '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
@@ -461,6 +470,63 @@ function buildHyperlinkInfo(cells) {
   return { links, relationships };
 }
 
+function commentEntries(cells) {
+  const comments = [];
+  const authors = [];
+  const authorIds = new Map();
+  for (const { r, c, cell } of cells) {
+    if (!cell || !Array.isArray(cell.c) || !cell.c.length) continue;
+    const items = cell.c.map((comment) => {
+      const author = comment && comment.a ? String(comment.a) : 'SheetJS';
+      let authorId = authorIds.get(author);
+      if (authorId === undefined) {
+        authorId = authors.length;
+        authors.push(author);
+        authorIds.set(author, authorId);
+      }
+      return { authorId, text: comment && comment.t };
+    });
+    comments.push({ ref: encodeCell({ r, c }), row: r, col: c, items });
+  }
+  return { comments, authors };
+}
+
+function commentText(items) {
+  if (items.length === 1) return String(items[0].text);
+  return items
+    .map((item, i) => `${i ? 'Reply' : 'Comment'}:\n    ${String(item.text)}`)
+    .join('\n');
+}
+
+function buildCommentsXml(cells) {
+  const { comments, authors } = commentEntries(cells);
+  if (!comments.length) return null;
+  const authorsXml = authors.map((author) => `<author>${xmlText(author)}</author>`).join('');
+  const commentsXml = comments
+    .map(
+      ({ ref, items }) =>
+        `<comment ref="${ref}" authorId="${items[0].authorId}"><text><t${items.length > 1 ? ' xml:space="preserve"' : ''}>${xmlText(commentText(items))}</t></text></comment>`
+    )
+    .join('');
+  return {
+    comments,
+    xml:
+      XML_DECL +
+      '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      `<authors>${authorsXml}</authors><commentList>${commentsXml}</commentList></comments>`,
+  };
+}
+
+function buildVmlXml(comments) {
+  const shapes = comments
+    .map(
+      ({ row, col }, i) =>
+        `<v:shape id="_x0000_s${1025 + i}" type="#_x0000_t202" style="position:absolute; margin-left:80pt;margin-top:5pt;width:104pt;height:64pt;z-index:10" fillcolor="#ECFAD4" strokecolor="#edeaa1"><v:fill color2="#BEFF82" type="gradient" angle="-180"><o:fill type="gradientUnscaled" v:ext="view"/></v:fill><v:shadow on="t" obscured="t"/><v:path o:connecttype="none"/><v:textbox><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>1,0,1,0,3,20,5,20</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>${row}</x:Row><x:Column>${col}</x:Column><x:Visible/></x:ClientData></v:shape>`
+    )
+    .join('');
+  return `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:mv="http://macVmlSchemaUri"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t202" o:spt="202" coordsize="21600,21600" path="m0,0l0,21600,21600,21600,21600,0xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>${shapes}</xml>`;
+}
+
 function buildSheetRels(relationships) {
   if (!relationships.length) return '';
   return (
@@ -471,9 +537,18 @@ function buildSheetRels(relationships) {
   );
 }
 
-function buildSheetXml(ws, styleTable) {
+function buildSheetXml(ws, styleTable, sheetIndex) {
   const cells = collectCells(ws);
   const hyperlinkInfo = buildHyperlinkInfo(cells);
+  const commentsInfo = buildCommentsXml(cells);
+  const commentRelOffset = hyperlinkInfo.relationships.length;
+  const relationships = hyperlinkInfo.relationships.slice();
+  if (commentsInfo) {
+    relationships.push(
+      `<Relationship Id="rId${commentRelOffset + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing${sheetIndex}.vml"/>`,
+      `<Relationship Id="rId${commentRelOffset + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments${sheetIndex}.xml"/>`
+    );
+  }
 
   // A declared `!ref` is validated (not iterated — the loop below only ever visits cells
   // the caller actually populated, sparse-safe by construction) via the same
@@ -531,15 +606,20 @@ function buildSheetXml(ws, styleTable) {
   return {
     xml: (
     XML_DECL +
-    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"${hyperlinkInfo.relationships.length ? ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' : ''}>` +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"${relationships.length ? ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' : ''}>` +
     `<dimension ref="${xmlAttr(dimensionRef)}"/>` +
     buildColsXml(wsColsMeta) +
     `<sheetData>${sheetDataXml}</sheetData>` +
     buildMergesXml(Array.isArray(ws) ? undefined : ws['!merges']) +
     hyperlinkXml +
+    (commentsInfo
+      ? `<legacyDrawing r:id="rId${commentRelOffset + 1}"/>`
+      : '') +
     '</worksheet>'
     ),
-    relationships: hyperlinkInfo.relationships,
+    relationships,
+    comments: commentsInfo,
+    vml: commentsInfo ? buildVmlXml(commentsInfo.comments) : null,
   };
 }
 
@@ -554,13 +634,16 @@ function buildXlsxZipEntries(wb) {
   }
 
   const styleTable = createStyleTable();
-  const sheetOutputs = wb.SheetNames.map((name) => {
+  const sheetOutputs = wb.SheetNames.map((name, i) => {
     const ws = wb.Sheets[name];
     if (ws == null) {
       throw unsupported(ELIXCEE_UNSUPPORTED_SHEET_SHAPE, `sheet '${name}' is listed in SheetNames but missing from Sheets`);
     }
-    return buildSheetXml(ws, styleTable);
+    return buildSheetXml(ws, styleTable, i + 1);
   });
+  const commentSheets = sheetOutputs
+    .map((output, i) => (output.comments ? i + 1 : null))
+    .filter((i) => i !== null);
 
   // TextEncoder, not Buffer.from(s, 'utf8') — a standard Web/Node API both platforms have
   // natively (Node 11+, every real browser), unlike Buffer which is Node-only and, unlike
@@ -572,7 +655,7 @@ function buildXlsxZipEntries(wb) {
   // the oracle's own type:'buffer' contract — see its own doc comment.
   const utf8 = (s) => new TextEncoder().encode(s);
   const entries = [
-    { name: '[Content_Types].xml', data: utf8(buildContentTypes(wb.SheetNames.length)) },
+    { name: '[Content_Types].xml', data: utf8(buildContentTypes(wb.SheetNames.length, commentSheets)) },
     { name: '_rels/.rels', data: utf8(buildRootRels()) },
     { name: 'docProps/core.xml', data: utf8(buildCoreXml()) },
     { name: 'docProps/app.xml', data: utf8(buildAppXml(wb.SheetNames)) },
@@ -586,6 +669,12 @@ function buildXlsxZipEntries(wb) {
         name: `xl/worksheets/_rels/sheet${i + 1}.xml.rels`,
         data: utf8(buildSheetRels(sheetOutputs[i].relationships)),
       });
+    }
+    if (sheetOutputs[i].comments) {
+      entries.push(
+        { name: `xl/comments${i + 1}.xml`, data: utf8(sheetOutputs[i].comments.xml) },
+        { name: `xl/drawings/vmlDrawing${i + 1}.vml`, data: utf8(sheetOutputs[i].vml) }
+      );
     }
   });
   entries.push({ name: 'xl/styles.xml', data: utf8(styleTable.build()) });

@@ -420,6 +420,36 @@ function crc32(buf) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+// ---- comments / legacy Notes in XLSX output (0.18.0) ----
+{
+  const wb = U.book_new();
+  const ws = U.aoa_to_sheet([['comment', 'plain']]);
+  ws.A1.c = [
+    { t: 'hello & <world>', a: 'Alice' },
+    { t: 'second reply', a: 'Bob' },
+  ];
+  ws.B1.c = [{ t: 'single note', a: 'Alice' }];
+  U.book_append_sheet(wb, ws, 'Sheet1');
+  const bytes = elixcee.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const read = XLSX.read(bytes, { type: 'buffer' });
+  assert.equal(read.Sheets.Sheet1.A1.c.length, 1);
+  assert.equal(read.Sheets.Sheet1.A1.c[0].a, 'Alice');
+  assert.equal(read.Sheets.Sheet1.A1.c[0].t, 'Comment:\n    hello & <world>\nReply:\n    second reply');
+  assert.equal(read.Sheets.Sheet1.B1.c.length, 1);
+  assert.equal(read.Sheets.Sheet1.B1.c[0].a, 'Alice');
+  assert.equal(read.Sheets.Sheet1.B1.c[0].t, 'single note');
+  const entries = readZipEntries(bytes);
+  const names = new Set(entries.map((e) => e.name));
+  assert.ok(names.has('xl/comments1.xml'));
+  assert.ok(names.has('xl/drawings/vmlDrawing1.vml'));
+  const sheetXml = entries.find((e) => e.name === 'xl/worksheets/sheet1.xml').data.toString('utf8');
+  assert.match(sheetXml, /<legacyDrawing r:id="rId1"\/>/);
+  const rels = entries.find((e) => e.name === 'xl/worksheets/_rels/sheet1.xml.rels').data.toString('utf8');
+  assert.match(rels, /relationships\/vmlDrawing.*Target="\.\.\/drawings\/vmlDrawing1\.vml"/);
+  assert.match(rels, /relationships\/comments.*Target="\.\.\/comments1\.xml"/);
+  console.log('OK  write: cell comments survive as OOXML comments, VML, and relationships');
+}
+
 {
   const wb = U.book_new();
   U.book_append_sheet(wb, U.aoa_to_sheet([[1, 'x']]), 'Sheet1');
