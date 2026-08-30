@@ -207,10 +207,20 @@ fn stream_rows(
     Ok(rx)
 }
 
+fn validate_max_rows(max_rows: Option<usize>) -> Result<(), &'static str> {
+    if max_rows == Some(0) {
+        Err("max_rows must be greater than zero")
+    } else {
+        Ok(())
+    }
+}
+
 #[pyclass(name = "StreamReader")]
 pub struct PyStreamReader {
     receiver: Option<RowReceiver>,
     include_row_numbers: bool,
+    max_rows: Option<usize>,
+    rows_read: usize,
 }
 
 type RowReceiver = Mutex<Receiver<Result<(u32, Vec<Variant>), String>>>;
@@ -219,21 +229,30 @@ pub(crate) fn stream_reader_from_path(
     path: &str,
     sheet: Option<&str>,
     include_row_numbers: bool,
+    max_rows: Option<usize>,
 ) -> PyResult<PyStreamReader> {
+    validate_max_rows(max_rows).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     let receiver = stream_rows(path.to_string(), sheet.map(str::to_string))
         .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
     Ok(PyStreamReader {
         receiver: Some(Mutex::new(receiver)),
         include_row_numbers,
+        max_rows,
+        rows_read: 0,
     })
 }
 
 #[pymethods]
 impl PyStreamReader {
     #[new]
-    #[pyo3(signature = (path, sheet = None, include_row_numbers = false))]
-    fn new(path: &str, sheet: Option<&str>, include_row_numbers: bool) -> PyResult<Self> {
-        stream_reader_from_path(path, sheet, include_row_numbers)
+    #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None))]
+    fn new(
+        path: &str,
+        sheet: Option<&str>,
+        include_row_numbers: bool,
+        max_rows: Option<usize>,
+    ) -> PyResult<Self> {
+        stream_reader_from_path(path, sheet, include_row_numbers, max_rows)
     }
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
@@ -272,6 +291,13 @@ impl PyStreamReader {
                 let values = PyList::new(py, row.iter().map(|v| variant_to_py(py, v)))?
                     .into_any()
                     .unbind();
+                self.rows_read += 1;
+                if self
+                    .max_rows
+                    .is_some_and(|max_rows| self.rows_read >= max_rows)
+                {
+                    self.receiver = None;
+                }
                 if self.include_row_numbers {
                     Ok(Some(
                         (row_number, values).into_pyobject(py)?.into_any().unbind(),
@@ -407,7 +433,7 @@ impl PyStreamWriter {
 mod tests {
     use super::{
         MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
-        resolve_xlsx_target, row_from_xml, stream_writer_from_path,
+        resolve_xlsx_target, row_from_xml, stream_writer_from_path, validate_max_rows,
     };
     use crate::Variant;
 
@@ -493,5 +519,11 @@ mod tests {
         assert!(writer.closed());
         writer.close().unwrap();
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn streaming_reader_rejects_a_zero_row_budget_before_opening_the_file() {
+        let err = validate_max_rows(Some(0)).expect_err("zero row budget must be rejected");
+        assert_eq!(err, "max_rows must be greater than zero");
     }
 }

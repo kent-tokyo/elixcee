@@ -2,8 +2,9 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
-## [0.28.0] - 2026-08-31
+## [0.29.0] - 2026-08-31
 
+- `open_stream`/`StreamReader`に`max_rows`を追加し、読み取り行数を上限設定できるようにしました。
 - StreamReaderとStreamWriterに明示的な`close()`/`closed`ライフサイクルAPIを追加しました。
 - StreamingReaderの契約を安定化し、`include_row_numbers=True`で疎なワークシートの
   元のExcel行番号を返すようにしました。

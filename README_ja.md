@@ -61,8 +61,8 @@ print(vm.get_cell(1, 2))       # 20
 APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 
 大きなXLSX/XLSMには、全体を展開しない`open_stream(path, sheet=None)`を使えます。
-`include_row_numbers=True`では`(行番号, 値)`を返し、`create_stream(path)`はXLSX用の
-追記型writerです。
+`include_row_numbers=True`では`(行番号, 値)`を返し、`max_rows=N`で読み取り行数を
+制限できます。`create_stream(path)`はXLSX用の追記型writerです。
 
 対応するVBA構文・ワークシート関数は[FUNCTIONS.md](FUNCTIONS.md)にまとめています。
 既知の制約と診断形式は[docs/](docs/)を参照してください。

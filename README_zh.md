@@ -57,7 +57,8 @@ Python API 还支持公式、范围、工作表、样式、表格、数据验证
 VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 
 对于大型 XLSX/XLSM 文件，可使用 `open_stream(path, sheet=None)` 逐行读取；设置
-`include_row_numbers=True` 后返回 `(行号, 值)` 元组，`create_stream(path)` 提供 XLSX 追加式写入器。
+`include_row_numbers=True` 后返回 `(行号, 值)` 元组，也可用 `max_rows=N` 限制读取行数，
+`create_stream(path)` 提供 XLSX 追加式写入器。
 
 ## 开发
 
