@@ -932,6 +932,83 @@ class TablesAgreeWithOpenpyxl(unittest.TestCase):
             self.assertEqual(t["auto_filter_ref"], "A3:C6")
             openpyxl.load_workbook(out)
 
+    # 0.16.0-A3: create_table -- the three-part linkage (worksheet .rels, <tableParts>,
+    # [Content_Types].xml) built from nothing, verified for both a from-scratch Vm() and
+    # a loaded file that already has a table (the merge path, not the synthesis path).
+    def test_create_table_from_scratch_reopens_cleanly_with_no_warnings(self):
+        vm = elixcee.Vm()
+        vm.set_cell(1, 1, "Name")
+        vm.set_cell(1, 2, "Qty")
+        vm.set_cell(2, 1, "Widget")
+        vm.set_cell(2, 2, 5)
+        vm.create_table("A1:B2", name="Table1")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out.xlsx")
+            vm.save_workbook(out)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                wb = openpyxl.load_workbook(out)
+                self.assertEqual(w, [])
+            ws = wb.active
+            self.assertIn("Table1", ws.tables)
+            t = ws.tables["Table1"]
+            self.assertEqual(t.ref, "A1:B2")
+            self.assertEqual([c.name for c in t.tableColumns], ["Name", "Qty"])
+
+    def test_create_table_alongside_an_existing_table_preserves_it_byte_identical(self):
+        with zipfile.ZipFile(FIXTURE3) as z:
+            source_table1_xml = z.read("xl/tables/table1.xml")
+
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.set_cell(1, 5, "City")
+        vm.set_cell(1, 6, "Pop")
+        vm.create_table("E1:F1", name="Table2", sheet="Sheet1")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out.xlsm")
+            vm.save_workbook(out)
+            with zipfile.ZipFile(out) as z:
+                self.assertEqual(z.read("xl/tables/table1.xml"), source_table1_xml)
+                rels = z.read("xl/worksheets/_rels/sheet1.xml.rels").decode("utf-8")
+                self.assertIn("table1.xml", rels)
+                self.assertIn("table2.xml", rels)
+                ct = z.read("[Content_Types].xml").decode("utf-8")
+                self.assertIn("/xl/tables/table1.xml", ct)
+                self.assertIn("/xl/tables/table2.xml", ct)
+
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                wb = openpyxl.load_workbook(out, keep_vba=True)
+                self.assertEqual(w, [])
+            ws = wb["Sheet1"]
+            self.assertIn("テーブル1", ws.tables)
+            self.assertIn("Table2", ws.tables)
+
+            # Second save-reload cycle must not drift or duplicate anything.
+            vm2 = elixcee.load_workbook(out)
+            out2 = os.path.join(d, "out2.xlsm")
+            vm2.save_workbook(out2)
+            with zipfile.ZipFile(out) as z1, zipfile.ZipFile(out2) as z2:
+                for name in ("xl/tables/table1.xml", "xl/tables/table2.xml",
+                             "xl/worksheets/_rels/sheet1.xml.rels"):
+                    self.assertEqual(z1.read(name), z2.read(name))
+
+    def test_create_table_rejects_an_overlapping_range(self):
+        vm = elixcee.load_workbook(FIXTURE3)  # already has テーブル1 at A1:C4
+        with self.assertRaises(ValueError):
+            vm.create_table("B2:D5", name="Overlap")
+
+    def test_create_table_rejects_a_blank_header_cell(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        vm.set_cell(1, 10, "OnlyOne")  # J1 set, K1 deliberately blank
+        with self.assertRaises(ValueError):
+            vm.create_table("J1:K1", name="Blank")
+
+    def test_create_table_requires_name_or_display_name(self):
+        vm = elixcee.Vm()
+        vm.set_cell(1, 1, "Col")
+        with self.assertRaises(ValueError):
+            vm.create_table("A1:A1")
+
 
 class DataValidationAgreesWithOpenpyxl(unittest.TestCase):
     # 0.16.0-C: add_data_validation()/remove_data_validation()/data_validations()

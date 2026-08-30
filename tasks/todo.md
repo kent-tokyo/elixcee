@@ -1070,3 +1070,18 @@ known-gap 29と同時に着手した2件目のGreen作業。isolated worktreeで
 - [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`は本worktree内で更新済み。`internal_docs/ROADMAP.md`の`0.16.0-C`行を`[x]`済みに更新——は親エージェント側で実施が必要。
 
 残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。
+
+## 0.16.0-A3：Tables 第三弾（最終） — 新規テーブルのゼロからの作成（`create_table`）
+
+0.16.0-Aの最終スライス。A1/A2のスコーピングドキュメントに基づく実装。A1/A2は既存の`xl/tables/tableN.xml`を読む・パッチするだけだったが、A3は初めてテーブルのパート・所属シートのリレーションシップ・`<tableParts>`参照をゼロから合成する必要があり、この3点いずれもこれまでこのプロジェクトに存在しなかったコードパス。ユーザーが事前に確認した4点（実fixture検証の例外付与、相対パス規約の採用、ヘッダー行由来のカラム名導出、既存テーブルとの重なり検証の追加）に基づき実装。isolated worktreeで実施。
+
+- [x] **`vm.create_table(ref, sheet=None, name=None, display_name=None, style_name=None)`**。カラム名は`ref`のヘッダー行の既存セル値から導出——`columns=`引数は無く、セル値への書き込みも一切行わない。実`openpyxl`が生成した実テーブルを直接検証してこの規約（メタデータ宣言のみ、セル値には触れない）を確認済み。`name`/`display_name`の少なくとも一方が必須、片方のみ指定時はもう片方へデフォルト。
+- [x] **4つの成果物を同時に合成、うち2つは真に新規のコードパス**：新規`xl/tables/tableN.xml`（`plan_worksheet_output`と同じ「一度存在した番号は再利用しない」走査方式で採番）、`[Content_Types].xml`への`Override`登録、所属シートの`<tableParts>`へのマージ（既存0〜複数件のテーブルと共存）、そして——このプロジェクト初のワークシートレベル`.rels`**書き込み**パス——既存の`.rels`が無ければゼロから新規作成、既にあれば衝突しない新規`rId`で`<Relationship>`を1件追加。relationship の`Target`は相対パス（`../tables/tableN.xml`）を採用——`openpyxl`自身の絶対パス規約ではなく、このプロジェクト既存の規約に合わせた（ユーザー確認済み）。
+- [x] **新規テーブルのXMLは`TableDef`構造体から素直にフル生成**（`edit_table`の外科的パッチとは対照的——ブランドニューのテーブルには失うべき既存の未知バイト列が無いため、この場合に限り安全）。Microsoft拡張の`xr:uid`/`xr3:uid`は完全省略——実`openpyxl`生成テーブルを直接確認し、これらGUID無しでも実ユーザーに配布されている実物であることを確認済み（ユーザー確認済みの例外）。フィルタ条件を持たないベアな`<autoFilter ref="...">`をテーブルの`ref`と同じ範囲で含める——同じ実サンプルで`openpyxl`が常にこれを含めることを確認（フィルタ条件のロジック自体は引き続き0.16.0-Bの範囲）。
+- [x] **実装中に発見・修正した本物の安全性リスク**：新規テーブル用に合成した`.rels`エントリを、生きた（既に変異済みの）passthroughリストに対して素朴に「このシートの`.rels`は生き残ったか」判定すると、元のソースファイルに`.rels`が一切存在しなかったシートの`drawing`/`legacyDrawing`/既存`tableParts`の復元が、新規テーブル追加という無関係な理由で誤って「復活」してしまう——まさに`rels_survived`ゲートが防ぐべきdangling `r:id`の失敗モードそのもの。新規テーブル合成処理が走る**前**にどの`.rels`が実際にソースから生き残っていたかをスナップショットし、生きた状態ではなくそのスナップショットに対して判定するよう修正。
+- [x] **構造化参照・calculated column authoringは引き続きスコープ外**（0.16.0-A全体の既定方針、変更なし）——`create_table`は`columns=`引数もセル値書き込みも一切持たない。
+- [x] **実fixture検証**：実`openpyxl`生成の従スクラッチテーブル（4成果物すべての正確なXML形状を、このwriterを書く前に直接確認——書いた後の後追い確認ではない）と、`fixture3_table_validation_conditional.xlsm`（マージケース——既に1つテーブルを持つシートに2つ目を作成し、元の`table1.xml`がバイト完全一致で無傷であること、2つ目の`<Relationship>`/`<tablePart>`が別idで共存すること、2回連続保存後も両テーブルがバイト完全一致で安定することを確認）の両方で検証。重なり検証・ヘッダー空セル拒否・name/display_name両方省略時の拒否も実fixtureに対して確認。`openpyxl`はいずれの結果も警告0件で再オープン。
+- [x] **検証**：新規Rustユニットテスト16件（`create_table_on_sheet`のカラム導出/デフォルト名/エラー系6件、`render_table_xml`/`relationship_ids`/`insert_before_close`/`parse_table_part_number`のプリミティブ系7件、従スクラッチ・マージ・drawing誤復活防止の3件のend-to-end save/reload統合テスト）。`cargo fmt --all -- --check`／`cargo clippy --workspace --all-targets -- -D warnings`（python feature込みでも確認）／`cargo test --workspace`(1303件全pass、新規16件)／`cargo audit`(脆弱性なし)／`scripts/check-versions.sh`(既知の`elixcee-types`ドリフトのみ)、いずれもクリーン。ホストのディスク容量が検証中に一時的に枯渇する既知の事象が再発したが、再試行で自然解消（ROADMAP等に既出の既知事象、コード側の問題ではない）。`maturin develop --release`で実ビルド後、`compat/differential-python/sheet_ops_check.py`の既存`TablesAgreeWithOpenpyxl`クラスへ新規テスト5件を追加、既存46件と合わせ全51件pass。使い捨ての検証スクリプトはこのテストクラスへ統合済みで削除。
+- [ ] **ドキュメント同期（一部未完了——isolated worktreeの制約による）**：`CHANGELOG.md`・`compat/differential-python/sheet_ops_check.py`は本worktree内で更新済み。`internal_docs/ROADMAP.md`（gitignore対象、worktreeにチェックアウトされないためこのworktreeからは編集不可）への反映——`0.16.0-A`セクション内の`A3`チェックボックスを完了に、これで`0.16.0-A`（Tables）全体が完了した旨——は親エージェント側で実施が必要。
+
+残作業：`internal_docs/ROADMAP.md`の更新のみ、親エージェント側で対応。それ以外はこれで完結。0.16.0全体では次にB（AutoFilter）が残る。

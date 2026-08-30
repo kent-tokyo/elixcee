@@ -454,6 +454,72 @@ pub(crate) fn apply_table_edits(table_xml: &str, edits: &[TableEditOp]) -> Strin
     xml
 }
 
+/// Every `Id="rIdN"` value declared by a `.rels` document's `<Relationship>` elements, as
+/// raw strings (0.16.0-A3) -- used to pick a fresh, non-colliding id when inserting one
+/// more relationship into an existing worksheet `.rels` file. Unlike `workbook_rels_decls`
+/// (which deliberately drops ids, since that caller always reassigns fresh ones for every
+/// entry it carries over), a NEW relationship inserted alongside existing ones must avoid
+/// colliding with whichever ids the source already used.
+pub(crate) fn relationship_ids(xml: &str) -> Vec<String> {
+    let mut ids = vec![];
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev {
+            let local = tag.split(':').next_back().unwrap_or(tag);
+            if local == "Relationship"
+                && let Some(id) = attr_get(attrs, "Id")
+            {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    ids
+}
+
+/// Serializes a freshly-created `TableDef` (0.16.0-A3) into a full `<table>...</table>`
+/// document from scratch. Safe only because a NEW table has no existing raw bytes to
+/// preserve -- unlike `apply_table_edits`, which surgically patches an EXISTING table's
+/// original bytes specifically to avoid dropping the `id`/`xr:uid`/`xr3:uid` extension
+/// GUIDs `TableDef` doesn't store. Omits those GUIDs entirely -- confirmed safely
+/// omittable by inspecting a real `openpyxl`-authored table directly, which ships to real
+/// users without them. Includes a bare `<autoFilter ref="...">` matching the table's own
+/// `ref` (also confirmed against the same real sample: openpyxl always includes one, even
+/// with no filter criteria) -- structural only, no filter-criteria authoring (0.16.0-B).
+pub(crate) fn render_table_xml(table: &TableDef, table_id: u32) -> String {
+    let table_ref = format_merge_ref(&table.ref_range);
+    let mut out = format!(
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+            "<table xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "id=\"{}\" name=\"{}\" displayName=\"{}\" ref=\"{}\" headerRowCount=\"1\" ",
+            "totalsRowShown=\"0\">",
+        ),
+        table_id,
+        crate::xml_escape(&table.name),
+        crate::xml_escape(&table.display_name),
+        table_ref,
+    );
+    out.push_str(&format!("<autoFilter ref=\"{table_ref}\"/>"));
+    out.push_str(&format!("<tableColumns count=\"{}\">", table.columns.len()));
+    for (i, col) in table.columns.iter().enumerate() {
+        out.push_str(&format!(
+            "<tableColumn id=\"{}\" name=\"{}\"/>",
+            i + 1,
+            crate::xml_escape(&col.name)
+        ));
+    }
+    out.push_str("</tableColumns>");
+    if let Some(style) = &table.style_name {
+        out.push_str(&format!(
+            "<tableStyleInfo name=\"{}\" showFirstColumn=\"0\" showLastColumn=\"0\" \
+             showRowStripes=\"1\" showColumnStripes=\"0\"/>",
+            crate::xml_escape(style)
+        ));
+    }
+    out.push_str("</table>\n");
+    out
+}
+
 pub enum SheetCell {
     Integer(i64),
     Float(f64),
@@ -2537,8 +2603,12 @@ pub(crate) fn with_ordered_child(
 /// Inserts `new_child` as the last child of `parent_span`, promoting a self-closing
 /// element (`<font/>`) to an open/close pair (`<font>{new_child}</font>`) when it has no
 /// children yet, or splicing just before the existing closing tag otherwise. Shared tail
-/// of `with_child`/`with_ordered_child`'s insert-when-absent case.
-fn insert_before_close(parent_span: &str, new_child: &str) -> String {
+/// of `with_child`/`with_ordered_child`'s insert-when-absent case. Also reused directly by
+/// `save_xlsx_impl` (0.16.0-A3) to insert a new `<Relationship>` into an existing worksheet
+/// `.rels` document before its `</Relationships>` close -- `find_next_open_tag` already
+/// skips the leading `<?xml ...?>` declaration, so passing a whole `.rels` document (not
+/// just an inner element span) works unchanged.
+pub(crate) fn insert_before_close(parent_span: &str, new_child: &str) -> String {
     let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(parent_span, 0) else {
         return parent_span.to_string();
     };
@@ -3569,6 +3639,111 @@ mod table_parsing_tests {
     #[test]
     fn xlsx_table_part_rids_is_empty_without_a_tableparts_element() {
         assert!(xlsx_table_part_rids("<worksheet></worksheet>").is_empty());
+    }
+
+    #[test]
+    fn relationship_ids_extracts_every_id_ignoring_type_and_target() {
+        let xml = concat!(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationship Id="rId1" Type="a" Target="b"/>"#,
+            r#"<Relationship Id="rId2" Type="c" Target="d"/>"#,
+            r#"</Relationships>"#,
+        );
+        assert_eq!(relationship_ids(xml), vec!["rId1", "rId2"]);
+    }
+
+    #[test]
+    fn relationship_ids_is_empty_for_a_relationships_document_with_no_entries() {
+        let xml = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#;
+        assert!(relationship_ids(xml).is_empty());
+    }
+
+    #[test]
+    fn insert_before_close_inserts_a_relationship_into_an_existing_rels_document() {
+        let xml = concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationship Id="rId1" Type="a" Target="b"/>"#,
+            r#"</Relationships>"#,
+        );
+        let out = insert_before_close(xml, r#"<Relationship Id="rId2" Type="c" Target="d"/>"#);
+        assert_eq!(relationship_ids(&out), vec!["rId1", "rId2"]);
+        // The existing relationship's own bytes survive untouched.
+        assert!(out.contains(r#"<Relationship Id="rId1" Type="a" Target="b"/>"#));
+    }
+
+    fn sample_table_def(ref_range: MergeRect) -> TableDef {
+        TableDef {
+            name: "Table1".to_string(),
+            display_name: "Table1".to_string(),
+            ref_range,
+            header_row_count: 1,
+            totals_row_count: 0,
+            totals_row_shown: false,
+            columns: vec![
+                TableColumn {
+                    id: None,
+                    name: "Name".to_string(),
+                    totals_row_function: None,
+                    totals_row_label: None,
+                    calculated_column_formula: None,
+                },
+                TableColumn {
+                    id: None,
+                    name: "Qty".to_string(),
+                    totals_row_function: None,
+                    totals_row_label: None,
+                    calculated_column_formula: None,
+                },
+            ],
+            style_name: None,
+            auto_filter_ref: Some(ref_range),
+            source_part: String::new(),
+            pending_edits: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn render_table_xml_produces_output_that_parse_table_xml_reads_back_correctly() {
+        let table = sample_table_def(((1, 1), (3, 2)));
+        let xml = render_table_xml(&table, 7);
+        let parsed = parse_table_xml(&xml).expect("must parse back");
+        assert_eq!(parsed.name, "Table1");
+        assert_eq!(parsed.display_name, "Table1");
+        assert_eq!(parsed.ref_range, ((1, 1), (3, 2)));
+        assert_eq!(parsed.header_row_count, 1);
+        assert!(!parsed.totals_row_shown);
+        assert_eq!(
+            parsed
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Name", "Qty"]
+        );
+        assert_eq!(parsed.auto_filter_ref, Some(((1, 1), (3, 2))));
+        assert!(parsed.style_name.is_none());
+    }
+
+    #[test]
+    fn render_table_xml_includes_a_style_when_one_is_set() {
+        let mut table = sample_table_def(((1, 1), (1, 1)));
+        table.style_name = Some("TableStyleMedium2".to_string());
+        let xml = render_table_xml(&table, 1);
+        assert!(xml.contains(r#"<tableStyleInfo name="TableStyleMedium2""#));
+        let parsed = parse_table_xml(&xml).expect("must parse back");
+        assert_eq!(parsed.style_name.as_deref(), Some("TableStyleMedium2"));
+    }
+
+    #[test]
+    fn render_table_xml_omits_xr_uid_extension_guids() {
+        // Confirmed safe against a real openpyxl-authored table (0.16.0-A3 design doc's
+        // A3 Addendum) -- real Excel-authored tables always carry xr:uid/xr3:uid, but
+        // they're Excel's own added-on-first-touch metadata, not required for a valid,
+        // openable file.
+        let xml = render_table_xml(&sample_table_def(((1, 1), (1, 1))), 1);
+        assert!(!xml.contains("xr:uid"));
+        assert!(!xml.contains("xr3:uid"));
     }
 }
 
