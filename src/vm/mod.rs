@@ -1438,9 +1438,50 @@ impl Vm {
                 let new_auto_filter_ref = t
                     .auto_filter_ref
                     .and_then(|r| shift_table_rect(r, axis, edit));
+                // 0.16.0-B2: `autofilter_columns`' `col_offset` is relative to
+                // `auto_filter_ref`'s own left edge -- same shift shape
+                // `shift_autofilters_for_structural_edit` already uses for the
+                // standalone case, reused here rather than duplicated as a new
+                // primitive. Dropped entirely if `auto_filter_ref` itself collapsed
+                // (nothing left to be relative to); row-axis edits never touch a
+                // column offset.
+                let autofilter_columns = match new_auto_filter_ref {
+                    None => Vec::new(),
+                    Some(_) if axis == formula::RefAxis::Row => t.autofilter_columns.clone(),
+                    Some(new_afr) => {
+                        let old_c1 = t.auto_filter_ref.map(|r| r.0.1).unwrap_or(0);
+                        let new_c1 = new_afr.0.1;
+                        t.autofilter_columns
+                            .iter()
+                            .filter_map(|c| {
+                                match formula::shift_cell_coord(old_c1 + c.col_offset, edit) {
+                                    formula::CellShift::Unchanged => Some(c.clone()),
+                                    formula::CellShift::Deleted => None,
+                                    formula::CellShift::Moved(new_abs) => {
+                                        let new_offset = new_abs - new_c1;
+                                        if new_offset == c.col_offset {
+                                            Some(c.clone())
+                                        } else {
+                                            Some(FilterColumn {
+                                                col_offset: new_offset,
+                                                dirty: true,
+                                                ..c.clone()
+                                            })
+                                        }
+                                    }
+                                }
+                            })
+                            .collect()
+                    }
+                };
+                let old_offsets: HashSet<u32> =
+                    t.autofilter_columns.iter().map(|c| c.col_offset).collect();
+                let new_offsets: HashSet<u32> =
+                    autofilter_columns.iter().map(|c| c.col_offset).collect();
                 let mut new_t = TableDef {
                     ref_range: new_ref,
                     auto_filter_ref: new_auto_filter_ref,
+                    autofilter_columns: autofilter_columns.clone(),
                     ..t.clone()
                 };
                 // 0.16.0-A2: persist the shift, closing the gap 0.16.0-A1 left behind
@@ -1451,6 +1492,22 @@ impl Vm {
                 new_t.pending_edits.push(TableEditOp::Resize(new_ref));
                 if let Some(afr) = new_auto_filter_ref {
                     new_t.pending_edits.push(TableEditOp::ResizeAutoFilter(afr));
+                }
+                // A dropped or moved column needs its stale-`colId` XML entry cleared
+                // before (if moved) the new one is written -- `SetFilterColumn`'s own
+                // write-time patch only ever replaces an entry matching its OWN
+                // `col_offset`, so a renumbered offset would otherwise leave both the
+                // old and new `<filterColumn>` present.
+                for old in old_offsets.difference(&new_offsets) {
+                    new_t
+                        .pending_edits
+                        .push(TableEditOp::ClearFilterColumn(*old));
+                }
+                for c in autofilter_columns.iter().filter(|c| c.dirty) {
+                    new_t.pending_edits.push(TableEditOp::SetFilterColumn(
+                        c.col_offset,
+                        c.criteria.clone(),
+                    ));
                 }
                 Some(new_t)
             })
@@ -1614,6 +1671,105 @@ impl Vm {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Sets (replacing any existing criteria on the same column) or adds `col_offset`'s
+    /// filter criteria on `table_name`'s own nested `<autoFilter>` (0.16.0-B2). Reuses
+    /// the exact same `FilterColumn`/`FilterCriteria` model and `evaluate_and_hide_rows`
+    /// engine `set_filter_column_on_sheet` (0.16.0-B1) built for the standalone case --
+    /// the only new code is where the criteria is stored (`TableDef.autofilter_columns`)
+    /// and how it's persisted (`TableEditOp::SetFilterColumn`, patching the table's own
+    /// nested `<autoFilter>` span, not the worksheet-level one). `Err` if `table_name`
+    /// doesn't exist, has no `<autoFilter>` at all (e.g. an 0.16.0-A3-created table with
+    /// filtering never turned on), or `col_offset` falls outside its width -- same
+    /// "reject a bad index rather than swallow it" bias as the standalone method.
+    pub fn set_table_filter_column_on_sheet(
+        &mut self,
+        key: &str,
+        table_name: &str,
+        col_offset: u32,
+        criteria: FilterCriteria,
+    ) -> Result<(), String> {
+        let Some(tables) = self.tables.get(key) else {
+            return Err(format!("Sheet '{key}' has no tables"));
+        };
+        let Some(idx) = tables
+            .iter()
+            .position(|t| t.display_name == table_name || t.name == table_name)
+        else {
+            return Err(format!("Table '{table_name}' not found on sheet '{key}'"));
+        };
+        let tables = self.tables.get_mut(key).expect("checked above");
+        let table = &mut tables[idx];
+        let Some(af_ref) = table.auto_filter_ref else {
+            return Err(format!("Table '{table_name}' has no autoFilter"));
+        };
+        let width = af_ref.1.1 - af_ref.0.1;
+        if col_offset > width {
+            return Err(format!(
+                "col_offset {col_offset} out of range (table autoFilter spans {} column(s))",
+                width + 1
+            ));
+        }
+        match table
+            .autofilter_columns
+            .iter_mut()
+            .find(|c| c.col_offset == col_offset)
+        {
+            Some(existing) => {
+                existing.criteria = criteria.clone();
+                existing.raw_span = None;
+                existing.dirty = false;
+            }
+            None => table.autofilter_columns.push(FilterColumn {
+                col_offset,
+                hidden_button: false,
+                show_button: true,
+                criteria: criteria.clone(),
+                raw_span: None,
+                dirty: false,
+            }),
+        }
+        table
+            .pending_edits
+            .push(TableEditOp::SetFilterColumn(col_offset, criteria));
+        self.reapply_table_autofilter_hide_state(key, idx);
+        Ok(())
+    }
+
+    /// Removes `col_offset`'s filter criteria on `table_name`'s own nested
+    /// `<autoFilter>` (0.16.0-B2), leaving the autofilter itself (and its other
+    /// columns' criteria) in place. `Err` if `table_name` doesn't exist or has no
+    /// `<autoFilter>`; a `col_offset` with no active criteria is a silent no-op, same
+    /// convention as `clear_filter_column_on_sheet`.
+    pub fn clear_table_filter_column_on_sheet(
+        &mut self,
+        key: &str,
+        table_name: &str,
+        col_offset: u32,
+    ) -> Result<(), String> {
+        let Some(tables) = self.tables.get(key) else {
+            return Err(format!("Sheet '{key}' has no tables"));
+        };
+        let Some(idx) = tables
+            .iter()
+            .position(|t| t.display_name == table_name || t.name == table_name)
+        else {
+            return Err(format!("Table '{table_name}' not found on sheet '{key}'"));
+        };
+        let tables = self.tables.get_mut(key).expect("checked above");
+        let table = &mut tables[idx];
+        if table.auto_filter_ref.is_none() {
+            return Err(format!("Table '{table_name}' has no autoFilter"));
+        }
+        table
+            .autofilter_columns
+            .retain(|c| c.col_offset != col_offset);
+        table
+            .pending_edits
+            .push(TableEditOp::ClearFilterColumn(col_offset));
+        self.reapply_table_autofilter_hide_state(key, idx);
         Ok(())
     }
 
@@ -1815,6 +1971,7 @@ impl Vm {
             columns,
             style_name: style_name.map(str::to_string),
             auto_filter_ref: Some(ref_range),
+            autofilter_columns: Vec::new(),
             source_part: String::new(),
             pending_edits: Vec::new(),
         };
@@ -3023,9 +3180,48 @@ impl Vm {
         let Some(af) = self.autofilters.get(key).cloned() else {
             return;
         };
-        let ((r1, c1), (r2, _)) = af.ref_range;
-        let thresholds: HashMap<u32, f64> = af
-            .columns
+        self.evaluate_and_hide_rows(key, af.ref_range, &af.columns);
+    }
+
+    /// Table-embedded mirror of `reapply_autofilter_hide_state` (0.16.0-B2) -- same
+    /// engine (`evaluate_and_hide_rows`), evaluated against `tables[key][table_idx]`'s
+    /// own `auto_filter_ref`/`autofilter_columns` instead of the standalone
+    /// `autofilters` map. A no-op if the table has no `auto_filter_ref` (nothing to
+    /// evaluate against) -- callers (`set_table_filter_column_on_sheet`) already reject
+    /// that case before ever reaching here.
+    fn reapply_table_autofilter_hide_state(&mut self, key: &str, table_idx: usize) {
+        let Some(table) = self.tables.get(key).and_then(|ts| ts.get(table_idx)) else {
+            return;
+        };
+        let Some(ref_range) = table.auto_filter_ref else {
+            return;
+        };
+        let columns = table.autofilter_columns.clone();
+        self.evaluate_and_hide_rows(key, ref_range, &columns);
+    }
+
+    /// Shared row-hide engine for both standalone (`reapply_autofilter_hide_state`) and
+    /// table-embedded (`reapply_table_autofilter_hide_state`) filter criteria (0.16.0-B/
+    /// B2) -- re-evaluates EVERY given `columns` entry against real cell data and
+    /// rewrites the full hidden-row set for `ref_range`'s data rows in one pass. Never
+    /// incremental: multiple `<filterColumn>`s combine via AND (a row shows only if it
+    /// passes every active column's criteria, confirmed against real `CT_AutoFilter`
+    /// semantics) -- toggling one column can only be judged correctly by re-checking all
+    /// of them together, or clearing one column could leave hidden a row that only ever
+    /// failed the CLEARED criterion. Evaluated ONCE, immediately, matching
+    /// `Stmt::RangeAutoFilter`'s own real one-shot VBA behavior -- never re-evaluated
+    /// again afterward even if the underlying cell values later change. `Top10` needs
+    /// the full column's values to compute a threshold before any row can be judged, so
+    /// it's precomputed in its own pass first, unlike every other criteria type
+    /// (evaluable per-row independently via `filter_column_matches`).
+    fn evaluate_and_hide_rows(
+        &mut self,
+        key: &str,
+        ref_range: MergeRect,
+        columns: &[FilterColumn],
+    ) {
+        let ((r1, c1), (r2, _)) = ref_range;
+        let thresholds: HashMap<u32, f64> = columns
             .iter()
             .filter_map(|col| {
                 let FilterCriteria::Top10 { top, percent, val } = &col.criteria else {
@@ -3055,7 +3251,7 @@ impl Vm {
             .collect();
 
         for row in (r1 + 1)..=r2 {
-            let passes = af.columns.iter().all(|col| {
+            let passes = columns.iter().all(|col| {
                 let value = self.get_cell(row, c1 + col.col_offset);
                 if let FilterCriteria::Top10 { top, .. } = &col.criteria {
                     return match (thresholds.get(&col.col_offset), to_f64(&value).ok()) {
@@ -17059,6 +17255,7 @@ mod tests {
             columns: vec![],
             style_name: None,
             auto_filter_ref: None,
+            autofilter_columns: Vec::new(),
             source_part: String::new(),
             pending_edits: Vec::new(),
         }
@@ -17854,6 +18051,159 @@ mod tests {
         assert_eq!(
             af.columns[0].criteria,
             FilterCriteria::Values(vec!["X".to_string()])
+        );
+    }
+
+    #[test]
+    fn set_table_filter_column_on_sheet_errors_without_an_autofilter() {
+        let mut vm = Vm::new();
+        let mut t = sample_table(((1, 1), (4, 1)));
+        t.auto_filter_ref = None;
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        assert!(
+            vm.set_table_filter_column_on_sheet("sheet1", "Table1", 0, FilterCriteria::Blank)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn set_table_filter_column_on_sheet_errors_on_an_out_of_range_offset() {
+        let mut vm = Vm::new();
+        let mut t = sample_table(((1, 1), (4, 3))); // 3 columns: offsets 0-2
+        t.auto_filter_ref = Some(((1, 1), (4, 3)));
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        assert!(
+            vm.set_table_filter_column_on_sheet("sheet1", "Table1", 3, FilterCriteria::Blank)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn set_table_filter_column_on_sheet_errors_on_an_unknown_table_name() {
+        let mut vm = Vm::new();
+        let mut t = sample_table(((1, 1), (4, 1)));
+        t.auto_filter_ref = Some(((1, 1), (4, 1)));
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        assert!(
+            vm.set_table_filter_column_on_sheet("sheet1", "NoSuchTable", 0, FilterCriteria::Blank)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn set_table_filter_column_on_sheet_replaces_existing_criteria_on_the_same_column() {
+        let mut vm = Vm::new();
+        let mut t = sample_table(((1, 1), (4, 1)));
+        t.auto_filter_ref = Some(((1, 1), (4, 1)));
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        vm.set_table_filter_column_on_sheet("sheet1", "Table1", 0, FilterCriteria::Blank)
+            .unwrap();
+        vm.set_table_filter_column_on_sheet(
+            "sheet1",
+            "Table1",
+            0,
+            FilterCriteria::Values(vec!["X".to_string()]),
+        )
+        .unwrap();
+        let cols = &vm.tables.get("sheet1").unwrap()[0].autofilter_columns;
+        assert_eq!(cols.len(), 1);
+        assert_eq!(
+            cols[0].criteria,
+            FilterCriteria::Values(vec!["X".to_string()])
+        );
+    }
+
+    #[test]
+    fn set_table_filter_column_on_sheet_hides_rows_reusing_the_shared_evaluation_engine() {
+        // Same fixture shape as set_equality_filter_hides_rows_that_do_not_match_any_value
+        // (standalone) -- proves table-embedded filtering reuses evaluate_and_hide_rows,
+        // not a duplicate implementation.
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet1");
+        for (row, val) in [(1, "Header"), (2, "A"), (3, "B"), (4, "C")] {
+            vm.cells_mut().insert(
+                (row, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Str(val.to_string()),
+                },
+            );
+        }
+        let mut t = sample_table(((1, 1), (4, 1)));
+        t.auto_filter_ref = Some(((1, 1), (4, 1)));
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        vm.set_table_filter_column_on_sheet(
+            "sheet1",
+            "Table1",
+            0,
+            FilterCriteria::Values(vec!["A".to_string(), "C".to_string()]),
+        )
+        .unwrap();
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![3]);
+    }
+
+    #[test]
+    fn clear_table_filter_column_on_sheet_removes_criteria_and_reevaluates() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet1");
+        for (row, val) in [(1, "Header"), (2, "A"), (3, "B")] {
+            vm.cells_mut().insert(
+                (row, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Str(val.to_string()),
+                },
+            );
+        }
+        let mut t = sample_table(((1, 1), (3, 1)));
+        t.auto_filter_ref = Some(((1, 1), (3, 1)));
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        vm.set_table_filter_column_on_sheet(
+            "sheet1",
+            "Table1",
+            0,
+            FilterCriteria::Values(vec!["A".to_string()]),
+        )
+        .unwrap();
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![3]);
+        vm.clear_table_filter_column_on_sheet("sheet1", "Table1", 0)
+            .unwrap();
+        assert!(vm.hidden_rows_on_sheet("sheet1").is_empty());
+        assert!(
+            vm.tables.get("sheet1").unwrap()[0]
+                .autofilter_columns
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn shift_tables_for_structural_edit_renumbers_a_filter_columns_offset_on_column_insert() {
+        let mut vm = Vm::new();
+        let mut t = table_with_columns(&["A", "B", "C"], ((1, 1), (4, 3)));
+        t.auto_filter_ref = Some(((1, 1), (4, 3)));
+        t.autofilter_columns = vec![values_filter_column(1, &["X"])]; // column "B", offset 1
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        // Insert a column before B (at column 2) -- B's absolute column shifts right,
+        // so its filter's relative offset should stay 1 relative to the unchanged ref
+        // left edge, but the NEW column at offset 1 pushes the old B to offset 2.
+        vm.insert_cols_on_sheet("sheet1", 2, 1);
+        let cols = &vm.tables.get("sheet1").unwrap()[0].autofilter_columns;
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].col_offset, 2);
+    }
+
+    #[test]
+    fn shift_tables_for_structural_edit_drops_a_filter_column_whose_own_column_is_deleted() {
+        let mut vm = Vm::new();
+        let mut t = table_with_columns(&["A", "B", "C"], ((1, 1), (4, 3)));
+        t.auto_filter_ref = Some(((1, 1), (4, 3)));
+        t.autofilter_columns = vec![values_filter_column(1, &["X"])]; // column "B"
+        vm.tables.insert("sheet1".to_string(), vec![t]);
+        vm.delete_cols_on_sheet("sheet1", 2, 1); // delete column B itself
+        assert!(
+            vm.tables.get("sheet1").unwrap()[0]
+                .autofilter_columns
+                .is_empty()
         );
     }
 

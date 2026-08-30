@@ -1313,22 +1313,26 @@ impl PyVm {
             .unwrap_or_default())
     }
 
-    /// Every table defined on *sheet* (defaults to the active sheet), read-only
-    /// (0.16.0-A1). Each table is a dict:
+    /// Every table defined on *sheet* (defaults to the active sheet), read-only.
+    /// Each table is a dict:
     ///
     /// ``{"name": ..., "display_name": ..., "ref": "A1:C4", "header_row_count": 1,
     /// "totals_row_count": 0, "totals_row_shown": False, "style_name": ...,
-    /// "auto_filter_ref": "A1:C4" or None, "columns": [...]}``
+    /// "auto_filter_ref": "A1:C4" or None, "autofilter_columns": [...], "columns": [...]}``
     ///
     /// Each column is ``{"id": ..., "name": ..., "totals_row_function": ...,
     /// "totals_row_label": ..., "calculated_column_formula": ...}`` — string fields
     /// are ``None`` when the attribute is absent in the source file.
+    /// ``autofilter_columns`` is the table's own nested autofilter's active filter
+    /// criteria (0.16.0-B2), same dict shape as :meth:`autofilter`'s own ``"columns"``
+    /// key — set via :meth:`set_table_equality_filter` and friends, empty if
+    /// ``auto_filter_ref`` is ``None`` or no criteria has been set yet.
     ///
-    /// Read-only: there's no create/edit/delete table API yet (separate future
-    /// phases). Structured references (``Table1[@Qty]``) are entirely out of
-    /// scope — ``calculated_column_formula`` is the raw, unparsed formula text,
-    /// never evaluated. An unmodified table survives every save unchanged
-    /// regardless of whether this method is ever called.
+    /// Structural editing (:meth:`create_table`/:meth:`edit_table`) is real, but
+    /// structured references (``Table1[@Qty]``) are entirely out of scope —
+    /// ``calculated_column_formula`` is the raw, unparsed formula text, never
+    /// evaluated. An unmodified table survives every save unchanged regardless of
+    /// whether this method is ever called.
     ///
     /// Raises ``ValueError`` if *sheet* is unknown.
     #[pyo3(signature = (sheet = None))]
@@ -1351,6 +1355,11 @@ impl PyVm {
                 "auto_filter_ref",
                 t.auto_filter_ref.as_ref().map(merge_rect_to_a1),
             )?;
+            let filter_cols = PyList::empty(py);
+            for c in &t.autofilter_columns {
+                filter_cols.append(filter_column_to_pydict(py, c)?)?;
+            }
+            dict.set_item("autofilter_columns", filter_cols)?;
             let cols = PyList::empty(py);
             for c in &t.columns {
                 let cd = PyDict::new(py);
@@ -2448,6 +2457,207 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Table-embedded mirror of :meth:`set_equality_filter` (0.16.0-B2) -- filters
+    /// *table_name*'s own nested autofilter instead of a standalone worksheet-level
+    /// one. Same one-shot, all-columns-together re-evaluation semantics.
+    ///
+    /// Raises ``ValueError`` if *table_name* doesn't exist, has no autofilter (e.g. a
+    /// table created without one), *col_offset* is outside its range, or *sheet* is
+    /// unknown.
+    #[pyo3(signature = (table_name, col_offset, values, sheet = None))]
+    fn set_table_equality_filter(
+        &mut self,
+        table_name: &str,
+        col_offset: u32,
+        values: Vec<String>,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .set_table_filter_column_on_sheet(
+                &key,
+                table_name,
+                col_offset,
+                reader::FilterCriteria::Values(values),
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Table-embedded mirror of :meth:`set_custom_filter` (0.16.0-B2). Same one-shot,
+    /// all-columns-together re-evaluation semantics.
+    ///
+    /// Raises ``ValueError`` if *table_name* doesn't exist, has no autofilter,
+    /// *col_offset* is outside its range, or *sheet* is unknown.
+    #[pyo3(signature = (
+        table_name, col_offset, operator, value, and_ = true, operator2 = None,
+        value2 = None, sheet = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_table_custom_filter(
+        &mut self,
+        table_name: &str,
+        col_offset: u32,
+        operator: &str,
+        value: &str,
+        and_: bool,
+        operator2: Option<&str>,
+        value2: Option<&str>,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .set_table_filter_column_on_sheet(
+                &key,
+                table_name,
+                col_offset,
+                reader::FilterCriteria::Custom {
+                    op1: operator.to_string(),
+                    val1: value.to_string(),
+                    and: and_,
+                    op2: operator2.map(str::to_string),
+                    val2: value2.map(str::to_string),
+                },
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Table-embedded mirror of :meth:`set_blank_filter` (0.16.0-B2).
+    ///
+    /// Raises ``ValueError`` if *table_name* doesn't exist, has no autofilter,
+    /// *col_offset* is outside its range, or *sheet* is unknown.
+    #[pyo3(signature = (table_name, col_offset, sheet = None))]
+    fn set_table_blank_filter(
+        &mut self,
+        table_name: &str,
+        col_offset: u32,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .set_table_filter_column_on_sheet(
+                &key,
+                table_name,
+                col_offset,
+                reader::FilterCriteria::Blank,
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Table-embedded mirror of :meth:`set_top10_filter` (0.16.0-B2).
+    ///
+    /// Raises ``ValueError`` if *table_name* doesn't exist, has no autofilter,
+    /// *col_offset* is outside its range, or *sheet* is unknown.
+    #[pyo3(signature = (table_name, col_offset, val, top = true, percent = false, sheet = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_table_top10_filter(
+        &mut self,
+        table_name: &str,
+        col_offset: u32,
+        val: f64,
+        top: bool,
+        percent: bool,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .set_table_filter_column_on_sheet(
+                &key,
+                table_name,
+                col_offset,
+                reader::FilterCriteria::Top10 { top, percent, val },
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Table-embedded mirror of :meth:`set_date_group_filter` (0.16.0-B2). Only one
+    /// bucket per call, same as the standalone method.
+    ///
+    /// Raises ``ValueError`` if no field is given, *table_name* doesn't exist, has no
+    /// autofilter, *col_offset* is outside its range, or *sheet* is unknown.
+    #[pyo3(signature = (
+        table_name, col_offset, year = None, month = None, day = None, hour = None,
+        minute = None, second = None, grouping = "day", sheet = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_table_date_group_filter(
+        &mut self,
+        table_name: &str,
+        col_offset: u32,
+        year: Option<i32>,
+        month: Option<u32>,
+        day: Option<u32>,
+        hour: Option<u32>,
+        minute: Option<u32>,
+        second: Option<u32>,
+        grouping: &str,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        if year.is_none()
+            && month.is_none()
+            && day.is_none()
+            && hour.is_none()
+            && minute.is_none()
+            && second.is_none()
+        {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "set_table_date_group_filter requires at least one of year/month/day/hour/minute/second",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let item = reader::DateGroupItem {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            date_time_grouping: grouping.to_string(),
+        };
+        self.inner
+            .set_table_filter_column_on_sheet(
+                &key,
+                table_name,
+                col_offset,
+                reader::FilterCriteria::DateGroup(vec![item]),
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Table-embedded mirror of :meth:`clear_filter_column` (0.16.0-B2).
+    ///
+    /// Raises ``ValueError`` if *table_name* doesn't exist or has no autofilter, or
+    /// *sheet* is unknown.
+    #[pyo3(signature = (table_name, col_offset, sheet = None))]
+    fn clear_table_filter_column(
+        &mut self,
+        table_name: &str,
+        col_offset: u32,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .clear_table_filter_column_on_sheet(&key, table_name, col_offset)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// *sheet*'s standalone autofilter, read-only (0.16.0-B), or ``None`` if it has
     /// none. ``{"ref": "A1:C20", "columns": [...]}`` -- each column dict's exact keys
     /// depend on its filter type (``"type"`` is always present: one of ``"values"``,
@@ -2472,54 +2682,7 @@ impl PyVm {
         dict.set_item("ref", merge_rect_to_a1(&af.ref_range))?;
         let cols = PyList::empty(py);
         for c in &af.columns {
-            let cd = PyDict::new(py);
-            cd.set_item("col_offset", c.col_offset)?;
-            match &c.criteria {
-                reader::FilterCriteria::Values(v) => {
-                    cd.set_item("type", "values")?;
-                    cd.set_item("values", v.clone())?;
-                }
-                reader::FilterCriteria::Custom {
-                    op1,
-                    val1,
-                    and,
-                    op2,
-                    val2,
-                } => {
-                    cd.set_item("type", "custom")?;
-                    cd.set_item("operator", op1)?;
-                    cd.set_item("value", val1)?;
-                    cd.set_item("and_", *and)?;
-                    cd.set_item("operator2", op2.as_deref())?;
-                    cd.set_item("value2", val2.as_deref())?;
-                }
-                reader::FilterCriteria::Blank => {
-                    cd.set_item("type", "blank")?;
-                }
-                reader::FilterCriteria::Top10 { top, percent, val } => {
-                    cd.set_item("type", "top10")?;
-                    cd.set_item("top", *top)?;
-                    cd.set_item("percent", *percent)?;
-                    cd.set_item("val", *val)?;
-                }
-                reader::FilterCriteria::DateGroup(items) => {
-                    cd.set_item("type", "date_group")?;
-                    let groups = PyList::empty(py);
-                    for it in items {
-                        let gd = PyDict::new(py);
-                        gd.set_item("year", it.year)?;
-                        gd.set_item("month", it.month)?;
-                        gd.set_item("day", it.day)?;
-                        gd.set_item("hour", it.hour)?;
-                        gd.set_item("minute", it.minute)?;
-                        gd.set_item("second", it.second)?;
-                        gd.set_item("grouping", &it.date_time_grouping)?;
-                        groups.append(gd)?;
-                    }
-                    cd.set_item("groups", groups)?;
-                }
-            }
-            cols.append(cd)?;
+            cols.append(filter_column_to_pydict(py, c)?)?;
         }
         dict.set_item("columns", cols)?;
         Ok(dict.into_any().unbind())
@@ -5247,6 +5410,65 @@ fn resolve_data_validations_for_sheet(
         rules.len(),
         &body,
     ))
+}
+
+/// Read-side mirror of `build_filter_column_xml` -- turns one `FilterColumn` into the
+/// same `{"col_offset": ..., "type": ..., ...}` dict shape, shared by `autofilter()`
+/// (standalone) and `tables()`'s own `autofilter_columns` key (0.16.0-B2), so the two
+/// storage contexts report identically rather than duplicating this match.
+#[cfg(feature = "python")]
+fn filter_column_to_pydict<'py>(
+    py: Python<'py>,
+    c: &reader::FilterColumn,
+) -> PyResult<Bound<'py, PyDict>> {
+    let cd = PyDict::new(py);
+    cd.set_item("col_offset", c.col_offset)?;
+    match &c.criteria {
+        reader::FilterCriteria::Values(v) => {
+            cd.set_item("type", "values")?;
+            cd.set_item("values", v.clone())?;
+        }
+        reader::FilterCriteria::Custom {
+            op1,
+            val1,
+            and,
+            op2,
+            val2,
+        } => {
+            cd.set_item("type", "custom")?;
+            cd.set_item("operator", op1)?;
+            cd.set_item("value", val1)?;
+            cd.set_item("and_", *and)?;
+            cd.set_item("operator2", op2.as_deref())?;
+            cd.set_item("value2", val2.as_deref())?;
+        }
+        reader::FilterCriteria::Blank => {
+            cd.set_item("type", "blank")?;
+        }
+        reader::FilterCriteria::Top10 { top, percent, val } => {
+            cd.set_item("type", "top10")?;
+            cd.set_item("top", *top)?;
+            cd.set_item("percent", *percent)?;
+            cd.set_item("val", *val)?;
+        }
+        reader::FilterCriteria::DateGroup(items) => {
+            cd.set_item("type", "date_group")?;
+            let groups = PyList::empty(py);
+            for it in items {
+                let gd = PyDict::new(py);
+                gd.set_item("year", it.year)?;
+                gd.set_item("month", it.month)?;
+                gd.set_item("day", it.day)?;
+                gd.set_item("hour", it.hour)?;
+                gd.set_item("minute", it.minute)?;
+                gd.set_item("second", it.second)?;
+                gd.set_item("grouping", &it.date_time_grouping)?;
+                groups.append(gd)?;
+            }
+            cd.set_item("groups", groups)?;
+        }
+    }
+    Ok(cd)
 }
 
 /// Builds one `<filterColumn>` element fresh from a `FilterColumn` whose criteria was

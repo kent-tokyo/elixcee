@@ -1649,6 +1649,52 @@ actually setting criteria and computing the resulting row-hide state.
 - No table-embedded filter criteria (0.16.0-B2, separate fast-follow) and no
   live/continuous re-evaluation as cell values change after the fact.
 
+### Root crate: table-embedded filter criteria — 0.16.0-B2, AutoFilter's second slice
+
+- `vm.set_table_equality_filter(table_name, col_offset, values, sheet=None)` /
+  `set_table_custom_filter(table_name, col_offset, operator, value, and_=True,
+  operator2=None, value2=None, sheet=None)` / `set_table_blank_filter(table_name,
+  col_offset, sheet=None)` / `set_table_top10_filter(table_name, col_offset, val,
+  top=True, percent=False, sheet=None)` / `set_table_date_group_filter(table_name,
+  col_offset, year=None, month=None, day=None, hour=None, minute=None, second=None,
+  grouping="day", sheet=None)` / `clear_table_filter_column(table_name, col_offset,
+  sheet=None)` — the table-embedded mirror of 0.16.0-B1's own standalone-`<autoFilter>`
+  methods, reusing the exact same `FilterColumn`/`FilterCriteria` model and row-hide
+  evaluation engine (a new `evaluate_and_hide_rows` function, factored out of B1's own
+  `reapply_autofilter_hide_state` rather than duplicated) against the table's own
+  `auto_filter_ref`/new `autofilter_columns` field instead of the standalone `autofilters`
+  map. `tables()`'s read-only listing gained a matching `autofilter_columns` key (same
+  dict shape as `autofilter()`'s own `"columns"`, via a new shared `filter_column_to_pydict`
+  helper so the two contexts report identically rather than duplicating that match).
+- Write path: `TableEditOp::SetFilterColumn`/`ClearFilterColumn`, following the exact same
+  `with_ordered_child`/`extract_records`/`rebuild_autofilter_container` surgical-patch
+  shape `ResizeAutoFilter` already established for a table's nested `<autoFilter>` — an
+  untouched column's raw bytes (and the autoFilter's own `xr:uid` GUID) stay byte-identical
+  regardless of another column's edit. `render_table_xml` (the from-scratch write path for
+  a table created via `create_table`) needed a real fix in the same PR: it always emitted a
+  bare `<autoFilter ref="...">` with no consideration of `autofilter_columns` at all, so a
+  filter set on a table before its first save would silently never reach disk — caught by
+  the real-fixture verification script itself, not assumed correct, fixed by embedding any
+  already-set criteria via the same `build_filter_column_xml` B1 uses for a fresh column.
+- Structural-edit shift: `autofilter_columns`' `col_offset` renumbers/drops on a row/column
+  insert-delete the same way `shift_autofilters_for_structural_edit` already does for the
+  standalone case (converted to an absolute column, shifted via `shift_cell_coord`, dropped
+  if deleted, reconverted against the table's shifted `auto_filter_ref`'s new left edge) —
+  a moved column's stale `colId` XML entry is explicitly cleared (`ClearFilterColumn`)
+  before the new one is written (`SetFilterColumn`), so a renumbered offset never leaves
+  both the old and new `<filterColumn>` present.
+- Verified against `fixture3`'s real table (equality filter on real `Name`/`Qty`/`Status`
+  data, real row-hide state confirmed against the actual cell values, not just the XML
+  shape) plus `openpyxl`-authored synthetic fixtures for custom/top10/blank/date-group
+  (openpyxl's own `Table()` writes an ABSOLUTE relationship `Target`
+  — `/xl/tables/table1.xml` — rather than this project's relative convention confirmed
+  against `fixture3`'s real Excel-authored file; elixcee's table loader doesn't resolve the
+  absolute form, a real, pre-existing, disclosed-not-fixed gap unrelated to this slice — so
+  those synthetic cases build the table via `create_table` instead, matching
+  `TablesAgreeWithOpenpyxl`'s own from-scratch pattern, still verified via a real `openpyxl`
+  reopen). Confirms a table's own filtering and a standalone worksheet-level `<autoFilter>`
+  never get confused for each other (one call raises when the other's context is missing).
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted
