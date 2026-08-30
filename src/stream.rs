@@ -1,11 +1,11 @@
-//! Forward-only row streaming for large XLSX files (0.21.0).
+//! Forward-only row streaming for large XLSX files (0.21.1).
 //!
 //! The normal `Vm` intentionally remains a random-access, fully mutable model. This
 //! module provides a separate pipeline API whose worker owns the ZIP entry and sends
 //! one decoded row at a time, so callers do not need to materialize a workbook.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::sync::{
     Mutex,
     mpsc::{self, Receiver},
