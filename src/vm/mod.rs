@@ -1652,6 +1652,83 @@ impl Vm {
         self.data_validations.insert(key.to_string(), shifted);
     }
 
+    /// Creates a new table on `key` from scratch (0.16.0-A3). `ref_range`'s first (header)
+    /// row must already hold the column names the new table will use -- this call never
+    /// writes any cell value itself, matching real Excel/`openpyxl`'s own "Insert Table"
+    /// behavior over pre-existing headers (confirmed against a real `openpyxl`-authored
+    /// sample; see `internal_docs/tables-0.16.0-a-design.md`'s A3 Addendum). Rejects a
+    /// blank header cell (cheap to check since the row is already being read, and a real,
+    /// easy-to-hit corrupt-file-producing case if let through) and a `ref_range` that
+    /// overlaps any table already on this sheet (real Excel's own restriction, and the one
+    /// deliberate exception to this project's "no speculative validation" default -- the
+    /// data needed is already loaded, and the failure mode is a genuinely broken file).
+    ///
+    /// The new `TableDef`'s `source_part` is left empty, which the writer already treats
+    /// as "no raw bytes to patch" (0.16.0-A2's own signal for a table that isn't backed by
+    /// any real ZIP part) -- 0.16.0-A3 extends that same signal at save time to mean
+    /// "synthesize this table's `xl/tables/tableN.xml`, its owning sheet's `.rels` entry,
+    /// `<tableParts>` entry, and `[Content_Types].xml` registration from scratch"
+    /// (`reader::render_table_xml`), rather than patching existing bytes the way
+    /// `apply_table_edits` does for an already-loaded table.
+    pub fn create_table_on_sheet(
+        &mut self,
+        key: &str,
+        ref_range: MergeRect,
+        name: Option<&str>,
+        display_name: Option<&str>,
+        style_name: Option<&str>,
+    ) -> Result<(), String> {
+        if name.is_none() && display_name.is_none() {
+            return Err("create_table requires name or display_name".to_string());
+        }
+        if let Some(existing) = self.tables.get(key)
+            && existing
+                .iter()
+                .any(|t| rects_overlap(t.ref_range, ref_range))
+        {
+            return Err("table range overlaps an existing table on this sheet".to_string());
+        }
+
+        let ((r1, c1), (_, c2)) = ref_range;
+        let header_row = self
+            .read_rect(key, r1, c1, r1, c2)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let mut columns = Vec::with_capacity(header_row.len());
+        for v in &header_row {
+            if matches!(v, Variant::Empty) {
+                return Err("table header row must have no blank cells".to_string());
+            }
+            columns.push(TableColumn {
+                id: None,
+                name: v.to_string(),
+                totals_row_function: None,
+                totals_row_label: None,
+                calculated_column_formula: None,
+            });
+        }
+
+        let resolved_display_name = display_name.or(name).expect("checked above").to_string();
+        let resolved_name = name.unwrap_or(&resolved_display_name).to_string();
+
+        let table = TableDef {
+            name: resolved_name,
+            display_name: resolved_display_name,
+            ref_range,
+            header_row_count: 1,
+            totals_row_count: 0,
+            totals_row_shown: false,
+            columns,
+            style_name: style_name.map(str::to_string),
+            auto_filter_ref: Some(ref_range),
+            source_part: String::new(),
+            pending_edits: Vec::new(),
+        };
+        self.tables.entry(key.to_string()).or_default().push(table);
+        Ok(())
+    }
+
     /// Shifts `key`'s hidden-row/column intervals for a structural edit
     /// (0.14.0-B Phase 3) -- only the axis actually being edited is
     /// touched, since inserting/deleting rows can't affect which COLUMNS
@@ -16855,6 +16932,101 @@ mod tests {
         assert!(err.contains("NoSuchColumn"));
         // All-or-nothing: the rename in the same call must not have partially applied.
         assert_eq!(vm.tables.get("sheet1").unwrap()[0].display_name, "Table1");
+    }
+
+    #[test]
+    fn create_table_on_sheet_derives_columns_from_the_header_row_and_defaults_names() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![
+                    Variant::Str("Name".to_string()),
+                    Variant::Str("Qty".to_string()),
+                ],
+                vec![Variant::Str("Widget".to_string()), Variant::Integer(5)],
+            ],
+        );
+        vm.create_table_on_sheet("sheet1", ((1, 1), (2, 2)), Some("Table1"), None, None)
+            .unwrap();
+        let t = &vm.tables.get("sheet1").unwrap()[0];
+        assert_eq!(t.name, "Table1");
+        // display_name defaults to name when only name is given.
+        assert_eq!(t.display_name, "Table1");
+        assert_eq!(t.ref_range, ((1, 1), (2, 2)));
+        assert_eq!(
+            t.columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Name", "Qty"]
+        );
+        assert_eq!(t.auto_filter_ref, Some(((1, 1), (2, 2))));
+        assert!(t.source_part.is_empty());
+        assert!(!t.totals_row_shown);
+    }
+
+    #[test]
+    fn create_table_on_sheet_defaults_name_from_display_name_when_only_display_name_given() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Str("Col".to_string())]]);
+        vm.create_table_on_sheet("sheet1", ((1, 1), (1, 1)), None, Some("Shown"), None)
+            .unwrap();
+        let t = &vm.tables.get("sheet1").unwrap()[0];
+        assert_eq!(t.name, "Shown");
+        assert_eq!(t.display_name, "Shown");
+    }
+
+    #[test]
+    fn create_table_on_sheet_rejects_when_neither_name_nor_display_name_is_given() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Str("Col".to_string())]]);
+        let err = vm
+            .create_table_on_sheet("sheet1", ((1, 1), (1, 1)), None, None, None)
+            .unwrap_err();
+        assert!(err.contains("name"));
+        assert!(vm.tables.get("sheet1").is_none_or(|t| t.is_empty()));
+    }
+
+    #[test]
+    fn create_table_on_sheet_rejects_a_blank_header_cell() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[vec![Variant::Str("Name".to_string()), Variant::Empty]],
+        );
+        let err = vm
+            .create_table_on_sheet("sheet1", ((1, 1), (2, 2)), Some("T"), None, None)
+            .unwrap_err();
+        assert!(err.contains("blank"));
+        assert!(vm.tables.get("sheet1").is_none_or(|t| t.is_empty()));
+    }
+
+    #[test]
+    fn create_table_on_sheet_rejects_a_ref_overlapping_an_existing_table() {
+        let mut vm = Vm::new();
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((1, 1), (4, 3)))]);
+        vm.write_rect("sheet1", (2, 5), &[vec![Variant::Str("X".to_string())]]);
+        let err = vm
+            .create_table_on_sheet("sheet1", ((2, 2), (2, 5)), Some("T2"), None, None)
+            .unwrap_err();
+        assert!(err.contains("overlap"));
+        // The would-be-overlapping table must not have been added.
+        assert_eq!(vm.tables.get("sheet1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn create_table_on_sheet_allows_a_non_overlapping_second_table_on_the_same_sheet() {
+        let mut vm = Vm::new();
+        vm.tables
+            .insert("sheet1".to_string(), vec![sample_table(((1, 1), (4, 3)))]);
+        vm.write_rect("sheet1", (1, 5), &[vec![Variant::Str("X".to_string())]]);
+        vm.create_table_on_sheet("sheet1", ((1, 5), (1, 5)), Some("T2"), None, None)
+            .unwrap();
+        assert_eq!(vm.tables.get("sheet1").unwrap().len(), 2);
     }
 
     #[test]
