@@ -1137,6 +1137,261 @@ class DataValidationAgreesWithOpenpyxl(unittest.TestCase):
             self.assertEqual(str(rules2[0].sqref), "E2")
 
 
+class AutoFilterFilteringAgreesWithOpenpyxl(unittest.TestCase):
+    # 0.16.0-B1: add_autofilter()/set_equality_filter()/set_custom_filter()/
+    # set_blank_filter()/set_top10_filter()/set_date_group_filter()/
+    # clear_filter_column()/remove_autofilter()/autofilter() -- distinct from
+    # AutoFilterSurvivesAnElixceeSave above (PR #29's byte-preservation fix for an
+    # ALREADY-PRESENT `<autoFilter>`); this class covers actually authoring filter
+    # criteria and the real row-hide evaluation they trigger. No real fixture has an
+    # active filter criterion of any kind (verified during scoping) -- every case here
+    # uses an openpyxl-authored synthetic fixture, the granted verification exception
+    # (see internal_docs/autofilter-0.16.0-b-design.md).
+
+    def test_equality_filter_hides_non_matching_rows_and_round_trips(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Name"])
+        for v in ["A", "B", "C", "A", "B"]:
+            ws.append([v])
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_eq_src.xlsx")
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            vm.add_autofilter("A1:A6")
+            vm.set_equality_filter(0, ["A", "B"])
+            self.assertEqual(vm.hidden_rows(), [4])  # row 4 = "C"
+
+            out = os.path.join(d, "af_eq_out.xlsx")
+            vm.save_workbook(out)
+            reopened = openpyxl.load_workbook(out)
+            self.assertIsNotNone(reopened)
+            xml = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            self.assertIn("<filterColumn", xml)
+            self.assertIn("<filters>", xml)
+
+            # Round trip + second save cycle: criteria and hidden state both stable.
+            vm2 = elixcee.load_workbook(out)
+            self.assertEqual(vm2.autofilter()["columns"][0]["values"], ["A", "B"])
+            self.assertEqual(vm2.hidden_rows(), [4])
+            out2 = os.path.join(d, "af_eq_out2.xlsx")
+            vm2.save_workbook(out2)
+            vm3 = elixcee.load_workbook(out2)
+            self.assertEqual(vm3.autofilter()["columns"][0]["values"], ["A", "B"])
+
+    def test_custom_filter_loads_real_openpyxl_criteria_and_combines_two_conditions_via_and(
+        self,
+    ):
+        from openpyxl.worksheet.filters import AutoFilter, CustomFilter, CustomFilters, FilterColumn
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Num"])
+        for v in [1, 5, 10, 15, 20]:
+            ws.append([v])
+        af = AutoFilter(ref="A1:A6")
+        af.filterColumn.append(
+            FilterColumn(
+                colId=0,
+                customFilters=CustomFilters(
+                    customFilter=[CustomFilter(operator="greaterThan", val="5")], _and=False
+                ),
+            )
+        )
+        ws.auto_filter = af
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_custom_src.xlsx")
+            wb.save(src)
+
+            vm = elixcee.load_workbook(src)
+            loaded = vm.autofilter()
+            self.assertEqual(loaded["columns"][0]["operator"], "greaterThan")
+            # Loading never auto-evaluates -- openpyxl itself never computed/wrote any
+            # <row hidden="1"> either, matching this milestone's "evaluate once, on an
+            # explicit call" design, not automatically on load.
+            self.assertEqual(vm.hidden_rows(), [])
+
+            vm.set_custom_filter(
+                0, "greaterThanOrEqual", "10", and_=True, operator2="lessThanOrEqual", value2="15"
+            )
+            self.assertEqual(vm.hidden_rows(), [2, 3, 6])  # 1, 5, 20 fail; 10, 15 pass
+
+            out = os.path.join(d, "af_custom_out.xlsx")
+            vm.save_workbook(out)
+            self.assertIsNotNone(openpyxl.load_workbook(out))
+            xml = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            self.assertIn('and="1"', xml)
+            self.assertIn('<customFilter operator="greaterThanOrEqual" val="10"', xml)
+            self.assertIn('<customFilter operator="lessThanOrEqual" val="15"', xml)
+
+    def test_blank_filter_hides_non_blank_rows(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["X"])
+        ws.append(["a"])
+        ws.append([None])
+        ws.append(["b"])
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_blank_src.xlsx")
+            wb.save(src)
+            vm = elixcee.load_workbook(src)
+            vm.add_autofilter("A1:A4")
+            vm.set_blank_filter(0)
+            self.assertEqual(vm.hidden_rows(), [2, 4])
+            out = os.path.join(d, "af_blank_out.xlsx")
+            vm.save_workbook(out)
+            self.assertIsNotNone(openpyxl.load_workbook(out))
+            xml = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            self.assertIn('<filters blank="1"', xml)
+
+    def test_top10_filter_keeps_the_highest_n_real_values(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["N"])
+        for v in [10, 20, 30, 40, 50]:
+            ws.append([v])
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_top10_src.xlsx")
+            wb.save(src)
+            vm = elixcee.load_workbook(src)
+            vm.add_autofilter("A1:A6")
+            vm.set_top10_filter(0, 2, top=True, percent=False)
+            self.assertEqual(vm.hidden_rows(), [2, 3, 4])  # only 40, 50 (rows 5, 6) stay
+            out = os.path.join(d, "af_top10_out.xlsx")
+            vm.save_workbook(out)
+            self.assertIsNotNone(openpyxl.load_workbook(out))
+            xml = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            self.assertIn("<top10", xml)
+
+    def test_date_group_filter_matches_only_the_specified_month(self):
+        import datetime
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["D"])
+        ws.append([datetime.date(2024, 1, 15)])
+        ws.append([datetime.date(2024, 2, 15)])
+        ws.append([datetime.date(2024, 1, 20)])
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_dategroup_src.xlsx")
+            wb.save(src)
+            vm = elixcee.load_workbook(src)
+            vm.add_autofilter("A1:A4")
+            vm.set_date_group_filter(0, year=2024, month=1, grouping="month")
+            self.assertEqual(vm.hidden_rows(), [3])  # the February row
+            out = os.path.join(d, "af_dategroup_out.xlsx")
+            vm.save_workbook(out)
+            self.assertIsNotNone(openpyxl.load_workbook(out))
+            xml = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            self.assertIn("<dateGroupItem", xml)
+
+    def test_an_unmodified_autofilter_criterion_survives_an_unrelated_save_byte_identical(
+        self,
+    ):
+        from openpyxl.worksheet.filters import AutoFilter, FilterColumn, Filters
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["X"])
+        ws.append(["a"])
+        af = AutoFilter(ref="A1:A2")
+        af.filterColumn.append(FilterColumn(colId=0, filters=Filters(filter=["a"])))
+        ws.auto_filter = af
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_preserve_src.xlsx")
+            wb.save(src)
+            xml_before = zipfile.ZipFile(src).read("xl/worksheets/sheet1.xml").decode()
+            af_before = xml_before[xml_before.index("<autoFilter") : xml_before.index("</autoFilter>") + 13]
+
+            vm = elixcee.load_workbook(src)
+            vm.set_cell(1, 2, "unrelated edit")  # B1, nowhere near the filter
+            out = os.path.join(d, "af_preserve_out.xlsx")
+            vm.save_workbook(out)
+            xml_after = zipfile.ZipFile(out).read("xl/worksheets/sheet1.xml").decode()
+            af_after = xml_after[xml_after.index("<autoFilter") : xml_after.index("</autoFilter>") + 13]
+            self.assertEqual(af_before, af_after)
+
+    def test_remove_autofilter_reveals_every_hidden_row(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Name"])
+        for v in ["A", "B", "C"]:
+            ws.append([v])
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_remove_src.xlsx")
+            wb.save(src)
+            vm = elixcee.load_workbook(src)
+            vm.add_autofilter("A1:A4")
+            vm.set_equality_filter(0, ["A"])
+            self.assertTrue(len(vm.hidden_rows()) > 0)
+            vm.remove_autofilter()
+            self.assertEqual(vm.hidden_rows(), [])
+            self.assertIsNone(vm.autofilter())
+
+    def test_clear_filter_column_leaves_other_columns_active(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["A", "B"])
+        ws.append(["x", 10])
+        ws.append(["y", 10])
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_clear_src.xlsx")
+            wb.save(src)
+            vm = elixcee.load_workbook(src)
+            vm.add_autofilter("A1:B3")
+            vm.set_equality_filter(0, ["x"])
+            vm.clear_filter_column(0)
+            self.assertEqual(vm.autofilter()["columns"], [])
+            self.assertEqual(vm.hidden_rows(), [])
+
+    def test_a_structural_edit_shift_is_persisted_to_disk_not_just_in_memory(self):
+        from openpyxl.worksheet.filters import AutoFilter, FilterColumn, Filters
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["X"])
+        ws.append(["a"])
+        af = AutoFilter(ref="A1:A2")
+        af.filterColumn.append(FilterColumn(colId=0, filters=Filters(filter=["a"])))
+        ws.auto_filter = af
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_shift_src.xlsx")
+            wb.save(src)
+            vm = elixcee.load_workbook(src)
+            # Inserting AT row 1 (the header's own row) shifts BOTH corners down, same
+            # real Excel semantics as any other range whose top edge is at-or-below the
+            # insert point -- A1:A2 becomes A2:A3, not A1:A3.
+            vm.insert_rows(1, amount=1)
+            self.assertEqual(vm.autofilter()["ref"], "A2:A3")
+            out = os.path.join(d, "af_shift_out.xlsx")
+            vm.save_workbook(out)
+            vm_reload = elixcee.load_workbook(out)
+            self.assertEqual(vm_reload.autofilter()["ref"], "A2:A3")
+
+            # Second save-reload cycle must not drift.
+            out2 = os.path.join(d, "af_shift_out2.xlsx")
+            vm_reload.save_workbook(out2)
+            vm_reload2 = elixcee.load_workbook(out2)
+            self.assertEqual(vm_reload2.autofilter()["ref"], "A2:A3")
+
+    def test_shared_mutation_safety_filtering_never_touches_cell_values(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["a", "b"])
+        ws.append(["x", "y"])
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "af_shared_src.xlsx")
+            wb.save(src)
+            vm = elixcee.load_workbook(src)
+            vm.add_autofilter("A1:B2")
+            vm.set_equality_filter(0, ["x"])
+            before = vm.get_range("A1:B2")
+            vm.set_equality_filter(0, ["nonexistent"])
+            after = vm.get_range("A1:B2")
+            self.assertEqual(before, after)
+
+
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):
     # Pins the PyO3-layer bound checks that have no Rust unit test of their
     # own (they live in #[cfg(feature = "python")] glue, not Vm-core logic) --

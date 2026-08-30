@@ -8,8 +8,8 @@ use crate::parser::ast::{
 };
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{
-    self, DataValidationRule, DataValidationSpec, SheetCell, TableColumn, TableDef, TableEditOp,
-    WorkbookSheet,
+    self, AutoFilterDef, DataValidationRule, DataValidationSpec, DateGroupItem, FilterColumn,
+    FilterCriteria, SheetCell, TableColumn, TableDef, TableEditOp, WorkbookSheet,
 };
 
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
@@ -1078,6 +1078,22 @@ pub struct Vm {
     /// workbook-wide part like `styles.xml`). Never cleared once set, matching
     /// `sheet_renames_since_load`'s own for-the-rest-of-this-`Vm`'s-life convention.
     pub(crate) data_validations_touched: HashSet<String>,
+    /// Standalone (worksheet-level) autofilter, keyed by sheet, at most one entry per
+    /// sheet (0.16.0-B) -- populated by `populate_from_sheets` from the reader's
+    /// `WorkbookSheet::autofilter`, then mutated by `add_autofilter_on_sheet`/
+    /// `set_filter_column_on_sheet`/`clear_filter_column_on_sheet`/
+    /// `remove_autofilter_on_sheet`. Same "mutate directly, no `pending_*` deferred
+    /// resolution" reasoning as `data_validations` -- an `<autoFilter>` is its own
+    /// independent record, never interned/shared. Shifts on any structural edit
+    /// (`shift_autofilters_for_structural_edit`) on both axes for `ref_range` (a 2D
+    /// rect, like `merged_ranges`/`tables`); a column-axis edit also renumbers each
+    /// `FilterColumn::col_offset` (relative to `ref_range`'s own left edge).
+    pub(crate) autofilters: HashMap<String, AutoFilterDef>,
+    /// Sheets whose `autofilters` entry has been touched (add/remove/set/clear-filter-
+    /// column, a real structural-edit shift, or a copy landing with no original XML of
+    /// its own) since load -- gates `build_xlsx_sheet`'s `<autoFilter>` emission exactly
+    /// like `data_validations_touched` gates `<dataValidations>`. Never cleared once set.
+    pub(crate) autofilters_touched: HashSet<String>,
     /// Per-sheet origin facts (0.10.0-A), keyed the same way as `merged_ranges`.
     /// Populated unconditionally by `populate_from_sheets` for every sheet that came from
     /// a real `WorkbookSheet` (unlike `merged_ranges`/`sheet_visibility`/
@@ -1196,6 +1212,8 @@ impl Vm {
             tables: HashMap::new(),
             data_validations: HashMap::new(),
             data_validations_touched: HashSet::new(),
+            autofilters: HashMap::new(),
+            autofilters_touched: HashSet::new(),
             worksheet_origins: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
@@ -1652,6 +1670,81 @@ impl Vm {
         self.data_validations.insert(key.to_string(), shifted);
     }
 
+    /// Shifts `key`'s standalone autofilter for a row/col structural edit (0.16.0-B) --
+    /// `ref_range` reuses `shift_table_rect`'s exact 2D-rect arithmetic, like `tables`/
+    /// `data_validations`' own `sqref` areas. A row-axis edit never touches `col_offset`
+    /// (rows don't affect which column a `FilterColumn` targets) -- only a column-axis
+    /// edit converts each offset to an absolute column (`old ref_range.c1 + col_offset`),
+    /// shifts it via `formula::shift_cell_coord` (single-index shape, matching
+    /// `row_heights`' own per-cell shift more than a range's), drops the column entirely
+    /// if its absolute position falls inside a deleted band, then reconverts against the
+    /// NEW `ref_range`'s left edge. Marks `dirty` only when a column's offset actually
+    /// changes numerically -- an edit outside `ref_range` shifts both the rect and every
+    /// column's absolute position by the same delta, leaving relative offsets (and thus
+    /// `raw_span`) untouched, same "don't reorder what didn't change" discipline as
+    /// `shift_data_validations_for_structural_edit`. The whole autofilter is dropped if
+    /// `ref_range` itself collapses to nothing.
+    fn shift_autofilters_for_structural_edit(
+        &mut self,
+        key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        let Some(af) = self.autofilters.get(key) else {
+            return;
+        };
+        let Some(new_ref) = shift_table_rect(af.ref_range, axis, edit) else {
+            self.autofilters.remove(key);
+            self.autofilters_touched.insert(key.to_string());
+            return;
+        };
+        let mut any_changed = new_ref != af.ref_range;
+        let old_c1 = af.ref_range.0.1;
+        let new_c1 = new_ref.0.1;
+        let mut dropped = false;
+        let columns: Vec<FilterColumn> = af
+            .columns
+            .iter()
+            .filter_map(|c| {
+                if axis == formula::RefAxis::Row {
+                    return Some(c.clone());
+                }
+                match formula::shift_cell_coord(old_c1 + c.col_offset, edit) {
+                    formula::CellShift::Unchanged => Some(c.clone()),
+                    formula::CellShift::Deleted => {
+                        dropped = true;
+                        None
+                    }
+                    formula::CellShift::Moved(new_abs) => {
+                        let new_offset = new_abs - new_c1;
+                        if new_offset == c.col_offset {
+                            Some(c.clone())
+                        } else {
+                            Some(FilterColumn {
+                                col_offset: new_offset,
+                                dirty: true,
+                                ..c.clone()
+                            })
+                        }
+                    }
+                }
+            })
+            .collect();
+        if dropped || columns.iter().any(|c| c.dirty) {
+            any_changed = true;
+        }
+        self.autofilters.insert(
+            key.to_string(),
+            AutoFilterDef {
+                ref_range: new_ref,
+                columns,
+            },
+        );
+        if any_changed {
+            self.autofilters_touched.insert(key.to_string());
+        }
+    }
+
     /// Creates a new table on `key` from scratch (0.16.0-A3). `ref_range`'s first (header)
     /// row must already hold the column names the new table will use -- this call never
     /// writes any cell value itself, matching real Excel/`openpyxl`'s own "Insert Table"
@@ -2095,6 +2188,7 @@ impl Vm {
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_autofilters_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_row_heights_for_structural_edit(key, edit);
@@ -2141,6 +2235,7 @@ impl Vm {
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_autofilters_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_row_heights_for_structural_edit(key, edit);
@@ -2184,6 +2279,7 @@ impl Vm {
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_autofilters_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_column_widths_for_structural_edit(key, edit);
@@ -2220,6 +2316,7 @@ impl Vm {
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_autofilters_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_column_widths_for_structural_edit(key, edit);
@@ -2805,6 +2902,179 @@ impl Vm {
         Ok(())
     }
 
+    /// Turns on a standalone autofilter over `ref_range` on `key` (0.16.0-B), with no
+    /// active column criteria yet -- matches real Excel's own state right after toggling
+    /// "Filter" on (a bare `<autoFilter ref="...">`, dropdown arrows shown, nothing
+    /// hidden). Replaces any existing autofilter on this sheet outright (real Excel only
+    /// ever has one at a time, per `CT_Worksheet`'s own `maxOccurs="1"`).
+    pub fn add_autofilter_on_sheet(&mut self, key: &str, ref_range: MergeRect) {
+        self.autofilters.insert(
+            key.to_string(),
+            AutoFilterDef {
+                ref_range,
+                columns: Vec::new(),
+            },
+        );
+        self.autofilters_touched.insert(key.to_string());
+    }
+
+    /// Turns off `key`'s autofilter entirely (0.16.0-B) -- a no-op if none exists.
+    /// Reveals every data row currently hidden inside the (former) `ref_range`, matching
+    /// real Excel's own "Clear Filter" reveal-everything behavior. This can theoretically
+    /// also reveal a row a caller hid for an unrelated reason if it happens to fall
+    /// inside `ref_range` -- `sheet_visibility`'s hidden-row intervals carry no
+    /// provenance (confirmed: nothing in this codebase distinguishes "hidden by filter"
+    /// from "hidden by an explicit hide call"), an accepted limitation matching this
+    /// project's minimalism bias, not fixed here.
+    pub fn remove_autofilter_on_sheet(&mut self, key: &str) {
+        let Some(af) = self.autofilters.remove(key) else {
+            return;
+        };
+        let ((r1, _), (r2, _)) = af.ref_range;
+        for row in (r1 + 1)..=r2 {
+            self.set_row_hidden_on_sheet(key, row, false);
+        }
+        self.autofilters_touched.insert(key.to_string());
+    }
+
+    /// Sets (replacing any existing criteria on the same column, matching real Excel's
+    /// own "one filter per column" model) or adds `col_offset`'s filter criteria on
+    /// `key`'s autofilter (0.16.0-B). `Err` if `key` has no autofilter yet, or
+    /// `col_offset` falls outside the autofilter's own `ref_range` width -- matches this
+    /// project's "reject a bad index rather than swallow it" bias
+    /// (`remove_data_validation_on_sheet`). Re-evaluates and rewrites the FULL hidden-row
+    /// set for every currently-active column together immediately afterward (see
+    /// `reapply_autofilter_hide_state`'s own doc comment for why this can never be
+    /// incremental).
+    pub fn set_filter_column_on_sheet(
+        &mut self,
+        key: &str,
+        col_offset: u32,
+        criteria: FilterCriteria,
+    ) -> Result<(), String> {
+        let af = self
+            .autofilters
+            .get_mut(key)
+            .ok_or_else(|| format!("sheet '{key}' has no autofilter"))?;
+        let width = af.ref_range.1.1 - af.ref_range.0.1;
+        if col_offset > width {
+            return Err(format!(
+                "col_offset {col_offset} out of range (autofilter ref spans {} column(s))",
+                width + 1
+            ));
+        }
+        match af.columns.iter_mut().find(|c| c.col_offset == col_offset) {
+            Some(existing) => {
+                existing.criteria = criteria;
+                existing.raw_span = None;
+                existing.dirty = false;
+            }
+            None => af.columns.push(FilterColumn {
+                col_offset,
+                hidden_button: false,
+                show_button: true,
+                criteria,
+                raw_span: None,
+                dirty: false,
+            }),
+        }
+        self.autofilters_touched.insert(key.to_string());
+        self.reapply_autofilter_hide_state(key);
+        Ok(())
+    }
+
+    /// Removes `col_offset`'s filter criteria on `key`'s autofilter (0.16.0-B), leaving
+    /// the autofilter itself (and its other columns' criteria) in place -- `ref_range`
+    /// stays exactly as-is; this only clears one column's own filtering. `Err` if `key`
+    /// has no autofilter; a `col_offset` with no active criteria is a silent no-op
+    /// (matches `set_row_hidden_on_sheet`'s own "unhiding an already-visible row is a
+    /// no-op" convention, not a hard error, since "make sure this column isn't filtered"
+    /// is a reasonable thing to call unconditionally).
+    pub fn clear_filter_column_on_sheet(
+        &mut self,
+        key: &str,
+        col_offset: u32,
+    ) -> Result<(), String> {
+        let af = self
+            .autofilters
+            .get_mut(key)
+            .ok_or_else(|| format!("sheet '{key}' has no autofilter"))?;
+        af.columns.retain(|c| c.col_offset != col_offset);
+        self.autofilters_touched.insert(key.to_string());
+        self.reapply_autofilter_hide_state(key);
+        Ok(())
+    }
+
+    /// Re-evaluates EVERY currently-active filter column on `key`'s autofilter against
+    /// real cell data and rewrites the full hidden-row set for `ref_range`'s data rows in
+    /// one pass (0.16.0-B). Never incremental: multiple `<filterColumn>`s combine via AND
+    /// (a row shows only if it passes every active column's criteria, confirmed against
+    /// real `CT_AutoFilter` semantics) -- toggling one column can only be judged
+    /// correctly by re-checking all of them together, or clearing one column could leave
+    /// hidden a row that only ever failed the CLEARED criterion. Evaluated ONCE,
+    /// immediately, matching `Stmt::RangeAutoFilter`'s own real one-shot VBA behavior --
+    /// never re-evaluated again afterward even if the underlying cell values later
+    /// change; call this again (indirectly, via another `set_filter_column_on_sheet`/
+    /// `clear_filter_column_on_sheet` call) if that's needed. `Top10` needs the full
+    /// column's values to compute a threshold before any row can be judged, so it's
+    /// precomputed in its own pass first, unlike every other criteria type (evaluable
+    /// per-row independently via `filter_column_matches`).
+    fn reapply_autofilter_hide_state(&mut self, key: &str) {
+        let Some(af) = self.autofilters.get(key).cloned() else {
+            return;
+        };
+        let ((r1, c1), (r2, _)) = af.ref_range;
+        let thresholds: HashMap<u32, f64> = af
+            .columns
+            .iter()
+            .filter_map(|col| {
+                let FilterCriteria::Top10 { top, percent, val } = &col.criteria else {
+                    return None;
+                };
+                let mut values: Vec<f64> = ((r1 + 1)..=r2)
+                    .filter_map(|row| to_f64(&self.get_cell(row, c1 + col.col_offset)).ok())
+                    .collect();
+                if values.is_empty() {
+                    return None;
+                }
+                values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let n = values.len();
+                let count = if *percent {
+                    (((*val / 100.0) * n as f64).ceil() as usize).max(1)
+                } else {
+                    (*val as usize).max(1)
+                }
+                .min(n);
+                let threshold = if *top {
+                    values[n - count]
+                } else {
+                    values[count - 1]
+                };
+                Some((col.col_offset, threshold))
+            })
+            .collect();
+
+        for row in (r1 + 1)..=r2 {
+            let passes = af.columns.iter().all(|col| {
+                let value = self.get_cell(row, c1 + col.col_offset);
+                if let FilterCriteria::Top10 { top, .. } = &col.criteria {
+                    return match (thresholds.get(&col.col_offset), to_f64(&value).ok()) {
+                        (Some(&thresh), Some(v)) => {
+                            if *top {
+                                v >= thresh
+                            } else {
+                                v <= thresh
+                            }
+                        }
+                        _ => false,
+                    };
+                }
+                filter_column_matches(&col.criteria, &value)
+            });
+            self.set_row_hidden_on_sheet(key, row, !passes);
+        }
+    }
+
     /// Every hidden row number on `key`, flattened from `hidden_rows`'
     /// interval-run storage into individual 1-based row numbers, sorted and
     /// deduplicated. Expanded, not interval-form -- a pathological
@@ -3386,6 +3656,8 @@ impl Vm {
             self.tables.remove(key);
             self.data_validations.remove(key);
             self.data_validations_touched.remove(key);
+            self.autofilters.remove(key);
+            self.autofilters_touched.remove(key);
         }
         Ok(())
     }
@@ -3404,14 +3676,15 @@ impl Vm {
         self.remove_sheet(&key, name)
     }
 
-    /// Renames a sheet, atomically re-keying all twenty-one lowercase-keyed per-sheet
+    /// Renames a sheet, atomically re-keying all twenty-three lowercase-keyed per-sheet
     /// `Vm` maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
     /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
     /// `cell_number_formats`, `pending_number_formats`, `pending_style_attrs`,
     /// `pending_style_copies` (0.15.0-C1), `pending_row_styles`, `pending_column_styles`
     /// (0.15.0-C2), `sheet_states`, `row_heights`, `column_widths`, `row_styles`,
     /// `column_styles`, `tables` (0.16.0-A1), `data_validations`,
-    /// `data_validations_touched` (0.16.0-C), `worksheet_origins`). Each gets one explicit
+    /// `data_validations_touched` (0.16.0-C), `autofilters`, `autofilters_touched`
+    /// (0.16.0-B), `worksheet_origins`). Each gets one explicit
     /// remove+insert line rather than a generic "walk every map" helper: the maps
     /// have different value types, a truly generic helper needs a macro or
     /// trait-object indirection to cross that, and with exactly one call site a
@@ -3548,6 +3821,12 @@ impl Vm {
         if self.data_validations_touched.remove(&old_key) {
             self.data_validations_touched.insert(new_key.clone());
         }
+        if let Some(v) = self.autofilters.remove(&old_key) {
+            self.autofilters.insert(new_key.clone(), v);
+        }
+        if self.autofilters_touched.remove(&old_key) {
+            self.autofilters_touched.insert(new_key.clone());
+        }
         // 11. `worksheet_origins` -- re-key AND update `original_display_name` to the
         //    NEW name; `save_xlsx_impl` reads this field (not the lowercased key) to
         //    write `<sheet name="...">` on save.
@@ -3674,6 +3953,12 @@ impl Vm {
             // looking for a (nonexistent) source fragment, which would silently drop it.
             self.data_validations.insert(new_key.clone(), v);
             self.data_validations_touched.insert(new_key.clone());
+        }
+        if let Some(v) = self.autofilters.get(&source_key).cloned() {
+            // Same reasoning as data_validations just above: the copy has no original
+            // worksheet XML of its own, so it must be marked touched unconditionally.
+            self.autofilters.insert(new_key.clone(), v);
+            self.autofilters_touched.insert(new_key.clone());
         }
         self.worksheet_origins.insert(
             new_key,
@@ -4600,6 +4885,9 @@ impl Vm {
             if !sheet_data.data_validations.is_empty() {
                 self.data_validations
                     .insert(key.clone(), sheet_data.data_validations.clone());
+            }
+            if let Some(af) = sheet_data.autofilter.clone() {
+                self.autofilters.insert(key.clone(), af);
             }
             self.worksheet_origins.insert(
                 key.clone(),
@@ -6981,6 +7269,98 @@ fn shift_table_rect(
     Some(match axis {
         formula::RefAxis::Row => ((new_low, c1), (new_high, c2)),
         formula::RefAxis::Col => ((r1, new_low), (r2, new_high)),
+    })
+}
+
+/// Evaluates one filter column's criteria against a real cell value (0.16.0-B).
+/// `Top10` is handled by the caller (`reapply_autofilter_hide_state`), which needs the
+/// FULL column's values to compute a threshold before any single row can be judged --
+/// unreachable here, every other variant is evaluable from one cell alone.
+fn filter_column_matches(criteria: &FilterCriteria, value: &Variant) -> bool {
+    match criteria {
+        FilterCriteria::Values(vals) => {
+            let text = vba_to_str(value);
+            vals.iter().any(|v| v == &text)
+        }
+        FilterCriteria::Blank => matches!(value, Variant::Empty) || vba_to_str(value).is_empty(),
+        FilterCriteria::Custom {
+            op1,
+            val1,
+            and,
+            op2,
+            val2,
+        } => {
+            let c1 = apply_filter_operator(op1, val1, value);
+            match (op2, val2) {
+                (Some(op2), Some(val2)) => {
+                    let c2 = apply_filter_operator(op2, val2, value);
+                    if *and { c1 && c2 } else { c1 || c2 }
+                }
+                _ => c1,
+            }
+        }
+        FilterCriteria::DateGroup(items) => date_group_matches(items, value),
+        FilterCriteria::Top10 { .. } => unreachable!(
+            "Top10 needs a precomputed threshold across the whole column, \
+             handled directly by reapply_autofilter_hide_state"
+        ),
+    }
+}
+
+/// Applies one `ST_FilterOperator` comparison. Tries numeric comparison first (the
+/// common case for `greaterThan`/`lessThan`/etc. against a real number column), falling
+/// back to text comparison when either side isn't a number -- matches real Excel's own
+/// behavior of comparing numeric filter criteria numerically and text criteria
+/// lexicographically.
+fn apply_filter_operator(op: &str, val: &str, cell: &Variant) -> bool {
+    if let (Ok(cell_n), Ok(val_n)) = (to_f64(cell), val.parse::<f64>()) {
+        return match op {
+            "equal" => cell_n == val_n,
+            "notEqual" => cell_n != val_n,
+            "greaterThan" => cell_n > val_n,
+            "greaterThanOrEqual" => cell_n >= val_n,
+            "lessThan" => cell_n < val_n,
+            "lessThanOrEqual" => cell_n <= val_n,
+            _ => false,
+        };
+    }
+    let cell_s = vba_to_str(cell);
+    match op {
+        "equal" => cell_s == val,
+        "notEqual" => cell_s != val,
+        "greaterThan" => cell_s.as_str() > val,
+        "greaterThanOrEqual" => cell_s.as_str() >= val,
+        "lessThan" => cell_s.as_str() < val,
+        "lessThanOrEqual" => cell_s.as_str() <= val,
+        _ => false,
+    }
+}
+
+/// Decomposes a cell's numeric serial value into calendar fields and checks it against
+/// every `DateGroupItem` (any match passes, each item's own absent fields are
+/// wildcards -- see `DateGroupItem`'s own doc comment). Reuses `elixcee_types::
+/// serial_to_ymd` (the same date-decomposition this project already uses for VBA's
+/// `Now()`/`DateSerial`) for the whole-day part; the sub-day fraction is decomposed into
+/// hour/minute/second directly, since `serial_to_ymd` only ever handled whole days.
+/// `false` for a non-numeric cell -- nothing to group.
+fn date_group_matches(items: &[DateGroupItem], value: &Variant) -> bool {
+    let Ok(serial) = to_f64(value) else {
+        return false;
+    };
+    let (y, m, d) = crate::types::serial_to_ymd(serial.floor() as i64);
+    let total_seconds = ((serial - serial.floor()) * 86400.0).round() as i64;
+    let (hh, mm, ss) = (
+        total_seconds / 3600,
+        (total_seconds % 3600) / 60,
+        total_seconds % 60,
+    );
+    items.iter().any(|g| {
+        g.year.is_none_or(|gy| gy == y)
+            && g.month.is_none_or(|gm| gm == m)
+            && g.day.is_none_or(|gd| gd == d)
+            && g.hour.is_none_or(|gh| i64::from(gh) == hh)
+            && g.minute.is_none_or(|gmi| i64::from(gmi) == mm)
+            && g.second.is_none_or(|gs| i64::from(gs) == ss)
     })
 }
 
@@ -11492,6 +11872,7 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                autofilter: None,
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -11512,6 +11893,7 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                autofilter: None,
             },
         ];
         let mut vm = Vm::new();
@@ -11579,6 +11961,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11607,6 +11990,7 @@ mod tests {
             column_styles: vec![(1, 2, 7u32)],
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11635,6 +12019,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -14175,6 +14560,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
 
         let mut vm = Vm::new();
@@ -14218,6 +14604,7 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                autofilter: None,
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -14238,6 +14625,7 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                autofilter: None,
             },
         ];
 
@@ -14280,6 +14668,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
 
         let mut vm = Vm::new();
@@ -15200,6 +15589,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -15307,6 +15697,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -15351,6 +15742,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -15384,6 +15776,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -17084,6 +17477,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: vec![sample_table(((1, 1), (4, 3)))],
             data_validations: Vec::new(),
+            autofilter: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -17113,6 +17507,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            autofilter: None,
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -17378,6 +17773,461 @@ mod tests {
         assert!(!vm.data_validations_touched.contains("sheet1"));
     }
 
+    fn bare_autofilter(ref_range: MergeRect) -> AutoFilterDef {
+        AutoFilterDef {
+            ref_range,
+            columns: Vec::new(),
+        }
+    }
+
+    fn values_filter_column(col_offset: u32, values: &[&str]) -> FilterColumn {
+        FilterColumn {
+            col_offset,
+            hidden_button: false,
+            show_button: true,
+            criteria: FilterCriteria::Values(values.iter().map(|s| s.to_string()).collect()),
+            raw_span: None,
+            dirty: false,
+        }
+    }
+
+    #[test]
+    fn add_autofilter_on_sheet_replaces_any_existing_one() {
+        let mut vm = Vm::new();
+        vm.add_autofilter_on_sheet("sheet1", ((1, 1), (10, 3)));
+        vm.add_autofilter_on_sheet("sheet1", ((1, 1), (20, 5)));
+        let af = vm.autofilters.get("sheet1").unwrap();
+        assert_eq!(af.ref_range, ((1, 1), (20, 5)));
+        assert!(af.columns.is_empty());
+        assert!(vm.autofilters_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn remove_autofilter_on_sheet_is_a_no_op_when_none_exists() {
+        let mut vm = Vm::new();
+        vm.remove_autofilter_on_sheet("sheet1");
+        assert!(!vm.autofilters_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn remove_autofilter_on_sheet_reveals_every_hidden_data_row_in_range() {
+        let mut vm = Vm::new();
+        vm.autofilters
+            .insert("sheet1".to_string(), bare_autofilter(((1, 1), (5, 1))));
+        for row in 2..=5 {
+            vm.set_row_hidden_on_sheet("sheet1", row, true);
+        }
+        vm.remove_autofilter_on_sheet("sheet1");
+        assert!(!vm.autofilters.contains_key("sheet1"));
+        assert!(vm.hidden_rows_on_sheet("sheet1").is_empty());
+    }
+
+    #[test]
+    fn set_filter_column_on_sheet_errors_without_an_autofilter() {
+        let mut vm = Vm::new();
+        assert!(
+            vm.set_filter_column_on_sheet("sheet1", 0, FilterCriteria::Blank)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn set_filter_column_on_sheet_errors_on_an_out_of_range_offset() {
+        let mut vm = Vm::new();
+        vm.add_autofilter_on_sheet("sheet1", ((1, 1), (5, 3))); // 3 columns: offsets 0-2
+        assert!(
+            vm.set_filter_column_on_sheet("sheet1", 3, FilterCriteria::Blank)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn set_filter_column_on_sheet_replaces_existing_criteria_on_the_same_column() {
+        let mut vm = Vm::new();
+        vm.add_autofilter_on_sheet("sheet1", ((1, 1), (5, 1)));
+        vm.set_filter_column_on_sheet("sheet1", 0, FilterCriteria::Blank)
+            .unwrap();
+        vm.set_filter_column_on_sheet("sheet1", 0, FilterCriteria::Values(vec!["X".to_string()]))
+            .unwrap();
+        let af = vm.autofilters.get("sheet1").unwrap();
+        assert_eq!(af.columns.len(), 1);
+        assert_eq!(
+            af.columns[0].criteria,
+            FilterCriteria::Values(vec!["X".to_string()])
+        );
+    }
+
+    #[test]
+    fn set_equality_filter_hides_rows_that_do_not_match_any_value() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet1");
+        for (row, val) in [(1, "Header"), (2, "A"), (3, "B"), (4, "C")] {
+            vm.cells_mut().insert(
+                (row, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Str(val.to_string()),
+                },
+            );
+        }
+        vm.add_autofilter_on_sheet("sheet1", ((1, 1), (4, 1)));
+        vm.set_filter_column_on_sheet(
+            "sheet1",
+            0,
+            FilterCriteria::Values(vec!["A".to_string(), "C".to_string()]),
+        )
+        .unwrap();
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![3]);
+    }
+
+    #[test]
+    fn reapply_autofilter_hide_state_combines_columns_via_and() {
+        // Two columns both active: col0 keeps "A"/"B", col1 keeps values > 5. A row
+        // must pass BOTH to stay visible.
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet1");
+        let rows: [(&str, f64); 4] = [("A", 10.0), ("A", 1.0), ("B", 10.0), ("C", 10.0)];
+        for (i, (name, num)) in rows.iter().enumerate() {
+            let row = i as u32 + 2;
+            vm.cells_mut().insert(
+                (row, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Str(name.to_string()),
+                },
+            );
+            vm.cells_mut().insert(
+                (row, 2),
+                CellContent {
+                    formula: None,
+                    value: Variant::Float(*num),
+                },
+            );
+        }
+        vm.add_autofilter_on_sheet("sheet1", ((1, 1), (5, 2)));
+        vm.set_filter_column_on_sheet(
+            "sheet1",
+            0,
+            FilterCriteria::Values(vec!["A".to_string(), "B".to_string()]),
+        )
+        .unwrap();
+        vm.set_filter_column_on_sheet(
+            "sheet1",
+            1,
+            FilterCriteria::Custom {
+                op1: "greaterThan".to_string(),
+                val1: "5".to_string(),
+                and: true,
+                op2: None,
+                val2: None,
+            },
+        )
+        .unwrap();
+        // Row 2 (A, 10) passes both; row 3 (A, 1) fails col1; row 4 (B, 10) passes
+        // both; row 5 (C, 10) fails col0.
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![3, 5]);
+
+        // Clearing col1's filter must reveal row 3 (which only ever failed col1),
+        // while row 5 stays hidden (still fails col0) -- proves this is a full
+        // re-evaluation, not an incremental per-column toggle.
+        vm.clear_filter_column_on_sheet("sheet1", 1).unwrap();
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![5]);
+    }
+
+    #[test]
+    fn filter_column_matches_values_is_exact_text_match_against_any_entry() {
+        let c = FilterCriteria::Values(vec!["A".to_string(), "B".to_string()]);
+        assert!(filter_column_matches(&c, &Variant::Str("A".to_string())));
+        assert!(!filter_column_matches(&c, &Variant::Str("C".to_string())));
+    }
+
+    #[test]
+    fn filter_column_matches_blank_accepts_empty_and_empty_string() {
+        assert!(filter_column_matches(
+            &FilterCriteria::Blank,
+            &Variant::Empty
+        ));
+        assert!(filter_column_matches(
+            &FilterCriteria::Blank,
+            &Variant::Str(String::new())
+        ));
+        assert!(!filter_column_matches(
+            &FilterCriteria::Blank,
+            &Variant::Str("x".to_string())
+        ));
+    }
+
+    #[test]
+    fn filter_column_matches_custom_numeric_comparison() {
+        let c = FilterCriteria::Custom {
+            op1: "greaterThanOrEqual".to_string(),
+            val1: "10".to_string(),
+            and: true,
+            op2: None,
+            val2: None,
+        };
+        assert!(filter_column_matches(&c, &Variant::Float(10.0)));
+        assert!(!filter_column_matches(&c, &Variant::Float(9.0)));
+    }
+
+    #[test]
+    fn filter_column_matches_custom_falls_back_to_text_when_not_numeric() {
+        let c = FilterCriteria::Custom {
+            op1: "equal".to_string(),
+            val1: "apple".to_string(),
+            and: true,
+            op2: None,
+            val2: None,
+        };
+        assert!(filter_column_matches(
+            &c,
+            &Variant::Str("apple".to_string())
+        ));
+        assert!(!filter_column_matches(
+            &c,
+            &Variant::Str("pear".to_string())
+        ));
+    }
+
+    #[test]
+    fn filter_column_matches_custom_or_combination() {
+        let c = FilterCriteria::Custom {
+            op1: "equal".to_string(),
+            val1: "1".to_string(),
+            and: false,
+            op2: Some("equal".to_string()),
+            val2: Some("5".to_string()),
+        };
+        assert!(filter_column_matches(&c, &Variant::Float(1.0)));
+        assert!(filter_column_matches(&c, &Variant::Float(5.0)));
+        assert!(!filter_column_matches(&c, &Variant::Float(3.0)));
+    }
+
+    #[test]
+    fn filter_column_matches_date_group_wildcards_absent_fields() {
+        // month=1 alone matches any January, any year.
+        let c = FilterCriteria::DateGroup(vec![DateGroupItem {
+            year: None,
+            month: Some(1),
+            day: None,
+            hour: None,
+            minute: None,
+            second: None,
+            date_time_grouping: "month".to_string(),
+        }]);
+        // Serial 45292 = 2024-01-15 (a real Excel serial date).
+        assert!(filter_column_matches(&c, &Variant::Float(45292.0)));
+        // Serial 45323 = 2024-02-15 -- wrong month.
+        assert!(!filter_column_matches(&c, &Variant::Float(45323.0)));
+    }
+
+    #[test]
+    fn reapply_autofilter_hide_state_top10_keeps_the_highest_n_values() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet1");
+        for (i, val) in [10.0, 20.0, 30.0, 40.0, 50.0].iter().enumerate() {
+            vm.cells_mut().insert(
+                (i as u32 + 2, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Float(*val),
+                },
+            );
+        }
+        vm.add_autofilter_on_sheet("sheet1", ((1, 1), (6, 1)));
+        vm.set_filter_column_on_sheet(
+            "sheet1",
+            0,
+            FilterCriteria::Top10 {
+                top: true,
+                percent: false,
+                val: 2.0,
+            },
+        )
+        .unwrap();
+        // Only the top 2 values (40, 50 -- rows 5, 6) stay visible.
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn shift_autofilters_for_structural_edit_row_insert_shifts_ref_not_col_offset() {
+        let mut vm = Vm::new();
+        vm.autofilters.insert(
+            "sheet1".to_string(),
+            AutoFilterDef {
+                ref_range: ((1, 1), (10, 3)),
+                columns: vec![values_filter_column(1, &["X"])],
+            },
+        );
+        vm.shift_autofilters_for_structural_edit(
+            "sheet1",
+            formula::RefAxis::Row,
+            formula::StructuralEdit::Insert { at: 5, count: 2 },
+        );
+        let af = vm.autofilters.get("sheet1").unwrap();
+        assert_eq!(af.ref_range, ((1, 1), (12, 3)));
+        assert_eq!(af.columns[0].col_offset, 1);
+        assert!(!af.columns[0].dirty);
+        assert!(vm.autofilters_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn shift_autofilters_for_structural_edit_col_insert_before_range_preserves_relative_offset() {
+        // Insert entirely BEFORE the autofilter's own range: both ref corners and
+        // every column's absolute position shift by the same delta, so relative
+        // col_offset values must come out unchanged.
+        let mut vm = Vm::new();
+        vm.autofilters.insert(
+            "sheet1".to_string(),
+            AutoFilterDef {
+                ref_range: ((1, 5), (10, 7)),
+                columns: vec![values_filter_column(1, &["X"])],
+            },
+        );
+        vm.shift_autofilters_for_structural_edit(
+            "sheet1",
+            formula::RefAxis::Col,
+            formula::StructuralEdit::Insert { at: 1, count: 2 },
+        );
+        let af = vm.autofilters.get("sheet1").unwrap();
+        assert_eq!(af.ref_range, ((1, 7), (10, 9)));
+        assert_eq!(af.columns[0].col_offset, 1);
+    }
+
+    #[test]
+    fn shift_autofilters_for_structural_edit_col_insert_inside_range_renumbers_offset() {
+        // Insert a column INSIDE the range, before the filtered column: ref's right
+        // edge grows, the filtered column's absolute position moves right, so its
+        // offset relative to the (unchanged) left edge must grow by the insert count.
+        let mut vm = Vm::new();
+        vm.autofilters.insert(
+            "sheet1".to_string(),
+            AutoFilterDef {
+                ref_range: ((1, 1), (10, 3)),
+                columns: vec![values_filter_column(2, &["X"])], // absolute col 3
+            },
+        );
+        vm.shift_autofilters_for_structural_edit(
+            "sheet1",
+            formula::RefAxis::Col,
+            formula::StructuralEdit::Insert { at: 2, count: 1 },
+        );
+        let af = vm.autofilters.get("sheet1").unwrap();
+        assert_eq!(af.ref_range, ((1, 1), (10, 4)));
+        assert_eq!(af.columns[0].col_offset, 3); // absolute col 4, ref c1 still 1
+        assert!(af.columns[0].dirty);
+    }
+
+    #[test]
+    fn shift_autofilters_for_structural_edit_col_delete_drops_the_targeted_column() {
+        let mut vm = Vm::new();
+        vm.autofilters.insert(
+            "sheet1".to_string(),
+            AutoFilterDef {
+                ref_range: ((1, 1), (10, 3)),
+                columns: vec![
+                    values_filter_column(0, &["X"]), // absolute col 1
+                    values_filter_column(1, &["Y"]), // absolute col 2 -- deleted
+                ],
+            },
+        );
+        vm.shift_autofilters_for_structural_edit(
+            "sheet1",
+            formula::RefAxis::Col,
+            formula::StructuralEdit::Delete { at: 2, count: 1 },
+        );
+        let af = vm.autofilters.get("sheet1").unwrap();
+        assert_eq!(af.columns.len(), 1);
+        assert_eq!(af.columns[0].col_offset, 0);
+    }
+
+    #[test]
+    fn shift_autofilters_for_structural_edit_drops_the_whole_autofilter_when_ref_collapses() {
+        let mut vm = Vm::new();
+        vm.autofilters
+            .insert("sheet1".to_string(), bare_autofilter(((5, 1), (5, 3))));
+        vm.shift_autofilters_for_structural_edit(
+            "sheet1",
+            formula::RefAxis::Row,
+            formula::StructuralEdit::Delete { at: 5, count: 1 },
+        );
+        assert!(!vm.autofilters.contains_key("sheet1"));
+        assert!(vm.autofilters_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn remove_sheet_clears_autofilters() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet1");
+        vm.ensure_sheet("Sheet2");
+        vm.active_sheet = "sheet2".to_string();
+        vm.autofilters
+            .insert("sheet1".to_string(), bare_autofilter(((1, 1), (5, 1))));
+        vm.autofilters_touched.insert("sheet1".to_string());
+        vm.delete_sheet("Sheet1").unwrap();
+        assert!(!vm.autofilters.contains_key("sheet1"));
+        assert!(!vm.autofilters_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn rename_sheet_rekeys_autofilters() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet1");
+        vm.autofilters
+            .insert("sheet1".to_string(), bare_autofilter(((1, 1), (5, 1))));
+        vm.autofilters_touched.insert("sheet1".to_string());
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+        assert!(!vm.autofilters.contains_key("sheet1"));
+        assert!(vm.autofilters.contains_key("renamed"));
+        assert!(vm.autofilters_touched.contains("renamed"));
+    }
+
+    #[test]
+    fn copy_sheet_copies_autofilter_and_marks_touched() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Sheet1");
+        vm.autofilters
+            .insert("sheet1".to_string(), bare_autofilter(((1, 1), (5, 1))));
+        vm.copy_sheet("Sheet1", "Copy").unwrap();
+        assert!(vm.autofilters.contains_key("copy"));
+        assert!(vm.autofilters_touched.contains("copy"));
+    }
+
+    #[test]
+    fn populate_from_sheets_threads_autofilter_into_the_vm() {
+        let mut sheet = WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells: HashMap::new(),
+            sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
+            sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
+            tables: Vec::new(),
+            data_validations: Vec::new(),
+            autofilter: Some(bare_autofilter(((1, 1), (5, 1)))),
+        };
+        sheet.autofilter.as_mut().unwrap().ref_range = ((1, 1), (5, 1));
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(vec![sheet]);
+        assert_eq!(
+            vm.autofilters.get("sheet1").unwrap().ref_range,
+            ((1, 1), (5, 1))
+        );
+        // Freshly loaded data is never pre-marked touched -- an untouched sheet must
+        // pass through its original fragment byte-identical.
+        assert!(!vm.autofilters_touched.contains("sheet1"));
+    }
+
     #[test]
     fn populate_from_sheets_threads_data_validations_into_the_vm() {
         let mut sheet = WorkbookSheet {
@@ -17399,6 +18249,7 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: vec![sample_dv_rule(vec![((1, 1), (1, 1))])],
+            autofilter: None,
         };
         sheet.data_validations[0].dirty = false;
         let mut vm = Vm::new();
