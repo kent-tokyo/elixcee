@@ -1529,6 +1529,62 @@ actual value.
   in the ON-DISK file, not just the in-memory `data_validations()` read, closing the same
   class of gap 0.16.0-A1's own table `ref` shift needed a regression test for.
 
+### Root crate: `create_table` — 0.16.0-A3, Tables' third and final slice
+
+Completes `0.16.0-A` (Tables). Creates a brand-new table from nothing — the largest slice
+of the three, since (unlike A1/A2, which only ever read or patched an *existing*
+`xl/tables/tableN.xml`) it has to build the table's own part, its owning sheet's
+relationship, and the worksheet's `<tableParts>` reference from scratch, none of which
+had any code path in this project before this phase.
+
+- `vm.create_table(ref, sheet=None, name=None, display_name=None, style_name=None)`.
+  Column names are read from `ref`'s existing header-row cell text, never written —
+  matching real Excel/`openpyxl`'s own "Insert Table" behavior over pre-existing headers,
+  confirmed by inspecting a real `openpyxl`-authored table directly rather than assumed.
+  At least one of `name`/`display_name` is required; the omitted one defaults to the
+  other. Rejects a blank header cell and a `ref` that overlaps any table already on the
+  sheet — the one deliberate exception to this project's "no speculative validation"
+  default, since the data is already being read and the failure mode is a genuinely
+  broken file, not a speculative one.
+- **Four artifacts synthesized together, two of them genuinely new code paths**: a fresh
+  `xl/tables/tableN.xml` (numbered via the same never-reuse-a-number scan
+  `plan_worksheet_output` already uses for worksheet parts), a `[Content_Types].xml`
+  `Override` registration, an entry in the owning sheet's `<tableParts>` (merged with
+  whatever's already there — 0 to many existing tables), and — the first worksheet-level
+  `.rels` *write* path this project has ever needed — either a brand-new `.rels` file (a
+  sheet gaining relationship-backed content for the first time) or one more
+  `<Relationship>` inserted into an existing one, with a fresh non-colliding `rId`. The
+  relationship `Target` is relative (`../tables/tableN.xml`), matching this project's own
+  existing convention throughout, not `openpyxl`'s own equally-valid absolute-path form.
+- A freshly-created table's XML is fully serialized from the `TableDef` struct (safe only
+  here, unlike `edit_table`'s surgical patching — a brand-new table has no existing
+  unknown bytes to lose). Omits the Microsoft `xr:uid`/`xr3:uid` extension GUIDs entirely
+  — confirmed safely omittable by inspecting a real `openpyxl`-authored table, which ships
+  to real users without them. Includes a bare, criteria-free `<autoFilter ref="...">`
+  matching the table's own `ref` — also confirmed against the same real sample (`openpyxl`
+  always includes one even with no filter set); actual filter-criteria authoring remains
+  0.16.0-B's job, standalone or table-nested.
+- **Real correctness risk found and fixed during implementation, not merely disclosed**:
+  naively checking "did this sheet's `.rels` survive" against the live, already-mutated
+  passthrough list would have let a newly-synthesized `.rels` (added for the new table)
+  retroactively "revive" restoration of that same sheet's `drawing`/`legacyDrawing`/
+  pre-existing-`tableParts` fragments even when the ORIGINAL source never had a `.rels`
+  for those to safely reference — exactly the dangling-`r:id` failure mode that gate
+  exists to prevent. Fixed by snapshotting which `.rels` parts genuinely survived from the
+  source *before* any new-table synthesis runs, and gating on that snapshot instead of the
+  live, post-mutation state.
+- No structured-reference or calculated-column authoring (milestone-wide exclusion,
+  unchanged) — `create_table` never accepts a `columns=` list or writes any cell value.
+- Verified against a real `openpyxl`-authored from-scratch table (for the exact XML shape
+  of all four artifacts, before writing this writer, not after) and against
+  `fixture3_table_validation_conditional.xlsm` for the merge case: creating a second table
+  on a sheet that already has one leaves the original `table1.xml` byte-identical, adds a
+  second `<Relationship>`/`<tablePart>` alongside the first (each with distinct ids, no
+  collision), and both tables survive a second save-reload cycle byte-identical.
+  `openpyxl` reopens every result — from-scratch and merge alike — with zero warnings.
+  Overlap rejection, blank-header-cell rejection, and the missing-name-and-display-name
+  rejection are all exercised against the real fixture, not just synthetic state.
+
 ## [0.10.1] - 2026-08-24
 
 Root `elixcee` (Rust crate + Python package) only: `0.10.0` → `0.10.1`, a single targeted

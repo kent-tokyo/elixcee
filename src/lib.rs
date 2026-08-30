@@ -1857,11 +1857,11 @@ impl PyVm {
     /// unknown column name in *remove_columns* rejects the entire call, not just that
     /// one column.
     ///
-    /// Not supported: creating a new table (0.16.0-A3, separate future phase),
-    /// structured references or calculated-column authoring (out of scope for all of
-    /// 0.16.0-A — an existing calculated column's formula text is left untouched),
-    /// mid-table column insertion, or removing/renaming the table's own ``name``
-    /// (only ``display_name`` is editable).
+    /// Not supported: structured references or calculated-column authoring (out of
+    /// scope for all of 0.16.0-A — an existing calculated column's formula text is left
+    /// untouched), mid-table column insertion, or removing/renaming the table's own
+    /// ``name`` (only ``display_name`` is editable). See :meth:`create_table` for
+    /// creating a new table.
     ///
     /// Parameters
     /// ----------
@@ -1919,6 +1919,61 @@ impl PyVm {
                 &add_columns.unwrap_or_default(),
                 &remove_columns.unwrap_or_default(),
             )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Creates a new table from scratch (0.16.0-A3). *ref*'s first (header) row must
+    /// already hold the column names the new table will use — this call never writes
+    /// any cell value itself, matching real Excel/``openpyxl``'s own "Insert Table"
+    /// behavior over pre-existing headers. No ``columns=`` parameter: header text is
+    /// read from the sheet, not supplied separately.
+    ///
+    /// At least one of *name*/*display_name* is required; the one you omit defaults to
+    /// the other (real Excel allows them to differ — *display_name* is what structured
+    /// references and the UI key on, *name* is a legacy identifier usually identical to
+    /// it). *style_name* is left unset (no table style) if omitted.
+    ///
+    /// Not supported: structured references or calculated-column authoring (out of
+    /// scope for all of 0.16.0-A), AutoFilter criteria (a bare, criteria-free
+    /// ``<autoFilter>`` matching *ref* is always included structurally, matching real
+    /// Excel/``openpyxl``'s own table shape — actual filtering is 0.16.0-B), or
+    /// workbook-wide ``display_name`` uniqueness validation (not checked, matching
+    /// :meth:`rename_sheet`'s own pre-existing lack of name-rule validation).
+    ///
+    /// Parameters
+    /// ----------
+    /// ref:
+    ///     The table's full bounding range, header row included, e.g. ``"A1:C4"``.
+    /// sheet:
+    ///     Sheet to create the table on. Defaults to the active sheet.
+    /// name:
+    ///     Legacy table identifier. Defaults to *display_name* if omitted.
+    /// display_name:
+    ///     The name structured references and the UI use. Defaults to *name* if
+    ///     omitted.
+    /// style_name:
+    ///     Table style name, or ``None`` for no style.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown, *ref* is a bad address, neither
+    /// *name* nor *display_name* is given, *ref* overlaps an existing table on the same
+    /// sheet, or any cell in *ref*'s header row is blank.
+    #[pyo3(signature = (r#ref, sheet = None, name = None, display_name = None, style_name = None))]
+    fn create_table(
+        &mut self,
+        r#ref: &str,
+        sheet: Option<&str>,
+        name: Option<&str>,
+        display_name: Option<&str>,
+        style_name: Option<&str>,
+    ) -> PyResult<()> {
+        let ref_range =
+            validate_range_addr(r#ref).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .create_table_on_sheet(&key, ref_range, name, display_name, style_name)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
@@ -2075,6 +2130,7 @@ impl PyVm {
         }
         Ok(list.into_any().unbind())
     }
+
     /// Every hidden row number on a sheet, as a sorted list of 1-based row
     /// numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.
     ///
@@ -2376,6 +2432,17 @@ struct WorksheetOutputPlan {
 /// path never re-derives a number from a name at all, only new-sheet allocation does).
 fn parse_sheet_part_number(name: &str) -> Option<u32> {
     name.strip_prefix("xl/worksheets/sheet")?
+        .strip_suffix(".xml")?
+        .parse()
+        .ok()
+}
+
+/// Same shape as `parse_sheet_part_number`, for `xl/tables/tableN.xml` (0.16.0-A3) —
+/// `create_table`'s freshly-minted table parts must never collide with a number that
+/// already exists in the source, mirroring the sheet-numbering policy's own "never reuse
+/// a number that ever existed" rule (see `plan_worksheet_output`'s own doc comment).
+fn parse_table_part_number(name: &str) -> Option<u32> {
+    name.strip_prefix("xl/tables/table")?
         .strip_suffix(".xml")?
         .parse()
         .ok()
@@ -2788,6 +2855,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     // brand-new sheet, which pruning's own "reachable elsewhere" analysis cannot rule out
     // for parts this writer has never modeled at all.
     let mut reserved_sheet_part_numbers: Vec<u32> = Vec::new();
+    // Same policy as `reserved_sheet_part_numbers`, for `xl/tables/tableN.xml`
+    // (0.16.0-A3's `create_table`) -- empty for a from-scratch `Vm` (nothing to reserve).
+    let mut reserved_table_part_numbers: Vec<u32> = Vec::new();
 
     if let Some(source_path) = passthrough_source {
         let raw_entries = reader::read_raw_zip_entries(source_path)?;
@@ -2799,6 +2869,10 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         reserved_sheet_part_numbers = raw_entries
             .keys()
             .filter_map(|name| parse_sheet_part_number(name))
+            .collect();
+        reserved_table_part_numbers = raw_entries
+            .keys()
+            .filter_map(|name| parse_table_part_number(name))
             .collect();
 
         for (sheet_key, origin) in &vm.worksheet_origins {
@@ -2935,6 +3009,100 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         &vm.worksheet_origins,
         &reserved_sheet_part_numbers,
     );
+
+    // Snapshot of which `.rels` parts genuinely survived from the SOURCE, taken before
+    // 0.16.0-A3's new-table synthesis below mutates `passthrough` -- `rels_survived`
+    // (below, per sheet) must consult this, not live `passthrough`, or synthesizing a
+    // worksheet's FIRST-EVER `.rels` for a brand-new table would also flip on
+    // `drawing`/`legacyDrawing`/pre-existing-`tableParts` restoration for that same sheet
+    // even when the ORIGINAL source had no `.rels` for those to safely reference (a
+    // malformed-source edge case, but exactly the dangling-`r:id` failure mode
+    // `rels_survived`'s own gate exists to prevent).
+    let originally_survived_rels: std::collections::HashSet<String> =
+        passthrough.iter().map(|(name, _)| name.clone()).collect();
+
+    // 0.16.0-A3: `create_table` leaves a new `TableDef` with `source_part` empty -- the
+    // signal 0.16.0-A2 already established for "no raw bytes to patch". Assign each one a
+    // fresh `xl/tables/tableN.xml` part number here (walking `worksheet_plans`' own stable
+    // order, then each sheet's table `Vec` in order -- deterministic, same policy as sheet
+    // numbering), synthesize its full XML from scratch (`reader::render_table_xml` -- safe
+    // only because a brand-new table has no existing unknown bytes to lose), register its
+    // content type, and wire up its owning sheet's worksheet `.rels`/`<tableParts>` -- two
+    // genuinely new code paths (no worksheet-level `.rels` WRITE path existed anywhere in
+    // this project before; `<tableParts>` previously only ever passed an EXISTING block
+    // through unconditionally, never synthesized or merged one).
+    let mut next_fresh_table_n = reserved_table_part_numbers.into_iter().max().unwrap_or(0);
+    let mut new_table_parts_by_sheet: HashMap<String, Vec<String>> = HashMap::new();
+    for plan in &worksheet_plans {
+        let Some(tables) = vm.tables.get(&plan.sheet_key) else {
+            continue;
+        };
+        for table in tables.iter().filter(|t| t.source_part.is_empty()) {
+            next_fresh_table_n += 1;
+            let table_part_name = format!("xl/tables/table{next_fresh_table_n}.xml");
+            passthrough.push((
+                table_part_name.clone(),
+                reader::render_table_xml(table, next_fresh_table_n).into_bytes(),
+            ));
+            carried_overrides.push((
+                format!("/{table_part_name}"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml".to_string(),
+            ));
+
+            // Relative to the `.rels` file's own directory (`xl/worksheets/_rels/`),
+            // matching this project's existing convention for every other relationship
+            // this writer emits (`build_xlsx_workbook_rels`, `plan_worksheet_output`) --
+            // not `openpyxl`'s own absolute-path convention (`/xl/tables/tableN.xml`),
+            // which is equally valid OPC but inconsistent with what's already here.
+            let target = format!("../tables/table{next_fresh_table_n}.xml");
+            let existing_rels_idx = passthrough
+                .iter()
+                .position(|(name, _)| name == &plan.output_rels_name);
+            let existing_rels_xml =
+                existing_rels_idx.map(|i| String::from_utf8_lossy(&passthrough[i].1).into_owned());
+            let next_rid = existing_rels_xml
+                .as_deref()
+                .map(reader::relationship_ids)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|id| id.strip_prefix("rId").and_then(|n| n.parse::<u32>().ok()))
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let new_rel = format!(
+                "<Relationship Id=\"rId{next_rid}\" \
+                 Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\" \
+                 Target=\"{target}\"/>"
+            );
+            let new_rels_bytes = match &existing_rels_xml {
+                Some(xml) => reader::insert_before_close(xml, &new_rel).into_bytes(),
+                None => format!(
+                    concat!(
+                        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+                        "<Relationships xmlns=\"http://schemas.openxmlformats.org/",
+                        "package/2006/relationships\">{}</Relationships>\n",
+                    ),
+                    new_rel
+                )
+                .into_bytes(),
+            };
+            match existing_rels_idx {
+                Some(i) => passthrough[i].1 = new_rels_bytes,
+                None => passthrough.push((plan.output_rels_name.clone(), new_rels_bytes)),
+            }
+
+            new_table_parts_by_sheet
+                .entry(plan.sheet_key.clone())
+                .or_default()
+                .push(format!(
+                    "<tablePart xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/\
+                     2006/relationships\" r:id=\"rId{next_rid}\"/>"
+                ));
+        }
+    }
+    // Re-sort: new/patched entries above were appended, not inserted in order.
+    passthrough.sort_by(|a, b| a.0.cmp(&b.0));
+    carried_overrides.sort_by(|a, b| a.0.cmp(&b.0));
 
     let cursor = Cursor::new(Vec::<u8>::new());
     let mut zip = ZipWriter::new(cursor);
@@ -3138,16 +3306,14 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         // not writer-owned -- see `is_writer_owned_part`'s own doc comment). Splicing a
         // relationship-backed element back over a `.rels` that didn't survive would emit
         // a dangling `r:id`, a real Excel repair warning.
-        let rels_survived = plan.is_existing
-            && passthrough
-                .iter()
-                .any(|(name, _)| name == &plan.output_rels_name);
+        let rels_survived =
+            plan.is_existing && originally_survived_rels.contains(&plan.output_rels_name);
         // Location-only hyperlinks are always kept; r:id-bearing ones only when
         // rels_survived (see extract_hyperlinks' own doc comment).
         let hyperlinks = source_xml
             .map(|xml| reader::extract_hyperlinks(xml, rels_survived))
             .unwrap_or_default();
-        let (table_parts, drawing, legacy_drawing) = if rels_survived {
+        let (existing_table_parts, drawing, legacy_drawing) = if rels_survived {
             (
                 source_xml.and_then(|xml| reader::extract_raw_element(xml, "tableParts")),
                 source_xml.and_then(|xml| reader::extract_raw_element(xml, "drawing")),
@@ -3156,6 +3322,29 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         } else {
             (None, None, None)
         };
+        // 0.16.0-A3: merge in any freshly-created table's `<tablePart>` regardless of
+        // `rels_survived` -- that gate protects restoring EXISTING relationship-backed
+        // content whose `.rels` didn't survive; a newly-created table's `.rels` entry was
+        // just synthesized above specifically to back it, so there's nothing dangling.
+        let new_table_parts = new_table_parts_by_sheet
+            .get(&plan.sheet_key)
+            .map(|v| v.as_slice())
+            .unwrap_or_default();
+        let merged_table_parts = if new_table_parts.is_empty() {
+            existing_table_parts.clone()
+        } else {
+            let mut children = existing_table_parts
+                .as_deref()
+                .map(|x| reader::extract_records(x, "tableParts", "tablePart"))
+                .unwrap_or_default();
+            children.extend(new_table_parts.iter().cloned());
+            Some(format!(
+                "<tableParts count=\"{}\">{}</tableParts>",
+                children.len(),
+                children.concat()
+            ))
+        };
+        let table_parts = merged_table_parts;
         let fragments = OpaqueWorksheetFragments {
             root_attrs: root_attrs.as_deref(),
             sheet_pr: sheet_pr.as_deref(),
@@ -5002,6 +5191,188 @@ mod tests {
         assert_eq!(reloaded.row_height_on_sheet(&key, 1), None);
         assert_eq!(reloaded.column_width_on_sheet(&key, 1), None);
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_table_part_number_extracts_n_and_rejects_a_non_matching_name() {
+        assert_eq!(parse_table_part_number("xl/tables/table3.xml"), Some(3));
+        assert_eq!(parse_table_part_number("xl/tables/table1.xml"), Some(1));
+        assert_eq!(parse_table_part_number("xl/worksheets/sheet1.xml"), None);
+        assert_eq!(parse_table_part_number("xl/tables/table.xml"), None);
+    }
+
+    fn zip_text(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> String {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name(name).unwrap(), &mut s).unwrap();
+        s
+    }
+
+    /// 0.16.0-A3: a from-scratch `Vm()` (no loaded source at all) creating a table needs
+    /// its OWN worksheet `.rels` synthesized from nothing -- the case that never existed
+    /// in this codebase before this phase (only an already-loaded sheet's `.rels` was
+    /// ever passed through; nothing wrote one fresh). Checks all four linkage artifacts
+    /// directly in the raw output bytes, not just the read-back `Vm.tables` state.
+    #[test]
+    fn create_table_from_scratch_writes_all_four_linkage_artifacts_and_round_trips() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[
+                vec![
+                    Variant::Str("Name".to_string()),
+                    Variant::Str("Qty".to_string()),
+                ],
+                vec![Variant::Str("Widget".to_string()), Variant::Integer(5)],
+            ],
+        );
+        vm.create_table_on_sheet("sheet1", ((1, 1), (2, 2)), Some("Table1"), None, None)
+            .unwrap();
+
+        let path = "/tmp/elixcee_test_create_table_from_scratch.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+
+        let file = std::fs::File::open(path).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let sheet_part = zip
+            .file_names()
+            .find(|n| n.starts_with("xl/worksheets/sheet") && n.ends_with(".xml"))
+            .unwrap()
+            .to_string();
+
+        let table_xml = zip_text(&mut zip, "xl/tables/table1.xml");
+        assert!(table_xml.contains(r#"ref="A1:B2""#));
+        assert!(table_xml.contains(r#"name="Name""#));
+        assert!(table_xml.contains(r#"name="Qty""#));
+        assert!(table_xml.contains("<autoFilter"));
+
+        let rels_xml = zip_text(&mut zip, "xl/worksheets/_rels/sheet1.xml.rels");
+        assert!(rels_xml.contains(r#"Target="../tables/table1.xml""#));
+        assert!(rels_xml.contains(
+            "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\""
+        ));
+
+        let sheet_xml = zip_text(&mut zip, &sheet_part);
+        assert!(sheet_xml.contains("<tableParts"));
+        assert!(sheet_xml.contains("<tablePart"));
+
+        let content_types = zip_text(&mut zip, "[Content_Types].xml");
+        assert!(content_types.contains(
+            "PartName=\"/xl/tables/table1.xml\" \
+             ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml\""
+        ));
+
+        let mut reloaded = Vm::new();
+        reloaded
+            .load_workbook_file(path)
+            .expect("reload should succeed");
+        let key = reloaded.resolve_sheet_key(None).unwrap();
+        let tables = reloaded
+            .tables
+            .get(&key)
+            .expect("table must survive reload");
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].display_name, "Table1");
+        assert_eq!(tables[0].ref_range, ((1, 1), (2, 2)));
+
+        // Second save-reload cycle: the now-loaded table (source_part non-empty) must
+        // round-trip unchanged via the ordinary passthrough path, not be re-synthesized.
+        let path2 = "/tmp/elixcee_test_create_table_from_scratch_2.xlsx";
+        save_workbook_impl(&reloaded, path2).expect("second save should succeed");
+        let mut reloaded2 = Vm::new();
+        reloaded2
+            .load_workbook_file(path2)
+            .expect("second reload should succeed");
+        let key2 = reloaded2.resolve_sheet_key(None).unwrap();
+        assert_eq!(reloaded2.tables.get(&key2).unwrap().len(), 1);
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(path2);
+    }
+
+    /// 0.16.0-A3: creating a table on a sheet that ALREADY has a table (and therefore
+    /// already has its own worksheet `.rels`/`<tableParts>`) exercises the MERGE path,
+    /// not the from-scratch-synthesis path above -- both must be handled correctly.
+    #[test]
+    fn create_table_alongside_an_existing_table_merges_rather_than_replaces() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Str("A".to_string())]]);
+        vm.create_table_on_sheet("sheet1", ((1, 1), (1, 1)), Some("First"), None, None)
+            .unwrap();
+        let path = "/tmp/elixcee_test_create_table_first.xlsx";
+        save_workbook_impl(&vm, path).expect("first save should succeed");
+
+        let mut loaded = Vm::new();
+        loaded
+            .load_workbook_file(path)
+            .expect("reload should succeed");
+        let key = loaded.resolve_sheet_key(None).unwrap();
+        loaded.write_rect(&key, (1, 3), &[vec![Variant::Str("B".to_string())]]);
+        loaded
+            .create_table_on_sheet(&key, ((1, 3), (1, 3)), Some("Second"), None, None)
+            .unwrap();
+
+        let path2 = "/tmp/elixcee_test_create_table_second.xlsx";
+        save_workbook_impl(&loaded, path2).expect("second save should succeed");
+
+        let file = std::fs::File::open(path2).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        // Both tables must have their own distinct part -- the second must not have
+        // overwritten or reused the first's number.
+        assert!(zip.by_name("xl/tables/table1.xml").is_ok());
+        assert!(zip.by_name("xl/tables/table2.xml").is_ok());
+        let rels_xml = zip_text(&mut zip, "xl/worksheets/_rels/sheet1.xml.rels");
+        // Both relationships must coexist in the SAME .rels file with distinct ids.
+        assert!(rels_xml.contains("table1.xml"));
+        assert!(rels_xml.contains("table2.xml"));
+        assert_eq!(reader::relationship_ids(&rels_xml).len(), 2);
+        drop(zip);
+
+        let mut reloaded = Vm::new();
+        reloaded
+            .load_workbook_file(path2)
+            .expect("final reload should succeed");
+        let key2 = reloaded.resolve_sheet_key(None).unwrap();
+        let tables = reloaded.tables.get(&key2).unwrap();
+        assert_eq!(tables.len(), 2);
+        let names: Vec<&str> = tables.iter().map(|t| t.display_name.as_str()).collect();
+        assert!(names.contains(&"First"));
+        assert!(names.contains(&"Second"));
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(path2);
+    }
+
+    #[test]
+    fn create_table_on_a_sheet_with_no_prior_relationships_does_not_falsely_revive_drawing_restoration()
+     {
+        // Regression test for a real risk found during implementation: synthesizing a
+        // worksheet's FIRST-EVER `.rels` for a new table must not flip `rels_survived`
+        // to true for that sheet's OTHER relationship-backed fragments (drawing,
+        // legacyDrawing, a pre-existing tableParts) when the ORIGINAL source never had
+        // a `.rels` for those to safely reference in the first place. Not reachable via
+        // this project's own writer (which never emits a dangling r:id-bearing element
+        // without a `.rels`), so this only re-confirms the snapshot-based `rels_survived`
+        // computation itself stays correct: a from-scratch Vm() has no source at all,
+        // so `plan.is_existing` is false regardless, and `rels_survived` must stay false.
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Str("A".to_string())]]);
+        vm.create_table_on_sheet("sheet1", ((1, 1), (1, 1)), Some("T"), None, None)
+            .unwrap();
+        let path = "/tmp/elixcee_test_create_table_no_prior_rels.xlsx";
+        save_workbook_impl(&vm, path).expect("save should succeed");
+        let file = std::fs::File::open(path).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        // No drawing/legacyDrawing was ever requested, so none should appear regardless.
+        let sheet_name = zip
+            .file_names()
+            .find(|n| n.starts_with("xl/worksheets/sheet") && n.ends_with(".xml"))
+            .unwrap()
+            .to_string();
+        let sheet_xml = zip_text(&mut zip, &sheet_name);
+        assert!(!sheet_xml.contains("<drawing"));
+        assert!(!sheet_xml.contains("<legacyDrawing"));
         let _ = std::fs::remove_file(path);
     }
 
