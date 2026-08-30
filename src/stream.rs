@@ -1,4 +1,4 @@
-//! Forward-only row streaming for large XLSX files (0.23.0).
+//! Forward-only row streaming for large XLSX files (0.25.0).
 //!
 //! The normal `Vm` intentionally remains a random-access, fully mutable model. This
 //! module provides a separate pipeline API whose worker owns the ZIP entry and sends
@@ -21,6 +21,22 @@ const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 /// Refuse an unterminated or hostile worksheet row before it can grow without bound.
 /// This keeps the forward-only API bounded even when given malformed XML.
 const MAX_STREAM_ROW_BYTES: usize = 16 * 1024 * 1024;
+/// Bound the pending rows retained by the append-only writer before `close()`
+/// materializes them into the normal workbook writer.
+const MAX_STREAM_WRITER_BYTES: usize = 64 * 1024 * 1024;
+
+fn estimated_variant_bytes(value: &Variant) -> usize {
+    match value {
+        Variant::Str(text) => text.len(),
+        Variant::Array(values) => values.iter().map(estimated_variant_bytes).sum(),
+        Variant::VbaArray(values) => values.elements.iter().map(estimated_variant_bytes).sum(),
+        Variant::Record(values) => values
+            .iter()
+            .map(|(key, value)| key.len() + estimated_variant_bytes(value))
+            .sum(),
+        _ => std::mem::size_of_val(value),
+    }
+}
 
 fn append_row_token(row_buf: &mut Vec<u8>, token: &[u8]) -> Result<(), String> {
     if row_buf.len().saturating_add(token.len()) > MAX_STREAM_ROW_BYTES {
@@ -268,6 +284,7 @@ impl PyStreamReader {
 pub struct PyStreamWriter {
     path: String,
     rows: Vec<Vec<Variant>>,
+    pending_bytes: usize,
     active: bool,
 }
 
@@ -275,6 +292,7 @@ pub(crate) fn stream_writer_from_path(path: &str) -> PyResult<PyStreamWriter> {
     Ok(PyStreamWriter {
         path: path.to_string(),
         rows: Vec::new(),
+        pending_bytes: 0,
         active: true,
     })
 }
@@ -312,6 +330,13 @@ impl PyStreamWriter {
                 "row must not be empty",
             ));
         }
+        let row_bytes = row.iter().map(estimated_variant_bytes).sum::<usize>();
+        if self.pending_bytes.saturating_add(row_bytes) > MAX_STREAM_WRITER_BYTES {
+            return Err(PyErr::new::<pyo3::exceptions::PyMemoryError, _>(format!(
+                "stream writer pending rows exceed the limit of {MAX_STREAM_WRITER_BYTES} bytes"
+            )));
+        }
+        self.pending_bytes = self.pending_bytes.saturating_add(row_bytes);
         self.rows.push(row);
         Ok(())
     }
@@ -320,6 +345,7 @@ impl PyStreamWriter {
             return Ok(());
         }
         let mut vm = crate::vm::Vm::new();
+        self.pending_bytes = 0;
         for (r, row) in self.rows.drain(..).enumerate() {
             vm.write_rect("sheet1", ((r + 1) as u32, 1), &[row]);
         }
@@ -332,7 +358,10 @@ impl PyStreamWriter {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_STREAM_ROW_BYTES, append_row_token, resolve_xlsx_target, row_from_xml};
+    use super::{
+        MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
+        resolve_xlsx_target, row_from_xml,
+    };
     use crate::Variant;
 
     #[test]
@@ -392,5 +421,15 @@ mod tests {
         let remaining = MAX_STREAM_ROW_BYTES - row.len();
         assert!(append_row_token(&mut row, &vec![b'x'; remaining]).is_ok());
         assert!(append_row_token(&mut row, b"x").is_err());
+    }
+
+    #[test]
+    fn streaming_writer_estimate_accounts_for_nested_values() {
+        let value = Variant::Array(vec![
+            Variant::Str("hello".to_string()),
+            Variant::Integer(42),
+        ]);
+        assert!(estimated_variant_bytes(&value) >= 5);
+        assert!(MAX_STREAM_WRITER_BYTES > estimated_variant_bytes(&value));
     }
 }

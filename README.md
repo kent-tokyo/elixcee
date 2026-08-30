@@ -4,7 +4,7 @@ Run and test a practical subset of Excel VBA without Microsoft Excel. The core i
 Rust, with a Python API (PyO3), a standalone CLI, and an experimental
 `@elixcee/xlsx` JavaScript/WASM package.
 
-Current release: **0.24.0**.
+Current release: **0.25.0**.
 
 elixcee is intended for data-processing macros. It is not a replacement for the
 Excel desktop application: UI features such as charts, dialogs, and screen

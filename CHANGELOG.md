@@ -2,11 +2,12 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
-## [0.24.0] - 2026-08-31
+## [0.25.0] - 2026-08-31
 
 - StreamingReaderの契約を安定化し、`include_row_numbers=True`で疎なワークシートの
   元のExcel行番号を返すようにしました。
 - 空行・空セル行、worksheet relationship targetの正規化、行バッファ16 MiB上限を追加しました。
+- StreamWriterの保留行にも64 MiB上限を設け、超過時は`MemoryError`を返すようにしました。
 
 ## [0.22.0] - 2026-08-30
 
