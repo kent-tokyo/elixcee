@@ -1144,8 +1144,60 @@ pub(crate) fn xml_unescape(s: &str) -> String {
 
 // ── Helper: read a ZIP entry into a String ────────────────────────────────────
 
-/// 64 MB decompressed cap per entry — enough for any real spreadsheet XML.
-const ZIP_ENTRY_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Per-entry decompressed cap. Large worksheets need more room than the previous 64 MB
+/// ceiling, but an explicit limit keeps malformed XML from turning one read into an
+/// unbounded allocation.
+const ZIP_ENTRY_MAX_BYTES: u64 = 256 * 1024 * 1024;
+const ZIP_MAX_ENTRIES: usize = 10_000;
+const ZIP_MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+const ZIP_MAX_COMPRESSION_RATIO: u64 = 1_000;
+
+fn validate_zip_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(), String> {
+    if archive.len() > ZIP_MAX_ENTRIES {
+        return Err(format!(
+            "ZIP archive has too many entries ({}; maximum is {})",
+            archive.len(),
+            ZIP_MAX_ENTRIES
+        ));
+    }
+    let mut total_uncompressed = 0u64;
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let name = entry.name();
+        if name.starts_with('/')
+            || name.starts_with('\\')
+            || name.split('/').any(|part| part == "..")
+            || name.contains('\0')
+        {
+            return Err(format!("ZIP entry has an unsafe path: {name}"));
+        }
+        let uncompressed = entry.size();
+        let compressed = entry.compressed_size();
+        if uncompressed > ZIP_ENTRY_MAX_BYTES {
+            return Err(format!(
+                "ZIP entry is too large: {name} ({} bytes; maximum is {})",
+                uncompressed, ZIP_ENTRY_MAX_BYTES
+            ));
+        }
+        total_uncompressed = total_uncompressed
+            .checked_add(uncompressed)
+            .ok_or_else(|| "ZIP archive uncompressed size overflows u64".to_string())?;
+        if total_uncompressed > ZIP_MAX_TOTAL_BYTES {
+            return Err(format!(
+                "ZIP archive expands beyond the maximum size ({} bytes; maximum is {})",
+                total_uncompressed, ZIP_MAX_TOTAL_BYTES
+            ));
+        }
+        if compressed > 0 && uncompressed / compressed > ZIP_MAX_COMPRESSION_RATIO {
+            return Err(format!(
+                "ZIP entry has an excessive compression ratio: {name} ({}:1; maximum is {}:1)",
+                uncompressed / compressed,
+                ZIP_MAX_COMPRESSION_RATIO
+            ));
+        }
+    }
+    Ok(())
+}
 
 fn zip_read_text<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
@@ -1175,6 +1227,7 @@ fn zip_read_text<R: Read + Seek>(
 pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    validate_zip_archive(&mut archive)?;
     let mut out = HashMap::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
@@ -2258,7 +2311,8 @@ pub(crate) fn workbook_rels_decls(xml: &str) -> Vec<(String, String)> {
 
 fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    validate_zip_archive(&mut archive)?;
     // Path-based read_workbook doesn't expose formulas/!ref/style ids (see BufferSheet's
     // doc comment) — discard that half here rather than changing WorkbookSheet itself.
     Ok(read_workbook_from_archive(archive)?
@@ -2275,6 +2329,7 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
 fn read_workbook_from_archive<R: Read + Seek>(
     mut archive: ZipArchive<R>,
 ) -> Result<BufferWorkbook, String> {
+    validate_zip_archive(&mut archive)?;
     let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
     let date1904 = xlsx_workbook_date1904(&wb_xml);
@@ -4365,6 +4420,7 @@ mod data_validation_parsing_tests {
 fn read_ods(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    validate_zip_archive(&mut archive)?;
     let xml = zip_read_text(&mut archive, "content.xml")?;
     Ok(ods_parse(&xml))
 }
@@ -5246,6 +5302,8 @@ mod merge_tests {
 #[cfg(test)]
 mod from_bytes_tests {
     use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
 
     // The path-based and bytes-based entry points must read the exact same real .xlsx
     // fixture into equal sheet data — read_workbook_from_bytes is meant to be a pure
@@ -5291,5 +5349,17 @@ mod from_bytes_tests {
     #[test]
     fn read_workbook_from_bytes_rejects_a_non_zip_buffer() {
         assert!(read_workbook_from_bytes(b"not a zip file").is_err());
+    }
+
+    #[test]
+    fn zip_validation_rejects_path_traversal_entries() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file("../outside.xml", SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"not valid workbook data").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let error = validate_zip_archive(&mut archive).unwrap_err();
+        assert!(error.contains("unsafe path"));
     }
 }
