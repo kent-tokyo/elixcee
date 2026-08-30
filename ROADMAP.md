@@ -7,11 +7,12 @@ what's left. Historical phase-by-phase implementation notes (Japanese) live in
 
 ## Current state
 
-`elixcee` **0.15.0 release candidate** (Rust crate + Python package), `elixcee-types`
+`elixcee` **0.16.0 release candidate** (Rust crate + Python package), `elixcee-types`
 **0.4.0**,
 `elixcee-wasm` **0.1.0** (never published to crates.io by design — `publish = false`).
-`0.15.0` adds the Safe Style Engine: safe number-format, cell-style, style-copy, named-style,
-and row/column default-style editing. `0.14.0` adds dependency-aware structural edits:
+`0.16.0` adds structured workbook objects: tables, standalone and table-embedded filters, and
+data validation. `0.15.0` adds the Safe Style Engine: safe number-format, cell-style,
+style-copy, named-style, and row/column default-style editing. `0.14.0` adds dependency-aware structural edits:
 formula-reference rewriting, safe `move_range`, metadata transforms, and worksheet
 AutoFilter preservation. `0.13.0` carries
 the eight independent Python API items from `0.12.0` plus the completed safe-round-trip and
@@ -1151,7 +1152,7 @@ implemented and covered by the local Rust/Python/XLSX verification suites. Real-
 reopen after a chained edit remains an explicit environmental follow-up because this
 workspace has no Excel installation.
 
-### 0.15.0 — Safe Style Engine — **in progress**
+### 0.15.0 — Safe Style Engine — **shipped**
 
 **Goal**: edit workbook formatting without mutating shared style records or corrupting
 `styles.xml`, while preserving unknown attributes and deduplicating equivalent records.
@@ -1176,6 +1177,23 @@ uses the documented ECMA-376-compatible shapes and openpyxl-authored fixtures.
 - [x] Equivalent style records are reused instead of duplicated where applicable.
 - [x] Combined pending style edits resolve deterministically in one save.
 - [ ] Real-Excel reopen and visual rendering verification.
+
+### 0.16.0 — Structured Workbook Objects — **in progress**
+
+**Goal**: make the most common structured worksheet objects inspectable and editable while
+keeping their XML relationships and range references consistent across structural edits.
+
+- [x] Read-only table inspection with `tables()`.
+- [x] Existing-table edits and new-table creation with `edit_table()` and `create_table()`.
+- [x] Standalone AutoFilter filtering and table-embedded filter criteria.
+- [x] Data Validation add, remove, and read APIs.
+- [x] Preservation fixes for conditional formatting, styled empty cells, and default styles.
+- [ ] Real-Excel reopen and visual rendering verification.
+
+**Release gate**: all supported table, filter, and validation operations must round-trip
+through XLSX fixtures without dropping unrelated worksheet XML, and structural edits must
+shift their associated ranges deterministically. Charts, images, comments, and theme-color
+minting remain subsequent roadmap work.
 
 ### 1.0.0 — Stable Supported Profile
 

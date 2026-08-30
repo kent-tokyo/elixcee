@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.16.0] - 2026-08-30
+
+Structured workbook objects for tables, filters, and data validation. Added read-only
+`tables()` introspection, `edit_table()` and `create_table()`, standalone AutoFilter
+operations, table-embedded filter criteria, and add/remove/read APIs for data validation.
+Structural edits keep table references, filter ranges, and validation ranges aligned.
+
+Also fixed round-trip preservation for conditional formatting, styled empty cells, and
+default worksheet styles. Charts, images, comments, and theme-color minting remain outside
+this milestone.
+
 ## [0.15.0] - 2026-08-30
 
 Safe Style Engine for controlled workbook formatting edits. Added `set_number_format`,
