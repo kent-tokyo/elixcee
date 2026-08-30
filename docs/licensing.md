@@ -21,7 +21,7 @@ confirmed via `npm view <pkg> license` against the live public registry:
 | `wmf` | 1.0.2 | Apache-2.0 |
 | `word` | 0.4.0 | Apache-2.0 |
 
-All 8 packages resolve from the public npm registry today (verified live during Phase 0
+All 8 packages resolve from the public npm registry today (verified during the dependency
 planning) — no vendored-tarball fallback is needed for `compat/oracle` to install and run
 the real package as a `devDependency`.
 

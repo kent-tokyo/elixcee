@@ -45,8 +45,8 @@ it) — see "Non-JSON mode" below.
 The exit code is intentionally coarse. The JSON body's `"ok"` field and
 `error.code` are the primary machine-readable signal for *why* something
 failed; a wider per-category exit code taxonomy is not part of this
-contract (see `tasks/todo.md` for why this was a deliberate choice, and
-where to raise it if that changes).
+contract; a typed error enum may replace this interim implementation in a future
+release.
 
 ## Success shape
 
@@ -129,7 +129,7 @@ Classification is currently done by pattern-matching the existing
 `Result<_, String>` error text at the CLI boundary (`src/diagnostics.rs`),
 not by a typed error enum in the VM. This is a known, deliberate interim
 trade-off — see the "runtime error 分類を型付きエラーへ" item in
-`tasks/todo.md` for the plan to harden it before adding more error kinds.
+the release roadmap for future hardening work.
 
 **Undefined Sub/Function calls, argument-count mismatches, and undefined
 `GoTo`/`On Error GoTo` labels are checked once, up front, before the
@@ -202,7 +202,7 @@ supported — every file passed on the command line is a standard module.
   Function, a `Type` defined identically-named in two modules is silently
   last-wins in the merged type table, with no rejection or diagnostic.
   Deferred as a Phase 2 item (cross-module UDTs are rare); tracked in
-  `tasks/todo.md`.
+  the release roadmap.
 - **`Module.Sub` qualification only makes sense for multi-file invocations.**
   A single-file run or check still resolves the entrypoint by bare Sub name
   only (unchanged from before this milestone, to keep the single-file path
@@ -213,7 +213,7 @@ supported — every file passed on the command line is a standard module.
   error's source position is a char offset into whichever module's source
   was executing, but `location` has no module identifier to attribute that
   offset to correctly (a single-source assumption from the source-location
-  work in `tasks/todo.md`'s Milestone A.5, not yet revisited). Single-file
+  work that has not yet been revisited). Single-file
   runs are unaffected and keep their exact precise `location`. Parse errors
   are unaffected in both modes — each file parses independently, so its
   error location is always unambiguous.
@@ -331,7 +331,7 @@ target isn't `Sheets`/`Worksheets` or a plain identifier (e.g. the token
 right after `With` isn't an identifier at all — malformed input). This
 happens before any statement exists to attach a diagnostic to, and fixing it
 would require a shape change to how `With` is represented in the AST for a
-very rare case — see `tasks/todo.md`'s Milestone B1.1 entry for the
+  very rare case — see the release roadmap for the
 reasoning.
 
 ## `snapshot` subcommand (workbook inspection, Milestone B4)

@@ -1,6 +1,8 @@
 .env
 AGENTS.md
 tasks/
+internal_docs/
+.DS_Store
 memo.txt
 
 # Added by cargo

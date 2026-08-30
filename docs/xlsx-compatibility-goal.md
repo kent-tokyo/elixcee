@@ -2,9 +2,8 @@
 
 ## Purpose
 
-This document anchors every later phase's answer to "are we compatible yet." It defines
-what compatibility means for the `@elixcee/xlsx` initiative — a planned npm package meant
-to be a drop-in replacement for [`xlsx@0.18.5`](https://www.npmjs.com/package/xlsx)
+This document defines how compatibility is measured for the experimental
+`@elixcee/xlsx` package against [`xlsx@0.18.5`](https://www.npmjs.com/package/xlsx)
 (SheetJS), reachable via `"xlsx": "npm:@elixcee/xlsx@^1.0.0"` with no application code
 changes.
 
@@ -35,10 +34,7 @@ explicitly classified — see [`compat/differential/classify.mjs`](../compat/dif
   Compatibility comes first; if `@elixcee/xlsx` is slower, that gets recorded, not traded
   away for speed.
 - **Full browser-bundle parity** (matching `dist/xlsx.full.min.js` exactly) remains
-  deferred — not because a WASM build target doesn't exist (`elixcee-wasm` now does, with
-  real browser smoke tests wired into CI — see `docs/xlsx-architecture.md`'s "Status"),
-  but because `write`/`writeFile`/`writeFileSync` are still unimplemented (see
-  `ROADMAP.md`'s "Known gaps").
+  deferred. The package has a browser entry point, but it is intended for bundled use.
 
 ## How compatibility is measured
 
@@ -52,12 +48,6 @@ explicitly classified — see [`compat/differential/classify.mjs`](../compat/dif
 
 ## Status
 
-**Stale — kept as the original Phase 0 framing, not the current state.** This document
-described Phase 0 (investigation and scaffolding only, no compatibility logic
-implemented) at the time it was written. Substantial `@elixcee/xlsx` compatibility work
-has since shipped — see `ROADMAP.md`'s "Current state" for what's actually implemented
-(33 `utils.*` exports differential-tested, working `XLSX.read()`/`readFile()`/
-`readFileSync()`, CI-wired differential suites) and `docs/xlsx-architecture.md`'s "Status"
-for how the crate layout actually turned out. The compatibility *definition* and
-non-goals above remain the operative policy; only this specific status paragraph was
-Phase-0-only and is now outdated.
+The package currently provides differential-tested utility functions and synchronous
+`XLSX.read()`/`readFile()`/`readFileSync()` plus `write()`/`writeFile()`/`writeFileSync()`
+for `bookType: "xlsx"`. ODS writing and exact browser-bundle parity remain out of scope.

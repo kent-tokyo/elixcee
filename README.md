@@ -1,729 +1,116 @@
 # elixcee
 
-**English** | [日本語](README_ja.md) | [中文](README_zh.md)
+Run and test a practical subset of Excel VBA without Microsoft Excel. The core is
+Rust, with a Python API (PyO3), a standalone CLI, and an experimental
+`@elixcee/xlsx` JavaScript/WASM package.
 
-Run, test, and diagnose Excel VBA macros without requiring Microsoft Excel. elixcee is a Rust-powered headless VBA runtime for Linux, macOS, and Windows, with static checks, property-based workbook testing, and structured diagnostics for VBA and workbook-operation failures.
+Current release: **0.24.0**.
 
-The core engine is written in **Rust**; Python bindings are provided via **pyo3 + maturin**.
+elixcee is intended for data-processing macros. It is not a replacement for the
+Excel desktop application: UI features such as charts, dialogs, and screen
+updates are skipped, modeled, or reported according to the operation.
 
-## Name
-
-**elixcee** = **Excel** + **elixir** + **C**
-
-An *elixir* that cures your Excel dependency — running at C-level speed via Rust.
-
----
-
-## Comparison with similar tools
-
-| Feature | **elixcee** | xlwings | LibreOffice UNO | openpyxl | xlcalculator |
-|---------|:-----------:|:-------:|:---------------:|:--------:|:------------:|
-| Runs VBA macros | Yes | Yes | Yes (subset) | No | No |
-| Requires Excel | No | Yes | No | No | No |
-| Requires LibreOffice | No | No | Yes | No | No |
-| Evaluates formulas | Yes | Yes | Yes | No | Yes |
-| macOS/Linux/Windows | Yes | partial | Yes | Yes | Yes |
-| Simple Python API | Yes | Yes | No | Yes | Yes |
-| Read .xlsx | Yes | Yes | Yes | Yes | Yes |
-| Read .ods | Yes | Yes | Yes | No | No |
-| Write .xlsx | Yes | Yes | Yes | Yes | No |
-| Write .ods | Yes | Yes | Yes | No | No |
-| Execution speed | Rust (native) | COM/IPC (slow) | IPC (slow) | — | Python |
-
-**Notes:**
-- **xlwings** requires Excel for Mac on macOS (via AppleScript) and Excel on Windows (via COM). Linux support requires a running Excel instance or a cloud bridge.
-- **LibreOffice UNO** has a slow startup (≥ 1 s process launch) and a complex API. It runs VBA via LibreOffice's own interpreter, which may not match Excel's behavior exactly.
-- **openpyxl** reads cached formula values from .xlsx files but does not re-evaluate formulas at runtime.
-- **xlcalculator** re-evaluates Excel formulas in Python but has no VBA support.
-- elixcee's VBA interpreter covers the subset of VBA used in typical data-processing macros (loops, conditionals, cell read/write, string/math functions, multi-sheet access). Most Excel UI operations such as charting and formatting are unsupported or no-ops. `MsgBox` is handled specially: depending on the mode, it's printed to stdout, collected in JSON output, or raised as an error.
-
----
-
-## Installation
+## Install
 
 ```bash
 pip install elixcee
 ```
 
-Development build (from source):
+Pre-built CLI binaries are published on the [GitHub Releases](https://github.com/kent-tokyo/elixcee/releases) page.
+
+For a source build:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
+pip install maturin
 maturin develop
 ```
 
----
+## CLI
 
-## CLI (Windows / Linux / macOS)
-
-Pre-built binaries are available on the [Releases](https://github.com/kent-tokyo/elixcee/releases) page — no Python required.
-
-| Download | Platform |
-|---|---|
-| [elixcee-x86_64-windows.exe](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-windows.exe) | Windows x64 |
-| [elixcee-x86_64-linux](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-linux) | Linux x64 |
-| [elixcee-aarch64-macos](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-aarch64-macos) | macOS Apple Silicon |
-
-### Usage
-
-```
-elixcee <vba_file>... <MacroName> [OPTIONS]
-
-Arguments:
-  <vba_file>...  One or more VBA source files (.vbs / .bas / .txt). With
-                 more than one, use Module.Sub to disambiguate same-named
-                 Subs/Functions across modules.
-  <MacroName>    Name of the Sub to execute (last argument)
-
-Options:
-  --file <path>    Load cell data from spreadsheet (.xlsx / .xlsm / .ods)
-  --sheet <name>   Active sheet name (default: first sheet in --file)
-  --output <path>  Save result cells to spreadsheet (.xlsx / .ods)
-  --json           Emit a single JSON object (result or error) instead of plain text
+```text
+elixcee <file.bas>... <MacroName> [--file input.xlsx] [--sheet Sheet1]
+                         [--output result.xlsx] [--json]
+elixcee check <file.bas>... [--entry MacroName] [--json]
+elixcee snapshot <workbook.xlsx|ods> [--json]
+elixcee test-workbook fixture.toml [--json] [--seed N] [--case N]
+elixcee diagnose <file.bas>... <MacroName> --file input.xlsx [--json]
+elixcee diagnose-workbook fixture.toml [--json] [--seed N] [--case N] [--cases N]
 ```
 
-### Examples
-
-Run a VBA file and print results to stdout:
-
-```bat
-elixcee macro.vbs ProcessData
-```
-
-Load data from an Excel file, run a macro, and save the output:
-
-```bat
-elixcee macro.vbs ProcessData --file input.xlsx --output result.xlsx
-```
-
-Output format — one line per non-empty cell, tab-separated address and value:
-
-```
-A1    Hello
-B1    42
-A2    3.14
-```
-
-`MsgBox` calls are printed to stdout.
-
-### Multiple files (multi-module projects)
-
-Pass more than one source file to run a project spanning several modules.
-Sub/Function names are shared project-wide — use `Module.Sub` to pick a
-specific one if the bare name exists in more than one module (module names
-come from `Attribute VB_Name` if present, else the filename):
-
-```bat
-elixcee Helpers.bas Main.bas Main.ProcessData
-```
-
-There's no project manifest yet (see [docs/agent-contract.md](docs/agent-contract.md)
-for exactly what is/isn't supported, including how cross-module name
-collisions are handled).
-
-### JSON output (for scripts / AI agents)
-
-Add `--json` for a single machine-readable JSON object instead of plain text:
-
-```bat
-elixcee macro.vbs ProcessData --json
-```
-
-```json
-{"schema_version":1,"ok":true,"entrypoint":"ProcessData","duration_ms":0.42,"cells":[{"sheet":"sheet1","address":"A1","value":42}],"messages":[]}
-```
-
-Full contract — error codes, exit codes, `messages` semantics: [docs/agent-contract.md](docs/agent-contract.md).
-
-### Static analysis without running the macro
-
-`elixcee check` inspects one or more `.bas` files without executing them: parse errors, whether the entrypoint macro exists, undefined Sub/Function calls anywhere in the body, and interactive `MsgBox` calls. Every positional argument is a file; the entrypoint (if any) is always `--entry`, never positional — so `elixcee check *.bas` checks every module in a project without asserting any particular entrypoint.
-
-```bat
-elixcee check macro.vbs --entry ProcessData --json
-```
-
-```json
-{"schema_version":1,"ok":true,"diagnostics":[]}
-```
-
-### Workbook snapshot
-
-`elixcee snapshot` reads a `.xlsx`/`.xlsm`/`.ods` file directly — no VBA
-execution — and prints every sheet's non-empty cells as Markdown by default,
-or JSON with `--json`:
-
-```bat
-elixcee snapshot Book1.xlsx --json
-```
-
-```json
-{"schema_version":1,"ok":true,"file":"Book1.xlsx","sheets":[{"name":"Sheet1","sheet_id":"1","stable_id":"sheet1","cells":[{"address":"A1","value":42}]}]}
-```
-
-`stable_id` is derived from the file's own `sheetId` when available (else a
-positional fallback) — it is **not** VBA's `CodeName` property. See
-[docs/agent-contract.md](docs/agent-contract.md) for the full rationale.
-
-### Property-based workbook testing
-
-`elixcee test-workbook` reruns a macro against a starting workbook many
-times with generated boundary-value inputs (blank, `0`, `1`, `-1`, near
-overflow, empty/short/long strings), checking every run for panics,
-runtime errors, timeouts, and Excel error values — each case starts from a
-completely fresh workbook state:
-
-```toml
-# fixture.toml
-name = "order calculation"
-workbook = "orders.xlsx"
-vba_files = ["Main.bas"]
-macro = "Main.Process"
-cases = 100
-seed = 42
-
-[[inputs]]
-range = "Input!B2:B10"
-strategy = "boundary_numeric"
-
-[[assertions]]
-range = "Result!A1:F100"
-rule = "no_excel_errors"
-```
-
-```bat
-elixcee test-workbook fixture.toml --json
-```
-
-A failing case reports its seed and case index so it can be reproduced
-exactly: `elixcee test-workbook fixture.toml --seed 42 --case 17`. Full
-schema, strategies, and assertion rules: [docs/agent-contract.md](docs/agent-contract.md).
-
-### Excel operation diagnostics
-
-`elixcee diagnose` runs a macro once and explains *why* Excel would reject
-it — a missing worksheet, a missing workbook, an out-of-bounds array
-index, a Copy/Paste shape mismatch, a write to a protected sheet, or a
-Copy/Paste that conflicts with a merged-cell layout — with evidence,
-instead of a bare error string:
-
-```bat
-elixcee diagnose Main.bas --file report.xlsx --json Main.Run
-```
-
-```json
-{
-  "schema_version": 1,
-  "ok": false,
-  "message": "Sheet 'Sales2025' not found",
-  "location": {"file": "Main.bas", "line": 2, "column": 5},
-  "root_causes": [
-    {
-      "code": "WORKSHEET_NOT_FOUND",
-      "certainty": "definite",
-      "expression": "Worksheets(\"Sales2025\")",
-      "requested": "Sales2025",
-      "available": ["input", "sales2026", "summary"],
-      "suggested": "sales2026",
-      "suggestions": ["did you mean 'sales2026'?"]
-    }
-  ],
-  "messages": []
-}
-```
-
-`Range("A1:C10").Copy` followed by `Range("E1:F10").PasteSpecial` reports
-both the shape mismatch and where each statement is:
-
-```json
-{
-  "code": "PASTE_SHAPE_MISMATCH",
-  "source_addr": "A1:C10", "source_rows": 10, "source_cols": 3,
-  "dest_addr": "E1:F10", "dest_rows": 10, "dest_cols": 2,
-  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
-  "suggestions": [
-    "resize the destination to E1:G10",
-    "or specify only the top-left cell E1"
-  ]
-}
-```
-
-Writing to a `.Protect`ed sheet reports which sheet and how to fix it:
-
-```json
-{
-  "code": "SHEET_PROTECTED",
-  "sheet": "sheet1",
-  "suggestions": ["unprotect the sheet first: Worksheets(\"sheet1\").Unprotect"]
-}
-```
-
-Pasting `A1:C10` into `E1:G10` when the destination's first row is merged
-(`E1:G1`) but the source's isn't reports the layout conflict and both
-locations:
-
-```json
-{
-  "code": "PASTE_MERGE_LAYOUT_MISMATCH",
-  "source_addr": "A1:C10", "dest_addr": "E1:G10",
-  "conflicts": ["E1:G1"],
-  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
-  "suggestions": [
-    "unmerge E1:G1 before pasting",
-    "or make the source and destination merge layouts identical"
-  ]
-}
-```
-
-Full classification rules and JSON schema: [docs/agent-contract.md](docs/agent-contract.md).
-
-### Diagnosing across generated inputs
-
-`elixcee diagnose-workbook` combines the two features above: it reruns a
-macro across `test-workbook`'s generated cases and classifies whichever
-failures it finds, instead of only reporting a bare error string. It's most
-useful for input-dependent failures like array-bounds errors, where only
-some drawn values trigger the bug — a single `diagnose` call already finds
-structural issues (shape mismatches, merged-cell conflicts, sheet
-protection) in one shot, since those don't depend on the input at all:
-
-```bat
-elixcee diagnose-workbook fixture.toml --json
-```
-
-```json
-{
-  "schema_version": 1,
-  "ok": false,
-  "seed": 42,
-  "case_index": 3,
-  "inputs": [{"address": "sheet1!B2", "value": 999999999}],
-  "failure": {
-    "rule": "no_runtime_error",
-    "message": "Array 'arr': index 999999999 out of bounds (len=6)"
-  },
-  "root_causes": [
-    {
-      "code": "ARRAY_INDEX_OUT_OF_BOUNDS",
-      "name": "arr", "index": 999999999, "lower": 0, "upper": 5,
-      "suggestions": ["check that 'arr' is large enough for index 999999999 (valid range is 0 To 5)"]
-    }
-  ]
-}
-```
-
-Same fixture format and `--seed`/`--case` replay as `test-workbook`, plus
-`--cases N` to override the fixture's own case count for one run. Full
-schema: [docs/agent-contract.md](docs/agent-contract.md).
-
-### Multi-area ranges
-
-`Range("A1:A10,C1:C10")` — a disjoint, multi-area range — is now
-recognized by `.Copy`, but pasting it is diagnose-only: `diagnose`/
-`diagnose-workbook` classify why, instead of silently doing nothing:
-
-```json
-{
-  "code": "MULTI_AREA_TO_SINGLE_AREA_PASTE",
-  "source_areas": [
-    {"address": "A1:A10", "rows": 10, "columns": 1},
-    {"address": "C1:C10", "rows": 10, "columns": 1}
-  ],
-  "destination_areas": [
-    {"address": "E1:F10", "rows": 10, "columns": 2}
-  ],
-  "suggestions": [
-    "paste each source area separately",
-    "copy a contiguous rectangular range",
-    "use destination areas with matching count and shapes"
-  ]
-}
-```
-
-`Union()`, `Areas`, `Dim rng As Range`/`Set` object variables, and matching-shape
-multi-area paste are now implemented — see "VBA object model" below. The 4 classified
-codes above still apply to every multi-area shape that doesn't match exactly (different
-area counts or shapes, or either side single-area): full scope in
-[docs/agent-contract.md](docs/agent-contract.md).
-
-### Hidden row/column evidence
-
-`diagnose`/`diagnose-workbook` now report when a `.Copy`'d range overlaps
-hidden rows/columns (read from real XLSX `hidden="1"` metadata) — not an
-error, just a new `observations` field, present alongside (or instead of)
-`root_causes`:
-
-```json
-{
-  "code": "RANGE_CONTAINS_HIDDEN_CELLS",
-  "certainty": "observed",
-  "range": {"sheet": "sheet1", "address": "A1:C100", "rows": 100, "columns": 3},
-  "visibility": {
-    "hidden_rows": ["11:14", "30:39"],
-    "hidden_columns": ["B:B"],
-    "total_cells": 300,
-    "visible_cells": 172
-  },
-  "message": "The range contains hidden rows or columns. Excel operations using visible cells only may produce a multi-area range."
-}
-```
-
-This is what `SpecialCells(xlCellTypeVisible)` (below) builds on — plain Copy/Paste
-itself is unaffected (hidden cells still copy/paste exactly as before). XLSX only; ODS
-is deferred. Full scope: [docs/agent-contract.md](docs/agent-contract.md).
-
-### VBA object model
-
-```vb
-Dim rng As Range
-Set rng = Range("A1:B2")
-rng.Value = 5                        ' real Set reference semantics — an alias, not a copy
-
-Dim u As Range
-Set u = Union(Range("A1"), Range("D1"))
-Range("C1").Value = u.Areas.Count    ' 2
-
-Dim ws As Worksheet
-Set ws = ActiveSheet
-ws.Range("A1").Value = 1
-
-Range("F1").Value = 7 Mod 3          ' 1
-Range("F2").Value = 2 ^ 3            ' 8
-Range("F3").Value = 7 \ 3            ' 2 (integer division)
-If Not (a And b) Then MsgBox "ok"
-
-With Cells(r, c)                     ' any target expression, evaluated once
-  .Value = 5
-  If .Value > 0 Then .Value = .Value + 1   ' .member works at any nesting depth
-End With
-
-Set rng = Range("A1"): Set rng2 = rng: Set rng = Nothing
-rng2.Value = 1                       ' aliases survive Set ... = Nothing on the original
-rng.Value = 2                        ' raises "Object variable or With block variable not set"
-
-Dim n
-n = Null
-If IsNull(n + 5) Then MsgBox "Null propagates through +"   ' True
-
-Function DoubleIt(x As Integer) As Integer
-  DoubleIt = x * 2
-End Function
-```
-
-`Set`-assigned `Range`/`Worksheet`/`Workbook` object variables with real reference
-semantics — including a genuine unset/`Nothing` state (member access through a never-`Set`
-or explicitly-`Nothing` variable raises real VBA's "Object variable or With block variable
-not set"; `Set x = Nothing` clears only `x`, not any alias made from it earlier) —
-`Union`/`Areas`, `SpecialCells(xlCellTypeVisible)` (built on the hidden row/column evidence
-above), matching-shape multi-area Copy/Paste, `Mod`/`\`/`^`, infix `And`/`Or`/`Xor`/`Not`
-(real bitwise semantics on non-Boolean operands), a runtime `With` stack (any target
-expression — including a computed one like `With Cells(r, c)` — evaluated once, with
-`.member` resolving correctly at any nesting depth inside `If`/`For`/`Do`/`Select Case`),
-`Variant`'s `Null` (documented VBA propagation through `+`/`&`/comparisons, distinct from
-`Empty`), the `:` multi-statement-per-line separator, typed `Function` parameters/return
-types, comma-separated multi-declarator `Dim` (`Dim a As Integer, b As Range`), and
-single-line `If cond Then stmt [Else stmt]` are all supported.
-
-**Known gaps**: multi-area Paste only executes when both sides are multi-area with
-matching `Areas.Count` and per-area shapes — every other combination stays diagnose-only
-(see above).
-
-### XLSX.read()/write() — `@elixcee/xlsx` (npm, prepared but not yet published)
-
-A synchronous, WebAssembly-backed `XLSX.read(bytes)` — no `await init()` required — is
-implemented in the `@elixcee/xlsx` npm package (see
-[docs/xlsx-architecture.md](docs/xlsx-architecture.md) for the compatibility initiative
-and the sync-bridge design), along with `readFile()`/`readFileSync()` (Node-only; the
-browser entry point throws rather than faking a filesystem). They return sheet names,
-`!ref`, `!merges`, `!rows`/`!cols` (hidden rows/columns), and per-cell `{t, v, f, w, z}` —
-values, formula text, formatted display strings, and date-typed cells, resolved via real
-`styles.xml`/number-format parsing. Differential-tested against the real `xlsx@0.18.5`
-package: 33/33 MATCH, 0 disclosed (the `src/reader.rs` `xml:space="preserve"` trimming
-defect noted in earlier rounds is fixed; see CHANGELOG.md). Works in Node (CJS/ESM) and the
-browser: a `"browser"` export condition routes to the inlined-bytes/`initSync` WASM
-artifact, verified not just by Node simulating that export condition but by an actual
-headless Chrome process loading a real bundle and reading `XLSX.read()`'s result back out
-of the page's own DOM (no Safari claim). The browser entry point still assumes bundled
-consumption — its shared code has a CJS `require('ssf')`, so it's not literal no-build
-`<script type="module">` usage — but a real packed-npm-tarball install (not a relative
-import into this repo) and CJS/ESM bundling both round-trip cleanly with no manual asset
-copy step required anymore.
-
-`XLSX.write(wb, opts)`/`writeFile()`/`writeFileSync()` — pure JS/XML/ZIP generation, no
-Rust writer needed — are implemented too (`bookType: "xlsx"` only), differential-tested
-both directions against the real oracle: 36 MATCH + 1 disclosed (`bookType: "ods"`, not
-implemented). `package.json`'s `description` was updated to match, but its `version`
-(`0.0.0-development`), `private` (`true`), and `publishConfig` (unset) were deliberately
-left untouched — no `npm publish` has actually run, and `@elixcee` scope ownership on
-npm is unconfirmed from this environment either way (see ROADMAP.md's "Known gaps").
-
-### Build from source
-
-```bash
-cargo build --release --bin elixcee
-# binary: target/release/elixcee  (or elixcee.exe on Windows)
-```
-
----
-
-## Quick Start
+The run command accepts one or more standard VBA modules (`.bas`, `.vbs`, or
+`.txt`). Use `Module.Sub` for a qualified entry point in a multi-module run.
+`--json` emits one stable JSON object on stdout; see
+[docs/agent-contract.md](docs/agent-contract.md) for the contract.
+
+## Python quick start
 
 ```python
 import elixcee
 
-# Run a VBA macro and get all resulting cells
-cells = elixcee.run_macro("""
-Sub FillSquares()
-    For i = 1 To 5
-        Cells(i, 1).Value = i * i
-    Next i
-End Sub
-""", "FillSquares")
-# cells == {(1,1): 1, (2,1): 4, (3,1): 9, (4,1): 16, (5,1): 25}
-
-# Pre-populate cells from Python, then run a macro
 vm = elixcee.Vm()
-vm.set_cell(1, 1, 100)
-vm.set_cell(2, 1, 200)
+vm.set_cell(1, 1, 10)          # coordinates are 1-based, like Excel
 vm.run("""
-Sub CalcTotal()
-    total = Cells(1,1).Value + Cells(2,1).Value
-    Cells(3,1).Value = total
+Sub DoubleIt()
+    Cells(1, 2).Value = Cells(1, 1).Value * 2
 End Sub
-""", "CalcTotal")
-print(vm.get_cell(3, 1))   # 300
-print(vm.variables())       # {"total": 300}
+""", "DoubleIt")
+print(vm.get_cell(1, 2))       # 20
 
-# Load cell data from an existing Excel file, then run a macro
-vm = elixcee.load_workbook("data.xlsx")
-vm.run(vba_code, "ProcessData")
-result_cells = vm.cells()   # {(row, col): value, ...}
-
-# Store a worksheet formula on a cell and evaluate it
-vm.set_cell_formula(4, 1, "=SUM(A1:A3)")
-print(vm.get_cell(4, 1))   # sum of rows 1-3 in column A
-
-# Bulk range/row access -- no per-cell round trips needed
 vm = elixcee.load_workbook("input.xlsx")
-rows = vm.get_range("A1:C10", sheet="Data")
-vm.set_range("E1:F2", [[1, 2], [3, 4]], sheet="Result")
-vm.append_row(["Alice", 100], sheet="Result")
+vm.run(vba_code, "ProcessData")
 vm.save_workbook("output.xlsx")
-
-# Sheet management and row/column edits
-vm.rename_sheet("Result", "Summary")
-vm.move_sheet("Summary", 0)          # move to the first tab
-vm.insert_rows(1, sheet="Summary")   # shift everything down by one row
-print(vm.merged_cells(sheet="Data")) # e.g. ["B1:C1"]
-
-# Column iteration, sorting, and merge create/remove
-cols = vm.iter_cols(max_col=3, sheet="Data")  # column-major, values only
-vm.sort_range("A2:B10", key_col=1, sheet="Data")
-vm.merge_cells("D1:E1", sheet="Data")
-vm.unmerge_cells("B1:C1", sheet="Data")
-
-# Hide/unhide rows and columns
-vm.set_row_hidden(5, sheet="Data")
-vm.set_column_hidden(4, hidden=False, sheet="Data")
-print(vm.hidden_rows(sheet="Data"))  # e.g. [5]
-
-# Copy a sheet
-vm.copy_sheet("Data", "Data Backup")
-
-# Read workbook-level defined names
-print(vm.defined_names())  # e.g. {"MyRange": "Sheet1!$A$1:$A$3"}
-
-# Read a sheet's whole-tab visibility
-print(vm.sheet_state("Data"))  # "visible", "hidden", or "veryHidden"
-
-# Read a row's height or a column's width, if explicitly set
-print(vm.row_height(5, sheet="Data"))     # e.g. 30.5, or None
-print(vm.column_width(2, sheet="Data"))   # e.g. 12.5, or None
-
-# Control MsgBox behavior
-vm = elixcee.Vm(on_msgbox="skip")   # silently ignore MsgBox calls (default)
-vm = elixcee.Vm(on_msgbox="error")  # raise RuntimeError on MsgBox
 ```
 
----
+The Python API also provides formula evaluation, ranges, sorting, merges,
+hidden rows/columns, sheet management, styles, tables, data validation,
+AutoFilter, defined-name inspection, pandas export, and `.xlsx`/`.xlsm`/`.ods`
+workbook I/O. See [elixcee.pyi](elixcee.pyi) for signatures and behavior.
 
-## Python API
+For large XLSX/XLSM files, `open_stream(path, sheet=None)` yields rows without
+materializing the whole workbook. Set `include_row_numbers=True` to receive
+`(row_number, values)` tuples. `create_stream(path)` provides an append-only
+XLSX row writer.
 
-| Method | Description |
-|---|---|
-| `Vm(on_msgbox="skip")` | Create a new VM. `on_msgbox="error"` raises `RuntimeError` on `MsgBox`. |
-| `vm.run(vba_code, macro_name)` | Parse and execute the named Sub. |
-| `vm.set_cell(row, col, value)` | Write a value into a cell (1-based). |
-| `vm.get_cell(row, col)` | Read a cell value. Returns `None` for empty cells. |
-| `vm.cells()` | All non-empty cells as `{(row, col): value}`. |
-| `vm.variables()` | All VBA variables as `{name: value}`. |
-| `vm.set_cell_formula(row, col, formula)` | Store a formula (e.g. `"=SUM(A1:A3)"`) and evaluate it. |
-| `vm.set_cell_formula_batch(formulas)` | Set multiple formulas at once: `{(row, col): formula_str}`. |
-| `vm.recalculate()` | Re-evaluate all formula cells (useful after manual cell writes). |
-| `vm.set_sheet(name)` | Switch the active sheet (creates it if absent). |
-| `vm.active_sheet()` | Name of the currently active sheet. |
-| `vm.sheet_names()` | List of all sheet names. |
-| `vm.get_sheet(name)` | Cells of a named sheet as `{(row, col): value}`. |
-| `vm.get_range(addr, sheet=None)` | Read a rectangular range (e.g. `"A1:C5"`) as a nested list. |
-| `vm.set_range(addr, values, sheet=None)` | Write a rectangular range from a nested list. |
-| `vm.append_row(values, sheet=None)` | Write one row just past the sheet's used range; returns the row number. |
-| `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | Values-only iteration over a rectangular region. |
-| `vm.iter_cols(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | Column-major values-only iteration -- the transposed sibling of `iter_rows`. |
-| `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | Highest used row/column, or `None` if the sheet is empty. |
-| `vm.calculate_dimension(sheet=None)` | Used range as an A1-style string (e.g. `"B2:D10"`), or `None` if empty. |
-| `vm.sort_range(addr, key_col, descending=False, header=False, sheet=None)` | Sort a rectangular range in place by one column. |
-| `vm.rename_sheet(old_name, new_name)` | Rename a sheet. |
-| `vm.move_sheet(name, new_index)` | Move a sheet to an absolute 0-based tab position. |
-| `vm.copy_sheet(source_name, new_name)` | Duplicate a sheet (cells, merges, hidden state, styles) into a new one. |
-| `vm.defined_names()` | Workbook-level defined names as `{name: raw_formula_text}`. Read-only. |
-| `vm.sheet_state(name)` | A sheet's whole-tab visibility: `"visible"`, `"hidden"`, or `"veryHidden"`. Read-only. |
-| `vm.row_height(row, sheet=None)` / `vm.column_width(col, sheet=None)` | A row's height in points / column's width in characters, or `None` if never explicitly set. Read-only. |
-| `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | Insert/delete rows (values only -- doesn't shift merges/styles). |
-| `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | Insert/delete columns (same caveat as rows). |
-| `vm.merged_cells(sheet=None)` | List a sheet's merged ranges as A1 strings, e.g. `["B1:C1"]`. |
-| `vm.merge_cells(addr, sheet=None)` / `vm.unmerge_cells(addr, sheet=None)` | Create/remove a merge. |
-| `vm.hidden_rows(sheet=None)` / `vm.hidden_columns(sheet=None)` | Sorted list of hidden row/column numbers. |
-| `vm.set_row_hidden(row, hidden=True, sheet=None)` / `vm.set_column_hidden(col, ...)` | Hide or unhide a single row/column. |
-| `vm.save_workbook(path)` | Save all sheets to `.xlsx` or `.ods`. |
-| `vm.cells_df()` | Return the active sheet as a **pandas DataFrame** (requires pandas). |
-| `elixcee.run_macro(vba, name)` | One-shot: run a macro and return `{(row, col): value}`. |
-| `elixcee.load_workbook(path)` | Load an `.xlsx` or `.ods` file into a `Vm`. |
+`Vm(on_msgbox="skip")` is the default. Use `on_msgbox="error"` to make a
+`MsgBox` call raise an error.
 
----
+## Supported VBA and formulas
 
-## Coverage
+The interpreter supports common data-processing constructs including
+`Sub`/`Function`, variables and arrays, `If`, `For`, `For Each`, `Do`,
+`Select Case`, `With`, `On Error`, user-defined types, named ranges, multiple
+sheets, and Excel-style `Range`/`Cells` operations. Formula support includes
+arithmetic, comparisons, criteria functions, lookup functions, date/time,
+text, statistical, financial, logical, and dynamic-array functions.
 
-See **[FUNCTIONS.md](FUNCTIONS.md)** for the complete function and VBA syntax reference, including Excel version for each function.
+The maintained coverage list is [FUNCTIONS.md](FUNCTIONS.md). Unsupported or
+intentional no-op behavior is documented there and in the diagnostic contract.
 
-**Highlights:**
-- **Classic (Excel 2003-)**: SUM, VLOOKUP, IF, PMT, FV, PV, NPER, RATE, IPMT, PPMT, NPV, IRR, MIRR, XNPV, XIRR, DGET, DSUM, DAVERAGE, DCOUNT, DCOUNTA, DMAX, DMIN, and 100+ core functions
-- **2007–2019**: IFERROR, COUNTIFS/SUMIFS, XOR, IFS, SWITCH, TEXTJOIN, MAXIFS/MINIFS
-- **365/2021**: XLOOKUP, XMATCH, FILTER, SORT, UNIQUE, SEQUENCE, LET, LAMBDA, MAP, REDUCE
-- **2024/365**: TEXTSPLIT, TEXTBEFORE, TEXTAFTER, VSTACK, HSTACK, TAKE, DROP, CHOOSECOLS, CHOOSEROWS
-- **VBA**: For/If/While/With/On Error/Function/`Type...End Type`/Named Ranges/Array of UDT
+## Workbook compatibility
 
-### Named Ranges
+The Rust reader/writer preserves supported cell data, formulas, styles, merges,
+hidden rows/columns, and many unknown OOXML parts. Macro projects in `.xlsm`
+files are preserved during supported round trips. Features not modeled by the
+writer can still be lost or disconnected; tables, drawings, comments,
+hyperlinks, and other OOXML objects should be treated as compatibility gaps
+unless covered by tests for the version in use.
 
-Register a named range in VBA with `Range("A1:B5").Name = "MyData"`, then use the name anywhere a range address is accepted:
+The project runs Rust tests, property tests, compatibility fixtures, and
+differential tests for the JavaScript package in CI. Compatibility with Excel's
+VBA execution semantics is not claimed for every macro, and post-save macro
+execution has not been fully validated against desktop Excel.
 
-```vba
-Range("MyData").Value = 0          ' write to all cells in the range
-For Each cell In Range("MyData")   ' iterate over cells
-    total = total + cell
-Next cell
+## Development
+
+```bash
+cargo test --workspace
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Named ranges are stored on `vm.named_ranges` (a `dict[str, str]` mapping lowercase name → address).
+The short-term plan is in [ROADMAP.md](ROADMAP.md). Public design and policy
+documents are in [docs/](docs/).
 
-### Criteria Syntax (COUNTIF / SUMIF / SUMIFS / etc.)
-
-| Criteria | Example | Meaning |
-|---|---|---|
-| Number | `10` | Exact numeric match |
-| String | `"apple"` | Case-insensitive string match |
-| Comparison | `">5"`, `"<=10"`, `"<>"` | Numeric comparison |
-| Wildcard | `"a*"`, `"?bc"` | `*` = any chars, `?` = one char |
-
-### Application Object
-
-| Property / Method | Description | Behavior |
-|---|---|---|
-| `Application.Calculation = xlCalculationManual` | Disable auto-recalculation | **Active** |
-| `Application.Calculation = xlCalculationAutomatic` | Enable auto-recalculation + re-evaluate all formula cells | **Active** |
-| `Application.ScreenUpdating = False/True` | Suppress screen refresh | **No-op** (no screen) |
-| `Application.EnableEvents = False/True` | Disable/enable event triggers | **No-op** (no events) |
-| `Application.DisplayAlerts = False/True` | Suppress dialog boxes | **No-op** (no dialogs) |
-| `Application.StatusBar = "..."` / `False` | Set/clear status bar text | **No-op** (no UI) |
-| `Application.Cursor = xlWait` / `xlDefault` | Change cursor shape | **No-op** (no UI) |
-| `Application.CutCopyMode = False` | Cancel clipboard mode | **Active** (clears the modeled clipboard) |
-
-> **No-op** properties are parsed and accepted without error, but have no effect. This allows VBA macro performance patterns (e.g., `Application.ScreenUpdating = False` at the start of a macro) to run unchanged.
-
----
-
-## Microsoft Excel round-trip validation
-
-elixcee's workbook save path has been validated using five sanitized,
-Microsoft Excel-authored `.xlsm` fixtures on Microsoft Excel for Mac.
-
-**Validated scope:**
-
-- open an Excel-authored workbook
-- modify cells with elixcee
-- save-as and in-place save
-- reopen in Microsoft Excel without a repair warning
-- preserve formulas, existing cell styles, merged cells, hidden rows/columns,
-  VBA project bytes, unknown ZIP parts, and surviving relationships
-
-**Not validated:**
-
-- post-save VBA macro execution
-- tables, data validation, conditional formatting, hyperlinks, comments,
-  defined names, charts, images, and print settings embedded in regenerated
-  worksheet XML
-
-See [`compat/oracle-excel-com/results/0.9.0-A_summary.md`](compat/oracle-excel-com/results/0.9.0-A_summary.md)
-for the full results.
-
----
-
-## Not Yet Supported
-
-See **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)** for the full list.
-
-Key gaps by category:
-- **Statistical**: NORM.S.DIST, T.INV, F.DIST, CHISQ.DIST, and more
-- **Text**: REPT, NUMBERVALUE, PHONETIC
-- **Out of scope**: IMAGE (URL image fetch), GROUPBY (pivot aggregation), TRIMRANGE
-
----
-
-## Status Legend
-
-| Mark | Meaning |
-|---|---|
-| Done | Implemented and tested |
-| TBD | Not yet scheduled |
-
----
-
-## Development Phases
-
-| Phase | Content | Status |
-|---|---|---|
-| Phase 1 | Rust project setup + pyo3 Python bindings | Done |
-| Phase 2 | VBA parser MVP (Sub/End Sub, assignment, Cells) | Done |
-| Phase 3 | Virtual Excel VM (variables, cell storage, interpreter) | Done |
-| Phase 3.5 | Excel formula engine (SUM, IF, VLOOKUP, Application.Calculation, etc.) | Done |
-| Phase 4 | Control flow (For loop, If/Else, arithmetic expressions) | Done |
-| Phase 5 | Python interface (Vm class, run_macro, load_workbook, MsgBox) | Done |
-| Phase 6 | Formula function expansion (100+ Excel functions, 118 tests) | Done |
-| Phase 7 | Advanced VBA constructs (ElseIf, Exit, For Each, On Error, Function, arrays, While-Wend) | Done |
-| Phase 8 | Range API (ClearContents, Offset, Sheets.Cells, WorksheetFunction, multi-sheet) | Done |
-| Phase 9 | Multi-sheet support (Sheets HashMap, With Sheets, Python API, load_workbook all sheets) | Done |
-| Phase 10 | Worksheet function expansion (math, trig, stats, array/spill, lambda functions) | Done |
-| Phase 11 | User-defined types (`Type...End Type`), named ranges, `RANDARRAY`, pandas integration (`cells_df`), type stubs (`.pyi`) | Done |
-| Phase D1 | Remove rust_xlsxwriter, hand-written XLSX via zip (dependencies: 5→4) | Done |
-| Phase D2 | Remove pest/pest_derive, hand-written recursive descent VBA parser (dependencies: 4→3) | Done |
-| Phase D3 | Remove calamine from runtime, hand-written XLSX/ODS reader (dependencies: 3→2) | Done |
-| Perf R4 | SUM/AVERAGE/MIN/MAX fast path (skip `Vec<Variant>`), RangeWrite dirty-flag batching | Done |
-| CLI | Standalone `elixcee` binary; pyo3 made optional; GitHub Actions release workflow | Done |
-| Milestone A | JSON agent contract (`--json`), error classification, MsgBox message log | Done |
-| Milestone A.1 | JSON contract hardening (`serde_json`-verified tests, message-log lifecycle, error code docs) | Done |
-| Milestone A.5 | Source location tracking — line/column in parse and runtime errors | Done |
-| Milestone B1 | `check` subcommand — parse diagnostics, entrypoint check, `MsgBox`/interactive-call detection | Done |
-| Milestone B1.1 | `check`: undefined Sub/Function call detection, unsupported-construct (no-op) detection | Done |
-| Milestone B2 | Multi-module projects — multiple `.bas` files, `Module.Sub` qualified entrypoints, cross-module collision detection | Done |
-| Milestone B3 | Deterministic black-box tests (`tests/blackbox.rs`, declarative `.toml` fixtures) | Done |
-| Milestone B4 | `snapshot` subcommand — read a workbook's cells without executing VBA | Done |
-| Milestone B5a | `test-workbook` subcommand — property-based testing with generated boundary-value inputs | Done |
-| Milestone B6a | `diagnose` subcommand — missing sheet/workbook, array-out-of-bounds root causes | Done |
-| Milestone B6b | `diagnose`: Copy/Paste shape mismatch + clipboard state | Done |
-| Milestone B6c | `diagnose`: sheet protection (`Protect`/`Unprotect`) | Done |
-| Milestone B6c2 | `diagnose`: merged-cell-aware Copy/Paste diagnostics | Done |
-| Milestone B6d | `diagnose-workbook` — root-cause diagnosis across generated test cases | Done |
-| Milestone B7a | Multi-area `Range`/`Union`/`Areas` foundation for Copy/Paste diagnostics | Done |
-| Milestone B7b | Hidden row/column metadata foundation for Copy/Paste diagnostics | Done |
-| Phase 3A-1 | `compat/vba-semantics/` value-correctness suite: 208 → 301 cases (6 new categories); fixed single-line-`If` statement dispatch, `Boolean` arithmetic (`True` = -1), `WorksheetFunction` Boolean coercion, `Empty` equality | Done |
-| Phase 3A-2 | CI `wasm` job: fresh `wasm-pack` build (Node + web targets) plus a Node/browser-condition smoke test, wired into GitHub Actions | Done |
-| 0.5.0 | VBA structural semantics (`:` statement separator, `Variant::Null` with documented propagation, real object-`Nothing` state with alias safety, a runtime `With` target stack) merged with `@elixcee/xlsx` real-consumer/real-browser validation (packed-tarball install, headless-Chrome smoke, bundle-safe WASM loading, `readFile()`); `compat/vba-semantics/` 301 → 386 cases; `elixcee-types` bumped to 0.2.0 for the new public `Variant::Null` enum variant; published to crates.io, PyPI, and GitHub Releases | Done |
+License: MIT. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

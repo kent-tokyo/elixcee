@@ -1,7 +1,7 @@
 # Python differential tests
 
 Compares elixcee's Python-native worksheet APIs against `openpyxl`'s own read
-of the same fixtures — see `docs/openpyxl-gap-audit.md`:
+of the same fixtures — see the Python API section in `README.md`:
 
 - `bulk_range_check.py`: the bulk worksheet range/row API (R1 + P1 remainder)
   — `get_range`/`set_range`/`append_row`/`iter_rows`/`iter_cols`/`max_row`/

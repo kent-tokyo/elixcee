@@ -10,7 +10,7 @@ object-injection vector, `@elixcee/xlsx` diverges deliberately and the divergenc
 recorded, not hidden. See [`docs/xlsx-compatibility-goal.md`](xlsx-compatibility-goal.md)
 for how this fits the overall compatibility definition.
 
-## Existing limits (as of Phase 0)
+## Existing limits (0.23.0)
 
 | Limit | Value | Where |
 |---|---|---|
@@ -165,14 +165,14 @@ folding it into `MATCH` or silently omitting it from a compatibility report.
 
 ## The oracle itself is a validating example
 
-`npm audit` against the installed `compat/` devDependencies (run during Phase 0) reports
+`npm audit` against the installed `compat/` devDependencies reports
 that `xlsx@0.18.5` — the exact version pinned as the compatibility oracle, per the
 project's own instruction to target npm's widely-used `0.18.5` rather than the latest
 SheetJS release — carries two known high-severity advisories: Prototype Pollution
 ([GHSA-4r6h-8v6p-xvw6](https://github.com/advisories/GHSA-4r6h-8v6p-xvw6), fixed in
 0.19.3) and a ReDoS
 ([GHSA-5pgg-2g8v-p4x9](https://github.com/advisories/GHSA-5pgg-2g8v-p4x9), fixed in
-0.20.2). This is expected, not a Phase 0 problem to fix: `xlsx` here is a `devDependency`
+0.20.2). This is expected: `xlsx` here is a `devDependency`
 used only to drive the oracle/differential harness, never shipped to an `@elixcee/xlsx`
 consumer. It is, however, direct, concrete confirmation of why this document's
 "intentional non-compatibility policy" exists — the oracle we are matching behavior

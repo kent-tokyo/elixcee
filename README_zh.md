@@ -2,42 +2,11 @@
 
 [English](README.md) | [日本語](README_ja.md) | **中文**
 
-无需安装 Microsoft Excel，即可运行、测试并诊断 Excel VBA 宏。elixcee 是一个 Rust 驱动的无头 VBA 运行时，支持 Linux、macOS 和 Windows，具备静态检查、基于属性的工作簿测试，以及针对 VBA 与工作簿操作失败的结构化诊断能力。
+elixcee 是一个使用 Rust 编写的无头运行时，可在不安装 Microsoft Excel 的情况下运行、测试和诊断面向数据处理的 Excel VBA 子集。项目提供 PyO3 Python API、独立 CLI，以及实验性的 `@elixcee/xlsx` JavaScript/WASM 包。
 
-核心引擎使用 **Rust** 编写，通过 **pyo3 + maturin** 提供 Python 绑定。
+它不是 Excel 桌面应用的完整替代品。屏幕更新、图表和对话框等 UI 功能会被跳过、简化建模或报告错误。
 
-## 名称由来
-
-**elixcee** = **Excel** + **elixir**（万灵药） + **C**
-
-治愈 Excel 依赖的"万灵药"——借助 Rust 以 C 语言级别的速度运行。
-
----
-
-## 与同类工具的对比
-
-| 功能 | **elixcee** | xlwings | LibreOffice UNO | openpyxl | xlcalculator |
-|------|:-----------:|:-------:|:---------------:|:--------:|:------------:|
-| 运行 VBA 宏 | 是 | 是 | 是（部分） | 否 | 否 |
-| 需要 Excel | 否 | 是 | 否 | 否 | 否 |
-| 需要 LibreOffice | 否 | 否 | 是 | 否 | 否 |
-| 公式求值 | 是 | 是 | 是 | 否 | 是 |
-| macOS/Linux/Windows | 是 | 部分 | 是 | 是 | 是 |
-| 简洁的 Python API | 是 | 是 | 否 | 是 | 是 |
-| 读取 .xlsx | 是 | 是 | 是 | 是 | 是 |
-| 读取 .ods | 是 | 是 | 是 | 否 | 否 |
-| 写入 .xlsx | 是 | 是 | 是 | 是 | 否 |
-| 写入 .ods | 是 | 是 | 是 | 否 | 否 |
-| 执行速度 | Rust（原生） | COM/IPC（慢） | IPC（慢） | — | Python |
-
-**说明：**
-- **xlwings** 在 macOS 上需要通过 AppleScript 调用 Excel for Mac，在 Windows 上需要通过 COM 调用 Excel。Linux 支持需要运行中的 Excel 实例或云端桥接。
-- **LibreOffice UNO** 启动耗时超过 1 秒，且 API 复杂。VBA 通过 LibreOffice 自有解释器运行，行为可能与 Excel 不完全一致。
-- **openpyxl** 从 .xlsx 文件中读取缓存的公式值，但不支持运行时重新求值。
-- **xlcalculator** 可在 Python 中重新求值 Excel 公式，但不支持 VBA。
-- elixcee 的 VBA 解释器覆盖了典型数据处理宏所用的 VBA 子集（循环、条件分支、单元格读写、字符串/数学函数、多工作表访问）。图表、格式设置等大多数 Excel UI 操作不受支持或为 no-op。`MsgBox` 是特例：根据运行模式，它会被输出到标准输出、收集进 JSON 输出，或作为错误抛出。
-
----
+当前版本：**0.24.0**。
 
 ## 安装
 
@@ -45,605 +14,57 @@
 pip install elixcee
 ```
 
-开发版（从源码构建）：
+CLI 二进制文件可从 [GitHub Releases](https://github.com/kent-tokyo/elixcee/releases) 获取。源码构建：
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
+pip install maturin
 maturin develop
 ```
 
----
+## CLI
 
-## CLI（Windows / Linux / macOS）
-
-无需 Python 的独立可执行文件，可从 [Releases](https://github.com/kent-tokyo/elixcee/releases) 页面下载。
-
-| 下载 | 适用平台 |
-|---|---|
-| [elixcee-x86_64-windows.exe](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-windows.exe) | Windows x64 |
-| [elixcee-x86_64-linux](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-x86_64-linux) | Linux x64 |
-| [elixcee-aarch64-macos](https://github.com/kent-tokyo/elixcee/releases/latest/download/elixcee-aarch64-macos) | macOS Apple Silicon |
-
-### 用法
-
-```
-elixcee <vba_file>... <MacroName> [OPTIONS]
-
-参数：
-  <vba_file>...  一个或多个 VBA 源文件（.vbs / .bas / .txt）。传入多个文件时，
-                 Sub/Function 名称在整个项目内共享，遇到同名时用 Module.Sub 指定。
-  <MacroName>    要执行的 Sub 名称（最后一个参数）
-
-选项：
-  --file <path>    从电子表格加载单元格数据（.xlsx / .xlsm / .ods）
-  --sheet <name>   活动工作表名称（默认：--file 的第一个工作表）
-  --output <path>  将结果单元格保存到电子表格（.xlsx / .ods）
-  --json           输出单个机器可读的 JSON 对象（结果或错误），而非纯文本
+```text
+elixcee <file.bas>... <MacroName> [--file input.xlsx] [--sheet Sheet1]
+                         [--output result.xlsx] [--json]
+elixcee check <file.bas>... [--entry MacroName] [--json]
+elixcee snapshot <workbook.xlsx|ods> [--json]
+elixcee test-workbook fixture.toml [--json] [--seed N] [--case N]
+elixcee diagnose <file.bas>... <MacroName> --file input.xlsx [--json]
+elixcee diagnose-workbook fixture.toml [--json] [--seed N] [--case N] [--cases N]
 ```
 
-### 示例
+多模块项目可使用 `Module.Sub` 指定入口。脚本和 CI 应使用 `--json`；完整契约见 [docs/agent-contract.md](docs/agent-contract.md)。
 
-执行 VBA 文件并将结果打印到标准输出：
-
-```bat
-elixcee macro.vbs ProcessData
-```
-
-从 Excel 文件加载数据，执行宏，并保存结果：
-
-```bat
-elixcee macro.vbs ProcessData --file input.xlsx --output result.xlsx
-```
-
-输出格式 — 每行一个非空单元格，地址与值用制表符分隔：
-
-```
-A1    Hello
-B1    42
-A2    3.14
-```
-
-`MsgBox` 的内容将输出到标准输出。
-
-### 多文件（多模块项目）
-
-传入多个源文件即可运行跨多个模块的项目。Sub/Function 名称在整个项目内共享——如果同名的 Sub/Function 存在于多个模块中，使用 `Module.Sub` 指定具体的一个（模块名优先取 `Attribute VB_Name`，否则取文件名）：
-
-```bat
-elixcee Helpers.bas Main.bas Main.ProcessData
-```
-
-目前还没有项目清单文件（具体支持范围、跨模块名称冲突的处理方式等详见 [docs/agent-contract.md](docs/agent-contract.md)）。
-
-### JSON 输出（面向脚本 / AI Agent）
-
-加上 `--json` 可输出单个机器可读的 JSON 对象，而非纯文本：
-
-```bat
-elixcee macro.vbs ProcessData --json
-```
-
-```json
-{"schema_version":1,"ok":true,"entrypoint":"ProcessData","duration_ms":0.42,"cells":[{"sheet":"sheet1","address":"A1","value":42}],"messages":[]}
-```
-
-完整契约（错误码、退出码、`messages` 语义）：[docs/agent-contract.md](docs/agent-contract.md)。
-
-### 不执行宏的静态分析
-
-`elixcee check` 在不执行的情况下检查一个或多个 `.bas` 文件：parse 错误、指定入口宏是否存在、代码中任何位置的未定义 Sub/Function 调用，以及 `MsgBox` 等交互操作。所有位置参数都视为文件，入口点（如果指定）始终通过 `--entry` 传入而非位置参数——因此 `elixcee check *.bas` 可以在不假设任何特定入口点的前提下检查项目中的每个模块。
-
-```bat
-elixcee check macro.vbs --entry ProcessData --json
-```
-
-```json
-{"schema_version":1,"ok":true,"diagnostics":[]}
-```
-
-### 工作簿快照
-
-`elixcee snapshot` 直接读取 `.xlsx`/`.xlsm`/`.ods` 文件——不执行 VBA——并以 Markdown（默认）或 `--json` 时以 JSON 打印每个工作表的非空单元格：
-
-```bat
-elixcee snapshot Book1.xlsx --json
-```
-
-```json
-{"schema_version":1,"ok":true,"file":"Book1.xlsx","sheets":[{"name":"Sheet1","sheet_id":"1","stable_id":"sheet1","cells":[{"address":"A1","value":42}]}]}
-```
-
-`stable_id` 来自文件自身的 `sheetId`（若不存在则按位置回退生成)，它**不是** VBA 的 `CodeName` 属性。完整设计理由见 [docs/agent-contract.md](docs/agent-contract.md)。
-
-### 基于属性的工作簿测试
-
-`elixcee test-workbook` 会用生成的边界值输入（空白、`0`、`1`、`-1`、接近溢出的数值、空/短/长字符串）反复对同一个起始工作簿运行宏，并在每次运行中检查 panic、运行时错误、超时以及 Excel 错误值——每个用例都从完全独立的工作簿状态开始：
-
-```toml
-# fixture.toml
-name = "order calculation"
-workbook = "orders.xlsx"
-vba_files = ["Main.bas"]
-macro = "Main.Process"
-cases = 100
-seed = 42
-
-[[inputs]]
-range = "Input!B2:B10"
-strategy = "boundary_numeric"
-
-[[assertions]]
-range = "Result!A1:F100"
-rule = "no_excel_errors"
-```
-
-```bat
-elixcee test-workbook fixture.toml --json
-```
-
-失败的用例会报告其 seed 和 case index，以便精确复现：`elixcee test-workbook fixture.toml --seed 42 --case 17`。完整 schema、strategy 与 assertion 规则见 [docs/agent-contract.md](docs/agent-contract.md)。
-
-### Excel 操作诊断
-
-`elixcee diagnose` 执行一次宏，并给出证据说明 Excel *为什么* 会拒绝该操作——缺失的工作表、缺失的工作簿、数组越界、Copy/Paste 形状不匹配、写入受保护的工作表，或 Copy/Paste 与合并单元格布局冲突——而不是只给出一句裸的错误字符串：
-
-```bat
-elixcee diagnose Main.bas --file report.xlsx --json Main.Run
-```
-
-```json
-{
-  "schema_version": 1,
-  "ok": false,
-  "message": "Sheet 'Sales2025' not found",
-  "location": {"file": "Main.bas", "line": 2, "column": 5},
-  "root_causes": [
-    {
-      "code": "WORKSHEET_NOT_FOUND",
-      "certainty": "definite",
-      "expression": "Worksheets(\"Sales2025\")",
-      "requested": "Sales2025",
-      "available": ["input", "sales2026", "summary"],
-      "suggested": "sales2026",
-      "suggestions": ["did you mean 'sales2026'?"]
-    }
-  ],
-  "messages": []
-}
-```
-
-`Range("A1:C10").Copy` 之后执行 `Range("E1:F10").PasteSpecial`，会同时报告形状不匹配以及两条语句各自的位置：
-
-```json
-{
-  "code": "PASTE_SHAPE_MISMATCH",
-  "source_addr": "A1:C10", "source_rows": 10, "source_cols": 3,
-  "dest_addr": "E1:F10", "dest_rows": 10, "dest_cols": 2,
-  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
-  "suggestions": [
-    "resize the destination to E1:G10",
-    "or specify only the top-left cell E1"
-  ]
-}
-```
-
-写入已 `.Protect` 的工作表会报告是哪个工作表以及修复方法：
-
-```json
-{
-  "code": "SHEET_PROTECTED",
-  "sheet": "sheet1",
-  "suggestions": ["unprotect the sheet first: Worksheets(\"sheet1\").Unprotect"]
-}
-```
-
-将 `A1:C10` 粘贴到 `E1:G10`，若目标区域的第一行已合并（`E1:G1`）而源区域没有合并，会报告布局冲突以及两条语句各自的位置：
-
-```json
-{
-  "code": "PASTE_MERGE_LAYOUT_MISMATCH",
-  "source_addr": "A1:C10", "dest_addr": "E1:G10",
-  "conflicts": ["E1:G1"],
-  "copy_location": {"file": "Main.bas", "line": 2, "column": 5},
-  "suggestions": [
-    "unmerge E1:G1 before pasting",
-    "or make the source and destination merge layouts identical"
-  ]
-}
-```
-
-完整分类规则与 JSON schema 见 [docs/agent-contract.md](docs/agent-contract.md)。
-
-### 对生成的输入进行诊断
-
-`elixcee diagnose-workbook` 结合了以上两个功能：对 `test-workbook` 生成的一系列用例反复运行宏，并对失败结果给出分类，而不只是一句裸的错误字符串。它对输入依赖型的失败(例如只有部分取值才会触发的数组越界)最有价值——形状不匹配、合并单元格冲突、工作表保护等结构性问题本身不依赖输入，运行一次 `diagnose` 就足以发现：
-
-```bat
-elixcee diagnose-workbook fixture.toml --json
-```
-
-```json
-{
-  "schema_version": 1,
-  "ok": false,
-  "seed": 42,
-  "case_index": 3,
-  "inputs": [{"address": "sheet1!B2", "value": 999999999}],
-  "failure": {
-    "rule": "no_runtime_error",
-    "message": "Array 'arr': index 999999999 out of bounds (len=6)"
-  },
-  "root_causes": [
-    {
-      "code": "ARRAY_INDEX_OUT_OF_BOUNDS",
-      "name": "arr", "index": 999999999, "lower": 0, "upper": 5,
-      "suggestions": ["check that 'arr' is large enough for index 999999999 (valid range is 0 To 5)"]
-    }
-  ]
-}
-```
-
-Fixture 格式与 `--seed`/`--case` 复现方式与 `test-workbook` 完全相同，另外新增 `--cases N` 可在本次运行中覆盖 fixture 自身声明的用例数。完整 schema 见 [docs/agent-contract.md](docs/agent-contract.md)。
-
-### 多区域 Range
-
-`.Copy` 现在能识别 `Range("A1:A10,C1:C10")` 这样不连续的多区域 Range，但粘贴仅限于诊断——`diagnose`/`diagnose-workbook` 会分类报告原因，而不是悄悄什么都不做：
-
-```json
-{
-  "code": "MULTI_AREA_TO_SINGLE_AREA_PASTE",
-  "source_areas": [
-    {"address": "A1:A10", "rows": 10, "columns": 1},
-    {"address": "C1:C10", "rows": 10, "columns": 1}
-  ],
-  "destination_areas": [
-    {"address": "E1:F10", "rows": 10, "columns": 2}
-  ],
-  "suggestions": [
-    "paste each source area separately",
-    "copy a contiguous rectangular range",
-    "use destination areas with matching count and shapes"
-  ]
-}
-```
-
-`Union()`、`Areas`、`Dim rng As Range`/`Set` 对象变量，以及区域数量和形状完全匹配时的多区域粘贴，现已支持——详见下方"VBA 对象模型"。上述 4 个分类代码仍适用于所有不完全匹配的多区域情况（数量或形状不一致，或仅一侧为多区域）。完整范围见 [docs/agent-contract.md](docs/agent-contract.md)。
-
-### 隐藏行/列证据
-
-当 `.Copy` 的区域与隐藏的行/列（从真实 XLSX 的 `hidden="1"` 元数据读取）重叠时，`diagnose`/`diagnose-workbook` 现在会报告——这不是错误，而是与 `root_causes` 并列（或单独出现）的新 `observations` 字段：
-
-```json
-{
-  "code": "RANGE_CONTAINS_HIDDEN_CELLS",
-  "certainty": "observed",
-  "range": {"sheet": "sheet1", "address": "A1:C100", "rows": 100, "columns": 3},
-  "visibility": {
-    "hidden_rows": ["11:14", "30:39"],
-    "hidden_columns": ["B:B"],
-    "total_cells": 300,
-    "visible_cells": 172
-  },
-  "message": "The range contains hidden rows or columns. Excel operations using visible cells only may produce a multi-area range."
-}
-```
-
-这是下方 `SpecialCells(xlCellTypeVisible)` 所依赖的基础信息——普通 Copy/Paste 本身的行为不受影响（隐藏单元格仍会像以前一样被复制/粘贴）。目前仅支持 XLSX，ODS 留待后续。完整范围见 [docs/agent-contract.md](docs/agent-contract.md)。
-
-### VBA 对象模型
-
-```vb
-Dim rng As Range
-Set rng = Range("A1:B2")
-rng.Value = 5                        ' 真正的 Set 引用语义——是别名，不是拷贝
-
-Dim u As Range
-Set u = Union(Range("A1"), Range("D1"))
-Range("C1").Value = u.Areas.Count    ' 2
-
-Dim ws As Worksheet
-Set ws = ActiveSheet
-ws.Range("A1").Value = 1
-
-Range("F1").Value = 7 Mod 3          ' 1
-Range("F2").Value = 2 ^ 3            ' 8
-Range("F3").Value = 7 \ 3            ' 2（整数除法）
-If Not (a And b) Then MsgBox "ok"
-
-With Cells(r, c)                     ' 任意目标表达式，只求值一次
-  .Value = 5
-  If .Value > 0 Then .Value = .Value + 1   ' .member 在任意嵌套深度都能正确解析
-End With
-
-Set rng = Range("A1"): Set rng2 = rng: Set rng = Nothing
-rng2.Value = 1                       ' 即使 rng 被置 Nothing，别名依然存活
-rng.Value = 2                        ' 抛出 "Object variable or With block variable not set"
-
-Dim n
-n = Null
-If IsNull(n + 5) Then MsgBox "Null 会通过 + 传播"   ' True
-
-Function DoubleIt(x As Integer) As Integer
-  DoubleIt = x * 2
-End Function
-```
-
-通过 `Set` 赋值的 `Range`/`Worksheet`/`Workbook` 对象变量——不仅有真正的引用语义，还具备真实的未设置/`Nothing` 状态（从未 `Set` 过或已显式置为 `Nothing` 的变量上的成员访问，会抛出真实 VBA 的 "Object variable or With block variable not set" 错误；`Set x = Nothing` 只清除 `x` 自身，不影响此前创建的别名）、`Union`/`Areas`、`SpecialCells(xlCellTypeVisible)`（基于上方的隐藏行/列信息）、区域数量与形状匹配的多区域 Copy/Paste、`Mod`/`\`/`^`、表达式中的 `And`/`Or`/`Xor`/`Not`（对非 Boolean 操作数执行真正的按位运算）、运行时 `With` 栈（任意目标表达式——包括如 `With Cells(r, c)` 这样的计算表达式——只求值一次，`.member` 在 `If`/`For`/`Do`/`Select Case` 内任意嵌套深度都能正确解析）、`Variant` 的 `Null`（区别于 `Empty`，遵循文档化的 VBA 传播规则，贯穿 `+`/`&`/比较运算符）、`:` 多语句分隔符、带类型的 `Function` 参数/返回值、单条 `Dim` 语句声明多个变量（`Dim a As Integer, b As Range`），以及单行 `If cond Then stmt [Else stmt]`——均已支持。
-
-**已知局限**：多区域粘贴仅在两侧都是多区域且 `Areas.Count` 与各区域形状均匹配时才会执行，其余组合仍仅诊断（见上文）。
-
-### XLSX.read()/write() — `@elixcee/xlsx`（npm，已备好发布但尚未发布）
-
-npm 包 `@elixcee/xlsx`（兼容性计划与同步桥接设计见 [docs/xlsx-architecture.md](docs/xlsx-architecture.md)）中，已实现同步、基于 WebAssembly 的 `XLSX.read(bytes)`——无需 `await init()`——同时还有 `readFile()`/`readFileSync()`（仅限 Node；浏览器入口点会直接抛出异常，而不是伪造一个文件系统）。返回工作表名、`!ref`、`!merges`、`!rows`/`!cols`（隐藏行/列），以及每个单元格的 `{t, v, f, w, z}`——值、公式文本、格式化显示字符串、以及通过真实 `styles.xml`/数字格式解析得到的日期型单元格。针对真实的 `xlsx@0.18.5` 包做了差分测试，33/33 项 MATCH、0 项披露例外（此前版本记载的 `src/reader.rs` `xml:space="preserve"` 裁剪缺陷已修复，详见 CHANGELOG.md）。同时支持 Node（CJS/ESM）与浏览器（`"browser"` export condition 已接入内联字节 + `initSync` 的 WASM artifact）——这一链路不仅通过 Node 模拟该 export condition 验证，还通过真实的无头 Chrome 进程加载实际打包产物、并从页面自身 DOM 中读取 `XLSX.read()` 结果验证过（不支持也未验证 Safari）。浏览器入口点仍然假定通过打包工具使用（其共享代码中含有 CJS 的 `require('ssf')`），并非可直接以 `<script type="module">` 免构建使用的形式——但真实的 npm tarball 安装（而非相对本仓库的 import）以及 CJS/ESM 打包现在都能直接工作，无需手动复制任何资源文件。
-
-`XLSX.write(wb, opts)`/`writeFile()`/`writeFileSync()`——纯 JS/XML/ZIP 生成，无需 Rust 侧写入实现——现已实现（仅支持 `bookType: "xlsx"`）。针对真实 oracle 做了双向差分测试：36 项 MATCH + 1 项已披露例外（`bookType: "ods"` 尚未实现）。`package.json` 的 description 已更新，但 `version`（仍为 `0.0.0-development`）、`private`（仍为 `true`）、`publishConfig`（仍未设置）均为有意保持不变——**尚未实际执行 `npm publish`**，在当前环境下也无法确认 `@elixcee` npm scope 的所有权（详见 ROADMAP.md 的「Known gaps」）。
-
-### 从源码构建
-
-```bash
-cargo build --release --bin elixcee
-# 生成文件：target/release/elixcee（Windows 为 elixcee.exe）
-```
-
----
-
-## 快速开始
+## Python 示例
 
 ```python
 import elixcee
 
-# 运行 VBA 宏并获取所有结果单元格
-cells = elixcee.run_macro("""
-Sub FillSquares()
-    For i = 1 To 5
-        Cells(i, 1).Value = i * i
-    Next i
-End Sub
-""", "FillSquares")
-# cells == {(1,1): 1, (2,1): 4, (3,1): 9, (4,1): 16, (5,1): 25}
-
-# 从 Python 预设单元格数据，再执行宏
 vm = elixcee.Vm()
-vm.set_cell(1, 1, 100)
-vm.set_cell(2, 1, 200)
+vm.set_cell(1, 1, 10)          # 行列索引从 1 开始
 vm.run("""
-Sub CalcTotal()
-    total = Cells(1,1).Value + Cells(2,1).Value
-    Cells(3,1).Value = total
+Sub DoubleIt()
+    Cells(1, 2).Value = Cells(1, 1).Value * 2
 End Sub
-""", "CalcTotal")
-print(vm.get_cell(3, 1))   # 300
-print(vm.variables())       # {"total": 300}
-
-# 从现有 Excel 文件加载数据，再执行宏
-vm = elixcee.load_workbook("data.xlsx")
-vm.run(vba_code, "ProcessData")
-result_cells = vm.cells()   # {(row, col): value, ...}
-
-# 在单元格上设置工作表公式并求值
-vm.set_cell_formula(4, 1, "=SUM(A1:A3)")
-print(vm.get_cell(4, 1))   # 第1~3行A列的合计
-
-# 批量读写区域/行 -- 无需逐单元格往返
-vm = elixcee.load_workbook("input.xlsx")
-rows = vm.get_range("A1:C10", sheet="Data")
-vm.set_range("E1:F2", [[1, 2], [3, 4]], sheet="Result")
-vm.append_row(["Alice", 100], sheet="Result")
-vm.save_workbook("output.xlsx")
-
-# 工作表管理与行/列编辑
-vm.rename_sheet("Result", "Summary")
-vm.move_sheet("Summary", 0)          # 移动到第一个标签页
-vm.insert_rows(1, sheet="Summary")   # 整体下移一行
-print(vm.merged_cells(sheet="Data")) # 例如 ["B1:C1"]
-
-# 列迭代、排序与合并单元格的创建/取消
-cols = vm.iter_cols(max_col=3, sheet="Data")  # 按列、仅返回值
-vm.sort_range("A2:B10", key_col=1, sheet="Data")
-vm.merge_cells("D1:E1", sheet="Data")
-vm.unmerge_cells("B1:C1", sheet="Data")
-
-# 隐藏/取消隐藏行与列
-vm.set_row_hidden(5, sheet="Data")
-vm.set_column_hidden(4, hidden=False, sheet="Data")
-print(vm.hidden_rows(sheet="Data"))  # 例如 [5]
-
-# 复制工作表
-vm.copy_sheet("Data", "Data Backup")
-
-# 读取工作簿级别的已定义名称
-print(vm.defined_names())  # 例如 {"MyRange": "Sheet1!$A$1:$A$3"}
-
-# 读取工作表的整表可见性状态
-print(vm.sheet_state("Data"))  # "visible" / "hidden" / "veryHidden"
-
-# 读取行高或列宽（仅当已显式设置时）
-print(vm.row_height(5, sheet="Data"))    # 例如 30.5，未设置则为 None
-print(vm.column_width(2, sheet="Data"))  # 例如 12.5，未设置则为 None
-
-# 控制 MsgBox 行为
-vm = elixcee.Vm(on_msgbox="skip")   # 静默忽略 MsgBox（默认）
-vm = elixcee.Vm(on_msgbox="error")  # MsgBox 时抛出 RuntimeError
+""", "DoubleIt")
+print(vm.get_cell(1, 2))       # 20
 ```
 
----
+Python API 还支持公式、范围、工作表、样式、表格、数据验证、AutoFilter、
+名称定义、pandas，以及 `.xlsx`/`.xlsm`/`.ods` 文件。接口签名见 [elixcee.pyi](elixcee.pyi)，
+VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 
-## Python API
+对于大型 XLSX/XLSM 文件，可使用 `open_stream(path, sheet=None)` 逐行读取；设置
+`include_row_numbers=True` 后返回 `(行号, 值)` 元组，`create_stream(path)` 提供 XLSX 追加式写入器。
 
-| 方法 | 说明 |
-|---|---|
-| `Vm(on_msgbox="skip")` | 创建 VM。`on_msgbox="error"` 时 MsgBox 抛出 RuntimeError。 |
-| `vm.run(vba_code, macro_name)` | 解析并执行指定的 Sub。 |
-| `vm.set_cell(row, col, value)` | 向单元格写入值（1-based）。 |
-| `vm.get_cell(row, col)` | 读取单元格值。空单元格返回 `None`。 |
-| `vm.cells()` | 以 `{(row, col): value}` 返回活动工作表的所有非空单元格。 |
-| `vm.variables()` | 以 `{name: value}` 返回所有 VBA 变量。 |
-| `vm.set_cell_formula(row, col, formula)` | 设置公式（如 `"=SUM(A1:A3)"`）并求值。 |
-| `vm.set_cell_formula_batch(formulas)` | 批量设置公式：`{(row, col): 公式字符串}`。 |
-| `vm.recalculate()` | 重新求值所有公式单元格。 |
-| `vm.set_sheet(name)` | 切换活动工作表（不存在则创建）。 |
-| `vm.active_sheet()` | 返回当前活动工作表名称。 |
-| `vm.sheet_names()` | 返回所有工作表名称列表。 |
-| `vm.get_sheet(name)` | 以 `{(row, col): value}` 返回指定工作表的所有非空单元格。 |
-| `vm.get_range(addr, sheet=None)` | 将矩形区域（如 `"A1:C5"`）读取为嵌套列表。 |
-| `vm.set_range(addr, values, sheet=None)` | 从嵌套列表写入矩形区域。 |
-| `vm.append_row(values, sheet=None)` | 在工作表已用区域之后写入一行，返回写入的行号。 |
-| `vm.iter_rows(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | 仅返回值的矩形区域迭代。 |
-| `vm.iter_cols(min_row=1, max_row=None, min_col=1, max_col=None, sheet=None)` | 按列、仅返回值的迭代（`iter_rows` 的转置版本）。 |
-| `vm.max_row(sheet=None)` / `vm.max_column(sheet=None)` | 已用区域的最大行/列；空工作表返回 `None`。 |
-| `vm.calculate_dimension(sheet=None)` | 以 A1 格式字符串（如 `"B2:D10"`）返回已用区域；空工作表返回 `None`。 |
-| `vm.sort_range(addr, key_col, descending=False, header=False, sheet=None)` | 按单列关键字原地排序矩形区域。 |
-| `vm.rename_sheet(old_name, new_name)` | 重命名工作表。 |
-| `vm.move_sheet(name, new_index)` | 将工作表移动到绝对位置（从 0 开始）的标签页位置。 |
-| `vm.copy_sheet(source_name, new_name)` | 复制一个工作表（单元格、合并区域、隐藏状态、样式）。 |
-| `vm.defined_names()` | 以 `{name: 原始公式文本}` 返回工作簿级别的已定义名称。只读。 |
-| `vm.sheet_state(name)` | 工作表的整表可见性状态：`"visible"`、`"hidden"` 或 `"veryHidden"`。只读。 |
-| `vm.row_height(row, sheet=None)` / `vm.column_width(col, sheet=None)` | 行高（磅）/ 列宽（字符数），若未显式设置则为 `None`。只读。 |
-| `vm.insert_rows(idx, amount=1, sheet=None)` / `vm.delete_rows(...)` | 插入/删除行（仅限数值 -- 不会移动合并单元格或样式）。 |
-| `vm.insert_cols(idx, amount=1, sheet=None)` / `vm.delete_cols(...)` | 插入/删除列（与行相同的限制）。 |
-| `vm.merged_cells(sheet=None)` | 以 A1 格式字符串列表返回工作表的合并区域，例如 `["B1:C1"]`。 |
-| `vm.merge_cells(addr, sheet=None)` / `vm.unmerge_cells(addr, sheet=None)` | 创建/取消一个合并区域。 |
-| `vm.hidden_rows(sheet=None)` / `vm.hidden_columns(sheet=None)` | 以排序列表返回隐藏的行/列编号。 |
-| `vm.set_row_hidden(row, hidden=True, sheet=None)` / `vm.set_column_hidden(col, ...)` | 隐藏或取消隐藏单行/单列。 |
-| `vm.save_workbook(path)` | 将所有工作表保存为 `.xlsx` 或 `.ods`。 |
-| `vm.cells_df()` | 将活动工作表作为 **pandas DataFrame** 返回（需安装 pandas）。 |
-| `elixcee.run_macro(vba, name)` | 一次性执行：运行宏并返回 `{(row, col): value}`。 |
-| `elixcee.load_workbook(path)` | 将 `.xlsx` / `.ods` 文件加载到 `Vm` 中。 |
+## 开发
 
----
-
-## 函数覆盖范围
-
-详见 **[FUNCTIONS.md](FUNCTIONS.md)**（完整函数与 VBA 语法参考，含 Excel 版本列）。
-
-**主要覆盖：**
-- **Classic（Excel 2003-）**：SUM、VLOOKUP、IF、PMT、FV、PV、NPER、RATE、IPMT、PPMT、NPV、IRR、MIRR、XNPV、XIRR、DGET、DSUM、DAVERAGE、DCOUNT、DCOUNTA、DMAX、DMIN 等 100+ 核心函数
-- **2007–2019**：IFERROR、COUNTIFS/SUMIFS、XOR、IFS、SWITCH、TEXTJOIN、MAXIFS/MINIFS
-- **365/2021**：XLOOKUP、XMATCH、FILTER、SORT、UNIQUE、SEQUENCE、LET、LAMBDA、MAP、REDUCE
-- **2024/365**：TEXTSPLIT、TEXTBEFORE、TEXTAFTER、VSTACK、HSTACK、TAKE、DROP、CHOOSECOLS、CHOOSEROWS
-- **VBA**：For/If/While/With/On Error/Function/`Type...End Type`/命名范围/UDT 数组
-
-### 命名范围
-
-在 VBA 中使用 `Range("A1:B5").Name = "MyData"` 注册命名范围，之后可在任何接受范围地址的地方使用该名称：
-
-```vba
-Range("MyData").Value = 0          ' 向范围内所有单元格写入
-For Each cell In Range("MyData")   ' 遍历单元格
-    total = total + cell
-Next cell
+```bash
+cargo test --workspace
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-命名范围存储在 `vm.named_ranges` 中（`dict[str, str]`，键为小写名称，值为地址）。
-
-### 条件语法（COUNTIF / SUMIF / SUMIFS 等）
-
-| 条件 | 示例 | 含义 |
-|---|---|---|
-| 数字 | `10` | 精确数值匹配 |
-| 字符串 | `"apple"` | 不区分大小写的字符串匹配 |
-| 比较 | `">5"`、`"<=10"`、`"<>"` | 数值比较 |
-| 通配符 | `"a*"`、`"?bc"` | `*` = 任意字符，`?` = 单个字符 |
-
-### Application 对象
-
-| 属性 / 方法 | 说明 | 行为 |
-|---|---|---|
-| `Application.Calculation = xlCalculationManual` | 禁用自动重算 | **有效** |
-| `Application.Calculation = xlCalculationAutomatic` | 启用自动重算并重新求值所有公式 | **有效** |
-| `Application.ScreenUpdating = False/True` | 抑制屏幕刷新 | **No-op**（无界面） |
-| `Application.EnableEvents = False/True` | 禁用/启用事件触发 | **No-op**（无事件） |
-| `Application.DisplayAlerts = False/True` | 抑制对话框 | **No-op**（无对话框） |
-| `Application.StatusBar = "..."` / `False` | 设置/清除状态栏文本 | **No-op**（无界面） |
-| `Application.Cursor = xlWait` / `xlDefault` | 更改光标形状 | **No-op**（无界面） |
-| `Application.CutCopyMode = False` | 取消剪贴板模式 | **有效**（清除已建模的剪贴板状态） |
-
-> **No-op** 属性会被解析并接受，但不产生任何效果。这使得 VBA 宏中的性能优化写法（如 `Application.ScreenUpdating = False`）能够不经修改直接运行。
-
----
-
-## Microsoft Excel round-trip 验证
-
-elixcee 的工作簿保存路径已使用 5 个经过脱敏处理、在 Microsoft Excel for Mac
-上实际创建的 Microsoft Excel 制 `.xlsm` fixture 进行了验证。
-
-**已验证范围：**
-
-- 打开 Excel 制作的工作簿
-- 使用 elixcee 修改单元格
-- 另存为与原地保存（in-place save）
-- 在 Microsoft Excel 中重新打开且无修复警告
-- 保留公式、既有单元格样式、合并单元格、隐藏行/列、VBA 项目字节、
-  未知 ZIP 部件以及仍然有效的 relationship
-
-**未验证范围：**
-
-- 保存后的 VBA 宏执行
-- 表格、数据验证、条件格式、超链接、批注、定义名称、图表、图片、
-  打印设置等嵌入在重新生成的工作表 XML 中的内容
-
-完整结果参见
-[`compat/oracle-excel-com/results/0.9.0-A_summary.md`](compat/oracle-excel-com/results/0.9.0-A_summary.md)。
-
----
-
-## 暂不支持
-
-详见 **[FUNCTIONS.md — Not Yet Supported](FUNCTIONS.md#not-yet-supported)**。
-
-主要缺口：
-- **统计函数**：NORM.S.DIST、T.INV、F.DIST、CHISQ.DIST 等
-- **文本函数**：REPT、NUMBERVALUE、PHONETIC
-- **超出范围**：IMAGE（URL 图片获取）、GROUPBY（透视聚合）、TRIMRANGE
-
----
-
-## 状态说明
-
-| 标记 | 含义 |
-|---|---|
-| 完成 | 已实现并测试 |
-| 待定 | 尚未排期 |
-
----
-
-## 开发阶段
-
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| Phase 1 | Rust 项目初始化 + pyo3 Python 绑定 | 完成 |
-| Phase 2 | VBA 解析器 MVP（Sub/End Sub、赋值、Cells） | 完成 |
-| Phase 3 | 虚拟 Excel VM（变量、单元格存储、解释器） | 完成 |
-| Phase 3.5 | Excel 公式引擎（SUM、IF、VLOOKUP、Application.Calculation 等） | 完成 |
-| Phase 4 | 控制流（For 循环、If 分支、算术表达式） | 完成 |
-| Phase 5 | Python 接口（Vm 类、run_macro、load_workbook、MsgBox） | 完成 |
-| Phase 6 | 工作表函数大幅扩充（100+ 函数，118 个测试） | 完成 |
-| Phase 7 | 高级 VBA 语法（ElseIf、Exit、For Each、On Error、Function、数组、While-Wend） | 完成 |
-| Phase 8 | Range API（ClearContents、Offset、Sheets.Cells、WorksheetFunction、多工作表） | 完成 |
-| Phase 9 | 多工作表支持（Sheets HashMap、With Sheets、Python API、load_workbook 全表） | 完成 |
-| Phase 10 | 工作表函数扩充（数学、三角、统计、数组溢出、Lambda 函数） | 完成 |
-| Phase 11 | 用户自定义类型（Type...End Type）、命名范围、RANDARRAY、pandas 集成、类型存根 | 完成 |
-| Phase D1 | 移除 rust_xlsxwriter，手写 XLSX（zip）输出（依赖：5→4） | 完成 |
-| Phase D2 | 移除 pest/pest_derive，手写递归下降 VBA 解析器（依赖：4→3） | 完成 |
-| Phase D3 | 从运行时依赖中移除 calamine，手写 XLSX/ODS 读取器（依赖：3→2） | 完成 |
-| Perf R4 | SUM/AVERAGE/MIN/MAX 快速路径（跳过 `Vec<Variant>`），RangeWrite dirty 标志批量更新 | 完成 |
-| CLI | 独立 `elixcee` 可执行文件；pyo3 可选化；GitHub Actions 发布工作流 | 完成 |
-| Milestone A | JSON Agent Contract（`--json`）、错误分类、MsgBox 消息日志 | 完成 |
-| Milestone A.1 | JSON contract 加固（`serde_json` 结构化校验测试、消息日志生命周期、错误码文档化） | 完成 |
-| Milestone A.5 | 源码位置追踪 — 为 parse/runtime 错误附加 line/column | 完成 |
-| Milestone B1 | `check` 子命令 — parse 诊断、入口点存在性检查、`MsgBox` 等交互操作检测 | 完成 |
-| Milestone B1.1 | `check`：未定义 Sub/Function 调用检测、不支持语法（no-op）检测 | 完成 |
-| Milestone B2 | 多模块项目 — 支持多个 `.bas` 文件、`Module.Sub` 限定入口点、跨模块名称冲突检测 | 完成 |
-| Milestone B3 | 确定性黑盒测试（`tests/blackbox.rs`，声明式 `.toml` fixture） | 完成 |
-| Milestone B4 | `snapshot` 子命令 — 不执行 VBA，直接读取工作簿单元格 | 完成 |
-| Milestone B5a | `test-workbook` 子命令 — 基于生成的边界值输入的属性测试 | 完成 |
-| Milestone B6a | `diagnose` 子命令 — 缺失工作表/工作簿、数组越界等根因诊断 | 完成 |
-| Milestone B6b | `diagnose`：Copy/Paste 形状不匹配 + 剪贴板状态 | 完成 |
-| Milestone B6c | `diagnose`：工作表保护（`Protect`/`Unprotect`） | 完成 |
-| Milestone B6c2 | `diagnose`：考虑合并单元格的 Copy/Paste 诊断 | 完成 |
-| Milestone B6d | `diagnose-workbook` — 跨生成用例的根因诊断 | 完成 |
-| Milestone B7a | 为 Copy/Paste 诊断提供多区域 `Range`/`Union`/`Areas` 基础 | 完成 |
-| Milestone B7b | 为 Copy/Paste 诊断提供隐藏行/列元数据基础 | 完成 |
-| Phase 3A-1 | `compat/vba-semantics/` 数值正确性套件：208 → 301 个用例（新增6个类别）；修复单行 `If` 语句分发、`Boolean` 算术（`True` = -1）、`WorksheetFunction` 的 Boolean 系数、`Empty` 相等比较等缺陷 | 完成 |
-| Phase 3A-2 | CI `wasm` job：全新 `wasm-pack` 构建（nodejs/web 两个 target）+ Node/browser 条件冒烟测试，接入 GitHub Actions | 完成 |
-| 0.5.0 | 合并 VBA 结构化语义（`:` 多语句分隔符、带文档化传播规则的 `Variant::Null`、具备别名安全的真实 `Nothing` 状态、运行时 `With` 目标栈）与 `@elixcee/xlsx` 的真实消费者/真实浏览器验证（打包 tarball 安装、真实无头 Chrome 冒烟测试、bundle-safe WASM 加载、`readFile()`）。`compat/vba-semantics/` 由 301 → 386 个用例；因新增公开 `Variant::Null` enum variant，`elixcee-types` 升级至 0.2.0；已发布至 crates.io、PyPI 与 GitHub Releases | 完成 |
+计划见 [ROADMAP.md](ROADMAP.md)，其他公开政策和限制见 [docs/](docs/)。

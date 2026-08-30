@@ -121,7 +121,7 @@ fn is_row_close(token: &[u8]) -> bool {
 fn stream_rows(
     path: String,
     sheet: Option<String>,
-) -> Result<Receiver<Result<Vec<Variant>, String>>, String> {
+) -> Result<Receiver<Result<(u32, Vec<Variant>), String>>, String> {
     let (zip_path, _) = sheet_target(&path, sheet.as_deref())?;
     let (tx, rx) = mpsc::sync_channel(2);
     std::thread::spawn(move || {
@@ -158,8 +158,8 @@ fn stream_rows(
                         append_row_token(&mut row_buf, &token)?;
                         if trimmed.ends_with(b"/>") {
                             if let Ok(xml) = std::str::from_utf8(&row_buf)
-                                && let Some((_, row)) = row_from_xml(xml, &shared)
-                                && tx.send(Ok(row)).is_err()
+                                && let Some((row_number, row)) = row_from_xml(xml, &shared)
+                                && tx.send(Ok((row_number, row))).is_err()
                             {
                                 return Ok(());
                             }
@@ -172,8 +172,8 @@ fn stream_rows(
                         if let Ok(xml) = std::str::from_utf8(&row_buf) {
                             let wrapped =
                                 format!("<worksheet><sheetData>{xml}</sheetData></worksheet>");
-                            if let Some((_, row)) = row_from_xml(&wrapped, &shared)
-                                && tx.send(Ok(row)).is_err()
+                            if let Some((row_number, row)) = row_from_xml(&wrapped, &shared)
+                                && tx.send(Ok((row_number, row))).is_err()
                             {
                                 return Ok(());
                             }
@@ -194,24 +194,30 @@ fn stream_rows(
 #[pyclass(name = "StreamReader")]
 pub struct PyStreamReader {
     receiver: Option<RowReceiver>,
+    include_row_numbers: bool,
 }
 
-type RowReceiver = Mutex<Receiver<Result<Vec<Variant>, String>>>;
+type RowReceiver = Mutex<Receiver<Result<(u32, Vec<Variant>), String>>>;
 
-pub(crate) fn stream_reader_from_path(path: &str, sheet: Option<&str>) -> PyResult<PyStreamReader> {
+pub(crate) fn stream_reader_from_path(
+    path: &str,
+    sheet: Option<&str>,
+    include_row_numbers: bool,
+) -> PyResult<PyStreamReader> {
     let receiver = stream_rows(path.to_string(), sheet.map(str::to_string))
         .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
     Ok(PyStreamReader {
         receiver: Some(Mutex::new(receiver)),
+        include_row_numbers,
     })
 }
 
 #[pymethods]
 impl PyStreamReader {
     #[new]
-    #[pyo3(signature = (path, sheet = None))]
-    fn new(path: &str, sheet: Option<&str>) -> PyResult<Self> {
-        stream_reader_from_path(path, sheet)
+    #[pyo3(signature = (path, sheet = None, include_row_numbers = false))]
+    fn new(path: &str, sheet: Option<&str>, include_row_numbers: bool) -> PyResult<Self> {
+        stream_reader_from_path(path, sheet, include_row_numbers)
     }
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
@@ -237,11 +243,18 @@ impl PyStreamReader {
             .expect("stream reader mutex poisoned")
             .recv();
         match next {
-            Ok(Ok(row)) => Ok(Some(
-                PyList::new(py, row.iter().map(|v| variant_to_py(py, v)))?
+            Ok(Ok((row_number, row))) => {
+                let values = PyList::new(py, row.iter().map(|v| variant_to_py(py, v)))?
                     .into_any()
-                    .unbind(),
-            )),
+                    .unbind();
+                if self.include_row_numbers {
+                    Ok(Some(
+                        (row_number, values).into_pyobject(py)?.into_any().unbind(),
+                    ))
+                } else {
+                    Ok(Some(values))
+                }
+            }
             Ok(Err(err)) => Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(err)),
             Err(_) => {
                 self.receiver = None;
