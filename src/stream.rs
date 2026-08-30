@@ -244,8 +244,17 @@ impl PyStreamReader {
         _value: Option<&Bound<'_, PyAny>>,
         _tb: Option<&Bound<'_, PyAny>>,
     ) -> bool {
-        self.receiver = None;
+        self.close();
         false
+    }
+    /// Stop reading and release the worker receiver.
+    fn close(&mut self) {
+        self.receiver = None;
+    }
+    /// Whether this reader has been explicitly closed or exhausted.
+    #[getter]
+    fn closed(&self) -> bool {
+        self.receiver.is_none()
     }
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
@@ -328,6 +337,12 @@ impl PyStreamWriter {
         Ok(false)
     }
 
+    /// Whether this writer has already materialized its rows and closed.
+    #[getter]
+    fn closed(&self) -> bool {
+        !self.active
+    }
+
     /// Number of rows accepted and retained until `close()`.
     #[getter]
     fn row_count(&self) -> usize {
@@ -392,7 +407,7 @@ impl PyStreamWriter {
 mod tests {
     use super::{
         MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
-        resolve_xlsx_target, row_from_xml,
+        resolve_xlsx_target, row_from_xml, stream_writer_from_path,
     };
     use crate::Variant;
 
@@ -463,5 +478,20 @@ mod tests {
         ]);
         assert!(estimated_variant_bytes(&value) >= 5);
         assert!(MAX_STREAM_WRITER_BYTES > estimated_variant_bytes(&value));
+    }
+
+    #[test]
+    fn streaming_writer_lifecycle_is_explicit_and_idempotent() {
+        let path = std::env::temp_dir().join("elixcee_stream_writer_lifecycle.xlsx");
+        let mut writer = stream_writer_from_path(path.to_str().unwrap(), Some(1024)).unwrap();
+        assert!(!writer.closed());
+        assert_eq!(writer.row_count(), 0);
+        assert_eq!(writer.pending_bytes(), 0);
+        assert_eq!(writer.max_pending_bytes(), 1024);
+
+        writer.close().unwrap();
+        assert!(writer.closed());
+        writer.close().unwrap();
+        let _ = std::fs::remove_file(path);
     }
 }
