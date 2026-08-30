@@ -7,7 +7,10 @@ use crate::parser::ast::{
     SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp,
 };
 use crate::parser::{self, EntrypointResolution};
-use crate::reader::{self, SheetCell, TableColumn, TableDef, TableEditOp, WorkbookSheet};
+use crate::reader::{
+    self, DataValidationRule, DataValidationSpec, SheetCell, TableColumn, TableDef, TableEditOp,
+    WorkbookSheet,
+};
 
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
 /// address helpers below are physically defined in `elixcee-types` (Phase
@@ -1048,6 +1051,33 @@ pub struct Vm {
     /// NOT touched by `move_range_on_sheet`: table-range-tracking through a cell move
     /// is real future work (0.16.0-A2/A3's own scope), not implicitly covered here.
     pub(crate) tables: HashMap<String, Vec<TableDef>>,
+    /// Per-sheet data-validation rules (0.16.0-C), keyed the same way as `merged_ranges`.
+    /// Populated by `populate_from_sheets` from the reader's
+    /// `WorkbookSheet::data_validations`, then mutated directly by
+    /// `add_data_validation_on_sheet`/`remove_data_validation_on_sheet` -- unlike the
+    /// style engine's interned `<cellXfs>`/`<fonts>`/`<fills>`/`<borders>` tables, each
+    /// `<dataValidation>` is its own independent record (no sharing, no dedup needed), so
+    /// an edit mutates this map directly rather than going through a `pending_*`/
+    /// `resolve_pending_*` deferred-resolution pass. `DataValidationRule::raw_span` is
+    /// the write-time source of truth (preserves unknown attributes/extension GUIDs like
+    /// `xr:uid` byte-for-byte for anything this struct doesn't model); the parsed fields
+    /// exist for the read API and for locating/shifting `sqref` on a structural edit.
+    /// Rule evaluation (does a given cell value satisfy the rule) is out of scope --
+    /// persist-only, matching openpyxl's own non-evaluating behavior, the bar this whole
+    /// milestone (`0.16.0`) is held to. Shifts on any structural edit
+    /// (`shift_data_validations_for_structural_edit`) on BOTH axes, like `merged_ranges`/
+    /// `tables` -- a `sqref` area is a 2D rect, not a row- or column-only dimension.
+    pub(crate) data_validations: HashMap<String, Vec<DataValidationRule>>,
+    /// Sheets whose `data_validations` have been touched (add/remove/a real
+    /// structural-edit shift, or a copy landing on a sheet with no original XML of its
+    /// own to fall back to) since load -- gates whether `build_xlsx_sheet` regenerates
+    /// `<dataValidations>` from current `Vm` state or passes the ORIGINAL fragment
+    /// through byte-identical (same "only reserialize what's actually pending"
+    /// discipline as `pending_number_formats`/`pending_style_attrs`, applied per-sheet
+    /// since `<dataValidations>` lives in the worksheet's own XML, not a shared
+    /// workbook-wide part like `styles.xml`). Never cleared once set, matching
+    /// `sheet_renames_since_load`'s own for-the-rest-of-this-`Vm`'s-life convention.
+    pub(crate) data_validations_touched: HashSet<String>,
     /// Per-sheet origin facts (0.10.0-A), keyed the same way as `merged_ranges`.
     /// Populated unconditionally by `populate_from_sheets` for every sheet that came from
     /// a real `WorkbookSheet` (unlike `merged_ranges`/`sheet_visibility`/
@@ -1164,6 +1194,8 @@ impl Vm {
             row_styles: HashMap::new(),
             column_styles: HashMap::new(),
             tables: HashMap::new(),
+            data_validations: HashMap::new(),
+            data_validations_touched: HashSet::new(),
             worksheet_origins: HashMap::new(),
             object_variables: HashMap::new(),
             with_stack: Vec::new(),
@@ -1567,6 +1599,59 @@ impl Vm {
         Ok(())
     }
 
+    /// Shifts every data-validation rule's `sqref` areas on `key` for a row/col
+    /// structural edit (0.16.0-C) -- reuses `shift_table_rect`'s exact 2D-rect
+    /// arithmetic (a `sqref` area, like a table `ref`, has no "must span >=2 cells"
+    /// invariant a merge has). A rule's MULTI-area `sqref` keeps whichever individual
+    /// areas survive the shift; a rule whose EVERY area collapses is dropped entirely
+    /// (nothing left to validate). Only marks a rule `dirty` (and this sheet
+    /// `data_validations_touched`) when the shift genuinely changed something -- an
+    /// edit that doesn't intersect a given rule's `sqref` at all leaves it byte-for-byte
+    /// untouched, same "don't reorder what didn't change" discipline as `TableDef`'s own
+    /// write path. `raw_span` itself is NOT patched here: only the parsed `sqref` field
+    /// updates now, the actual `with_attr` patch happens once at save time (see
+    /// `resolve_data_validations_for_sheet`, `src/lib.rs`) -- mirrors how
+    /// `shift_tables_for_structural_edit` above only touches `TableDef`'s parsed fields,
+    /// never `raw_entries` bytes, until save.
+    fn shift_data_validations_for_structural_edit(
+        &mut self,
+        key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        let Some(rules) = self.data_validations.get(key) else {
+            return;
+        };
+        let mut any_changed = false;
+        let shifted: Vec<DataValidationRule> = rules
+            .iter()
+            .filter_map(|r| {
+                let new_sqref: Vec<MergeRect> = r
+                    .sqref
+                    .iter()
+                    .filter_map(|&rect| shift_table_rect(rect, axis, edit))
+                    .collect();
+                if new_sqref.is_empty() {
+                    any_changed = true;
+                    return None;
+                }
+                if new_sqref == r.sqref {
+                    return Some(r.clone());
+                }
+                any_changed = true;
+                Some(DataValidationRule {
+                    sqref: new_sqref,
+                    dirty: true,
+                    ..r.clone()
+                })
+            })
+            .collect();
+        if any_changed {
+            self.data_validations_touched.insert(key.to_string());
+        }
+        self.data_validations.insert(key.to_string(), shifted);
+    }
+
     /// Shifts `key`'s hidden-row/column intervals for a structural edit
     /// (0.14.0-B Phase 3) -- only the axis actually being edited is
     /// touched, since inserting/deleting rows can't affect which COLUMNS
@@ -1932,6 +2017,7 @@ impl Vm {
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_row_heights_for_structural_edit(key, edit);
@@ -1977,6 +2063,7 @@ impl Vm {
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_row_heights_for_structural_edit(key, edit);
@@ -2019,6 +2106,7 @@ impl Vm {
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_column_widths_for_structural_edit(key, edit);
@@ -2054,6 +2142,7 @@ impl Vm {
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_column_widths_for_structural_edit(key, edit);
@@ -2574,6 +2663,69 @@ impl Vm {
                 pending.insert((row, col), src);
             }
         }
+    }
+
+    /// Adds a new data-validation rule to `key` (0.16.0-C), returning its index in that
+    /// sheet's rule list (stable until the rule is removed). Unlike the style engine's
+    /// interned `<cellXfs>`/`<fonts>`/`<fills>`/`<borders>` tables, each `<dataValidation>`
+    /// is its own independent record -- no sharing, no dedup, no deferred-resolution
+    /// `pending_*` pass needed. `raw_span` is built directly from the given fields (via
+    /// `build_data_validation_span`) and marked NOT `dirty`: a freshly-built span is
+    /// already correct, there's nothing stale to reconcile at save time.
+    pub fn add_data_validation_on_sheet(
+        &mut self,
+        key: &str,
+        sqref: Vec<MergeRect>,
+        spec: DataValidationSpec,
+    ) -> usize {
+        let raw_span = crate::build_data_validation_span(&spec, &sqref);
+        let rule = DataValidationRule {
+            validation_type: spec.validation_type,
+            operator: spec.operator,
+            formula1: spec.formula1,
+            formula2: spec.formula2,
+            allow_blank: spec.allow_blank,
+            show_input_message: spec.show_input_message,
+            prompt_title: spec.prompt_title,
+            prompt: spec.prompt,
+            show_error_message: spec.show_error_message,
+            error_style: spec.error_style,
+            error_title: spec.error_title,
+            error: spec.error,
+            sqref,
+            dirty: false,
+            raw_span,
+        };
+        let rules = self.data_validations.entry(key.to_string()).or_default();
+        rules.push(rule);
+        self.data_validations_touched.insert(key.to_string());
+        rules.len() - 1
+    }
+
+    /// Removes the data-validation rule at `index` on `key` (0.16.0-C), added by
+    /// `add_data_validation_on_sheet` or present from load. `Err` on an out-of-range
+    /// index rather than a silent no-op -- matches this project's own "a caller-facing
+    /// index API should reject a typo, not swallow it" bias (e.g. `delete_sheet`'s own
+    /// existence check, contrasted with the VBA-path's pre-existing silent-no-op
+    /// precedent it deliberately does NOT inherit).
+    pub fn remove_data_validation_on_sheet(
+        &mut self,
+        key: &str,
+        index: usize,
+    ) -> Result<(), String> {
+        let rules = self
+            .data_validations
+            .get_mut(key)
+            .ok_or_else(|| format!("sheet '{key}' has no data validation rules"))?;
+        if index >= rules.len() {
+            return Err(format!(
+                "data validation index {index} out of range (sheet '{key}' has {} rule(s))",
+                rules.len()
+            ));
+        }
+        rules.remove(index);
+        self.data_validations_touched.insert(key.to_string());
+        Ok(())
     }
 
     /// Every hidden row number on `key`, flattened from `hidden_rows`'
@@ -3155,6 +3307,8 @@ impl Vm {
             self.row_styles.remove(key);
             self.column_styles.remove(key);
             self.tables.remove(key);
+            self.data_validations.remove(key);
+            self.data_validations_touched.remove(key);
         }
         Ok(())
     }
@@ -3173,13 +3327,14 @@ impl Vm {
         self.remove_sheet(&key, name)
     }
 
-    /// Renames a sheet, atomically re-keying all nineteen lowercase-keyed per-sheet `Vm`
-    /// maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
+    /// Renames a sheet, atomically re-keying all twenty-one lowercase-keyed per-sheet
+    /// `Vm` maps that a rename can touch (`sheets`, `sheet_order`, `active_sheet`,
     /// `merged_ranges`, `sheet_visibility`, `cell_style_indices`,
     /// `cell_number_formats`, `pending_number_formats`, `pending_style_attrs`,
     /// `pending_style_copies` (0.15.0-C1), `pending_row_styles`, `pending_column_styles`
     /// (0.15.0-C2), `sheet_states`, `row_heights`, `column_widths`, `row_styles`,
-    /// `column_styles`, `tables` (0.16.0-A1), `worksheet_origins`). Each gets one explicit
+    /// `column_styles`, `tables` (0.16.0-A1), `data_validations`,
+    /// `data_validations_touched` (0.16.0-C), `worksheet_origins`). Each gets one explicit
     /// remove+insert line rather than a generic "walk every map" helper: the maps
     /// have different value types, a truly generic helper needs a macro or
     /// trait-object indirection to cross that, and with exactly one call site a
@@ -3310,6 +3465,12 @@ impl Vm {
         if let Some(v) = self.tables.remove(&old_key) {
             self.tables.insert(new_key.clone(), v);
         }
+        if let Some(v) = self.data_validations.remove(&old_key) {
+            self.data_validations.insert(new_key.clone(), v);
+        }
+        if self.data_validations_touched.remove(&old_key) {
+            self.data_validations_touched.insert(new_key.clone());
+        }
         // 11. `worksheet_origins` -- re-key AND update `original_display_name` to the
         //    NEW name; `save_xlsx_impl` reads this field (not the lowercased key) to
         //    write `<sheet name="...">` on save.
@@ -3428,6 +3589,14 @@ impl Vm {
         }
         if let Some(v) = self.tables.get(&source_key).cloned() {
             self.tables.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.data_validations.get(&source_key).cloned() {
+            // The copy is a brand-new sheet with no original worksheet XML of its own to
+            // fall back to -- mark it touched unconditionally so `build_xlsx_sheet`
+            // regenerates `<dataValidations>` from this copied `Vm` state rather than
+            // looking for a (nonexistent) source fragment, which would silently drop it.
+            self.data_validations.insert(new_key.clone(), v);
+            self.data_validations_touched.insert(new_key.clone());
         }
         self.worksheet_origins.insert(
             new_key,
@@ -4350,6 +4519,10 @@ impl Vm {
             }
             if !sheet_data.tables.is_empty() {
                 self.tables.insert(key.clone(), sheet_data.tables.clone());
+            }
+            if !sheet_data.data_validations.is_empty() {
+                self.data_validations
+                    .insert(key.clone(), sheet_data.data_validations.clone());
             }
             self.worksheet_origins.insert(
                 key.clone(),
@@ -11241,6 +11414,7 @@ mod tests {
                 row_styles: HashMap::new(),
                 column_styles: Vec::new(),
                 tables: Vec::new(),
+                data_validations: Vec::new(),
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -11260,6 +11434,7 @@ mod tests {
                 row_styles: HashMap::new(),
                 column_styles: Vec::new(),
                 tables: Vec::new(),
+                data_validations: Vec::new(),
             },
         ];
         let mut vm = Vm::new();
@@ -11326,6 +11501,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11353,6 +11529,7 @@ mod tests {
             row_styles: HashMap::from([(3u32, 5u32)]),
             column_styles: vec![(1, 2, 7u32)],
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -11380,6 +11557,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -13919,6 +14097,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -13961,6 +14140,7 @@ mod tests {
                 row_styles: HashMap::new(),
                 column_styles: Vec::new(),
                 tables: Vec::new(),
+                data_validations: Vec::new(),
             },
             WorkbookSheet {
                 name: "Second".to_string(),
@@ -13980,6 +14160,7 @@ mod tests {
                 row_styles: HashMap::new(),
                 column_styles: Vec::new(),
                 tables: Vec::new(),
+                data_validations: Vec::new(),
             },
         ];
 
@@ -14021,6 +14202,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
 
         let mut vm = Vm::new();
@@ -14940,6 +15122,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -15046,6 +15229,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -15089,6 +15273,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -15121,6 +15306,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -16725,6 +16911,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: vec![sample_table(((1, 1), (4, 3)))],
+            data_validations: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -16753,6 +16940,7 @@ mod tests {
             row_styles: HashMap::new(),
             column_styles: Vec::new(),
             tables: Vec::new(),
+            data_validations: Vec::new(),
         }];
         let mut vm = Vm::new();
         vm.populate_from_sheets(sheets);
@@ -16787,5 +16975,267 @@ mod tests {
         vm.copy_sheet("Sheet1", "Copy").unwrap();
         assert_eq!(vm.tables.get("copy").unwrap().len(), 1);
         assert_eq!(vm.tables.get("sheet1").unwrap().len(), 1);
+    }
+
+    // ── 0.16.0-C: data validation (add/remove/structural-edit shift) ────────
+
+    fn sample_dv_rule(sqref: Vec<MergeRect>) -> DataValidationRule {
+        DataValidationRule {
+            validation_type: "list".to_string(),
+            operator: None,
+            formula1: Some(r#""Yes,No""#.to_string()),
+            formula2: None,
+            allow_blank: true,
+            show_input_message: false,
+            prompt_title: None,
+            prompt: None,
+            show_error_message: false,
+            error_style: None,
+            error_title: None,
+            error: None,
+            sqref,
+            dirty: false,
+            raw_span: r#"<dataValidation type="list" allowBlank="1" sqref="E1" xr:uid="{X}"><formula1>"Yes,No"</formula1></dataValidation>"#.to_string(),
+        }
+    }
+
+    fn sample_dv_spec(validation_type: &str) -> DataValidationSpec {
+        DataValidationSpec {
+            validation_type: validation_type.to_string(),
+            operator: None,
+            formula1: None,
+            formula2: None,
+            allow_blank: true,
+            show_input_message: false,
+            prompt_title: None,
+            prompt: None,
+            show_error_message: true,
+            error_style: None,
+            error_title: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn add_data_validation_on_sheet_returns_the_new_rules_index() {
+        let mut vm = Vm::new();
+        let idx0 = vm.add_data_validation_on_sheet(
+            "sheet1",
+            vec![((1, 1), (1, 1))],
+            DataValidationSpec {
+                formula1: Some(r#""A,B""#.to_string()),
+                ..sample_dv_spec("list")
+            },
+        );
+        let idx1 = vm.add_data_validation_on_sheet(
+            "sheet1",
+            vec![((2, 1), (2, 1))],
+            DataValidationSpec {
+                operator: Some("greaterThan".to_string()),
+                formula1: Some("0".to_string()),
+                allow_blank: false,
+                ..sample_dv_spec("whole")
+            },
+        );
+        assert_eq!(idx0, 0);
+        assert_eq!(idx1, 1);
+        assert_eq!(vm.data_validations.get("sheet1").unwrap().len(), 2);
+        assert!(vm.data_validations_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn add_data_validation_on_sheet_builds_a_raw_span_a_reader_can_parse_back() {
+        let mut vm = Vm::new();
+        vm.add_data_validation_on_sheet(
+            "sheet1",
+            vec![((1, 1), (5, 1))],
+            DataValidationSpec {
+                operator: Some("between".to_string()),
+                formula1: Some("1".to_string()),
+                formula2: Some("10".to_string()),
+                show_input_message: true,
+                prompt_title: Some("Title".to_string()),
+                prompt: Some("Pick 1-10".to_string()),
+                error_style: Some("stop".to_string()),
+                ..sample_dv_spec("whole")
+            },
+        );
+        let rule = &vm.data_validations.get("sheet1").unwrap()[0];
+        let reparsed = crate::reader::xlsx_data_validations(&format!(
+            "<worksheet><dataValidations count=\"1\">{}</dataValidations></worksheet>",
+            rule.raw_span
+        ));
+        assert_eq!(reparsed.len(), 1);
+        assert_eq!(reparsed[0].validation_type, "whole");
+        assert_eq!(reparsed[0].operator.as_deref(), Some("between"));
+        assert_eq!(reparsed[0].formula1.as_deref(), Some("1"));
+        assert_eq!(reparsed[0].formula2.as_deref(), Some("10"));
+        assert_eq!(reparsed[0].prompt_title.as_deref(), Some("Title"));
+        assert_eq!(reparsed[0].sqref, vec![((1, 1), (5, 1))]);
+    }
+
+    #[test]
+    fn remove_data_validation_on_sheet_removes_the_given_index() {
+        let mut vm = Vm::new();
+        vm.data_validations.insert(
+            "sheet1".to_string(),
+            vec![
+                sample_dv_rule(vec![((1, 1), (1, 1))]),
+                sample_dv_rule(vec![((2, 1), (2, 1))]),
+            ],
+        );
+        vm.remove_data_validation_on_sheet("sheet1", 0).unwrap();
+        let remaining = vm.data_validations.get("sheet1").unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].sqref, vec![((2, 1), (2, 1))]);
+        assert!(vm.data_validations_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn remove_data_validation_on_sheet_errors_on_an_out_of_range_index() {
+        let mut vm = Vm::new();
+        vm.data_validations.insert(
+            "sheet1".to_string(),
+            vec![sample_dv_rule(vec![((1, 1), (1, 1))])],
+        );
+        assert!(vm.remove_data_validation_on_sheet("sheet1", 5).is_err());
+        // The one real rule is untouched by the failed attempt.
+        assert_eq!(vm.data_validations.get("sheet1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn shift_data_validations_for_structural_edit_shifts_sqref_and_marks_dirty() {
+        let mut vm = Vm::new();
+        vm.data_validations.insert(
+            "sheet1".to_string(),
+            vec![sample_dv_rule(vec![((10, 5), (10, 5))])],
+        );
+        vm.insert_rows_on_sheet("sheet1", 1, 2);
+        let rules = vm.data_validations.get("sheet1").unwrap();
+        assert_eq!(rules[0].sqref, vec![((12, 5), (12, 5))]);
+        assert!(rules[0].dirty);
+        assert!(vm.data_validations_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn shift_data_validations_for_structural_edit_leaves_an_unaffected_rule_byte_identical() {
+        // An edit far from a rule's own sqref must not reorder/rebuild its raw_span --
+        // same "don't touch what didn't change" discipline as TableDef's own write path.
+        let mut vm = Vm::new();
+        let original_span = sample_dv_rule(vec![((1, 5), (1, 5))]).raw_span;
+        vm.data_validations.insert(
+            "sheet1".to_string(),
+            vec![sample_dv_rule(vec![((1, 5), (1, 5))])],
+        );
+        vm.insert_rows_on_sheet("sheet1", 100, 5);
+        let rules = vm.data_validations.get("sheet1").unwrap();
+        assert_eq!(rules[0].sqref, vec![((1, 5), (1, 5))]);
+        assert!(!rules[0].dirty);
+        assert_eq!(rules[0].raw_span, original_span);
+        assert!(!vm.data_validations_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn shift_data_validations_for_structural_edit_drops_a_rule_whose_sqref_fully_collapses() {
+        let mut vm = Vm::new();
+        vm.data_validations.insert(
+            "sheet1".to_string(),
+            vec![sample_dv_rule(vec![((3, 1), (4, 1))])],
+        );
+        vm.delete_rows_on_sheet("sheet1", 1, 10);
+        assert!(vm.data_validations.get("sheet1").unwrap().is_empty());
+        assert!(vm.data_validations_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn shift_data_validations_for_structural_edit_keeps_a_multi_area_rules_surviving_areas() {
+        let mut vm = Vm::new();
+        vm.data_validations.insert(
+            "sheet1".to_string(),
+            vec![sample_dv_rule(vec![((1, 1), (1, 1)), ((3, 1), (4, 1))])],
+        );
+        vm.delete_rows_on_sheet("sheet1", 3, 10);
+        let rules = vm.data_validations.get("sheet1").unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].sqref, vec![((1, 1), (1, 1))]);
+    }
+
+    #[test]
+    fn rename_sheet_rekeys_data_validations_and_its_touched_marker() {
+        let mut vm = Vm::new();
+        vm.data_validations.insert(
+            "sheet1".to_string(),
+            vec![sample_dv_rule(vec![((1, 1), (1, 1))])],
+        );
+        vm.data_validations_touched.insert("sheet1".to_string());
+        vm.rename_sheet("Sheet1", "Renamed").unwrap();
+        assert!(!vm.data_validations.contains_key("sheet1"));
+        assert_eq!(vm.data_validations.get("renamed").unwrap().len(), 1);
+        assert!(!vm.data_validations_touched.contains("sheet1"));
+        assert!(vm.data_validations_touched.contains("renamed"));
+    }
+
+    #[test]
+    fn delete_sheet_clears_data_validations_on_a_non_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Extra");
+        vm.data_validations.insert(
+            "extra".to_string(),
+            vec![sample_dv_rule(vec![((1, 1), (1, 1))])],
+        );
+        vm.data_validations_touched.insert("extra".to_string());
+        vm.delete_sheet("Extra").unwrap();
+        assert!(!vm.data_validations.contains_key("extra"));
+        assert!(!vm.data_validations_touched.contains("extra"));
+    }
+
+    #[test]
+    fn copy_sheet_copies_data_validations_and_marks_the_copy_touched() {
+        // The copy has no original worksheet XML of its own to fall back to, so it must
+        // be marked touched unconditionally (see `copy_sheet`'s own doc comment) even
+        // though the source sheet itself may be untouched.
+        let mut vm = Vm::new();
+        vm.data_validations.insert(
+            "sheet1".to_string(),
+            vec![sample_dv_rule(vec![((1, 1), (1, 1))])],
+        );
+        vm.copy_sheet("Sheet1", "Copy").unwrap();
+        assert_eq!(vm.data_validations.get("copy").unwrap().len(), 1);
+        assert_eq!(vm.data_validations.get("sheet1").unwrap().len(), 1);
+        assert!(vm.data_validations_touched.contains("copy"));
+        assert!(!vm.data_validations_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn populate_from_sheets_threads_data_validations_into_the_vm() {
+        let mut sheet = WorkbookSheet {
+            name: "Sheet1".to_string(),
+            cells: HashMap::new(),
+            sheet_id: None,
+            workbook_rel_id: None,
+            source_part_name: None,
+            merged_ranges: Vec::new(),
+            hidden_rows: Vec::new(),
+            hidden_columns: Vec::new(),
+            raw_style_indices: HashMap::new(),
+            formulas: HashMap::new(),
+            cell_number_formats: HashMap::new(),
+            sheet_state: None,
+            row_heights: HashMap::new(),
+            column_widths: Vec::new(),
+            row_styles: HashMap::new(),
+            column_styles: Vec::new(),
+            tables: Vec::new(),
+            data_validations: vec![sample_dv_rule(vec![((1, 1), (1, 1))])],
+        };
+        sheet.data_validations[0].dirty = false;
+        let mut vm = Vm::new();
+        vm.populate_from_sheets(vec![sheet]);
+        let rules = vm.data_validations.get("sheet1").unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].validation_type, "list");
+        // Freshly loaded data is never pre-marked touched -- an untouched sheet must
+        // pass through its original fragment byte-identical.
+        assert!(!vm.data_validations_touched.contains("sheet1"));
     }
 }
