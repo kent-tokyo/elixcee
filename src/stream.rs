@@ -1,11 +1,11 @@
-//! Forward-only row streaming for large XLSX files (0.20.0).
+//! Forward-only row streaming for large XLSX files (0.21.0).
 //!
 //! The normal `Vm` intentionally remains a random-access, fully mutable model. This
 //! module provides a separate pipeline API whose worker owns the ZIP entry and sends
 //! one decoded row at a time, so callers do not need to materialize a workbook.
 
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::sync::{
     Mutex,
     mpsc::{self, Receiver},
@@ -89,43 +89,36 @@ fn stream_rows(
             let shared = reader::xlsx_shared_strings_for_stream(&shared_xml);
             let entry = archive.by_name(&zip_path).map_err(|e| e.to_string())?;
             let mut input = BufReader::with_capacity(STREAM_BUFFER_BYTES, entry);
-            let mut buf = Vec::with_capacity(128 * 1024);
-            let mut chunk = [0u8; STREAM_BUFFER_BYTES];
+            let mut row_buf = Vec::with_capacity(128 * 1024);
+            let mut token = Vec::with_capacity(1024);
             let mut in_row = false;
             loop {
-                let n = input.read(&mut chunk).map_err(|e| e.to_string())?;
-                if n == 0 {
+                token.clear();
+                if input
+                    .read_until(b'>', &mut token)
+                    .map_err(|e| e.to_string())?
+                    == 0
+                {
                     break;
                 }
-                let mut start = 0;
-                while start < n {
-                    if !in_row {
-                        if let Some(pos) = chunk[start..n].windows(4).position(|w| w == b"<row") {
-                            let pos = start + pos;
-                            if chunk
-                                .get(pos + 4)
-                                .is_some_and(|b| *b == b' ' || *b == b'>' || *b == b'/')
-                            {
-                                in_row = true;
-                                buf.clear();
-                                buf.extend_from_slice(&chunk[pos..n]);
-                                start = n;
-                            } else {
-                                start = pos + 4;
-                            }
-                        } else {
-                            break;
-                        }
-                    } else {
-                        buf.extend_from_slice(&chunk[start..n]);
-                        start = n;
-                    }
-                    if in_row
-                        && buf.windows(6).any(|w| w == b"</row>")
-                        && let Some(end) = buf.windows(6).position(|w| w == b"</row>")
+                if !in_row {
+                    let trimmed = token.trim_ascii_start();
+                    if trimmed.starts_with(b"<row")
+                        && trimmed
+                            .get(4)
+                            .is_some_and(|b| *b == b' ' || *b == b'>' || *b == b'/')
                     {
-                        let end = end + 6;
-                        if let Ok(xml) = std::str::from_utf8(&buf[..end]) {
+                        in_row = true;
+                        row_buf.clear();
+                        row_buf.extend_from_slice(&token);
+                        if trimmed.ends_with(b"/>") {
+                            in_row = false;
+                        }
+                    }
+                } else {
+                    row_buf.extend_from_slice(&token);
+                    if token.trim_ascii_start().starts_with(b"</row>") {
+                        if let Ok(xml) = std::str::from_utf8(&row_buf) {
                             let wrapped =
                                 format!("<worksheet><sheetData>{xml}</sheetData></worksheet>");
                             if let Some((_, row)) = row_from_xml(&wrapped, &shared)
@@ -134,7 +127,6 @@ fn stream_rows(
                                 return Ok(());
                             }
                         }
-                        buf.drain(..end);
                         in_row = false;
                     }
                 }
@@ -271,5 +263,31 @@ impl PyStreamWriter {
             .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
         self.active = false;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::row_from_xml;
+    use crate::Variant;
+
+    #[test]
+    fn row_parser_preserves_positions_and_shared_strings() {
+        let xml = r#"<worksheet><sheetData>
+            <row r="7"><c r="B7" t="s"><v>0</v></c><c r="D7"><v>42</v></c></row>
+        </sheetData></worksheet>"#;
+        let (_, row) = row_from_xml(xml, &["shared".to_string()]).expect("row");
+        assert_eq!(row.len(), 4);
+        assert!(matches!(row[0], Variant::Empty));
+        assert!(matches!(&row[1], Variant::Str(value) if value == "shared"));
+        assert!(matches!(row[2], Variant::Empty));
+        assert!(matches!(row[3], Variant::Integer(42)));
+    }
+
+    #[test]
+    fn row_parser_handles_a_row_with_inline_string() {
+        let xml = r#"<worksheet><sheetData><row r="2"><c r="A2" t="inlineStr"><is><t>hello</t></is></c></row></sheetData></worksheet>"#;
+        let (_, row) = row_from_xml(xml, &[]).expect("row");
+        assert!(matches!(&row[0], Variant::Str(value) if value == "hello"));
     }
 }
