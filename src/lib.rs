@@ -2131,6 +2131,400 @@ impl PyVm {
         Ok(list.into_any().unbind())
     }
 
+    /// Turns on a standalone autofilter over *ref* (0.16.0-B) -- a bare
+    /// ``<autoFilter>`` with dropdown arrows shown and no column filtered yet,
+    /// matching real Excel's own state right after toggling "Filter" on. Replaces any
+    /// existing autofilter on the same sheet outright (real Excel allows only one).
+    ///
+    /// This is the SAME file element a table's own nested ``<autoFilter>``
+    /// (:meth:`create_table`) uses structurally, but a wholly independent one, keyed by
+    /// sheet, not by table -- setting a table-embedded filter's actual criteria is
+    /// separate future work, not this method.
+    ///
+    /// Parameters
+    /// ----------
+    /// ref:
+    ///     The filtered range, header row included, e.g. ``"A1:C20"``.
+    /// sheet:
+    ///     Sheet to add the autofilter to. Defaults to the active sheet.
+    ///
+    /// Raises ``ValueError`` if *ref* is a bad address or *sheet* is unknown.
+    #[pyo3(signature = (r#ref, sheet = None))]
+    fn add_autofilter(&mut self, r#ref: &str, sheet: Option<&str>) -> PyResult<()> {
+        let ref_range =
+            validate_range_addr(r#ref).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.add_autofilter_on_sheet(&key, ref_range);
+        Ok(())
+    }
+
+    /// Turns off *sheet*'s autofilter entirely (0.16.0-B) -- a no-op if none exists.
+    /// Reveals every data row currently hidden inside the (former) filtered range,
+    /// matching real Excel's own "Clear Filter" behavior. This can theoretically also
+    /// reveal a row hidden for an unrelated reason if it happens to fall inside that
+    /// range -- this project's hidden-row state carries no "hidden by filter" vs.
+    /// "hidden by an explicit hide call" provenance, an accepted limitation, not fixed
+    /// here.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown.
+    #[pyo3(signature = (sheet = None))]
+    fn remove_autofilter(&mut self, sheet: Option<&str>) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner.remove_autofilter_on_sheet(&key);
+        Ok(())
+    }
+
+    /// Filters *col_offset* to only the rows whose value is one of *values* (0.16.0-B)
+    /// -- real Excel's checkbox-list filter, exact text match against any value in the
+    /// list. Replaces any existing criteria already set on the same column.
+    ///
+    /// Immediately re-evaluates and hides/shows every data row in the autofilter's
+    /// range based on ALL currently-active columns together (not just this one) -- see
+    /// the module-level note on :meth:`set_custom_filter` for why this can never be
+    /// incremental, and why it is a one-shot action, not live re-evaluation as cell
+    /// values later change.
+    ///
+    /// Parameters
+    /// ----------
+    /// col_offset:
+    ///     0-based column offset relative to the autofilter's own range left edge (its
+    ///     leftmost column is ``0``) -- NOT the same convention as VBA's
+    ///     ``AutoFilter``/``Field``, which is 1-based.
+    /// values:
+    ///     The exact text values to keep. Compared against each cell's display text.
+    /// sheet:
+    ///     Sheet whose autofilter to modify. Defaults to the active sheet.
+    ///
+    /// Raises ``ValueError`` if *sheet* has no autofilter yet, *col_offset* is outside
+    /// its range, or *sheet* is unknown.
+    #[pyo3(signature = (col_offset, values, sheet = None))]
+    fn set_equality_filter(
+        &mut self,
+        col_offset: u32,
+        values: Vec<String>,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .set_filter_column_on_sheet(&key, col_offset, reader::FilterCriteria::Values(values))
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Filters *col_offset* by one or two numeric/text comparisons (0.16.0-B) -- real
+    /// Excel's "Number Filters"/"Text Filters" custom-comparison dialog. There is no
+    /// single "between" operator in the real file format (that's a data-validation-only
+    /// concept) -- a range like "between 10 and 20" is two conditions,
+    /// ``operator="greaterThanOrEqual", value="10"`` AND
+    /// ``operator2="lessThanOrEqual", value2="20"``.
+    ///
+    /// Comparisons try numeric first, falling back to text comparison when either side
+    /// isn't a number.
+    ///
+    /// Immediately re-evaluates row visibility the same way :meth:`set_equality_filter`
+    /// does — see that method's own docstring for the one-shot, all-columns-together
+    /// semantics.
+    ///
+    /// Parameters
+    /// ----------
+    /// col_offset:
+    ///     0-based column offset relative to the autofilter's own range left edge.
+    /// operator:
+    ///     One of ``"equal"``, ``"notEqual"``, ``"greaterThan"``, ``"greaterThanOrEqual"``,
+    ///     ``"lessThan"``, ``"lessThanOrEqual"``.
+    /// value:
+    ///     The comparison value, as text (parsed as a number first if possible).
+    /// and_:
+    ///     When *operator2*/*value2* are also given, whether the two conditions combine
+    ///     via AND (default) or OR.
+    /// operator2, value2:
+    ///     An optional second condition, same shape as *operator*/*value*.
+    /// sheet:
+    ///     Sheet whose autofilter to modify. Defaults to the active sheet.
+    ///
+    /// Raises ``ValueError`` if *sheet* has no autofilter yet, *col_offset* is outside
+    /// its range, or *sheet* is unknown.
+    #[pyo3(signature = (
+        col_offset, operator, value, and_ = true, operator2 = None, value2 = None,
+        sheet = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_custom_filter(
+        &mut self,
+        col_offset: u32,
+        operator: &str,
+        value: &str,
+        and_: bool,
+        operator2: Option<&str>,
+        value2: Option<&str>,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .set_filter_column_on_sheet(
+                &key,
+                col_offset,
+                reader::FilterCriteria::Custom {
+                    op1: operator.to_string(),
+                    val1: value.to_string(),
+                    and: and_,
+                    op2: operator2.map(str::to_string),
+                    val2: value2.map(str::to_string),
+                },
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Filters *col_offset* to only blank cells (0.16.0-B) -- real Excel's "Blanks"
+    /// checkbox in the filter dropdown. A cell with no value, or an empty-string
+    /// result, both count as blank.
+    ///
+    /// Immediately re-evaluates row visibility the same way :meth:`set_equality_filter`
+    /// does.
+    ///
+    /// Raises ``ValueError`` if *sheet* has no autofilter yet, *col_offset* is outside
+    /// its range, or *sheet* is unknown.
+    #[pyo3(signature = (col_offset, sheet = None))]
+    fn set_blank_filter(&mut self, col_offset: u32, sheet: Option<&str>) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .set_filter_column_on_sheet(&key, col_offset, reader::FilterCriteria::Blank)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Filters *col_offset* to its top (or bottom) *val* items, or top/bottom *val*
+    /// percent (0.16.0-B) -- real Excel's "Top 10" filter. Computed once, immediately,
+    /// from the column's current numeric values across the autofilter's data rows —
+    /// not re-derived later if those values change.
+    ///
+    /// Immediately re-evaluates row visibility the same way :meth:`set_equality_filter`
+    /// does.
+    ///
+    /// Parameters
+    /// ----------
+    /// col_offset:
+    ///     0-based column offset relative to the autofilter's own range left edge.
+    /// val:
+    ///     The count (or percentage, when *percent* is ``True``) of items to keep.
+    /// top:
+    ///     ``True`` (default) for the top *val*, ``False`` for the bottom *val*.
+    /// percent:
+    ///     Whether *val* is a percentage of the column's row count rather than a raw
+    ///     count. Defaults to ``False``.
+    /// sheet:
+    ///     Sheet whose autofilter to modify. Defaults to the active sheet.
+    ///
+    /// Raises ``ValueError`` if *sheet* has no autofilter yet, *col_offset* is outside
+    /// its range, or *sheet* is unknown.
+    #[pyo3(signature = (col_offset, val, top = true, percent = false, sheet = None))]
+    fn set_top10_filter(
+        &mut self,
+        col_offset: u32,
+        val: f64,
+        top: bool,
+        percent: bool,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .set_filter_column_on_sheet(
+                &key,
+                col_offset,
+                reader::FilterCriteria::Top10 { top, percent, val },
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Filters *col_offset* to dates matching one calendar bucket (0.16.0-B) -- real
+    /// Excel's date-grouping filter (e.g. "all of January 2024"). Every field you
+    /// give must match; an omitted field is a wildcard, so ``month=1`` alone matches
+    /// every January regardless of year. At least one field must be given.
+    ///
+    /// Only one bucket per call — real multi-bucket date-group filters (e.g. "January
+    /// OR February") are out of scope; call this once per bucket if that's ever
+    /// needed, which replaces rather than adds (same "one filter per column" model as
+    /// every other ``set_*_filter``).
+    ///
+    /// Immediately re-evaluates row visibility the same way :meth:`set_equality_filter`
+    /// does.
+    ///
+    /// Parameters
+    /// ----------
+    /// col_offset:
+    ///     0-based column offset relative to the autofilter's own range left edge.
+    /// year, month, day, hour, minute, second:
+    ///     The calendar fields to match. Omitted fields are wildcards.
+    /// grouping:
+    ///     The real file format's own ``dateTimeGrouping`` granularity label (e.g.
+    ///     ``"month"``, ``"day"``, ``"year"``) -- persisted for round-trip fidelity,
+    ///     not itself used to decide which fields matter (that's implied by which
+    ///     fields you actually give).
+    /// sheet:
+    ///     Sheet whose autofilter to modify. Defaults to the active sheet.
+    ///
+    /// Raises ``ValueError`` if no field is given, *sheet* has no autofilter yet,
+    /// *col_offset* is outside its range, or *sheet* is unknown.
+    #[pyo3(signature = (
+        col_offset, year = None, month = None, day = None, hour = None, minute = None,
+        second = None, grouping = "day", sheet = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_date_group_filter(
+        &mut self,
+        col_offset: u32,
+        year: Option<i32>,
+        month: Option<u32>,
+        day: Option<u32>,
+        hour: Option<u32>,
+        minute: Option<u32>,
+        second: Option<u32>,
+        grouping: &str,
+        sheet: Option<&str>,
+    ) -> PyResult<()> {
+        if year.is_none()
+            && month.is_none()
+            && day.is_none()
+            && hour.is_none()
+            && minute.is_none()
+            && second.is_none()
+        {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "set_date_group_filter requires at least one of year/month/day/hour/minute/second",
+            ));
+        }
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let item = reader::DateGroupItem {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            date_time_grouping: grouping.to_string(),
+        };
+        self.inner
+            .set_filter_column_on_sheet(
+                &key,
+                col_offset,
+                reader::FilterCriteria::DateGroup(vec![item]),
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Removes *col_offset*'s filter criteria (0.16.0-B), leaving the autofilter itself
+    /// and every other column's criteria in place. A no-op if that column has no
+    /// active criteria. Immediately re-evaluates row visibility from the remaining
+    /// active columns, same one-shot semantics as :meth:`set_equality_filter`.
+    ///
+    /// Raises ``ValueError`` if *sheet* has no autofilter, or *sheet* is unknown.
+    #[pyo3(signature = (col_offset, sheet = None))]
+    fn clear_filter_column(&mut self, col_offset: u32, sheet: Option<&str>) -> PyResult<()> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        self.inner
+            .clear_filter_column_on_sheet(&key, col_offset)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// *sheet*'s standalone autofilter, read-only (0.16.0-B), or ``None`` if it has
+    /// none. ``{"ref": "A1:C20", "columns": [...]}`` -- each column dict's exact keys
+    /// depend on its filter type (``"type"`` is always present: one of ``"values"``,
+    /// ``"custom"``, ``"blank"``, ``"top10"``, ``"date_group"``).
+    ///
+    /// This never evaluates a rule against any cell's value directly — the hidden-row
+    /// STATE each ``set_*_filter``/``clear_filter_column`` call already computed is
+    /// what actually governs visibility (see :meth:`hidden_rows`); this method only
+    /// reports the stored filter criteria themselves.
+    ///
+    /// Raises ``ValueError`` if *sheet* is unknown.
+    #[pyo3(signature = (sheet = None))]
+    fn autofilter(&self, py: Python<'_>, sheet: Option<&str>) -> PyResult<Py<PyAny>> {
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let Some(af) = self.inner.autofilters.get(&key) else {
+            return Ok(py.None());
+        };
+        let dict = PyDict::new(py);
+        dict.set_item("ref", merge_rect_to_a1(&af.ref_range))?;
+        let cols = PyList::empty(py);
+        for c in &af.columns {
+            let cd = PyDict::new(py);
+            cd.set_item("col_offset", c.col_offset)?;
+            match &c.criteria {
+                reader::FilterCriteria::Values(v) => {
+                    cd.set_item("type", "values")?;
+                    cd.set_item("values", v.clone())?;
+                }
+                reader::FilterCriteria::Custom {
+                    op1,
+                    val1,
+                    and,
+                    op2,
+                    val2,
+                } => {
+                    cd.set_item("type", "custom")?;
+                    cd.set_item("operator", op1)?;
+                    cd.set_item("value", val1)?;
+                    cd.set_item("and_", *and)?;
+                    cd.set_item("operator2", op2.as_deref())?;
+                    cd.set_item("value2", val2.as_deref())?;
+                }
+                reader::FilterCriteria::Blank => {
+                    cd.set_item("type", "blank")?;
+                }
+                reader::FilterCriteria::Top10 { top, percent, val } => {
+                    cd.set_item("type", "top10")?;
+                    cd.set_item("top", *top)?;
+                    cd.set_item("percent", *percent)?;
+                    cd.set_item("val", *val)?;
+                }
+                reader::FilterCriteria::DateGroup(items) => {
+                    cd.set_item("type", "date_group")?;
+                    let groups = PyList::empty(py);
+                    for it in items {
+                        let gd = PyDict::new(py);
+                        gd.set_item("year", it.year)?;
+                        gd.set_item("month", it.month)?;
+                        gd.set_item("day", it.day)?;
+                        gd.set_item("hour", it.hour)?;
+                        gd.set_item("minute", it.minute)?;
+                        gd.set_item("second", it.second)?;
+                        gd.set_item("grouping", &it.date_time_grouping)?;
+                        groups.append(gd)?;
+                    }
+                    cd.set_item("groups", groups)?;
+                }
+            }
+            cols.append(cd)?;
+        }
+        dict.set_item("columns", cols)?;
+        Ok(dict.into_any().unbind())
+    }
+
     /// Every hidden row number on a sheet, as a sorted list of 1-based row
     /// numbers (e.g. ``[5, 6, 9]``). Expanded, not interval-form.
     ///
@@ -4460,8 +4854,20 @@ fn build_xlsx_sheet(
     // autoFilter itself is byte-preserved verbatim — see `OpaqueWorksheetFragments::
     // auto_filter`'s doc comment). Verified against openpyxl's own writer order
     // (`worksheet/_writer.py`'s `write_tail`), not guessed.
-    if let Some(af) = fragments.auto_filter {
-        out.push_str(af);
+    //
+    // 0.16.0-B: an untouched sheet's `<autoFilter>` passes through byte-identical exactly
+    // as before this feature existed (`fragments.auto_filter`, captured from `source_xml`
+    // same as every other opaque fragment here); a touched one (add/remove/set/clear a
+    // filter column, a real structural-edit shift, or a copy with no source XML at all) is
+    // regenerated from current `Vm` state instead — same `*_touched`-gated pattern as
+    // `<dataValidations>` just below. See `resolve_autofilter_for_sheet`'s own doc comment.
+    let af_output = if vm.autofilters_touched.contains(&sheet_key) {
+        resolve_autofilter_for_sheet(vm, &sheet_key, fragments.auto_filter)
+    } else {
+        fragments.auto_filter.map(str::to_string)
+    };
+    if let Some(af) = af_output {
+        out.push_str(&af);
         out.push('\n');
     }
 
@@ -4841,6 +5247,155 @@ fn resolve_data_validations_for_sheet(
         rules.len(),
         &body,
     ))
+}
+
+/// Builds one `<filterColumn>` element fresh from a `FilterColumn` whose criteria was
+/// just set via `set_*_filter` (`raw_span: None` -- nothing to preserve). Real shapes
+/// verified against actual `openpyxl`-generated bytes for every variant (0.16.0-B),
+/// not assumed from spec text alone -- see `internal_docs/autofilter-0.16.0-b-design.md`
+/// Finding 3.
+fn build_filter_column_xml(fc: &reader::FilterColumn) -> String {
+    let mut attrs = format!(" colId=\"{}\"", fc.col_offset);
+    if fc.hidden_button {
+        attrs.push_str(" hiddenButton=\"1\"");
+    }
+    if !fc.show_button {
+        attrs.push_str(" showButton=\"0\"");
+    }
+    let body = match &fc.criteria {
+        reader::FilterCriteria::Values(vals) => {
+            let inner: String = vals
+                .iter()
+                .map(|v| format!("<filter val=\"{}\"/>", xml_escape(v)))
+                .collect();
+            format!("<filters>{inner}</filters>")
+        }
+        reader::FilterCriteria::Custom {
+            op1,
+            val1,
+            and,
+            op2,
+            val2,
+        } => {
+            let mut inner = format!(
+                "<customFilter operator=\"{}\" val=\"{}\"/>",
+                xml_escape(op1),
+                xml_escape(val1)
+            );
+            if let (Some(op2), Some(val2)) = (op2, val2) {
+                inner.push_str(&format!(
+                    "<customFilter operator=\"{}\" val=\"{}\"/>",
+                    xml_escape(op2),
+                    xml_escape(val2)
+                ));
+            }
+            format!(
+                "<customFilters and=\"{}\">{inner}</customFilters>",
+                if *and { "1" } else { "0" }
+            )
+        }
+        reader::FilterCriteria::Blank => "<filters blank=\"1\"/>".to_string(),
+        reader::FilterCriteria::Top10 { top, percent, val } => {
+            format!(
+                "<top10 top=\"{}\" percent=\"{}\" val=\"{}\"/>",
+                if *top { "1" } else { "0" },
+                if *percent { "1" } else { "0" },
+                val
+            )
+        }
+        reader::FilterCriteria::DateGroup(items) => {
+            let inner: String = items
+                .iter()
+                .map(|g| {
+                    let mut a = String::new();
+                    if let Some(y) = g.year {
+                        a.push_str(&format!(" year=\"{y}\""));
+                    }
+                    if let Some(m) = g.month {
+                        a.push_str(&format!(" month=\"{m}\""));
+                    }
+                    if let Some(d) = g.day {
+                        a.push_str(&format!(" day=\"{d}\""));
+                    }
+                    if let Some(h) = g.hour {
+                        a.push_str(&format!(" hour=\"{h}\""));
+                    }
+                    if let Some(mi) = g.minute {
+                        a.push_str(&format!(" minute=\"{mi}\""));
+                    }
+                    if let Some(s) = g.second {
+                        a.push_str(&format!(" second=\"{s}\""));
+                    }
+                    a.push_str(&format!(
+                        " dateTimeGrouping=\"{}\"",
+                        xml_escape(&g.date_time_grouping)
+                    ));
+                    format!("<dateGroupItem{a}/>")
+                })
+                .collect();
+            format!("<filters calendarType=\"gregorian\">{inner}</filters>")
+        }
+    };
+    format!("<filterColumn{attrs}>{body}</filterColumn>")
+}
+
+/// Regenerates `<autoFilter>` for a sheet whose autofilter was touched (add/remove/set/
+/// clear a filter column, a real structural-edit shift, or a copy landing with no
+/// original XML of its own) since load -- `vm.autofilters_touched` gates whether this
+/// runs at all (see `build_xlsx_sheet`'s own call site: an untouched sheet's original
+/// fragment passes through byte-identical instead). Each `FilterColumn`'s `raw_span` is
+/// used as-is unless `dirty` (a structural-edit shift updated `col_offset` but not yet
+/// `raw_span`, patched via `with_attr`) or absent (a freshly set/replaced column, built
+/// fresh via `build_filter_column_xml`) -- mirrors `resolve_data_validations_for_sheet`'s
+/// exact per-record preservation discipline. `None` when the autofilter was removed
+/// entirely.
+fn resolve_autofilter_for_sheet(
+    vm: &Vm,
+    sheet_key: &str,
+    original: Option<&str>,
+) -> Option<String> {
+    let af = vm.autofilters.get(sheet_key)?;
+    let body: String = af
+        .columns
+        .iter()
+        .map(|c| match (&c.raw_span, c.dirty) {
+            (Some(raw), false) => raw.clone(),
+            (Some(raw), true) => reader::with_attr(raw, "colId", &c.col_offset.to_string()),
+            (None, _) => build_filter_column_xml(c),
+        })
+        .collect();
+    Some(rebuild_autofilter_container(
+        original,
+        &merge_rect_to_a1(&af.ref_range),
+        &body,
+    ))
+}
+
+/// Rebuilds `<autoFilter ref="...">...</autoFilter>` (or a bare self-closing
+/// `<autoFilter ref="..."/>` when `body` is empty -- unlike `<dataValidation>`,
+/// `<filterColumn>` has no `minOccurs="1"` constraint on its parent, confirmed against a
+/// real bare `<autoFilter ref="A1:C4"/>` with zero filter columns, e.g. right after
+/// `add_autofilter` before any column criteria is set), preserving every OTHER attribute
+/// the original `<autoFilter>` had (there are none real Excel/openpyxl ever emit beyond
+/// `ref`, but the mechanism doesn't assume that). Reuses `reader::with_attr` the same way
+/// `rebuild_counted_container` does for `<dataValidations>`'s `count`, applied to `ref`
+/// instead.
+fn rebuild_autofilter_container(original: Option<&str>, new_ref: &str, body: &str) -> String {
+    let attrs_only = original
+        .and_then(|span| {
+            let open_end = span.find('>')?;
+            span[..open_end].strip_prefix("<autoFilter")
+        })
+        .map(|raw| raw.trim_end().strip_suffix('/').unwrap_or(raw).to_string())
+        .unwrap_or_default();
+    let synthetic = format!("<autoFilter{attrs_only}/>");
+    let with_ref = reader::with_attr(&synthetic, "ref", new_ref);
+    let open = with_ref.trim_end().strip_suffix("/>").unwrap_or(&with_ref);
+    if body.is_empty() {
+        format!("{open}/>")
+    } else {
+        format!("{open}>{body}</autoFilter>")
+    }
 }
 
 // ── ODS write ────────────────────────────────────────────────────────────────

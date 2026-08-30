@@ -273,6 +273,7 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                autofilter: None,
             },
             formulas: HashMap::new(),
             dimension: None,
