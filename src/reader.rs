@@ -129,9 +129,8 @@ pub struct WorkbookSheet {
     /// shape right after turning AutoFilter on but before filtering anything). At most
     /// one per sheet, per `CT_Worksheet`'s own `maxOccurs="1"` on this child -- unlike
     /// `tables`, never a `Vec`. A table's own NESTED `<autoFilter>` is a completely
-    /// separate thing (`TableDef::auto_filter_ref`, structural-only, no criteria) --
-    /// table-embedded filter criteria is 0.16.0-B2, not this field. Always `None` for
-    /// `.ods`.
+    /// separate thing (`TableDef::auto_filter_ref`/`autofilter_columns`, its own
+    /// storage and write path, 0.16.0-B2) -- not this field. Always `None` for `.ods`.
     pub autofilter: Option<AutoFilterDef>,
 }
 
@@ -534,8 +533,14 @@ pub struct TableDef {
     /// `<tableStyleInfo name="...">`'s name, when present.
     pub style_name: Option<String>,
     /// The table's own nested `<autoFilter ref="...">`, when present -- structural
-    /// only, no filter-criteria parsing (that's 0.16.0-B).
+    /// only.
     pub auto_filter_ref: Option<MergeRect>,
+    /// `auto_filter_ref`'s own `<filterColumn>` children (0.16.0-B2), parsed the same
+    /// way as a standalone `AutoFilterDef.columns` -- reuses `FilterColumn`/
+    /// `FilterCriteria` and the same `col_offset` convention (0-based, relative to
+    /// `auto_filter_ref`'s own left edge, not `ref_range`'s). Empty when
+    /// `auto_filter_ref` is `None` or has no active criteria yet.
+    pub autofilter_columns: Vec<FilterColumn>,
     /// Normalized `xl/tables/tableN.xml` part path this table was parsed from
     /// (0.16.0-A2) -- lets the writer find the right `raw_entries` key to surgically
     /// patch. Empty for a table built programmatically (never happens today -- no
@@ -565,6 +570,11 @@ pub(crate) enum TableEditOp {
     SetTotalsRowShown(bool),
     AddColumn(String),
     RemoveColumn(String),
+    /// Sets (replacing any existing entry for the same `col_offset`) one
+    /// `<filterColumn>` on the table's own nested `<autoFilter>` (0.16.0-B2).
+    SetFilterColumn(u32, FilterCriteria),
+    /// Removes `col_offset`'s `<filterColumn>` entry, if any.
+    ClearFilterColumn(u32),
 }
 
 fn col_letters(mut col: u32) -> String {
@@ -658,6 +668,57 @@ pub(crate) fn apply_table_edits(table_xml: &str, edits: &[TableEditOp]) -> Strin
                 );
                 with_ordered_child(&xml, "tableColumns", TABLE_CHILD_ORDER, Some(&new_child))
             }
+            TableEditOp::SetFilterColumn(col_offset, criteria) => {
+                match extract_raw_element(&xml, "autoFilter") {
+                    Some(af) => {
+                        let ref_str = span_attr_str(&af, "ref").unwrap_or_default();
+                        let mut cols: Vec<String> =
+                            extract_records(&af, "autoFilter", "filterColumn")
+                                .into_iter()
+                                .filter(|c| {
+                                    span_attr_str(c, "colId").and_then(|v| v.parse::<u32>().ok())
+                                        != Some(*col_offset)
+                                })
+                                .collect();
+                        cols.push(crate::build_filter_column_xml(&FilterColumn {
+                            col_offset: *col_offset,
+                            hidden_button: false,
+                            show_button: true,
+                            criteria: criteria.clone(),
+                            raw_span: None,
+                            dirty: false,
+                        }));
+                        let new_af = crate::rebuild_autofilter_container(
+                            Some(&af),
+                            &ref_str,
+                            &cols.concat(),
+                        );
+                        with_ordered_child(&xml, "autoFilter", TABLE_CHILD_ORDER, Some(&new_af))
+                    }
+                    None => xml,
+                }
+            }
+            TableEditOp::ClearFilterColumn(col_offset) => {
+                match extract_raw_element(&xml, "autoFilter") {
+                    Some(af) => {
+                        let ref_str = span_attr_str(&af, "ref").unwrap_or_default();
+                        let cols: Vec<String> = extract_records(&af, "autoFilter", "filterColumn")
+                            .into_iter()
+                            .filter(|c| {
+                                span_attr_str(c, "colId").and_then(|v| v.parse::<u32>().ok())
+                                    != Some(*col_offset)
+                            })
+                            .collect();
+                        let new_af = crate::rebuild_autofilter_container(
+                            Some(&af),
+                            &ref_str,
+                            &cols.concat(),
+                        );
+                        with_ordered_child(&xml, "autoFilter", TABLE_CHILD_ORDER, Some(&new_af))
+                    }
+                    None => xml,
+                }
+            }
         };
     }
     xml
@@ -691,9 +752,12 @@ pub(crate) fn relationship_ids(xml: &str) -> Vec<String> {
 /// original bytes specifically to avoid dropping the `id`/`xr:uid`/`xr3:uid` extension
 /// GUIDs `TableDef` doesn't store. Omits those GUIDs entirely -- confirmed safely
 /// omittable by inspecting a real `openpyxl`-authored table directly, which ships to real
-/// users without them. Includes a bare `<autoFilter ref="...">` matching the table's own
+/// users without them. Includes an `<autoFilter ref="...">` matching the table's own
 /// `ref` (also confirmed against the same real sample: openpyxl always includes one, even
-/// with no filter criteria) -- structural only, no filter-criteria authoring (0.16.0-B).
+/// with no filter criteria), embedding any `autofilter_columns` already set on this
+/// `TableDef` before its first save (0.16.0-B2) -- always built fresh via
+/// `build_filter_column_xml`, never a `raw_span` to preserve, since the table itself
+/// never existed on disk before now.
 pub(crate) fn render_table_xml(table: &TableDef, table_id: u32) -> String {
     let table_ref = format_merge_ref(&table.ref_range);
     let mut out = format!(
@@ -708,7 +772,23 @@ pub(crate) fn render_table_xml(table: &TableDef, table_id: u32) -> String {
         crate::xml_escape(&table.display_name),
         table_ref,
     );
-    out.push_str(&format!("<autoFilter ref=\"{table_ref}\"/>"));
+    // 0.16.0-B2: a freshly created table can already have filter criteria set on it
+    // (via set_table_*_filter, before the first save) -- embed them the same way
+    // apply_table_edits' SetFilterColumn op does for an existing table, via
+    // build_filter_column_xml, since a brand-new table's own filter columns are
+    // ALWAYS fresh (never a raw_span to preserve).
+    if table.autofilter_columns.is_empty() {
+        out.push_str(&format!("<autoFilter ref=\"{table_ref}\"/>"));
+    } else {
+        let body: String = table
+            .autofilter_columns
+            .iter()
+            .map(crate::build_filter_column_xml)
+            .collect();
+        out.push_str(&format!(
+            "<autoFilter ref=\"{table_ref}\">{body}</autoFilter>"
+        ));
+    }
     out.push_str(&format!("<tableColumns count=\"{}\">", table.columns.len()));
     for (i, col) in table.columns.iter().enumerate() {
         out.push_str(&format!(
@@ -3600,6 +3680,7 @@ fn parse_table_xml(xml: &str) -> Option<TableDef> {
                                 columns: Vec::new(),
                                 style_name: None,
                                 auto_filter_ref: None,
+                                autofilter_columns: Vec::new(),
                                 source_part: String::new(),
                                 pending_edits: Vec::new(),
                             });
@@ -3661,6 +3742,20 @@ fn parse_table_xml(xml: &str) -> Option<TableDef> {
                 }
             }
         }
+    }
+    // 0.16.0-B2: the streaming loop above only ever reads `<autoFilter>`'s own `ref`
+    // attribute -- its `<filterColumn>` children are parsed the same way as a
+    // standalone `AutoFilterDef`'s (`xlsx_autofilter`), via a second, targeted
+    // extraction against the whole document rather than threading state through the
+    // streaming iterator above.
+    if let Some(t) = table.as_mut()
+        && t.auto_filter_ref.is_some()
+        && let Some(af_span) = extract_raw_element(xml, "autoFilter")
+    {
+        t.autofilter_columns = extract_records(&af_span, "autoFilter", "filterColumn")
+            .iter()
+            .filter_map(|s| parse_filter_column_xml(s))
+            .collect();
     }
     table
 }
@@ -3733,6 +3828,112 @@ mod table_parsing_tests {
         let t = parse_table_xml(&out).unwrap();
         assert_eq!(t.ref_range, ((1, 1), (4, 3)));
         assert_eq!(t.auto_filter_ref, Some(((1, 1), (5, 3))));
+    }
+
+    #[test]
+    fn apply_table_edits_set_filter_column_adds_a_fresh_filter_column() {
+        let out = apply_table_edits(
+            REAL_TABLE_XML,
+            &[TableEditOp::SetFilterColumn(
+                1,
+                FilterCriteria::Values(vec!["Yes".to_string()]),
+            )],
+        );
+        assert!(out.contains(r#"colId="1""#));
+        assert!(out.contains(r#"<filter val="Yes"/>"#));
+        // The table's own ref/other siblings are untouched.
+        assert!(out.contains(r#"ref="A1:C4""#));
+    }
+
+    #[test]
+    fn apply_table_edits_set_filter_column_replaces_an_existing_entry_for_the_same_col_offset() {
+        let with_one = apply_table_edits(
+            REAL_TABLE_XML,
+            &[TableEditOp::SetFilterColumn(1, FilterCriteria::Blank)],
+        );
+        let out = apply_table_edits(
+            &with_one,
+            &[TableEditOp::SetFilterColumn(
+                1,
+                FilterCriteria::Values(vec!["A".to_string()]),
+            )],
+        );
+        assert_eq!(out.matches("filterColumn").count(), 2); // one open + one close tag
+        assert!(!out.contains("blank"));
+        assert!(out.contains(r#"<filter val="A"/>"#));
+    }
+
+    #[test]
+    fn apply_table_edits_set_filter_column_preserves_an_unrelated_columns_raw_bytes() {
+        let with_two = apply_table_edits(
+            REAL_TABLE_XML,
+            &[
+                TableEditOp::SetFilterColumn(0, FilterCriteria::Blank),
+                TableEditOp::SetFilterColumn(1, FilterCriteria::Values(vec!["A".to_string()])),
+            ],
+        );
+        let out = apply_table_edits(
+            &with_two,
+            &[TableEditOp::SetFilterColumn(
+                1,
+                FilterCriteria::Values(vec!["B".to_string()]),
+            )],
+        );
+        // Column 0's own criteria (untouched by the second call) survives verbatim.
+        assert!(out.contains(r#"colId="0""#));
+        assert!(out.contains(r#"<filters blank="1"/>"#));
+        assert!(out.contains(r#"<filter val="B"/>"#));
+        assert!(!out.contains(r#"<filter val="A"/>"#));
+    }
+
+    #[test]
+    fn apply_table_edits_clear_filter_column_removes_only_the_targeted_entry() {
+        let with_two = apply_table_edits(
+            REAL_TABLE_XML,
+            &[
+                TableEditOp::SetFilterColumn(0, FilterCriteria::Blank),
+                TableEditOp::SetFilterColumn(1, FilterCriteria::Values(vec!["A".to_string()])),
+            ],
+        );
+        let out = apply_table_edits(&with_two, &[TableEditOp::ClearFilterColumn(0)]);
+        assert!(!out.contains(r#"colId="0""#));
+        assert!(out.contains(r#"colId="1""#));
+        let t = parse_table_xml(&out).unwrap();
+        assert_eq!(t.autofilter_columns.len(), 1);
+        assert_eq!(t.autofilter_columns[0].col_offset, 1);
+    }
+
+    #[test]
+    fn apply_table_edits_clear_filter_column_leaves_a_bare_self_closing_autofilter_when_empty() {
+        let with_one = apply_table_edits(
+            REAL_TABLE_XML,
+            &[TableEditOp::SetFilterColumn(0, FilterCriteria::Blank)],
+        );
+        let out = apply_table_edits(&with_one, &[TableEditOp::ClearFilterColumn(0)]);
+        assert!(out.contains(r#"<autoFilter ref="A1:C4"/>"#));
+        let t = parse_table_xml(&out).unwrap();
+        assert!(t.autofilter_columns.is_empty());
+    }
+
+    #[test]
+    fn parse_table_xml_reads_a_real_nested_filter_column() {
+        let xml = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          id="1" name="Table1" displayName="Table1" ref="A1:C4">
+          <autoFilter ref="A1:C4">
+            <filterColumn colId="0"><filters><filter val="X"/></filters></filterColumn>
+          </autoFilter>
+          <tableColumns count="3">
+            <tableColumn id="1" name="Name"/><tableColumn id="2" name="Qty"/>
+            <tableColumn id="3" name="Status"/>
+          </tableColumns>
+        </table>"#;
+        let t = parse_table_xml(xml).unwrap();
+        assert_eq!(t.autofilter_columns.len(), 1);
+        assert_eq!(t.autofilter_columns[0].col_offset, 0);
+        assert_eq!(
+            t.autofilter_columns[0].criteria,
+            FilterCriteria::Values(vec!["X".to_string()])
+        );
     }
 
     #[test]
@@ -3909,6 +4110,7 @@ mod table_parsing_tests {
             ],
             style_name: None,
             auto_filter_ref: Some(ref_range),
+            autofilter_columns: Vec::new(),
             source_part: String::new(),
             pending_edits: Vec::new(),
         }
@@ -3944,6 +4146,29 @@ mod table_parsing_tests {
         assert!(xml.contains(r#"<tableStyleInfo name="TableStyleMedium2""#));
         let parsed = parse_table_xml(&xml).expect("must parse back");
         assert_eq!(parsed.style_name.as_deref(), Some("TableStyleMedium2"));
+    }
+
+    #[test]
+    fn render_table_xml_embeds_filter_criteria_already_set_before_the_first_save() {
+        // Regression: a table created via create_table can already have set_table_*_filter
+        // called on it before ANY save -- render_table_xml (the from-scratch write path,
+        // distinct from apply_table_edits' patch-existing-bytes path) must embed
+        // `autofilter_columns` too, or the criteria silently never reaches disk.
+        let mut table = sample_table_def(((1, 1), (1, 1)));
+        table.autofilter_columns = vec![FilterColumn {
+            col_offset: 0,
+            hidden_button: false,
+            show_button: true,
+            criteria: FilterCriteria::Blank,
+            raw_span: None,
+            dirty: false,
+        }];
+        let xml = render_table_xml(&table, 1);
+        assert!(xml.contains(r#"colId="0""#));
+        assert!(xml.contains(r#"<filters blank="1"/>"#));
+        let parsed = parse_table_xml(&xml).expect("must parse back");
+        assert_eq!(parsed.autofilter_columns.len(), 1);
+        assert_eq!(parsed.autofilter_columns[0].criteria, FilterCriteria::Blank);
     }
 
     #[test]

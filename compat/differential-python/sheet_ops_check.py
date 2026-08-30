@@ -1392,6 +1392,152 @@ class AutoFilterFilteringAgreesWithOpenpyxl(unittest.TestCase):
             self.assertEqual(before, after)
 
 
+class TableAutoFilterColumnsAgreeWithOpenpyxl(unittest.TestCase):
+    # 0.16.0-B2: set_table_equality_filter()/set_table_custom_filter()/
+    # set_table_blank_filter()/set_table_top10_filter()/set_table_date_group_filter()/
+    # clear_table_filter_column() -- the table-embedded mirror of
+    # AutoFilterFilteringAgreesWithOpenpyxl's own standalone-autoFilter methods, reusing
+    # the exact same FilterColumn/FilterCriteria model and row-hide evaluation engine.
+    # fixture3's own real table (テーブル1, columns Name/Qty/Status, real data
+    # gweg/33/good, wf/44/ok, fwf/55/bad) is real-fixture grounding for the common
+    # equality case; the other filter types use openpyxl-synthetic fixtures, same
+    # granted exception as the standalone case.
+
+    def test_equality_filter_on_a_real_fixture_table_hides_non_matching_rows(self):
+        vm = elixcee.load_workbook(FIXTURE3)
+        t = vm.tables()[0]
+        self.assertEqual(t["autofilter_columns"], [])
+        self.assertEqual(vm.hidden_rows(), [])
+
+        vm.set_table_equality_filter(t["name"], 1, ["44"])  # Qty == 44 -> only "wf" row
+        self.assertEqual(
+            vm.tables()[0]["autofilter_columns"],
+            [{"col_offset": 1, "type": "values", "values": ["44"]}],
+        )
+        self.assertEqual(vm.hidden_rows(), [2, 4])  # rows for Qty=33 and Qty=55
+
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "table_af_eq_out.xlsx")
+            vm.save_workbook(out)
+            xml = zipfile.ZipFile(out).read("xl/tables/table1.xml").decode()
+            self.assertIn('<filterColumn colId="1">', xml)
+            self.assertIn('<filter val="44"/>', xml)
+            self.assertIsNotNone(openpyxl.load_workbook(out))
+
+            # Second save cycle: criteria and GUIDs both stable.
+            vm2 = elixcee.load_workbook(out)
+            self.assertEqual(
+                vm2.tables()[0]["autofilter_columns"],
+                [{"col_offset": 1, "type": "values", "values": ["44"]}],
+            )
+            out2 = os.path.join(d, "table_af_eq_out2.xlsx")
+            vm2.save_workbook(out2)
+            xml2 = zipfile.ZipFile(out2).read("xl/tables/table1.xml").decode()
+            self.assertIn('<filter val="44"/>', xml2)
+            self.assertIn("xr:uid=", xml2)  # table's own GUID survives, not reserialized
+
+            # Clear reverts to a bare, self-closing <autoFilter>, GUID intact.
+            vm2.clear_table_filter_column(t["name"], 1)
+            out3 = os.path.join(d, "table_af_eq_out3.xlsx")
+            vm2.save_workbook(out3)
+            xml3 = zipfile.ZipFile(out3).read("xl/tables/table1.xml").decode()
+            self.assertNotIn("filterColumn", xml3)
+            self.assertIn("<autoFilter", xml3)
+            self.assertIn("xr:uid=", xml3)
+
+    def test_custom_filter_and_top10_reuse_the_same_engine_as_standalone(self):
+        # Built via elixcee's own create_table rather than an openpyxl-authored one:
+        # openpyxl's Table() writes an ABSOLUTE relationship Target
+        # ("/xl/tables/table1.xml") rather than this project's relative convention
+        # ("../tables/table1.xml", confirmed against fixture3's real Excel-authored
+        # file and matched by create_table's own A3 design) -- elixcee's table loader
+        # doesn't resolve the absolute form (a real, pre-existing gap, unrelated to and
+        # out of scope for 0.16.0-B2). Matches TablesAgreeWithOpenpyxl's own
+        # from-scratch pattern; still verified via a real openpyxl reopen below.
+        vm = elixcee.Vm()
+        vm.set_cell(1, 1, "Name")
+        vm.set_cell(1, 2, "Num")
+        for i, (name, n) in enumerate([("A", 1), ("B", 5), ("C", 10), ("D", 15), ("E", 20)]):
+            vm.set_cell(2 + i, 1, name)
+            vm.set_cell(2 + i, 2, n)
+        vm.create_table("A1:B6", name="T1")
+
+        vm.set_table_custom_filter(
+            "T1", 1, "greaterThanOrEqual", "10", and_=True, operator2="lessThanOrEqual", value2="15"
+        )
+        self.assertEqual(vm.hidden_rows(), [2, 3, 6])  # 1, 5, 20 fail; 10, 15 pass
+
+        # Replacing column 1's own criteria (top10 instead of custom) means only the
+        # top10 rule is now active for that column -- top 2 of [1,5,10,15,20] is
+        # {15, 20}, so rows 2 ("A"/1), 3 ("B"/5), 4 ("C"/10) hide.
+        vm.set_table_top10_filter("T1", 1, 2.0, top=True)
+        self.assertEqual(vm.hidden_rows(), [2, 3, 4])
+
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "table_af_custom_out.xlsx")
+            vm.save_workbook(out)
+            self.assertIsNotNone(openpyxl.load_workbook(out))
+            xml = zipfile.ZipFile(out).read("xl/tables/table1.xml").decode()
+            self.assertIn("<top10", xml)
+
+    def test_blank_and_date_group_filters_round_trip(self):
+        # Excel serials for 2024-01-15/2024-02-01/2024-01-20, confirmed against
+        # openpyxl.utils.datetime.to_excel -- date_group_matches (src/vm/mod.rs)
+        # decomposes a cell's raw numeric value via serial_to_ymd, it never accepts a
+        # Python datetime object directly.
+        vm = elixcee.Vm()
+        vm.set_cell(1, 1, "X")
+        vm.set_cell(1, 2, "D")
+        vm.set_cell(2, 1, "a")
+        vm.set_cell(2, 2, 45306.0)  # 2024-01-15
+        vm.set_cell(3, 2, 45323.0)  # 2024-02-01, row 3's "X" cell left blank
+        vm.set_cell(4, 1, "b")
+        vm.set_cell(4, 2, 45311.0)  # 2024-01-20
+        vm.create_table("A1:B4", name="T2")
+
+        vm.set_table_blank_filter("T2", 0)
+        self.assertEqual(vm.hidden_rows(), [2, 4])  # only the blank "X" row (3) stays
+
+        vm.clear_table_filter_column("T2", 0)
+        vm.set_table_date_group_filter("T2", 1, year=2024, month=1, grouping="month")
+        self.assertEqual(vm.hidden_rows(), [3])  # only Feb (row 3) fails January
+
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "table_af_date_out.xlsx")
+            vm.save_workbook(out)
+            self.assertIsNotNone(openpyxl.load_workbook(out))
+            xml = zipfile.ZipFile(out).read("xl/tables/table1.xml").decode()
+            self.assertIn("dateGroupItem", xml)
+            self.assertIn('month="1"', xml)
+
+    def test_unknown_table_name_and_out_of_range_offset_raise(self):
+        vm = elixcee.Vm()
+        vm.set_cell(1, 1, "A")
+        vm.set_cell(2, 1, "x")
+        vm.create_table("A1:A2", name="T3")
+        with self.assertRaises(ValueError):
+            vm.set_table_equality_filter("NoSuchTable", 0, ["x"])
+        with self.assertRaises(ValueError):
+            vm.set_table_equality_filter("T3", 5, ["x"])
+        # Confirms the table itself DID load correctly -- otherwise both asserts above
+        # would trivially pass for the wrong reason ("sheet has no tables" is also a
+        # ValueError).
+        vm.set_table_equality_filter("T3", 0, ["x"])
+        self.assertEqual(vm.hidden_rows(), [])
+
+    def test_a_standalone_filter_call_on_a_table_only_sheet_is_independent(self):
+        # Confirms the two storage contexts (standalone autoFilter vs. a table's own
+        # nested one) never get confused for each other.
+        vm = elixcee.Vm()
+        vm.set_cell(1, 1, "A")
+        vm.set_cell(2, 1, "x")
+        vm.create_table("A1:A2", name="T4")
+        with self.assertRaises(ValueError):
+            vm.set_equality_filter(0, ["x"])  # no standalone autoFilter on this sheet
+        vm.set_table_equality_filter("T4", 0, ["x"])  # the table's own works fine
+        self.assertEqual(vm.hidden_rows(), [])
+
+
 class SortRangeAndMergeCellsRejectOversizedOrInvalidInput(unittest.TestCase):
     # Pins the PyO3-layer bound checks that have no Rust unit test of their
     # own (they live in #[cfg(feature = "python")] glue, not Vm-core logic) --
