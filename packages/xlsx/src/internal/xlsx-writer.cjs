@@ -440,8 +440,40 @@ function buildMergesXml(merges) {
   return `<mergeCells count="${merges.length}">${inner}</mergeCells>`;
 }
 
+function buildHyperlinkInfo(cells) {
+  const links = [];
+  const relationships = [];
+  for (const { r, c, cell } of cells) {
+    if (!cell || !cell.l || !cell.l.Target) continue;
+    const target = String(cell.l.Target);
+    const ref = encodeCell({ r, c });
+    const tooltip = cell.l.Tooltip ? ` tooltip="${xmlAttr(cell.l.Tooltip)}"` : '';
+    if (target.charAt(0) === '#') {
+      links.push(`<hyperlink ref="${ref}" location="${xmlAttr(target.slice(1))}"${tooltip}/>`);
+    } else {
+      const id = `rId${relationships.length + 1}`;
+      relationships.push(
+        `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xmlAttr(target)}" TargetMode="External"/>`
+      );
+      links.push(`<hyperlink ref="${ref}" r:id="${id}"${tooltip}/>`);
+    }
+  }
+  return { links, relationships };
+}
+
+function buildSheetRels(relationships) {
+  if (!relationships.length) return '';
+  return (
+    XML_DECL +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    relationships.join('') +
+    '</Relationships>'
+  );
+}
+
 function buildSheetXml(ws, styleTable) {
   const cells = collectCells(ws);
+  const hyperlinkInfo = buildHyperlinkInfo(cells);
 
   // A declared `!ref` is validated (not iterated — the loop below only ever visits cells
   // the caller actually populated, sparse-safe by construction) via the same
@@ -493,15 +525,22 @@ function buildSheetXml(ws, styleTable) {
   else if (minR !== Infinity) dimensionRef = `${encodeCell({ r: minR, c: minC })}:${encodeCell({ r: maxR, c: maxC })}`;
   else dimensionRef = 'A1';
 
-  return (
+  const hyperlinkXml = hyperlinkInfo.links.length
+    ? `<hyperlinks>${hyperlinkInfo.links.join('')}</hyperlinks>`
+    : '';
+  return {
+    xml: (
     XML_DECL +
-    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"${hyperlinkInfo.relationships.length ? ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' : ''}>` +
     `<dimension ref="${xmlAttr(dimensionRef)}"/>` +
     buildColsXml(wsColsMeta) +
     `<sheetData>${sheetDataXml}</sheetData>` +
     buildMergesXml(Array.isArray(ws) ? undefined : ws['!merges']) +
+    hyperlinkXml +
     '</worksheet>'
-  );
+    ),
+    relationships: hyperlinkInfo.relationships,
+  };
 }
 
 // ---- top-level orchestration: WorkBook -> ZIP entries ----
@@ -515,7 +554,7 @@ function buildXlsxZipEntries(wb) {
   }
 
   const styleTable = createStyleTable();
-  const sheetXmls = wb.SheetNames.map((name) => {
+  const sheetOutputs = wb.SheetNames.map((name) => {
     const ws = wb.Sheets[name];
     if (ws == null) {
       throw unsupported(ELIXCEE_UNSUPPORTED_SHEET_SHAPE, `sheet '${name}' is listed in SheetNames but missing from Sheets`);
@@ -541,7 +580,13 @@ function buildXlsxZipEntries(wb) {
     { name: 'xl/_rels/workbook.xml.rels', data: utf8(buildWorkbookRels(wb.SheetNames.length)) },
   ];
   wb.SheetNames.forEach((_, i) => {
-    entries.push({ name: `xl/worksheets/sheet${i + 1}.xml`, data: utf8(sheetXmls[i]) });
+    entries.push({ name: `xl/worksheets/sheet${i + 1}.xml`, data: utf8(sheetOutputs[i].xml) });
+    if (sheetOutputs[i].relationships.length) {
+      entries.push({
+        name: `xl/worksheets/_rels/sheet${i + 1}.xml.rels`,
+        data: utf8(buildSheetRels(sheetOutputs[i].relationships)),
+      });
+    }
   });
   entries.push({ name: 'xl/styles.xml', data: utf8(styleTable.build()) });
 
@@ -559,6 +604,8 @@ module.exports = {
   buildCoreXml,
   buildAppXml,
   buildWorkbookXml,
+  buildSheetRels,
+  buildHyperlinkInfo,
   createStyleTable,
   unsupported,
   ELIXCEE_UNSUPPORTED_CELL_TYPE,

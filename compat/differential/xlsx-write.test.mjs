@@ -253,6 +253,28 @@ runWriteCase('multi-cell sheet mixing date/custom-numeric/general-numeric/string
   return wb;
 })());
 
+// ---- hyperlinks in XLSX output (0.17.0) ----
+{
+  const wb = U.book_new();
+  const ws = U.aoa_to_sheet([['external', 'internal', 'mailto']]);
+  U.cell_set_hyperlink(ws.A1, 'https://example.com/path', 'Example site');
+  U.cell_set_internal_link(ws.B1, 'Sheet2!A1', 'Jump to Sheet2');
+  U.cell_set_hyperlink(ws.C1, 'mailto:user@example.com');
+  U.book_append_sheet(wb, ws, 'Sheet1');
+  U.book_append_sheet(wb, U.aoa_to_sheet([['destination']]), 'Sheet2');
+
+  const read = XLSX.read(elixcee.write(wb, { type: 'buffer', bookType: 'xlsx' }), {
+    type: 'buffer',
+    cellStyles: true,
+  });
+  assert.equal(read.Sheets.Sheet1.A1.l.Target, 'https://example.com/path');
+  assert.equal(read.Sheets.Sheet1.A1.l.Tooltip, 'Example site');
+  assert.equal(read.Sheets.Sheet1.B1.l.Target, '#Sheet2!A1');
+  assert.equal(read.Sheets.Sheet1.B1.l.Tooltip, 'Jump to Sheet2');
+  assert.equal(read.Sheets.Sheet1.C1.l.Target, 'mailto:user@example.com');
+  console.log('OK  write: external, internal, mailto hyperlinks and tooltips survive an elixcee XLSX write');
+}
+
 // ---- sheet visibility ----
 //
 // read() (packages/xlsx/src/internal/read-shape.cjs) never parses xl/workbook.xml's own
