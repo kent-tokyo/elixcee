@@ -12,6 +12,11 @@
 - 実装済みのZIP/XML/Workbook/VBA各種上限をsecurity modelの現行契約へ同期しました。
 - 未実装の全体read work budget、defined-name数上限、reader cancellation budgetだけを残課題として明示しました。
 
+## [0.69.0] - 2026-08-31
+
+- Workbookのdefined-name一覧に10万件の上限を追加し、超過時は部分的な一覧を返さず明示的に拒否するようにしました。
+- defined-name上限をsecurity modelとresource limits文書へ反映しました。
+
 ## [0.66.0] - 2026-08-31
 
 - パス指定のWorkbook readerが、未対応または拡張子なしの入力をファイルアクセス前に決定的なエラーとして拒否するようにしました。

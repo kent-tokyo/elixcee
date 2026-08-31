@@ -1169,6 +1169,7 @@ const SHEET_MAX_CELLS: usize = 5_000_000;
 const SHEET_MAX_MERGES: usize = 1_000_000;
 const SHARED_STRINGS_MAX_COUNT: usize = 1_000_000;
 const SHARED_STRINGS_MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+const DEFINED_NAMES_MAX_COUNT: usize = 100_000;
 
 fn validate_workbook_model_count(sheet_count: usize) -> Result<(), String> {
     if sheet_count > WORKBOOK_MAX_SHEETS {
@@ -2715,7 +2716,7 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>, Optio
 /// distinguished here -- both are returned under their own `name` attribute
 /// exactly as written; `Vm::defined_names` is what decides how to flatten
 /// them into one map.
-pub(crate) fn xlsx_defined_names(xml: &str) -> Vec<(String, String)> {
+pub(crate) fn xlsx_defined_names(xml: &str) -> Result<Vec<(String, String)>, String> {
     let mut iter = XmlIter::new(xml);
     let mut result = vec![];
     let mut current_name: Option<String> = None;
@@ -2734,6 +2735,12 @@ pub(crate) fn xlsx_defined_names(xml: &str) -> Vec<(String, String)> {
                 if local == "definedName"
                     && let Some(name) = current_name.take()
                 {
+                    if result.len() >= DEFINED_NAMES_MAX_COUNT {
+                        return Err(format!(
+                            "defined-name table is too large (more than {}; maximum is {})",
+                            DEFINED_NAMES_MAX_COUNT, DEFINED_NAMES_MAX_COUNT
+                        ));
+                    }
                     result.push((name, current_text.clone()));
                 }
             }
@@ -2745,7 +2752,7 @@ pub(crate) fn xlsx_defined_names(xml: &str) -> Vec<(String, String)> {
             Ev::SelfClose(_, _) => {}
         }
     }
-    result
+    Ok(result)
 }
 
 /// Returns `{rId → target_path}` for relationships whose `Type` ends with
@@ -4978,7 +4985,7 @@ mod defined_names_tests {
 <definedName name="Other" localSheetId="0">Sheet1!$B$1</definedName>
 </definedNames></workbook>"#;
         assert_eq!(
-            xlsx_defined_names(xml),
+            xlsx_defined_names(xml).unwrap(),
             vec![
                 ("MyRange".to_string(), "Sheet1!$A$1:$A$3".to_string()),
                 ("Other".to_string(), "Sheet1!$B$1".to_string()),
@@ -4989,15 +4996,35 @@ mod defined_names_tests {
     #[test]
     fn xlsx_defined_names_is_empty_when_absent() {
         let xml = r#"<workbook><sheets><sheet name="Sheet1" r:id="rId1"/></sheets></workbook>"#;
-        assert_eq!(xlsx_defined_names(xml), Vec::<(String, String)>::new());
+        assert_eq!(
+            xlsx_defined_names(xml).unwrap(),
+            Vec::<(String, String)>::new()
+        );
     }
 
     #[test]
     fn xlsx_defined_names_xml_unescapes_the_text_content() {
         let xml = r#"<definedNames><definedName name="X">Sheet1!$A$1 &amp; "text"</definedName></definedNames>"#;
         assert_eq!(
-            xlsx_defined_names(xml),
+            xlsx_defined_names(xml).unwrap(),
             vec![("X".to_string(), "Sheet1!$A$1 & \"text\"".to_string())]
+        );
+    }
+
+    #[test]
+    fn xlsx_defined_names_rejects_a_table_over_the_count_limit() {
+        let mut xml = String::from("<workbook><definedNames>");
+        for index in 0..=DEFINED_NAMES_MAX_COUNT {
+            xml.push_str(&format!(
+                "<definedName name=\"Name{index}\">Sheet1!$A$1</definedName>"
+            ));
+        }
+        xml.push_str("</definedNames></workbook>");
+
+        let error = xlsx_defined_names(&xml).unwrap_err();
+        assert_eq!(
+            error,
+            "defined-name table is too large (more than 100000; maximum is 100000)"
         );
     }
 }

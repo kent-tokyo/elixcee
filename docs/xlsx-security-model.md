@@ -10,7 +10,7 @@ object-injection vector, `@elixcee/xlsx` diverges deliberately and the divergenc
 recorded, not hidden. See [`docs/xlsx-compatibility-goal.md`](xlsx-compatibility-goal.md)
 for how this fits the overall compatibility definition.
 
-## Existing limits (0.68.0)
+## Existing limits (0.69.0)
 
 | Limit | Value | Where |
 |---|---|---|
@@ -36,6 +36,7 @@ for how this fits the overall compatibility definition.
 | VBA string value | 16 MiB | `DEFAULT_MAX_VBA_STRING_BYTES`, `src/vm/mod.rs` |
 | VBA/runtime array | 10,000,000 elements | `DEFAULT_MAX_VBA_ARRAY_ELEMENTS`, `src/vm/mod.rs` |
 | VBA materialized cells | 5,000,000 across all sheets | `DEFAULT_MAX_VBA_CELLS`, `src/vm/mod.rs` |
+| Defined names | 100,000 | `DEFINED_NAMES_MAX_COUNT`, `src/reader.rs` |
 
 Python callers may adjust these VBA budgets with `Vm.set_budgets()`. An omitted argument
 uses its safe default; an explicit `None` opts out of that one limit. New VMs retain the
@@ -57,7 +58,7 @@ The XML reader rejects DTD/ENTITY declarations and incomplete documents before t
 workbook-specific parser consumes them. The following XML/model limits remain explicitly
 absent today:
 
-- No cap on defined-name count or formula-string length.
+- No cap on formula-string length beyond the existing XML text-node limit.
 - No wall-clock/parse-time budget on the reader itself (a loop-execution deadline exists
   on `Vm`, but it only governs VBA execution *after* a workbook is already parsed).
 
@@ -90,7 +91,6 @@ threshold specifically.
 | Limit | Rationale | Where it would live |
 |---|---|---|
 | A single overall "work budget" for a read | Backstop against limit combinations that individually pass but compound | Top of `read_workbook`/its buffer-based successor |
-| Defined-name count cap | Bounds the size of the optional defined-name view and passthrough rewrite work | `xlsx_defined_names` / defined-name preservation path |
 | Reader wall-clock or cancellation budget | Prevents a valid-but-pathologically expensive input from occupying a caller indefinitely | Path and buffer reader entry points |
 
 These remaining limits need a compatibility review and representative measurements before

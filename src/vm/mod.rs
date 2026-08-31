@@ -5121,7 +5121,7 @@ impl Vm {
         else {
             return Ok(HashMap::new());
         };
-        Ok(reader::xlsx_defined_names(&xml).into_iter().collect())
+        Ok(reader::xlsx_defined_names(&xml)?.into_iter().collect())
     }
 
     /// Populates this `Vm` from already-read sheet data and sets the active
