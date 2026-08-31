@@ -1484,8 +1484,8 @@ pub(crate) fn xlsx_workbook_sheets_for_stream(
     xlsx_workbook_sheets(xml)
 }
 #[cfg(feature = "python")]
-pub(crate) fn xlsx_rels_for_stream(xml: &str, suffix: &str) -> HashMap<String, String> {
-    xlsx_rels(xml, suffix)
+pub(crate) fn xlsx_worksheet_rels_for_stream(xml: &str) -> Result<HashMap<String, String>, String> {
+    xlsx_worksheet_rels(xml)
 }
 #[cfg(feature = "python")]
 pub(crate) fn xlsx_sheet_cells_for_stream(xml: &str, shared: &[String]) -> XlsxSheetData {
@@ -2658,7 +2658,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
     let date1904 = xlsx_workbook_date1904(&wb_xml);
 
     let rels_xml = zip_read_text(&mut archive, "xl/_rels/workbook.xml.rels")?;
-    let rels = xlsx_rels(&rels_xml, "/worksheet");
+    let rels = xlsx_worksheet_rels(&rels_xml)?;
 
     let shared: Vec<String> = if archive
         .file_names()
@@ -2882,6 +2882,41 @@ fn xlsx_rels(xml: &str, type_suffix: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+/// Returns worksheet relationships while rejecting external targets. A worksheet must be
+/// backed by an internal package part; treating a URL as a missing local part would make
+/// malformed input look like an ordinary absent sheet.
+fn xlsx_worksheet_rels(xml: &str) -> Result<HashMap<String, String>, String> {
+    let mut iter = XmlIter::new(xml);
+    let mut map = HashMap::new();
+    while let Some(ev) = iter.next_ev() {
+        if let Ev::SelfClose(ref tag, ref attrs) = ev {
+            let local = tag.split(':').next_back().unwrap_or(tag);
+            if local != "Relationship" {
+                continue;
+            }
+            let (Some(id), Some(ty), Some(target)) = (
+                attr_get(attrs, "Id"),
+                attr_get(attrs, "Type"),
+                attr_get(attrs, "Target"),
+            ) else {
+                continue;
+            };
+            if !ty.ends_with("/worksheet") {
+                continue;
+            }
+            if attr_get(attrs, "TargetMode")
+                .is_some_and(|mode| mode.eq_ignore_ascii_case("External"))
+            {
+                return Err(format!(
+                    "external worksheet relationship target is not allowed: {target}"
+                ));
+            }
+            map.insert(id.to_string(), target.to_string());
+        }
+    }
+    Ok(map)
 }
 
 /// Builds the shared-strings table.
@@ -5882,6 +5917,16 @@ mod from_bytes_tests {
         };
         assert!(
             error.contains("escapes ZIP root"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn worksheet_relationships_reject_external_targets() {
+        let xml = br#"<Relationships><Relationship Id="rId1" Type="/worksheet" Target="https://example.test/sheet.xml" TargetMode="External"/></Relationships>"#;
+        let error = xlsx_worksheet_rels(std::str::from_utf8(xml).unwrap()).unwrap_err();
+        assert!(
+            error.contains("external worksheet relationship target"),
             "unexpected error: {error}"
         );
     }

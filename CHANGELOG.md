@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.83.0] - 2026-08-31
+
+- worksheet relationshipの`TargetMode="External"`を通常reader・stream readerの双方で拒否するようにしました。
+- worksheetを外部URLや外部参照として解釈せず、内部ZIP partだけを入力対象にする境界を統一しました。
+
 ## [0.82.0] - 2026-08-31
 
 - worksheet relationship targetの正規化とZIPルート脱出拒否を通常readerにも適用しました。
