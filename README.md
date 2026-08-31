@@ -86,6 +86,7 @@ Snapshots also include the workbook's worksheet tab order.
 Snapshots also include runtime defined names.
 Snapshots include the current `calculation_mode` (`automatic` or `manual`).
 Snapshots include per-sheet visibility states (`visible`, `hidden`, or `veryHidden`).
+Snapshots include per-sheet merged ranges in A1 notation.
 Use `diagnose_macro(vba_code, macro_name, workbook_path)` for structured
 diagnostics matching the CLI `diagnose --json` contract.
 

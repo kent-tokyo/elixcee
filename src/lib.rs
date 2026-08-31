@@ -657,6 +657,31 @@ impl PyVm {
         snapshot.set_item("active_sheet", self.inner.active_sheet.as_str())?;
         snapshot.set_item("sheet_order", self.inner.sheet_order.clone())?;
         snapshot.set_item("defined_names", self.inner.named_ranges.clone())?;
+        let merged_ranges = PyDict::new(py);
+        let cell_address = |row: u32, mut col: u32| {
+            let mut letters = Vec::new();
+            while col > 0 {
+                col -= 1;
+                letters.push((b'A' + (col % 26) as u8) as char);
+                col /= 26;
+            }
+            letters.reverse();
+            format!("{}{}", letters.into_iter().collect::<String>(), row)
+        };
+        for name in self.inner.sheet_names() {
+            let ranges: Vec<String> = self
+                .inner
+                .merged_ranges
+                .get(&name)
+                .into_iter()
+                .flat_map(|items| items.iter())
+                .map(|&((row1, col1), (row2, col2))| {
+                    format!("{}:{}", cell_address(row1, col1), cell_address(row2, col2))
+                })
+                .collect();
+            merged_ranges.set_item(name, ranges)?;
+        }
+        snapshot.set_item("merged_ranges", merged_ranges)?;
         let sheet_states = PyDict::new(py);
         for name in self.inner.sheet_names() {
             let state = self
