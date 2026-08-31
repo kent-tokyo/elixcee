@@ -15,6 +15,8 @@ use crate::reader::{
 /// Default deterministic budget for one VBA entrypoint run. Rust callers can
 /// opt out with `Vm::max_instructions = None` when the source is trusted.
 pub const DEFAULT_MAX_VBA_INSTRUCTIONS: u64 = 10_000_000;
+/// Default maximum number of nested VBA Sub/Function frames.
+pub const DEFAULT_MAX_VBA_CALL_DEPTH: usize = 256;
 
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
 /// address helpers below are physically defined in `elixcee-types` (Phase
@@ -879,6 +881,9 @@ pub struct Vm {
     /// `DEFAULT_MAX_VBA_INSTRUCTIONS`, while trusted callers may opt out.
     pub max_instructions: Option<u64>,
     instruction_count: u64,
+    /// Maximum nested Sub/Function frames. `Vm::new` sets the safe default;
+    /// trusted Rust callers may set `None` explicitly.
+    pub max_call_depth: Option<usize>,
     /// Counts outer-loop iterations across `For`/`ForEach`/`DoLoop` so the
     /// deadline is only actually checked (a real `Instant::now()` call)
     /// every 256th iteration, not every one.
@@ -1200,6 +1205,7 @@ impl Vm {
             deadline: None,
             max_instructions: Some(DEFAULT_MAX_VBA_INSTRUCTIONS),
             instruction_count: 0,
+            max_call_depth: Some(DEFAULT_MAX_VBA_CALL_DEPTH),
             loop_iters: 0,
             strict_resolution: false,
             last_resolution_failure: None,
@@ -1313,6 +1319,19 @@ impl Vm {
             return Err(format!(
                 "BUDGET: VBA instruction limit exceeded ({}; maximum is {})",
                 self.instruction_count, limit
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_call_depth(&self) -> Result<(), String> {
+        if let Some(limit) = self.max_call_depth
+            && self.call_stack.len() >= limit
+        {
+            return Err(format!(
+                "BUDGET: VBA call depth limit exceeded ({}; maximum is {})",
+                self.call_stack.len() + 1,
+                limit
             ));
         }
         Ok(())
@@ -5306,6 +5325,7 @@ impl Vm {
     }
 
     fn call_sub_def(&mut self, sub: &SubDef, args: &[Variant]) -> Result<(), String> {
+        self.check_call_depth()?;
         let saved: Vec<(String, Option<Variant>)> = sub
             .params
             .iter()
@@ -5346,6 +5366,7 @@ impl Vm {
     }
 
     fn call_func_def(&mut self, func: &FuncDef, args: &[Variant]) -> Result<Variant, String> {
+        self.check_call_depth()?;
         let saved: Vec<(String, Option<Variant>)> = func
             .params
             .iter()
@@ -14962,6 +14983,15 @@ mod tests {
         assert!(err.starts_with("BUDGET:"), "{err:?}");
         assert_eq!(vm.variables["first"], Variant::Integer(1));
         assert!(!vm.variables.contains_key("second"));
+    }
+
+    #[test]
+    fn call_depth_budget_stops_recursive_subs() {
+        let mut vm = Vm::new();
+        vm.max_call_depth = Some(2);
+        let prog = parser::parse("Sub Main()\n    Call Main()\nEnd Sub\n").unwrap();
+        let err = vm.run_sub(&prog, "main").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA call depth"), "{err:?}");
     }
 
     #[test]

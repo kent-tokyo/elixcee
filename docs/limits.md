@@ -94,8 +94,9 @@ rewriter:
 | Formula nesting depth | 256 | `MAX_FORMULA_DEPTH` |
 
 VBA execution applies a deterministic instruction budget of 10,000,000 statements or
-loop iterations per run by default (`DEFAULT_MAX_VBA_INSTRUCTIONS`). Trusted Rust callers
-can explicitly set `Vm::max_instructions = None` to opt out.
+loop iterations per run by default (`DEFAULT_MAX_VBA_INSTRUCTIONS`). It also limits nested
+Sub/Function calls to 256 frames (`DEFAULT_MAX_VBA_CALL_DEPTH`). Trusted Rust callers can
+explicitly set either `Vm::max_instructions` or `Vm::max_call_depth` to `None` to opt out.
 
 VBA parsing applies these input limits before constructing a program AST:
 
