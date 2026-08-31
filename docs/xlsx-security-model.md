@@ -35,6 +35,10 @@ for how this fits the overall compatibility definition.
 | VBA call depth | 256 frames | `DEFAULT_MAX_VBA_CALL_DEPTH`, `src/vm/mod.rs` |
 | VBA string value | 16 MiB | `DEFAULT_MAX_VBA_STRING_BYTES`, `src/vm/mod.rs` |
 | VBA/runtime array | 10,000,000 elements | `DEFAULT_MAX_VBA_ARRAY_ELEMENTS`, `src/vm/mod.rs` |
+
+Python callers may adjust these VBA budgets with `Vm.set_budgets()`. An omitted argument
+uses its safe default; an explicit `None` opts out of that one limit. New VMs retain the
+safe defaults above.
 | VBA source | 4 MiB | `MAX_VBA_SOURCE_BYTES`, `src/parser/mod.rs` |
 | VBA identifier | 1,024 characters | `MAX_VBA_IDENTIFIER_CHARS`, `src/parser/mod.rs` |
 | VBA tokens | 1,000,000 | `MAX_VBA_TOKENS`, `src/parser/mod.rs` |

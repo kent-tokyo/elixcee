@@ -101,6 +101,8 @@ Each retained VBA string is limited to 16 MiB (`DEFAULT_MAX_VBA_STRING_BYTES`), 
 runtime/VBA array is limited to 10,000,000 elements (`DEFAULT_MAX_VBA_ARRAY_ELEMENTS`).
 These value budgets are checked on VBA assignments and cell writes; budget errors are not
 swallowed by `On Error Resume Next`.
+Python callers can use `Vm.set_budgets()` to adjust the limits; omitted arguments use the
+safe defaults, while an explicit `None` disables that individual limit.
 
 VBA parsing applies these input limits before constructing a program AST:
 
