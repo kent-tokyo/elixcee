@@ -1024,14 +1024,10 @@ function sheetToTxt(sheet, opts) {
 //    oracle -- quote-escaping alone does NOT fix this, since no quote is needed to make a
 //    href value dangerous). isSafeHrefTarget (below) allow-lists http(s)/mailto/tel/ftp/
 //    relative/fragment targets; anything else renders as plain text, no <a> wrapper.
-// 3. REPRODUCED, NOT FIXED -- cell.h (a documented raw-HTML rich-text rendering field) is
-//    used completely as-is when present, with zero escaping, on both the oracle and here.
-//    This is the field's own documented, intentional purpose (rendering rich text like
-//    `<b>bold</b>`) -- escaping it would silently break that feature rather than fix a
-//    bug. `packages/xlsx` has no file reader yet, so `.h` can only enter this function via
-//    a caller explicitly setting it; that caller is responsible for only putting
-//    known-safe HTML there, exactly as a SheetJS consumer already must be today. See
-//    docs/compatibility-known-defects.md.
+// 3. FIXED BY DEFAULT -- cell.h is a documented raw-HTML rich-text field, but it is still
+//    caller-controlled markup. Escape it by default; raw passthrough requires the explicit
+//    `rawHtml: true` opt-in below. This keeps the rich-text escape hatch without rendering
+//    an untrusted value as markup accidentally.
 const HTML_ENTITY_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&apos;', '"': '&quot;' };
 const HTML_DANGEROUS_CHARS_RE = /[&<>'"]/g;
 const HTML_CONTROL_CHARS_RE = /[\u0000-\u001f]/g;
@@ -1096,7 +1092,9 @@ function makeHtmlRow(sheet, r, R, o) {
     if (RS < 0) continue;
     const coord = encodeCell({ r: R, c: C });
     const cell = o.dense ? (sheet[R] || [])[C] : sheet[coord];
-    let w = (cell && cell.v != null && (cell.h || escapeHtmlText(cell.w || (formatCell(cell), cell.w) || ''))) || '';
+    const cellText = cell && cell.h && o.rawHtml === true ? cell.h : (cell && cell.w || (cell && formatCell(cell), cell && cell.w) || '');
+    const renderedText = cell && cell.h && o.rawHtml === true ? cellText : escapeHtmlText(cellText);
+    let w = (cell && cell.v != null && renderedText) || '';
     const sp = {};
     if (RS > 1) sp.rowspan = RS;
     if (CS > 1) sp.colspan = CS;

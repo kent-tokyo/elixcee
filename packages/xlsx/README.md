@@ -56,6 +56,10 @@ before depending on this for anything beyond the surface it actually covers.
   against the real `xlsx@0.18.5` package (own write → oracle read, oracle write → own
   read) and against itself (own write → own read).
 
+- `utils.sheet_to_html` escapes caller-controlled `cell.h` markup by default. Use the
+  explicit `rawHtml: true` option only when the rich-text HTML has been independently
+  trusted; this is an intentional security extension beyond the oracle's default.
+
 ## What's not implemented
 
 - **ODS output**, and any `bookType` other than `"xlsx"`.

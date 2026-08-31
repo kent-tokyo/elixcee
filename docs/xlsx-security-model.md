@@ -170,18 +170,12 @@ HTML-injection-shaped findings, handled three different ways:
    `tel`/`ftp`/relative/fragment targets (`isSafeHrefTarget`); anything else renders as
    plain text with no `<a>` wrapper at all, rather than a link to a rejected scheme.
    Registered as `sheet_to_html:unsafe_href_scheme`.
-3. **Reproduced, NOT fixed — this is a deliberate compatibility decision, not an
-   oversight.** `cell.h` (a documented raw-HTML rich-text rendering field) is used
-   completely as-is when present, on both the oracle and here — see
-   `docs/compatibility-known-defects.md`. Escaping it would break its own documented
-   purpose (rendering rich text like `<b>bold</b>`) rather than fix a bug. `packages/xlsx`
-   has no file reader yet, so `.h` can only enter this function via a caller explicitly
-   setting it — that caller carries the same sanitization responsibility a real SheetJS
-   consumer already has today. **Revisit this decision once a future phase's file reader
-   can populate `.h` from untrusted rich-text runs** — the "no file I/O yet" premise this
-   decision rests on will no longer hold at that point.
+3. **Fixed by default.** `cell.h` is a documented raw-HTML rich-text rendering field,
+   but it remains caller-controlled markup. `packages/xlsx` escapes it by default;
+   callers that have independently trusted the markup may explicitly pass `rawHtml: true`
+   to retain the oracle-compatible passthrough behavior.
 
-Both fixed findings are registered in `SECURITY_DIVERGENCE_REGISTRY` (not
+The fixed findings are registered in `SECURITY_DIVERGENCE_REGISTRY` (not
 `SAFETY_DIVERGENCE_REGISTRY`) — HTML/script injection is a security concern regardless of
 whether the dangerous value entered via untrusted file content or a caller-supplied value,
 unlike the resource-exhaustion divergences above where the file-vs-argument distinction

@@ -865,11 +865,15 @@ for (const [schemeLabel, target] of [
   assert.ok(!eOut.includes('<a '), `elixcee must not wrap ${schemeLabel} content in an <a> tag at all`);
   assert.ok(eOut.includes('click'), 'the text content itself must still be present, just not as a link');
 }
-// .h passthrough: REPRODUCED, not fixed — see docs/compatibility-known-defects.md. This
-// is a MATCH fixture (both sides intentionally produce the same, unescaped output), not a
-// registered divergence — the point being verified is that elixcee does NOT silently
-// diverge here by "fixing" something the compatibility decision deliberately leaves as-is.
-htmlCase('cell.h raw HTML passthrough (reproduced by design, see docs/compatibility-known-defects.md)', () => ({ A1: { t: 's', v: 'safe', h: '<img src=x onerror=alert(3)>' }, '!ref': 'A1:A1' }));
+// Explicit rawHtml opt-in preserves the oracle-compatible rich-text escape hatch.
+htmlCase('cell.h raw HTML passthrough (explicit opt-in)', () => ({ A1: { t: 's', v: 'safe', h: '<img src=x onerror=alert(3)>' }, '!ref': 'A1:A1' }), { rawHtml: true });
+
+// The safe default must render caller-controlled cell.h as text, not executable markup.
+{
+  const safe = elixcee.sheet_to_html({ A1: { t: 's', v: 'unsafe', h: '<img src=x onerror=alert(4)>' }, '!ref': 'A1:A1' });
+  assert.ok(safe.includes('&lt;img src=x onerror=alert(4)&gt;'), 'default sheet_to_html must escape cell.h');
+  assert.ok(!safe.includes('<img src=x onerror=alert(4)>'), 'default sheet_to_html must not emit raw cell.h markup');
+}
 
 // A crafted full-grid !ref (~17.18 billion cells) is confirmed to not return within 25s
 // on the real oracle — reuses the same measurement basis as sheet_to_formulae/

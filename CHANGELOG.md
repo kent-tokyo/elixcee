@@ -60,6 +60,11 @@
 - 既定VMでShell、COM/object creation、WScript、ファイル操作相当を実行時にも`SECURITY:`エラーとして拒否するようにしました。
 - `On Error Resume Next`で外部作用の遮断エラーを握り潰せないことを回帰テストで固定しました。
 
+## [0.59.0] - 2026-08-31
+
+- `sheet_to_html`の`cell.h`をデフォルトでescapeし、未信頼値がraw HTMLとして描画されないようにしました。
+- 互換性が必要な利用者向けに、`rawHtml: true`の明示opt-inを追加しました。
+
 ## [0.46.0] - 2026-08-31
 
 - `Vm.snapshot()`に`hidden_rows`/`hidden_columns`を追加し、行列の非表示状態を取得できるようにしました。

@@ -127,27 +127,25 @@ compatibility-known-defect:
   api: sheet_to_html
   case: "cell.h present (raw HTML rich-text rendering)"
   oracle_behavior: used verbatim, zero escaping
-  elixcee_behavior: reproduced for compatibility — NOT a security fix
+  elixcee_behavior: escaped by default; rawHtml:true opts into the oracle-compatible passthrough
 ```
 
-`make_html_row`'s cell-content line is `(cell.h || escapeHtmlText(...))` — when `cell.h` is
-present, it is used **completely as-is**, with no HTML escaping at all, confirmed live
-against the real oracle (`cell.h = '<img src=x onerror=alert(1)>'` produces that exact
-markup verbatim in the output, byte for byte). Unlike `sheet_to_html`'s attribute-building
+The oracle's `make_html_row` uses `(cell.h || escapeHtmlText(...))` — when `cell.h` is
+present, it is used **completely as-is**, with no HTML escaping at all. elixcee now escapes
+`cell.h` by default and requires the explicit `rawHtml: true` option for passthrough.
+Unlike `sheet_to_html`'s attribute-building
 (`data-t`/`data-v`/`data-z`/`id`, both table-level and per-cell) or `cell.l.Target`'s
 `href` construction — both **genuine bugs** with no intended purpose, fixed in
 `packages/xlsx` (see `docs/xlsx-security-model.md`) and registered in
 `compat/differential/classify.mjs`'s `SECURITY_DIVERGENCE_REGISTRY` — `cell.h` is a
 **documented, intentional** field: a pre-rendered HTML representation of a cell's rich
-text (e.g. `<b>bold</b>` for a bold run), meant to be inserted as-is. Escaping it would not
-fix a bug; it would silently break the feature it exists for.
+text (e.g. `<b>bold</b>` for a bold run), meant to be inserted as-is. The opt-in preserves
+that feature for callers that have independently established the markup is trusted.
 
 `packages/xlsx` has no file reader yet, so `.h` can only reach `sheet_to_html` via a
 caller explicitly setting it on a cell object — the caller is responsible for only putting
 known-safe HTML there, exactly as a real SheetJS consumer already must be today (this is
 not a gap introduced by this package; it is the oracle's own documented contract for this
-field). **This is reproduced, not a "no XSS" claim** — if `.h` content is ever attacker-
-controlled (e.g. once a real XLSX reader parses untrusted rich-text runs into `.h`,
-whichever future phase adds that), this decision must be revisited at that point, not
-assumed still-safe by inertia. See `compat/differential/xlsx-utils.test.mjs`'s
+field). The default path is the safe path for attacker-controlled `.h` content. See
+`compat/differential/xlsx-utils.test.mjs`'s
 `sheet_to_html` fixtures for the differential coverage of this exact behavior.

@@ -130,6 +130,8 @@ export interface Sheet2HTMLOpts {
   header?: string;
   /** Footer HTML */
   footer?: string;
+  /** Preserve cell.h as raw HTML; default false for untrusted input safety */
+  rawHtml?: boolean;
 }
 
 // Buffer-first read — see packages/xlsx/src/index.cjs's `read` doc comment for exactly
