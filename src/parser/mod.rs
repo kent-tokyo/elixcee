@@ -1639,6 +1639,10 @@ impl Parser {
         self.expect_ident("set")?;
         let var = self.consume_ident()?;
         self.expect_tok(Tok::Eq)?;
+        let rhs_name = match self.peek() {
+            Tok::Ident(name) => name.clone(),
+            _ => "<expression>".to_string(),
+        };
         match self.parse_object_expr()? {
             Some(value) => Ok(Stmt::Set { var, value }),
             None => {
@@ -1650,8 +1654,8 @@ impl Parser {
                 self.skip_to_stmt_end();
                 Ok(Stmt::Unsupported {
                     reason: format!(
-                        "'Set {} = ...' targets an unmodeled object expression and was skipped",
-                        var
+                        "'Set {} = {} ...' targets an unmodeled object expression and was skipped",
+                        var, rhs_name
                     ),
                 })
             }

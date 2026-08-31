@@ -275,6 +275,7 @@ This is a separate command from the run-mode above, with its own JSON shape
 | `E1006` | `duplicate_module_name` | error | (multi-module) Two files resolved to the same module name |
 | `E1008` | `argument_count_mismatch` | error | A call to a Sub/Function declared *in the same file being checked* passes a different number of arguments than it declares — cross-module calls aren't checked (this diagnostic only ever sees one module's own `Program`), and neither is a call inside the callee's own body (recursion) |
 | `E1009` | `undefined_label` | error | A `GoTo`/`On Error GoTo` target isn't a `Label` anywhere in the same Sub/Function (VBA label scope is the whole procedure, not the current block) |
+| `E1010` | `blocked_external_effect` | error | The source contains an external-effecting construct such as `Shell`, COM/object creation, `WScript`, file-system object access, or `Open`/`Kill`; the default VM does not execute it and `check` fails explicitly |
 | `I1001` | `interactive_call` | info | The macro contains a `MsgBox` call — not broken, just not fully headless |
 | `I1002` | `unsupported_construct` | info | A line is a no-op because the construct on it isn't recognized/implemented (`Debug.Print`, an unrecognized `Range`/`Sheets` property or method, a property/field read without assignment, or calling a Sub without `Call`/parentheses) — the macro still runs to completion, this just makes an already-silent no-op visible |
 

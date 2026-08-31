@@ -86,10 +86,11 @@ fn run_check_impl(
     }
 
     for (reason, span) in &prog.module_diagnostics {
+        let (severity, code, kind) = unsupported_diagnostic_kind(reason);
         diags.push(Diagnostic {
-            severity: "info",
-            code: "I1002",
-            kind: "unsupported_construct",
+            severity,
+            code,
+            kind,
             message: reason.clone(),
             location: Some(locate(source, file, *span)),
         });
@@ -123,6 +124,29 @@ fn run_check_impl(
     collect_extra_compile_diagnostics(&prog, source, file, &mut diags);
 
     diags
+}
+
+/// External-effecting VBA constructs are intentionally unreachable in the
+/// VM. Keep them distinct from ordinary unsupported no-ops so `check` cannot
+/// report a macro as clean when it contains a Shell/COM/file-system escape.
+fn unsupported_diagnostic_kind(reason: &str) -> (&'static str, &'static str, &'static str) {
+    let lower = reason.to_ascii_lowercase();
+    let blocked = [
+        "shell",
+        "createobject",
+        "getobject",
+        "wscript",
+        "filesystemobject",
+        "open ",
+        "kill ",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if blocked {
+        ("error", "E1010", "blocked_external_effect")
+    } else {
+        ("info", "I1002", "unsupported_construct")
+    }
 }
 
 /// Every name in scope for one Sub/Function: its own name (for recursion),
@@ -803,10 +827,11 @@ fn walk_body(
         }
 
         if let Stmt::Unsupported { reason } = &s.stmt {
+            let (severity, code, kind) = unsupported_diagnostic_kind(reason);
             diags.push(Diagnostic {
-                severity: "info",
-                code: "I1002",
-                kind: "unsupported_construct",
+                severity,
+                code,
+                kind,
                 message: reason.clone(),
                 location: Some(locate(source, file, s.span)),
             });
@@ -1733,6 +1758,23 @@ mod tests {
             diags[0].message
         );
         assert_eq!(diags[0].location.as_ref().unwrap().line, 2);
+    }
+
+    #[test]
+    fn create_object_is_an_explicitly_blocked_external_effect() {
+        let diags = run_check(
+            "Sub Main()\n    Set d = CreateObject(\"Scripting.Dictionary\")\nEnd Sub\n",
+            "f.bas",
+            Some("Main"),
+        );
+        assert_eq!(codes(&diags), vec!["E1010"]);
+        assert_eq!(diags[0].severity, "error");
+        assert_eq!(diags[0].kind, "blocked_external_effect");
+        assert!(
+            diags[0]
+                .message
+                .contains("CreateObject".to_lowercase().as_str())
+        );
     }
 
     #[test]
