@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.91.0] - 2026-08-31
+
+- XMLの開始タグと終了タグの名前一致をXML予算検証で確認するようにしました。
+- 要素の深さだけが一致する壊れたXMLを成功扱いせず、通常reader・stream reader共通で入力エラーにします。
+
 ## [0.90.0] - 2026-08-31
 
 - XML要素内の重複属性を通常reader・stream reader共通のXML予算検証で拒否するようにしました。

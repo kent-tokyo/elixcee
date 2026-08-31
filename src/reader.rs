@@ -1360,6 +1360,7 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
     let mut elements = 0usize;
     let mut attributes = 0usize;
     let mut depth = 0usize;
+    let mut open_tags = Vec::new();
     let mut iter = XmlIter::new(xml);
     while let Some(event) = iter.next_ev() {
         match event {
@@ -1380,6 +1381,7 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
                         XML_MAX_DEPTH
                     ));
                 }
+                open_tags.push(tag.clone());
                 let mut names = HashSet::new();
                 for attr in attrs {
                     if !names.insert(attr.name.clone()) {
@@ -1438,10 +1440,18 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
                     }
                 }
             }
-            Ev::Close(_) => {
+            Ev::Close(tag) => {
                 depth = depth
                     .checked_sub(1)
                     .ok_or_else(|| format!("XML document has an unmatched closing tag: {name}"))?;
+                let Some(open_tag) = open_tags.pop() else {
+                    return Err(format!("XML document has an unmatched closing tag: {name}"));
+                };
+                if open_tag != tag {
+                    return Err(format!(
+                        "XML document has mismatched closing tag: {name} (expected </{open_tag}>, got </{tag}>)"
+                    ));
+                }
             }
             Ev::Text(text) => {
                 if text.len() > XML_MAX_TEXT_NODE_BYTES {
@@ -6240,6 +6250,13 @@ mod from_bytes_tests {
         let error =
             validate_xml_budget("sheet.xml", r#"<worksheet ref="A1" ref="B1"/>"#).unwrap_err();
         assert!(error.contains("duplicate attribute"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_mismatched_closing_tags() {
+        let error =
+            validate_xml_budget("sheet.xml", "<worksheet><sheetData></worksheet>").unwrap_err();
+        assert!(error.contains("mismatched closing tag"));
     }
 
     #[test]
