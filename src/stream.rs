@@ -191,8 +191,14 @@ fn stream_rows(
             let file = File::open(&path).map_err(|e| e.to_string())?;
             let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
             reader::validate_zip_archive_for_stream(&mut archive)?;
-            let shared_xml = reader::zip_read_text_for_stream(&mut archive, "xl/sharedStrings.xml")
-                .unwrap_or_default();
+            let shared_xml = if archive
+                .file_names()
+                .any(|name| name == "xl/sharedStrings.xml")
+            {
+                reader::zip_read_text_for_stream(&mut archive, "xl/sharedStrings.xml")?
+            } else {
+                String::new()
+            };
             let shared = reader::xlsx_shared_strings_for_stream(&shared_xml);
             let entry = archive.by_name(&zip_path).map_err(|e| e.to_string())?;
             let mut input = BufReader::with_capacity(STREAM_BUFFER_BYTES, entry);
