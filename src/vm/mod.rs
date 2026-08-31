@@ -5052,15 +5052,21 @@ impl Vm {
     /// Two failure messages are preserved exactly so CLI callers can keep
     /// classifying them the way `--file` already does (`E3001`/`io_error`
     /// vs `E3002`/`sheet_setup_error`): a literal `"workbook has no sheets"`
-    /// for an empty workbook, or `"cannot read '<path>': <reader error>"`
-    /// for anything else.
+    /// for an empty workbook, the reader's deterministic unsupported-extension
+    /// error unchanged, or `"cannot read '<path>': <reader error>"` for any
+    /// other read failure.
     pub fn load_workbook_file(&mut self, path: &str) -> Result<Vec<String>, String> {
         self.loaded_workbook_name = std::path::Path::new(path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string());
         self.loaded_workbook_path = Some(path.to_string());
-        let sheets =
-            reader::read_workbook(path).map_err(|e| format!("cannot read '{}': {}", path, e))?;
+        let sheets = reader::read_workbook(path).map_err(|error| {
+            if error == "unsupported input extension; use .xlsx, .xlsm, or .ods" {
+                error
+            } else {
+                format!("cannot read '{}': {}", path, error)
+            }
+        })?;
         if sheets.is_empty() {
             return Err("workbook has no sheets".to_string());
         }
@@ -15062,6 +15068,19 @@ mod tests {
             .load_workbook_file("/nonexistent/path/does_not_exist.xlsx")
             .unwrap_err();
         assert!(err.starts_with("cannot read"), "{:?}", err);
+    }
+
+    #[test]
+    fn load_workbook_file_preserves_the_safe_unsupported_extension_error() {
+        let mut vm = Vm::new();
+        let err = vm
+            .load_workbook_file("/sensitive/input/location/workbook.xlsb")
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "unsupported input extension; use .xlsx, .xlsm, or .ods"
+        );
+        assert!(!err.contains("sensitive/input/location"));
     }
 
     #[test]

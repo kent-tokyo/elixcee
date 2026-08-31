@@ -191,6 +191,10 @@ with a deterministic error that does not echo the caller's path. The
 `read_workbook_from_bytes` buffer API remains extension-independent because its input is
 already an in-memory OOXML ZIP buffer.
 
+The VM's path-based workbook loader preserves this unsupported-extension error instead of
+wrapping it with the original path, so the same input boundary and path-minimization rule
+hold above the low-level reader as well.
+
 ## Safe output paths (`save_workbook`, Phase S3)
 
 The writer accepts only `.xlsx`, `.xlsm`, and `.ods` output extensions. Other extensions are
