@@ -1156,6 +1156,64 @@ const XML_MAX_ATTRIBUTES: usize = 2_000_000;
 const XML_MAX_ATTRIBUTE_VALUE_BYTES: usize = 16 * 1024 * 1024;
 const XML_MAX_TEXT_NODE_BYTES: usize = 64 * 1024 * 1024;
 const XML_MAX_DEPTH: usize = 1_024;
+const WORKBOOK_MAX_SHEETS: usize = 4_096;
+const SHEET_MAX_CELLS: usize = 5_000_000;
+const SHEET_MAX_MERGES: usize = 1_000_000;
+const SHARED_STRINGS_MAX_COUNT: usize = 1_000_000;
+const SHARED_STRINGS_MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+
+fn validate_workbook_model_count(sheet_count: usize) -> Result<(), String> {
+    if sheet_count > WORKBOOK_MAX_SHEETS {
+        return Err(format!(
+            "workbook has too many sheets ({}; maximum is {})",
+            sheet_count, WORKBOOK_MAX_SHEETS
+        ));
+    }
+    Ok(())
+}
+
+fn validate_shared_strings(strings: &[String]) -> Result<(), String> {
+    if strings.len() > SHARED_STRINGS_MAX_COUNT {
+        return Err(format!(
+            "shared strings table is too large ({}; maximum is {})",
+            strings.len(),
+            SHARED_STRINGS_MAX_COUNT
+        ));
+    }
+    let total_bytes = strings
+        .iter()
+        .try_fold(0usize, |total, value| total.checked_add(value.len()));
+    let Some(total_bytes) = total_bytes else {
+        return Err("shared strings size overflows usize".to_string());
+    };
+    if total_bytes > SHARED_STRINGS_MAX_TOTAL_BYTES {
+        return Err(format!(
+            "shared strings table is too large ({} bytes; maximum is {} bytes)",
+            total_bytes, SHARED_STRINGS_MAX_TOTAL_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sheet_model(
+    sheet_name: &str,
+    cell_count: usize,
+    merged_range_count: usize,
+) -> Result<(), String> {
+    if cell_count > SHEET_MAX_CELLS {
+        return Err(format!(
+            "sheet has too many cells: {sheet_name} ({}; maximum is {})",
+            cell_count, SHEET_MAX_CELLS
+        ));
+    }
+    if merged_range_count > SHEET_MAX_MERGES {
+        return Err(format!(
+            "sheet has too many merged ranges: {sheet_name} ({}; maximum is {})",
+            merged_range_count, SHEET_MAX_MERGES
+        ));
+    }
+    Ok(())
+}
 
 fn validate_zip_entry_metadata(
     name: &str,
@@ -2491,13 +2549,18 @@ fn read_workbook_from_archive<R: Read + Seek>(
     validate_zip_archive(&mut archive)?;
     let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
+    validate_workbook_model_count(sheet_refs.len())?;
     let date1904 = xlsx_workbook_date1904(&wb_xml);
 
     let rels_xml = zip_read_text(&mut archive, "xl/_rels/workbook.xml.rels")?;
     let rels = xlsx_rels(&rels_xml, "/worksheet");
 
     let shared: Vec<String> = match zip_read_text(&mut archive, "xl/sharedStrings.xml") {
-        Ok(xml) => xlsx_shared_strings(&xml),
+        Ok(xml) => {
+            let strings = xlsx_shared_strings(&xml);
+            validate_shared_strings(&strings)?;
+            strings
+        }
         Err(_) => vec![],
     };
 
@@ -2521,6 +2584,11 @@ fn read_workbook_from_archive<R: Read + Seek>(
             Err(_) => continue,
         };
         let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared, &styles.cell_xfs);
+        validate_sheet_model(
+            &name,
+            sheet_data.cells.len(),
+            sheet_data.merged_ranges.len(),
+        )?;
         // GitHub #4: resolved from the same style_ids BufferSheet::style_ids already
         // carries -- see WorkbookSheet::cell_number_formats' doc comment.
         let cell_number_formats: HashMap<(u32, u32), String> = sheet_data
@@ -5592,5 +5660,24 @@ mod from_bytes_tests {
         let xml =
             r#"<?xml version="1.0"?><worksheet><row hidden="true"><c r="A1"/></row></worksheet>"#;
         validate_xml_budget("sheet.xml", xml).expect("normal XML should stay within the budget");
+    }
+
+    #[test]
+    fn workbook_model_limits_reject_excessive_shape_counts() {
+        let error = validate_workbook_model_count(WORKBOOK_MAX_SHEETS + 1).unwrap_err();
+        assert!(error.contains("too many sheets"));
+
+        let error = validate_sheet_model("Sheet1", SHEET_MAX_CELLS + 1, 0).unwrap_err();
+        assert!(error.contains("too many cells"));
+
+        let error = validate_sheet_model("Sheet1", 0, SHEET_MAX_MERGES + 1).unwrap_err();
+        assert!(error.contains("too many merged ranges"));
+    }
+
+    #[test]
+    fn shared_string_limit_rejects_excessive_count() {
+        let strings = vec![String::new(); SHARED_STRINGS_MAX_COUNT + 1];
+        let error = validate_shared_strings(&strings).unwrap_err();
+        assert!(error.contains("shared strings table is too large"));
     }
 }

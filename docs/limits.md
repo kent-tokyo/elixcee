@@ -74,6 +74,15 @@ After the ZIP checks, every XML part is subject to these document-level limits:
 | Text node length | 64 MiB | `XML_MAX_TEXT_NODE_BYTES` |
 | Nesting depth | 1,024 | `XML_MAX_DEPTH` |
 
+The materialized workbook model also has these limits:
+
+| Limit | Value | Constant |
+|---|---:|---|
+| Sheets per workbook | 4,096 | `WORKBOOK_MAX_SHEETS` |
+| Cells per sheet | 5,000,000 | `SHEET_MAX_CELLS` |
+| Merged ranges per sheet | 1,000,000 | `SHEET_MAX_MERGES` |
+| Shared strings | 1,000,000 entries / 256 MiB | `SHARED_STRINGS_MAX_*` |
+
 These are build-time safeguards, not claims that arbitrary hostile files are safe. The
 limits are checked from ZIP metadata before part parsing; path traversal is rejected at
 the same boundary, and DTD/ENTITY declarations are rejected. Numeric thresholds are

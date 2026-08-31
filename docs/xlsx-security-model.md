@@ -23,6 +23,10 @@ for how this fits the overall compatibility definition.
 | XML attribute value | 16 MiB | `XML_MAX_ATTRIBUTE_VALUE_BYTES`, `src/reader.rs` |
 | XML text node | 64 MiB | `XML_MAX_TEXT_NODE_BYTES`, `src/reader.rs` |
 | XML nesting depth | 1,024 | `XML_MAX_DEPTH`, `src/reader.rs` |
+| Workbook sheets | 4,096 | `WORKBOOK_MAX_SHEETS`, `src/reader.rs` |
+| Cells per sheet | 5,000,000 | `SHEET_MAX_CELLS`, `src/reader.rs` |
+| Merged ranges per sheet | 1,000,000 | `SHEET_MAX_MERGES`, `src/reader.rs` |
+| Shared strings | 1,000,000 entries / 256 MiB | `SHARED_STRINGS_MAX_*`, `src/reader.rs` |
 
 The reader also rejects absolute paths, parent-directory components, and NUL bytes in
 ZIP entry names before any workbook part is consumed. All these checks run for the
@@ -33,16 +37,16 @@ The XML reader rejects DTD/ENTITY declarations and incomplete documents before t
 workbook-specific parser consumes them. The following XML/model limits remain explicitly
 absent today:
 
-- No cap on shared-string count/total length, cell count, merged-range count, sheet
-  count, defined-name count, or formula-string length.
+- No cap on defined-name count or formula-string length.
 - No wall-clock/parse-time budget on the reader itself (a loop-execution deadline exists
   on `Vm`, but it only governs VBA execution *after* a workbook is already parsed).
 
 XML nesting depth is a partial exception: `src/reader.rs`'s `XmlIter` is a flat,
 non-recursive pull parser (no DOM tree, no recursive descent), so pathological nesting
 depth cannot cause a Rust stack overflow the way a recursive-descent or DOM-building
-parser could. It can still cost unbounded time/memory via element/attribute count, which
-is why those are listed as planned limits below, not dismissed as already covered.
+parser could. It can still cost time/memory through model construction, which is why the
+explicit document and workbook-model budgets above are complemented by the planned
+measurement phase below.
 
 ## `packages/xlsx` (JS) limits — distinct from the Rust reader above
 
