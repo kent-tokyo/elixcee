@@ -2846,6 +2846,12 @@ fn validate_workbook_sheets(
     let mut relationship_ids = HashSet::new();
     let mut sheet_ids = HashSet::new();
     for (name, relationship_id, sheet_id, state) in sheets {
+        if name.trim().is_empty() {
+            return Err("worksheet name must not be empty".to_string());
+        }
+        if relationship_id.trim().is_empty() {
+            return Err("worksheet relationship id must not be empty".to_string());
+        }
         let folded_name = name.to_lowercase();
         if !names.insert(folded_name) {
             return Err(format!("duplicate worksheet name is not allowed: {name}"));
@@ -2853,6 +2859,13 @@ fn validate_workbook_sheets(
         if !relationship_ids.insert(relationship_id) {
             return Err(format!(
                 "duplicate worksheet relationship reference is not allowed: {relationship_id}"
+            ));
+        }
+        if let Some(sheet_id) = sheet_id
+            && (sheet_id.parse::<u32>().ok().filter(|id| *id > 0).is_none())
+        {
+            return Err(format!(
+                "invalid worksheet sheetId is not allowed: {sheet_id}"
             ));
         }
         if let Some(sheet_id) = sheet_id
@@ -5162,6 +5175,31 @@ mod sheet_id_tests {
         )];
         let error = validate_workbook_sheets(&sheets).unwrap_err();
         assert!(error.contains("invalid worksheet state"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_empty_identifiers() {
+        let error = validate_workbook_sheets(&[("  ".to_string(), "rId1".to_string(), None, None)])
+            .unwrap_err();
+        assert!(error.contains("worksheet name must not be empty"));
+
+        let error = validate_workbook_sheets(&[("Sheet1".to_string(), "".to_string(), None, None)])
+            .unwrap_err();
+        assert!(error.contains("relationship id must not be empty"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_non_positive_or_non_numeric_sheet_ids() {
+        for sheet_id in ["0", "-1", "not-a-number"] {
+            let sheets = vec![(
+                "Sheet1".to_string(),
+                "rId1".to_string(),
+                Some(sheet_id.to_string()),
+                None,
+            )];
+            let error = validate_workbook_sheets(&sheets).unwrap_err();
+            assert!(error.contains("invalid worksheet sheetId"));
+        }
     }
 
     #[test]

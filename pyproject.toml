@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "elixcee"
-version = "0.87.0"
+version = "0.88.0"
 description = "Emulate and execute Excel VBA macros at high speed — without Microsoft Excel"
 readme = "README.md"
 requires-python = ">=3.9"

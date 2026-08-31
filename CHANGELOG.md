@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.88.0] - 2026-08-31
+
+- 空のworksheet名・relationship ID、および0/非数値の`sheetId`を通常reader・stream readerの双方で拒否するようにしました。
+- Workbook識別子の不正値を既定値へ変換せず、明示的な入力エラーとして扱います。
+
 ## [0.87.0] - 2026-08-31
 
 - 必須属性が欠けたworksheet要素や、自己終了形式でないworksheet要素を通常reader・stream readerで拒否するようにしました。
