@@ -81,6 +81,8 @@ to `run_macro` to bound VBA execution time.
 Repeated runs of the same source on one `Vm` reuse its parsed AST.
 Use `vm.fork()` to create an isolated copy for batch execution.
 Use `vm.snapshot()` to obtain a detached read-only view of all sheets.
+Use `diagnose_macro(vba_code, macro_name, workbook_path)` for structured
+diagnostics matching the CLI `diagnose --json` contract.
 
 ## Supported VBA and formulas
 

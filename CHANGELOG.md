@@ -2,6 +2,10 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.39.0] - 2026-08-31
+
+- `diagnose_macro()`を追加し、Pythonから構造化されたVBA診断JSONを取得できるようにしました。
+
 ## [0.38.0] - 2026-08-31
 
 - `Vm.snapshot()`を追加し、VMの全シートを独立したPython辞書として取得できるようにしました。

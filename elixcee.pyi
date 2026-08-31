@@ -671,6 +671,14 @@ class Vm:
 
 # ── Module-level functions ────────────────────────────────────────────────────
 
+def diagnose_macro(vba_code: str, macro_name: str, workbook_path: str) -> str:
+    """Return structured diagnosis JSON for a VBA macro and workbook.
+
+    Uses strict worksheet/workbook resolution and returns the same schema as
+    the CLI ``diagnose --json`` command.
+    """
+    ...
+
 def run_macro(
     vba_code: str,
     macro_name: str,

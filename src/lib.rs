@@ -2946,6 +2946,34 @@ fn grid_to_py(py: Python<'_>, grid: &[Vec<Variant>]) -> PyResult<Py<PyAny>> {
 
 // ── Module-level functions ────────────────────────────────────────────────────
 
+/// Diagnose a VBA macro against a workbook and return the stable diagnosis JSON
+/// contract used by the CLI's ``diagnose`` command.
+///
+/// Unlike ``run_macro``, this uses strict worksheet/workbook resolution so a
+/// missing reference is reported with a structured root cause instead of being
+/// auto-created or silently treated as empty.
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (vba_code, macro_name, workbook_path))]
+fn diagnose_macro(vba_code: &str, macro_name: &str, workbook_path: &str) -> PyResult<String> {
+    let program = parser::parse(vba_code)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
+    let programs = vec![("python".to_string(), program)];
+    let diagnosis = diagnose::run_diagnosis(&programs, workbook_path, macro_name)
+        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
+    let location = diagnosis
+        .span
+        .map(|span| diagnostics::locate(vba_code, "<vba>", span));
+    let copy_location = diagnosis
+        .copy_span
+        .map(|span| diagnostics::locate(vba_code, "<vba>", span));
+    Ok(diagnose::to_json(
+        &diagnosis,
+        location.as_ref(),
+        copy_location.as_ref(),
+    ))
+}
+
 /// Run a VBA macro string and return the resulting cells as ``{(row, col): value}``.
 ///
 /// Parameters
@@ -5912,7 +5940,10 @@ mod elixcee {
     #[pymodule_export]
     use super::stream::{PyStreamReader, PyStreamWriter};
     #[pymodule_export]
-    use super::{PyExcelError, PyVm, create_stream, hello, load_workbook, open_stream, run_macro};
+    use super::{
+        PyExcelError, PyVm, create_stream, diagnose_macro, hello, load_workbook, open_stream,
+        run_macro,
+    };
 }
 
 #[cfg(test)]
