@@ -646,6 +646,32 @@ impl PyVm {
         Ok(dict.into_any().unbind())
     }
 
+    /// Return a read-only Python snapshot of the workbook state.
+    ///
+    /// The returned nested dictionaries are copies and use 1-based
+    /// ``(row, col)`` keys, so mutating the result cannot change this VM.
+    fn snapshot(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let snapshot = PyDict::new(py);
+        snapshot.set_item("schema_version", 1u32)?;
+        snapshot.set_item("active_sheet", self.inner.active_sheet.as_str())?;
+
+        let sheets = PyDict::new(py);
+        for name in self.inner.sheet_names() {
+            let cells = PyDict::new(py);
+            if let Some(sheet) = self.inner.get_sheet_cells(&name) {
+                for ((row, col), content) in sheet {
+                    if !matches!(content.value, Variant::Empty) {
+                        let key = (*row, *col).into_pyobject(py)?.into_any().unbind();
+                        cells.set_item(key, variant_to_py(py, &content.value))?;
+                    }
+                }
+            }
+            sheets.set_item(name, cells)?;
+        }
+        snapshot.set_item("sheets", sheets)?;
+        Ok(snapshot.into_any().unbind())
+    }
+
     /// Return all VBA variables as a dict: ``{name: value}``.
     fn variables(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);

@@ -136,6 +136,10 @@ class Vm:
         """Return all non-empty cells of the active sheet as ``{(row, col): value}``."""
         ...
 
+    def snapshot(self) -> dict[str, Any]:
+        """Return a detached workbook snapshot with ``schema_version``, ``active_sheet``, and ``sheets``."""
+        ...
+
     # ── Formula support ────────────────────────────────────────────────────────
 
     def set_cell_formula(self, row: int, col: int, formula: str) -> None:

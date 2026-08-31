@@ -70,6 +70,7 @@ APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 `Vm(timeout_ms=N)`または`run_macro(..., timeout_ms=N)`でVBA実行時間を制限できます。
 同じ`Vm`で同じソースを再実行する場合は、解析済みASTを再利用します。
 `vm.fork()`でバッチ処理用の独立したVMコピーを作成できます。
+`vm.snapshot()`で全シートの独立した読み取り専用スナップショットを取得できます。
 
 対応するVBA構文・ワークシート関数は[FUNCTIONS.md](FUNCTIONS.md)にまとめています。
 既知の制約と診断形式は[docs/](docs/)を参照してください。

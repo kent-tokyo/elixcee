@@ -80,6 +80,7 @@ Set `timeout_ms=N` to bound how long each `next()` waits for another row.
 to `run_macro` to bound VBA execution time.
 Repeated runs of the same source on one `Vm` reuse its parsed AST.
 Use `vm.fork()` to create an isolated copy for batch execution.
+Use `vm.snapshot()` to obtain a detached read-only view of all sheets.
 
 ## Supported VBA and formulas
 

@@ -66,6 +66,7 @@ VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 可用 `Vm(timeout_ms=N)` 或 `run_macro(..., timeout_ms=N)` 限制 VBA 执行时间。
 同一个 `Vm` 重复执行相同源码时会复用已解析的 AST。
 可使用 `vm.fork()` 创建用于批处理的独立 VM 副本。
+可使用 `vm.snapshot()` 获取所有工作表的独立只读快照。
 
 ## 开发
 
