@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.73.0] - 2026-08-31
+
+- ストリーミングwriterのネスト値サイズ見積もりを飽和加算に変更し、整数オーバーフローによるpending-byte制限の回避を防止しました。
+- 行単位のサイズ集計にも同じ保護を適用し、回帰テストを追加しました。
+
 ## [0.72.0] - 2026-08-31
 
 - CIに固定版`cargo-deny 0.19.9`の依存監査を追加し、advisory、license、source、duplicate dependencyの検査を継続的に実行するようにしました。

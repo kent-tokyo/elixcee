@@ -29,12 +29,17 @@ const MAX_STREAM_WRITER_BYTES: usize = 64 * 1024 * 1024;
 fn estimated_variant_bytes(value: &Variant) -> usize {
     match value {
         Variant::Str(text) => text.len(),
-        Variant::Array(values) => values.iter().map(estimated_variant_bytes).sum(),
-        Variant::VbaArray(values) => values.elements.iter().map(estimated_variant_bytes).sum(),
-        Variant::Record(values) => values
-            .iter()
-            .map(|(key, value)| key.len() + estimated_variant_bytes(value))
-            .sum(),
+        Variant::Array(values) => values.iter().fold(0, |total, value| {
+            total.saturating_add(estimated_variant_bytes(value))
+        }),
+        Variant::VbaArray(values) => values.elements.iter().fold(0, |total, value| {
+            total.saturating_add(estimated_variant_bytes(value))
+        }),
+        Variant::Record(values) => values.iter().fold(0, |total, (key, value)| {
+            total
+                .saturating_add(key.len())
+                .saturating_add(estimated_variant_bytes(value))
+        }),
         _ => std::mem::size_of_val(value),
     }
 }
@@ -542,7 +547,9 @@ impl PyStreamWriter {
                 "stream writer pending rows exceed the limit of {max_rows} rows"
             )));
         }
-        let row_bytes = row.iter().map(estimated_variant_bytes).sum::<usize>();
+        let row_bytes = row.iter().fold(0usize, |total, value| {
+            total.saturating_add(estimated_variant_bytes(value))
+        });
         if self.pending_bytes.saturating_add(row_bytes) > self.max_pending_bytes {
             return Err(PyErr::new::<pyo3::exceptions::PyMemoryError, _>(format!(
                 "stream writer pending rows exceed the limit of {} bytes",
@@ -571,6 +578,8 @@ impl PyStreamWriter {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::{
         MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
         resolve_xlsx_target, row_from_xml, row_from_xml_with_limit, stream_writer_from_path,
@@ -646,6 +655,21 @@ mod tests {
         ]);
         assert!(estimated_variant_bytes(&value) >= 5);
         assert!(MAX_STREAM_WRITER_BYTES > estimated_variant_bytes(&value));
+    }
+
+    #[test]
+    fn streaming_writer_estimate_saturates_nested_totals() {
+        let value = Variant::Array(vec![
+            Variant::Record(HashMap::from([(
+                "key".to_string(),
+                Variant::Str("value".to_string()),
+            )])),
+            Variant::VbaArray(crate::types::VbaArray {
+                bounds: vec![crate::types::ArrayBound { lower: 0, upper: 0 }],
+                elements: vec![Variant::Str("value".to_string())],
+            }),
+        ]);
+        assert_eq!(estimated_variant_bytes(&value), 3 + 5 + 5);
     }
 
     #[test]
