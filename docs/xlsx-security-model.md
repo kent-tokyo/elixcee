@@ -27,6 +27,10 @@ for how this fits the overall compatibility definition.
 | Cells per sheet | 5,000,000 | `SHEET_MAX_CELLS`, `src/reader.rs` |
 | Merged ranges per sheet | 1,000,000 | `SHEET_MAX_MERGES`, `src/reader.rs` |
 | Shared strings | 1,000,000 entries / 256 MiB | `SHARED_STRINGS_MAX_*`, `src/reader.rs` |
+| Formula input | 1 MiB | `MAX_FORMULA_BYTES`, `src/formula/parser.rs` |
+| Formula references | 100,000 | `MAX_FORMULA_REFS`, `src/formula/parser.rs` |
+| Formula AST nodes | 200,000 | `MAX_FORMULA_NODES`, `src/formula/parser.rs` |
+| Formula nesting depth | 256 | `MAX_FORMULA_DEPTH`, `src/formula/parser.rs` |
 
 The reader also rejects absolute paths, parent-directory components, and NUL bytes in
 ZIP entry names before any workbook part is consumed. All these checks run for the

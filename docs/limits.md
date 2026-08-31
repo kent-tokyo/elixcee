@@ -83,6 +83,16 @@ The materialized workbook model also has these limits:
 | Merged ranges per sheet | 1,000,000 | `SHEET_MAX_MERGES` |
 | Shared strings | 1,000,000 entries / 256 MiB | `SHARED_STRINGS_MAX_*` |
 
+Formula parsing applies these limits before exposing an AST to the evaluator or reference
+rewriter:
+
+| Limit | Value | Constant |
+|---|---:|---|
+| Formula input | 1 MiB | `MAX_FORMULA_BYTES` |
+| Formula references | 100,000 | `MAX_FORMULA_REFS` |
+| Formula AST nodes | 200,000 | `MAX_FORMULA_NODES` |
+| Formula nesting depth | 256 | `MAX_FORMULA_DEPTH` |
+
 These are build-time safeguards, not claims that arbitrary hostile files are safe. The
 limits are checked from ZIP metadata before part parsing; path traversal is rejected at
 the same boundary, and DTD/ENTITY declarations are rejected. Numeric thresholds are

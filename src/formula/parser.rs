@@ -1,5 +1,10 @@
 use super::ast::{BinOpKind, FormulaExpr, SheetQualifier};
 
+const MAX_FORMULA_BYTES: usize = 1 * 1024 * 1024;
+const MAX_FORMULA_REFS: usize = 100_000;
+const MAX_FORMULA_NODES: usize = 200_000;
+const MAX_FORMULA_DEPTH: usize = 256;
+
 /// One cell/range reference as it literally appears in formula text, with its
 /// exact char-offset span (relative to the normalized input `parse_with_refs`
 /// was called on -- see that function's doc comment). Used by the reference
@@ -40,6 +45,7 @@ pub struct FormulaParser {
     chars: Vec<char>,
     pos: usize,
     refs: Vec<RefOccurrence>,
+    depth: usize,
 }
 
 impl FormulaParser {
@@ -48,7 +54,21 @@ impl FormulaParser {
             chars: input.chars().collect(),
             pos: 0,
             refs: Vec::new(),
+            depth: 0,
         }
+    }
+
+    fn parse_nested_expr(&mut self) -> Result<FormulaExpr, String> {
+        if self.depth >= MAX_FORMULA_DEPTH {
+            return Err(format!(
+                "Formula nesting exceeds the maximum depth of {}",
+                MAX_FORMULA_DEPTH
+            ));
+        }
+        self.depth += 1;
+        let result = self.parse_expr();
+        self.depth -= 1;
+        result
     }
 
     fn peek(&self) -> Option<char> {
@@ -216,7 +236,7 @@ impl FormulaParser {
         match self.peek() {
             Some('(') => {
                 self.advance();
-                let expr = self.parse_expr()?;
+                let expr = self.parse_nested_expr()?;
                 self.skip_ws();
                 if !self.consume(')') {
                     return Err("Expected ')'".into());
@@ -323,6 +343,12 @@ impl FormulaParser {
             self.advance();
             self.skip_ws();
             let (c2, r2, abs_c2, abs_r2, c2_start, c2_end) = self.parse_ref_corner()?;
+            if self.refs.len() >= MAX_FORMULA_REFS {
+                return Err(format!(
+                    "Formula has too many references (maximum is {})",
+                    MAX_FORMULA_REFS
+                ));
+            }
             self.refs.push(RefOccurrence::Range {
                 span: (corner1_start, c2_end),
                 c1: col,
@@ -348,6 +374,12 @@ impl FormulaParser {
                 abs_r2,
                 sheet,
             });
+        }
+        if self.refs.len() >= MAX_FORMULA_REFS {
+            return Err(format!(
+                "Formula has too many references (maximum is {})",
+                MAX_FORMULA_REFS
+            ));
         }
         self.refs.push(RefOccurrence::Cell {
             span: (corner1_start, corner1_end),
@@ -536,12 +568,12 @@ impl FormulaParser {
             let mut args = vec![];
             self.skip_ws();
             if self.peek() != Some(')') {
-                args.push(self.parse_expr()?);
+                args.push(self.parse_nested_expr()?);
                 loop {
                     self.skip_ws();
                     if self.consume(',') {
                         self.skip_ws();
-                        args.push(self.parse_expr()?);
+                        args.push(self.parse_nested_expr()?);
                     } else {
                         break;
                     }
@@ -589,6 +621,13 @@ pub fn parse(formula: &str) -> Result<FormulaExpr, String> {
 /// the original stored string must apply the same normalization first.
 pub fn parse_with_refs(formula: &str) -> Result<(FormulaExpr, Vec<RefOccurrence>), String> {
     let input = formula.trim().trim_start_matches('=');
+    if input.len() > MAX_FORMULA_BYTES {
+        return Err(format!(
+            "Formula is too long ({} bytes; maximum is {})",
+            input.len(),
+            MAX_FORMULA_BYTES
+        ));
+    }
     let mut p = FormulaParser::new(input);
     let expr = p.parse_expr()?;
     p.skip_ws();
@@ -599,8 +638,46 @@ pub fn parse_with_refs(formula: &str) -> Result<(FormulaExpr, Vec<RefOccurrence>
             p.chars[p.pos..].iter().collect::<String>()
         ))
     } else {
+        let mut nodes = 0usize;
+        validate_expr_shape(&expr, 0, &mut nodes)?;
         Ok((expr, p.refs))
     }
+}
+
+fn validate_expr_shape(expr: &FormulaExpr, depth: usize, nodes: &mut usize) -> Result<(), String> {
+    *nodes = (*nodes)
+        .checked_add(1)
+        .ok_or_else(|| "Formula AST node count overflows usize".to_string())?;
+    if *nodes > MAX_FORMULA_NODES {
+        return Err(format!(
+            "Formula AST is too large (maximum is {} nodes)",
+            MAX_FORMULA_NODES
+        ));
+    }
+    if depth > MAX_FORMULA_DEPTH {
+        return Err(format!(
+            "Formula AST exceeds the maximum depth of {}",
+            MAX_FORMULA_DEPTH
+        ));
+    }
+    match expr {
+        FormulaExpr::BinOp { lhs, rhs, .. } => {
+            validate_expr_shape(lhs, depth + 1, nodes)?;
+            validate_expr_shape(rhs, depth + 1, nodes)?;
+        }
+        FormulaExpr::UnaryMinus(inner) => validate_expr_shape(inner, depth + 1, nodes)?,
+        FormulaExpr::FuncCall { args, .. } => {
+            for arg in args {
+                validate_expr_shape(arg, depth + 1, nodes)?;
+            }
+        }
+        FormulaExpr::Number(_)
+        | FormulaExpr::Str(_)
+        | FormulaExpr::Bool(_)
+        | FormulaExpr::CellRef { .. }
+        | FormulaExpr::Range { .. } => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1110,5 +1187,23 @@ mod tests {
             }
             other => panic!("expected Cell occurrence, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn formula_limits_reject_excessive_input_length() {
+        let input = "1".repeat(MAX_FORMULA_BYTES + 1);
+        let error = parse(&input).unwrap_err();
+        assert!(error.contains("too long"));
+    }
+
+    #[test]
+    fn formula_limits_reject_excessive_nesting_before_stack_growth() {
+        let input = format!(
+            "{}1{}",
+            "(".repeat(MAX_FORMULA_DEPTH + 1),
+            ")".repeat(MAX_FORMULA_DEPTH + 1)
+        );
+        let error = parse(&input).unwrap_err();
+        assert!(error.contains("nesting"));
     }
 }
