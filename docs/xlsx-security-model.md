@@ -192,6 +192,11 @@ save-as operation cannot redirect the workbook bytes to a different target. Plat
 temporary-directory aliases (such as macOS `/tmp`) are allowed so normal temporary output
 continues to work. A missing path component remains valid and is created by the normal writer.
 
+The writer serializes XLSX/ODS bytes into a same-directory temporary file, flushes and syncs
+that file, then publishes it with a rename. This prevents a failed serialization or write from
+leaving a partially written destination; on platforms where replacing an existing file cannot
+be atomic, the platform-specific replacement fallback is used.
+
 ## Intentional non-compatibility policy
 
 When matching the oracle's behavior on a given input would mean reproducing a resource-

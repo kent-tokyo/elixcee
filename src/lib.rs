@@ -3291,6 +3291,71 @@ fn reject_symlink_output(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Write an output artifact beside its destination and publish it with a
+/// rename only after the complete byte stream has been flushed and synced.
+/// Keeping the temporary file in the same directory preserves rename's
+/// atomicity on platforms that support replacing an existing file atomically.
+fn write_output_atomically(path: &str, data: &[u8]) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let output = std::path::Path::new(path);
+    let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let filename = output
+        .file_name()
+        .ok_or_else(|| "output path must name a file".to_string())?
+        .to_string_lossy();
+    let prefix = format!(".{filename}.elixcee-tmp-{}", std::process::id());
+
+    for attempt in 0..100u32 {
+        let temporary = parent.join(format!("{prefix}-{attempt}"));
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("cannot create temporary output: {error}")),
+        };
+
+        let write_result = file
+            .write_all(data)
+            .and_then(|_| file.flush())
+            .and_then(|_| file.sync_all());
+        drop(file);
+        if let Err(error) = write_result {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("cannot write temporary output: {error}"));
+        }
+
+        let result = {
+            #[cfg(not(windows))]
+            {
+                std::fs::rename(&temporary, output)
+            }
+            #[cfg(windows)]
+            {
+                match std::fs::rename(&temporary, output) {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        std::fs::remove_file(output)
+                            .and_then(|_| std::fs::rename(&temporary, output))
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+        };
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("cannot publish output: {error}"));
+        }
+        return Ok(());
+    }
+
+    Err("cannot allocate a unique temporary output path".to_string())
+}
+
 /// 0.10.0-D, slice D1: one worksheet's complete set of output identifiers, computed once
 /// per save by `plan_worksheet_output` rather than independently re-derived at each of the
 /// several places that used to compute `sheet{i+1}.xml`/`sheetId`/`r:id` on their own
@@ -4306,7 +4371,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     }
 
     let data = zip.finish().map_err(|e| e.to_string())?.into_inner();
-    std::fs::write(path, data).map_err(|e| e.to_string())?;
+    write_output_atomically(path, &data)?;
     Ok(())
 }
 
@@ -6008,7 +6073,7 @@ fn save_ods_impl(vm: &Vm, path: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let data = zip.finish().map_err(|e| e.to_string())?.into_inner();
-    std::fs::write(path, data).map_err(|e| e.to_string())?;
+    write_output_atomically(path, &data)?;
     Ok(())
 }
 
@@ -6285,6 +6350,31 @@ mod tests {
         let _ = std::fs::remove_file(&target);
         let _ = std::fs::remove_dir(&linked_dir);
         let _ = std::fs::remove_dir(&real_dir);
+    }
+
+    #[test]
+    fn atomic_output_replaces_existing_file_without_leaving_temp_artifact() {
+        let path =
+            std::env::temp_dir().join(format!("elixcee_atomic_output_{}.xlsx", std::process::id()));
+        std::fs::write(&path, b"old").expect("write old output");
+
+        write_output_atomically(path.to_str().unwrap(), b"new").expect("publish output");
+
+        assert_eq!(std::fs::read(&path).expect("read new output"), b"new");
+        let prefix = format!(
+            ".elixcee_atomic_output_{}.xlsx.elixcee-tmp-",
+            std::process::id()
+        );
+        let leftovers = std::fs::read_dir(path.parent().unwrap())
+            .expect("read temp directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count();
+        assert_eq!(
+            leftovers, 0,
+            "atomic publish must clean temporary artifacts"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
