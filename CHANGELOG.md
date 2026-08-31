@@ -2,6 +2,10 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.44.0] - 2026-08-31
+
+- `Vm.snapshot()`に`sheet_states`を追加し、シートの表示状態を取得できるようにしました。
+
 ## [0.43.0] - 2026-08-31
 
 - `Vm.snapshot()`に`calculation_mode`を追加し、Automatic/Manual計算状態を取得できるようにしました。

@@ -137,7 +137,7 @@ class Vm:
         ...
 
     def snapshot(self, include_formulas: bool = False) -> dict[str, Any]:
-        """Return a detached workbook snapshot including calculation mode; optionally include ``formulas``."""
+        """Return a detached workbook snapshot including sheet states; optionally include ``formulas``."""
         ...
 
     # ── Formula support ────────────────────────────────────────────────────────

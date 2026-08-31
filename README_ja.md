@@ -75,6 +75,7 @@ APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 スナップショットにはワークシートのタブ順も含まれます。
 スナップショットには実行時の名前定義も含まれます。
 スナップショットには現在の`calculation_mode`（`automatic`または`manual`）も含まれます。
+スナップショットにはシートごとの表示状態（`visible`、`hidden`、`veryHidden`）も含まれます。
 `diagnose_macro(vba_code, macro_name, workbook_path)`でCLIの`diagnose --json`と同じ構造化診断JSONを取得できます。
 
 対応するVBA構文・ワークシート関数は[FUNCTIONS.md](FUNCTIONS.md)にまとめています。

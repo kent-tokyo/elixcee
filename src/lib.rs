@@ -657,6 +657,15 @@ impl PyVm {
         snapshot.set_item("active_sheet", self.inner.active_sheet.as_str())?;
         snapshot.set_item("sheet_order", self.inner.sheet_order.clone())?;
         snapshot.set_item("defined_names", self.inner.named_ranges.clone())?;
+        let sheet_states = PyDict::new(py);
+        for name in self.inner.sheet_names() {
+            let state = self
+                .inner
+                .sheet_state(&name)
+                .expect("sheet_names only returns existing sheets");
+            sheet_states.set_item(name, state.as_str())?;
+        }
+        snapshot.set_item("sheet_states", sheet_states)?;
         let calculation_mode = match &self.inner.calc_mode {
             vm::CalculationMode::Automatic => "automatic",
             vm::CalculationMode::Manual => "manual",

@@ -85,6 +85,7 @@ Pass `include_formulas=True` to include stored formulas separately from values.
 Snapshots also include the workbook's worksheet tab order.
 Snapshots also include runtime defined names.
 Snapshots include the current `calculation_mode` (`automatic` or `manual`).
+Snapshots include per-sheet visibility states (`visible`, `hidden`, or `veryHidden`).
 Use `diagnose_macro(vba_code, macro_name, workbook_path)` for structured
 diagnostics matching the CLI `diagnose --json` contract.
 
