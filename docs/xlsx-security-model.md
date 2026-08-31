@@ -10,7 +10,7 @@ object-injection vector, `@elixcee/xlsx` diverges deliberately and the divergenc
 recorded, not hidden. See [`docs/xlsx-compatibility-goal.md`](xlsx-compatibility-goal.md)
 for how this fits the overall compatibility definition.
 
-## Existing limits (0.48.0)
+## Existing limits (0.68.0)
 
 | Limit | Value | Where |
 |---|---|---|
@@ -85,23 +85,17 @@ per this project's standing rule against adding resource limits without measurem
 [`docs/limits.md`](limits.md) for the time/RSS measurement behind the 5,000,000-cell
 threshold specifically.
 
-## Planned limits (not yet implemented — design targets for the phase that builds the
-compat-hardened reader)
+## Remaining planned limits (not yet implemented)
 
 | Limit | Rationale | Where it would live |
 |---|---|---|
-| Compression-ratio cap (per entry and/or overall) | Classic zip-bomb: a tiny compressed entry expanding to gigabytes | ZIP entry read loop, `src/reader.rs` |
-| Total decompressed-size budget across all entries | Many entries each under the per-entry cap can still sum to unbounded memory | Same read loop, tracked across the whole archive |
-| ZIP entry-count cap | Bounds enumeration/metadata cost regardless of per-entry size | Archive open, before iterating entries |
-| XML element-count cap per document | Bounds parse time/memory for pathologically tag-dense XML | `XmlIter` consumer (per-document counter) |
-| XML attribute-count cap per element | Same class of concern, per-element | `parse_attrs`, `src/reader.rs` |
-| Attribute-value / text-node length caps | Bounds a single absurdly long value from being accepted whole | `parse_attrs` / text accumulation in `xlsx_sheet_cells` etc. |
-| Shared-string count and total-character budget | `sharedStrings.xml` is a common bomb vector (many/huge strings referenced repeatedly) | `xlsx_shared_strings`, `src/reader.rs` |
-| Sheet / row / column / cell / merge / defined-name count caps | Bounds the size of the materialized workbook model itself | Sheet-cell parse loop, `src/reader.rs` |
 | A single overall "work budget" for a read | Backstop against limit combinations that individually pass but compound | Top of `read_workbook`/its buffer-based successor |
+| Defined-name count cap | Bounds the size of the optional defined-name view and passthrough rewrite work | `xlsx_defined_names` / defined-name preservation path |
+| Reader wall-clock or cancellation budget | Prevents a valid-but-pathologically expensive input from occupying a caller indefinitely | Path and buffer reader entry points |
 
-Exact numeric values for every row above are an open item — deferred to the phase that
-implements them, informed by real-world file surveys, not chosen arbitrarily here.
+These remaining limits need a compatibility review and representative measurements before
+they become default rejection rules. The implemented per-layer limits above remain the
+active safety boundary until that work is completed.
 
 ## Prototype-pollution-safe key handling
 

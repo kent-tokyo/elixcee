@@ -7,6 +7,10 @@ a crafted malicious input), never speculatively. See
 threat model context; this file is where the *sizing* decision for each limit is worked
 through and kept up to date as new measurements arrive.
 
+Path-based workbook input is restricted to `.xlsx`, `.xlsm`, and `.ods` (case-insensitive)
+before opening the file. Unsupported or missing extensions return a deterministic error;
+the in-memory OOXML buffer reader is intentionally extension-independent.
+
 ## `packages/xlsx`: `MAX_RANGE_CELLS` (`ELIXCEE_RANGE_TOO_LARGE`)
 
 `sheet_to_formulae`, `sheet_to_csv`, `sheet_to_txt` (which delegates to `sheet_to_csv`),
