@@ -650,25 +650,40 @@ impl PyVm {
     ///
     /// The returned nested dictionaries are copies and use 1-based
     /// ``(row, col)`` keys, so mutating the result cannot change this VM.
-    fn snapshot(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    #[pyo3(signature = (include_formulas = false))]
+    fn snapshot(&self, py: Python<'_>, include_formulas: bool) -> PyResult<Py<PyAny>> {
         let snapshot = PyDict::new(py);
         snapshot.set_item("schema_version", 1u32)?;
         snapshot.set_item("active_sheet", self.inner.active_sheet.as_str())?;
 
         let sheets = PyDict::new(py);
+        let formulas = include_formulas.then(|| PyDict::new(py));
         for name in self.inner.sheet_names() {
             let cells = PyDict::new(py);
+            let sheet_formulas = include_formulas.then(|| PyDict::new(py));
             if let Some(sheet) = self.inner.get_sheet_cells(&name) {
                 for ((row, col), content) in sheet {
                     if !matches!(content.value, Variant::Empty) {
                         let key = (*row, *col).into_pyobject(py)?.into_any().unbind();
                         cells.set_item(key, variant_to_py(py, &content.value))?;
                     }
+                    if let (Some(formula), Some(sheet_formulas)) =
+                        (content.formula.as_ref(), sheet_formulas.as_ref())
+                    {
+                        let key = (*row, *col).into_pyobject(py)?.into_any().unbind();
+                        sheet_formulas.set_item(key, formula)?;
+                    }
                 }
             }
-            sheets.set_item(name, cells)?;
+            sheets.set_item(&name, cells)?;
+            if let (Some(formulas), Some(sheet_formulas)) = (formulas.as_ref(), sheet_formulas) {
+                formulas.set_item(name, sheet_formulas)?;
+            }
         }
         snapshot.set_item("sheets", sheets)?;
+        if let Some(formulas) = formulas {
+            snapshot.set_item("formulas", formulas)?;
+        }
         Ok(snapshot.into_any().unbind())
     }
 

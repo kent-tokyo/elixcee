@@ -136,8 +136,8 @@ class Vm:
         """Return all non-empty cells of the active sheet as ``{(row, col): value}``."""
         ...
 
-    def snapshot(self) -> dict[str, Any]:
-        """Return a detached workbook snapshot with ``schema_version``, ``active_sheet``, and ``sheets``."""
+    def snapshot(self, include_formulas: bool = False) -> dict[str, Any]:
+        """Return a detached workbook snapshot; optionally include a separate ``formulas`` map."""
         ...
 
     # ── Formula support ────────────────────────────────────────────────────────
