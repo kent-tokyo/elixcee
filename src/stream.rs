@@ -162,6 +162,22 @@ fn is_row_close(token: &[u8]) -> bool {
     rest.iter().all(|b| b.is_ascii_whitespace() || *b == b'>') && rest.contains(&b'>')
 }
 
+fn parse_stream_row(
+    row_buf: &[u8],
+    shared: &[String],
+    max_columns: usize,
+    wrap_in_sheet_data: bool,
+) -> Result<Option<(u32, Vec<Variant>)>, String> {
+    let xml =
+        std::str::from_utf8(row_buf).map_err(|_| "worksheet row is not valid UTF-8".to_string())?;
+    if wrap_in_sheet_data {
+        let wrapped = format!("<worksheet><sheetData>{xml}</sheetData></worksheet>");
+        row_from_xml_with_limit(&wrapped, shared, max_columns)
+    } else {
+        row_from_xml_with_limit(xml, shared, max_columns)
+    }
+}
+
 fn stream_rows(
     path: String,
     sheet: Option<String>,
@@ -203,9 +219,8 @@ fn stream_rows(
                         row_buf.clear();
                         append_row_token(&mut row_buf, &token, max_row_bytes)?;
                         if trimmed.ends_with(b"/>") {
-                            if let Ok(xml) = std::str::from_utf8(&row_buf)
-                                && let Some((row_number, row)) =
-                                    row_from_xml_with_limit(xml, &shared, max_columns)?
+                            if let Some((row_number, row)) =
+                                parse_stream_row(&row_buf, &shared, max_columns, false)?
                                 && tx.send(Ok((row_number, row))).is_err()
                             {
                                 return Ok(());
@@ -216,19 +231,18 @@ fn stream_rows(
                 } else {
                     append_row_token(&mut row_buf, &token, max_row_bytes)?;
                     if is_row_close(&token) {
-                        if let Ok(xml) = std::str::from_utf8(&row_buf) {
-                            let wrapped =
-                                format!("<worksheet><sheetData>{xml}</sheetData></worksheet>");
-                            if let Some((row_number, row)) =
-                                row_from_xml_with_limit(&wrapped, &shared, max_columns)?
-                                && tx.send(Ok((row_number, row))).is_err()
-                            {
-                                return Ok(());
-                            }
+                        if let Some((row_number, row)) =
+                            parse_stream_row(&row_buf, &shared, max_columns, true)?
+                            && tx.send(Ok((row_number, row))).is_err()
+                        {
+                            return Ok(());
                         }
                         in_row = false;
                     }
                 }
+            }
+            if in_row {
+                return Err("worksheet row is unterminated".to_string());
             }
             Ok(())
         })();
@@ -586,9 +600,9 @@ mod tests {
 
     use super::{
         MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
-        resolve_xlsx_target, row_from_xml, row_from_xml_with_limit, stream_writer_from_path,
-        validate_max_columns, validate_max_row_bytes, validate_max_rows, validate_max_writer_rows,
-        validate_timeout_ms, validate_writer_row_columns,
+        parse_stream_row, resolve_xlsx_target, row_from_xml, row_from_xml_with_limit,
+        stream_writer_from_path, validate_max_columns, validate_max_row_bytes, validate_max_rows,
+        validate_max_writer_rows, validate_timeout_ms, validate_writer_row_columns,
     };
     use crate::Variant;
 
@@ -768,5 +782,12 @@ mod tests {
         let xml = r#"<worksheet><sheetData><row r="1"><c r="C1"><v>7</v></c></row></sheetData></worksheet>"#;
         assert!(row_from_xml_with_limit(xml, &[], 3).is_ok());
         assert!(row_from_xml_with_limit(xml, &[], 2).is_err());
+    }
+
+    #[test]
+    fn streaming_row_parser_rejects_invalid_utf8_instead_of_dropping_the_row() {
+        let error = parse_stream_row(b"<row r=\"1\">\xff</row>", &[], 4, true)
+            .expect_err("invalid UTF-8 must be reported");
+        assert_eq!(error, "worksheet row is not valid UTF-8");
     }
 }
