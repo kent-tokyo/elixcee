@@ -1363,7 +1363,7 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
     let mut iter = XmlIter::new(xml);
     while let Some(event) = iter.next_ev() {
         match event {
-            Ev::Open(_, attrs) => {
+            Ev::Open(tag, attrs) => {
                 elements = elements
                     .checked_add(1)
                     .ok_or_else(|| format!("XML document element count overflows: {name}"))?;
@@ -1380,7 +1380,13 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
                         XML_MAX_DEPTH
                     ));
                 }
+                let mut names = HashSet::new();
                 for attr in attrs {
+                    if !names.insert(attr.name.clone()) {
+                        return Err(format!(
+                            "XML element has a duplicate attribute: {name} ({tag})"
+                        ));
+                    }
                     attributes = attributes
                         .checked_add(1)
                         .ok_or_else(|| format!("XML document attribute count overflows: {name}"))?;
@@ -1398,7 +1404,7 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
                     }
                 }
             }
-            Ev::SelfClose(_, attrs) => {
+            Ev::SelfClose(tag, attrs) => {
                 elements = elements
                     .checked_add(1)
                     .ok_or_else(|| format!("XML document element count overflows: {name}"))?;
@@ -1408,7 +1414,13 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
                         XML_MAX_ELEMENTS
                     ));
                 }
+                let mut names = HashSet::new();
                 for attr in attrs {
+                    if !names.insert(attr.name.clone()) {
+                        return Err(format!(
+                            "XML element has a duplicate attribute: {name} ({tag})"
+                        ));
+                    }
                     attributes = attributes
                         .checked_add(1)
                         .ok_or_else(|| format!("XML document attribute count overflows: {name}"))?;
@@ -6221,6 +6233,13 @@ mod from_bytes_tests {
     fn xml_budget_rejects_unclosed_documents() {
         let error = validate_xml_budget("sheet.xml", "<worksheet><sheetData/>").unwrap_err();
         assert!(error.contains("unclosed"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_duplicate_attributes() {
+        let error =
+            validate_xml_budget("sheet.xml", r#"<worksheet ref="A1" ref="B1"/>"#).unwrap_err();
+        assert!(error.contains("duplicate attribute"));
     }
 
     #[test]

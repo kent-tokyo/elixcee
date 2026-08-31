@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.90.0] - 2026-08-31
+
+- XML要素内の重複属性を通常reader・stream reader共通のXML予算検証で拒否するようにしました。
+- 同名属性の先勝ち・後勝ち解釈による入力の曖昧性をなくし、XLSX/XML入力を明示的に失敗させます。
+
 ## [0.89.0] - 2026-08-31
 
 - 31文字を超えるworksheet名と、Excelで禁止される`: \\ / ? * [ ]`文字を通常reader・stream readerの双方で拒否するようにしました。
