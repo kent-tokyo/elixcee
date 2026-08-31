@@ -103,6 +103,8 @@ These value budgets are checked on VBA assignments and cell writes; budget error
 swallowed by `On Error Resume Next`.
 VBA-generated workbook state is also limited to 5,000,000 materialized cells across all
 sheets (`DEFAULT_MAX_VBA_CELLS`).
+Blocked external effects are rejected at runtime with a `SECURITY:` error by default;
+ordinary unsupported statements remain no-ops for compatibility.
 Python callers can use `Vm.set_budgets()` to adjust the limits; omitted arguments use the
 safe defaults, while an explicit `None` disables that individual limit.
 

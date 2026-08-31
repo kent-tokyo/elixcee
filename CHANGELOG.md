@@ -55,6 +55,11 @@
 - `check`でShell、COM/object creation、WScript、ファイル操作相当の外部作用を`E1010`として明示的に拒否するようにしました。
 - 既定VMが外部作用を実行しないことを、unsupported情報と区別したエラー契約として文書化しました。
 
+## [0.58.0] - 2026-08-31
+
+- 既定VMでShell、COM/object creation、WScript、ファイル操作相当を実行時にも`SECURITY:`エラーとして拒否するようにしました。
+- `On Error Resume Next`で外部作用の遮断エラーを握り潰せないことを回帰テストで固定しました。
+
 ## [0.46.0] - 2026-08-31
 
 - `Vm.snapshot()`に`hidden_rows`/`hidden_columns`を追加し、行列の非表示状態を取得できるようにしました。

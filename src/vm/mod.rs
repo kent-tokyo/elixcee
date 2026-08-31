@@ -24,6 +24,21 @@ pub const DEFAULT_MAX_VBA_ARRAY_ELEMENTS: usize = MAX_ARRAY_ELEMENTS;
 /// Default maximum number of materialized cells retained across VBA sheets.
 pub const DEFAULT_MAX_VBA_CELLS: usize = 5_000_000;
 
+fn is_blocked_external_effect(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    [
+        "shell",
+        "createobject",
+        "getobject",
+        "wscript",
+        "filesystemobject",
+        "open ",
+        "kill ",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
 /// address helpers below are physically defined in `elixcee-types` (Phase
 /// 2A) — re-exported here so every existing `vm::X` / `crate::vm::X`
@@ -899,6 +914,9 @@ pub struct Vm {
     /// Maximum materialized cells across all sheets. `None` disables the
     /// guard for trusted Rust callers.
     pub max_cells: Option<usize>,
+    /// Reject unsupported statements that are known to represent external
+    /// effects. Ordinary unsupported statements remain no-ops.
+    pub reject_blocked_external_effects: bool,
     /// Counts outer-loop iterations across `For`/`ForEach`/`DoLoop` so the
     /// deadline is only actually checked (a real `Instant::now()` call)
     /// every 256th iteration, not every one.
@@ -1224,6 +1242,7 @@ impl Vm {
             max_string_bytes: Some(DEFAULT_MAX_VBA_STRING_BYTES),
             max_array_elements: Some(DEFAULT_MAX_VBA_ARRAY_ELEMENTS),
             max_cells: Some(DEFAULT_MAX_VBA_CELLS),
+            reject_blocked_external_effects: true,
             loop_iters: 0,
             strict_resolution: false,
             last_resolution_failure: None,
@@ -5595,6 +5614,7 @@ impl Vm {
             Err(e)
                 if !self.strict_resolution
                     && !e.starts_with("BUDGET:")
+                    && !e.starts_with("SECURITY:")
                     && matches!(self.current_error_mode(), Some(ErrorMode::ResumeNext)) =>
             {
                 self.record_error(&e);
@@ -6330,7 +6350,11 @@ impl Vm {
                     self.exec_stmt_inner(s)?;
                 }
             }
-            Stmt::Unsupported { .. } => {}
+            Stmt::Unsupported { reason } => {
+                if self.reject_blocked_external_effects && is_blocked_external_effect(reason) {
+                    return Err(format!("SECURITY: blocked external VBA effect: {}", reason));
+                }
+            }
             Stmt::DimArray { name, sizes } => {
                 if sizes.is_empty() {
                     // `Dim arr()` — dynamic array, unsized until a later
@@ -15117,6 +15141,21 @@ mod tests {
         .unwrap();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert!(err.starts_with("BUDGET: VBA cell count"), "{err:?}");
+    }
+
+    #[test]
+    fn blocked_external_effects_fail_even_with_resume_next() {
+        let mut vm = Vm::new();
+        let prog = parser::parse(
+            "Sub MySub()\n    On Error Resume Next\n    Set d = CreateObject(\"Scripting.Dictionary\")\n    done = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(
+            err.starts_with("SECURITY: blocked external VBA effect"),
+            "{err:?}"
+        );
+        assert!(!vm.variables.contains_key("done"));
     }
 
     #[test]

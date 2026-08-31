@@ -40,6 +40,10 @@ for how this fits the overall compatibility definition.
 Python callers may adjust these VBA budgets with `Vm.set_budgets()`. An omitted argument
 uses its safe default; an explicit `None` opts out of that one limit. New VMs retain the
 safe defaults above.
+
+At runtime, the default VM rejects the blocked external-effect class with a `SECURITY:`
+error. This rejection is not suppressible by `On Error Resume Next`; unrelated unsupported
+statements retain their existing no-op behavior.
 | VBA source | 4 MiB | `MAX_VBA_SOURCE_BYTES`, `src/parser/mod.rs` |
 | VBA identifier | 1,024 characters | `MAX_VBA_IDENTIFIER_CHARS`, `src/parser/mod.rs` |
 | VBA tokens | 1,000,000 | `MAX_VBA_TOKENS`, `src/parser/mod.rs` |
