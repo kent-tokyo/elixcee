@@ -35,6 +35,7 @@ for how this fits the overall compatibility definition.
 | VBA call depth | 256 frames | `DEFAULT_MAX_VBA_CALL_DEPTH`, `src/vm/mod.rs` |
 | VBA string value | 16 MiB | `DEFAULT_MAX_VBA_STRING_BYTES`, `src/vm/mod.rs` |
 | VBA/runtime array | 10,000,000 elements | `DEFAULT_MAX_VBA_ARRAY_ELEMENTS`, `src/vm/mod.rs` |
+| VBA materialized cells | 5,000,000 across all sheets | `DEFAULT_MAX_VBA_CELLS`, `src/vm/mod.rs` |
 
 Python callers may adjust these VBA budgets with `Vm.set_budgets()`. An omitted argument
 uses its safe default; an explicit `None` opts out of that one limit. New VMs retain the

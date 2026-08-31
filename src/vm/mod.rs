@@ -21,6 +21,8 @@ pub const DEFAULT_MAX_VBA_CALL_DEPTH: usize = 256;
 pub const DEFAULT_MAX_VBA_STRING_BYTES: usize = 16 * 1024 * 1024;
 /// Default maximum number of elements in a VBA/runtime array value.
 pub const DEFAULT_MAX_VBA_ARRAY_ELEMENTS: usize = MAX_ARRAY_ELEMENTS;
+/// Default maximum number of materialized cells retained across VBA sheets.
+pub const DEFAULT_MAX_VBA_CELLS: usize = 5_000_000;
 
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
 /// address helpers below are physically defined in `elixcee-types` (Phase
@@ -894,6 +896,9 @@ pub struct Vm {
     /// Maximum elements in one retained VBA/runtime array. `None` disables
     /// the guard for trusted Rust callers.
     pub max_array_elements: Option<usize>,
+    /// Maximum materialized cells across all sheets. `None` disables the
+    /// guard for trusted Rust callers.
+    pub max_cells: Option<usize>,
     /// Counts outer-loop iterations across `For`/`ForEach`/`DoLoop` so the
     /// deadline is only actually checked (a real `Instant::now()` call)
     /// every 256th iteration, not every one.
@@ -1218,6 +1223,7 @@ impl Vm {
             max_call_depth: Some(DEFAULT_MAX_VBA_CALL_DEPTH),
             max_string_bytes: Some(DEFAULT_MAX_VBA_STRING_BYTES),
             max_array_elements: Some(DEFAULT_MAX_VBA_ARRAY_ELEMENTS),
+            max_cells: Some(DEFAULT_MAX_VBA_CELLS),
             loop_iters: 0,
             strict_resolution: false,
             last_resolution_failure: None,
@@ -1403,6 +1409,19 @@ impl Vm {
     fn check_variable_budget(&self) -> Result<(), String> {
         for value in self.variables.values() {
             self.check_variant_budget(value)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_cell_budget(&self) -> Result<(), String> {
+        if let Some(limit) = self.max_cells {
+            let count: usize = self.sheets.values().map(HashMap::len).sum();
+            if count > limit {
+                return Err(format!(
+                    "BUDGET: VBA cell count limit exceeded ({}; maximum is {})",
+                    count, limit
+                ));
+            }
         }
         Ok(())
     }
@@ -5567,7 +5586,8 @@ impl Vm {
         self.current_span = Some(spanned.span);
         let result = self
             .exec_stmt_inner(&spanned.stmt)
-            .and_then(|()| self.check_variable_budget());
+            .and_then(|()| self.check_variable_budget())
+            .and_then(|()| self.check_cell_budget());
         match result {
             Ok(()) => Ok(()),
             // `On Error Resume Next` is not honored in strict-resolution
@@ -15085,6 +15105,18 @@ mod tests {
         let prog = parser::parse("Sub MySub()\n    value = Array(1, 2)\nEnd Sub\n").unwrap();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert!(err.starts_with("BUDGET: VBA array element"), "{err:?}");
+    }
+
+    #[test]
+    fn cell_budget_stops_workbook_growth() {
+        let mut vm = Vm::new();
+        vm.max_cells = Some(1);
+        let prog = parser::parse(
+            "Sub MySub()\n    Cells(1, 1).Value = 1\n    Cells(1, 2).Value = 2\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA cell count"), "{err:?}");
     }
 
     #[test]

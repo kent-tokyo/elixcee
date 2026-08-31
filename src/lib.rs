@@ -564,13 +564,14 @@ impl PyVm {
     /// Configure deterministic VBA value/execution budgets for this VM.
     /// Explicit ``None`` disables that individual budget. Omitted values use
     /// the safe defaults, so changing one limit never disables the others.
-    #[pyo3(signature = (max_instructions = 10000000, max_call_depth = 256, max_string_bytes = 16777216, max_array_elements = 10000000))]
+    #[pyo3(signature = (max_instructions = 10000000, max_call_depth = 256, max_string_bytes = 16777216, max_array_elements = 10000000, max_cells = 5000000))]
     fn set_budgets(
         &mut self,
         max_instructions: Option<u64>,
         max_call_depth: Option<usize>,
         max_string_bytes: Option<usize>,
         max_array_elements: Option<usize>,
+        max_cells: Option<usize>,
     ) -> PyResult<()> {
         if max_instructions == Some(0) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -592,10 +593,16 @@ impl PyVm {
                 "max_array_elements must be greater than zero",
             ));
         }
+        if max_cells == Some(0) {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "max_cells must be greater than zero",
+            ));
+        }
         self.inner.max_instructions = max_instructions;
         self.inner.max_call_depth = max_call_depth;
         self.inner.max_string_bytes = max_string_bytes;
         self.inner.max_array_elements = max_array_elements;
+        self.inner.max_cells = max_cells;
         Ok(())
     }
 
