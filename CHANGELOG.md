@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.89.0] - 2026-08-31
+
+- 31文字を超えるworksheet名と、Excelで禁止される`: \\ / ? * [ ]`文字を通常reader・stream readerの双方で拒否するようにしました。
+- 無効なworksheet名を曖昧な参照・保存対象として受け入れず、入力エラーとして扱います。
+
 ## [0.88.0] - 2026-08-31
 
 - 空のworksheet名・relationship ID、および0/非数値の`sheetId`を通常reader・stream readerの双方で拒否するようにしました。

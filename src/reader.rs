@@ -2849,6 +2849,19 @@ fn validate_workbook_sheets(
         if name.trim().is_empty() {
             return Err("worksheet name must not be empty".to_string());
         }
+        if name.chars().count() > 31 {
+            return Err(format!(
+                "worksheet name exceeds the 31-character limit: {name}"
+            ));
+        }
+        if name
+            .chars()
+            .any(|ch| matches!(ch, ':' | '\\' | '/' | '?' | '*' | '[' | ']'))
+        {
+            return Err(format!(
+                "worksheet name contains a forbidden character: {name}"
+            ));
+        }
         if relationship_id.trim().is_empty() {
             return Err("worksheet relationship id must not be empty".to_string());
         }
@@ -5186,6 +5199,23 @@ mod sheet_id_tests {
         let error = validate_workbook_sheets(&[("Sheet1".to_string(), "".to_string(), None, None)])
             .unwrap_err();
         assert!(error.contains("relationship id must not be empty"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_invalid_name_shapes() {
+        let too_long = "a".repeat(32);
+        let error =
+            validate_workbook_sheets(&[(too_long, "rId1".to_string(), None, None)]).unwrap_err();
+        assert!(error.contains("31-character limit"));
+
+        for name in ["bad:name", "bad\\name", "bad/name", "bad?name", "bad*name"] {
+            let sheets = vec![(name.to_string(), "rId1".to_string(), None, None)];
+            let error = validate_workbook_sheets(&sheets).unwrap_err();
+            assert!(
+                error.contains("forbidden character"),
+                "unexpected error: {error}"
+            );
+        }
     }
 
     #[test]
