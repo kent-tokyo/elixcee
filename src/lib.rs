@@ -3250,19 +3250,45 @@ fn save_workbook_impl(vm: &Vm, path: &str) -> Result<(), String> {
     save_xlsx_impl(vm, path)
 }
 
-/// Refuse to follow an existing symbolic link at the output path. Saving is a
-/// caller-authorized write, but silently following a link could redirect that
-/// write outside the intended destination (including during an in-place save).
-/// Missing paths are allowed; the writer creates them normally.
+/// Refuse to follow an existing symbolic link anywhere in the output path.
+/// Saving is a caller-authorized write, but silently following a link could
+/// redirect that write outside the intended destination (including during an
+/// in-place save). Missing paths are allowed; the writer creates them normally.
 fn reject_symlink_output(path: &str) -> Result<(), String> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err("refusing to overwrite a symbolic-link output path".to_string())
+    let mut current = std::path::PathBuf::new();
+    let system_temp_dir = std::env::temp_dir();
+    let canonical_system_temp_dir = system_temp_dir.canonicalize().ok();
+    for component in std::path::Path::new(path).components() {
+        current.push(component);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                // macOS commonly exposes /tmp as a system-managed symlink to
+                // /private/tmp (and /var as an alias for /private/var). These
+                // are platform-managed aliases on the route to temp_dir(),
+                // not caller-controlled redirects. Preserve normal temp-file
+                // behavior while still rejecting every other path component.
+                let is_standard_unix_temp_alias =
+                    cfg!(unix) && current == std::path::Path::new("/tmp");
+                let is_system_temp_alias = is_standard_unix_temp_alias
+                    || (system_temp_dir.starts_with(&current)
+                        && current
+                            .canonicalize()
+                            .ok()
+                            .zip(canonical_system_temp_dir.as_ref())
+                            .map(|(canonical_current, temp)| temp.starts_with(&canonical_current))
+                            .unwrap_or(false));
+                if !is_system_temp_alias {
+                    return Err("refusing to overwrite a symbolic-link output path".to_string());
+                }
+            }
+            Ok(_) => {}
+            // Once a component is missing, no later component can be an
+            // existing symlink in this output path; the writer will create it.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(format!("cannot inspect output path: {error}")),
         }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("cannot inspect output path: {error}")),
     }
+    Ok(())
 }
 
 /// 0.10.0-D, slice D1: one worksheet's complete set of output identifiers, computed once
@@ -6225,6 +6251,40 @@ mod tests {
         );
         let _ = std::fs::remove_file(&link);
         let _ = std::fs::remove_file(&target);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_workbook_rejects_symbolic_link_parent_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let suffix = std::process::id();
+        let real_dir = std::env::temp_dir().join(format!("elixcee_real_output_dir_{suffix}"));
+        let linked_dir = std::env::temp_dir().join(format!("elixcee_linked_output_dir_{suffix}"));
+        let target = real_dir.join("output.xlsx");
+        let link = linked_dir.join("output.xlsx");
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&linked_dir);
+        let _ = std::fs::remove_dir(&real_dir);
+        std::fs::create_dir(&real_dir).expect("create real output directory");
+        std::fs::write(&target, b"sentinel").expect("write sentinel target");
+        symlink(&real_dir, &linked_dir).expect("create output directory symlink");
+
+        let result = save_workbook_impl(&Vm::new(), link.to_str().unwrap());
+
+        assert_eq!(
+            result,
+            Err("refusing to overwrite a symbolic-link output path".to_string())
+        );
+        assert_eq!(
+            std::fs::read(&target).expect("read sentinel target"),
+            b"sentinel"
+        );
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&linked_dir);
+        let _ = std::fs::remove_dir(&real_dir);
     }
 
     #[test]

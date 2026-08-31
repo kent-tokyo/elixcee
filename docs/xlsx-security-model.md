@@ -185,10 +185,12 @@ matters for the reader's own future threat model.
 
 ## Safe output paths (`save_workbook`, Phase S3)
 
-Before creating an XLSX or ODS output, the writer inspects the destination with
-`symlink_metadata`. An existing symbolic link is rejected with a deterministic error instead
-of being followed, so an in-place or save-as operation cannot redirect the workbook bytes to a
-different target. A missing destination remains valid and is created by the normal writer.
+Before creating an XLSX or ODS output, the writer inspects every existing component of the
+destination with `symlink_metadata`. An existing symbolic link at the file or parent-directory
+level is rejected with a deterministic error instead of being followed, so an in-place or
+save-as operation cannot redirect the workbook bytes to a different target. Platform-managed
+temporary-directory aliases (such as macOS `/tmp`) are allowed so normal temporary output
+continues to work. A missing path component remains valid and is created by the normal writer.
 
 ## Intentional non-compatibility policy
 
