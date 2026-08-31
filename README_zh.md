@@ -60,7 +60,8 @@ VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 `include_row_numbers=True` 后返回 `(行号, 值)` 元组，也可用 `max_rows=N` 限制读取行数，
 或用 `max_row_bytes=N` 限制单行 XML 缓冲区大小，
 或用 `max_columns=N` 限制每行列数，
-`create_stream(path)` 提供 XLSX 追加式写入器。
+`create_stream(path)` 提供 XLSX 追加式写入器；可用 `max_rows=N` 或
+`max_pending_bytes=N` 限制待处理输出。
 
 ## 开发
 

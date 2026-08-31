@@ -71,7 +71,8 @@ workbook I/O. See [elixcee.pyi](elixcee.pyi) for signatures and behavior.
 For large XLSX/XLSM files, `open_stream(path, sheet=None)` yields rows without
 materializing the whole workbook. Set `include_row_numbers=True` to receive
 `(row_number, values)` tuples, or `max_rows=N`/`max_row_bytes=N`/`max_columns=N` to bound a read.
-`create_stream(path)` provides an append-only XLSX row writer.
+`create_stream(path)` provides an append-only XLSX row writer. Set
+`max_rows=N` and/or `max_pending_bytes=N` to bound pending output.
 
 `Vm(on_msgbox="skip")` is the default. Use `on_msgbox="error"` to make a
 `MsgBox` call raise an error.

@@ -257,6 +257,14 @@ fn validate_max_columns(max_columns: Option<usize>) -> Result<(), &'static str> 
     }
 }
 
+fn validate_max_writer_rows(max_rows: Option<usize>) -> Result<(), &'static str> {
+    if max_rows == Some(0) {
+        Err("max_rows must be greater than zero")
+    } else {
+        Ok(())
+    }
+}
+
 #[pyclass(name = "StreamReader")]
 pub struct PyStreamReader {
     receiver: Option<RowReceiver>,
@@ -382,12 +390,14 @@ pub struct PyStreamWriter {
     rows: Vec<Vec<Variant>>,
     pending_bytes: usize,
     max_pending_bytes: usize,
+    max_rows: Option<usize>,
     active: bool,
 }
 
 pub(crate) fn stream_writer_from_path(
     path: &str,
     max_pending_bytes: Option<usize>,
+    max_rows: Option<usize>,
 ) -> PyResult<PyStreamWriter> {
     let max_pending_bytes = max_pending_bytes.unwrap_or(MAX_STREAM_WRITER_BYTES);
     if max_pending_bytes == 0 {
@@ -395,11 +405,13 @@ pub(crate) fn stream_writer_from_path(
             "max_pending_bytes must be greater than zero",
         ));
     }
+    validate_max_writer_rows(max_rows).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     Ok(PyStreamWriter {
         path: path.to_string(),
         rows: Vec::new(),
         pending_bytes: 0,
         max_pending_bytes,
+        max_rows,
         active: true,
     })
 }
@@ -407,9 +419,13 @@ pub(crate) fn stream_writer_from_path(
 #[pymethods]
 impl PyStreamWriter {
     #[new]
-    #[pyo3(signature = (path, max_pending_bytes = None))]
-    fn new(path: &str, max_pending_bytes: Option<usize>) -> PyResult<Self> {
-        stream_writer_from_path(path, max_pending_bytes)
+    #[pyo3(signature = (path, max_pending_bytes = None, max_rows = None))]
+    fn new(
+        path: &str,
+        max_pending_bytes: Option<usize>,
+        max_rows: Option<usize>,
+    ) -> PyResult<Self> {
+        stream_writer_from_path(path, max_pending_bytes, max_rows)
     }
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
@@ -448,6 +464,12 @@ impl PyStreamWriter {
         self.max_pending_bytes
     }
 
+    /// Maximum number of pending rows accepted by this writer.
+    #[getter]
+    fn max_rows(&self) -> Option<usize> {
+        self.max_rows
+    }
+
     fn append(&mut self, values: &Bound<'_, PyAny>) -> PyResult<()> {
         if !self.active {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -462,6 +484,15 @@ impl PyStreamWriter {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "row must not be empty",
             ));
+        }
+        if self
+            .max_rows
+            .is_some_and(|max_rows| self.rows.len() >= max_rows)
+        {
+            let max_rows = self.max_rows.expect("checked above");
+            return Err(PyErr::new::<pyo3::exceptions::PyMemoryError, _>(format!(
+                "stream writer pending rows exceed the limit of {max_rows} rows"
+            )));
         }
         let row_bytes = row.iter().map(estimated_variant_bytes).sum::<usize>();
         if self.pending_bytes.saturating_add(row_bytes) > self.max_pending_bytes {
@@ -495,7 +526,7 @@ mod tests {
     use super::{
         MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
         resolve_xlsx_target, row_from_xml, row_from_xml_with_limit, stream_writer_from_path,
-        validate_max_columns, validate_max_row_bytes, validate_max_rows,
+        validate_max_columns, validate_max_row_bytes, validate_max_rows, validate_max_writer_rows,
     };
     use crate::Variant;
 
@@ -571,11 +602,13 @@ mod tests {
     #[test]
     fn streaming_writer_lifecycle_is_explicit_and_idempotent() {
         let path = std::env::temp_dir().join("elixcee_stream_writer_lifecycle.xlsx");
-        let mut writer = stream_writer_from_path(path.to_str().unwrap(), Some(1024)).unwrap();
+        let mut writer =
+            stream_writer_from_path(path.to_str().unwrap(), Some(1024), Some(3)).unwrap();
         assert!(!writer.closed());
         assert_eq!(writer.row_count(), 0);
         assert_eq!(writer.pending_bytes(), 0);
         assert_eq!(writer.max_pending_bytes(), 1024);
+        assert_eq!(writer.max_rows(), Some(3));
 
         writer.close().unwrap();
         assert!(writer.closed());
@@ -586,6 +619,12 @@ mod tests {
     #[test]
     fn streaming_reader_rejects_a_zero_row_budget_before_opening_the_file() {
         let err = validate_max_rows(Some(0)).expect_err("zero row budget must be rejected");
+        assert_eq!(err, "max_rows must be greater than zero");
+    }
+
+    #[test]
+    fn streaming_writer_rejects_a_zero_row_budget_before_opening_the_file() {
+        let err = validate_max_writer_rows(Some(0)).expect_err("zero row budget must be rejected");
         assert_eq!(err, "max_rows must be greater than zero");
     }
 
