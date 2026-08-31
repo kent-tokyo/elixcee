@@ -2,6 +2,10 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.46.0] - 2026-08-31
+
+- `Vm.snapshot()`に`hidden_rows`/`hidden_columns`を追加し、行列の非表示状態を取得できるようにしました。
+
 ## [0.45.0] - 2026-08-31
 
 - `Vm.snapshot()`に`merged_ranges`を追加し、結合セル範囲をA1記法で取得できるようにしました。

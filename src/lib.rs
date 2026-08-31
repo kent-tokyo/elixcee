@@ -682,6 +682,49 @@ impl PyVm {
             merged_ranges.set_item(name, ranges)?;
         }
         snapshot.set_item("merged_ranges", merged_ranges)?;
+        let hidden_rows = PyDict::new(py);
+        let hidden_columns = PyDict::new(py);
+        let column_address = |mut col: u32| {
+            let mut letters = Vec::new();
+            while col > 0 {
+                col -= 1;
+                letters.push((b'A' + (col % 26) as u8) as char);
+                col /= 26;
+            }
+            letters.reverse();
+            letters.into_iter().collect::<String>()
+        };
+        for name in self.inner.sheet_names() {
+            let visibility = self.inner.sheet_visibility.get(&name);
+            let rows: Vec<String> = visibility
+                .map(|value| {
+                    value
+                        .hidden_rows
+                        .iter()
+                        .map(|interval| format!("{}:{}", interval.start, interval.end))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let columns: Vec<String> = visibility
+                .map(|value| {
+                    value
+                        .hidden_columns
+                        .iter()
+                        .map(|interval| {
+                            format!(
+                                "{}:{}",
+                                column_address(interval.start),
+                                column_address(interval.end)
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            hidden_rows.set_item(&name, rows)?;
+            hidden_columns.set_item(name, columns)?;
+        }
+        snapshot.set_item("hidden_rows", hidden_rows)?;
+        snapshot.set_item("hidden_columns", hidden_columns)?;
         let sheet_states = PyDict::new(py);
         for name in self.inner.sheet_names() {
             let state = self

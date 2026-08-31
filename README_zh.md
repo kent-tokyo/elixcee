@@ -73,6 +73,7 @@ VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 快照还包含当前的 `calculation_mode`（`automatic` 或 `manual`）。
 快照还包含每个工作表的显示状态（`visible`、`hidden` 或 `veryHidden`）。
 快照还以 A1 表示法包含每个工作表的合并单元格范围。
+快照还包含隐藏行和隐藏列的区间。
 可使用 `diagnose_macro(vba_code, macro_name, workbook_path)` 获取与 CLI `diagnose --json` 相同的结构化诊断 JSON。
 
 ## 开发
