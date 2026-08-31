@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.82.0] - 2026-08-31
+
+- worksheet relationship targetの正規化とZIPルート脱出拒否を通常readerにも適用しました。
+- 通常readerとstream readerが同じ安全なrelationship解決境界を共有し、異常な相対targetを部分成功として扱わないようにしました。
+
 ## [0.81.0] - 2026-08-31
 
 - 通常のXLSX readerが、worksheet relationshipまたはworksheet partの欠落をシートの黙ったスキップとして扱わず、明示的な入力エラーを返すようにしました。

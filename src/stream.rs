@@ -58,35 +58,6 @@ fn append_row_token(
     Ok(())
 }
 
-/// Resolve a worksheet relationship target relative to `xl/`, as required by
-/// OOXML package relationships. ZIP entry names always use `/`, so doing this
-/// explicitly also keeps `..` from producing a name that can never be found.
-fn resolve_xlsx_target(target: &str) -> Result<String, String> {
-    let base = if target.starts_with('/') {
-        target.trim_start_matches('/').to_string()
-    } else {
-        format!("xl/{target}")
-    };
-    let mut parts = Vec::new();
-    for part in base.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                if parts.pop().is_none() {
-                    return Err(format!("worksheet relationship escapes ZIP root: {target}"));
-                }
-            }
-            part => parts.push(part),
-        }
-    }
-    if parts.is_empty() {
-        return Err(format!(
-            "worksheet relationship has an empty target: {target}"
-        ));
-    }
-    Ok(parts.join("/"))
-}
-
 fn sheet_target(path: &str, requested: Option<&str>) -> Result<(String, Vec<String>), String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -109,7 +80,7 @@ fn sheet_target(path: &str, requested: Option<&str>) -> Result<(String, Vec<Stri
     let target = rels
         .get(&chosen.1)
         .ok_or_else(|| format!("worksheet relationship is missing for {}", chosen.0))?;
-    let zip_path = resolve_xlsx_target(target)?;
+    let zip_path = reader::resolve_xlsx_target(target)?;
     Ok((zip_path, names))
 }
 
@@ -608,9 +579,9 @@ mod tests {
 
     use super::{
         MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
-        parse_stream_row, resolve_xlsx_target, row_from_xml, row_from_xml_with_limit,
-        stream_writer_from_path, validate_max_columns, validate_max_row_bytes, validate_max_rows,
-        validate_max_writer_rows, validate_timeout_ms, validate_writer_row_columns,
+        parse_stream_row, row_from_xml, row_from_xml_with_limit, stream_writer_from_path,
+        validate_max_columns, validate_max_row_bytes, validate_max_rows, validate_max_writer_rows,
+        validate_timeout_ms, validate_writer_row_columns,
     };
     use crate::Variant;
 
@@ -650,18 +621,18 @@ mod tests {
     #[test]
     fn worksheet_relationship_targets_are_normalized() {
         assert_eq!(
-            resolve_xlsx_target("worksheets/sheet1.xml").unwrap(),
+            crate::reader::resolve_xlsx_target("worksheets/sheet1.xml").unwrap(),
             "xl/worksheets/sheet1.xml"
         );
         assert_eq!(
-            resolve_xlsx_target("../worksheets/sheet1.xml").unwrap(),
+            crate::reader::resolve_xlsx_target("../worksheets/sheet1.xml").unwrap(),
             "worksheets/sheet1.xml"
         );
         assert_eq!(
-            resolve_xlsx_target("/xl/worksheets/sheet1.xml").unwrap(),
+            crate::reader::resolve_xlsx_target("/xl/worksheets/sheet1.xml").unwrap(),
             "xl/worksheets/sheet1.xml"
         );
-        assert!(resolve_xlsx_target("../../outside.xml").is_err());
+        assert!(crate::reader::resolve_xlsx_target("../../outside.xml").is_err());
     }
 
     #[test]

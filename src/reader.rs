@@ -2601,6 +2601,36 @@ pub(crate) fn workbook_rels_decls(xml: &str) -> Vec<(String, String)> {
 
 // ── XLSX reader ───────────────────────────────────────────────────────────────
 
+/// Resolves a worksheet relationship target relative to `xl/` and rejects targets that
+/// escape the ZIP package root. Relationship targets are package paths, not filesystem
+/// paths; keeping this validation here makes the normal and streaming readers share the
+/// same boundary.
+pub(crate) fn resolve_xlsx_target(target: &str) -> Result<String, String> {
+    let base = if target.starts_with('/') {
+        target.trim_start_matches('/').to_string()
+    } else {
+        format!("xl/{target}")
+    };
+    let mut parts = Vec::new();
+    for part in base.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err(format!("worksheet relationship escapes ZIP root: {target}"));
+                }
+            }
+            part => parts.push(part),
+        }
+    }
+    if parts.is_empty() {
+        return Err(format!(
+            "worksheet relationship has an empty target: {target}"
+        ));
+    }
+    Ok(parts.join("/"))
+}
+
 fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -2654,11 +2684,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
         let target = rels
             .get(&rid)
             .ok_or_else(|| format!("worksheet relationship is missing for {name} ({rid})"))?;
-        let zip_path = if let Some(rest) = target.strip_prefix('/') {
-            rest.to_string()
-        } else {
-            format!("xl/{}", target)
-        };
+        let zip_path = resolve_xlsx_target(target)?;
         let sheet_xml = if archive.file_names().any(|name| name == zip_path) {
             zip_read_text(&mut archive, &zip_path)?
         } else {
@@ -5745,6 +5771,14 @@ mod from_bytes_tests {
     }
 
     fn minimal_workbook_zip(styles: Option<&[u8]>, sheet: &[u8]) -> Vec<u8> {
+        minimal_workbook_zip_with_target(styles, sheet, "worksheets/sheet1.xml")
+    }
+
+    fn minimal_workbook_zip_with_target(
+        styles: Option<&[u8]>,
+        sheet: &[u8],
+        target: &str,
+    ) -> Vec<u8> {
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default();
         zip.start_file("xl/workbook.xml", options).unwrap();
@@ -5755,7 +5789,10 @@ mod from_bytes_tests {
         zip.start_file("xl/_rels/workbook.xml.rels", options)
             .unwrap();
         zip.write_all(
-            br#"<Relationships><Relationship Id="rId1" Type="/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            format!(
+                "<Relationships><Relationship Id=\"rId1\" Type=\"/worksheet\" Target=\"{target}\"/></Relationships>"
+            )
+            .as_bytes(),
         )
         .unwrap();
         zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
@@ -5832,6 +5869,19 @@ mod from_bytes_tests {
         };
         assert!(
             error.contains("worksheet relationship is missing"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_a_worksheet_target_that_escapes_the_package() {
+        let bytes = minimal_workbook_zip_with_target(None, br#"<worksheet/>"#, "../../outside.xml");
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("a worksheet target escaping the package should be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("escapes ZIP root"),
             "unexpected error: {error}"
         );
     }
