@@ -1,6 +1,6 @@
 use super::ast::{BinOpKind, FormulaExpr, SheetQualifier};
 
-const MAX_FORMULA_BYTES: usize = 1 * 1024 * 1024;
+const MAX_FORMULA_BYTES: usize = 1024 * 1024;
 const MAX_FORMULA_REFS: usize = 100_000;
 const MAX_FORMULA_NODES: usize = 200_000;
 const MAX_FORMULA_DEPTH: usize = 256;

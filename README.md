@@ -123,7 +123,14 @@ execution has not been fully validated against desktop Excel.
 cargo test --workspace
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
+cargo audit --no-fetch
+cargo deny check --disable-fetch
 ```
+
+依存監査は、ネットワークアクセスを必要としないローカル検証として実行できます。
+`cargo audit --no-fetch`と`cargo deny check --disable-fetch`は、手元にある advisory DB と
+リポジトリ内の`deny.toml`を使用します。advisory DBが古い場合は、結果が最新の公開情報を
+反映していない可能性があります。
 
 The short-term plan is in [ROADMAP.md](ROADMAP.md). Public design and policy
 documents are in [docs/](docs/).

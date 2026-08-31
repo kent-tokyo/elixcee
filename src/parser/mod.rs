@@ -40,7 +40,9 @@ enum Tok {
     Eof,
 }
 
-fn tokenize(input: &str) -> Result<(Vec<Tok>, Vec<(u32, u32)>), String> {
+type TokenizeOutput = (Vec<Tok>, Vec<(u32, u32)>);
+
+fn tokenize(input: &str) -> Result<TokenizeOutput, String> {
     let chars: Vec<char> = input.chars().collect();
     let mut pos = 0;
     let mut toks: Vec<Tok> = Vec::new();
