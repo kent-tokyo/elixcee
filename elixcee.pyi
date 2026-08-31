@@ -116,6 +116,10 @@ class Vm:
         """Return the value at (``row``, ``col``).  Returns ``None`` for empty cells."""
         ...
 
+    def fork(self) -> Vm:
+        """Return an independent copy for isolated batch execution."""
+        ...
+
     def get_cell_number_format(self, row: int, col: int) -> str | None:
         """Return the active sheet's resolved number-format code for a cell.
 

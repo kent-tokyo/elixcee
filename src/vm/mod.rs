@@ -767,6 +767,7 @@ fn merge_style_attr_edit(existing: &mut StyleAttrEdit, edit: &StyleAttrEdit) {
     }
 }
 
+#[derive(Clone)]
 pub struct Vm {
     /// Per-sheet cell storage. Key is sheet name (lowercase for lookup).
     sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
@@ -1225,6 +1226,16 @@ impl Vm {
             pending_raised_error: None,
             option_base: 0,
         }
+    }
+
+    /// Return an independent copy of this VM for isolated batch execution.
+    ///
+    /// The copy includes workbook data and VBA runtime state, but subsequent
+    /// mutations of either VM do not affect the other. External execution
+    /// deadlines are copied as-is so callers should set a fresh deadline when
+    /// scheduling the fork for later execution.
+    pub fn fork(&self) -> Self {
+        self.clone()
     }
 
     /// Records a caught runtime error into every `Err` property — called at

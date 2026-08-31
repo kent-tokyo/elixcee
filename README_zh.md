@@ -65,6 +65,7 @@ VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 `max_columns=N` 或 `max_pending_bytes=N` 限制待处理输出。
 可用 `Vm(timeout_ms=N)` 或 `run_macro(..., timeout_ms=N)` 限制 VBA 执行时间。
 同一个 `Vm` 重复执行相同源码时会复用已解析的 AST。
+可使用 `vm.fork()` 创建用于批处理的独立 VM 副本。
 
 ## 开发
 

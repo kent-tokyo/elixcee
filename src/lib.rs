@@ -614,6 +614,19 @@ impl PyVm {
         variant_to_py(py, &self.inner.get_cell(row, col))
     }
 
+    /// Return an independent VM copy for isolated batch execution.
+    ///
+    /// Changes to the returned VM do not affect this VM, and vice versa.
+    fn fork(&self) -> Self {
+        PyVm {
+            inner: self.inner.fork(),
+            timeout_ms: self.timeout_ms,
+            program_cache: self.program_cache.clone(),
+            #[cfg(test)]
+            program_parse_count: 0,
+        }
+    }
+
     /// Return the active sheet's resolved number-format code for a cell (1-based
     /// row/col), e.g. ``"m/d/yyyy"`` for a date-formatted cell, or ``None`` for a cell
     /// with no format, the General format, or a sheet with no source-file styles.
@@ -5897,6 +5910,31 @@ mod tests {
         vm.run(replacement, "Main", None).unwrap();
         assert_eq!(vm.program_parse_count, 2);
         assert_eq!(vm.inner.get_cell(1, 1), Variant::Integer(2));
+    }
+
+    #[cfg(feature = "python")]
+    #[test]
+    fn pyvm_fork_isolates_workbook_state() {
+        let mut original = PyVm::new("skip", None).unwrap();
+        original.inner.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(10),
+            },
+        );
+
+        let mut fork = original.fork();
+        fork.inner.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(20),
+            },
+        );
+
+        assert_eq!(original.inner.get_cell(1, 1), Variant::Integer(10));
+        assert_eq!(fork.inner.get_cell(1, 1), Variant::Integer(20));
     }
 
     #[test]
