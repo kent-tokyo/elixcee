@@ -3301,6 +3301,15 @@ fn write_output_atomically(path: &str, data: &[u8]) -> Result<(), String> {
 
     let output = std::path::Path::new(path);
     let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let existing_permissions = match std::fs::symlink_metadata(output) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            if metadata.permissions().readonly() {
+                return Err("refusing to overwrite a read-only output path".to_string());
+            }
+            Some(metadata.permissions())
+        }
+        _ => None,
+    };
     let filename = output
         .file_name()
         .ok_or_else(|| "output path must name a file".to_string())?
@@ -3319,8 +3328,12 @@ fn write_output_atomically(path: &str, data: &[u8]) -> Result<(), String> {
             Err(error) => return Err(format!("cannot create temporary output: {error}")),
         };
 
-        let write_result = file
-            .write_all(data)
+        let write_result = existing_permissions
+            .as_ref()
+            .map(|permissions| file.set_permissions(permissions.clone()))
+            .transpose()
+            .map(|result| result.map(|_| ()))
+            .and_then(|_| file.write_all(data))
             .and_then(|_| file.flush())
             .and_then(|_| file.sync_all());
         drop(file);
@@ -6374,6 +6387,49 @@ mod tests {
             leftovers, 0,
             "atomic publish must clean temporary artifacts"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_output_preserves_permissions_and_rejects_read_only_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "elixcee_atomic_permissions_{}.xlsx",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"old").expect("write old output");
+        let mut permissions = std::fs::metadata(&path)
+            .expect("read output metadata")
+            .permissions();
+        permissions.set_mode(0o640);
+        std::fs::set_permissions(&path, permissions).expect("set output permissions");
+
+        write_output_atomically(path.to_str().unwrap(), b"new").expect("publish output");
+
+        let mode = std::fs::metadata(&path)
+            .expect("read published metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o640,
+            "atomic publish must preserve output permissions"
+        );
+        assert_eq!(std::fs::read(&path).expect("read published output"), b"new");
+
+        let mut readonly = std::fs::metadata(&path)
+            .expect("read published metadata")
+            .permissions();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&path, readonly).expect("make output read-only");
+        let result = write_output_atomically(path.to_str().unwrap(), b"blocked");
+        assert_eq!(
+            result,
+            Err("refusing to overwrite a read-only output path".to_string())
+        );
+        assert_eq!(std::fs::read(&path).expect("read protected output"), b"new");
         let _ = std::fs::remove_file(&path);
     }
 

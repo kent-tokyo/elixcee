@@ -195,7 +195,9 @@ continues to work. A missing path component remains valid and is created by the 
 The writer serializes XLSX/ODS bytes into a same-directory temporary file, flushes and syncs
 that file, then publishes it with a rename. This prevents a failed serialization or write from
 leaving a partially written destination; on platforms where replacing an existing file cannot
-be atomic, the platform-specific replacement fallback is used.
+be atomic, the platform-specific replacement fallback is used. When replacing an existing
+regular file, its permissions are copied to the temporary file first; read-only destinations
+are rejected before serialization so the replacement path cannot bypass that protection.
 
 ## Intentional non-compatibility policy
 
