@@ -65,7 +65,7 @@ APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 制限できます。`max_row_bytes=N`では1行のXMLバッファ上限も指定できます。
 `max_columns=N`では1行の列数上限も指定できます。
 `create_stream(path)`はXLSX用の追記型writerです。`max_rows=N`や
-`max_pending_bytes=N`で保留中の出力を制限できます。
+`max_columns=N`や`max_pending_bytes=N`も指定して、保留中の出力を制限できます。
 
 対応するVBA構文・ワークシート関数は[FUNCTIONS.md](FUNCTIONS.md)にまとめています。
 既知の制約と診断形式は[docs/](docs/)を参照してください。

@@ -61,7 +61,7 @@ VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 或用 `max_row_bytes=N` 限制单行 XML 缓冲区大小，
 或用 `max_columns=N` 限制每行列数，
 `create_stream(path)` 提供 XLSX 追加式写入器；可用 `max_rows=N` 或
-`max_pending_bytes=N` 限制待处理输出。
+`max_columns=N` 或 `max_pending_bytes=N` 限制待处理输出。
 
 ## 开发
 

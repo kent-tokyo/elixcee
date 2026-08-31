@@ -5,6 +5,7 @@
 ## [0.32.0] - 2026-08-31
 
 - `create_stream`/`StreamWriter`に`max_rows`を追加し、保留行数の上限を設定できるようにしました。
+- `create_stream`/`StreamWriter`に`max_columns`を追加し、各保留行の列数上限を設定できるようにしました。
 
 - `open_stream`/`StreamReader`に`max_columns`を追加し、1行の列数上限を入力ごとに設定できるようにしました。
 - `open_stream`/`StreamReader`に`max_row_bytes`を追加し、1行のXMLバッファ上限を入力ごとに設定できるようにしました。
