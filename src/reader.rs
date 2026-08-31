@@ -2651,9 +2651,9 @@ fn read_workbook_from_archive<R: Read + Seek>(
 
     let mut sheets = vec![];
     for (name, rid, sheet_id, sheet_state) in sheet_refs {
-        let Some(target) = rels.get(&rid) else {
-            continue;
-        };
+        let target = rels
+            .get(&rid)
+            .ok_or_else(|| format!("worksheet relationship is missing for {name} ({rid})"))?;
         let zip_path = if let Some(rest) = target.strip_prefix('/') {
             rest.to_string()
         } else {
@@ -2662,7 +2662,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
         let sheet_xml = if archive.file_names().any(|name| name == zip_path) {
             zip_read_text(&mut archive, &zip_path)?
         } else {
-            continue;
+            return Err(format!("worksheet part is missing: {zip_path}"));
         };
         validate_shared_string_refs(&sheet_xml, &shared)?;
         let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared, &styles.cell_xfs);
@@ -5785,6 +5785,55 @@ mod from_bytes_tests {
             Err(error) => error,
         };
         assert!(error.contains("valid UTF-8"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_a_missing_worksheet_part() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        zip.start_file("xl/workbook.xml", options).unwrap();
+        zip.write_all(
+            br#"<workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        )
+        .unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", options)
+            .unwrap();
+        zip.write_all(
+            br#"<Relationships><Relationship Id="rId1" Type="/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("a missing worksheet part should be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("worksheet part is missing"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_a_missing_worksheet_relationship() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        zip.start_file("xl/workbook.xml", options).unwrap();
+        zip.write_all(
+            br#"<workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        )
+        .unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", options)
+            .unwrap();
+        zip.write_all(br#"<Relationships/>"#).unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("a missing worksheet relationship should be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("worksheet relationship is missing"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.81.0] - 2026-08-31
+
+- 通常のXLSX readerが、worksheet relationshipまたはworksheet partの欠落をシートの黙ったスキップとして扱わず、明示的な入力エラーを返すようにしました。
+- 欠損したシートを含むWorkbookの部分的な成功を防ぎ、通常readerとstream readerの失敗契約を統一しました。
+
 ## [0.80.0] - 2026-08-31
 
 - 通常のXLSX readerが、存在する`styles.xml`やworksheet XMLの読み込みエラーを既定値やシート欠落へ変換せず、明示的な入力エラーとして返すようにしました。
