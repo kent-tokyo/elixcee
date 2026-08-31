@@ -1205,7 +1205,6 @@ fn validate_shared_strings(strings: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(any(feature = "python", test))]
 fn validate_shared_string_refs(xml: &str, shared: &[String]) -> Result<(), String> {
     let mut iter = XmlIter::new(xml);
     let mut cell_type: Option<String> = None;
@@ -2631,13 +2630,16 @@ fn read_workbook_from_archive<R: Read + Seek>(
     let rels_xml = zip_read_text(&mut archive, "xl/_rels/workbook.xml.rels")?;
     let rels = xlsx_rels(&rels_xml, "/worksheet");
 
-    let shared: Vec<String> = match zip_read_text(&mut archive, "xl/sharedStrings.xml") {
-        Ok(xml) => {
-            let strings = xlsx_shared_strings(&xml);
-            validate_shared_strings(&strings)?;
-            strings
-        }
-        Err(_) => vec![],
+    let shared: Vec<String> = if archive
+        .file_names()
+        .any(|name| name == "xl/sharedStrings.xml")
+    {
+        let xml = zip_read_text(&mut archive, "xl/sharedStrings.xml")?;
+        let strings = xlsx_shared_strings(&xml);
+        validate_shared_strings(&strings)?;
+        strings
+    } else {
+        vec![]
     };
 
     let styles = match zip_read_text(&mut archive, "xl/styles.xml") {
@@ -2659,6 +2661,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
             Ok(s) => s,
             Err(_) => continue,
         };
+        validate_shared_string_refs(&sheet_xml, &shared)?;
         let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared, &styles.cell_xfs);
         validate_sheet_model(
             &name,
