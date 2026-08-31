@@ -12,6 +12,10 @@ use crate::reader::{
     FilterCriteria, SheetCell, TableColumn, TableDef, TableEditOp, WorkbookSheet,
 };
 
+/// Default deterministic budget for one VBA entrypoint run. Rust callers can
+/// opt out with `Vm::max_instructions = None` when the source is trusted.
+pub const DEFAULT_MAX_VBA_INSTRUCTIONS: u64 = 10_000_000;
+
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
 /// address helpers below are physically defined in `elixcee-types` (Phase
 /// 2A) — re-exported here so every existing `vm::X` / `crate::vm::X`
@@ -870,6 +874,11 @@ pub struct Vm {
     /// timeout guard). `None` (the default) means no limit — every existing
     /// caller (run-mode, `check`, `snapshot`, Python bindings) is unaffected.
     pub deadline: Option<std::time::Instant>,
+    /// Deterministic execution budget counted across statements and loop
+    /// iterations. `None` means unlimited; `Vm::new` uses
+    /// `DEFAULT_MAX_VBA_INSTRUCTIONS`, while trusted callers may opt out.
+    pub max_instructions: Option<u64>,
+    instruction_count: u64,
     /// Counts outer-loop iterations across `For`/`ForEach`/`DoLoop` so the
     /// deadline is only actually checked (a real `Instant::now()` call)
     /// every 256th iteration, not every one.
@@ -1189,6 +1198,8 @@ impl Vm {
             defined_names_may_be_stale: false,
             sheet_renames_since_load: HashMap::new(),
             deadline: None,
+            max_instructions: Some(DEFAULT_MAX_VBA_INSTRUCTIONS),
+            instruction_count: 0,
             loop_iters: 0,
             strict_resolution: false,
             last_resolution_failure: None,
@@ -1283,12 +1294,26 @@ impl Vm {
     /// single slow iteration can overshoot the deadline by at most ~256
     /// iterations' worth of time, not indefinitely.
     fn check_deadline(&mut self) -> Result<(), String> {
+        self.charge_instruction()?;
         self.loop_iters = self.loop_iters.wrapping_add(1);
         if self.loop_iters.is_multiple_of(256)
             && let Some(deadline) = self.deadline
             && std::time::Instant::now() >= deadline
         {
             return Err("TIMEOUT: loop execution exceeded the configured deadline".to_string());
+        }
+        Ok(())
+    }
+
+    fn charge_instruction(&mut self) -> Result<(), String> {
+        self.instruction_count = self.instruction_count.saturating_add(1);
+        if let Some(limit) = self.max_instructions
+            && self.instruction_count > limit
+        {
+            return Err(format!(
+                "BUDGET: VBA instruction limit exceeded ({}; maximum is {})",
+                self.instruction_count, limit
+            ));
         }
         Ok(())
     }
@@ -5143,6 +5168,7 @@ impl Vm {
         self.err_help_file.clear();
         self.err_help_context = 0;
         self.pending_raised_error = None;
+        self.instruction_count = 0;
         // A Vm reused across multiple run_sub calls must not carry the
         // previous run's call frames (or their On Error state) into this
         // one — call_sub_def pushes the entrypoint's own frame below, so
@@ -5223,6 +5249,7 @@ impl Vm {
         self.err_help_file.clear();
         self.err_help_context = 0;
         self.pending_raised_error = None;
+        self.instruction_count = 0;
         self.call_stack.clear();
         // Real VBA scopes `Option Base` per module; this codebase's `Vm`
         // is a single flat namespace across every loaded module (same
@@ -5445,6 +5472,7 @@ impl Vm {
         if self.exit_flag.is_some() {
             return Ok(());
         }
+        self.charge_instruction()?;
         self.current_span = Some(spanned.span);
         let result = self.exec_stmt_inner(&spanned.stmt);
         match result {
@@ -14923,6 +14951,17 @@ mod tests {
         .unwrap();
         vm.run_sub(&prog, "mysub").unwrap();
         assert_eq!(vm.variables["n"], Variant::Integer(2000));
+    }
+
+    #[test]
+    fn instruction_budget_stops_execution_deterministically() {
+        let mut vm = Vm::new();
+        vm.max_instructions = Some(1);
+        let prog = parser::parse("Sub MySub()\n    first = 1\n    second = 2\nEnd Sub\n").unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET:"), "{err:?}");
+        assert_eq!(vm.variables["first"], Variant::Integer(1));
+        assert!(!vm.variables.contains_key("second"));
     }
 
     #[test]

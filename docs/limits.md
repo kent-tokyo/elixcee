@@ -93,6 +93,10 @@ rewriter:
 | Formula AST nodes | 200,000 | `MAX_FORMULA_NODES` |
 | Formula nesting depth | 256 | `MAX_FORMULA_DEPTH` |
 
+VBA execution applies a deterministic instruction budget of 10,000,000 statements or
+loop iterations per run by default (`DEFAULT_MAX_VBA_INSTRUCTIONS`). Trusted Rust callers
+can explicitly set `Vm::max_instructions = None` to opt out.
+
 VBA parsing applies these input limits before constructing a program AST:
 
 | Limit | Value | Constant |
