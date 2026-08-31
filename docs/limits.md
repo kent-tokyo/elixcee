@@ -93,6 +93,14 @@ rewriter:
 | Formula AST nodes | 200,000 | `MAX_FORMULA_NODES` |
 | Formula nesting depth | 256 | `MAX_FORMULA_DEPTH` |
 
+VBA parsing applies these input limits before constructing a program AST:
+
+| Limit | Value | Constant |
+|---|---:|---|
+| VBA source | 4 MiB | `MAX_VBA_SOURCE_BYTES` |
+| VBA identifier | 1,024 characters | `MAX_VBA_IDENTIFIER_CHARS` |
+| VBA tokens | 1,000,000 | `MAX_VBA_TOKENS` |
+
 These are build-time safeguards, not claims that arbitrary hostile files are safe. The
 limits are checked from ZIP metadata before part parsing; path traversal is rejected at
 the same boundary, and DTD/ENTITY declarations are rejected. Numeric thresholds are

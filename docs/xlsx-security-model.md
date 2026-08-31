@@ -31,6 +31,9 @@ for how this fits the overall compatibility definition.
 | Formula references | 100,000 | `MAX_FORMULA_REFS`, `src/formula/parser.rs` |
 | Formula AST nodes | 200,000 | `MAX_FORMULA_NODES`, `src/formula/parser.rs` |
 | Formula nesting depth | 256 | `MAX_FORMULA_DEPTH`, `src/formula/parser.rs` |
+| VBA source | 4 MiB | `MAX_VBA_SOURCE_BYTES`, `src/parser/mod.rs` |
+| VBA identifier | 1,024 characters | `MAX_VBA_IDENTIFIER_CHARS`, `src/parser/mod.rs` |
+| VBA tokens | 1,000,000 | `MAX_VBA_TOKENS`, `src/parser/mod.rs` |
 
 The reader also rejects absolute paths, parent-directory components, and NUL bytes in
 ZIP entry names before any workbook part is consumed. All these checks run for the

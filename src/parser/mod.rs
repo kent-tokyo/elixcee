@@ -1,6 +1,10 @@
 pub mod ast;
 pub use ast::*;
 
+const MAX_VBA_SOURCE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_VBA_IDENTIFIER_CHARS: usize = 1_024;
+const MAX_VBA_TOKENS: usize = 1_000_000;
+
 // ── Tokenizer ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,7 +40,7 @@ enum Tok {
     Eof,
 }
 
-fn tokenize(input: &str) -> (Vec<Tok>, Vec<(u32, u32)>) {
+fn tokenize(input: &str) -> Result<(Vec<Tok>, Vec<(u32, u32)>), String> {
     let chars: Vec<char> = input.chars().collect();
     let mut pos = 0;
     let mut toks: Vec<Tok> = Vec::new();
@@ -222,6 +226,13 @@ fn tokenize(input: &str) -> (Vec<Tok>, Vec<(u32, u32)>) {
                 {
                     pos += 1;
                 }
+                if pos - start > MAX_VBA_IDENTIFIER_CHARS {
+                    return Err(format!(
+                        "VBA identifier is too long ({} characters; maximum is {})",
+                        pos - start,
+                        MAX_VBA_IDENTIFIER_CHARS
+                    ));
+                }
                 let s: String = chars[start..pos].iter().collect::<String>().to_lowercase();
                 toks.push(Tok::Ident(s));
             }
@@ -238,7 +249,7 @@ fn tokenize(input: &str) -> (Vec<Tok>, Vec<(u32, u32)>) {
     }
     toks.push(Tok::Eof);
     spans.push((pos as u32, pos as u32));
-    (toks, spans)
+    Ok((toks, spans))
 }
 
 // Only push Newline if last token isn't already one (collapse runs)
@@ -3211,7 +3222,33 @@ pub struct ParseErrorWithSpan {
 /// gave up. Existing callers should keep using `parse` — this is additive,
 /// for the `--json` CLI contract's location reporting.
 pub fn parse_with_span(input: &str) -> Result<Program, ParseErrorWithSpan> {
-    let (tokens, spans) = tokenize(input);
+    if input.len() > MAX_VBA_SOURCE_BYTES {
+        return Err(ParseErrorWithSpan {
+            message: format!(
+                "VBA source is too long ({} bytes; maximum is {})",
+                input.len(),
+                MAX_VBA_SOURCE_BYTES
+            ),
+            span: SourceSpan { start: 0, end: 0 },
+        });
+    }
+    let (tokens, spans) = tokenize(input).map_err(|message| ParseErrorWithSpan {
+        message,
+        span: SourceSpan { start: 0, end: 0 },
+    })?;
+    if tokens.len() > MAX_VBA_TOKENS {
+        return Err(ParseErrorWithSpan {
+            message: format!(
+                "VBA source has too many tokens ({}; maximum is {})",
+                tokens.len() - 1,
+                MAX_VBA_TOKENS
+            ),
+            span: SourceSpan {
+                start: input.chars().count() as u32,
+                end: input.chars().count() as u32,
+            },
+        });
+    }
     let mut parser = Parser::new(tokens, spans);
     parser.parse_program().map_err(|message| {
         let span = parser.peek_span();
@@ -4984,5 +5021,31 @@ mod tests {
                 value: Expr::Float(99999999999999999999.0),
             }]
         );
+    }
+
+    #[test]
+    fn parser_limits_reject_excessive_source_length() {
+        let error = parse(&"x".repeat(MAX_VBA_SOURCE_BYTES + 1)).unwrap_err();
+        assert!(error.contains("source is too long"));
+    }
+
+    #[test]
+    fn parser_limits_reject_excessive_identifier_length() {
+        let identifier = "a".repeat(MAX_VBA_IDENTIFIER_CHARS + 1);
+        let error = parse(&format!("Sub {identifier}()\nEnd Sub\n")).unwrap_err();
+        assert!(error.contains("identifier is too long"));
+    }
+
+    #[test]
+    fn parser_limits_reject_excessive_token_count() {
+        let source = format!(
+            "Sub X()\n{}\nEnd Sub\n",
+            (0..(MAX_VBA_TOKENS / 3 + 1))
+                .map(|_| "a = 1")
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let error = parse(&source).unwrap_err();
+        assert!(error.contains("too many tokens"));
     }
 }
