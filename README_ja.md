@@ -63,6 +63,7 @@ APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 大きなXLSX/XLSMには、全体を展開しない`open_stream(path, sheet=None)`を使えます。
 `include_row_numbers=True`では`(行番号, 値)`を返し、`max_rows=N`で読み取り行数を
 制限できます。`max_row_bytes=N`では1行のXMLバッファ上限も指定できます。
+`max_columns=N`では1行の列数上限も指定できます。
 `create_stream(path)`はXLSX用の追記型writerです。
 
 対応するVBA構文・ワークシート関数は[FUNCTIONS.md](FUNCTIONS.md)にまとめています。

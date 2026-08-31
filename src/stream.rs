@@ -117,17 +117,35 @@ fn cell_variant(cell: &SheetCell) -> Variant {
     }
 }
 
-fn row_from_xml(xml: &str, shared: &[String]) -> Option<(u32, Vec<Variant>)> {
+fn row_from_xml_with_limit(
+    xml: &str,
+    shared: &[String],
+    max_columns: usize,
+) -> Result<Option<(u32, Vec<Variant>)>, String> {
     let parsed = reader::xlsx_sheet_cells_for_stream(xml, shared);
-    let row = parsed.first_row?;
+    let Some(row) = parsed.first_row else {
+        return Ok(None);
+    };
     let max_col = parsed.cells.keys().map(|(_, col)| *col).max().unwrap_or(0);
+    if max_col as usize > max_columns {
+        return Err(format!(
+            "worksheet row exceeds the streaming limit of {max_columns} columns"
+        ));
+    }
     let mut out = vec![Variant::Empty; max_col as usize];
     for ((_, col), cell) in parsed.cells {
         if col > 0 {
             out[(col - 1) as usize] = cell_variant(&cell);
         }
     }
-    Some((row, out))
+    Ok(Some((row, out)))
+}
+
+#[cfg(test)]
+fn row_from_xml(xml: &str, shared: &[String]) -> Option<(u32, Vec<Variant>)> {
+    row_from_xml_with_limit(xml, shared, usize::MAX)
+        .ok()
+        .flatten()
 }
 
 fn is_row_close(token: &[u8]) -> bool {
@@ -142,6 +160,7 @@ fn stream_rows(
     path: String,
     sheet: Option<String>,
     max_row_bytes: usize,
+    max_columns: usize,
 ) -> Result<Receiver<Result<(u32, Vec<Variant>), String>>, String> {
     let (zip_path, _) = sheet_target(&path, sheet.as_deref())?;
     let (tx, rx) = mpsc::sync_channel(2);
@@ -179,7 +198,8 @@ fn stream_rows(
                         append_row_token(&mut row_buf, &token, max_row_bytes)?;
                         if trimmed.ends_with(b"/>") {
                             if let Ok(xml) = std::str::from_utf8(&row_buf)
-                                && let Some((row_number, row)) = row_from_xml(xml, &shared)
+                                && let Some((row_number, row)) =
+                                    row_from_xml_with_limit(xml, &shared, max_columns)?
                                 && tx.send(Ok((row_number, row))).is_err()
                             {
                                 return Ok(());
@@ -193,7 +213,8 @@ fn stream_rows(
                         if let Ok(xml) = std::str::from_utf8(&row_buf) {
                             let wrapped =
                                 format!("<worksheet><sheetData>{xml}</sheetData></worksheet>");
-                            if let Some((row_number, row)) = row_from_xml(&wrapped, &shared)
+                            if let Some((row_number, row)) =
+                                row_from_xml_with_limit(&wrapped, &shared, max_columns)?
                                 && tx.send(Ok((row_number, row))).is_err()
                             {
                                 return Ok(());
@@ -228,6 +249,14 @@ fn validate_max_row_bytes(max_row_bytes: Option<usize>) -> Result<(), &'static s
     }
 }
 
+fn validate_max_columns(max_columns: Option<usize>) -> Result<(), &'static str> {
+    if max_columns == Some(0) {
+        Err("max_columns must be greater than zero")
+    } else {
+        Ok(())
+    }
+}
+
 #[pyclass(name = "StreamReader")]
 pub struct PyStreamReader {
     receiver: Option<RowReceiver>,
@@ -244,14 +273,17 @@ pub(crate) fn stream_reader_from_path(
     include_row_numbers: bool,
     max_rows: Option<usize>,
     max_row_bytes: Option<usize>,
+    max_columns: Option<usize>,
 ) -> PyResult<PyStreamReader> {
     validate_max_rows(max_rows).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     validate_max_row_bytes(max_row_bytes)
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+    validate_max_columns(max_columns).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     let receiver = stream_rows(
         path.to_string(),
         sheet.map(str::to_string),
         max_row_bytes.unwrap_or(MAX_STREAM_ROW_BYTES),
+        max_columns.unwrap_or(16_384),
     )
     .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
     Ok(PyStreamReader {
@@ -265,15 +297,23 @@ pub(crate) fn stream_reader_from_path(
 #[pymethods]
 impl PyStreamReader {
     #[new]
-    #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None))]
+    #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None))]
     fn new(
         path: &str,
         sheet: Option<&str>,
         include_row_numbers: bool,
         max_rows: Option<usize>,
         max_row_bytes: Option<usize>,
+        max_columns: Option<usize>,
     ) -> PyResult<Self> {
-        stream_reader_from_path(path, sheet, include_row_numbers, max_rows, max_row_bytes)
+        stream_reader_from_path(
+            path,
+            sheet,
+            include_row_numbers,
+            max_rows,
+            max_row_bytes,
+            max_columns,
+        )
     }
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
@@ -454,8 +494,8 @@ impl PyStreamWriter {
 mod tests {
     use super::{
         MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
-        resolve_xlsx_target, row_from_xml, stream_writer_from_path, validate_max_row_bytes,
-        validate_max_rows,
+        resolve_xlsx_target, row_from_xml, row_from_xml_with_limit, stream_writer_from_path,
+        validate_max_columns, validate_max_row_bytes, validate_max_rows,
     };
     use crate::Variant;
 
@@ -560,5 +600,18 @@ mod tests {
         let mut row = Vec::new();
         assert!(append_row_token(&mut row, b"1234", 4).is_ok());
         assert!(append_row_token(&mut row, b"5", 4).is_err());
+    }
+
+    #[test]
+    fn streaming_reader_rejects_a_zero_column_budget_before_opening_the_file() {
+        let err = validate_max_columns(Some(0)).expect_err("zero column budget must be rejected");
+        assert_eq!(err, "max_columns must be greater than zero");
+    }
+
+    #[test]
+    fn streaming_row_parser_honors_a_custom_column_budget() {
+        let xml = r#"<worksheet><sheetData><row r="1"><c r="C1"><v>7</v></c></row></sheetData></worksheet>"#;
+        assert!(row_from_xml_with_limit(xml, &[], 3).is_ok());
+        assert!(row_from_xml_with_limit(xml, &[], 2).is_err());
     }
 }
