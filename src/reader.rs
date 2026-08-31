@@ -1441,6 +1441,10 @@ pub(crate) fn xlsx_sheet_cells_for_stream(xml: &str, shared: &[String]) -> XlsxS
 pub(crate) fn xlsx_shared_strings_for_stream(xml: &str) -> Vec<String> {
     xlsx_shared_strings(xml)
 }
+#[cfg(feature = "python")]
+pub(crate) fn validate_shared_strings_for_stream(strings: &[String]) -> Result<(), String> {
+    validate_shared_strings(strings)
+}
 
 // ── Raw ZIP passthrough (Milestone: safe round-trip) ───────────────────────────
 

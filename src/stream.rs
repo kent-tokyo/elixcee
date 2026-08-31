@@ -200,6 +200,7 @@ fn stream_rows(
                 String::new()
             };
             let shared = reader::xlsx_shared_strings_for_stream(&shared_xml);
+            reader::validate_shared_strings_for_stream(&shared)?;
             let entry = archive.by_name(&zip_path).map_err(|e| e.to_string())?;
             let mut input = BufReader::with_capacity(STREAM_BUFFER_BYTES, entry);
             let mut row_buf = Vec::with_capacity(128 * 1024);
