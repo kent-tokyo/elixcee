@@ -3243,10 +3243,26 @@ fn create_stream(
 }
 
 fn save_workbook_impl(vm: &Vm, path: &str) -> Result<(), String> {
+    reject_symlink_output(path)?;
     if path.to_lowercase().ends_with(".ods") {
         return save_ods_impl(vm, path);
     }
     save_xlsx_impl(vm, path)
+}
+
+/// Refuse to follow an existing symbolic link at the output path. Saving is a
+/// caller-authorized write, but silently following a link could redirect that
+/// write outside the intended destination (including during an in-place save).
+/// Missing paths are allowed; the writer creates them normally.
+fn reject_symlink_output(path: &str) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err("refusing to overwrite a symbolic-link output path".to_string())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot inspect output path: {error}")),
+    }
 }
 
 /// 0.10.0-D, slice D1: one worksheet's complete set of output identifiers, computed once
@@ -6183,6 +6199,32 @@ mod tests {
         let range = wb.worksheet_range("sheet1").expect("sheet1 should exist");
         let cells: Vec<_> = range.cells().collect();
         assert!(!cells.is_empty(), "saved file should have cells");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_workbook_rejects_symbolic_link_output_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let suffix = std::process::id();
+        let target = std::env::temp_dir().join(format!("elixcee_symlink_target_{suffix}.xlsx"));
+        let link = std::env::temp_dir().join(format!("elixcee_symlink_output_{suffix}.xlsx"));
+        let _ = std::fs::remove_file(&link);
+        std::fs::write(&target, b"sentinel").expect("write sentinel target");
+        symlink(&target, &link).expect("create output symlink");
+
+        let result = save_workbook_impl(&Vm::new(), link.to_str().unwrap());
+
+        assert_eq!(
+            result,
+            Err("refusing to overwrite a symbolic-link output path".to_string())
+        );
+        assert_eq!(
+            std::fs::read(&target).expect("read sentinel target"),
+            b"sentinel"
+        );
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&target);
     }
 
     #[test]

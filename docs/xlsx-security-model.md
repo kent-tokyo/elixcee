@@ -183,6 +183,13 @@ whether the dangerous value entered via untrusted file content or a caller-suppl
 unlike the resource-exhaustion divergences above where the file-vs-argument distinction
 matters for the reader's own future threat model.
 
+## Safe output paths (`save_workbook`, Phase S3)
+
+Before creating an XLSX or ODS output, the writer inspects the destination with
+`symlink_metadata`. An existing symbolic link is rejected with a deterministic error instead
+of being followed, so an in-place or save-as operation cannot redirect the workbook bytes to a
+different target. A missing destination remains valid and is created by the normal writer.
+
 ## Intentional non-compatibility policy
 
 When matching the oracle's behavior on a given input would mean reproducing a resource-
