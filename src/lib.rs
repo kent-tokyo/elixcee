@@ -527,6 +527,9 @@ mod bulk_range_validation_tests {
 pub struct PyVm {
     inner: Vm,
     timeout_ms: Option<u64>,
+    program_cache: Option<(String, parser::Program)>,
+    #[cfg(test)]
+    program_parse_count: u32,
 }
 
 #[cfg(feature = "python")]
@@ -552,6 +555,9 @@ impl PyVm {
         Ok(PyVm {
             inner: vm,
             timeout_ms,
+            program_cache: None,
+            #[cfg(test)]
+            program_parse_count: 0,
         })
     }
 
@@ -559,8 +565,24 @@ impl PyVm {
     #[pyo3(signature = (vba_code, macro_name, timeout_ms = None))]
     fn run(&mut self, vba_code: &str, macro_name: &str, timeout_ms: Option<u64>) -> PyResult<()> {
         validate_execution_timeout_ms(timeout_ms)?;
-        let prog = parser::parse(vba_code)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
+        if self
+            .program_cache
+            .as_ref()
+            .is_none_or(|(cached_source, _)| cached_source != vba_code)
+        {
+            let prog = parser::parse(vba_code)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
+            self.program_cache = Some((vba_code.to_owned(), prog));
+            #[cfg(test)]
+            {
+                self.program_parse_count += 1;
+            }
+        }
+        let prog = &self
+            .program_cache
+            .as_ref()
+            .expect("program cache populated immediately above")
+            .1;
         let timeout_ms = timeout_ms.or(self.timeout_ms);
         self.inner.deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
         let result = self.inner.run_sub(&prog, macro_name).map_err(|err| {
@@ -2952,6 +2974,9 @@ fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<P
     Ok(PyVm {
         inner: vm,
         timeout_ms: None,
+        program_cache: None,
+        #[cfg(test)]
+        program_parse_count: 0,
     })
 }
 
@@ -5855,6 +5880,24 @@ mod elixcee {
 mod tests {
     use super::*;
     use calamine::{Reader, Xlsx, open_workbook};
+
+    #[cfg(feature = "python")]
+    #[test]
+    fn pyvm_reuses_the_parsed_program_only_for_identical_source() {
+        let source = "Sub Main()\n    Cells(1, 1).Value = 1\nEnd Sub\n";
+        let replacement = "Sub Main()\n    Cells(1, 1).Value = 2\nEnd Sub\n";
+        let mut vm = PyVm::new("skip", None).unwrap();
+
+        vm.run(source, "Main", None).unwrap();
+        assert_eq!(vm.program_parse_count, 1);
+
+        vm.run(source, "Main", None).unwrap();
+        assert_eq!(vm.program_parse_count, 1);
+
+        vm.run(replacement, "Main", None).unwrap();
+        assert_eq!(vm.program_parse_count, 2);
+        assert_eq!(vm.inner.get_cell(1, 1), Variant::Integer(2));
+    }
 
     #[test]
     // 3.14 is an arbitrary decimal test value for the save/load round trip, not π.

@@ -68,6 +68,7 @@ APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 `create_stream(path)`はXLSX用の追記型writerです。`max_rows=N`や
 `max_columns=N`や`max_pending_bytes=N`も指定して、保留中の出力を制限できます。
 `Vm(timeout_ms=N)`または`run_macro(..., timeout_ms=N)`でVBA実行時間を制限できます。
+同じ`Vm`で同じソースを再実行する場合は、解析済みASTを再利用します。
 
 対応するVBA構文・ワークシート関数は[FUNCTIONS.md](FUNCTIONS.md)にまとめています。
 既知の制約と診断形式は[docs/](docs/)を参照してください。
