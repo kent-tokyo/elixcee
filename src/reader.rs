@@ -930,11 +930,15 @@ enum Ev {
 
 struct XmlIter<'a> {
     s: &'a str,
+    malformed: bool,
 }
 
 impl<'a> XmlIter<'a> {
     fn new(s: &'a str) -> Self {
-        XmlIter { s }
+        XmlIter {
+            s,
+            malformed: false,
+        }
     }
 
     fn next_ev(&mut self) -> Option<Ev> {
@@ -960,15 +964,23 @@ impl<'a> XmlIter<'a> {
             // Closing tag
             if self.s.starts_with('/') {
                 self.s = &self.s[1..];
-                let end = self.s.find('>').unwrap_or(self.s.len());
+                let Some(end) = self.s.find('>') else {
+                    self.malformed = true;
+                    self.s = "";
+                    return None;
+                };
                 let name = self.s[..end].trim().to_string();
-                self.s = &self.s[(end + 1).min(self.s.len())..];
+                self.s = &self.s[end + 1..];
                 return Some(Ev::Close(name));
             }
 
             // Comment
             if self.s.starts_with("!--") {
-                let end = self.s.find("-->").map(|p| p + 3).unwrap_or(self.s.len());
+                let Some(end) = self.s.find("-->").map(|p| p + 3) else {
+                    self.malformed = true;
+                    self.s = "";
+                    return None;
+                };
                 self.s = &self.s[end..];
                 continue;
             }
@@ -976,9 +988,13 @@ impl<'a> XmlIter<'a> {
             // CDATA
             if self.s.starts_with("![CDATA[") {
                 self.s = &self.s[8..];
-                let end = self.s.find("]]>").unwrap_or(self.s.len());
+                let Some(end) = self.s.find("]]>") else {
+                    self.malformed = true;
+                    self.s = "";
+                    return None;
+                };
                 let text = self.s[..end].to_string();
-                self.s = &self.s[(end + 3).min(self.s.len())..];
+                self.s = &self.s[end + 3..];
                 if !text.is_empty() {
                     return Some(Ev::Text(text));
                 }
@@ -987,13 +1003,21 @@ impl<'a> XmlIter<'a> {
 
             // Processing instruction or DOCTYPE
             if self.s.starts_with('?') || self.s.starts_with('!') {
-                let end = self.s.find('>').map(|p| p + 1).unwrap_or(self.s.len());
+                let Some(end) = self.s.find('>').map(|p| p + 1) else {
+                    self.malformed = true;
+                    self.s = "";
+                    return None;
+                };
                 self.s = &self.s[end..];
                 continue;
             }
 
             // Opening / self-closing tag
-            let tag_end = find_tag_close(self.s);
+            let Some(tag_end) = find_tag_close(self.s) else {
+                self.malformed = true;
+                self.s = "";
+                return None;
+            };
             let tag_inner = self.s[..tag_end].trim_end();
             let self_close = tag_inner.ends_with('/');
             let tag_body = if self_close {
@@ -1018,7 +1042,7 @@ impl<'a> XmlIter<'a> {
 }
 
 /// Find the byte position of the unquoted `>` that closes the current tag body.
-fn find_tag_close(s: &str) -> usize {
+fn find_tag_close(s: &str) -> Option<usize> {
     let mut in_quote = false;
     let mut qchar = '"';
     for (i, c) in s.char_indices() {
@@ -1032,12 +1056,12 @@ fn find_tag_close(s: &str) -> usize {
                     in_quote = true;
                     qchar = c;
                 }
-                '>' => return i,
+                '>' => return Some(i),
                 _ => {}
             }
         }
     }
-    s.len()
+    None
 }
 
 /// Parse ` name="value" ...` attribute string.
@@ -1484,6 +1508,9 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
     if depth != 0 {
         return Err(format!("XML document has unclosed elements: {name}"));
     }
+    if iter.malformed {
+        return Err(format!("XML document has malformed syntax: {name}"));
+    }
     if !root_seen {
         return Err(format!("XML document has no root element: {name}"));
     }
@@ -1779,7 +1806,7 @@ fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize
             .unwrap_or(after_lt.len());
         let full_name = after_lt[..name_end].to_string();
         let rest = &after_lt[name_end..];
-        let tag_close_rel = find_tag_close(rest);
+        let tag_close_rel = find_tag_close(rest)?;
         return Some((tag_start, tag_close_rel, full_name));
     }
 }
@@ -6293,6 +6320,23 @@ mod from_bytes_tests {
     fn xml_budget_rejects_a_document_without_a_root() {
         let error = validate_xml_budget("sheet.xml", "   ").unwrap_err();
         assert!(error.contains("no root element"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_unterminated_xml_constructs() {
+        for xml in [
+            "<worksheet><!-- unterminated",
+            "<worksheet><![CDATA[unterminated</worksheet>",
+            "<worksheet></worksheet",
+            "<worksheet>",
+            "<worksheet attr=\"unterminated>",
+        ] {
+            let error = validate_xml_budget("sheet.xml", xml).unwrap_err();
+            assert!(
+                error.contains("malformed") || error.contains("unclosed"),
+                "unexpected error for {xml:?}: {error}"
+            );
+        }
     }
 
     #[test]
