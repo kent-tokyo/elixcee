@@ -76,7 +76,8 @@ Set `timeout_ms=N` to bound how long each `next()` waits for another row.
 `max_rows=N`, `max_columns=N`, and/or `max_pending_bytes=N` to bound pending output.
 
 `Vm(on_msgbox="skip")` is the default. Use `on_msgbox="error"` to make a
-`MsgBox` call raise an error.
+`MsgBox` call raise an error. Set `Vm(timeout_ms=N)` or pass `timeout_ms=N`
+to `run_macro` to bound VBA execution time.
 
 ## Supported VBA and formulas
 

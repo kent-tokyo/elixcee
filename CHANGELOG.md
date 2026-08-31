@@ -2,6 +2,10 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.35.0] - 2026-08-31
+
+- `Vm`/`run_macro`に`timeout_ms`を追加し、PythonからVBA実行期限を設定できるようにしました。
+
 ## [0.34.0] - 2026-08-31
 
 - `open_stream`/`StreamReader`に`timeout_ms`を追加し、次の行を待つ時間を制限できるようにしました。

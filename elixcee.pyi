@@ -81,7 +81,7 @@ class Vm:
     All row/column coordinates are **1-based** (matching VBA's ``Cells(row, col)``).
     """
 
-    def __init__(self, on_msgbox: str = "skip") -> None:
+    def __init__(self, on_msgbox: str = "skip", timeout_ms: int | None = None) -> None:
         """Create a new VM.
 
         Parameters
@@ -89,16 +89,20 @@ class Vm:
         on_msgbox:
             ``"skip"`` (default) silently ignores ``MsgBox`` calls.
             ``"error"`` raises :exc:`RuntimeError` when a ``MsgBox`` is hit.
+        timeout_ms:
+            Optional maximum execution time in milliseconds. Raises
+            :exc:`TimeoutError` when the deadline is exceeded.
         """
         ...
 
     # ── VBA execution ──────────────────────────────────────────────────────────
 
-    def run(self, vba_code: str, macro_name: str) -> None:
+    def run(self, vba_code: str, macro_name: str, timeout_ms: int | None = None) -> None:
         """Parse and execute *macro_name* inside *vba_code*.
 
-        Raises :exc:`SyntaxError` on parse failure, :exc:`RuntimeError` on
-        runtime error.
+        Raises :exc:`SyntaxError` on parse failure, :exc:`TimeoutError` when
+        the deadline is exceeded, or :exc:`RuntimeError` on other runtime
+        errors.
         """
         ...
 
@@ -663,6 +667,7 @@ def run_macro(
     vba_code: str,
     macro_name: str,
     on_msgbox: str = "skip",
+    timeout_ms: int | None = None,
 ) -> dict[tuple[int, int], Any]:
     """Run *macro_name* and return all resulting cells as ``{(row, col): value}``.
 
@@ -674,6 +679,9 @@ def run_macro(
         Name of the Sub to execute.
     on_msgbox:
         ``"skip"`` (default) or ``"error"``.
+    timeout_ms:
+        Optional maximum execution time in milliseconds. Raises
+        :exc:`TimeoutError` when the deadline is exceeded.
     """
     ...
 

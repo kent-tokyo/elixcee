@@ -17,6 +17,8 @@ pub mod vm;
 /// resolve without every call site needing to know it's an external crate.
 pub use elixcee_types as types;
 
+#[cfg(feature = "python")]
+use std::time::{Duration, Instant};
 #[cfg(any(feature = "python", test))]
 use vm::CellContent;
 #[cfg(any(feature = "python", test))]
@@ -524,26 +526,52 @@ mod bulk_range_validation_tests {
 #[pyclass(name = "Vm")]
 pub struct PyVm {
     inner: Vm,
+    timeout_ms: Option<u64>,
+}
+
+#[cfg(feature = "python")]
+fn validate_execution_timeout_ms(timeout_ms: Option<u64>) -> PyResult<()> {
+    if timeout_ms == Some(0) {
+        Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "timeout_ms must be greater than zero",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
 impl PyVm {
     #[new]
-    #[pyo3(signature = (on_msgbox = "skip"))]
-    fn new(on_msgbox: &str) -> PyResult<Self> {
+    #[pyo3(signature = (on_msgbox = "skip", timeout_ms = None))]
+    fn new(on_msgbox: &str, timeout_ms: Option<u64>) -> PyResult<Self> {
+        validate_execution_timeout_ms(timeout_ms)?;
         let mut vm = Vm::new();
         vm.error_on_msgbox = on_msgbox == "error";
-        Ok(PyVm { inner: vm })
+        Ok(PyVm {
+            inner: vm,
+            timeout_ms,
+        })
     }
 
     /// Parse and execute *vba_code*, running the Sub named *macro_name*.
-    fn run(&mut self, vba_code: &str, macro_name: &str) -> PyResult<()> {
+    #[pyo3(signature = (vba_code, macro_name, timeout_ms = None))]
+    fn run(&mut self, vba_code: &str, macro_name: &str, timeout_ms: Option<u64>) -> PyResult<()> {
+        validate_execution_timeout_ms(timeout_ms)?;
         let prog = parser::parse(vba_code)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
-        self.inner
-            .run_sub(&prog, macro_name)
-            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
+        let timeout_ms = timeout_ms.or(self.timeout_ms);
+        self.inner.deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+        let result = self.inner.run_sub(&prog, macro_name).map_err(|err| {
+            if err.starts_with("TIMEOUT:") {
+                PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(err)
+            } else {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err)
+            }
+        });
+        self.inner.deadline = None;
+        result
     }
 
     /// Write a value into a cell. ``row`` and ``col`` are 1-based (VBA convention).
@@ -2867,17 +2895,21 @@ fn grid_to_py(py: Python<'_>, grid: &[Vec<Variant>]) -> PyResult<Py<PyAny>> {
 ///     Name of the Sub to execute.
 /// on_msgbox : str
 ///     ``"skip"`` (default) or ``"error"``.
+/// timeout_ms : int, optional
+///     Maximum execution time in milliseconds. Raises ``TimeoutError`` when
+///     the VM's loop deadline is exceeded.
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (vba_code, macro_name, on_msgbox = "skip"))]
+#[pyo3(signature = (vba_code, macro_name, on_msgbox = "skip", timeout_ms = None))]
 fn run_macro(
     py: Python<'_>,
     vba_code: &str,
     macro_name: &str,
     on_msgbox: &str,
+    timeout_ms: Option<u64>,
 ) -> PyResult<Py<PyAny>> {
-    let mut vm = PyVm::new(on_msgbox)?;
-    vm.run(vba_code, macro_name)?;
+    let mut vm = PyVm::new(on_msgbox, timeout_ms)?;
+    vm.run(vba_code, macro_name, None)?;
     vm.cells(py)
 }
 
@@ -2917,7 +2949,10 @@ fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<P
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     }
 
-    Ok(PyVm { inner: vm })
+    Ok(PyVm {
+        inner: vm,
+        timeout_ms: None,
+    })
 }
 
 #[cfg(feature = "python")]
