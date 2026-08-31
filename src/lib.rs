@@ -599,6 +599,9 @@ impl PyVm {
     /// Write a value into a cell. ``row`` and ``col`` are 1-based (VBA convention).
     fn set_cell(&mut self, row: u32, col: u32, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let v = py_to_variant(value)?;
+        self.inner
+            .check_variant_budget(&v)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         self.inner.cells_mut().insert(
             (row, col),
             CellContent {

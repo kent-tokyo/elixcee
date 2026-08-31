@@ -17,6 +17,10 @@ use crate::reader::{
 pub const DEFAULT_MAX_VBA_INSTRUCTIONS: u64 = 10_000_000;
 /// Default maximum number of nested VBA Sub/Function frames.
 pub const DEFAULT_MAX_VBA_CALL_DEPTH: usize = 256;
+/// Default maximum UTF-8 bytes retained in one VBA string value.
+pub const DEFAULT_MAX_VBA_STRING_BYTES: usize = 16 * 1024 * 1024;
+/// Default maximum number of elements in a VBA/runtime array value.
+pub const DEFAULT_MAX_VBA_ARRAY_ELEMENTS: usize = MAX_ARRAY_ELEMENTS;
 
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
 /// address helpers below are physically defined in `elixcee-types` (Phase
@@ -884,6 +888,12 @@ pub struct Vm {
     /// Maximum nested Sub/Function frames. `Vm::new` sets the safe default;
     /// trusted Rust callers may set `None` explicitly.
     pub max_call_depth: Option<usize>,
+    /// Maximum UTF-8 bytes in one retained VBA string. `None` disables the
+    /// guard for trusted Rust callers.
+    pub max_string_bytes: Option<usize>,
+    /// Maximum elements in one retained VBA/runtime array. `None` disables
+    /// the guard for trusted Rust callers.
+    pub max_array_elements: Option<usize>,
     /// Counts outer-loop iterations across `For`/`ForEach`/`DoLoop` so the
     /// deadline is only actually checked (a real `Instant::now()` call)
     /// every 256th iteration, not every one.
@@ -1206,6 +1216,8 @@ impl Vm {
             max_instructions: Some(DEFAULT_MAX_VBA_INSTRUCTIONS),
             instruction_count: 0,
             max_call_depth: Some(DEFAULT_MAX_VBA_CALL_DEPTH),
+            max_string_bytes: Some(DEFAULT_MAX_VBA_STRING_BYTES),
+            max_array_elements: Some(DEFAULT_MAX_VBA_ARRAY_ELEMENTS),
             loop_iters: 0,
             strict_resolution: false,
             last_resolution_failure: None,
@@ -1333,6 +1345,64 @@ impl Vm {
                 self.call_stack.len() + 1,
                 limit
             ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_variant_budget(&self, value: &Variant) -> Result<(), String> {
+        match value {
+            Variant::Str(s) => {
+                if let Some(limit) = self.max_string_bytes
+                    && s.len() > limit
+                {
+                    return Err(format!(
+                        "BUDGET: VBA string size limit exceeded ({} bytes; maximum is {})",
+                        s.len(),
+                        limit
+                    ));
+                }
+            }
+            Variant::Array(values) => {
+                if let Some(limit) = self.max_array_elements
+                    && values.len() > limit
+                {
+                    return Err(format!(
+                        "BUDGET: VBA array element limit exceeded ({}; maximum is {})",
+                        values.len(),
+                        limit
+                    ));
+                }
+                for value in values {
+                    self.check_variant_budget(value)?;
+                }
+            }
+            Variant::VbaArray(array) => {
+                if let Some(limit) = self.max_array_elements
+                    && array.elements.len() > limit
+                {
+                    return Err(format!(
+                        "BUDGET: VBA array element limit exceeded ({}; maximum is {})",
+                        array.elements.len(),
+                        limit
+                    ));
+                }
+                for value in &array.elements {
+                    self.check_variant_budget(value)?;
+                }
+            }
+            Variant::Record(fields) => {
+                for value in fields.values() {
+                    self.check_variant_budget(value)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn check_variable_budget(&self) -> Result<(), String> {
+        for value in self.variables.values() {
+            self.check_variant_budget(value)?;
         }
         Ok(())
     }
@@ -5495,13 +5565,16 @@ impl Vm {
         }
         self.charge_instruction()?;
         self.current_span = Some(spanned.span);
-        let result = self.exec_stmt_inner(&spanned.stmt);
+        let result = self
+            .exec_stmt_inner(&spanned.stmt)
+            .and_then(|()| self.check_variable_budget());
         match result {
             Ok(()) => Ok(()),
             // `On Error Resume Next` is not honored in strict-resolution
             // mode (`diagnose`) — see the field doc on `strict_resolution`.
             Err(e)
                 if !self.strict_resolution
+                    && !e.starts_with("BUDGET:")
                     && matches!(self.current_error_mode(), Some(ErrorMode::ResumeNext)) =>
             {
                 self.record_error(&e);
@@ -5515,6 +5588,7 @@ impl Vm {
         match stmt {
             Stmt::Assignment { var, value } => {
                 let v = self.eval_expr(value)?;
+                self.check_variant_budget(&v)?;
                 self.variables.insert(var.clone(), v);
             }
             Stmt::CellWrite { row, col, value } => {
@@ -5523,6 +5597,7 @@ impl Vm {
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 let v = self.eval_expr(value)?;
+                self.check_variant_budget(&v)?;
                 self.cells_mut().insert(
                     (r, c),
                     CellContent {
@@ -5820,6 +5895,7 @@ impl Vm {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
                 let v = self.eval_expr(value)?;
+                self.check_variant_budget(&v)?;
                 let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeWrite: invalid address '{}'", addr))?;
@@ -7285,6 +7361,7 @@ impl Vm {
     pub fn set_cell_formula(&mut self, row: u32, col: u32, formula: &str) -> Result<(), String> {
         let expr = formula::parse(formula)?;
         let value = formula::evaluate(&expr, self.cells())?;
+        self.check_variant_budget(&value)?;
         self.cells_mut().insert(
             (row, col),
             CellContent {
@@ -14992,6 +15069,22 @@ mod tests {
         let prog = parser::parse("Sub Main()\n    Call Main()\nEnd Sub\n").unwrap();
         let err = vm.run_sub(&prog, "main").unwrap_err();
         assert!(err.starts_with("BUDGET: VBA call depth"), "{err:?}");
+    }
+
+    #[test]
+    fn value_budgets_stop_oversized_strings_and_arrays() {
+        let mut vm = Vm::new();
+        vm.max_string_bytes = Some(4);
+        let prog = parser::parse("Sub MySub()\n    value = \"hello\"\nEnd Sub\n").unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA string size"), "{err:?}");
+        assert!(!vm.variables.contains_key("value"));
+
+        let mut vm = Vm::new();
+        vm.max_array_elements = Some(1);
+        let prog = parser::parse("Sub MySub()\n    value = Array(1, 2)\nEnd Sub\n").unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA array element"), "{err:?}");
     }
 
     #[test]

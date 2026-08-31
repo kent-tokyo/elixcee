@@ -97,6 +97,10 @@ VBA execution applies a deterministic instruction budget of 10,000,000 statement
 loop iterations per run by default (`DEFAULT_MAX_VBA_INSTRUCTIONS`). It also limits nested
 Sub/Function calls to 256 frames (`DEFAULT_MAX_VBA_CALL_DEPTH`). Trusted Rust callers can
 explicitly set either `Vm::max_instructions` or `Vm::max_call_depth` to `None` to opt out.
+Each retained VBA string is limited to 16 MiB (`DEFAULT_MAX_VBA_STRING_BYTES`), and each
+runtime/VBA array is limited to 10,000,000 elements (`DEFAULT_MAX_VBA_ARRAY_ELEMENTS`).
+These value budgets are checked on VBA assignments and cell writes; budget errors are not
+swallowed by `On Error Resume Next`.
 
 VBA parsing applies these input limits before constructing a program AST:
 
