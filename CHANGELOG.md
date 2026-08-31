@@ -2,6 +2,10 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.41.0] - 2026-08-31
+
+- `Vm.snapshot()`に`sheet_order`を追加し、ワークシートのタブ順を保持できるようにしました。
+
 ## [0.40.0] - 2026-08-31
 
 - `Vm.snapshot(include_formulas=True)`で、セルの計算結果と保存数式を分離して取得できるようにしました。

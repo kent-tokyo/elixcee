@@ -82,6 +82,7 @@ Repeated runs of the same source on one `Vm` reuse its parsed AST.
 Use `vm.fork()` to create an isolated copy for batch execution.
 Use `vm.snapshot()` to obtain a detached read-only view of all sheets.
 Pass `include_formulas=True` to include stored formulas separately from values.
+Snapshots also include the workbook's worksheet tab order.
 Use `diagnose_macro(vba_code, macro_name, workbook_path)` for structured
 diagnostics matching the CLI `diagnose --json` contract.
 

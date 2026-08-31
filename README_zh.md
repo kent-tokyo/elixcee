@@ -68,6 +68,7 @@ VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 可使用 `vm.fork()` 创建用于批处理的独立 VM 副本。
 可使用 `vm.snapshot()` 获取所有工作表的独立只读快照。
 指定 `include_formulas=True` 可单独获取保存的公式，而不与计算结果混合。
+快照还包含工作表的标签顺序。
 可使用 `diagnose_macro(vba_code, macro_name, workbook_path)` 获取与 CLI `diagnose --json` 相同的结构化诊断 JSON。
 
 ## 开发

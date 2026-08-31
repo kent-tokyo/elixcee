@@ -655,6 +655,7 @@ impl PyVm {
         let snapshot = PyDict::new(py);
         snapshot.set_item("schema_version", 1u32)?;
         snapshot.set_item("active_sheet", self.inner.active_sheet.as_str())?;
+        snapshot.set_item("sheet_order", self.inner.sheet_order.clone())?;
 
         let sheets = PyDict::new(py);
         let formulas = include_formulas.then(|| PyDict::new(py));
