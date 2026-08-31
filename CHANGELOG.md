@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.87.0] - 2026-08-31
+
+- 必須属性が欠けたworksheet要素や、自己終了形式でないworksheet要素を通常reader・stream readerで拒否するようにしました。
+- 不完全な`workbook.xml`のsheet要素を黙って無視せず、部分的なWorkbook成功を防ぎます。
+
 ## [0.86.0] - 2026-08-31
 
 - 重複`sheetId`と未知のworksheet `state`値を通常reader・stream readerの双方で拒否するようにしました。

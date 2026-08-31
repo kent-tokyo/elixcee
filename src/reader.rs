@@ -1484,6 +1484,10 @@ pub(crate) fn xlsx_workbook_sheets_for_stream(
     xlsx_workbook_sheets(xml)
 }
 #[cfg(feature = "python")]
+pub(crate) fn validate_workbook_sheet_elements_for_stream(xml: &str) -> Result<(), String> {
+    validate_workbook_sheet_elements(xml)
+}
+#[cfg(feature = "python")]
 pub(crate) fn validate_workbook_sheets_for_stream(
     sheets: &[(String, String, Option<String>, Option<String>)],
 ) -> Result<(), String> {
@@ -2659,6 +2663,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
 ) -> Result<BufferWorkbook, String> {
     validate_zip_archive(&mut archive)?;
     let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
+    validate_workbook_sheet_elements(&wb_xml)?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
     validate_workbook_sheets(&sheet_refs)?;
     validate_workbook_model_count(sheet_refs.len())?;
@@ -2811,6 +2816,27 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>, Optio
         }
     }
     result
+}
+
+fn validate_workbook_sheet_elements(xml: &str) -> Result<(), String> {
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        match ev {
+            Ev::SelfClose(tag, attrs) if tag.split(':').next_back() == Some("sheet") => {
+                if attr_get(&attrs, "name").is_none() {
+                    return Err("worksheet is missing its name attribute".to_string());
+                }
+                if attr_get(&attrs, "id").is_none() {
+                    return Err("worksheet is missing its relationship id".to_string());
+                }
+            }
+            Ev::Open(tag, _) if tag.split(':').next_back() == Some("sheet") => {
+                return Err("worksheet element must be self-closing".to_string());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn validate_workbook_sheets(
@@ -5136,6 +5162,30 @@ mod sheet_id_tests {
         )];
         let error = validate_workbook_sheets(&sheets).unwrap_err();
         assert!(error.contains("invalid worksheet state"));
+    }
+
+    #[test]
+    fn validate_workbook_sheet_elements_rejects_missing_required_attributes() {
+        let error = validate_workbook_sheet_elements(
+            r#"<workbook><sheets><sheet sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("missing its name attribute"));
+
+        let error = validate_workbook_sheet_elements(
+            r#"<workbook><sheets><sheet name="Sheet1" sheetId="1"/></sheets></workbook>"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("missing its relationship id"));
+    }
+
+    #[test]
+    fn validate_workbook_sheet_elements_rejects_non_self_closing_sheets() {
+        let error = validate_workbook_sheet_elements(
+            r#"<workbook><sheets><sheet name="Sheet1" r:id="rId1"></sheet></sheets></workbook>"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("must be self-closing"));
     }
 
     #[test]

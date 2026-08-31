@@ -63,6 +63,7 @@ fn sheet_target(path: &str, requested: Option<&str>) -> Result<(String, Vec<Stri
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     reader::validate_zip_archive_for_stream(&mut archive)?;
     let workbook = reader::zip_read_text_for_stream(&mut archive, "xl/workbook.xml")?;
+    reader::validate_workbook_sheet_elements_for_stream(&workbook)?;
     let refs = reader::xlsx_workbook_sheets_for_stream(&workbook);
     reader::validate_workbook_sheets_for_stream(&refs)?;
     let rels_xml = reader::zip_read_text_for_stream(&mut archive, "xl/_rels/workbook.xml.rels")?;
