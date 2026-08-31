@@ -2616,8 +2616,8 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
 
 /// The body of the XLSX reader, generalized over any `R: Read + Seek` archive source
 /// (a `std::fs::File` for path-based reads, a `Cursor<&[u8]>` for `read_workbook_from_bytes`)
-/// — see `docs/xlsx-architecture.md`'s "reader.rs buffer-API resolution". Pure extraction
-/// from the former `read_xlsx`, no behavior change.
+/// — see `docs/xlsx-architecture.md`'s "reader.rs buffer-API resolution". Shared extraction
+/// from the former `read_xlsx`, preserving errors from malformed present parts.
 fn read_workbook_from_archive<R: Read + Seek>(
     mut archive: ZipArchive<R>,
 ) -> Result<BufferWorkbook, String> {
@@ -2642,9 +2642,11 @@ fn read_workbook_from_archive<R: Read + Seek>(
         vec![]
     };
 
-    let styles = match zip_read_text(&mut archive, "xl/styles.xml") {
-        Ok(xml) => xlsx_styles(&xml),
-        Err(_) => XlsxStyles::default(),
+    let styles = if archive.file_names().any(|name| name == "xl/styles.xml") {
+        let xml = zip_read_text(&mut archive, "xl/styles.xml")?;
+        xlsx_styles(&xml)
+    } else {
+        XlsxStyles::default()
     };
 
     let mut sheets = vec![];
@@ -2657,9 +2659,10 @@ fn read_workbook_from_archive<R: Read + Seek>(
         } else {
             format!("xl/{}", target)
         };
-        let sheet_xml = match zip_read_text(&mut archive, &zip_path) {
-            Ok(s) => s,
-            Err(_) => continue,
+        let sheet_xml = if archive.file_names().any(|name| name == zip_path) {
+            zip_read_text(&mut archive, &zip_path)?
+        } else {
+            continue;
         };
         validate_shared_string_refs(&sheet_xml, &shared)?;
         let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared, &styles.cell_xfs);
@@ -5739,6 +5742,49 @@ mod from_bytes_tests {
     #[test]
     fn read_workbook_from_bytes_rejects_a_non_zip_buffer() {
         assert!(read_workbook_from_bytes(b"not a zip file").is_err());
+    }
+
+    fn minimal_workbook_zip(styles: Option<&[u8]>, sheet: &[u8]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        zip.start_file("xl/workbook.xml", options).unwrap();
+        zip.write_all(
+            br#"<workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        )
+        .unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", options)
+            .unwrap();
+        zip.write_all(
+            br#"<Relationships><Relationship Id="rId1" Type="/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+        )
+        .unwrap();
+        zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+        zip.write_all(sheet).unwrap();
+        if let Some(styles) = styles {
+            zip.start_file("xl/styles.xml", options).unwrap();
+            zip.write_all(styles).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_invalid_utf8_in_present_styles() {
+        let bytes = minimal_workbook_zip(Some(&[0xff]), br#"<worksheet/>"#);
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("invalid styles should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("valid UTF-8"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_invalid_utf8_in_present_worksheet() {
+        let bytes = minimal_workbook_zip(None, &[0xff]);
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("invalid worksheet should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("valid UTF-8"), "unexpected error: {error}");
     }
 
     #[test]

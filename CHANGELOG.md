@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.80.0] - 2026-08-31
+
+- 通常のXLSX readerが、存在する`styles.xml`やworksheet XMLの読み込みエラーを既定値やシート欠落へ変換せず、明示的な入力エラーとして返すようにしました。
+- 欠落している任意partだけは従来どおり互換フォールバックし、部分的なWorkbook成功を防止します。
+
 ## [0.79.0] - 2026-08-31
 
 - 通常のXLSX readerにも共有文字列インデックスの範囲検証を適用し、stream readerとの入力整合性を統一しました。
