@@ -1205,6 +1205,61 @@ fn validate_shared_strings(strings: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(feature = "python", test))]
+fn validate_shared_string_refs(xml: &str, shared: &[String]) -> Result<(), String> {
+    let mut iter = XmlIter::new(xml);
+    let mut cell_type: Option<String> = None;
+    let mut in_value = false;
+    let mut value = String::new();
+
+    while let Some(ev) = iter.next_ev() {
+        let is_self_close = matches!(&ev, Ev::SelfClose(_, _));
+        match &ev {
+            Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                match local {
+                    "c" => {
+                        cell_type = attr_get(attrs, "t").map(str::to_string);
+                    }
+                    "v" => {
+                        in_value = true;
+                        value.clear();
+                        if is_self_close && cell_type.as_deref() == Some("s") {
+                            return Err("shared string cell has an invalid index".to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                match local {
+                    "v" => {
+                        if in_value && cell_type.as_deref() == Some("s") {
+                            let index = value
+                                .trim()
+                                .parse::<usize>()
+                                .ok()
+                                .filter(|&index| index < shared.len());
+                            if index.is_none() {
+                                return Err(
+                                    "shared string cell refers to an invalid index".to_string()
+                                );
+                            }
+                        }
+                        in_value = false;
+                    }
+                    "c" => cell_type = None,
+                    _ => {}
+                }
+            }
+            Ev::Text(text) if in_value => value.push_str(text),
+            Ev::Text(_) => {}
+        }
+    }
+    Ok(())
+}
+
 fn validate_sheet_model(
     sheet_name: &str,
     cell_count: usize,
@@ -1444,6 +1499,13 @@ pub(crate) fn xlsx_shared_strings_for_stream(xml: &str) -> Vec<String> {
 #[cfg(feature = "python")]
 pub(crate) fn validate_shared_strings_for_stream(strings: &[String]) -> Result<(), String> {
     validate_shared_strings(strings)
+}
+#[cfg(feature = "python")]
+pub(crate) fn validate_shared_string_refs_for_stream(
+    xml: &str,
+    shared: &[String],
+) -> Result<(), String> {
+    validate_shared_string_refs(xml, shared)
 }
 
 // ── Raw ZIP passthrough (Milestone: safe round-trip) ───────────────────────────
@@ -5768,5 +5830,15 @@ mod from_bytes_tests {
         let strings = vec![String::new(); SHARED_STRINGS_MAX_COUNT + 1];
         let error = validate_shared_strings(&strings).unwrap_err();
         assert!(error.contains("shared strings table is too large"));
+    }
+
+    #[test]
+    fn shared_string_refs_reject_missing_indices() {
+        let valid = r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#;
+        validate_shared_string_refs(valid, &["ok".to_string()]).unwrap();
+
+        let invalid = r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row></sheetData></worksheet>"#;
+        let error = validate_shared_string_refs(invalid, &["ok".to_string()]).unwrap_err();
+        assert!(error.contains("invalid index"));
     }
 }

@@ -170,6 +170,7 @@ fn parse_stream_row(
 ) -> Result<Option<(u32, Vec<Variant>)>, String> {
     let xml =
         std::str::from_utf8(row_buf).map_err(|_| "worksheet row is not valid UTF-8".to_string())?;
+    reader::validate_shared_string_refs_for_stream(xml, shared)?;
     if wrap_in_sheet_data {
         let wrapped = format!("<worksheet><sheetData>{xml}</sheetData></worksheet>");
         row_from_xml_with_limit(&wrapped, shared, max_columns)
