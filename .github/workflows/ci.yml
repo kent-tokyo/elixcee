@@ -144,6 +144,15 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
+      # Keep the dependency policy in deny.toml executable in CI as well as in
+      # the offline local gate. The version is pinned so a toolchain update does
+      # not silently change license/source interpretation.
+      - name: install cargo-deny
+        run: cargo install cargo-deny --version 0.19.9 --locked
+
+      - name: cargo deny
+        run: cargo deny check
+
   # @elixcee/xlsx (packages/xlsx) and its differential-testing harness
   # (compat/) — previously not wired into CI at all despite every one of
   # these commands already working locally (verified live before adding

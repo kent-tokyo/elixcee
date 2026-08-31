@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.72.0] - 2026-08-31
+
+- CIに固定版`cargo-deny 0.19.9`の依存監査を追加し、advisory、license、source、duplicate dependencyの検査を継続的に実行するようにしました。
+- ローカルの`cargo deny check --disable-fetch`とCIの依存ポリシーを同じ`deny.toml`で検証するようにしました。
+
 ## [0.71.0] - 2026-08-31
 
 - Rustワークスペースのclippy警告を解消し、CIの`-D warnings`を実装コード全体へ適用できる状態にしました。
