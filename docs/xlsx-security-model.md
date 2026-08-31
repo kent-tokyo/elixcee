@@ -185,6 +185,10 @@ matters for the reader's own future threat model.
 
 ## Safe output paths (`save_workbook`, Phase S3)
 
+The writer accepts only `.xlsx`, `.xlsm`, and `.ods` output extensions. Other extensions are
+rejected before any destination or temporary file is created, preventing an XLSX payload from
+being silently written under an unrelated format name.
+
 Before creating an XLSX or ODS output, the writer inspects every existing component of the
 destination with `symlink_metadata`. An existing symbolic link at the file or parent-directory
 level is rejected with a deterministic error instead of being followed, so an in-place or

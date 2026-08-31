@@ -3243,11 +3243,31 @@ fn create_stream(
 }
 
 fn save_workbook_impl(vm: &Vm, path: &str) -> Result<(), String> {
+    validate_output_extension(path)?;
     reject_symlink_output(path)?;
     if path.to_lowercase().ends_with(".ods") {
         return save_ods_impl(vm, path);
     }
     save_xlsx_impl(vm, path)
+}
+
+/// Keep the file-format contract explicit: the writer must not silently emit
+/// an XLSX payload under an unrelated extension.
+fn validate_output_extension(path: &str) -> Result<(), String> {
+    let supported = std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            extension.eq_ignore_ascii_case("xlsx")
+                || extension.eq_ignore_ascii_case("xlsm")
+                || extension.eq_ignore_ascii_case("ods")
+        })
+        .unwrap_or(false);
+    if supported {
+        Ok(())
+    } else {
+        Err("unsupported output extension; use .xlsx, .xlsm, or .ods".to_string())
+    }
 }
 
 /// Refuse to follow an existing symbolic link anywhere in the output path.
@@ -6431,6 +6451,23 @@ mod tests {
         );
         assert_eq!(std::fs::read(&path).expect("read protected output"), b"new");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_workbook_rejects_unsupported_output_extension() {
+        let path = std::env::temp_dir().join(format!(
+            "elixcee_unsupported_output_{}.txt",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let result = save_workbook_impl(&Vm::new(), path.to_str().unwrap());
+
+        assert_eq!(
+            result,
+            Err("unsupported output extension; use .xlsx, .xlsm, or .ods".to_string())
+        );
+        assert!(!path.exists(), "unsupported output must not create a file");
     }
 
     #[test]
