@@ -1361,10 +1361,17 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
     let mut attributes = 0usize;
     let mut depth = 0usize;
     let mut open_tags = Vec::new();
+    let mut root_seen = false;
     let mut iter = XmlIter::new(xml);
     while let Some(event) = iter.next_ev() {
         match event {
             Ev::Open(tag, attrs) => {
+                if depth == 0 && root_seen {
+                    return Err(format!("XML document has multiple root elements: {name}"));
+                }
+                if depth == 0 {
+                    root_seen = true;
+                }
                 elements = elements
                     .checked_add(1)
                     .ok_or_else(|| format!("XML document element count overflows: {name}"))?;
@@ -1407,6 +1414,12 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
                 }
             }
             Ev::SelfClose(tag, attrs) => {
+                if depth == 0 && root_seen {
+                    return Err(format!("XML document has multiple root elements: {name}"));
+                }
+                if depth == 0 {
+                    root_seen = true;
+                }
                 elements = elements
                     .checked_add(1)
                     .ok_or_else(|| format!("XML document element count overflows: {name}"))?;
@@ -1460,11 +1473,19 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
                         XML_MAX_TEXT_NODE_BYTES
                     ));
                 }
+                if depth == 0 && !text.trim().is_empty() {
+                    return Err(format!(
+                        "XML document has non-whitespace text outside the root element: {name}"
+                    ));
+                }
             }
         }
     }
     if depth != 0 {
         return Err(format!("XML document has unclosed elements: {name}"));
+    }
+    if !root_seen {
+        return Err(format!("XML document has no root element: {name}"));
     }
     Ok(())
 }
@@ -6257,6 +6278,21 @@ mod from_bytes_tests {
         let error =
             validate_xml_budget("sheet.xml", "<worksheet><sheetData></worksheet>").unwrap_err();
         assert!(error.contains("mismatched closing tag"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_multiple_roots_and_outside_text() {
+        let error = validate_xml_budget("sheet.xml", "<worksheet/><worksheet/>").unwrap_err();
+        assert!(error.contains("multiple root elements"));
+
+        let error = validate_xml_budget("sheet.xml", "text<worksheet/>").unwrap_err();
+        assert!(error.contains("outside the root element"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_a_document_without_a_root() {
+        let error = validate_xml_budget("sheet.xml", "   ").unwrap_err();
+        assert!(error.contains("no root element"));
     }
 
     #[test]
