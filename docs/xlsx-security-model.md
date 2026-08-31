@@ -10,18 +10,22 @@ object-injection vector, `@elixcee/xlsx` diverges deliberately and the divergenc
 recorded, not hidden. See [`docs/xlsx-compatibility-goal.md`](xlsx-compatibility-goal.md)
 for how this fits the overall compatibility definition.
 
-## Existing limits (0.23.0)
+## Existing limits (0.47.0)
 
 | Limit | Value | Where |
 |---|---|---|
-| Per-ZIP-entry decompressed size | 64 MB | `ZIP_ENTRY_MAX_BYTES`, `src/reader.rs:347` |
+| ZIP entry count | 10,000 entries | `ZIP_MAX_ENTRIES`, `src/reader.rs` |
+| Per-ZIP-entry decompressed size | 256 MiB | `ZIP_ENTRY_MAX_BYTES`, `src/reader.rs` |
+| Total decompressed size | 1 GiB | `ZIP_MAX_TOTAL_BYTES`, `src/reader.rs` |
+| Per-entry compression ratio | 1,000:1 | `ZIP_MAX_COMPRESSION_RATIO`, `src/reader.rs` |
 
-That is the **only** resource limit in the current reader. Explicitly absent today:
+The reader also rejects absolute paths, parent-directory components, and NUL bytes in
+ZIP entry names before any workbook part is consumed. All these checks run for the
+path-based reader, the bytes-based reader, raw passthrough used during save, and the
+streaming reader's shared ZIP path.
 
-- No cap on total decompressed size across all ZIP entries combined (many entries, each
-  individually under 64 MB, is currently unbounded).
-- No cap on ZIP entry count.
-- No compression-ratio cap (classic zip-bomb detection).
+The following XML/model limits remain explicitly absent today:
+
 - No cap on XML element count or attribute count per document.
 - No cap on shared-string count/total length, cell count, merged-range count, sheet
   count, defined-name count, or formula-string length.

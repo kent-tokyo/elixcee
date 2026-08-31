@@ -1152,6 +1152,44 @@ const ZIP_MAX_ENTRIES: usize = 10_000;
 const ZIP_MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 const ZIP_MAX_COMPRESSION_RATIO: u64 = 1_000;
 
+fn validate_zip_entry_metadata(
+    name: &str,
+    uncompressed: u64,
+    compressed: u64,
+    total_before: u64,
+) -> Result<u64, String> {
+    if name.starts_with('/')
+        || name.starts_with('\\')
+        || name.split('/').any(|part| part == "..")
+        || name.contains('\0')
+    {
+        return Err(format!("ZIP entry has an unsafe path: {name}"));
+    }
+    if uncompressed > ZIP_ENTRY_MAX_BYTES {
+        return Err(format!(
+            "ZIP entry is too large: {name} ({} bytes; maximum is {})",
+            uncompressed, ZIP_ENTRY_MAX_BYTES
+        ));
+    }
+    let total_uncompressed = total_before
+        .checked_add(uncompressed)
+        .ok_or_else(|| "ZIP archive uncompressed size overflows u64".to_string())?;
+    if total_uncompressed > ZIP_MAX_TOTAL_BYTES {
+        return Err(format!(
+            "ZIP archive expands beyond the maximum size ({} bytes; maximum is {})",
+            total_uncompressed, ZIP_MAX_TOTAL_BYTES
+        ));
+    }
+    if compressed > 0 && uncompressed / compressed > ZIP_MAX_COMPRESSION_RATIO {
+        return Err(format!(
+            "ZIP entry has an excessive compression ratio: {name} ({}:1; maximum is {}:1)",
+            uncompressed / compressed,
+            ZIP_MAX_COMPRESSION_RATIO
+        ));
+    }
+    Ok(total_uncompressed)
+}
+
 fn validate_zip_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(), String> {
     if archive.len() > ZIP_MAX_ENTRIES {
         return Err(format!(
@@ -1163,38 +1201,12 @@ fn validate_zip_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(
     let mut total_uncompressed = 0u64;
     for i in 0..archive.len() {
         let entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = entry.name();
-        if name.starts_with('/')
-            || name.starts_with('\\')
-            || name.split('/').any(|part| part == "..")
-            || name.contains('\0')
-        {
-            return Err(format!("ZIP entry has an unsafe path: {name}"));
-        }
-        let uncompressed = entry.size();
-        let compressed = entry.compressed_size();
-        if uncompressed > ZIP_ENTRY_MAX_BYTES {
-            return Err(format!(
-                "ZIP entry is too large: {name} ({} bytes; maximum is {})",
-                uncompressed, ZIP_ENTRY_MAX_BYTES
-            ));
-        }
-        total_uncompressed = total_uncompressed
-            .checked_add(uncompressed)
-            .ok_or_else(|| "ZIP archive uncompressed size overflows u64".to_string())?;
-        if total_uncompressed > ZIP_MAX_TOTAL_BYTES {
-            return Err(format!(
-                "ZIP archive expands beyond the maximum size ({} bytes; maximum is {})",
-                total_uncompressed, ZIP_MAX_TOTAL_BYTES
-            ));
-        }
-        if compressed > 0 && uncompressed / compressed > ZIP_MAX_COMPRESSION_RATIO {
-            return Err(format!(
-                "ZIP entry has an excessive compression ratio: {name} ({}:1; maximum is {}:1)",
-                uncompressed / compressed,
-                ZIP_MAX_COMPRESSION_RATIO
-            ));
-        }
+        total_uncompressed = validate_zip_entry_metadata(
+            entry.name(),
+            entry.size(),
+            entry.compressed_size(),
+            total_uncompressed,
+        )?;
     }
     Ok(())
 }
@@ -5402,5 +5414,45 @@ mod from_bytes_tests {
         let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
         let error = validate_zip_archive(&mut archive).unwrap_err();
         assert!(error.contains("unsafe path"));
+    }
+
+    #[test]
+    fn zip_entry_metadata_rejects_each_resource_limit() {
+        let error =
+            validate_zip_entry_metadata("large.xml", ZIP_ENTRY_MAX_BYTES + 1, 1, 0).unwrap_err();
+        assert!(error.contains("too large"));
+
+        let error =
+            validate_zip_entry_metadata("combined.xml", 1, 1, ZIP_MAX_TOTAL_BYTES).unwrap_err();
+        assert!(error.contains("maximum size"));
+
+        let error = validate_zip_entry_metadata("bomb.xml", ZIP_MAX_COMPRESSION_RATIO + 1, 1, 0)
+            .unwrap_err();
+        assert!(error.contains("compression ratio"));
+
+        let error = validate_zip_entry_metadata("/absolute.xml", 1, 1, 0).unwrap_err();
+        assert!(error.contains("unsafe path"));
+    }
+
+    #[test]
+    fn zip_entry_metadata_accepts_limits_without_exceeding_them() {
+        assert_eq!(
+            validate_zip_entry_metadata(
+                "ok.xml",
+                ZIP_ENTRY_MAX_BYTES,
+                ZIP_ENTRY_MAX_BYTES / ZIP_MAX_COMPRESSION_RATIO,
+                0
+            )
+            .unwrap(),
+            ZIP_ENTRY_MAX_BYTES
+        );
+        assert_eq!(
+            validate_zip_entry_metadata("ok.xml", 1, 1, ZIP_MAX_TOTAL_BYTES - 1).unwrap(),
+            ZIP_MAX_TOTAL_BYTES
+        );
+        assert_eq!(
+            validate_zip_entry_metadata("ok.xml", ZIP_MAX_COMPRESSION_RATIO, 1, 0).unwrap(),
+            ZIP_MAX_COMPRESSION_RATIO
+        );
     }
 }

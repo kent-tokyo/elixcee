@@ -2,6 +2,12 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.47.0] - 2026-08-31
+
+- ZIP入力にentry数、entryごとの展開後サイズ、総展開サイズ、圧縮率の上限を適用しました。
+- ZIPエントリ名の絶対パス、親ディレクトリ参照、NUL文字を拒否する回帰テストを追加しました。
+- `docs/xlsx-security-model.md`と`docs/limits.md`を実装済みの入力境界に同期しました。
+
 ## [0.46.0] - 2026-08-31
 
 - `Vm.snapshot()`に`hidden_rows`/`hidden_columns`を追加し、行列の非表示状態を取得できるようにしました。

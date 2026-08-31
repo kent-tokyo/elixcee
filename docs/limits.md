@@ -53,8 +53,18 @@ worksheet needs for these in-memory JS APIs — the number is chosen to reject
 pathologically large ranges specifically, not to constrain normal use. No adjustment from
 the original value.
 
-## `src/reader.rs`: `ZIP_ENTRY_MAX_BYTES`
+## `src/reader.rs`: ZIP archive limits
 
-See [`docs/xlsx-security-model.md`](xlsx-security-model.md#existing-limits-as-of-phase-0)
-— 64 MB per ZIP entry. Sizing rationale not yet written up separately here; this section
-is a placeholder for when that limit's own measurement basis is documented.
+The reader applies four fixed, conservative limits before consuming workbook XML:
+
+| Limit | Value | Constant |
+|---|---:|---|
+| ZIP entry count | 10,000 | `ZIP_MAX_ENTRIES` |
+| Per-entry decompressed size | 256 MiB | `ZIP_ENTRY_MAX_BYTES` |
+| Total decompressed size | 1 GiB | `ZIP_MAX_TOTAL_BYTES` |
+| Per-entry compression ratio | 1,000:1 | `ZIP_MAX_COMPRESSION_RATIO` |
+
+These are build-time safeguards, not claims that arbitrary hostile files are safe. The
+limits are checked from ZIP metadata before part parsing; path traversal is rejected at
+the same boundary. Numeric thresholds are intentionally conservative until the planned
+normal-large-file and malicious-fixture measurements establish a representative corpus.
