@@ -55,7 +55,7 @@ the original value.
 
 ## `src/reader.rs`: ZIP archive limits
 
-The reader applies four fixed, conservative limits before consuming workbook XML:
+The reader applies four fixed, conservative ZIP limits before consuming workbook XML:
 
 | Limit | Value | Constant |
 |---|---:|---|
@@ -64,7 +64,18 @@ The reader applies four fixed, conservative limits before consuming workbook XML
 | Total decompressed size | 1 GiB | `ZIP_MAX_TOTAL_BYTES` |
 | Per-entry compression ratio | 1,000:1 | `ZIP_MAX_COMPRESSION_RATIO` |
 
+After the ZIP checks, every XML part is subject to these document-level limits:
+
+| Limit | Value | Constant |
+|---|---:|---|
+| Elements per document | 1,000,000 | `XML_MAX_ELEMENTS` |
+| Attributes per document | 2,000,000 | `XML_MAX_ATTRIBUTES` |
+| Attribute value length | 16 MiB | `XML_MAX_ATTRIBUTE_VALUE_BYTES` |
+| Text node length | 64 MiB | `XML_MAX_TEXT_NODE_BYTES` |
+| Nesting depth | 1,024 | `XML_MAX_DEPTH` |
+
 These are build-time safeguards, not claims that arbitrary hostile files are safe. The
 limits are checked from ZIP metadata before part parsing; path traversal is rejected at
-the same boundary. Numeric thresholds are intentionally conservative until the planned
-normal-large-file and malicious-fixture measurements establish a representative corpus.
+the same boundary, and DTD/ENTITY declarations are rejected. Numeric thresholds are
+intentionally conservative until the planned normal-large-file and malicious-fixture
+measurements establish a representative corpus.

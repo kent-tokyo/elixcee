@@ -10,7 +10,7 @@ object-injection vector, `@elixcee/xlsx` diverges deliberately and the divergenc
 recorded, not hidden. See [`docs/xlsx-compatibility-goal.md`](xlsx-compatibility-goal.md)
 for how this fits the overall compatibility definition.
 
-## Existing limits (0.47.0)
+## Existing limits (0.48.0)
 
 | Limit | Value | Where |
 |---|---|---|
@@ -18,15 +18,21 @@ for how this fits the overall compatibility definition.
 | Per-ZIP-entry decompressed size | 256 MiB | `ZIP_ENTRY_MAX_BYTES`, `src/reader.rs` |
 | Total decompressed size | 1 GiB | `ZIP_MAX_TOTAL_BYTES`, `src/reader.rs` |
 | Per-entry compression ratio | 1,000:1 | `ZIP_MAX_COMPRESSION_RATIO`, `src/reader.rs` |
+| XML elements per document | 1,000,000 | `XML_MAX_ELEMENTS`, `src/reader.rs` |
+| XML attributes per document | 2,000,000 | `XML_MAX_ATTRIBUTES`, `src/reader.rs` |
+| XML attribute value | 16 MiB | `XML_MAX_ATTRIBUTE_VALUE_BYTES`, `src/reader.rs` |
+| XML text node | 64 MiB | `XML_MAX_TEXT_NODE_BYTES`, `src/reader.rs` |
+| XML nesting depth | 1,024 | `XML_MAX_DEPTH`, `src/reader.rs` |
 
 The reader also rejects absolute paths, parent-directory components, and NUL bytes in
 ZIP entry names before any workbook part is consumed. All these checks run for the
 path-based reader, the bytes-based reader, raw passthrough used during save, and the
 streaming reader's shared ZIP path.
 
-The following XML/model limits remain explicitly absent today:
+The XML reader rejects DTD/ENTITY declarations and incomplete documents before the
+workbook-specific parser consumes them. The following XML/model limits remain explicitly
+absent today:
 
-- No cap on XML element count or attribute count per document.
 - No cap on shared-string count/total length, cell count, merged-range count, sheet
   count, defined-name count, or formula-string length.
 - No wall-clock/parse-time budget on the reader itself (a loop-execution deadline exists

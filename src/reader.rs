@@ -1151,6 +1151,11 @@ const ZIP_ENTRY_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const ZIP_MAX_ENTRIES: usize = 10_000;
 const ZIP_MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 const ZIP_MAX_COMPRESSION_RATIO: u64 = 1_000;
+const XML_MAX_ELEMENTS: usize = 1_000_000;
+const XML_MAX_ATTRIBUTES: usize = 2_000_000;
+const XML_MAX_ATTRIBUTE_VALUE_BYTES: usize = 16 * 1024 * 1024;
+const XML_MAX_TEXT_NODE_BYTES: usize = 64 * 1024 * 1024;
+const XML_MAX_DEPTH: usize = 1_024;
 
 fn validate_zip_entry_metadata(
     name: &str,
@@ -1211,6 +1216,115 @@ fn validate_zip_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(
     Ok(())
 }
 
+fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle)
+            .all(|(actual, expected)| actual.to_ascii_lowercase() == *expected)
+    })
+}
+
+fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
+    let raw = xml.as_bytes();
+    if contains_ascii_case_insensitive(raw, b"<!doctype")
+        || contains_ascii_case_insensitive(raw, b"<!entity")
+    {
+        return Err(format!(
+            "XML document uses a forbidden DTD or entity declaration: {name}"
+        ));
+    }
+
+    let mut elements = 0usize;
+    let mut attributes = 0usize;
+    let mut depth = 0usize;
+    let mut iter = XmlIter::new(xml);
+    while let Some(event) = iter.next_ev() {
+        match event {
+            Ev::Open(_, attrs) => {
+                elements = elements
+                    .checked_add(1)
+                    .ok_or_else(|| format!("XML document element count overflows: {name}"))?;
+                if elements > XML_MAX_ELEMENTS {
+                    return Err(format!(
+                        "XML document has too many elements: {name} (maximum is {})",
+                        XML_MAX_ELEMENTS
+                    ));
+                }
+                depth += 1;
+                if depth > XML_MAX_DEPTH {
+                    return Err(format!(
+                        "XML document is nested too deeply: {name} (maximum is {})",
+                        XML_MAX_DEPTH
+                    ));
+                }
+                for attr in attrs {
+                    attributes = attributes
+                        .checked_add(1)
+                        .ok_or_else(|| format!("XML document attribute count overflows: {name}"))?;
+                    if attributes > XML_MAX_ATTRIBUTES {
+                        return Err(format!(
+                            "XML document has too many attributes: {name} (maximum is {})",
+                            XML_MAX_ATTRIBUTES
+                        ));
+                    }
+                    if attr.value.len() > XML_MAX_ATTRIBUTE_VALUE_BYTES {
+                        return Err(format!(
+                            "XML attribute value is too long: {name} (maximum is {} bytes)",
+                            XML_MAX_ATTRIBUTE_VALUE_BYTES
+                        ));
+                    }
+                }
+            }
+            Ev::SelfClose(_, attrs) => {
+                elements = elements
+                    .checked_add(1)
+                    .ok_or_else(|| format!("XML document element count overflows: {name}"))?;
+                if elements > XML_MAX_ELEMENTS {
+                    return Err(format!(
+                        "XML document has too many elements: {name} (maximum is {})",
+                        XML_MAX_ELEMENTS
+                    ));
+                }
+                for attr in attrs {
+                    attributes = attributes
+                        .checked_add(1)
+                        .ok_or_else(|| format!("XML document attribute count overflows: {name}"))?;
+                    if attributes > XML_MAX_ATTRIBUTES {
+                        return Err(format!(
+                            "XML document has too many attributes: {name} (maximum is {})",
+                            XML_MAX_ATTRIBUTES
+                        ));
+                    }
+                    if attr.value.len() > XML_MAX_ATTRIBUTE_VALUE_BYTES {
+                        return Err(format!(
+                            "XML attribute value is too long: {name} (maximum is {} bytes)",
+                            XML_MAX_ATTRIBUTE_VALUE_BYTES
+                        ));
+                    }
+                }
+            }
+            Ev::Close(_) => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| format!("XML document has an unmatched closing tag: {name}"))?;
+            }
+            Ev::Text(text) => {
+                if text.len() > XML_MAX_TEXT_NODE_BYTES {
+                    return Err(format!(
+                        "XML text node is too long: {name} (maximum is {} bytes)",
+                        XML_MAX_TEXT_NODE_BYTES
+                    ));
+                }
+            }
+        }
+    }
+    if depth != 0 {
+        return Err(format!("XML document has unclosed elements: {name}"));
+    }
+    Ok(())
+}
+
 fn zip_read_text<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     name: &str,
@@ -1224,6 +1338,7 @@ fn zip_read_text<R: Read + Seek>(
         .take(ZIP_ENTRY_MAX_BYTES)
         .read_to_string(&mut s)
         .map_err(|e| e.to_string())?;
+    validate_xml_budget(name, &s)?;
     Ok(s)
 }
 
@@ -5454,5 +5569,28 @@ mod from_bytes_tests {
             validate_zip_entry_metadata("ok.xml", ZIP_MAX_COMPRESSION_RATIO, 1, 0).unwrap(),
             ZIP_MAX_COMPRESSION_RATIO
         );
+    }
+
+    #[test]
+    fn xml_budget_rejects_external_entity_declarations() {
+        let error = validate_xml_budget(
+            "workbook.xml",
+            "<!DOCTYPE workbook [<!ENTITY x SYSTEM 'file:///secret'>]><workbook/>",
+        )
+        .unwrap_err();
+        assert!(error.contains("DTD or entity"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_unclosed_documents() {
+        let error = validate_xml_budget("sheet.xml", "<worksheet><sheetData/>").unwrap_err();
+        assert!(error.contains("unclosed"));
+    }
+
+    #[test]
+    fn xml_budget_accepts_a_normal_document_and_xsd_boolean_literals() {
+        let xml =
+            r#"<?xml version="1.0"?><worksheet><row hidden="true"><c r="A1"/></row></worksheet>"#;
+        validate_xml_budget("sheet.xml", xml).expect("normal XML should stay within the budget");
     }
 }
