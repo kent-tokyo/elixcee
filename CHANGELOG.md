@@ -2,10 +2,17 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.34.0] - 2026-08-31
+
+- `open_stream`/`StreamReader`に`timeout_ms`を追加し、次の行を待つ時間を制限できるようにしました。
+
+## [0.33.0] - 2026-08-31
+
+- `create_stream`/`StreamWriter`に`max_columns`を追加し、各保留行の列数上限を設定できるようにしました。
+
 ## [0.32.0] - 2026-08-31
 
 - `create_stream`/`StreamWriter`に`max_rows`を追加し、保留行数の上限を設定できるようにしました。
-- `create_stream`/`StreamWriter`に`max_columns`を追加し、各保留行の列数上限を設定できるようにしました。
 
 - `open_stream`/`StreamReader`に`max_columns`を追加し、1行の列数上限を入力ごとに設定できるようにしました。
 - `open_stream`/`StreamReader`に`max_row_bytes`を追加し、1行のXMLバッファ上限を入力ごとに設定できるようにしました。

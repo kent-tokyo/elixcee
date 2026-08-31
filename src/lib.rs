@@ -2935,7 +2935,7 @@ pub fn save_workbook(vm: &Vm, path: &str) -> Result<(), String> {
 
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None))]
+#[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None, timeout_ms = None))]
 fn open_stream(
     path: &str,
     sheet: Option<&str>,
@@ -2943,6 +2943,7 @@ fn open_stream(
     max_rows: Option<usize>,
     max_row_bytes: Option<usize>,
     max_columns: Option<usize>,
+    timeout_ms: Option<u64>,
 ) -> PyResult<stream::PyStreamReader> {
     stream::stream_reader_from_path(
         path,
@@ -2951,6 +2952,7 @@ fn open_stream(
         max_rows,
         max_row_bytes,
         max_columns,
+        timeout_ms,
     )
 }
 

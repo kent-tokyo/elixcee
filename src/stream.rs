@@ -8,8 +8,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::{
     Mutex,
-    mpsc::{self, Receiver},
+    mpsc::{self, Receiver, RecvTimeoutError},
 };
+use std::time::Duration;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList};
@@ -276,11 +277,20 @@ fn validate_writer_row_columns(row_len: usize, max_columns: Option<usize>) -> Re
     }
 }
 
+fn validate_timeout_ms(timeout_ms: Option<u64>) -> Result<(), &'static str> {
+    if timeout_ms == Some(0) {
+        Err("timeout_ms must be greater than zero")
+    } else {
+        Ok(())
+    }
+}
+
 #[pyclass(name = "StreamReader")]
 pub struct PyStreamReader {
     receiver: Option<RowReceiver>,
     include_row_numbers: bool,
     max_rows: Option<usize>,
+    timeout_ms: Option<u64>,
     rows_read: usize,
 }
 
@@ -293,11 +303,13 @@ pub(crate) fn stream_reader_from_path(
     max_rows: Option<usize>,
     max_row_bytes: Option<usize>,
     max_columns: Option<usize>,
+    timeout_ms: Option<u64>,
 ) -> PyResult<PyStreamReader> {
     validate_max_rows(max_rows).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     validate_max_row_bytes(max_row_bytes)
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     validate_max_columns(max_columns).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+    validate_timeout_ms(timeout_ms).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     let receiver = stream_rows(
         path.to_string(),
         sheet.map(str::to_string),
@@ -309,6 +321,7 @@ pub(crate) fn stream_reader_from_path(
         receiver: Some(Mutex::new(receiver)),
         include_row_numbers,
         max_rows,
+        timeout_ms,
         rows_read: 0,
     })
 }
@@ -316,7 +329,7 @@ pub(crate) fn stream_reader_from_path(
 #[pymethods]
 impl PyStreamReader {
     #[new]
-    #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None))]
+    #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None, timeout_ms = None))]
     fn new(
         path: &str,
         sheet: Option<&str>,
@@ -324,6 +337,7 @@ impl PyStreamReader {
         max_rows: Option<usize>,
         max_row_bytes: Option<usize>,
         max_columns: Option<usize>,
+        timeout_ms: Option<u64>,
     ) -> PyResult<Self> {
         stream_reader_from_path(
             path,
@@ -332,6 +346,7 @@ impl PyStreamReader {
             max_rows,
             max_row_bytes,
             max_columns,
+            timeout_ms,
         )
     }
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -362,10 +377,13 @@ impl PyStreamReader {
         let Some(receiver) = &self.receiver else {
             return Ok(None);
         };
-        let next = receiver
-            .lock()
-            .expect("stream reader mutex poisoned")
-            .recv();
+        let next = {
+            let receiver = receiver.lock().expect("stream reader mutex poisoned");
+            match self.timeout_ms {
+                Some(timeout_ms) => receiver.recv_timeout(Duration::from_millis(timeout_ms)),
+                None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            }
+        };
         match next {
             Ok(Ok((row_number, row))) => {
                 let values = PyList::new(py, row.iter().map(|v| variant_to_py(py, v)))?
@@ -387,7 +405,13 @@ impl PyStreamReader {
                 }
             }
             Ok(Err(err)) => Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(err)),
-            Err(_) => {
+            Err(RecvTimeoutError::Timeout) => {
+                Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
+                    "stream reader timed out after {} ms",
+                    self.timeout_ms.expect("timeout error requires a timeout")
+                )))
+            }
+            Err(RecvTimeoutError::Disconnected) => {
                 self.receiver = None;
                 Ok(None)
             }
@@ -551,7 +575,7 @@ mod tests {
         MAX_STREAM_ROW_BYTES, MAX_STREAM_WRITER_BYTES, append_row_token, estimated_variant_bytes,
         resolve_xlsx_target, row_from_xml, row_from_xml_with_limit, stream_writer_from_path,
         validate_max_columns, validate_max_row_bytes, validate_max_rows, validate_max_writer_rows,
-        validate_writer_row_columns,
+        validate_timeout_ms, validate_writer_row_columns,
     };
     use crate::Variant;
 
@@ -661,6 +685,12 @@ mod tests {
             validate_writer_row_columns(5, Some(4)).unwrap_err(),
             "stream writer row exceeds the limit of 4 columns"
         );
+    }
+
+    #[test]
+    fn streaming_reader_rejects_a_zero_timeout_before_opening_the_file() {
+        let err = validate_timeout_ms(Some(0)).expect_err("zero timeout must be rejected");
+        assert_eq!(err, "timeout_ms must be greater than zero");
     }
 
     #[test]

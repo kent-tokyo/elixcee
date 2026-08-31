@@ -64,6 +64,7 @@ APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 `include_row_numbers=True`では`(行番号, 値)`を返し、`max_rows=N`で読み取り行数を
 制限できます。`max_row_bytes=N`では1行のXMLバッファ上限も指定できます。
 `max_columns=N`では1行の列数上限も指定できます。
+`timeout_ms=N`では次の行を待つ時間（ミリ秒）を制限できます。
 `create_stream(path)`はXLSX用の追記型writerです。`max_rows=N`や
 `max_columns=N`や`max_pending_bytes=N`も指定して、保留中の出力を制限できます。
 
