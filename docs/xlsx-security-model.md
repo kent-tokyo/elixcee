@@ -183,6 +183,14 @@ whether the dangerous value entered via untrusted file content or a caller-suppl
 unlike the resource-exhaustion divergences above where the file-vs-argument distinction
 matters for the reader's own future threat model.
 
+## Safe input paths (`read_workbook`, Phase S1)
+
+The path-based reader accepts only `.xlsx`, `.xlsm`, and `.ods` (case-insensitive)
+extensions. A missing or unsupported extension is rejected before the file is opened,
+with a deterministic error that does not echo the caller's path. The
+`read_workbook_from_bytes` buffer API remains extension-independent because its input is
+already an in-memory OOXML ZIP buffer.
+
 ## Safe output paths (`save_workbook`, Phase S3)
 
 The writer accepts only `.xlsx`, `.xlsm`, and `.ods` output extensions. Other extensions are

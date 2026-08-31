@@ -818,14 +818,22 @@ pub enum SheetCell {
 }
 
 /// Read a spreadsheet file into sheets. Supports .xlsx, .xlsm, .ods.
+///
+/// The extension is validated before opening the path. This keeps the path-based
+/// API's format boundary explicit and avoids treating an XLSX payload as an
+/// arbitrary input format. Extension matching is case-insensitive.
 pub fn read_workbook(path: &str) -> Result<Vec<WorkbookSheet>, String> {
-    let lower = path.to_lowercase();
-    if lower.ends_with(".ods") {
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str());
+    if extension.is_some_and(|value| value.eq_ignore_ascii_case("ods")) {
         read_ods(path)
-    } else if lower.ends_with(".xlsx") || lower.ends_with(".xlsm") {
+    } else if extension.is_some_and(|value| {
+        value.eq_ignore_ascii_case("xlsx") || value.eq_ignore_ascii_case("xlsm")
+    }) {
         read_xlsx(path)
     } else {
-        Err(format!("unsupported file format: {}", path))
+        Err("unsupported input extension; use .xlsx, .xlsm, or .ods".to_string())
     }
 }
 
@@ -4471,6 +4479,35 @@ mod table_parsing_tests {
         let xml = render_table_xml(&sample_table_def(((1, 1), (1, 1))), 1);
         assert!(!xml.contains("xr:uid"));
         assert!(!xml.contains("xr3:uid"));
+    }
+}
+
+#[cfg(test)]
+mod input_extension_tests {
+    use super::read_workbook;
+
+    #[test]
+    fn read_workbook_rejects_unsupported_extension_before_opening() {
+        let error = match read_workbook("/definitely/not/there.xlsb") {
+            Ok(_) => panic!("unsupported extension should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "unsupported input extension; use .xlsx, .xlsm, or .ods"
+        );
+    }
+
+    #[test]
+    fn read_workbook_rejects_missing_extension_before_opening() {
+        let error = match read_workbook("/definitely/not/there") {
+            Ok(_) => panic!("missing extension should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "unsupported input extension; use .xlsx, .xlsm, or .ods"
+        );
     }
 }
 
