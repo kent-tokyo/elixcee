@@ -2,6 +2,10 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.42.0] - 2026-08-31
+
+- `Vm.snapshot()`に`defined_names`を追加し、名前定義を含むワークブック状態を取得できるようにしました。
+
 ## [0.41.0] - 2026-08-31
 
 - `Vm.snapshot()`に`sheet_order`を追加し、ワークシートのタブ順を保持できるようにしました。
