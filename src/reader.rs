@@ -2913,6 +2913,11 @@ fn xlsx_worksheet_rels(xml: &str) -> Result<HashMap<String, String>, String> {
                     "external worksheet relationship target is not allowed: {target}"
                 ));
             }
+            if map.contains_key(id) {
+                return Err(format!(
+                    "duplicate worksheet relationship id is not allowed: {id}"
+                ));
+            }
             map.insert(id.to_string(), target.to_string());
         }
     }
@@ -5927,6 +5932,16 @@ mod from_bytes_tests {
         let error = xlsx_worksheet_rels(std::str::from_utf8(xml).unwrap()).unwrap_err();
         assert!(
             error.contains("external worksheet relationship target"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn worksheet_relationships_reject_duplicate_ids() {
+        let xml = br#"<Relationships><Relationship Id="rId1" Type="/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId1" Type="/worksheet" Target="worksheets/sheet2.xml"/></Relationships>"#;
+        let error = xlsx_worksheet_rels(std::str::from_utf8(xml).unwrap()).unwrap_err();
+        assert!(
+            error.contains("duplicate worksheet relationship id"),
             "unexpected error: {error}"
         );
     }

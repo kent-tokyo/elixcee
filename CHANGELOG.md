@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.84.0] - 2026-08-31
+
+- worksheet relationshipの重複`Id`を通常reader・stream readerの双方で拒否するようにしました。
+- relationshipの後勝ち解決を廃止し、同じworksheet参照が入力順に依存しないようにしました。
+
 ## [0.83.0] - 2026-08-31
 
 - worksheet relationshipの`TargetMode="External"`を通常reader・stream readerの双方で拒否するようにしました。
