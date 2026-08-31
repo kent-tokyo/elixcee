@@ -565,12 +565,16 @@ impl PyStreamWriter {
             return Ok(());
         }
         let mut vm = crate::vm::Vm::new();
-        self.pending_bytes = 0;
-        for (r, row) in self.rows.drain(..).enumerate() {
-            vm.write_rect("sheet1", ((r + 1) as u32, 1), &[row]);
+        // Keep the pending rows until the output has been saved successfully.
+        // A failed save must be retryable without silently turning the next
+        // attempt into an empty workbook.
+        for (r, row) in self.rows.iter().enumerate() {
+            vm.write_rect("sheet1", ((r + 1) as u32, 1), std::slice::from_ref(row));
         }
         crate::save_workbook(&vm, &self.path)
             .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
+        self.rows.clear();
+        self.pending_bytes = 0;
         self.active = false;
         Ok(())
     }
@@ -688,6 +692,29 @@ mod tests {
         assert!(writer.closed());
         writer.close().unwrap();
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn streaming_writer_preserves_rows_after_a_failed_save() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "elixcee_stream_writer_missing_parent-{}",
+                std::process::id()
+            ))
+            .join("output.xlsx");
+        let mut writer =
+            stream_writer_from_path(path.to_str().unwrap(), Some(1024), Some(3), Some(4)).unwrap();
+        writer.rows.push(vec![Variant::Integer(42)]);
+        writer.pending_bytes = writer.rows[0].iter().fold(0usize, |total, value| {
+            total.saturating_add(estimated_variant_bytes(value))
+        });
+
+        let _error = writer
+            .close()
+            .expect_err("missing parent must make save fail");
+        assert!(!writer.closed());
+        assert_eq!(writer.row_count(), 1);
+        assert!(writer.pending_bytes() > 0);
     }
 
     #[test]
