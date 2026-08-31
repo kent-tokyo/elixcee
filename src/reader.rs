@@ -2,7 +2,7 @@
 // Supports: .xlsx, .xlsm (Office Open XML ZIP), .ods (OpenDocument ZIP).
 // Row/col indices are 1-based, matching the VM's convention.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek};
 use std::str::FromStr;
 
@@ -1484,6 +1484,12 @@ pub(crate) fn xlsx_workbook_sheets_for_stream(
     xlsx_workbook_sheets(xml)
 }
 #[cfg(feature = "python")]
+pub(crate) fn validate_workbook_sheets_for_stream(
+    sheets: &[(String, String, Option<String>, Option<String>)],
+) -> Result<(), String> {
+    validate_workbook_sheets(sheets)
+}
+#[cfg(feature = "python")]
 pub(crate) fn xlsx_worksheet_rels_for_stream(xml: &str) -> Result<HashMap<String, String>, String> {
     xlsx_worksheet_rels(xml)
 }
@@ -2654,6 +2660,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
     validate_zip_archive(&mut archive)?;
     let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
+    validate_workbook_sheets(&sheet_refs)?;
     validate_workbook_model_count(sheet_refs.len())?;
     let date1904 = xlsx_workbook_date1904(&wb_xml);
 
@@ -2804,6 +2811,25 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>, Optio
         }
     }
     result
+}
+
+fn validate_workbook_sheets(
+    sheets: &[(String, String, Option<String>, Option<String>)],
+) -> Result<(), String> {
+    let mut names = HashSet::new();
+    let mut relationship_ids = HashSet::new();
+    for (name, relationship_id, _, _) in sheets {
+        let folded_name = name.to_lowercase();
+        if !names.insert(folded_name) {
+            return Err(format!("duplicate worksheet name is not allowed: {name}"));
+        }
+        if !relationship_ids.insert(relationship_id) {
+            return Err(format!(
+                "duplicate worksheet relationship reference is not allowed: {relationship_id}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Returns `[(name, raw_text)]` in document order, from every
@@ -5046,6 +5072,26 @@ fn ods_make_cell(s: &OdsCellState) -> Option<SheetCell> {
 #[cfg(test)]
 mod sheet_id_tests {
     use super::*;
+
+    #[test]
+    fn validate_workbook_sheets_rejects_case_insensitive_duplicate_names() {
+        let sheets = vec![
+            ("Data".to_string(), "rId1".to_string(), None, None),
+            ("data".to_string(), "rId2".to_string(), None, None),
+        ];
+        let error = validate_workbook_sheets(&sheets).unwrap_err();
+        assert!(error.contains("duplicate worksheet name"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_duplicate_relationship_references() {
+        let sheets = vec![
+            ("Sheet1".to_string(), "rId1".to_string(), None, None),
+            ("Sheet2".to_string(), "rId1".to_string(), None, None),
+        ];
+        let error = validate_workbook_sheets(&sheets).unwrap_err();
+        assert!(error.contains("duplicate worksheet relationship reference"));
+    }
 
     #[test]
     fn xlsx_workbook_sheets_captures_non_contiguous_sheet_ids() {

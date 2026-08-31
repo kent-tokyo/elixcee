@@ -64,6 +64,7 @@ fn sheet_target(path: &str, requested: Option<&str>) -> Result<(String, Vec<Stri
     reader::validate_zip_archive_for_stream(&mut archive)?;
     let workbook = reader::zip_read_text_for_stream(&mut archive, "xl/workbook.xml")?;
     let refs = reader::xlsx_workbook_sheets_for_stream(&workbook);
+    reader::validate_workbook_sheets_for_stream(&refs)?;
     let rels_xml = reader::zip_read_text_for_stream(&mut archive, "xl/_rels/workbook.xml.rels")?;
     let rels = reader::xlsx_worksheet_rels_for_stream(&rels_xml)?;
     let names = refs.iter().map(|r| r.0.clone()).collect::<Vec<_>>();
