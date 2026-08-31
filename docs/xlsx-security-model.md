@@ -37,6 +37,7 @@ for how this fits the overall compatibility definition.
 | VBA/runtime array | 10,000,000 elements | `DEFAULT_MAX_VBA_ARRAY_ELEMENTS`, `src/vm/mod.rs` |
 | VBA materialized cells | 5,000,000 across all sheets | `DEFAULT_MAX_VBA_CELLS`, `src/vm/mod.rs` |
 | Defined names | 100,000 | `DEFINED_NAMES_MAX_COUNT`, `src/reader.rs` |
+| Defined-name formula text | 1 MiB | `DEFINED_NAME_MAX_TEXT_BYTES`, `src/reader.rs` |
 
 Python callers may adjust these VBA budgets with `Vm.set_budgets()`. An omitted argument
 uses its safe default; an explicit `None` opts out of that one limit. New VMs retain the
@@ -58,7 +59,7 @@ The XML reader rejects DTD/ENTITY declarations and incomplete documents before t
 workbook-specific parser consumes them. The following XML/model limits remain explicitly
 absent today:
 
-- No cap on formula-string length beyond the existing XML text-node limit.
+- Formula strings outside defined names remain bounded by the existing XML text-node limit.
 - No wall-clock/parse-time budget on the reader itself (a loop-execution deadline exists
   on `Vm`, but it only governs VBA execution *after* a workbook is already parsed).
 

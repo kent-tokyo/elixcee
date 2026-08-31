@@ -87,6 +87,7 @@ The materialized workbook model also has these limits:
 | Merged ranges per sheet | 1,000,000 | `SHEET_MAX_MERGES` |
 | Shared strings | 1,000,000 entries / 256 MiB | `SHARED_STRINGS_MAX_*` |
 | Defined names | 100,000 | `DEFINED_NAMES_MAX_COUNT` |
+| Defined-name formula text | 1 MiB | `DEFINED_NAME_MAX_TEXT_BYTES` |
 
 Formula parsing applies these limits before exposing an AST to the evaluator or reference
 rewriter:

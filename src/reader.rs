@@ -1170,6 +1170,7 @@ const SHEET_MAX_MERGES: usize = 1_000_000;
 const SHARED_STRINGS_MAX_COUNT: usize = 1_000_000;
 const SHARED_STRINGS_MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
 const DEFINED_NAMES_MAX_COUNT: usize = 100_000;
+const DEFINED_NAME_MAX_TEXT_BYTES: usize = 1024 * 1024;
 
 fn validate_workbook_model_count(sheet_count: usize) -> Result<(), String> {
     if sheet_count > WORKBOOK_MAX_SHEETS {
@@ -2746,6 +2747,12 @@ pub(crate) fn xlsx_defined_names(xml: &str) -> Result<Vec<(String, String)>, Str
             }
             Ev::Text(text) => {
                 if current_name.is_some() {
+                    if current_text.len().saturating_add(text.len()) > DEFINED_NAME_MAX_TEXT_BYTES {
+                        return Err(format!(
+                            "defined-name formula is too large (more than {}; maximum is {})",
+                            DEFINED_NAME_MAX_TEXT_BYTES, DEFINED_NAME_MAX_TEXT_BYTES
+                        ));
+                    }
                     current_text.push_str(text);
                 }
             }
@@ -5025,6 +5032,20 @@ mod defined_names_tests {
         assert_eq!(
             error,
             "defined-name table is too large (more than 100000; maximum is 100000)"
+        );
+    }
+
+    #[test]
+    fn xlsx_defined_names_rejects_an_oversized_formula_text() {
+        let value = "A".repeat(DEFINED_NAME_MAX_TEXT_BYTES + 1);
+        let xml = format!(
+            "<workbook><definedNames><definedName name=\"Huge\">{value}</definedName></definedNames></workbook>"
+        );
+
+        let error = xlsx_defined_names(&xml).unwrap_err();
+        assert_eq!(
+            error,
+            "defined-name formula is too large (more than 1048576; maximum is 1048576)"
         );
     }
 }
