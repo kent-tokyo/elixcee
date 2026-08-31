@@ -167,8 +167,10 @@ HTML-injection-shaped findings, handled three different ways:
    this — no quote character is needed to make a `href` value dangerous, so this is a
    distinct failure mode requiring a distinct fix (a scheme check, not a character
    escaper) and its own registry entry. `packages/xlsx` allow-lists `http(s)`/`mailto`/
-   `tel`/`ftp`/relative/fragment targets (`isSafeHrefTarget`); anything else renders as
-   plain text with no `<a>` wrapper at all, rather than a link to a rejected scheme.
+   `tel`/`ftp`/relative/fragment targets (`isSafeHrefTarget`). Leading/trailing whitespace,
+   ASCII control characters, and backslashes are rejected before those checks so browser URL
+   normalization cannot change the intended scheme or host. Anything else renders as plain text
+   with no `<a>` wrapper at all, rather than a link to a rejected scheme.
    Registered as `sheet_to_html:unsafe_href_scheme`.
 3. **Fixed by default.** `cell.h` is a documented raw-HTML rich-text rendering field,
    but it remains caller-controlled markup. `packages/xlsx` escapes it by default;

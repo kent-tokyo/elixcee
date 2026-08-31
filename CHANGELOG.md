@@ -60,6 +60,11 @@
 - 既定VMでShell、COM/object creation、WScript、ファイル操作相当を実行時にも`SECURITY:`エラーとして拒否するようにしました。
 - `On Error Resume Next`で外部作用の遮断エラーを握り潰せないことを回帰テストで固定しました。
 
+## [0.60.0] - 2026-08-31
+
+- `sheet_to_html`のリンクURL判定で前後空白、制御文字、バックスラッシュを拒否するようにしました。
+- ブラウザのURL正規化によるscheme/host解釈の揺れを避ける回帰テストを追加しました。
+
 ## [0.59.0] - 2026-08-31
 
 - `sheet_to_html`の`cell.h`をデフォルトでescapeし、未信頼値がraw HTMLとして描画されないようにしました。

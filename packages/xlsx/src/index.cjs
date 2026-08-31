@@ -1065,8 +1065,10 @@ function buildHtmlTag(tag, inner, attrs) {
 }
 
 const SAFE_HREF_SCHEME_RE = /^(?:https?|mailto|tel|ftp):/i;
+const HREF_UNSAFE_CHARS_RE = /[\u0000-\u001f\u007f\\]/;
 function isSafeHrefTarget(target) {
   if (typeof target !== 'string' || target === '') return false;
+  if (target.trim() !== target || HREF_UNSAFE_CHARS_RE.test(target)) return false;
   if (target.charAt(0) === '#' || target.charAt(0) === '/') return true;
   if (target.charAt(0) === '.' && (target.charAt(1) === '/' || (target.charAt(1) === '.' && target.charAt(2) === '/'))) return true;
   return SAFE_HREF_SCHEME_RE.test(target);

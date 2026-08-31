@@ -865,6 +865,10 @@ for (const [schemeLabel, target] of [
   assert.ok(!eOut.includes('<a '), `elixcee must not wrap ${schemeLabel} content in an <a> tag at all`);
   assert.ok(eOut.includes('click'), 'the text content itself must still be present, just not as a link');
 }
+for (const target of [' javascript:alert(1)', 'javascript:alert(1) ', 'java\nscript:alert(1)', 'https:\\\\evil.example']) {
+  const out = elixcee.sheet_to_html({ A1: { t: 's', v: 'click', l: { Target: target } }, '!ref': 'A1:A1' });
+  assert.ok(!out.includes('<a '), `ambiguous href must not be linked: ${JSON.stringify(target)}`);
+}
 // Explicit rawHtml opt-in preserves the oracle-compatible rich-text escape hatch.
 htmlCase('cell.h raw HTML passthrough (explicit opt-in)', () => ({ A1: { t: 's', v: 'safe', h: '<img src=x onerror=alert(3)>' }, '!ref': 'A1:A1' }), { rawHtml: true });
 

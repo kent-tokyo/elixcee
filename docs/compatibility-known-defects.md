@@ -142,6 +142,9 @@ Unlike `sheet_to_html`'s attribute-building
 text (e.g. `<b>bold</b>` for a bold run), meant to be inserted as-is. The opt-in preserves
 that feature for callers that have independently established the markup is trusted.
 
+`sheet_to_html` also rejects hyperlink targets with leading/trailing whitespace, ASCII control
+characters, or backslashes to avoid browser URL-normalization ambiguity.
+
 `packages/xlsx` has no file reader yet, so `.h` can only reach `sheet_to_html` via a
 caller explicitly setting it on a cell object — the caller is responsible for only putting
 known-safe HTML there, exactly as a real SheetJS consumer already must be today (this is
