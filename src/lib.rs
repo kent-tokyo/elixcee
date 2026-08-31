@@ -657,6 +657,11 @@ impl PyVm {
         snapshot.set_item("active_sheet", self.inner.active_sheet.as_str())?;
         snapshot.set_item("sheet_order", self.inner.sheet_order.clone())?;
         snapshot.set_item("defined_names", self.inner.named_ranges.clone())?;
+        let calculation_mode = match &self.inner.calc_mode {
+            vm::CalculationMode::Automatic => "automatic",
+            vm::CalculationMode::Manual => "manual",
+        };
+        snapshot.set_item("calculation_mode", calculation_mode)?;
 
         let sheets = PyDict::new(py);
         let formulas = include_formulas.then(|| PyDict::new(py));
