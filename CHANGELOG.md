@@ -2,6 +2,11 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [0.86.0] - 2026-08-31
+
+- 重複`sheetId`と未知のworksheet `state`値を通常reader・stream readerの双方で拒否するようにしました。
+- `visible`、`hidden`、`veryHidden`以外の状態を黙ってvisibleへ変換せず、Workbookメタデータの解釈を明示的に失敗させます。
+
 ## [0.85.0] - 2026-08-31
 
 - Workbook内のworksheet名重複（大文字小文字違いを含む）と`r:id`重複を通常reader・stream readerで拒否するようにしました。

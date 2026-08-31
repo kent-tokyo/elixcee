@@ -2818,7 +2818,8 @@ fn validate_workbook_sheets(
 ) -> Result<(), String> {
     let mut names = HashSet::new();
     let mut relationship_ids = HashSet::new();
-    for (name, relationship_id, _, _) in sheets {
+    let mut sheet_ids = HashSet::new();
+    for (name, relationship_id, sheet_id, state) in sheets {
         let folded_name = name.to_lowercase();
         if !names.insert(folded_name) {
             return Err(format!("duplicate worksheet name is not allowed: {name}"));
@@ -2827,6 +2828,18 @@ fn validate_workbook_sheets(
             return Err(format!(
                 "duplicate worksheet relationship reference is not allowed: {relationship_id}"
             ));
+        }
+        if let Some(sheet_id) = sheet_id
+            && !sheet_ids.insert(sheet_id)
+        {
+            return Err(format!(
+                "duplicate worksheet sheetId is not allowed: {sheet_id}"
+            ));
+        }
+        if let Some(state) = state
+            && !matches!(state.as_str(), "visible" | "hidden" | "veryHidden")
+        {
+            return Err(format!("invalid worksheet state is not allowed: {state}"));
         }
     }
     Ok(())
@@ -5091,6 +5104,38 @@ mod sheet_id_tests {
         ];
         let error = validate_workbook_sheets(&sheets).unwrap_err();
         assert!(error.contains("duplicate worksheet relationship reference"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_duplicate_sheet_ids() {
+        let sheets = vec![
+            (
+                "Sheet1".to_string(),
+                "rId1".to_string(),
+                Some("7".to_string()),
+                None,
+            ),
+            (
+                "Sheet2".to_string(),
+                "rId2".to_string(),
+                Some("7".to_string()),
+                None,
+            ),
+        ];
+        let error = validate_workbook_sheets(&sheets).unwrap_err();
+        assert!(error.contains("duplicate worksheet sheetId"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_unknown_states() {
+        let sheets = vec![(
+            "Sheet1".to_string(),
+            "rId1".to_string(),
+            None,
+            Some("collapsed".to_string()),
+        )];
+        let error = validate_workbook_sheets(&sheets).unwrap_err();
+        assert!(error.contains("invalid worksheet state"));
     }
 
     #[test]
