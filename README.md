@@ -4,7 +4,7 @@ Run and test a practical subset of Excel VBA without Microsoft Excel. The core i
 Rust, with a Python API (PyO3), a standalone CLI, and an experimental
 `@elixcee/xlsx` JavaScript/WASM package.
 
-Current release: **0.28.0**.
+Current release: **1.0.0**.
 
 elixcee is intended for data-processing macros. It is not a replacement for the
 Excel desktop application: UI features such as charts, dialogs, and screen
@@ -116,6 +116,11 @@ The project runs Rust tests, property tests, compatibility fixtures, and
 differential tests for the JavaScript package in CI. Compatibility with Excel's
 VBA execution semantics is not claimed for every macro, and post-save macro
 execution has not been fully validated against desktop Excel.
+
+The v1 support boundaries are documented in
+[docs/v1-support-contract.md](docs/v1-support-contract.md). Version 1.0 is a
+stable contract for the documented data-processing subset and its safe failure
+behavior; it is not a claim of complete Excel or VBA compatibility.
 
 ## Development
 

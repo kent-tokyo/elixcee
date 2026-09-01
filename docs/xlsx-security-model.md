@@ -10,7 +10,7 @@ object-injection vector, `@elixcee/xlsx` diverges deliberately and the divergenc
 recorded, not hidden. See [`docs/xlsx-compatibility-goal.md`](xlsx-compatibility-goal.md)
 for how this fits the overall compatibility definition.
 
-## Existing limits (0.69.0)
+## Existing limits (1.0.0)
 
 | Limit | Value | Where |
 |---|---|---|
