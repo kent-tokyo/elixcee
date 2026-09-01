@@ -971,6 +971,10 @@ impl<'a> XmlIter<'a> {
                 };
                 let name = self.s[..end].trim().to_string();
                 self.s = &self.s[end + 1..];
+                if name.is_empty() {
+                    self.malformed = true;
+                    return None;
+                }
                 return Some(Ev::Close(name));
             }
 
@@ -1032,6 +1036,10 @@ impl<'a> XmlIter<'a> {
                 .unwrap_or(tag_body.len());
             let name = tag_body[..name_end].to_string();
             let attrs = parse_attrs(&tag_body[name_end..]);
+            if name.is_empty() || parse_attrs_strict(&tag_body[name_end..]).is_err() {
+                self.malformed = true;
+                return None;
+            }
 
             if self_close {
                 return Some(Ev::SelfClose(name, attrs));
@@ -1089,6 +1097,44 @@ fn parse_attrs(mut s: &str) -> Vec<Attr> {
         attrs.push(Attr { name, value });
     }
     attrs
+}
+
+/// Validate the attribute grammar without changing the permissive parser used by
+/// the feature-specific readers. The budget pass uses this to ensure malformed
+/// attributes cannot be silently truncated into a partial element.
+fn parse_attrs_strict(mut s: &str) -> Result<(), ()> {
+    loop {
+        s = s.trim_start();
+        if s.is_empty() {
+            return Ok(());
+        }
+        let Some(eq) = s.find('=') else {
+            return Err(());
+        };
+        let name = s[..eq].trim();
+        if name.is_empty()
+            || name
+                .chars()
+                .any(|c| c.is_ascii_whitespace() || c == '<' || c == '>')
+        {
+            return Err(());
+        }
+        s = s[eq + 1..].trim_start();
+        let Some(quote) = s.chars().next() else {
+            return Err(());
+        };
+        if quote != '"' && quote != '\'' {
+            return Err(());
+        }
+        s = &s[1..];
+        let Some(end) = s.find(quote) else {
+            return Err(());
+        };
+        if s[..end].contains('<') {
+            return Err(());
+        }
+        s = &s[end + 1..];
+    }
 }
 
 fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
@@ -6336,6 +6382,20 @@ mod from_bytes_tests {
                 error.contains("malformed") || error.contains("unclosed"),
                 "unexpected error for {xml:?}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn xml_budget_rejects_malformed_tag_names_and_attributes() {
+        for xml in [
+            "<>",
+            "<worksheet missing_value>",
+            "<worksheet value=unquoted/>",
+            "<worksheet value=\"unterminated/>",
+            "<worksheet value=\"bad<value\"/>",
+        ] {
+            let error = validate_xml_budget("sheet.xml", xml).unwrap_err();
+            assert!(error.contains("malformed") || error.contains("unclosed"));
         }
     }
 
