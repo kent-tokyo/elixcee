@@ -55,7 +55,8 @@ ZIP entry names before any workbook part is consumed. All these checks run for t
 path-based reader, the bytes-based reader, raw passthrough used during save, and the
 streaming reader's shared ZIP path.
 
-The XML reader rejects DTD/ENTITY declarations and incomplete documents before the
+The XML reader rejects DTD/ENTITY declarations, forbidden XML 1.0 control characters,
+and incomplete documents before the
 workbook-specific parser consumes them. The following XML/model limits remain explicitly
 absent today:
 

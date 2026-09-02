@@ -1427,6 +1427,14 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
 
 fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
     let raw = xml.as_bytes();
+    if xml
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    {
+        return Err(format!(
+            "XML document contains a forbidden control character: {name}"
+        ));
+    }
     if contains_ascii_case_insensitive(raw, b"<!doctype")
         || contains_ascii_case_insensitive(raw, b"<!entity")
     {
@@ -6418,6 +6426,17 @@ mod from_bytes_tests {
         }
         validate_xml_budget("sheet.xml", "<?xml version=\"1.0\"?><worksheet/>")
             .expect("well-formed processing instructions should remain accepted");
+    }
+
+    #[test]
+    fn xml_budget_rejects_forbidden_control_characters() {
+        for control in ['\0', '\u{1}', '\u{b}', '\u{1f}'] {
+            let xml = format!("<worksheet>value{control}</worksheet>");
+            let error = validate_xml_budget("sheet.xml", &xml).unwrap_err();
+            assert!(error.contains("control character"));
+        }
+        validate_xml_budget("sheet.xml", "<worksheet>\t\n\r</worksheet>")
+            .expect("XML whitespace controls should remain accepted");
     }
 
     #[test]
