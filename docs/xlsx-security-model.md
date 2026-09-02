@@ -22,6 +22,7 @@ for how this fits the overall compatibility definition.
 | XML attributes per document | 2,000,000 | `XML_MAX_ATTRIBUTES`, `src/reader.rs` |
 | XML attribute value | 16 MiB | `XML_MAX_ATTRIBUTE_VALUE_BYTES`, `src/reader.rs` |
 | XML text node | 64 MiB | `XML_MAX_TEXT_NODE_BYTES`, `src/reader.rs` |
+| XML control characters | C0 controls rejected except TAB/LF/CR | `validate_xml_budget`, `src/reader.rs` |
 | XML nesting depth | 1,024 | `XML_MAX_DEPTH`, `src/reader.rs` |
 | Workbook sheets | 4,096 | `WORKBOOK_MAX_SHEETS`, `src/reader.rs` |
 | Cells per sheet | 5,000,000 | `SHEET_MAX_CELLS`, `src/reader.rs` |

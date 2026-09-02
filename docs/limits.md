@@ -76,6 +76,7 @@ After the ZIP checks, every XML part is subject to these document-level limits:
 | Attributes per document | 2,000,000 | `XML_MAX_ATTRIBUTES` |
 | Attribute value length | 16 MiB | `XML_MAX_ATTRIBUTE_VALUE_BYTES` |
 | Text node length | 64 MiB | `XML_MAX_TEXT_NODE_BYTES` |
+| XML control characters | C0 controls rejected except TAB/LF/CR | `validate_xml_budget` |
 | Nesting depth | 1,024 | `XML_MAX_DEPTH` |
 
 The materialized workbook model also has these limits:
