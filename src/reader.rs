@@ -5,11 +5,110 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek};
 use std::str::FromStr;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
 use elixcee_types::ExcelError;
 use zip::ZipArchive;
 
 // ── Public types ──────────────────────────────────────────────────────────────
+
+/// Limits and cancellation controls for a workbook read.
+///
+/// `max_work_units` accounts for every ZIP entry's declared decompressed bytes
+/// plus a fixed per-entry parsing allowance. This is deliberately conservative:
+/// it rejects a combination of many individually legal entries before XML/model
+/// construction begins. `cancellation` is shared with the caller and can be
+/// flipped from another thread while a read is in progress.
+pub const DEFAULT_READ_MAX_WORK_UNITS: u64 = 2 * 1024 * 1024 * 1024;
+
+#[derive(Clone)]
+pub struct ReadOptions {
+    pub max_work_units: Option<u64>,
+    pub timeout_ms: Option<u64>,
+    pub cancellation: Option<Arc<AtomicBool>>,
+}
+
+impl Default for ReadOptions {
+    fn default() -> Self {
+        Self {
+            max_work_units: Some(DEFAULT_READ_MAX_WORK_UNITS),
+            timeout_ms: None,
+            cancellation: None,
+        }
+    }
+}
+
+impl ReadOptions {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_work_units == Some(0) {
+            return Err("max_work_units must be greater than zero".to_string());
+        }
+        if self.timeout_ms == Some(0) {
+            return Err("read timeout_ms must be greater than zero".to_string());
+        }
+        Ok(())
+    }
+}
+
+struct ReadBudget {
+    max_work_units: Option<u64>,
+    deadline: Option<Instant>,
+    cancellation: Option<Arc<AtomicBool>>,
+    consumed: u64,
+}
+
+impl ReadBudget {
+    fn new(options: &ReadOptions) -> Result<Self, String> {
+        options.validate()?;
+        Ok(Self {
+            max_work_units: options.max_work_units,
+            deadline: options
+                .timeout_ms
+                .map(|ms| Instant::now() + Duration::from_millis(ms)),
+            cancellation: options.cancellation.clone(),
+            consumed: 0,
+        })
+    }
+
+    fn check(&self) -> Result<(), String> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err("READER_CANCELED: workbook read was canceled".to_string());
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err("READER_TIMEOUT: workbook read exceeded its deadline".to_string());
+        }
+        Ok(())
+    }
+
+    fn charge(&mut self, bytes: u64, entry_name: &str) -> Result<(), String> {
+        self.check()?;
+        let units = bytes.saturating_add(4096);
+        self.consumed = self
+            .consumed
+            .checked_add(units)
+            .ok_or_else(|| "READER_WORK_BUDGET: work counter overflowed".to_string())?;
+        if let Some(max) = self.max_work_units
+            && self.consumed > max
+        {
+            return Err(format!(
+                "READER_WORK_BUDGET: workbook read exceeded max_work_units at {entry_name} ({} > {max})",
+                self.consumed
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// A 1-based inclusive `((row1,col1),(row2,col2))` rect (Milestone B6c2) —
 /// a private per-module alias, not a shared type, matching this codebase's
@@ -823,15 +922,24 @@ pub enum SheetCell {
 /// API's format boundary explicit and avoids treating an XLSX payload as an
 /// arbitrary input format. Extension matching is case-insensitive.
 pub fn read_workbook(path: &str) -> Result<Vec<WorkbookSheet>, String> {
+    read_workbook_with_options(path, &ReadOptions::default())
+}
+
+/// Read a workbook with explicit resource and cancellation controls.
+pub fn read_workbook_with_options(
+    path: &str,
+    options: &ReadOptions,
+) -> Result<Vec<WorkbookSheet>, String> {
+    ReadBudget::new(options)?.check()?;
     let extension = std::path::Path::new(path)
         .extension()
         .and_then(|value| value.to_str());
     if extension.is_some_and(|value| value.eq_ignore_ascii_case("ods")) {
-        read_ods(path)
+        read_ods(path, options)
     } else if extension.is_some_and(|value| {
         value.eq_ignore_ascii_case("xlsx") || value.eq_ignore_ascii_case("xlsm")
     }) {
-        read_xlsx(path)
+        read_xlsx(path, options)
     } else {
         Err("unsupported input extension; use .xlsx, .xlsm, or .ods".to_string())
     }
@@ -851,8 +959,17 @@ pub fn read_workbook(path: &str) -> Result<Vec<WorkbookSheet>, String> {
 /// one of its other construction sites (`src/vm/mod.rs`'s tests, `src/snapshot.rs`), which
 /// are out of scope this phase.
 pub fn read_workbook_from_bytes(bytes: &[u8]) -> Result<BufferWorkbook, String> {
+    read_workbook_from_bytes_with_options(bytes, &ReadOptions::default())
+}
+
+/// Read an in-memory XLSX/XLSM buffer with explicit resource and cancellation controls.
+pub fn read_workbook_from_bytes_with_options(
+    bytes: &[u8],
+    options: &ReadOptions,
+) -> Result<BufferWorkbook, String> {
+    ReadBudget::new(options)?.check()?;
     let archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
-    read_workbook_from_archive(archive)
+    read_workbook_from_archive(archive, options)
 }
 
 /// The buffer-API-only output of `read_workbook_from_bytes`: per-sheet data plus the two
@@ -1396,6 +1513,15 @@ fn validate_zip_entry_metadata(
 }
 
 fn validate_zip_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(), String> {
+    let mut budget = ReadBudget::new(&ReadOptions::default())?;
+    validate_zip_archive_with_budget(archive, &mut budget)
+}
+
+fn validate_zip_archive_with_budget<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    budget: &mut ReadBudget,
+) -> Result<(), String> {
+    budget.check()?;
     if archive.len() > ZIP_MAX_ENTRIES {
         return Err(format!(
             "ZIP archive has too many entries ({}; maximum is {})",
@@ -1405,7 +1531,9 @@ fn validate_zip_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(
     }
     let mut total_uncompressed = 0u64;
     for i in 0..archive.len() {
+        budget.check()?;
         let entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        budget.charge(entry.size(), entry.name())?;
         total_uncompressed = validate_zip_entry_metadata(
             entry.name(),
             entry.size(),
@@ -2773,13 +2901,13 @@ pub(crate) fn resolve_xlsx_target(target: &str) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
-fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
+fn read_xlsx(path: &str, options: &ReadOptions) -> Result<Vec<WorkbookSheet>, String> {
+    ReadBudget::new(options)?.check()?;
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
-    validate_zip_archive(&mut archive)?;
+    let archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
     // Path-based read_workbook doesn't expose formulas/!ref/style ids (see BufferSheet's
     // doc comment) — discard that half here rather than changing WorkbookSheet itself.
-    Ok(read_workbook_from_archive(archive)?
+    Ok(read_workbook_from_archive(archive, options)?
         .sheets
         .into_iter()
         .map(|bs| bs.sheet)
@@ -2792,9 +2920,13 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
 /// from the former `read_xlsx`, preserving errors from malformed present parts.
 fn read_workbook_from_archive<R: Read + Seek>(
     mut archive: ZipArchive<R>,
+    options: &ReadOptions,
 ) -> Result<BufferWorkbook, String> {
-    validate_zip_archive(&mut archive)?;
+    let mut budget = ReadBudget::new(options)?;
+    validate_zip_archive_with_budget(&mut archive, &mut budget)?;
+    budget.check()?;
     let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
+    budget.check()?;
     validate_workbook_sheet_elements(&wb_xml)?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
     validate_workbook_sheets(&sheet_refs)?;
@@ -2802,6 +2934,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
     let date1904 = xlsx_workbook_date1904(&wb_xml);
 
     let rels_xml = zip_read_text(&mut archive, "xl/_rels/workbook.xml.rels")?;
+    budget.check()?;
     let rels = xlsx_worksheet_rels(&rels_xml)?;
 
     let shared: Vec<String> = if archive
@@ -2809,6 +2942,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
         .any(|name| name == "xl/sharedStrings.xml")
     {
         let xml = zip_read_text(&mut archive, "xl/sharedStrings.xml")?;
+        budget.check()?;
         let strings = xlsx_shared_strings(&xml);
         validate_shared_strings(&strings)?;
         strings
@@ -2818,6 +2952,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
 
     let styles = if archive.file_names().any(|name| name == "xl/styles.xml") {
         let xml = zip_read_text(&mut archive, "xl/styles.xml")?;
+        budget.check()?;
         xlsx_styles(&xml)
     } else {
         XlsxStyles::default()
@@ -2830,7 +2965,9 @@ fn read_workbook_from_archive<R: Read + Seek>(
             .ok_or_else(|| format!("worksheet relationship is missing for {name} ({rid})"))?;
         let zip_path = resolve_xlsx_target(target)?;
         let sheet_xml = if archive.file_names().any(|name| name == zip_path) {
-            zip_read_text(&mut archive, &zip_path)?
+            let xml = zip_read_text(&mut archive, &zip_path)?;
+            budget.check()?;
+            xml
         } else {
             return Err(format!("worksheet part is missing: {zip_path}"));
         };
@@ -2861,6 +2998,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
             && let Ok(sheet_rels_xml) =
                 zip_read_text(&mut archive, &crate::part_rels_name(&zip_path))
         {
+            budget.check()?;
             let table_rels = xlsx_rels(&sheet_rels_xml, "/table");
             let base = crate::rels_target_dir(&crate::part_rels_name(&zip_path)).to_string();
             for rid in &table_rids {
@@ -5065,11 +5203,14 @@ mod data_validation_parsing_tests {
 
 // ── ODS reader ────────────────────────────────────────────────────────────────
 
-fn read_ods(path: &str) -> Result<Vec<WorkbookSheet>, String> {
+fn read_ods(path: &str, options: &ReadOptions) -> Result<Vec<WorkbookSheet>, String> {
+    ReadBudget::new(options)?.check()?;
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
-    validate_zip_archive(&mut archive)?;
+    let mut budget = ReadBudget::new(options)?;
+    validate_zip_archive_with_budget(&mut archive, &mut budget)?;
     let xml = zip_read_text(&mut archive, "content.xml")?;
+    budget.check()?;
     Ok(ods_parse(&xml))
 }
 
@@ -6149,6 +6290,70 @@ mod from_bytes_tests {
     #[test]
     fn read_workbook_from_bytes_rejects_a_non_zip_buffer() {
         assert!(read_workbook_from_bytes(b"not a zip file").is_err());
+    }
+
+    #[test]
+    fn read_options_reject_a_work_budget_before_parsing() {
+        let bytes = minimal_workbook_zip(None, br#"<worksheet/>"#);
+        let options = ReadOptions {
+            max_work_units: Some(1),
+            ..ReadOptions::default()
+        };
+        let error = match read_workbook_from_bytes_with_options(&bytes, &options) {
+            Ok(_) => panic!("work budget should reject before parsing"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("READER_WORK_BUDGET"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn read_options_honor_cancellation_before_parsing() {
+        let bytes = minimal_workbook_zip(None, br#"<worksheet/>"#);
+        let flag = Arc::new(AtomicBool::new(true));
+        let options = ReadOptions {
+            cancellation: Some(flag),
+            ..ReadOptions::default()
+        };
+        let error = match read_workbook_from_bytes_with_options(&bytes, &options) {
+            Ok(_) => panic!("cancellation should reject before parsing"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("READER_CANCELED"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn read_options_validate_timeout_and_budget_values() {
+        let timeout = ReadOptions {
+            timeout_ms: Some(0),
+            ..ReadOptions::default()
+        };
+        assert!(timeout.validate().unwrap_err().contains("timeout_ms"));
+        let budget = ReadOptions {
+            max_work_units: Some(0),
+            ..ReadOptions::default()
+        };
+        assert!(budget.validate().unwrap_err().contains("max_work_units"));
+    }
+
+    #[test]
+    fn read_budget_rejects_an_expired_deadline() {
+        let budget = ReadBudget {
+            max_work_units: None,
+            deadline: Some(Instant::now()),
+            cancellation: None,
+            consumed: 0,
+        };
+        let error = budget.check().unwrap_err();
+        assert!(
+            error.contains("READER_TIMEOUT"),
+            "unexpected error: {error}"
+        );
     }
 
     fn minimal_workbook_zip(styles: Option<&[u8]>, sheet: &[u8]) -> Vec<u8> {

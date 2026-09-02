@@ -18,6 +18,7 @@ for how this fits the overall compatibility definition.
 | Per-ZIP-entry decompressed size | 256 MiB | `ZIP_ENTRY_MAX_BYTES`, `src/reader.rs` |
 | Total decompressed size | 1 GiB | `ZIP_MAX_TOTAL_BYTES`, `src/reader.rs` |
 | Per-entry compression ratio | 1,000:1 | `ZIP_MAX_COMPRESSION_RATIO`, `src/reader.rs` |
+| Overall read work budget | 2 GiB-equivalent units by default; declared entry bytes plus 4 KiB per entry | `DEFAULT_READ_MAX_WORK_UNITS`, `ReadOptions` |
 | XML elements per document | 1,000,000 | `XML_MAX_ELEMENTS`, `src/reader.rs` |
 | XML attributes per document | 2,000,000 | `XML_MAX_ATTRIBUTES`, `src/reader.rs` |
 | XML attribute value | 16 MiB | `XML_MAX_ATTRIBUTE_VALUE_BYTES`, `src/reader.rs` |
@@ -89,16 +90,15 @@ per this project's standing rule against adding resource limits without measurem
 [`docs/limits.md`](limits.md) for the time/RSS measurement behind the 5,000,000-cell
 threshold specifically.
 
-## Remaining planned limits (not yet implemented)
+## Remaining planned limits
 
 | Limit | Rationale | Where it would live |
 |---|---|---|
-| A single overall "work budget" for a read | Backstop against limit combinations that individually pass but compound | Top of `read_workbook`/its buffer-based successor |
-| Reader wall-clock or cancellation budget | Prevents a valid-but-pathologically expensive input from occupying a caller indefinitely | Path and buffer reader entry points |
+| Byte-level reader interruption | Prevents a single large ZIP/XML read from delaying a cooperative stop between part boundaries | The current API checks before/after ZIP entries and parsed parts; the underlying entry read is not interruptible |
 
-These remaining limits need a compatibility review and representative measurements before
-they become default rejection rules. The implemented per-layer limits above remain the
-active safety boundary until that work is completed.
+The implemented work budget and cooperative deadline/cancellation checks need representative
+large-file and malicious-fixture measurements before their defaults are treated as calibrated
+performance guarantees. The per-layer limits above remain the active safety boundary.
 
 ## Prototype-pollution-safe key handling
 

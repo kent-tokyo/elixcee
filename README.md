@@ -61,6 +61,12 @@ print(vm.get_cell(1, 2))       # 20
 vm = elixcee.load_workbook("input.xlsx")
 vm.run(vba_code, "ProcessData")
 vm.save_workbook("output.xlsx")
+
+# Optional reader resource controls (the cancellation check is cooperative).
+cancel = elixcee.ReadCancellation()
+vm = elixcee.load_workbook(
+    "input.xlsx", max_work_units=100_000_000, timeout_ms=30_000, cancellation=cancel
+)
 ```
 
 The Python API also provides formula evaluation, ranges, sorting, merges,

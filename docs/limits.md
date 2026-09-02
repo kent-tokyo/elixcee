@@ -67,6 +67,7 @@ The reader applies four fixed, conservative ZIP limits before consuming workbook
 | Per-entry decompressed size | 256 MiB | `ZIP_ENTRY_MAX_BYTES` |
 | Total decompressed size | 1 GiB | `ZIP_MAX_TOTAL_BYTES` |
 | Per-entry compression ratio | 1,000:1 | `ZIP_MAX_COMPRESSION_RATIO` |
+| Overall read work budget | 2 GiB-equivalent units by default; declared entry bytes plus 4 KiB per entry | `DEFAULT_READ_MAX_WORK_UNITS`, `ReadOptions` |
 
 After the ZIP checks, every XML part is subject to these document-level limits:
 

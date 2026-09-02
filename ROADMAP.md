@@ -51,8 +51,8 @@ openpyxl、LibreOffice、独立したVBA意味論fixtureとの比較基盤があ
    drawing/chart/pivot等が、編集・保存後に失われたり切断されたりする可能性がある。
 2. **全Excel関数・全VBAオブジェクトの互換性はない** — 未対応関数・オブジェクトを
    空値や成功に変換せず、unsupported / warned / rejectedとして診断できる状態が必要。
-3. **reader全体の処理時間予算・キャンセル機構が未実装** — 個別のサイズ上限だけでは、
-   多数の合法なpartや高コストな組み合わせによるCPU消費を防げない。
+3. **readerのbyte単位中断と実測校正が未完了** — 総work budgetと協調的なdeadline/cancellationは
+   APIに実装済みだが、単一の大きなZIP/XML読み込み途中を中断する機構と実測校正は残っている。
 
 ### 解除条件
 
@@ -337,6 +337,7 @@ ClosedXML / Aspose.Cellsを機能の優先順位付けとAPI比較の対象に�
   drawing、freeze pane、hidden stateをpart単位のfixtureで回帰化する。
 - zip bomb、過大XML、過大セル範囲、循環数式などの資源上限を明示する。
 - reader全体にdeadline、cancellation token、総work budgetを通し、CLI/Python/APIから中断できるようにする。
+- [x] Rust/Pythonのreader APIに`max_work_units`、`timeout_ms`、協調キャンセルtokenを提供する（CLIとbyte単位中断は未完了）。
 - キャンセル時は入力・一時ファイル・ZIP/XML parserの状態を確実に解放し、部分Workbookを返さない。
 
 ### `[MEASURE]` 大規模I/Oとメモリ上限

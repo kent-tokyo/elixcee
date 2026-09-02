@@ -18,6 +18,11 @@ pub mod vm;
 pub use elixcee_types as types;
 
 #[cfg(feature = "python")]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+#[cfg(feature = "python")]
 use std::time::{Duration, Instant};
 #[cfg(any(feature = "python", test))]
 use vm::CellContent;
@@ -69,6 +74,35 @@ impl PyExcelError {
     }
     fn __hash__(&self) -> isize {
         self.code.len() as isize
+    }
+}
+
+/// Cooperative cancellation handle for a workbook read.
+#[cfg(feature = "python")]
+#[pyclass(name = "ReadCancellation", from_py_object)]
+#[derive(Clone)]
+pub struct PyReadCancellation {
+    flag: Arc<AtomicBool>,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyReadCancellation {
+    #[new]
+    fn new() -> Self {
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Request cancellation of a workbook read using this handle.
+    fn cancel(&self) {
+        self.flag.store(true, Ordering::Relaxed);
+    }
+
+    #[getter]
+    fn cancelled(&self) -> bool {
+        self.flag.load(Ordering::Relaxed)
     }
 }
 
@@ -3162,12 +3196,34 @@ fn run_macro(
 ///     Sheet name to read. Defaults to the first sheet.
 /// on_msgbox : str, optional
 ///     ``"skip"`` (default) or ``"error"``.
+/// max_work_units : int, optional
+///     Maximum conservative read-work budget. Defaults to 2 GiB-equivalent units.
+/// timeout_ms : int, optional
+///     Maximum workbook-read time in milliseconds.
+/// cancellation : ReadCancellation, optional
+///     Cooperative cancellation handle shared with another thread.
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (path, sheet = None, on_msgbox = "skip"))]
-fn load_workbook(path: &str, sheet: Option<&str>, on_msgbox: &str) -> PyResult<PyVm> {
-    let sheets =
-        reader::read_workbook(path).map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
+#[pyo3(signature = (path, sheet = None, on_msgbox = "skip", max_work_units = None, timeout_ms = None, cancellation = None))]
+#[allow(clippy::too_many_arguments)]
+fn load_workbook(
+    path: &str,
+    sheet: Option<&str>,
+    on_msgbox: &str,
+    max_work_units: Option<u64>,
+    timeout_ms: Option<u64>,
+    cancellation: Option<PyRef<'_, PyReadCancellation>>,
+) -> PyResult<PyVm> {
+    let options = reader::ReadOptions {
+        max_work_units: max_work_units.or(Some(reader::DEFAULT_READ_MAX_WORK_UNITS)),
+        timeout_ms,
+        cancellation: cancellation.map(|value| value.flag.clone()),
+    };
+    options
+        .validate()
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+    let sheets = reader::read_workbook_with_options(path, &options)
+        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
 
     if sheets.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -6228,8 +6284,8 @@ mod elixcee {
     use super::stream::{PyStreamReader, PyStreamWriter};
     #[pymodule_export]
     use super::{
-        PyExcelError, PyVm, create_stream, diagnose_macro, hello, load_workbook, open_stream,
-        run_macro,
+        PyExcelError, PyReadCancellation, PyVm, create_stream, diagnose_macro, hello,
+        load_workbook, open_stream, run_macro,
     };
 }
 

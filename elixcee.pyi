@@ -19,6 +19,12 @@ def open_stream(
 ) -> StreamReader: ...
 def create_stream(path: str, max_pending_bytes: int | None = None, max_rows: int | None = None, max_columns: int | None = None) -> StreamWriter: ...
 
+class ReadCancellation:
+    """Cooperative cancellation handle for a workbook read."""
+    @property
+    def cancelled(self) -> bool: ...
+    def cancel(self) -> None: ...
+
 class StreamReader:
     """Forward-only row reader for XLSX/XLSM worksheets."""
     def __init__(
@@ -705,6 +711,9 @@ def load_workbook(
     path: str,
     sheet: Optional[str] = None,
     on_msgbox: str = "skip",
+    max_work_units: Optional[int] = None,
+    timeout_ms: Optional[int] = None,
+    cancellation: Optional[ReadCancellation] = None,
 ) -> Vm:
     """Load an ``.xlsx``, ``.xlsm``, or ``.ods`` file into a new :class:`Vm`.
 
@@ -719,6 +728,12 @@ def load_workbook(
         Sheet name to set as active.  Defaults to the first sheet.
     on_msgbox:
         ``"skip"`` (default) or ``"error"``.
+    max_work_units:
+        Optional conservative total read-work budget.
+    timeout_ms:
+        Optional maximum workbook-read time in milliseconds.
+    cancellation:
+        Optional :class:`ReadCancellation` handle.
     """
     ...
 
