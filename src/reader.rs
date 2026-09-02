@@ -1005,15 +1005,23 @@ impl<'a> XmlIter<'a> {
                 continue;
             }
 
-            // Processing instruction or DOCTYPE
-            if self.s.starts_with('?') || self.s.starts_with('!') {
-                let Some(end) = self.s.find('>').map(|p| p + 1) else {
+            // Processing instructions must use XML's `?>` terminator. Any other
+            // declaration is rejected: DTD/entity declarations are forbidden,
+            // and silently skipping an unknown `<!...>` construct would turn
+            // malformed input into a partial document.
+            if self.s.starts_with('?') {
+                let Some(end) = self.s.find("?>").map(|p| p + 2) else {
                     self.malformed = true;
                     self.s = "";
                     return None;
                 };
                 self.s = &self.s[end..];
                 continue;
+            }
+            if self.s.starts_with('!') {
+                self.malformed = true;
+                self.s = "";
+                return None;
             }
 
             // Opening / self-closing tag
@@ -1551,11 +1559,11 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
             }
         }
     }
-    if depth != 0 {
-        return Err(format!("XML document has unclosed elements: {name}"));
-    }
     if iter.malformed {
         return Err(format!("XML document has malformed syntax: {name}"));
+    }
+    if depth != 0 {
+        return Err(format!("XML document has unclosed elements: {name}"));
     }
     if !root_seen {
         return Err(format!("XML document has no root element: {name}"));
@@ -6397,6 +6405,19 @@ mod from_bytes_tests {
             let error = validate_xml_budget("sheet.xml", xml).unwrap_err();
             assert!(error.contains("malformed") || error.contains("unclosed"));
         }
+    }
+
+    #[test]
+    fn xml_budget_rejects_unknown_declarations_and_unterminated_processing_instructions() {
+        for xml in [
+            "<!unknown><worksheet/>",
+            "<worksheet><?processing instruction></worksheet>",
+        ] {
+            let error = validate_xml_budget("sheet.xml", xml).unwrap_err();
+            assert!(error.contains("malformed") || error.contains("multiple root"));
+        }
+        validate_xml_budget("sheet.xml", "<?xml version=\"1.0\"?><worksheet/>")
+            .expect("well-formed processing instructions should remain accepted");
     }
 
     #[test]
