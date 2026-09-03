@@ -50,10 +50,22 @@ over any assumption of lossless editing.
 embedded WASM and is intended for bundled applications. The package is kept
 private and is not published yet.
 
+The native Rust and Python readers expose the same cooperative read controls:
+the default total work budget is 2 GiB-equivalent units, Python additionally
+exposes `timeout_ms` and `ReadCancellation`, and the CLI exposes equivalent
+deadline/signal controls. The WASM `readWorkbook(bytes)` export remains
+synchronous and takes only the input buffer; it applies the reader's default
+limits but cannot observe a JavaScript cancellation request during the call.
+Applications that need hard cancellation should run the synchronous call in a
+worker and terminate that worker, treating termination as distinct from the
+reader's cooperative `READER_CANCELED` result.
+
 ## Security boundaries
 
-Workbook files are untrusted input. The reader enforces a 64 MiB decompressed
-size limit per ZIP entry; broader archive and XML budgets remain planned. The
+Workbook files are untrusted input. The reader enforces per-entry, archive-wide,
+XML, and total-work budgets before returning a workbook. The native/Python
+cooperative cancellation boundary is checked at ZIP read chunks and parsed-part
+boundaries; a blocking filesystem call cannot be forcibly interrupted. The
 JavaScript compatibility layer deliberately rejects selected dangerous or
 resource-exhausting inputs even when the reference package accepts them. See
 [xlsx-security-model.md](xlsx-security-model.md).
