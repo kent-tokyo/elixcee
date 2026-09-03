@@ -5056,11 +5056,20 @@ impl Vm {
     /// error unchanged, or `"cannot read '<path>': <reader error>"` for any
     /// other read failure.
     pub fn load_workbook_file(&mut self, path: &str) -> Result<Vec<String>, String> {
+        self.load_workbook_file_with_options(path, &reader::ReadOptions::default())
+    }
+
+    /// Load a workbook using explicit reader resource and cancellation controls.
+    pub fn load_workbook_file_with_options(
+        &mut self,
+        path: &str,
+        options: &reader::ReadOptions,
+    ) -> Result<Vec<String>, String> {
         self.loaded_workbook_name = std::path::Path::new(path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string());
         self.loaded_workbook_path = Some(path.to_string());
-        let sheets = reader::read_workbook(path).map_err(|error| {
+        let sheets = reader::read_workbook_with_options(path, options).map_err(|error| {
             if error == "unsupported input extension; use .xlsx, .xlsm, or .ods" {
                 error
             } else {

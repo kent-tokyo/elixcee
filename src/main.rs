@@ -15,6 +15,63 @@ use elixcee::{
     vm::{Variant, Vm, serial_to_display},
 };
 
+static CLI_SIGNAL_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn signal(signal: i32, handler: usize) -> usize;
+}
+
+#[cfg(unix)]
+extern "C" fn handle_cli_signal(_: i32) {
+    CLI_SIGNAL_CANCELLED.store(true, Ordering::Relaxed);
+}
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn SetConsoleCtrlHandler(
+        handler: Option<unsafe extern "system" fn(u32) -> i32>,
+        add: i32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn handle_cli_signal(_: u32) -> i32 {
+    CLI_SIGNAL_CANCELLED.store(true, Ordering::Relaxed);
+    1
+}
+
+fn install_cli_signal_handlers() {
+    #[cfg(unix)]
+    unsafe {
+        signal(2, handle_cli_signal as *const () as usize);
+        signal(15, handle_cli_signal as *const () as usize);
+    }
+    #[cfg(windows)]
+    unsafe {
+        SetConsoleCtrlHandler(Some(handle_cli_signal), 1);
+    }
+}
+
+fn start_cli_cancellation_watcher(
+    cancel_file: Option<String>,
+    cancellation: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let file_cancelled = cancel_file
+                .as_deref()
+                .is_some_and(|path| std::path::Path::new(path).exists());
+            if CLI_SIGNAL_CANCELLED.load(Ordering::Relaxed) || file_cancelled {
+                cancellation.store(true, Ordering::Relaxed);
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    })
+}
+
 fn usage() -> ! {
     eprintln!(
         "Usage: elixcee <vba_file>... <MacroName> [OPTIONS]\n\
@@ -386,29 +443,19 @@ fn run_snapshot_command(args: &[String]) -> ! {
 
     let cancellation = Arc::new(AtomicBool::new(false));
     let watcher_stop = Arc::new(AtomicBool::new(false));
-    let watcher = cancel_file.map(|path| {
-        let cancellation = Arc::clone(&cancellation);
-        let watcher_stop = Arc::clone(&watcher_stop);
-        thread::spawn(move || {
-            while !watcher_stop.load(Ordering::Relaxed) {
-                if std::path::Path::new(&path).exists() {
-                    cancellation.store(true, Ordering::Relaxed);
-                    break;
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-        })
-    });
+    let watcher = start_cli_cancellation_watcher(
+        cancel_file,
+        Arc::clone(&cancellation),
+        watcher_stop.clone(),
+    );
     let options = reader::ReadOptions {
         max_work_units: max_work_units.or(Some(reader::DEFAULT_READ_MAX_WORK_UNITS)),
         timeout_ms,
-        cancellation: watcher.as_ref().map(|_| Arc::clone(&cancellation)),
+        cancellation: Some(Arc::clone(&cancellation)),
     };
     let read_result = reader::read_workbook_with_options(&path, &options);
     watcher_stop.store(true, Ordering::Relaxed);
-    if let Some(watcher) = watcher {
-        let _ = watcher.join();
-    }
+    let _ = watcher.join();
     match read_result {
         Ok(sheets) => {
             if json {
@@ -876,6 +923,7 @@ fn messages_to_json(messages: &[String]) -> String {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    install_cli_signal_handlers();
 
     if matches!(
         args.get(1).map(String::as_str),
@@ -958,11 +1006,21 @@ fn main() {
     let mut vm = Vm::new();
     vm.print_msgbox = !json;
 
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let watcher_stop = Arc::new(AtomicBool::new(false));
+    let watcher =
+        start_cli_cancellation_watcher(None, Arc::clone(&cancellation), watcher_stop.clone());
+    let read_options = reader::ReadOptions {
+        max_work_units: Some(reader::DEFAULT_READ_MAX_WORK_UNITS),
+        timeout_ms: None,
+        cancellation: Some(cancellation),
+    };
+
     // Load spreadsheet data if provided
     if let Some(ref path) = xlsx_file {
         // load_workbook_file already sets the active sheet to the first one
         // loaded; only override it if --sheet was explicitly given.
-        match vm.load_workbook_file(path) {
+        match vm.load_workbook_file_with_options(path, &read_options) {
             Ok(_) => {}
             Err(e) if e == "workbook has no sheets" => {
                 if json {
@@ -997,6 +1055,8 @@ fn main() {
             die(&e)
         }
     }
+    watcher_stop.store(true, Ordering::Relaxed);
+    let _ = watcher.join();
 
     let start = std::time::Instant::now();
     let run_result = if modules.len() == 1 {
