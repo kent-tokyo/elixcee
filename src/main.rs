@@ -30,7 +30,7 @@ fn usage() -> ! {
          \x20   Static analysis — parse + optional entrypoint check + interactive-call\n\
          \x20   detection, without executing the macro. All positional arguments\n\
          \x20   are files; the entrypoint (if any) is always given via --entry.\n\
-           elixcee snapshot <file> [--json]\n\
+           elixcee snapshot <file> [--json] [--max-work-units <N>] [--timeout-ms <N>]\n\
          \x20   Reads a .xlsx/.ods file directly (no VBA execution) and prints every\n\
          \x20   sheet's non-empty cells — Markdown by default, JSON with --json.\n\
            elixcee test-workbook <fixture.toml> [--json] [--seed <N>] [--case <N>]\n\
@@ -329,18 +329,49 @@ fn run_check_command(args: &[String]) -> ! {
 fn run_snapshot_command(args: &[String]) -> ! {
     let mut path: Option<String> = None;
     let mut json = false;
+    let mut max_work_units = None;
+    let mut timeout_ms = None;
 
-    for arg in args {
-        match arg.as_str() {
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
             "--json" => json = true,
+            "--max-work-units" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .unwrap_or_else(|| die("--max-work-units requires a positive integer"));
+                max_work_units = Some(
+                    value
+                        .parse::<u64>()
+                        .unwrap_or_else(|_| die("--max-work-units requires a positive integer")),
+                );
+            }
+            "--timeout-ms" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .unwrap_or_else(|| die("--timeout-ms requires a positive integer"));
+                timeout_ms = Some(
+                    value
+                        .parse::<u64>()
+                        .unwrap_or_else(|_| die("--timeout-ms requires a positive integer")),
+                );
+            }
             a if a.starts_with('-') => die(&format!("unknown option: {}", a)),
-            _ if path.is_none() => path = Some(arg.clone()),
+            _ if path.is_none() => path = Some(args[index].clone()),
             _ => die("snapshot takes exactly one file"),
         }
+        index += 1;
     }
     let Some(path) = path else { usage() };
 
-    match reader::read_workbook(&path) {
+    let options = reader::ReadOptions {
+        max_work_units,
+        timeout_ms,
+        ..reader::ReadOptions::default()
+    };
+    match reader::read_workbook_with_options(&path, &options) {
         Ok(sheets) => {
             if json {
                 println!("{}", snapshot::to_json(&path, &sheets));

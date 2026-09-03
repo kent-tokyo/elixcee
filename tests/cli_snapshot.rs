@@ -197,3 +197,31 @@ fn snapshot_of_an_unsupported_extension_is_an_io_error() {
     assert!(!ok, "{:?}", v);
     assert_eq!(v["error"]["code"], "E3001");
 }
+
+#[test]
+fn snapshot_applies_the_reader_work_budget() {
+    let path = build_workbook_fixture(
+        "Sub Main()\n    Cells(1, 1).Value = 42\nEnd Sub\n",
+        "budget",
+        "xlsx",
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_elixcee"))
+        .args([
+            "snapshot",
+            path.to_str().unwrap(),
+            "--json",
+            "--max-work-units",
+            "1",
+        ])
+        .output()
+        .expect("run elixcee binary");
+    assert!(!output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("JSON error output");
+    assert_eq!(value["ok"], false);
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("READER_WORK_BUDGET")
+    );
+}

@@ -337,7 +337,7 @@ ClosedXML / Aspose.Cellsを機能の優先順位付けとAPI比較の対象に�
   drawing、freeze pane、hidden stateをpart単位のfixtureで回帰化する。
 - zip bomb、過大XML、過大セル範囲、循環数式などの資源上限を明示する。
 - reader全体にdeadline、cancellation token、総work budgetを通し、CLI/Python/APIから中断できるようにする。
-- [x] Rust/Pythonのreader APIに`max_work_units`、`timeout_ms`、協調キャンセルtokenを提供する（CLIとbyte単位中断は未完了）。
+- [x] Rust/Pythonのreader APIに`max_work_units`、`timeout_ms`、協調キャンセルtokenを提供し、CLI snapshotからbudget/deadlineを指定できるようにする（CLIの協調キャンセルとbyte単位中断は未完了）。
 - キャンセル時は入力・一時ファイル・ZIP/XML parserの状態を確実に解放し、部分Workbookを返さない。
 
 ### `[MEASURE]` 大規模I/Oとメモリ上限
