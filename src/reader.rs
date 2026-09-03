@@ -1707,6 +1707,7 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "python")]
 fn zip_read_text<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     name: &str,
@@ -1720,6 +1721,43 @@ fn zip_read_text<R: Read + Seek>(
         .take(ZIP_ENTRY_MAX_BYTES)
         .read_to_string(&mut s)
         .map_err(|e| e.to_string())?;
+    validate_xml_budget(name, &s)?;
+    Ok(s)
+}
+
+/// Read wrapper that makes a ZIP entry's decompression loop interruptible at
+/// the underlying reader's byte/chunk boundary. ZIP itself cannot abort a
+/// blocking filesystem read, but every subsequent read observes the shared
+/// deadline and cancellation flag before and after decompression.
+struct BudgetedRead<'a, R> {
+    inner: R,
+    budget: &'a ReadBudget,
+}
+
+impl<R: Read> Read for BudgetedRead<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.budget.check().map_err(std::io::Error::other)?;
+        let read = self.inner.read(buffer)?;
+        self.budget.check().map_err(std::io::Error::other)?;
+        Ok(read)
+    }
+}
+
+fn zip_read_text_with_budget<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    budget: &ReadBudget,
+) -> Result<String, String> {
+    let entry = archive
+        .by_name(name)
+        .map_err(|e| format!("{}: {}", name, e))?;
+    let mut s = String::new();
+    BudgetedRead {
+        inner: entry.take(ZIP_ENTRY_MAX_BYTES),
+        budget,
+    }
+    .read_to_string(&mut s)
+    .map_err(|e| e.to_string())?;
     validate_xml_budget(name, &s)?;
     Ok(s)
 }
@@ -2925,7 +2963,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
     let mut budget = ReadBudget::new(options)?;
     validate_zip_archive_with_budget(&mut archive, &mut budget)?;
     budget.check()?;
-    let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
+    let wb_xml = zip_read_text_with_budget(&mut archive, "xl/workbook.xml", &budget)?;
     budget.check()?;
     validate_workbook_sheet_elements(&wb_xml)?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
@@ -2933,7 +2971,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
     validate_workbook_model_count(sheet_refs.len())?;
     let date1904 = xlsx_workbook_date1904(&wb_xml);
 
-    let rels_xml = zip_read_text(&mut archive, "xl/_rels/workbook.xml.rels")?;
+    let rels_xml = zip_read_text_with_budget(&mut archive, "xl/_rels/workbook.xml.rels", &budget)?;
     budget.check()?;
     let rels = xlsx_worksheet_rels(&rels_xml)?;
 
@@ -2941,7 +2979,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
         .file_names()
         .any(|name| name == "xl/sharedStrings.xml")
     {
-        let xml = zip_read_text(&mut archive, "xl/sharedStrings.xml")?;
+        let xml = zip_read_text_with_budget(&mut archive, "xl/sharedStrings.xml", &budget)?;
         budget.check()?;
         let strings = xlsx_shared_strings(&xml);
         validate_shared_strings(&strings)?;
@@ -2951,7 +2989,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
     };
 
     let styles = if archive.file_names().any(|name| name == "xl/styles.xml") {
-        let xml = zip_read_text(&mut archive, "xl/styles.xml")?;
+        let xml = zip_read_text_with_budget(&mut archive, "xl/styles.xml", &budget)?;
         budget.check()?;
         xlsx_styles(&xml)
     } else {
@@ -2965,7 +3003,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
             .ok_or_else(|| format!("worksheet relationship is missing for {name} ({rid})"))?;
         let zip_path = resolve_xlsx_target(target)?;
         let sheet_xml = if archive.file_names().any(|name| name == zip_path) {
-            let xml = zip_read_text(&mut archive, &zip_path)?;
+            let xml = zip_read_text_with_budget(&mut archive, &zip_path, &budget)?;
             budget.check()?;
             xml
         } else {
@@ -2996,7 +3034,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
         let table_rids = xlsx_table_part_rids(&sheet_xml);
         if !table_rids.is_empty()
             && let Ok(sheet_rels_xml) =
-                zip_read_text(&mut archive, &crate::part_rels_name(&zip_path))
+                zip_read_text_with_budget(&mut archive, &crate::part_rels_name(&zip_path), &budget)
         {
             budget.check()?;
             let table_rels = xlsx_rels(&sheet_rels_xml, "/table");
@@ -3006,7 +3044,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
                     continue;
                 };
                 let resolved = crate::normalize_part_path(&format!("{base}{target}"));
-                if let Ok(table_xml) = zip_read_text(&mut archive, &resolved)
+                if let Ok(table_xml) = zip_read_text_with_budget(&mut archive, &resolved, &budget)
                     && let Some(mut t) = parse_table_xml(&table_xml)
                 {
                     t.source_part = resolved;
@@ -5209,7 +5247,7 @@ fn read_ods(path: &str, options: &ReadOptions) -> Result<Vec<WorkbookSheet>, Str
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
     let mut budget = ReadBudget::new(options)?;
     validate_zip_archive_with_budget(&mut archive, &mut budget)?;
-    let xml = zip_read_text(&mut archive, "content.xml")?;
+    let xml = zip_read_text_with_budget(&mut archive, "content.xml", &budget)?;
     budget.check()?;
     Ok(ods_parse(&xml))
 }
@@ -6354,6 +6392,45 @@ mod from_bytes_tests {
             error.contains("READER_TIMEOUT"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn budgeted_entry_read_honors_cancellation_between_chunks() {
+        struct CancelAfterOneRead {
+            reads: usize,
+            cancellation: Arc<AtomicBool>,
+        }
+
+        impl Read for CancelAfterOneRead {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.reads == 0 {
+                    self.reads += 1;
+                    buffer[0] = b'a';
+                    self.cancellation.store(true, Ordering::Relaxed);
+                    Ok(1)
+                } else {
+                    Ok(0)
+                }
+            }
+        }
+
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let budget = ReadBudget {
+            max_work_units: None,
+            deadline: None,
+            cancellation: Some(Arc::clone(&cancellation)),
+            consumed: 0,
+        };
+        let mut reader = BudgetedRead {
+            inner: CancelAfterOneRead {
+                reads: 0,
+                cancellation,
+            },
+            budget: &budget,
+        };
+        let mut output = String::new();
+        let error = reader.read_to_string(&mut output).unwrap_err();
+        assert!(error.to_string().contains("READER_CANCELED"));
     }
 
     fn minimal_workbook_zip(styles: Option<&[u8]>, sheet: &[u8]) -> Vec<u8> {

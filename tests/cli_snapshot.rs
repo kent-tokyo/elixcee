@@ -225,3 +225,34 @@ fn snapshot_applies_the_reader_work_budget() {
             .contains("READER_WORK_BUDGET")
     );
 }
+
+#[test]
+fn snapshot_honors_a_preexisting_cancel_file() {
+    let path = build_workbook_fixture(
+        "Sub Main()\n    Cells(1, 1).Value = 42\nEnd Sub\n",
+        "cancel",
+        "xlsx",
+    );
+    let cancel_file = std::env::temp_dir().join("elixcee_cli_snapshot_cancel.flag");
+    fs::write(&cancel_file, "cancel").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_elixcee"))
+        .args([
+            "snapshot",
+            path.to_str().unwrap(),
+            "--json",
+            "--cancel-file",
+            cancel_file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run elixcee binary");
+    let _ = fs::remove_file(&cancel_file);
+    assert!(!output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("JSON error output");
+    assert_eq!(value["ok"], false);
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("READER_CANCELED")
+    );
+}

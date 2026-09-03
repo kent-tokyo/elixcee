@@ -1,4 +1,12 @@
-use std::{env, fs, process};
+use std::{
+    env, fs, process,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 use elixcee::{
     check, diagnose, diagnoseworkbook,
@@ -31,6 +39,7 @@ fn usage() -> ! {
          \x20   detection, without executing the macro. All positional arguments\n\
          \x20   are files; the entrypoint (if any) is always given via --entry.\n\
            elixcee snapshot <file> [--json] [--max-work-units <N>] [--timeout-ms <N>]\n\
+         \x20   [--cancel-file <path>]\n\
          \x20   Reads a .xlsx/.ods file directly (no VBA execution) and prints every\n\
          \x20   sheet's non-empty cells — Markdown by default, JSON with --json.\n\
            elixcee test-workbook <fixture.toml> [--json] [--seed <N>] [--case <N>]\n\
@@ -331,6 +340,7 @@ fn run_snapshot_command(args: &[String]) -> ! {
     let mut json = false;
     let mut max_work_units = None;
     let mut timeout_ms = None;
+    let mut cancel_file = None;
 
     let mut index = 0;
     while index < args.len() {
@@ -358,6 +368,14 @@ fn run_snapshot_command(args: &[String]) -> ! {
                         .unwrap_or_else(|_| die("--timeout-ms requires a positive integer")),
                 );
             }
+            "--cancel-file" => {
+                index += 1;
+                cancel_file = Some(
+                    args.get(index)
+                        .unwrap_or_else(|| die("--cancel-file requires a path"))
+                        .clone(),
+                );
+            }
             a if a.starts_with('-') => die(&format!("unknown option: {}", a)),
             _ if path.is_none() => path = Some(args[index].clone()),
             _ => die("snapshot takes exactly one file"),
@@ -366,12 +384,32 @@ fn run_snapshot_command(args: &[String]) -> ! {
     }
     let Some(path) = path else { usage() };
 
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let watcher_stop = Arc::new(AtomicBool::new(false));
+    let watcher = cancel_file.map(|path| {
+        let cancellation = Arc::clone(&cancellation);
+        let watcher_stop = Arc::clone(&watcher_stop);
+        thread::spawn(move || {
+            while !watcher_stop.load(Ordering::Relaxed) {
+                if std::path::Path::new(&path).exists() {
+                    cancellation.store(true, Ordering::Relaxed);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+        })
+    });
     let options = reader::ReadOptions {
-        max_work_units,
+        max_work_units: max_work_units.or(Some(reader::DEFAULT_READ_MAX_WORK_UNITS)),
         timeout_ms,
-        ..reader::ReadOptions::default()
+        cancellation: watcher.as_ref().map(|_| Arc::clone(&cancellation)),
     };
-    match reader::read_workbook_with_options(&path, &options) {
+    let read_result = reader::read_workbook_with_options(&path, &options);
+    watcher_stop.store(true, Ordering::Relaxed);
+    if let Some(watcher) = watcher {
+        let _ = watcher.join();
+    }
+    match read_result {
         Ok(sheets) => {
             if json {
                 println!("{}", snapshot::to_json(&path, &sheets));

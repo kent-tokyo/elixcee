@@ -84,6 +84,11 @@ Set `timeout_ms=N` to bound how long each `next()` waits for another row.
 `Vm(on_msgbox="skip")` is the default. Use `on_msgbox="error"` to make a
 `MsgBox` call raise an error. Set `Vm(timeout_ms=N)` or pass `timeout_ms=N`
 to `run_macro` to bound VBA execution time.
+
+The read-only CLI snapshot accepts `--max-work-units N`, `--timeout-ms N`, and
+`--cancel-file PATH`. Creating the cancel-file while a read is in progress
+requests a cooperative stop; a blocking filesystem read cannot be forcibly
+interrupted by this mechanism.
 Repeated runs of the same source on one `Vm` reuse its parsed AST.
 Use `vm.fork()` to create an isolated copy for batch execution.
 Use `vm.snapshot()` to obtain a detached read-only view of all sheets.

@@ -94,9 +94,9 @@ threshold specifically.
 
 | Limit | Rationale | Where it would live |
 |---|---|---|
-| Byte-level reader interruption | Prevents a single large ZIP/XML read from delaying a cooperative stop between part boundaries | The current API checks before/after ZIP entries and parsed parts; the underlying entry read is not interruptible |
+| OS-signal reader interruption | Lets CLI users request cancellation without creating a control file | The current CLI uses `--cancel-file`; the Rust/Python token and ZIP entry reader are cooperative |
 
-The implemented work budget and cooperative deadline/cancellation checks need representative
+The implemented work budget and chunk-level cooperative deadline/cancellation checks need representative
 large-file and malicious-fixture measurements before their defaults are treated as calibrated
 performance guarantees. The per-layer limits above remain the active safety boundary.
 
