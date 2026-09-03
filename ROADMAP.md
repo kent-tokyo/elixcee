@@ -228,6 +228,7 @@ ClosedXML / Aspose.Cellsを機能の優先順位付けとAPI比較の対象に�
 - 展開時間、peak RSS、CPU時間、entry数、圧縮率を記録し、連続実行で資源が回収されることを確認する。
 - 既存の `ZIP_ENTRY_MAX_BYTES` とJS側の範囲上限を、全体予算との組み合わせで再検証する。
 - [x] macOSで1,000,000行相当のXLSXへ実SIGINTを3回送り、`READER_CANCELED`、wall time、peak RSSを記録する（Linux/Windowsと通常処理の校正は未完了）。
+- [x] macOSのdebug binaryで10,000/100,000/150,000行の正常読込と1,000,000行の安全な拒否を各3回測定し、wall time・peak RSS・正確性をJSONへ保存する（cross-platform/release/fixture拡張は未完了）。
 
 ## Security Phase S2 — parser / formula / VM の耐性
 

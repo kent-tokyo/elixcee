@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-03",
+  "host": "Darwin/aarch64-apple-darwin",
+  "toolchain": "rustc 1.97.0",
+  "binary": "target/debug/elixcee",
+  "fixture_format": "XLSX with Stored ZIP entries and one numeric cell per row",
+  "repetitions": 3,
+  "observations": [
+    {
+      "rows": 10000,
+      "repetition": 1,
+      "fixture_bytes": 477297,
+      "exit_code": 0,
+      "wall_ms": 456.847,
+      "peak_rss_bytes": 6471680,
+      "stdout_bytes": 328000,
+      "correct": true,
+      "observed_rows": 10000
+    },
+    {
+      "rows": 10000,
+      "repetition": 2,
+      "fixture_bytes": 477297,
+      "exit_code": 0,
+      "wall_ms": 533.294,
+      "peak_rss_bytes": 6995968,
+      "stdout_bytes": 328000,
+      "correct": true,
+      "observed_rows": 10000
+    },
+    {
+      "rows": 10000,
+      "repetition": 3,
+      "fixture_bytes": 477297,
+      "exit_code": 0,
+      "wall_ms": 525.673,
+      "peak_rss_bytes": 6471680,
+      "stdout_bytes": 328000,
+      "correct": true,
+      "observed_rows": 10000
+    },
+    {
+      "rows": 100000,
+      "repetition": 1,
+      "fixture_bytes": 5067300,
+      "exit_code": 0,
+      "wall_ms": 4752.034,
+      "peak_rss_bytes": 26198016,
+      "stdout_bytes": 3478003,
+      "correct": true,
+      "observed_rows": 100000
+    },
+    {
+      "rows": 100000,
+      "repetition": 2,
+      "fixture_bytes": 5067300,
+      "exit_code": 0,
+      "wall_ms": 4319.285,
+      "peak_rss_bytes": 20447232,
+      "stdout_bytes": 3478003,
+      "correct": true,
+      "observed_rows": 100000
+    },
+    {
+      "rows": 100000,
+      "repetition": 3,
+      "fixture_bytes": 5067300,
+      "exit_code": 0,
+      "wall_ms": 4125.426,
+      "peak_rss_bytes": 20299776,
+      "stdout_bytes": 3478003,
+      "correct": true,
+      "observed_rows": 100000
+    },
+    {
+      "rows": 150000,
+      "repetition": 1,
+      "fixture_bytes": 7767300,
+      "exit_code": 0,
+      "wall_ms": 9372.713,
+      "peak_rss_bytes": 29360128,
+      "stdout_bytes": 5328003,
+      "correct": true,
+      "observed_rows": 150000
+    },
+    {
+      "rows": 150000,
+      "repetition": 2,
+      "fixture_bytes": 7767300,
+      "exit_code": 0,
+      "wall_ms": 7786.521,
+      "peak_rss_bytes": 30736384,
+      "stdout_bytes": 5328003,
+      "correct": true,
+      "observed_rows": 150000
+    },
+    {
+      "rows": 150000,
+      "repetition": 3,
+      "fixture_bytes": 7767300,
+      "exit_code": 0,
+      "wall_ms": 6824.44,
+      "peak_rss_bytes": 29556736,
+      "stdout_bytes": 5328003,
+      "correct": true,
+      "observed_rows": 150000
+    },
+    {
+      "rows": 1000000,
+      "repetition": 1,
+      "fixture_bytes": 53667303,
+      "exit_code": 1,
+      "wall_ms": 22404.255,
+      "peak_rss_bytes": 73449472,
+      "stdout_bytes": 199,
+      "correct": true,
+      "error": "XML document has too many elements: xl/worksheets/sheet1.xml (maximum is 1000000)"
+    },
+    {
+      "rows": 1000000,
+      "repetition": 2,
+      "fixture_bytes": 53667303,
+      "exit_code": 1,
+      "wall_ms": 12440.796,
+      "peak_rss_bytes": 73580544,
+      "stdout_bytes": 199,
+      "correct": true,
+      "error": "XML document has too many elements: xl/worksheets/sheet1.xml (maximum is 1000000)"
+    },
+    {
+      "rows": 1000000,
+      "repetition": 3,
+      "fixture_bytes": 53667303,
+      "exit_code": 1,
+      "wall_ms": 11480.388,
+      "peak_rss_bytes": 73547776,
+      "stdout_bytes": 199,
+      "correct": true,
+      "error": "XML document has too many elements: xl/worksheets/sheet1.xml (maximum is 1000000)"
+    }
+  ]
+}
