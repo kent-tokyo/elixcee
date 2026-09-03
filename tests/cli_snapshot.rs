@@ -10,7 +10,16 @@
 /// without checking).
 use serde_json::Value;
 use std::fs;
-use std::process::Command;
+use std::io::{BufRead, Cursor, Write};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
+use zip::write::{SimpleFileOptions, ZipWriter};
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, signal: i32) -> i32;
+}
 
 fn write_vba(vba: &str, tag: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("elixcee_cli_snapshot_{}.bas", tag));
@@ -248,6 +257,74 @@ fn snapshot_honors_a_preexisting_cancel_file() {
     let _ = fs::remove_file(&cancel_file);
     assert!(!output.status.success());
     let value: Value = serde_json::from_slice(&output.stdout).expect("JSON error output");
+    assert_eq!(value["ok"], false);
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("READER_CANCELED")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_exits_with_cancellation_after_sigint() {
+    let path = std::env::temp_dir().join("elixcee_cli_snapshot_sigint.xlsx");
+    let mut sheet = String::from("<worksheet><sheetData>");
+    for row in 1..=1_000_000 {
+        sheet.push_str(&format!(
+            "<row r=\"{row}\"><c r=\"A{row}\"><v>1</v></c></row>"
+        ));
+    }
+    sheet.push_str("</sheetData></worksheet>");
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("xl/workbook.xml", options).unwrap();
+    zip.write_all(
+        br#"<workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+    )
+    .unwrap();
+    zip.start_file("xl/_rels/workbook.xml.rels", options)
+        .unwrap();
+    zip.write_all(br#"<Relationships><Relationship Id="rId1" Type="/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#).unwrap();
+    zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+    zip.write_all(sheet.as_bytes()).unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    fs::write(&path, bytes).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_elixcee"))
+        .args(["snapshot", path.to_str().unwrap(), "--json"])
+        .env("ELIXCEE_TEST_SIGNAL_READY", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn elixcee binary");
+    let stderr = child.stderr.take().expect("capture child stderr");
+    let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut lines = std::io::BufReader::new(stderr).lines();
+        while let Some(Ok(line)) = lines.next() {
+            if line == "ELIXCEE_SIGNAL_READY" {
+                let _ = ready_sender.send(());
+                break;
+            }
+        }
+    });
+    if ready_receiver.recv_timeout(Duration::from_secs(2)).is_err() {
+        let _ = child.kill();
+        panic!("CLI did not install its signal handler before the deadline");
+    }
+    assert_eq!(unsafe { kill(child.id() as i32, 2) }, 0);
+    let output = child.wait_with_output().expect("wait for SIGINT child");
+    let _ = fs::remove_file(&path);
+    eprintln!(
+        "SIGINT status={:?} stdout={} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("JSON cancellation output");
     assert_eq!(value["ok"], false);
     assert!(
         value["error"]["message"]

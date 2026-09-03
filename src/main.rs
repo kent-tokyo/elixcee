@@ -19,7 +19,7 @@ static CLI_SIGNAL_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
 unsafe extern "C" {
-    fn signal(signal: i32, handler: usize) -> usize;
+    fn signal(signal: i32, handler: Option<extern "C" fn(i32)>) -> Option<extern "C" fn(i32)>;
 }
 
 #[cfg(unix)]
@@ -44,8 +44,8 @@ unsafe extern "system" fn handle_cli_signal(_: u32) -> i32 {
 fn install_cli_signal_handlers() {
     #[cfg(unix)]
     unsafe {
-        signal(2, handle_cli_signal as *const () as usize);
-        signal(15, handle_cli_signal as *const () as usize);
+        signal(2, Some(handle_cli_signal));
+        signal(15, Some(handle_cli_signal));
     }
     #[cfg(windows)]
     unsafe {
@@ -924,6 +924,9 @@ fn messages_to_json(messages: &[String]) -> String {
 fn main() {
     let args: Vec<String> = env::args().collect();
     install_cli_signal_handlers();
+    if env::var_os("ELIXCEE_TEST_SIGNAL_READY").is_some() {
+        eprintln!("ELIXCEE_SIGNAL_READY");
+    }
 
     if matches!(
         args.get(1).map(String::as_str),
