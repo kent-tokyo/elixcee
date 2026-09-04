@@ -4,7 +4,7 @@ Run and test a practical subset of Excel VBA without Microsoft Excel. The core i
 Rust, with a Python API (PyO3), a standalone CLI, and an experimental
 `@elixcee/xlsx` JavaScript/WASM package.
 
-Current release: **1.0.0**.
+Current release: **1.0.1**.
 
 elixcee is intended for data-processing macros. It is not a replacement for the
 Excel desktop application: UI features such as charts, dialogs, and screen
@@ -141,6 +141,9 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo audit --no-fetch
 cargo deny check --disable-fetch
+python3 scripts/check-reader-measurements.py docs/measurements/*.json
+python3 scripts/check-reader-measurements.py --self-test
+bash scripts/check-measurement-boundary.sh
 ```
 
 依存監査は、ネットワークアクセスを必要としないローカル検証として実行できます。

@@ -6,7 +6,7 @@ elixcee 是一个使用 Rust 编写的无头运行时，可在不安装 Microsof
 
 它不是 Excel 桌面应用的完整替代品。屏幕更新、图表和对话框等 UI 功能会被跳过、简化建模或报告错误。
 
-当前版本：**0.28.0**。
+当前版本：**1.0.1**。
 
 ## 安装
 
@@ -75,6 +75,12 @@ VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 快照还以 A1 表示法包含每个工作表的合并单元格范围。
 快照还包含隐藏行和隐藏列的区间。
 可使用 `diagnose_macro(vba_code, macro_name, workbook_path)` 获取与 CLI `diagnose --json` 相同的结构化诊断 JSON。
+
+普通读取器支持通过 `load_workbook(..., max_work_units=N, timeout_ms=N,
+cancellation=token)` 设置总工作量、截止时间和协作式取消。CLI 的 `snapshot`
+和 `--file` 读取还支持 `--max-work-units N`、`--timeout-ms N`、
+`--cancel-file PATH` 与 SIGINT。取消请求会在下一个 ZIP 数据块边界被检测；
+正在进行的操作系统阻塞读取不会被强制中断。
 
 ## 开发
 

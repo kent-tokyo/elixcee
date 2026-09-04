@@ -2,6 +2,7 @@
 // Supports: .xlsx, .xlsm (Office Open XML ZIP), .ods (OpenDocument ZIP).
 // Row/col indices are 1-based, matching the VM's convention.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek};
 use std::str::FromStr;
@@ -321,10 +322,10 @@ fn parse_filter_criteria_xml(filter_column_span: &str) -> Option<FilterCriteria>
     let mut top10: Option<(bool, bool, f64)> = None;
 
     while let Some(ev) = iter.next_ev() {
-        let (Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs)) = ev else {
+        let (Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs)) = ev else {
             continue;
         };
-        match tag.split(':').next_back().unwrap_or(tag.as_str()) {
+        match tag.split(':').next_back().unwrap_or(tag) {
             "filters" => {
                 if matches!(attr_get(attrs, "blank"), Some("1")) {
                     is_blank = true;
@@ -521,8 +522,8 @@ fn parse_data_validation_xml(span: &str) -> Option<DataValidationRule> {
 
     while let Some(ev) = iter.next_ev() {
         match ev {
-            Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "dataValidation" => {
                         rule = Some(DataValidationRule {
@@ -556,8 +557,8 @@ fn parse_data_validation_xml(span: &str) -> Option<DataValidationRule> {
                     _ => {}
                 }
             }
-            Ev::Close(ref tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "formula1" if in_formula1 => {
                         if let Some(r) = rule.as_mut() {
@@ -833,7 +834,7 @@ pub(crate) fn relationship_ids(xml: &str) -> Vec<String> {
     let mut ids = vec![];
     let mut iter = XmlIter::new(xml);
     while let Some(ev) = iter.next_ev() {
-        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local == "Relationship"
                 && let Some(id) = attr_get(attrs, "Id")
@@ -1031,18 +1032,18 @@ pub struct BufferSheet {
 // ── Minimal pull XML parser ───────────────────────────────────────────────────
 
 #[derive(Debug)]
-struct Attr {
-    name: String,
-    value: String,
+struct Attr<'a> {
+    name: &'a str,
+    value: Cow<'a, str>,
 }
 
 #[derive(Debug)]
-enum Ev {
-    Open(String, Vec<Attr>),
-    Close(String),
-    SelfClose(String, Vec<Attr>),
+enum Ev<'a> {
+    Open(&'a str, Vec<Attr<'a>>),
+    Close(&'a str),
+    SelfClose(&'a str, Vec<Attr<'a>>),
     /// Raw, unescaped text preserved verbatim.
-    Text(String),
+    Text(Cow<'a, str>),
 }
 
 struct XmlIter<'a> {
@@ -1058,7 +1059,7 @@ impl<'a> XmlIter<'a> {
         }
     }
 
-    fn next_ev(&mut self) -> Option<Ev> {
+    fn next_ev(&mut self) -> Option<Ev<'a>> {
         loop {
             if self.s.is_empty() {
                 return None;
@@ -1069,7 +1070,7 @@ impl<'a> XmlIter<'a> {
                 let end = self.s.find('<').unwrap_or(self.s.len());
                 let raw = &self.s[..end];
                 self.s = &self.s[end..];
-                let text = xml_unescape(raw);
+                let text = xml_unescape_cow(raw);
                 if text.is_empty() {
                     continue;
                 }
@@ -1086,7 +1087,7 @@ impl<'a> XmlIter<'a> {
                     self.s = "";
                     return None;
                 };
-                let name = self.s[..end].trim().to_string();
+                let name = self.s[..end].trim();
                 self.s = &self.s[end + 1..];
                 if name.is_empty() {
                     self.malformed = true;
@@ -1114,7 +1115,7 @@ impl<'a> XmlIter<'a> {
                     self.s = "";
                     return None;
                 };
-                let text = self.s[..end].to_string();
+                let text = Cow::Borrowed(&self.s[..end]);
                 self.s = &self.s[end + 3..];
                 if !text.is_empty() {
                     return Some(Ev::Text(text));
@@ -1159,13 +1160,14 @@ impl<'a> XmlIter<'a> {
             let name_end = tag_body
                 .find(|c: char| c.is_ascii_whitespace())
                 .unwrap_or(tag_body.len());
-            let name = tag_body[..name_end].to_string();
-            let attrs = parse_attrs(&tag_body[name_end..]);
-            if name.is_empty() || parse_attrs_strict(&tag_body[name_end..]).is_err() {
-                self.malformed = true;
-                return None;
-            }
-
+            let name = &tag_body[..name_end];
+            let attrs = match parse_attrs_strict(&tag_body[name_end..]) {
+                Ok(attrs) if !name.is_empty() => attrs,
+                _ => {
+                    self.malformed = true;
+                    return None;
+                }
+            };
             if self_close {
                 return Some(Ev::SelfClose(name, attrs));
             }
@@ -1198,7 +1200,7 @@ fn find_tag_close(s: &str) -> Option<usize> {
 }
 
 /// Parse ` name="value" ...` attribute string.
-fn parse_attrs(mut s: &str) -> Vec<Attr> {
+fn parse_attrs(mut s: &str) -> Vec<Attr<'_>> {
     let mut attrs = vec![];
     loop {
         s = s.trim_start();
@@ -1206,7 +1208,7 @@ fn parse_attrs(mut s: &str) -> Vec<Attr> {
             break;
         }
         let Some(eq) = s.find('=') else { break };
-        let name = s[..eq].trim().to_string();
+        let name = s[..eq].trim();
         if name.is_empty() {
             break;
         }
@@ -1217,21 +1219,22 @@ fn parse_attrs(mut s: &str) -> Vec<Attr> {
         }
         s = &s[1..]; // skip opening quote
         let end = s.find(quote).unwrap_or(s.len());
-        let value = xml_unescape(&s[..end]);
+        let value = xml_unescape_cow(&s[..end]);
         s = &s[(end + 1).min(s.len())..];
         attrs.push(Attr { name, value });
     }
     attrs
 }
 
-/// Validate the attribute grammar without changing the permissive parser used by
-/// the feature-specific readers. The budget pass uses this to ensure malformed
-/// attributes cannot be silently truncated into a partial element.
-fn parse_attrs_strict(mut s: &str) -> Result<(), ()> {
+/// Parse and validate attributes in one pass. `XmlIter` uses this strict path so
+/// malformed attributes cannot be silently truncated into a partial element.
+/// Other targeted XML helpers intentionally retain the permissive `parse_attrs`.
+fn parse_attrs_strict(mut s: &str) -> Result<Vec<Attr<'_>>, ()> {
+    let mut attrs = Vec::new();
     loop {
         s = s.trim_start();
         if s.is_empty() {
-            return Ok(());
+            return Ok(attrs);
         }
         let Some(eq) = s.find('=') else {
             return Err(());
@@ -1258,15 +1261,19 @@ fn parse_attrs_strict(mut s: &str) -> Result<(), ()> {
         if s[..end].contains('<') {
             return Err(());
         }
+        attrs.push(Attr {
+            name,
+            value: xml_unescape_cow(&s[..end]),
+        });
         s = &s[end + 1..];
     }
 }
 
-fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
+fn attr_get<'a>(attrs: &'a [Attr<'_>], name: &str) -> Option<&'a str> {
     attrs
         .iter()
         .find(|a| a.name == name || a.name.split(':').next_back() == Some(name))
-        .map(|a| a.value.as_str())
+        .map(|a| a.value.as_ref())
 }
 
 /// True when a named attribute is present and its value is a "true" xsd:boolean literal —
@@ -1277,7 +1284,7 @@ fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
 /// the oracle's own writer, not a hypothetical) — so a "1"-only check silently never
 /// recognized an oracle-written hidden column at all. Used for both `<row>` and `<col>`
 /// so the two stay consistent rather than each hardcoding its own literal.
-fn attr_is_true(attrs: &[Attr], name: &str) -> bool {
+fn attr_is_true(attrs: &[Attr<'_>], name: &str) -> bool {
     matches!(
         attr_get(attrs, name),
         Some("1") | Some("true") | Some("TRUE")
@@ -1290,9 +1297,9 @@ fn attr_is_true(attrs: &[Attr], name: &str) -> bool {
 // would otherwise rescan to the end of the string).
 const MAX_ENTITY_BODY_LEN: usize = 12;
 
-pub(crate) fn xml_unescape(s: &str) -> String {
+fn xml_unescape_cow(s: &str) -> Cow<'_, str> {
     if !s.contains('&') {
-        return s.to_string();
+        return Cow::Borrowed(s);
     }
     // Single forward pass, each '&...;' consumed at most once — chained
     // .replace() calls (the previous implementation) double-unescape
@@ -1342,7 +1349,11 @@ pub(crate) fn xml_unescape(s: &str) -> String {
         }
     }
     out.push_str(rest);
-    out
+    Cow::Owned(out)
+}
+
+pub(crate) fn xml_unescape(s: &str) -> String {
+    xml_unescape_cow(s).into_owned()
 }
 
 // ── Helper: read a ZIP entry into a String ────────────────────────────────────
@@ -1400,6 +1411,7 @@ fn validate_shared_strings(strings: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "python"))]
 fn validate_shared_string_refs(xml: &str, shared: &[String]) -> Result<(), String> {
     let mut iter = XmlIter::new(xml);
     let mut cell_type: Option<String> = None;
@@ -1410,7 +1422,7 @@ fn validate_shared_string_refs(xml: &str, shared: &[String]) -> Result<(), Strin
         let is_self_close = matches!(&ev, Ev::SelfClose(_, _));
         match &ev {
             Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "c" => {
                         cell_type = attr_get(attrs, "t").map(str::to_string);
@@ -1426,7 +1438,7 @@ fn validate_shared_string_refs(xml: &str, shared: &[String]) -> Result<(), Strin
                 }
             }
             Ev::Close(tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "v" => {
                         if in_value && cell_type.as_deref() == Some("s") {
@@ -1553,7 +1565,149 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
     })
 }
 
-fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
+struct XmlBudgetValidator<'xml> {
+    name: String,
+    elements: usize,
+    attributes: usize,
+    depth: usize,
+    open_tags: Vec<&'xml str>,
+    attribute_names: HashSet<&'xml str>,
+    root_seen: bool,
+}
+
+impl<'xml> XmlBudgetValidator<'xml> {
+    fn new(name: &str, xml: &str) -> Result<Self, String> {
+        validate_xml_preamble(name, xml)?;
+        Ok(Self {
+            name: name.to_string(),
+            elements: 0,
+            attributes: 0,
+            depth: 0,
+            open_tags: Vec::new(),
+            attribute_names: HashSet::new(),
+            root_seen: false,
+        })
+    }
+
+    fn observe(&mut self, event: &Ev<'xml>) -> Result<(), String> {
+        match event {
+            Ev::Open(tag, attrs) => self.observe_element(tag, attrs, true),
+            Ev::SelfClose(tag, attrs) => self.observe_element(tag, attrs, false),
+            Ev::Close(tag) => {
+                self.depth = self.depth.checked_sub(1).ok_or_else(|| {
+                    format!("XML document has an unmatched closing tag: {}", self.name)
+                })?;
+                let Some(open_tag) = self.open_tags.pop() else {
+                    return Err(format!(
+                        "XML document has an unmatched closing tag: {}",
+                        self.name
+                    ));
+                };
+                if open_tag != *tag {
+                    return Err(format!(
+                        "XML document has mismatched closing tag: {} (expected </{open_tag}>, got </{tag}>)",
+                        self.name
+                    ));
+                }
+                Ok(())
+            }
+            Ev::Text(text) => {
+                if text.len() > XML_MAX_TEXT_NODE_BYTES {
+                    return Err(format!(
+                        "XML text node is too long: {} (maximum is {} bytes)",
+                        self.name, XML_MAX_TEXT_NODE_BYTES
+                    ));
+                }
+                if self.depth == 0 && !text.trim().is_empty() {
+                    return Err(format!(
+                        "XML document has non-whitespace text outside the root element: {}",
+                        self.name
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn observe_element(
+        &mut self,
+        tag: &'xml str,
+        attrs: &[Attr<'xml>],
+        opens: bool,
+    ) -> Result<(), String> {
+        if self.depth == 0 && self.root_seen {
+            return Err(format!(
+                "XML document has multiple root elements: {}",
+                self.name
+            ));
+        }
+        if self.depth == 0 {
+            self.root_seen = true;
+        }
+        self.elements = self
+            .elements
+            .checked_add(1)
+            .ok_or_else(|| format!("XML document element count overflows: {}", self.name))?;
+        if self.elements > XML_MAX_ELEMENTS {
+            return Err(format!(
+                "XML document has too many elements: {} (maximum is {})",
+                self.name, XML_MAX_ELEMENTS
+            ));
+        }
+        if opens {
+            self.depth += 1;
+            if self.depth > XML_MAX_DEPTH {
+                return Err(format!(
+                    "XML document is nested too deeply: {} (maximum is {})",
+                    self.name, XML_MAX_DEPTH
+                ));
+            }
+            self.open_tags.push(tag);
+        }
+
+        self.attribute_names.clear();
+        for attr in attrs {
+            if !self.attribute_names.insert(attr.name) {
+                return Err(format!(
+                    "XML element has a duplicate attribute: {} ({tag})",
+                    self.name
+                ));
+            }
+            self.attributes = self
+                .attributes
+                .checked_add(1)
+                .ok_or_else(|| format!("XML document attribute count overflows: {}", self.name))?;
+            if self.attributes > XML_MAX_ATTRIBUTES {
+                return Err(format!(
+                    "XML document has too many attributes: {} (maximum is {})",
+                    self.name, XML_MAX_ATTRIBUTES
+                ));
+            }
+            if attr.value.len() > XML_MAX_ATTRIBUTE_VALUE_BYTES {
+                return Err(format!(
+                    "XML attribute value is too long: {} (maximum is {} bytes)",
+                    self.name, XML_MAX_ATTRIBUTE_VALUE_BYTES
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self, malformed: bool) -> Result<(), String> {
+        if malformed {
+            return Err(format!("XML document has malformed syntax: {}", self.name));
+        }
+        if self.depth != 0 {
+            return Err(format!("XML document has unclosed elements: {}", self.name));
+        }
+        if !self.root_seen {
+            return Err(format!("XML document has no root element: {}", self.name));
+        }
+        Ok(())
+    }
+}
+
+fn validate_xml_preamble(name: &str, xml: &str) -> Result<(), String> {
     let raw = xml.as_bytes();
     if xml
         .chars()
@@ -1570,141 +1724,16 @@ fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
             "XML document uses a forbidden DTD or entity declaration: {name}"
         ));
     }
+    Ok(())
+}
 
-    let mut elements = 0usize;
-    let mut attributes = 0usize;
-    let mut depth = 0usize;
-    let mut open_tags = Vec::new();
-    let mut root_seen = false;
+fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
+    let mut validator = XmlBudgetValidator::new(name, xml)?;
     let mut iter = XmlIter::new(xml);
     while let Some(event) = iter.next_ev() {
-        match event {
-            Ev::Open(tag, attrs) => {
-                if depth == 0 && root_seen {
-                    return Err(format!("XML document has multiple root elements: {name}"));
-                }
-                if depth == 0 {
-                    root_seen = true;
-                }
-                elements = elements
-                    .checked_add(1)
-                    .ok_or_else(|| format!("XML document element count overflows: {name}"))?;
-                if elements > XML_MAX_ELEMENTS {
-                    return Err(format!(
-                        "XML document has too many elements: {name} (maximum is {})",
-                        XML_MAX_ELEMENTS
-                    ));
-                }
-                depth += 1;
-                if depth > XML_MAX_DEPTH {
-                    return Err(format!(
-                        "XML document is nested too deeply: {name} (maximum is {})",
-                        XML_MAX_DEPTH
-                    ));
-                }
-                open_tags.push(tag.clone());
-                let mut names = HashSet::new();
-                for attr in attrs {
-                    if !names.insert(attr.name.clone()) {
-                        return Err(format!(
-                            "XML element has a duplicate attribute: {name} ({tag})"
-                        ));
-                    }
-                    attributes = attributes
-                        .checked_add(1)
-                        .ok_or_else(|| format!("XML document attribute count overflows: {name}"))?;
-                    if attributes > XML_MAX_ATTRIBUTES {
-                        return Err(format!(
-                            "XML document has too many attributes: {name} (maximum is {})",
-                            XML_MAX_ATTRIBUTES
-                        ));
-                    }
-                    if attr.value.len() > XML_MAX_ATTRIBUTE_VALUE_BYTES {
-                        return Err(format!(
-                            "XML attribute value is too long: {name} (maximum is {} bytes)",
-                            XML_MAX_ATTRIBUTE_VALUE_BYTES
-                        ));
-                    }
-                }
-            }
-            Ev::SelfClose(tag, attrs) => {
-                if depth == 0 && root_seen {
-                    return Err(format!("XML document has multiple root elements: {name}"));
-                }
-                if depth == 0 {
-                    root_seen = true;
-                }
-                elements = elements
-                    .checked_add(1)
-                    .ok_or_else(|| format!("XML document element count overflows: {name}"))?;
-                if elements > XML_MAX_ELEMENTS {
-                    return Err(format!(
-                        "XML document has too many elements: {name} (maximum is {})",
-                        XML_MAX_ELEMENTS
-                    ));
-                }
-                let mut names = HashSet::new();
-                for attr in attrs {
-                    if !names.insert(attr.name.clone()) {
-                        return Err(format!(
-                            "XML element has a duplicate attribute: {name} ({tag})"
-                        ));
-                    }
-                    attributes = attributes
-                        .checked_add(1)
-                        .ok_or_else(|| format!("XML document attribute count overflows: {name}"))?;
-                    if attributes > XML_MAX_ATTRIBUTES {
-                        return Err(format!(
-                            "XML document has too many attributes: {name} (maximum is {})",
-                            XML_MAX_ATTRIBUTES
-                        ));
-                    }
-                    if attr.value.len() > XML_MAX_ATTRIBUTE_VALUE_BYTES {
-                        return Err(format!(
-                            "XML attribute value is too long: {name} (maximum is {} bytes)",
-                            XML_MAX_ATTRIBUTE_VALUE_BYTES
-                        ));
-                    }
-                }
-            }
-            Ev::Close(tag) => {
-                depth = depth
-                    .checked_sub(1)
-                    .ok_or_else(|| format!("XML document has an unmatched closing tag: {name}"))?;
-                let Some(open_tag) = open_tags.pop() else {
-                    return Err(format!("XML document has an unmatched closing tag: {name}"));
-                };
-                if open_tag != tag {
-                    return Err(format!(
-                        "XML document has mismatched closing tag: {name} (expected </{open_tag}>, got </{tag}>)"
-                    ));
-                }
-            }
-            Ev::Text(text) => {
-                if text.len() > XML_MAX_TEXT_NODE_BYTES {
-                    return Err(format!(
-                        "XML text node is too long: {name} (maximum is {} bytes)",
-                        XML_MAX_TEXT_NODE_BYTES
-                    ));
-                }
-                if depth == 0 && !text.trim().is_empty() {
-                    return Err(format!(
-                        "XML document has non-whitespace text outside the root element: {name}"
-                    ));
-                }
-            }
-        }
+        validator.observe(&event)?;
     }
-    if iter.malformed {
-        return Err(format!("XML document has malformed syntax: {name}"));
-    }
-    if depth != 0 {
-        return Err(format!("XML document has unclosed elements: {name}"));
-    }
-    if !root_seen {
-        return Err(format!("XML document has no root element: {name}"));
-    }
-    Ok(())
+    validator.finish(iter.malformed)
 }
 
 #[cfg(feature = "python")]
@@ -1748,6 +1777,19 @@ fn zip_read_text_with_budget<R: Read + Seek>(
     name: &str,
     budget: &ReadBudget,
 ) -> Result<String, String> {
+    let s = zip_read_text_unvalidated_with_budget(archive, name, budget)?;
+    validate_xml_budget(name, &s)?;
+    Ok(s)
+}
+
+/// Read UTF-8 XML with ZIP/deadline/cancellation limits but leave structural
+/// validation to a parser that consumes the same event stream. Only worksheet
+/// parsing uses this path; every other XML part keeps `zip_read_text_with_budget`.
+fn zip_read_text_unvalidated_with_budget<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    budget: &ReadBudget,
+) -> Result<String, String> {
     let entry = archive
         .by_name(name)
         .map_err(|e| format!("{}: {}", name, e))?;
@@ -1758,7 +1800,6 @@ fn zip_read_text_with_budget<R: Read + Seek>(
     }
     .read_to_string(&mut s)
     .map_err(|e| e.to_string())?;
-    validate_xml_budget(name, &s)?;
     Ok(s)
 }
 
@@ -1858,7 +1899,7 @@ pub(crate) fn content_type_decls(xml: &str) -> ContentTypeDecls {
     let mut overrides = vec![];
     let mut iter = XmlIter::new(xml);
     while let Some(ev) = iter.next_ev() {
-        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             match local {
                 "Default" => {
@@ -2894,7 +2935,7 @@ pub(crate) fn workbook_rels_decls(xml: &str) -> Vec<(String, String)> {
     let mut rels = vec![];
     let mut iter = XmlIter::new(xml);
     while let Some(ev) = iter.next_ev() {
-        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local == "Relationship"
                 && let (Some(ty), Some(target)) =
@@ -3003,14 +3044,14 @@ fn read_workbook_from_archive<R: Read + Seek>(
             .ok_or_else(|| format!("worksheet relationship is missing for {name} ({rid})"))?;
         let zip_path = resolve_xlsx_target(target)?;
         let sheet_xml = if archive.file_names().any(|name| name == zip_path) {
-            let xml = zip_read_text_with_budget(&mut archive, &zip_path, &budget)?;
+            let xml = zip_read_text_unvalidated_with_budget(&mut archive, &zip_path, &budget)?;
             budget.check()?;
             xml
         } else {
             return Err(format!("worksheet part is missing: {zip_path}"));
         };
-        validate_shared_string_refs(&sheet_xml, &shared)?;
-        let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared, &styles.cell_xfs);
+        let sheet_data =
+            xlsx_sheet_cells_validated(&zip_path, &sheet_xml, &shared, &styles.cell_xfs)?;
         validate_sheet_model(
             &name,
             sheet_data.cells.len(),
@@ -3095,7 +3136,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
 fn xlsx_workbook_date1904(xml: &str) -> bool {
     let mut iter = XmlIter::new(xml);
     while let Some(ev) = iter.next_ev() {
-        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev
             && tag.split(':').next_back() == Some("workbookPr")
         {
             return attr_is_true(attrs, "date1904");
@@ -3112,7 +3153,7 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>, Optio
     let mut iter = XmlIter::new(xml);
     let mut result = vec![];
     while let Some(ev) = iter.next_ev() {
-        if let Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local == "sheet"
                 && let (Some(name), Some(rid)) = (attr_get(attrs, "name"), attr_get(attrs, "id"))
@@ -3266,7 +3307,7 @@ fn xlsx_rels(xml: &str, type_suffix: &str) -> HashMap<String, String> {
     let mut iter = XmlIter::new(xml);
     let mut map = HashMap::new();
     while let Some(ev) = iter.next_ev() {
-        if let Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local == "Relationship"
                 && let (Some(id), Some(ty), Some(target)) = (
@@ -3290,7 +3331,7 @@ fn xlsx_worksheet_rels(xml: &str) -> Result<HashMap<String, String>, String> {
     let mut iter = XmlIter::new(xml);
     let mut map = HashMap::new();
     while let Some(ev) = iter.next_ev() {
-        if let Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local != "Relationship" {
                 continue;
@@ -3395,7 +3436,7 @@ fn xlsx_styles(xml: &str) -> XlsxStyles {
     while let Some(ev) = iter.next_ev() {
         match &ev {
             Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "numFmt" => {
                         if let (Some(id), Some(code)) = (
@@ -3639,7 +3680,7 @@ pub(crate) fn with_attr(span: &str, attr_name: &str, attr_value: &str) -> String
             continue;
         }
         new_attrs.push(' ');
-        new_attrs.push_str(&a.name);
+        new_attrs.push_str(a.name);
         new_attrs.push_str("=\"");
         new_attrs.push_str(&crate::xml_escape(&a.value));
         new_attrs.push('"');
@@ -4149,8 +4190,32 @@ pub(crate) struct XlsxSheetData {
     raw_style_indices: HashMap<(u32, u32), u32>,
 }
 
+#[cfg(any(test, feature = "python"))]
 fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> XlsxSheetData {
+    xlsx_sheet_cells_impl(xml, shared, cell_xfs, None)
+        .expect("worksheet parsing without validation cannot fail")
+}
+
+fn xlsx_sheet_cells_validated(
+    name: &str,
+    xml: &str,
+    shared: &[String],
+    cell_xfs: &[Option<u32>],
+) -> Result<XlsxSheetData, String> {
+    xlsx_sheet_cells_impl(xml, shared, cell_xfs, Some(name))
+}
+
+fn xlsx_sheet_cells_impl(
+    xml: &str,
+    shared: &[String],
+    cell_xfs: &[Option<u32>],
+    validation_name: Option<&str>,
+) -> Result<XlsxSheetData, String> {
     let mut iter = XmlIter::new(xml);
+    let mut validator = validation_name
+        .map(|name| XmlBudgetValidator::new(name, xml))
+        .transpose()?;
+    let validate_shared_refs = validation_name.is_some();
     let mut cells: HashMap<(u32, u32), SheetCell> = HashMap::new();
     let mut merged_ranges: Vec<MergeRect> = Vec::new();
     let mut hidden_rows: Vec<(u32, u32)> = Vec::new();
@@ -4169,6 +4234,8 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     let mut cur_col: u32 = 0;
     let mut cur_type = String::new();
     let mut in_v = false;
+    let mut in_shared_string_value = false;
+    let mut shared_string_value = String::new();
     // `<v xml:space="preserve">` marks significant leading/trailing
     // whitespace in a t="str" cell's literal text, same as any XML element
     // — confirmed live against compat/corpus/workbooks/with_text.xlsx's raw
@@ -4182,9 +4249,12 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     let mut is_text = String::new();
 
     while let Some(ev) = iter.next_ev() {
+        if let Some(validator) = validator.as_mut() {
+            validator.observe(&ev)?;
+        }
         match ev {
-            Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "row" => {
                         if let Some(r) = attr_get(attrs, "r") {
@@ -4287,6 +4357,13 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                     "v" => {
                         in_v = true;
                         v_preserve_space = attr_get(attrs, "xml:space") == Some("preserve");
+                        if validate_shared_refs && cur_type == "s" {
+                            shared_string_value.clear();
+                            if matches!(ev, Ev::SelfClose(_, _)) {
+                                return Err("shared string cell has an invalid index".to_string());
+                            }
+                            in_shared_string_value = true;
+                        }
                     }
                     "f" => {
                         // A self-closing <f/> (or a shared-formula follower cell,
@@ -4314,10 +4391,23 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                     _ => {}
                 }
             }
-            Ev::Close(ref tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "v" => {
+                        if in_shared_string_value {
+                            let index = shared_string_value
+                                .trim()
+                                .parse::<usize>()
+                                .ok()
+                                .filter(|&index| index < shared.len());
+                            if index.is_none() {
+                                return Err(
+                                    "shared string cell refers to an invalid index".to_string()
+                                );
+                            }
+                            in_shared_string_value = false;
+                        }
                         // A zero-character <v></v> never produces an Ev::Text event (there's
                         // no text to emit), so `in_v` is still true here — the Text-event
                         // handler below never ran for this cell. Route the empty string
@@ -4349,9 +4439,12 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                 }
             }
             Ev::Text(ref text) => {
+                if in_shared_string_value {
+                    shared_string_value.push_str(text);
+                }
                 if in_v && cur_row > 0 && cur_col > 0 {
                     let raw = if v_preserve_space {
-                        text.as_str()
+                        text.as_ref()
                     } else {
                         text.trim()
                     };
@@ -4369,21 +4462,24 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
         }
 
         // Emit inline string on </c>
-        if let Ev::Close(ref tag) = ev
+        if let Ev::Close(tag) = ev
             && tag.split(':').next_back() == Some("c")
-            && cur_type == "inlineStr"
-            && !is_text.is_empty()
-            && cur_row > 0
-            && cur_col > 0
         {
-            cells.insert((cur_row, cur_col), SheetCell::Str(is_text.clone()));
-            is_text.clear();
+            if cur_type == "inlineStr" && !is_text.is_empty() && cur_row > 0 && cur_col > 0 {
+                cells.insert((cur_row, cur_col), SheetCell::Str(is_text.clone()));
+                is_text.clear();
+            }
+            cur_type.clear();
+            in_shared_string_value = false;
         }
+    }
+    if let Some(validator) = validator {
+        validator.finish(iter.malformed)?;
     }
     if let Some(run) = pending_hidden_row_run.take() {
         hidden_rows.push(run);
     }
-    XlsxSheetData {
+    Ok(XlsxSheetData {
         cells,
         first_row,
         merged_ranges,
@@ -4397,7 +4493,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
         dimension,
         style_ids,
         raw_style_indices,
-    }
+    })
 }
 
 fn xlsx_parse_cell(v: &str, t: &str, shared: &[String]) -> Option<SheetCell> {
@@ -4483,7 +4579,7 @@ fn xlsx_table_part_rids(sheet_xml: &str) -> Vec<String> {
     let mut iter = XmlIter::new(&tp);
     let mut rids = Vec::new();
     while let Some(ev) = iter.next_ev() {
-        if let Ev::SelfClose(ref tag, ref attrs) = ev
+        if let Ev::SelfClose(tag, ref attrs) = ev
             && tag.split(':').next_back() == Some("tablePart")
             && let Some(rid) = attr_get(attrs, "id")
         {
@@ -4506,8 +4602,8 @@ fn parse_table_xml(xml: &str) -> Option<TableDef> {
 
     while let Some(ev) = iter.next_ev() {
         match ev {
-            Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "table" => {
                         let name = attr_get(attrs, "name").unwrap_or("").to_string();
@@ -4569,8 +4665,8 @@ fn parse_table_xml(xml: &str) -> Option<TableDef> {
                     _ => {}
                 }
             }
-            Ev::Close(ref tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "calculatedColumnFormula" if in_calc_formula => {
                         if let Some(c) = cur_column.as_mut() {
@@ -5278,7 +5374,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
     while let Some(ev) = iter.next_ev() {
         match &ev {
             Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "table" => {
                         let name = attr_get(attrs, "name").unwrap_or("sheet1").to_lowercase();
@@ -5375,7 +5471,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                 }
             }
             Ev::Close(tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "table" => {
                         in_sheet = false;
@@ -6485,6 +6581,48 @@ mod from_bytes_tests {
             Err(error) => error,
         };
         assert!(error.contains("valid UTF-8"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn fused_worksheet_validation_preserves_security_errors() {
+        let cases: &[&[u8]] = &[
+            br#"<worksheet ref="A1" ref="B1"/>"#,
+            b"<worksheet><sheetData></worksheet>",
+            b"<!DOCTYPE worksheet><worksheet/>",
+            b"text<worksheet/>",
+        ];
+        for &sheet in cases {
+            let xml = std::str::from_utf8(sheet).unwrap();
+            let expected = validate_xml_budget("xl/worksheets/sheet1.xml", xml).unwrap_err();
+            let bytes = minimal_workbook_zip(None, sheet);
+            let actual = match read_workbook_from_bytes(&bytes) {
+                Ok(_) => panic!("malformed worksheet should be rejected: {xml}"),
+                Err(error) => error,
+            };
+            assert_eq!(actual, expected, "different error for {xml:?}");
+        }
+    }
+
+    #[test]
+    fn fused_worksheet_validation_preserves_shared_string_errors() {
+        let cases: &[(&[u8], &str)] = &[
+            (
+                br#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v/></c></row></sheetData></worksheet>"#,
+                "shared string cell has an invalid index",
+            ),
+            (
+                br#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#,
+                "shared string cell refers to an invalid index",
+            ),
+        ];
+        for &(sheet, expected) in cases {
+            let bytes = minimal_workbook_zip(None, sheet);
+            let actual = match read_workbook_from_bytes(&bytes) {
+                Ok(_) => panic!("invalid shared-string reference should be rejected"),
+                Err(error) => error,
+            };
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]

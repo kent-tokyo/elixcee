@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-03",
+  "host": "Darwin/aarch64-apple-darwin",
+  "toolchain": "rustc 1.97.0",
+  "binary": "target/release/measure_reader_write_inprocess",
+  "api": "Vm::load_workbook_file + write_rect + set_cell_formula + save_workbook + reader::read_workbook",
+  "iterations_per_fixture": 5,
+  "fixtures": [
+    {
+      "fixture": "/tmp/elixcee-inprocess-fixtures/dense.xlsx",
+      "iterations": 5,
+      "wall_ms": 19397.845,
+      "baseline_allocator_size_in_use_bytes": 11648,
+      "baseline_allocator_size_allocated_bytes": 8388608,
+      "observations": [
+        {
+          "iteration": 1,
+          "cells": 400000,
+          "wall_ms": 4065.373,
+          "allocator_size_in_use_bytes": 142848,
+          "allocator_size_allocated_bytes": 25165824
+        },
+        {
+          "iteration": 2,
+          "cells": 400000,
+          "wall_ms": 3631.586,
+          "allocator_size_in_use_bytes": 143008,
+          "allocator_size_allocated_bytes": 25165824
+        },
+        {
+          "iteration": 3,
+          "cells": 400000,
+          "wall_ms": 3479.279,
+          "allocator_size_in_use_bytes": 143168,
+          "allocator_size_allocated_bytes": 25165824
+        },
+        {
+          "iteration": 4,
+          "cells": 400000,
+          "wall_ms": 3841.31,
+          "allocator_size_in_use_bytes": 143328,
+          "allocator_size_allocated_bytes": 25165824
+        },
+        {
+          "iteration": 5,
+          "cells": 400000,
+          "wall_ms": 4380.271,
+          "allocator_size_in_use_bytes": 143488,
+          "allocator_size_allocated_bytes": 25165824
+        }
+      ]
+    },
+    {
+      "fixture": "/tmp/elixcee-inprocess-fixtures/mixed.xlsx",
+      "iterations": 5,
+      "wall_ms": 17993.311,
+      "baseline_allocator_size_in_use_bytes": 11648,
+      "baseline_allocator_size_allocated_bytes": 8388608,
+      "observations": [
+        {
+          "iteration": 1,
+          "cells": 320000,
+          "wall_ms": 3462.183,
+          "allocator_size_in_use_bytes": 191952,
+          "allocator_size_allocated_bytes": 33554432
+        },
+        {
+          "iteration": 2,
+          "cells": 320000,
+          "wall_ms": 3340.4,
+          "allocator_size_in_use_bytes": 192112,
+          "allocator_size_allocated_bytes": 37748736
+        },
+        {
+          "iteration": 3,
+          "cells": 320000,
+          "wall_ms": 3577.043,
+          "allocator_size_in_use_bytes": 192272,
+          "allocator_size_allocated_bytes": 37748736
+        },
+        {
+          "iteration": 4,
+          "cells": 320000,
+          "wall_ms": 3817.691,
+          "allocator_size_in_use_bytes": 192432,
+          "allocator_size_allocated_bytes": 37748736
+        },
+        {
+          "iteration": 5,
+          "cells": 320000,
+          "wall_ms": 3795.955,
+          "allocator_size_in_use_bytes": 192592,
+          "allocator_size_allocated_bytes": 37748736
+        }
+      ]
+    },
+    {
+      "fixture": "/tmp/elixcee-inprocess-fixtures/multi-sheet-4.xlsx",
+      "iterations": 5,
+      "wall_ms": 20225.771,
+      "baseline_allocator_size_in_use_bytes": 11664,
+      "baseline_allocator_size_allocated_bytes": 8388608,
+      "observations": [
+        {
+          "iteration": 1,
+          "cells": 400000,
+          "wall_ms": 4833.319,
+          "allocator_size_in_use_bytes": 142864,
+          "allocator_size_allocated_bytes": 33554432
+        },
+        {
+          "iteration": 2,
+          "cells": 400000,
+          "wall_ms": 4610.5,
+          "allocator_size_in_use_bytes": 143024,
+          "allocator_size_allocated_bytes": 33554432
+        },
+        {
+          "iteration": 3,
+          "cells": 400000,
+          "wall_ms": 3424.722,
+          "allocator_size_in_use_bytes": 143184,
+          "allocator_size_allocated_bytes": 33554432
+        },
+        {
+          "iteration": 4,
+          "cells": 400000,
+          "wall_ms": 3593.806,
+          "allocator_size_in_use_bytes": 143344,
+          "allocator_size_allocated_bytes": 33554432
+        },
+        {
+          "iteration": 5,
+          "cells": 400000,
+          "wall_ms": 3763.391,
+          "allocator_size_in_use_bytes": 143504,
+          "allocator_size_allocated_bytes": 33554432
+        }
+      ]
+    }
+  ]
+}

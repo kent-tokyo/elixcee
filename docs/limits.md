@@ -126,6 +126,9 @@ VBA parsing applies these input limits before constructing a program AST:
 
 These are build-time safeguards, not claims that arbitrary hostile files are safe. The
 limits are checked from ZIP metadata before part parsing; path traversal is rejected at
-the same boundary, and DTD/ENTITY declarations are rejected. Numeric thresholds are
-intentionally conservative until the planned normal-large-file and malicious-fixture
-measurements establish a representative corpus.
+the same boundary, and DTD/ENTITY declarations are rejected. The reader also exposes a
+total-work budget, deadline, and cooperative cancellation; native CLI cancellation can
+be requested by SIGINT or a cancel file. Dated macOS large-input, cancellation, and
+resource-reclamation measurements are stored in `docs/measurements/`. The thresholds
+remain conservative because Linux/Windows and independent-oracle calibration is not yet
+complete.

@@ -6,7 +6,7 @@ Microsoft Excelなしで、データ処理向けのExcel VBAのサブセット�
 テスト・診断するRust製ランタイムです。PyO3によるPython API、単体CLI、
 実験的な`@elixcee/xlsx` JavaScript/WASMパッケージを提供します。
 
-現在のリリースは **0.28.0** です。
+現在のリリースは **1.0.1** です。
 
 Excelデスクトップアプリの完全な代替ではありません。画面更新、グラフ、
 ダイアログなどのUI機能は、スキップ・簡易モデル化・エラー化されます。
@@ -79,6 +79,12 @@ APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 スナップショットにはシートごとの結合セル範囲もA1記法で含まれます。
 スナップショットには非表示行・列の区間も含まれます。
 `diagnose_macro(vba_code, macro_name, workbook_path)`でCLIの`diagnose --json`と同じ構造化診断JSONを取得できます。
+
+通常readerでは`load_workbook(..., max_work_units=N, timeout_ms=N,
+cancellation=token)`で総work量、期限、協調キャンセルを指定できます。CLIの
+`snapshot`と`--file`読込では`--max-work-units N`、`--timeout-ms N`、
+`--cancel-file PATH`に加えてSIGINTも利用できます。キャンセルは協調方式のため、
+OSのブロッキング読込中は次のZIP chunk境界で検出されます。
 
 対応するVBA構文・ワークシート関数は[FUNCTIONS.md](FUNCTIONS.md)にまとめています。
 既知の制約と診断形式は[docs/](docs/)を参照してください。

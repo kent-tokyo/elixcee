@@ -664,7 +664,7 @@ impl PyVm {
             .1;
         let timeout_ms = timeout_ms.or(self.timeout_ms);
         self.inner.deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
-        let result = self.inner.run_sub(&prog, macro_name).map_err(|err| {
+        let result = self.inner.run_sub(prog, macro_name).map_err(|err| {
             if err.starts_with("TIMEOUT:") {
                 PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(err)
             } else {

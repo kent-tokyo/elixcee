@@ -1,6 +1,6 @@
 [package]
 name = "elixcee"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 authors = ["kent-tokyo <kent-tokyo@users.noreply.github.com>"]
 repository = "https://github.com/kent-tokyo/elixcee"
@@ -10,6 +10,13 @@ license = "MIT"
 keywords = ["excel", "vba", "macro", "spreadsheet", "python"]
 categories = ["simulation", "text-processing"]
 readme = "README.md"
+# Local calibration helpers are deliberately kept out of registry packages;
+# they remain available from the checkout via `cargo run --bin ...`.
+exclude = [
+    "src/bin/measure_reader_inprocess.rs",
+    "src/bin/measure_reader_vm_load.rs",
+    "src/bin/measure_reader_write_inprocess.rs",
+]
 
 [workspace]
 members = ["crates/elixcee-types", "crates/elixcee-wasm"]

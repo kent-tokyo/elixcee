@@ -58,11 +58,11 @@ injection, path traversal, or resource-exhaustion risk.
 
 Each release records implementation tests and static checks separately from
 measurements requiring Microsoft Excel, large fixtures, or another independent
-oracle. For v1.0, the local offline gate covers the checked-in Rust workspace,
-property/integration tests, clippy, dependency policy, and feature compilation.
-Excel-oracle, cross-platform clean-install, and large-scale performance results
-remain environment-dependent evidence and must not be inferred from the local
-gate.
+oracle. For v1.0.1, the local offline gate covers the checked-in Rust workspace,
+property/integration tests, clippy, dependency policy, feature compilation, and
+the checked-in reader-measurement contract. Dated macOS reader measurements are
+available under `docs/measurements/`; Excel-oracle and cross-platform results
+remain separate evidence and must not be inferred from the local gate.
 
 The roadmap remains the source of truth for expanding this contract:
 [ROADMAP.md](../ROADMAP.md).

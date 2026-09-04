@@ -28,7 +28,7 @@ openpyxlが提供するPythonからの扱いやすい入出力・編集APIは重
 重い測定は、機能実装のたびに行わず、各 `[MEASURE]` phase の最後に集約します。
 小さなfixtureでの正しさは `[BUILD]` で先に確認し、ベンチマークで正しさを推測しません。
 
-## 現状（1.0.0サポート契約）
+## 現状（1.0.1サポート契約）
 
 実装済みの主な範囲は、VBAの基本制御構文・変数/配列・Range/Cells・複数シート・
 エラー処理、主要な数式カテゴリ、Python/CLI、XLSX/XLSM/ODS入出力、テーブル・検証・
@@ -38,8 +38,9 @@ openpyxl、LibreOffice、独立したVBA意味論fixtureとの比較基盤があ
 大きなXLSX/XLSM向けに、前方向のstreaming reader/writerも提供しています。readerは
 行番号付き返却、空行、relationship targetの正規化、行バッファ上限を扱います。
 
-ただし、Microsoft Excel本体をoracleにしたVBA実行・保存後再実行、大規模ワークブックの
-時間/RSS比較、OOXML part単位の保持保証、1.0の公開契約は未完了です。
+1.0の公開契約は固定済みです。ただし、Microsoft Excel本体をoracleにしたVBA実行・
+保存後再実行、他OSでの大規模ワークブック時間/RSS比較、OOXML part単位の保持保証は
+引き続き未完了です。
 
 ## 明示する未達項目
 
@@ -51,15 +52,17 @@ openpyxl、LibreOffice、独立したVBA意味論fixtureとの比較基盤があ
    drawing/chart/pivot等が、編集・保存後に失われたり切断されたりする可能性がある。
 2. **全Excel関数・全VBAオブジェクトの互換性はない** — 未対応関数・オブジェクトを
    空値や成功に変換せず、unsupported / warned / rejectedとして診断できる状態が必要。
-3. **readerの実測校正が未完了** — 総work budget、chunk単位のdeadline/cancellation、
-   CLIのOSシグナル/cancel-file連携は実装済みだが、実測校正は残っている。
+3. **readerのcross-platform/oracle校正が未完了** — 総work budget、chunk単位の
+   deadline/cancellation、CLIのOSシグナル/cancel-file連携とmacOSローカル校正は完了したが、
+   Linux/Windowsおよび独立oracleとの同条件比較は残っている。
 
 ### 解除条件
 
 - OOXML: feature/part/relationshipごとの保持率、編集可否、Excel再オープン結果をfixture付きで公開する。
 - Excel関数/VBA: 対応表、独立期待値、Excel oracle結果、未対応診断をカテゴリ別に公開する。
 - reader: deadline・cancellation token・総work budgetをAPI/CLI/Pythonで提供し、タイムアウト時に
-  部分的なWorkbookを返さず、確実に後始末して終了する。
+  部分的なWorkbookを返さず、確実に後始末して終了する。macOSでの大規模入力・シグナル・
+  CLI反復・release・in-process allocator校正は完了しているが、他OS/oracle校正は未完了。
 
 ## XLSX editing compatibility track
 
@@ -229,6 +232,22 @@ ClosedXML / Aspose.Cellsを機能の優先順位付けとAPI比較の対象に�
 - 既存の `ZIP_ENTRY_MAX_BYTES` とJS側の範囲上限を、全体予算との組み合わせで再検証する。
 - [x] macOSで1,000,000行相当のXLSXへ実SIGINTを3回送り、`READER_CANCELED`、wall time、peak RSSを記録する（Linux/Windowsと通常処理の校正は未完了）。
 - [x] macOSのdebug binaryで10,000/100,000/150,000行の正常読込と1,000,000行の安全な拒否を各3回測定し、wall time・peak RSS・正確性をJSONへ保存する（cross-platform/release/fixture拡張は未完了）。
+- [x] macOSのdebug binaryでdense/sparse/style-heavy/formula-heavy/mixedの大容量XLSX fixtureを各3回測定し、ZIP/XML構造・snapshot正確性・wall time・peak RSSをJSONへ保存する（cross-platform/release/oracle/reclamation拡張は未完了）。
+- [x] 高密度5列および4シート構成を追加したXLSX fixtureを各3回測定し、シート数・row/cell・style/formula構造とsnapshot正確性・wall time・peak RSSをJSONへ保存する（cross-platform/release/oracle/reclamation拡張は未完了）。
+- [x] dense/mixed/multi-sheet-4のCLI子プロセスを各10回逐次実行し、終了待ち・残存プロセスなし・snapshot正確性・child peak RSS・親測定プロセスRSS差分をJSONへ保存する（in-process allocator/長時間soak/cross-platform拡張は未完了）。
+- [x] Rustのbuffer reader APIを同一プロセス内でdense/mixed/multi-sheet-4各10回（計30回）soakし、drop後のmacOS malloc統計・正確性・wall timeをJSONへ保存する（他OS/他allocator/書込・mutation経路/より長時間のsoakは未完了）。
+- [x] reader測定JSONのschema・メタデータ・反復成功・正確性を外部依存なしで再検証するvalidatorを追加する。
+- [x] reader測定JSON validatorをCIとローカル開発コマンドから実行できるようにする（測定そのものはmacOSローカル限定）。
+- [x] reader測定JSON validatorの正常系・拒否系self-testを追加し、CIで実行する。
+- [x] release reader校正とwrite/mutation soakのJSON成果物をCIの測定契約チェック対象へ追加する。
+- [x] release CLI binaryで既存の7系列大容量fixtureを各3回校正し、wall time・peak RSS・snapshot正確性をJSONへ保存する（cross-platform/oracle比較は未完了）。
+- [x] 測定専用Rust binをCargo registry packageから除外し、checkout内のローカル実行経路は維持する。
+- [x] 測定専用Rust binのCargo package除外とcheckout内の存在を外部依存なしで静的検証し、CIへ追加する。
+- [x] release Rustプロセス内でload→write_rect→set_cell_formula→save→再読込検証をdense/mixed/multi-sheet-4各5回実行し、drop後allocator統計・正確性・wall timeをJSONへ保存する（他OS/他allocator/長時間soak/追加mutationは未完了）。
+- [x] readerからVM構築までを分離して反復測定できるrelease専用helperを追加し、registry packageから除外したままローカル比較可能にする。
+- [x] `WorkbookSheet`からVMへセル・数式・シートメタデータを所有権移動し、全セルの文字列cloneとセルごとの可変sheet再検索を除去する。
+- [x] `XmlIter`のタグ名・通常テキスト・属性名を入力XMLからborrowし、実体参照を含む値だけを`Cow`で所有化するとともに、属性文法検証と属性生成を単一走査へ統合して短命文字列割当と属性列の二重parseを除去する。
+- [x] 通常readerのworksheet XMLについて、DTD・制御文字・整形式・要素/属性/深さ上限・重複属性・shared-string index検証とセル構築を単一イベント走査へ統合し、悪意ある入力の拒否理由を維持したまま検証用の全XML再走査を除去する。
 
 ## Security Phase S2 — parser / formula / VM の耐性
 

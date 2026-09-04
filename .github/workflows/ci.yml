@@ -38,6 +38,32 @@ jobs:
         working-directory: compat/oracle-excel-com
         run: python3 mechanical_check.py --self-test
 
+  reader-measurement-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: validate checked-in reader measurement artifacts
+        run: >-
+          python3 scripts/check-reader-measurements.py
+          docs/measurements/reader-large-2026-09-03.json
+          docs/measurements/reader-mixed-2026-09-03.json
+          docs/measurements/reader-density-sheets-2026-09-03.json
+          docs/measurements/reader-inprocess-soak-2026-09-03.json
+          docs/measurements/reader-reclamation-2026-09-03.json
+          docs/measurements/reader-release-2026-09-03.json
+          docs/measurements/reader-write-release-soak-2026-09-03.json
+
+      - name: validate reader measurement validator
+        run: python3 scripts/check-reader-measurements.py --self-test
+
+      - name: validate measurement package boundary
+        run: bash scripts/check-measurement-boundary.sh
+
   test:
     runs-on: ubuntu-latest
     steps:

@@ -10,7 +10,7 @@ object-injection vector, `@elixcee/xlsx` diverges deliberately and the divergenc
 recorded, not hidden. See [`docs/xlsx-compatibility-goal.md`](xlsx-compatibility-goal.md)
 for how this fits the overall compatibility definition.
 
-## Existing limits (1.0.0)
+## Existing limits (1.0.1)
 
 | Limit | Value | Where |
 |---|---|---|
@@ -40,6 +40,9 @@ for how this fits the overall compatibility definition.
 | VBA materialized cells | 5,000,000 across all sheets | `DEFAULT_MAX_VBA_CELLS`, `src/vm/mod.rs` |
 | Defined names | 100,000 | `DEFINED_NAMES_MAX_COUNT`, `src/reader.rs` |
 | Defined-name formula text | 1 MiB | `DEFINED_NAME_MAX_TEXT_BYTES`, `src/reader.rs` |
+| VBA source | 4 MiB | `MAX_VBA_SOURCE_BYTES`, `src/parser/mod.rs` |
+| VBA identifier | 1,024 characters | `MAX_VBA_IDENTIFIER_CHARS`, `src/parser/mod.rs` |
+| VBA tokens | 1,000,000 | `MAX_VBA_TOKENS`, `src/parser/mod.rs` |
 
 Python callers may adjust these VBA budgets with `Vm.set_budgets()`. An omitted argument
 uses its safe default; an explicit `None` opts out of that one limit. New VMs retain the
@@ -48,9 +51,6 @@ safe defaults above.
 At runtime, the default VM rejects the blocked external-effect class with a `SECURITY:`
 error. This rejection is not suppressible by `On Error Resume Next`; unrelated unsupported
 statements retain their existing no-op behavior.
-| VBA source | 4 MiB | `MAX_VBA_SOURCE_BYTES`, `src/parser/mod.rs` |
-| VBA identifier | 1,024 characters | `MAX_VBA_IDENTIFIER_CHARS`, `src/parser/mod.rs` |
-| VBA tokens | 1,000,000 | `MAX_VBA_TOKENS`, `src/parser/mod.rs` |
 
 The reader also rejects absolute paths, parent-directory components, and NUL bytes in
 ZIP entry names before any workbook part is consumed. All these checks run for the
@@ -58,20 +58,22 @@ path-based reader, the bytes-based reader, raw passthrough used during save, and
 streaming reader's shared ZIP path.
 
 The XML reader rejects DTD/ENTITY declarations, forbidden XML 1.0 control characters,
-and incomplete documents before the
-workbook-specific parser consumes them. The following XML/model limits remain explicitly
-absent today:
+and incomplete documents. Normal-reader worksheet XML performs those checks, resource
+accounting, shared-string validation, and cell construction in one event pass; other XML
+parts are validated before their workbook-specific parser consumes them. The following
+boundary remains explicit:
 
 - Formula strings outside defined names remain bounded by the existing XML text-node limit.
-- No wall-clock/parse-time budget on the reader itself (a loop-execution deadline exists
-  on `Vm`, but it only governs VBA execution *after* a workbook is already parsed).
+- Deadline and cancellation are cooperative. A blocking operating-system filesystem read
+  cannot be preempted; the request is observed at the next ZIP read/check boundary.
 
 XML nesting depth is a partial exception: `src/reader.rs`'s `XmlIter` is a flat,
 non-recursive pull parser (no DOM tree, no recursive descent), so pathological nesting
 depth cannot cause a Rust stack overflow the way a recursive-descent or DOM-building
 parser could. It can still cost time/memory through model construction, which is why the
-explicit document and workbook-model budgets above are complemented by the planned
-measurement phase below.
+explicit document and workbook-model budgets above are complemented by the dated
+measurement artifacts under `docs/measurements/` and the remaining cross-platform
+validation described below.
 
 ## `packages/xlsx` (JS) limits — distinct from the Rust reader above
 
@@ -90,15 +92,17 @@ per this project's standing rule against adding resource limits without measurem
 [`docs/limits.md`](limits.md) for the time/RSS measurement behind the 5,000,000-cell
 threshold specifically.
 
-## Remaining planned limits
+## Remaining validation
 
-| Limit | Rationale | Where it would live |
+| Item | Current boundary | Remaining evidence |
 |---|---|---|
-| OS-signal reader interruption | Lets CLI users request cancellation without creating a control file | The current CLI uses `--cancel-file`; the Rust/Python token and ZIP entry reader are cooperative |
+| OS-signal reader interruption | CLI SIGINT and cancel-file support are implemented | Linux/Windows real-signal E2E calibration |
+| Synchronous WASM cancellation | Default reader limits apply, but a running call cannot observe JavaScript cancellation | Worker termination or a future asynchronous API contract |
 
-The implemented work budget and chunk-level cooperative deadline/cancellation checks need representative
-large-file and malicious-fixture measurements before their defaults are treated as calibrated
-performance guarantees. The per-layer limits above remain the active safety boundary.
+The implemented work budget and chunk-level cooperative deadline/cancellation checks have
+dated macOS large-file, signal, and reclamation measurements under `docs/measurements/`.
+Those results are not cross-platform guarantees; the per-layer limits above remain the
+active safety boundary.
 
 ## Prototype-pollution-safe key handling
 
@@ -239,7 +243,7 @@ against is a real, currently-vulnerable version of a real package, not a hypothe
 
 ## Open items
 
-- Exact numeric values for every row in the "planned limits" table.
+- Cross-platform calibration of the implemented reader limits and cancellation paths.
 - Whether some limits should be user-configurable (an options field) vs. fixed
   constants — SheetJS itself has no such options, so any configurability here is new
   surface area that needs its own compatibility reasoning, not an automatic yes.

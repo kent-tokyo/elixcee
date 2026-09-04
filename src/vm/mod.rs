@@ -5154,7 +5154,7 @@ impl Vm {
         self.sheets.clear();
         self.sheet_order.clear();
         let mut names = Vec::with_capacity(sheets.len());
-        for sheet_data in &sheets {
+        for mut sheet_data in sheets {
             self.ensure_sheet(&sheet_data.name);
             let prev = self.active_sheet.clone();
             // Lowercased, matching `active_sheet`'s documented invariant —
@@ -5164,19 +5164,27 @@ impl Vm {
             // non-lowercase sheet name (found and fixed during extraction:
             // confirmed via a hand-crafted .xlsx with a sheet named "Input"
             // that panicked with "active sheet must exist" before this fix).
-            self.active_sheet = sheet_data.name.to_lowercase();
-            for (&(row, col), cell) in &sheet_data.cells {
+            let key = sheet_data.name.to_lowercase();
+            self.active_sheet = key.clone();
+            let mut formulas = std::mem::take(&mut sheet_data.formulas);
+            let source_cells = std::mem::take(&mut sheet_data.cells);
+            let target_cells = self
+                .sheets
+                .get_mut(&key)
+                .expect("just-inserted sheet must exist");
+            target_cells.reserve(source_cells.len().saturating_add(formulas.len()));
+            for ((row, col), cell) in source_cells {
                 let value = match cell {
-                    SheetCell::Integer(n) => Variant::Integer(*n),
-                    SheetCell::Float(f) => Variant::Float(*f),
-                    SheetCell::Str(s) => Variant::Str(s.clone()),
-                    SheetCell::Bool(b) => Variant::Boolean(*b),
-                    SheetCell::Error(e) => Variant::Error(e.clone()),
+                    SheetCell::Integer(n) => Variant::Integer(n),
+                    SheetCell::Float(f) => Variant::Float(f),
+                    SheetCell::Str(s) => Variant::Str(s),
+                    SheetCell::Bool(b) => Variant::Boolean(b),
+                    SheetCell::Error(e) => Variant::Error(e),
                 };
-                self.cells_mut().insert(
+                target_cells.insert(
                     (row, col),
                     CellContent {
-                        formula: sheet_data.formulas.get(&(row, col)).cloned(),
+                        formula: formulas.remove(&(row, col)),
                         value,
                     },
                 );
@@ -5190,31 +5198,28 @@ impl Vm {
             // text, but nothing ever reads `formulas` for a `(row, col)` `cells` doesn't
             // already have. Without this, such a formula silently vanished on load, even
             // though its text was successfully parsed one line up in `xlsx_sheet_cells`.
-            for (&(row, col), formula) in &sheet_data.formulas {
-                if sheet_data.cells.contains_key(&(row, col)) {
-                    continue; // already inserted above, with its real cached value
-                }
-                self.cells_mut().insert(
+            for ((row, col), formula) in formulas {
+                target_cells.insert(
                     (row, col),
                     CellContent {
-                        formula: Some(formula.clone()),
+                        formula: Some(formula),
                         value: Variant::Empty,
                     },
                 );
             }
+            self.cell_index_dirty = true;
             self.active_sheet = prev;
-            let key = sheet_data.name.to_lowercase();
             if !sheet_data.merged_ranges.is_empty() {
                 self.merged_ranges
-                    .insert(key.clone(), sheet_data.merged_ranges.clone());
+                    .insert(key.clone(), sheet_data.merged_ranges);
             }
             if !sheet_data.raw_style_indices.is_empty() {
                 self.cell_style_indices
-                    .insert(key.clone(), sheet_data.raw_style_indices.clone());
+                    .insert(key.clone(), sheet_data.raw_style_indices);
             }
             if !sheet_data.cell_number_formats.is_empty() {
                 self.cell_number_formats
-                    .insert(key.clone(), sheet_data.cell_number_formats.clone());
+                    .insert(key.clone(), sheet_data.cell_number_formats);
             }
             if !sheet_data.hidden_rows.is_empty() || !sheet_data.hidden_columns.is_empty() {
                 self.sheet_visibility.insert(
@@ -5222,13 +5227,13 @@ impl Vm {
                     SheetVisibility {
                         hidden_rows: sheet_data
                             .hidden_rows
-                            .iter()
-                            .map(|&(start, end)| Interval { start, end })
+                            .into_iter()
+                            .map(|(start, end)| Interval { start, end })
                             .collect(),
                         hidden_columns: sheet_data
                             .hidden_columns
-                            .iter()
-                            .map(|&(start, end)| Interval { start, end })
+                            .into_iter()
+                            .map(|(start, end)| Interval { start, end })
                             .collect(),
                     },
                 );
@@ -5238,38 +5243,36 @@ impl Vm {
                 self.sheet_states.insert(key.clone(), state);
             }
             if !sheet_data.row_heights.is_empty() {
-                self.row_heights
-                    .insert(key.clone(), sheet_data.row_heights.clone());
+                self.row_heights.insert(key.clone(), sheet_data.row_heights);
             }
             if !sheet_data.column_widths.is_empty() {
                 self.column_widths
-                    .insert(key.clone(), sheet_data.column_widths.clone());
+                    .insert(key.clone(), sheet_data.column_widths);
             }
             if !sheet_data.row_styles.is_empty() {
-                self.row_styles
-                    .insert(key.clone(), sheet_data.row_styles.clone());
+                self.row_styles.insert(key.clone(), sheet_data.row_styles);
             }
             if !sheet_data.column_styles.is_empty() {
                 self.column_styles
-                    .insert(key.clone(), sheet_data.column_styles.clone());
+                    .insert(key.clone(), sheet_data.column_styles);
             }
             if !sheet_data.tables.is_empty() {
-                self.tables.insert(key.clone(), sheet_data.tables.clone());
+                self.tables.insert(key.clone(), sheet_data.tables);
             }
             if !sheet_data.data_validations.is_empty() {
                 self.data_validations
-                    .insert(key.clone(), sheet_data.data_validations.clone());
+                    .insert(key.clone(), sheet_data.data_validations);
             }
-            if let Some(af) = sheet_data.autofilter.clone() {
+            if let Some(af) = sheet_data.autofilter {
                 self.autofilters.insert(key.clone(), af);
             }
             self.worksheet_origins.insert(
                 key.clone(),
                 WorksheetOrigin {
-                    original_sheet_id: sheet_data.sheet_id.clone(),
-                    original_workbook_rel_id: sheet_data.workbook_rel_id.clone(),
-                    original_part_name: sheet_data.source_part_name.clone(),
-                    original_display_name: Some(sheet_data.name.clone()),
+                    original_sheet_id: sheet_data.sheet_id,
+                    original_workbook_rel_id: sheet_data.workbook_rel_id,
+                    original_part_name: sheet_data.source_part_name,
+                    original_display_name: Some(sheet_data.name),
                 },
             );
             names.push(key);

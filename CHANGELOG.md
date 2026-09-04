@@ -2,6 +2,15 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [1.0.1] - 2026-09-04
+
+- readerの総work budget、deadline、協調キャンセルをRust/Python/CLIへ通し、CLIではSIGINTとcancel-fileから安全に中断できるようにしました。
+- ZIP/XMLのchunk境界でキャンセルを確認し、キャンセル・大容量入力・反復資源回収・read/mutate/write経路をローカルfixtureで校正しました。
+- XMLイベントをborrow/`Cow`化し、worksheetの構文・資源・shared-string検証とセル構築を単一走査へ統合しました。
+- `WorkbookSheet`からVMへの変換を所有権移動に変更し、セル値・数式・シートメタデータの不要なcloneを除去しました。
+- macOS arm64のrelease build、dense 400,000セル、3回のローカル比較で、reader→VMロード中央値を約1,386.5 msから650.5 msへ短縮しました（約2.13倍、条件と制約は`docs/measurements/reader-optimization-2026-09-04.md`参照）。
+- reader測定成果物のsemantic validator、拒否系self-test、Cargo package境界チェックをCIへ追加しました。
+
 ## [1.0.0] - 2026-09-01
 
 - 文書化されたデータ処理サブセットと、安全な失敗動作をv1サポート契約として固定しました。

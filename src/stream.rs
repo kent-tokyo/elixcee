@@ -25,6 +25,7 @@ const MAX_STREAM_ROW_BYTES: usize = 16 * 1024 * 1024;
 /// Bound the pending rows retained by the append-only writer before `close()`
 /// materializes them into the normal workbook writer.
 const MAX_STREAM_WRITER_BYTES: usize = 64 * 1024 * 1024;
+type StreamRowResult = Result<(u32, Vec<Variant>), String>;
 
 fn estimated_variant_bytes(value: &Variant) -> usize {
     match value {
@@ -157,7 +158,7 @@ fn stream_rows(
     sheet: Option<String>,
     max_row_bytes: usize,
     max_columns: usize,
-) -> Result<Receiver<Result<(u32, Vec<Variant>), String>>, String> {
+) -> Result<Receiver<StreamRowResult>, String> {
     let (zip_path, _) = sheet_target(&path, sheet.as_deref())?;
     let (tx, rx) = mpsc::sync_channel(2);
     std::thread::spawn(move || {
@@ -294,7 +295,7 @@ pub struct PyStreamReader {
     rows_read: usize,
 }
 
-type RowReceiver = Mutex<Receiver<Result<(u32, Vec<Variant>), String>>>;
+type RowReceiver = Mutex<Receiver<StreamRowResult>>;
 
 pub(crate) fn stream_reader_from_path(
     path: &str,
