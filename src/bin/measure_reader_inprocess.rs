@@ -36,11 +36,6 @@ fn allocator_stats() -> Option<MallocStatistics> {
     Some(stats)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn allocator_stats() -> Option<()> {
-    None
-}
-
 fn json_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -65,6 +60,7 @@ fn main() {
         std::process::exit(2);
     });
     let input_bytes = bytes.len();
+    #[cfg(target_os = "macos")]
     let baseline = allocator_stats();
     let started = Instant::now();
     let mut successes = 0usize;
@@ -93,10 +89,11 @@ fn main() {
                 stats.size_in_use, stats.size_allocated, stats.blocks_in_use
             )
         });
-        #[cfg(not(target_os = "macos"))]
-        let allocator_json: Option<String> = None;
+        #[cfg(target_os = "macos")]
         let allocator_json =
             allocator_json.unwrap_or_else(|| "\"allocator_stats\":null".to_string());
+        #[cfg(not(target_os = "macos"))]
+        let allocator_json = "\"allocator_stats\":null".to_string();
         observations.push(format!(
             "{{\"iteration\":{},\"cells\":{},\"wall_ms\":{:.3},{} }}",
             iteration,
@@ -113,10 +110,11 @@ fn main() {
             stats.size_in_use, stats.size_allocated
         )
     });
-    #[cfg(not(target_os = "macos"))]
-    let baseline_json: Option<String> = None;
+    #[cfg(target_os = "macos")]
     let baseline_json =
         baseline_json.unwrap_or_else(|| "\"allocator_stats_supported\":false".to_string());
+    #[cfg(not(target_os = "macos"))]
+    let baseline_json = "\"allocator_stats_supported\":false".to_string();
     println!(
         "{{\"fixture\":{},\"input_bytes\":{},\"iterations\":{},\"successes\":{},\"total_cells\":{},\"wall_ms\":{:.3},{},\"observations\":[{}]}}",
         json_string(&fixture),

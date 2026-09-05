@@ -3390,12 +3390,14 @@ fn reject_symlink_output(path: &str) -> Result<(), String> {
 fn write_output_atomically(path: &str, data: &[u8]) -> Result<(), String> {
     use std::io::Write;
 
-    let (temporary, mut file) = create_atomic_output_temp(path)?;
-    let write_result = file
-        .write_all(data)
-        .and_then(|_| file.flush())
-        .and_then(|_| file.sync_all());
-    drop(file);
+    let (temporary, write_result) = {
+        let (temporary, mut file) = create_atomic_output_temp(path)?;
+        let write_result = file
+            .write_all(data)
+            .and_then(|_| file.flush())
+            .and_then(|_| file.sync_all());
+        (temporary, write_result)
+    }; // Close the file before cleanup or rename on native platforms.
     if let Err(error) = write_result {
         let _ = std::fs::remove_file(&temporary);
         return Err(format!("cannot write temporary output: {error}"));
