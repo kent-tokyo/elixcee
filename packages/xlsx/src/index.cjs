@@ -1094,7 +1094,7 @@ function makeHtmlRow(sheet, r, R, o) {
     if (RS < 0) continue;
     const coord = encodeCell({ r: R, c: C });
     const cell = o.dense ? (sheet[R] || [])[C] : sheet[coord];
-    const cellText = cell && cell.h && o.rawHtml === true ? cell.h : (cell && cell.w || (cell && formatCell(cell), cell && cell.w) || '');
+    const cellText = cell && cell.h || (cell && cell.w || (cell && formatCell(cell), cell && cell.w) || '');
     const renderedText = cell && cell.h && o.rawHtml === true ? cellText : escapeHtmlText(cellText);
     let w = (cell && cell.v != null && renderedText) || '';
     const sp = {};

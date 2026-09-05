@@ -4,26 +4,21 @@
 
 The root `elixcee` crate owns the Rust workbook model, hand-written XML reader,
 formula engine, VBA parser/VM, and ZIP-based writer. `elixcee-types` contains
-shared value types. `elixcee-wasm` exposes the reader/writer to the JavaScript
-package in `packages/xlsx`.
+shared value types. The JavaScript package uses `elixcee-wasm` for reading;
+its public write APIs use a separate JavaScript OOXML/ZIP writer.
 
 Runtime dependencies are intentionally small: `zip` is used for workbook
 containers and PyO3 is optional for the Python feature. XML parsing and the VBA
 parser are hand-written. This keeps the CLI, Python extension, and WASM build
-on the same core implementation.
+on the same Rust core for native operations. The JS facade has its own API and writer boundaries.
 
 ## Data flow
 
-```text
-.xlsx/.xlsm/.ods
-        │
-        ▼
-  Rust reader ──► Vm / workbook model ──► Rust writer ──► workbook file
-                         │
-                         ├── CLI
-                         ├── Python (PyO3)
-                         └── WASM → @elixcee/xlsx
-```
+Native: workbook → Rust reader → VM/workbook model → Rust writer → file.
+CLI and Python wrap that native path.
+
+JavaScript: bytes → Rust/WASM reader → JS workbook object → JS writer → bytes.
+Node file APIs wrap these byte APIs; browsers use in-memory APIs only.
 
 The VM uses 1-based row and column coordinates at its public boundaries, as
 Excel/VBA does. Cell values and formulas are stored separately so formulas can
@@ -52,8 +47,8 @@ private and is not published yet.
 
 The native Rust and Python readers expose the same cooperative read controls:
 the default total work budget is 2 GiB-equivalent units, Python additionally
-exposes `timeout_ms` and `ReadCancellation`, and the CLI exposes equivalent
-deadline/signal controls. The WASM `readWorkbook(bytes)` export remains
+exposes `timeout_ms` and `ReadCancellation`, and CLI snapshot exposes work-budget/deadline/cancel-file controls.
+Run-mode --file uses the default budget with signal cancellation. The WASM `readWorkbook(bytes)` export remains
 synchronous and takes only the input buffer; it applies the reader's default
 limits but cannot observe a JavaScript cancellation request during the call.
 Applications that need hard cancellation should run the synchronous call in a

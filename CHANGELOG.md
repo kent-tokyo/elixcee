@@ -2,6 +2,46 @@
 
 重要な変更を [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 形式で記録します。
 
+## [Unreleased]
+
+次の開発分はここに記録します。
+
+## [1.0.2] - 2026-09-06
+
+性能値は各リンク先の測定時点（1.0.1表記の開発ツリー）の記録です。公開済み1.0.1との比較や、1.0.2タグそのものの再測定と混同しないでください。
+
+- JSの`sheet_to_html`が既定で`cell.h`を捨てずにエスケープ表示するよう修正しました。生HTMLの出力は引き続き明示的な`rawHtml: true`に限定します。JSパッケージはprivateのままです。
+- CLI契約・ロードマップ・各言語README・互換性／資源／配布境界の文書を整理し、0.x変更履歴を別文書へ移動しました。過去の測定条件と未達結果は保持しています。
+- 数式校正バイナリもCargo配布対象から除外し、通常のvタグでCLI配布物を作成するよう公開workflowを統一しました。
+- 大規模XLSX向けに、保存時の行別tree／配列を単一の座標sortへ変更し、セル番地をスタック上で生成するようにしました。Readerでは属性配列とセル型の作業領域を再利用し、タグ境界・重複属性・禁止宣言の検査コストを削減しました。直前の実装に対する20組の交互測定で、10万／40万／100万セル（25万×4シート）の全体中央値は1.180／1.318／1.196倍でした。厳密な1.2倍目標の達成は40万セルのみです。全ZIP部品の展開後バイト一致、全ターゲットtest／全feature clippyを確認し、保存耐久性・入力制限・versionを維持しました。生データと小規模／文字列混在の回帰測定は `docs/benchmarks/workbook-large-speedup-2026-09-06.md` を参照してください。
+- opaque XML要素検索で、不在の要素名を先に判定し、タグ名の一時`String`生成をborrowへ置換しました。共有文字列収集では文字列セルだけを座標順に並べ替え、数値セルの不要なsort／lookupを削減しました。直前の実装を基準とした40組の交互測定で、数値1万／10万セル・混在1万セルは約2倍に高速化し、全ZIP部品の展開後バイト一致を確認しました。小規模は約1.09倍で1.2倍目標未達です。保存耐久性とversionは維持し、詳細は `docs/benchmarks/workbook-speedup120-2026-09-06.md` に記録しました。
+- ClosedXML 0.105.1／.NET SDK 10.0.400を固定した比較用workerを追加しました。macOSの同一入力・編集・`F_FULLFSYNC`・atomic rename・再読込条件で、elixcee／ClosedXML／openpyxlを3ケース各30反復×2回測定しました。両runの全ケースでelixceeの中央値がClosedXMLを下回りましたが、高負荷環境の大きなp95変動とラウンド単位の逆転も含め、暫定値として `docs/benchmarks/workbook-closedxml-2026-09-06.md` に記録しました。C#依存は製品の依存関係に追加していません。
+- 公開されている低レベルcell map経由で数式本文が変更された場合も、warmな依存計画を無効化して再評価するよう修正しました。
+- worksheet XMLを一時的な巨大`String`へ構築せず、保存先の`ZipWriter`へ直接ストリーミングするsink経路へ変更しました。passthrough entry全量保持の削減は引き続き未完了です。
+- passthrough entry はメタデータ解析後に所有権移動するようにし、保存用payloadの不要な二重cloneを除去しました。raw ZIP全体の遅延展開は引き続き未完了です。
+- dirty/full-rescan の代表値一致を検査しながら p50/p95 を出力する、formula dirty propagation のローカル校正バイナリを追加しました。
+- formula dirty propagation の校正を100式／1,000式のcontrolled matrixへ拡張し、各ケースのp50/p95とfull-rescan一致を記録しました。
+- formula dirty propagation の測定バイナリに、Unixのpeak RSS・user/system CPUカウンタ出力を追加しました。
+- manual→automatic遷移と循環参照のp50/p95校正も追加し、dirty propagationの測定行列を拡張しました。
+- release-profile 10反復の dirty/full matrix と resource counter 結果を測定成果物へ保存しました。
+- Writerのworksheet sink／passthrough clone削減後に代表XLSXのrelease保存soakを3回実行し、round-tripとallocator結果を保存しました。
+- formula dirty propagation の release matrix を30反復へ拡張し、p95の再現性を測定成果物へ保存しました。
+- elixcee／openpyxl／LibreOfficeの初回XLSX速度比較と、比較不能条件を含む公開用ベンチマーク成果物を追加しました。
+- openpyxl比較に保存後fsyncを追加した初期5反復を記録しました。ただしmacOSのRust `sync_all`（`F_FULLFSYNC`）とは不一致だったため、この初期測定を公平な比較とする説明を撤回しました。
+- 標準の耐久性保証を変えず、最終fsyncを省略する明示的な `save_workbook_fast` APIを追加しました。高速経路はクラッシュ耐性が弱いため用途を限定します。
+- XLSX writerを圧縮前後の64 KiBバッファとシーク不要のZIP出力へ変更し、標準の `sync_all`／atomic renameを維持したまま細切れ書き込みを削減しました。数値1万／10万セルの保存中央値を変更前より約49%／55%短縮しました。
+- macOS `F_FULLFSYNC`まで一致させたopenpyxl 3.1.2比較を、3ケース・30反復＋独立40反復で実測しました。未公開Rust APIのload/edit/save/reload中央値は再測定で1.90〜2.98倍高速でした。条件・p95・全生データは `docs/benchmarks/workbook-equal-durable-2026-09-06.md` を参照してください。
+- 純粋な VM 内 `Scripting.Dictionary` adapter を追加しました。`New`、キーの追加・検索・削除、`CompareMode`、挿入順のキー列挙をサポートし、`CreateObject` の外部効果遮断は維持します。
+- VBA built-in `Collection`を追加しました。`New Collection`、1-based index、case-insensitive key、`Add`/`Remove`/`Item`/`Count`、値/object `For Each`、object-valued itemの`Set`取得、`With`、参照alias、到達可能性回収、要素budgetに対応します。
+- Collectionの`Call c.Add(...)`/`Call c.Remove(...)`構文と、export済みclass moduleの基本object連携（生成、instance field、初期化、Sub/Function、Collection/`For Each`/`With`）を追加しました。
+- class moduleの非indexed Property Get/Let/Set、object-valued field/引数、`Class_Terminate`、`Implements`署名検証、Private/Friend境界、class object arrayを追加しました。
+- indexed `Property Get/Let/Set`、型付き引数を受けるobject-returning class `Function`、interface宣言型を保持する厳密なSub/Function/Property dispatch（`With`を含む）を追加しました。
+- Range objectの相対`.Cells`/`.Range`、1-based default `Item`/`Value`、`With`内の相対参照を追加しました。
+- Worksheetの`Name`/`Index`/`Visible`/`UsedRange`/`Activate`/`Select`と、Workbookの`Name`/`ActiveSheet`/`Worksheets.Count`/`Sheets.Count`をdirect/object参照へ追加しました。シート名変更後も保持中のWorksheet/Range参照は同じシートを指し続けます。
+- `Range.SpecialCells(Type[, Value])`を全`XlCellType`定数へ拡張し、定数/数式の型mask、空白、最終セル、入力規則、条件付き書式、legacy comment、該当なし1004、走査budgetに対応しました。
+- Range、Collection、イベント、外部オブジェクトの残作業を安全境界ごとに分割してロードマップへ追加しました。
+- 小容量入力が監視threadの初回pollより先に完了しても、事前作成済みCLI cancel-fileを確実に反映するよう競合を修正しました。
+
 ## [1.0.1] - 2026-09-04
 
 - readerの総work budget、deadline、協調キャンセルをRust/Python/CLIへ通し、CLIではSIGINTとcancel-fileから安全に中断できるようにしました。
@@ -17,389 +57,6 @@
 - 完全なExcel/VBA互換性を主張せず、`supported`、`preserved`、`warned`、`rejected`、`unverified`の境界を公開しました。
 - READMEとセキュリティモデルのリリース表記を1.0.0へ更新しました。
 
-## [0.94.0] - 2026-09-01
+## Older releases
 
-- XML要素のタグ名と属性構文を厳格に検証し、属性の`=`欠落、未クォート値、未終了クォート、タグ名欠落を拒否するようにしました。
-- 不正な属性を部分的に解釈して成功扱いする経路を閉じ、通常reader・stream reader共通の入力エラー契約を強化しました。
-
-## [0.93.0] - 2026-08-31
-
-- 未終了のコメント、CDATA、終了タグ、属性付きタグをXML入力エラーとして拒否するようにしました。
-- 軽量XML反復器が壊れた構文を末尾まで黙って消費せず、通常reader・stream reader共通で部分的な成功を防ぎます。
-
-## [0.92.0] - 2026-08-31
-
-- XML予算検証でルート要素を必須・一意とし、ルート外の非空テキストを拒否するようにしました。
-- 複数ルートやルートなしのXMLを部分的な入力として処理せず、通常reader・stream reader共通で入力エラーにします。
-
-## [0.91.0] - 2026-08-31
-
-- XMLの開始タグと終了タグの名前一致をXML予算検証で確認するようにしました。
-- 要素の深さだけが一致する壊れたXMLを成功扱いせず、通常reader・stream reader共通で入力エラーにします。
-
-## [0.90.0] - 2026-08-31
-
-- XML要素内の重複属性を通常reader・stream reader共通のXML予算検証で拒否するようにしました。
-- 同名属性の先勝ち・後勝ち解釈による入力の曖昧性をなくし、XLSX/XML入力を明示的に失敗させます。
-
-## [0.89.0] - 2026-08-31
-
-- 31文字を超えるworksheet名と、Excelで禁止される`: \\ / ? * [ ]`文字を通常reader・stream readerの双方で拒否するようにしました。
-- 無効なworksheet名を曖昧な参照・保存対象として受け入れず、入力エラーとして扱います。
-
-## [0.88.0] - 2026-08-31
-
-- 空のworksheet名・relationship ID、および0/非数値の`sheetId`を通常reader・stream readerの双方で拒否するようにしました。
-- Workbook識別子の不正値を既定値へ変換せず、明示的な入力エラーとして扱います。
-
-## [0.87.0] - 2026-08-31
-
-- 必須属性が欠けたworksheet要素や、自己終了形式でないworksheet要素を通常reader・stream readerで拒否するようにしました。
-- 不完全な`workbook.xml`のsheet要素を黙って無視せず、部分的なWorkbook成功を防ぎます。
-
-## [0.86.0] - 2026-08-31
-
-- 重複`sheetId`と未知のworksheet `state`値を通常reader・stream readerの双方で拒否するようにしました。
-- `visible`、`hidden`、`veryHidden`以外の状態を黙ってvisibleへ変換せず、Workbookメタデータの解釈を明示的に失敗させます。
-
-## [0.85.0] - 2026-08-31
-
-- Workbook内のworksheet名重複（大文字小文字違いを含む）と`r:id`重複を通常reader・stream readerで拒否するようにしました。
-- 曖昧なシート名・参照先の後勝ち解決を防ぎ、Workbookメタデータの解釈を決定的にしました。
-
-## [0.84.0] - 2026-08-31
-
-- worksheet relationshipの重複`Id`を通常reader・stream readerの双方で拒否するようにしました。
-- relationshipの後勝ち解決を廃止し、同じworksheet参照が入力順に依存しないようにしました。
-
-## [0.83.0] - 2026-08-31
-
-- worksheet relationshipの`TargetMode="External"`を通常reader・stream readerの双方で拒否するようにしました。
-- worksheetを外部URLや外部参照として解釈せず、内部ZIP partだけを入力対象にする境界を統一しました。
-
-## [0.82.0] - 2026-08-31
-
-- worksheet relationship targetの正規化とZIPルート脱出拒否を通常readerにも適用しました。
-- 通常readerとstream readerが同じ安全なrelationship解決境界を共有し、異常な相対targetを部分成功として扱わないようにしました。
-
-## [0.81.0] - 2026-08-31
-
-- 通常のXLSX readerが、worksheet relationshipまたはworksheet partの欠落をシートの黙ったスキップとして扱わず、明示的な入力エラーを返すようにしました。
-- 欠損したシートを含むWorkbookの部分的な成功を防ぎ、通常readerとstream readerの失敗契約を統一しました。
-
-## [0.80.0] - 2026-08-31
-
-- 通常のXLSX readerが、存在する`styles.xml`やworksheet XMLの読み込みエラーを既定値やシート欠落へ変換せず、明示的な入力エラーとして返すようにしました。
-- 欠落している任意partだけは従来どおり互換フォールバックし、部分的なWorkbook成功を防止します。
-
-## [0.79.0] - 2026-08-31
-
-- 通常のXLSX readerにも共有文字列インデックスの範囲検証を適用し、stream readerとの入力整合性を統一しました。
-- 存在する`sharedStrings.xml`の読み込み・検証エラーを空テーブルとして握りつぶさないようにしました。
-
-## [0.78.0] - 2026-08-31
-
-- ストリーミングreaderが不正な共有文字列インデックスを空セルへ変換せず、明示的な入力エラーとして返すようにしました。
-- 共有文字列参照の範囲検証を追加し、通常readerと同様に不完全な入力を成功扱いしないようにしました。
-
-## [0.77.0] - 2026-08-31
-
-- ストリーミングreaderにも共有文字列テーブルの件数・総サイズ上限を適用し、通常readerと同じ資源制限で検証するようにしました。
-- 上限超過時に共有文字列を部分的に処理せず、明示的なエラーとして返します。
-
-## [0.76.0] - 2026-08-31
-
-- ストリーミングreaderが、存在する`sharedStrings.xml`の破損・上限超過を空テーブルとして握りつぶさず、明示的なエラーとして返すようにしました。
-- `sharedStrings.xml`が本当に存在しない場合だけ、従来どおり空の共有文字列テーブルとして扱います。
-
-## [0.75.0] - 2026-08-31
-
-- ストリーミングreaderが不正UTF-8の行を黙って破棄せず、明示的なエラーとして返すようにしました。
-- 終端のないworksheet rowを成功扱いにしない回帰防御を追加しました。
-
-## [0.74.0] - 2026-08-31
-
-- ストリーミングwriterが保存失敗時に保留行を失わないようにし、同じwriterで安全に再試行できるようにしました。
-- 保存成功後にだけ保留行・pending bytesを解放する回帰テストを追加しました。
-
-## [0.73.0] - 2026-08-31
-
-- ストリーミングwriterのネスト値サイズ見積もりを飽和加算に変更し、整数オーバーフローによるpending-byte制限の回避を防止しました。
-- 行単位のサイズ集計にも同じ保護を適用し、回帰テストを追加しました。
-
-## [0.72.0] - 2026-08-31
-
-- CIに固定版`cargo-deny 0.19.9`の依存監査を追加し、advisory、license、source、duplicate dependencyの検査を継続的に実行するようにしました。
-- ローカルの`cargo deny check --disable-fetch`とCIの依存ポリシーを同じ`deny.toml`で検証するようにしました。
-
-## [0.71.0] - 2026-08-31
-
-- Rustワークスペースのclippy警告を解消し、CIの`-D warnings`を実装コード全体へ適用できる状態にしました。
-- `cargo-deny`のlicense/sourceポリシーを追加し、依存監査をローカルでも再現できるようにしました。
-
-## [0.67.0] - 2026-08-31
-
-- v0.66で導入した未対応入力拡張子の決定的エラーを、VMのWorkbook読み込みAPIでもそのまま伝播するようにしました。
-- 拒否された入力パスを上位APIのエラーメッセージへ再露出しない回帰テストを追加しました。
-
-## [0.68.0] - 2026-08-31
-
-- 実装済みのZIP/XML/Workbook/VBA各種上限をsecurity modelの現行契約へ同期しました。
-- 未実装の全体read work budget、defined-name数上限、reader cancellation budgetだけを残課題として明示しました。
-
-## [0.69.0] - 2026-08-31
-
-- Workbookのdefined-name一覧に10万件の上限を追加し、超過時は部分的な一覧を返さず明示的に拒否するようにしました。
-- defined-name上限をsecurity modelとresource limits文書へ反映しました。
-
-## [0.70.0] - 2026-08-31
-
-- defined-nameの式文字列を1MiBまでに制限し、超過時は部分結果を返さず明示的に拒否するようにしました。
-- defined-nameの件数・式文字列長の上限をセキュリティ文書へ反映しました。
-
-## [0.66.0] - 2026-08-31
-
-- パス指定のWorkbook readerが、未対応または拡張子なしの入力をファイルアクセス前に決定的なエラーとして拒否するようにしました。
-- `.xlsx`・`.xlsm`・`.ods`の大文字小文字を区別しない入力形式境界を回帰テストで固定しました。
-
-## [0.48.0] - 2026-08-31
-
-- ZIP入力にentry数、entryごとの展開後サイズ、総展開サイズ、圧縮率の上限を適用しました。
-- ZIPエントリ名の絶対パス、親ディレクトリ参照、NUL文字を拒否する回帰テストを追加しました。
-- `docs/xlsx-security-model.md`と`docs/limits.md`を実装済みの入力境界に同期しました。
-- XMLの要素数、属性数、属性値、テキストノード、入れ子深度に上限を追加しました。
-- DTD/ENTITY宣言と不完全なXML文書を拒否する回帰テストを追加しました。
-
-## [0.49.0] - 2026-08-31
-
-- Workbookのシート数、シートごとのセル数・結合範囲数、共有文字列の件数・総サイズに上限を追加しました。
-- 共有モデル上限の拒否条件を純粋な検証関数として回帰テストに追加しました。
-
-## [0.50.0] - 2026-08-31
-
-- 数式パーサーに入力長、参照数、ASTノード数、ネスト深度の上限を追加しました。
-- 深い括弧・関数ネストと過大な数式入力を安全なパースエラーにしました。
-
-## [0.51.0] - 2026-08-31
-
-- VBA parserにソース長、識別子長、トークン数の上限を追加しました。
-- 過大なVBAソースをAST構築前に決定的なパースエラーとして拒否するテストを追加しました。
-
-## [0.52.0] - 2026-08-31
-
-- VBA VMに決定的な命令数上限を追加し、無限ループや過大な実行をwall-clock設定なしでも停止できるようにしました。
-- 命令数上限の超過を`BUDGET:`エラーとして返す回帰テストを追加しました。
-
-## [0.53.0] - 2026-08-31
-
-- VBA Sub/Functionの再帰・ネスト呼び出し深度にデフォルト上限を追加しました。
-- 呼び出し深度超過を`BUDGET:`エラーとして安全に停止する回帰テストを追加しました。
-
-## [0.54.0] - 2026-08-31
-
-- VBA VMに文字列サイズと配列要素数のデフォルトbudgetを追加しました。
-- 上限超過を`BUDGET:`エラーとして安全に停止する回帰テストを追加しました。
-
-## [0.55.0] - 2026-08-31
-
-- Pythonの`Vm.set_budgets()`から、VBAの命令数・呼び出し深度・文字列・配列budgetを個別に設定できるようにしました。
-- 既定値は変更せず、明示的な`None`で個別budgetを無制限にできるAPI契約を追加しました。
-
-## [0.56.0] - 2026-08-31
-
-- VBA実行中にワークブック全体へ保持できるセル数のデフォルトbudgetを追加しました。
-- `Vm.set_budgets()`からセル数上限も設定でき、超過は`BUDGET:`エラーとして停止します。
-
-## [0.57.0] - 2026-08-31
-
-- `check`でShell、COM/object creation、WScript、ファイル操作相当の外部作用を`E1010`として明示的に拒否するようにしました。
-- 既定VMが外部作用を実行しないことを、unsupported情報と区別したエラー契約として文書化しました。
-
-## [0.58.0] - 2026-08-31
-
-- 既定VMでShell、COM/object creation、WScript、ファイル操作相当を実行時にも`SECURITY:`エラーとして拒否するようにしました。
-- `On Error Resume Next`で外部作用の遮断エラーを握り潰せないことを回帰テストで固定しました。
-
-## [0.65.0] - 2026-08-31
-
-- 保存APIが`.xlsx`・`.xlsm`・`.ods`以外の拡張子へ誤ってXLSXを書き出さないよう、明示的に拒否するようにしました。
-- 未対応拡張子ではファイルを作成しない回帰テストを追加しました。
-
-## [0.64.0] - 2026-08-31
-
-- 既存出力ファイルのpermissionを原子的保存後も保全するようにしました。
-- read-only出力をrenameで迂回して上書きせず、明示的に拒否するようにしました。
-
-## [0.63.0] - 2026-08-31
-
-- XLSX/ODSを同一ディレクトリの一時ファイルへ完全に書き込んでから公開する原子的保存に変更しました。
-- 保存途中の失敗で既存の出力成果物が部分的に上書きされないようにしました。
-
-## [0.62.0] - 2026-08-31
-
-- XLSX/ODSの保存先パス途中にあるsymbolic linkも検出し、リンク先への意図しない書き込みを拒否するようにしました。
-- 保存先と親ディレクトリのsymlink拒否、およびリンク先データ保全を確認する回帰テストを追加しました。
-
-## [0.61.0] - 2026-08-31
-
-- XLSX/ODSの保存先が既存のsymbolic linkの場合、リンク先を上書きせず明示的に拒否するようにしました。
-- 保存先symlinkの拒否とリンク先データ保全を確認する回帰テストを追加しました。
-
-## [0.60.0] - 2026-08-31
-
-- `sheet_to_html`のリンクURL判定で前後空白、制御文字、バックスラッシュを拒否するようにしました。
-- ブラウザのURL正規化によるscheme/host解釈の揺れを避ける回帰テストを追加しました。
-
-## [0.59.0] - 2026-08-31
-
-- `sheet_to_html`の`cell.h`をデフォルトでescapeし、未信頼値がraw HTMLとして描画されないようにしました。
-- 互換性が必要な利用者向けに、`rawHtml: true`の明示opt-inを追加しました。
-
-## [0.46.0] - 2026-08-31
-
-- `Vm.snapshot()`に`hidden_rows`/`hidden_columns`を追加し、行列の非表示状態を取得できるようにしました。
-
-## [0.45.0] - 2026-08-31
-
-- `Vm.snapshot()`に`merged_ranges`を追加し、結合セル範囲をA1記法で取得できるようにしました。
-
-## [0.44.0] - 2026-08-31
-
-- `Vm.snapshot()`に`sheet_states`を追加し、シートの表示状態を取得できるようにしました。
-
-## [0.43.0] - 2026-08-31
-
-- `Vm.snapshot()`に`calculation_mode`を追加し、Automatic/Manual計算状態を取得できるようにしました。
-
-## [0.42.0] - 2026-08-31
-
-- `Vm.snapshot()`に`defined_names`を追加し、名前定義を含むワークブック状態を取得できるようにしました。
-
-## [0.41.0] - 2026-08-31
-
-- `Vm.snapshot()`に`sheet_order`を追加し、ワークシートのタブ順を保持できるようにしました。
-
-## [0.40.0] - 2026-08-31
-
-- `Vm.snapshot(include_formulas=True)`で、セルの計算結果と保存数式を分離して取得できるようにしました。
-
-## [0.39.0] - 2026-08-31
-
-- `diagnose_macro()`を追加し、Pythonから構造化されたVBA診断JSONを取得できるようにしました。
-
-## [0.38.0] - 2026-08-31
-
-- `Vm.snapshot()`を追加し、VMの全シートを独立したPython辞書として取得できるようにしました。
-
-## [0.37.0] - 2026-08-31
-
-- `Vm.fork()`を追加し、ワークブックとVBA実行状態を独立コピーしてバッチ処理に利用できるようにしました。
-
-## [0.36.0] - 2026-08-31
-
-- Pythonの同一`Vm`で同じVBAソースを再実行する際、解析済みASTを再利用するようにしました。
-
-## [0.35.0] - 2026-08-31
-
-- `Vm`/`run_macro`に`timeout_ms`を追加し、PythonからVBA実行期限を設定できるようにしました。
-
-## [0.34.0] - 2026-08-31
-
-- `open_stream`/`StreamReader`に`timeout_ms`を追加し、次の行を待つ時間を制限できるようにしました。
-
-## [0.33.0] - 2026-08-31
-
-- `create_stream`/`StreamWriter`に`max_columns`を追加し、各保留行の列数上限を設定できるようにしました。
-
-## [0.32.0] - 2026-08-31
-
-- `create_stream`/`StreamWriter`に`max_rows`を追加し、保留行数の上限を設定できるようにしました。
-
-- `open_stream`/`StreamReader`に`max_columns`を追加し、1行の列数上限を入力ごとに設定できるようにしました。
-- `open_stream`/`StreamReader`に`max_row_bytes`を追加し、1行のXMLバッファ上限を入力ごとに設定できるようにしました。
-- `open_stream`/`StreamReader`に`max_rows`を追加し、読み取り行数を上限設定できるようにしました。
-- StreamReaderとStreamWriterに明示的な`close()`/`closed`ライフサイクルAPIを追加しました。
-- StreamingReaderの契約を安定化し、`include_row_numbers=True`で疎なワークシートの
-  元のExcel行番号を返すようにしました。
-- 空行・空セル行、worksheet relationship targetの正規化、行バッファ16 MiB上限を追加しました。
-- StreamWriterの保留行にも64 MiB上限を設け、超過時は`MemoryError`を返すようにしました。
-- StreamWriterに`row_count`、`pending_bytes`、`max_pending_bytes`の読み取り専用状態情報を追加しました。
-- `create_stream`/`StreamWriter`で`max_pending_bytes`を指定し、環境ごとのメモリ予算を調整できるようにしました。
-
-## [0.22.0] - 2026-08-30
-
-- Streaming workbook row readerの行メモリ使用量を制限。
-- 依存関係とPython/Cargoパッケージのバージョンを更新。
-
-## [0.21.1] - 2026-08-30
-
-- streaming readerのmaturinビルドを修復。
-
-## [0.21.0] - 2026-08-30
-
-- streaming readerの行境界処理を強化。
-
-## [0.20.0] - 2026-08-30
-
-- 大きなワークブックを行単位で読むstreaming APIを追加。
-- Python APIとreaderのストリーミング経路を追加。
-
-## [0.19.0] - 2026-08-30
-
-- spreadsheet ZIP入力のセキュリティ対策を強化。
-- エントリサイズ、アーカイブ構造、展開処理の検証を追加。
-
-## [0.18.0] - 2026-08-30
-
-- JavaScript/WASM XLSX writerでセルコメントをlegacy Notesとして保存。
-
-## [0.17.0] - 2026-08-30
-
-- JavaScript/WASM XLSX writerで外部・内部ハイパーリンクを保存。
-- worksheet relationshipとtooltipの回帰テストを追加。
-
-## [0.16.0] - 2026-08-30
-
-- テーブル、AutoFilter、データ検証の読み取り・編集APIを追加。
-- conditional formatting、styled empty cells、default worksheet stylesの保存を修正。
-
-## [0.15.0] - 2026-08-30
-
-- 安全なstyle編集APIを追加（number format、font、fill、border、alignment、protection、
-  row/column style、style copy）。
-- 既存の共有styleを直接変更せず、style recordを重複排除。
-
-## [0.14.0] - 2026-08-30
-
-- 行列挿入削除、sheet rename、range moveで数式・結合・非表示状態・styleを追従。
-- formula cellとAutoFilter metadataの保存を改善。
-
-## [0.12.0] - 2026-08-27
-
-- Pythonのbulk range/row API、sheet管理、merge、hidden row/column、copy sheet、
-  defined names、sheet state、row/column size APIを追加。
-
-## [0.11.0] - 2026-08-26
-
-- Python workbook APIとCLIのworksheet操作を拡張。
-- 数式・VBA・XLSX round-tripの回帰テストを追加。
-
-## [0.10.1] - 2026-08-24
-
-- XLSX namespaceの`r:` prefix処理を修正し、maturin wheelのround-tripを修復。
-
-## [0.10.0] - 2026-08-24
-
-- worksheet/workbook metadata、freeze panes、selection、style、mergeの保存を改善。
-- `.xlsm`のVBA projectと未知のOOXML partを保持するround-trip基盤を追加。
-
-## [0.9.0] - 2026-08-22
-
-- 実Excel作成fixtureによるXLSX round-trip検証を追加。
-- VBA project、relationship、content typeの保存を改善。
-
-## [0.1.0]–[0.8.0]
-
-- Rust VBA parser/VM、数式エンジン、Python API、CLI、複数シート、JSON診断、
-  property-based workbook test、JavaScript/WASM基盤を段階的に追加。
-- 詳細な互換性・セキュリティ方針は [docs/](docs/) を参照。
+[0.xの変更履歴](docs/history/CHANGELOG-0.x.md)へ移動しました。過去の記録は保持しています。

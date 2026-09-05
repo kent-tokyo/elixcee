@@ -3,7 +3,8 @@
 ## elixcee's license
 
 elixcee (this repository, including any future `@elixcee/xlsx` package) is **MIT**
-licensed (see repository root `LICENSE` / `Cargo.toml` / `pyproject.toml`).
+licensed as declared in [Cargo.toml](../Cargo.toml) and [pyproject.toml](../pyproject.toml).
+The JS package carries the [MIT license text](../packages/xlsx/LICENSE).
 
 ## The compat target's license chain
 
@@ -21,9 +22,8 @@ confirmed via `npm view <pkg> license` against the live public registry:
 | `wmf` | 1.0.2 | Apache-2.0 |
 | `word` | 0.4.0 | Apache-2.0 |
 
-All 8 packages resolve from the public npm registry today (verified during the dependency
-planning) — no vendored-tarball fallback is needed for `compat/oracle` to install and run
-the real package as a `devDependency`.
+This is the historical dependency-planning inventory, not a fresh registry or legal
+audit. Recheck resolved package contents and notices before distribution.
 
 ## Obligation if code or text is ever ported
 
@@ -45,12 +45,10 @@ consumption, no NOTICE obligation by itself.
 **As of Phase 1B-2B, `packages/xlsx` takes its first real *runtime* dependency**:
 `ssf@0.11.2` (Apache-2.0, transitively pulling in `frac@1.1.2`, also Apache-2.0), used to
 back `format_cell`/`sheet_to_csv`/`sheet_to_txt`'s number-format rendering — see
-[`docs/xlsx-architecture.md`](xlsx-architecture.md)'s "SSF backend" decision for the
-rationale (a deliberate, disclosed choice: compatibility now over a from-scratch
-~900-line format-engine port, with the reimplementation option kept open for a later
-Rust-native phase). This is an ordinary npm `dependencies` declaration — `ssf`/`frac`'s
+[package README](../packages/xlsx/README.md) for the current runtime boundary.
+This is an ordinary npm `dependencies` declaration — `ssf`/`frac`'s
 own source is never copied into or embedded in this repository's files — but it does mean
-any `npm install @elixcee/xlsx` consumer transitively receives `ssf`/`frac`'s actual
+consumers of a future published package would transitively receive `ssf`/`frac`'s actual
 package contents in their own `node_modules`, which is the normal npm dependency pattern,
 not a §4(b)/(d) "vendored redistribution" case. Neither `ssf` nor `frac` ships an upstream
 `NOTICE` file (checked directly, not assumed — only a `LICENSE`), so the §4(d) NOTICE-

@@ -466,11 +466,34 @@ impl Parser {
         self.skip_nl();
         let mut subs = vec![];
         let mut funcs = vec![];
+        let mut properties = vec![];
         let mut type_defs = vec![];
         let mut module_diagnostics: Vec<(String, SourceSpan)> = vec![];
         let mut module_name: Option<String> = None;
         let mut option_base: i64 = 0;
+        let mut is_class_module = false;
+        let mut class_fields = Vec::new();
+        let mut implements = Vec::new();
         while *self.peek() != Tok::Eof {
+            let mut access = AccessModifier::Public;
+            // Header emitted by VBA when a class module is exported. The
+            // following BEGIN/END metadata block contains designer flags,
+            // not executable VBA, and is skipped as one unit.
+            if self.is_ident("version") && self.is_ident_at(2, "class") {
+                is_class_module = true;
+                self.skip_to_eol();
+                continue;
+            }
+            if is_class_module && self.is_ident("begin") {
+                self.skip_to_eol();
+                while *self.peek() != Tok::Eof && !self.is_ident("end") {
+                    self.skip_to_eol();
+                }
+                if self.is_ident("end") {
+                    self.skip_to_eol();
+                }
+                continue;
+            }
             // Module-level Option declarations → no-op, except `Option
             // Base <n>` (real VBA only allows a bare 0 or 1 literal here),
             // which sets the default lower bound for array declarators
@@ -509,8 +532,19 @@ impl Parser {
                 || self.is_ident("static")
             {
                 let start = self.peek_span().start;
+                access = if self.is_ident("private") {
+                    AccessModifier::Private
+                } else if self.is_ident("friend") {
+                    AccessModifier::Friend
+                } else {
+                    AccessModifier::Public
+                };
                 self.advance();
-                if !self.is_ident("sub") && !self.is_ident("function") && !self.is_ident("type") {
+                if !self.is_ident("sub")
+                    && !self.is_ident("function")
+                    && !self.is_ident("property")
+                    && !self.is_ident("type")
+                {
                     // Module-level `Const` never gets its value evaluated
                     // anywhere (unlike inside a Sub) — a real gap, worth
                     // flagging. A plain `Public x As Long`/`Static y` etc.
@@ -525,17 +559,28 @@ impl Parser {
                             SourceSpan { start, end },
                         ));
                     } else {
-                        self.skip_to_eol(); // module-level declaration (Dim, etc.) → skip
+                        // A class module's `Private value As Long` / `Public
+                        // value As Variant` is instance state. We collect
+                        // names for every module because a `.cls` path can
+                        // mark the Program only after parsing; standard
+                        // modules simply never consume this list.
+                        self.parse_module_fields(&mut class_fields, access);
                     }
                     continue;
                 }
             }
             if self.is_ident("sub") {
-                subs.push(self.parse_sub()?);
+                subs.push(self.parse_sub(access)?);
             } else if self.is_ident("function") {
-                funcs.push(self.parse_func()?);
+                funcs.push(self.parse_func(access)?);
+            } else if self.is_ident("property") {
+                properties.push(self.parse_property(access)?);
             } else if self.is_ident("type") {
                 type_defs.push(self.parse_type_def()?);
+            } else if self.is_ident("implements") {
+                self.advance();
+                implements.push(self.consume_ident()?);
+                self.skip_to_eol();
             } else if *self.peek() == Tok::Newline {
                 self.advance();
             } else if self.is_ident("const") {
@@ -548,8 +593,8 @@ impl Parser {
                     SourceSpan { start, end },
                 ));
             } else if self.is_ident("dim") {
-                // Bare module-level `Dim` (no modifier) — harmless, same as Group A above.
-                self.skip_to_eol();
+                self.advance();
+                self.parse_module_fields(&mut class_fields, AccessModifier::Private);
             } else {
                 // Unknown module-level line → genuinely unrecognized construct.
                 let start = self.peek_span().start;
@@ -569,11 +614,49 @@ impl Parser {
         Ok(Program {
             subs,
             funcs,
+            properties,
             type_defs,
+            is_class_module,
+            class_fields,
+            implements,
             module_diagnostics,
             module_name,
             option_base,
         })
+    }
+
+    /// Collect comma-separated module/class field declarations while
+    /// deliberately ignoring their static VBA types.
+    fn parse_module_fields(&mut self, fields: &mut Vec<ClassFieldDef>, access: AccessModifier) {
+        loop {
+            let Tok::Ident(name) = self.peek().clone() else {
+                self.skip_to_eol();
+                return;
+            };
+            self.advance();
+            let mut type_name = None;
+            while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof) {
+                if self.is_ident("as") {
+                    self.advance();
+                    if let Tok::Ident(value) = self.peek().clone() {
+                        self.advance();
+                        type_name = Some(value);
+                    }
+                } else {
+                    self.advance();
+                }
+            }
+            fields.push(ClassFieldDef {
+                name,
+                type_name,
+                access,
+            });
+            if *self.peek() != Tok::Comma {
+                self.skip_to_eol();
+                return;
+            }
+            self.advance();
+        }
     }
 
     /// Parse a `Type Name ... End Type` block.
@@ -605,24 +688,30 @@ impl Parser {
         Ok(TypeDef { name, fields })
     }
 
-    fn parse_sub(&mut self) -> Result<SubDef, String> {
+    fn parse_sub(&mut self, access: AccessModifier) -> Result<SubDef, String> {
         self.expect_ident("sub")?;
         let name = self.consume_ident()?;
         self.expect_tok(Tok::LParen)?;
-        let params = self.parse_params()?;
+        let (params, param_types) = self.parse_params()?;
         self.expect_tok(Tok::RParen)?;
         self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_end_kw("sub"))?;
         self.consume_end_kw("sub")?;
         self.skip_nl();
-        Ok(SubDef { name, params, body })
+        Ok(SubDef {
+            name,
+            params,
+            param_types,
+            access,
+            body,
+        })
     }
 
-    fn parse_func(&mut self) -> Result<FuncDef, String> {
+    fn parse_func(&mut self, access: AccessModifier) -> Result<FuncDef, String> {
         self.expect_ident("function")?;
         let name = self.consume_ident()?;
         self.expect_tok(Tok::LParen)?;
-        let params = self.parse_params()?;
+        let (params, param_types) = self.parse_params()?;
         self.expect_tok(Tok::RParen)?;
         // Optional return-type annotation: `Function f(...) As Integer`.
         // Not enforced anywhere (elixcee is dynamically typed at runtime,
@@ -630,19 +719,68 @@ impl Parser {
         // just consumed so it doesn't trip `eat_stmt_end()` below. Previously
         // unhandled entirely: `Function f(x As Integer) As Integer` failed
         // with "expected newline, got Ident(\"as\")" right here.
-        if self.is_ident("as") {
+        let return_type = if self.is_ident("as") {
             self.advance();
-            self.consume_ident()?;
-        }
+            Some(self.consume_ident()?)
+        } else {
+            None
+        };
         self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_end_kw("function"))?;
         self.consume_end_kw("function")?;
         self.skip_nl();
-        Ok(FuncDef { name, params, body })
+        Ok(FuncDef {
+            name,
+            params,
+            param_types,
+            return_type,
+            access,
+            body,
+        })
     }
 
-    fn parse_params(&mut self) -> Result<Vec<String>, String> {
+    fn parse_property(&mut self, access: AccessModifier) -> Result<PropertyDef, String> {
+        self.expect_ident("property")?;
+        let kind = if self.is_ident("get") {
+            self.advance();
+            PropertyKind::Get
+        } else if self.is_ident("let") {
+            self.advance();
+            PropertyKind::Let
+        } else if self.is_ident("set") {
+            self.advance();
+            PropertyKind::Set
+        } else {
+            return Err("expected Get, Let, or Set after Property".to_string());
+        };
+        let name = self.consume_ident()?;
+        self.expect_tok(Tok::LParen)?;
+        let (params, param_types) = self.parse_params()?;
+        self.expect_tok(Tok::RParen)?;
+        let return_type = if self.is_ident("as") {
+            self.advance();
+            Some(self.consume_ident()?)
+        } else {
+            None
+        };
+        self.eat_stmt_end()?;
+        let body = self.parse_stmts(|p| p.is_end_kw("property"))?;
+        self.consume_end_kw("property")?;
+        self.skip_nl();
+        Ok(PropertyDef {
+            name,
+            kind,
+            params,
+            param_types,
+            return_type,
+            access,
+            body,
+        })
+    }
+
+    fn parse_params(&mut self) -> Result<(Vec<String>, Vec<Option<String>>), String> {
         let mut params = vec![];
+        let mut param_types = vec![];
         while !matches!(self.peek(), Tok::RParen | Tok::Eof) {
             // `ByVal`/`ByRef` are recognized and discarded — elixcee's own
             // call semantics don't distinguish them (every call is
@@ -678,15 +816,18 @@ impl Parser {
             let name = self.consume_ident()?;
             params.push(name);
             // optional: As <type>
-            if self.is_ident("as") {
+            let type_name = if self.is_ident("as") {
                 self.advance();
-                self.consume_ident()?; // type name
-            }
+                Some(self.consume_ident()?)
+            } else {
+                None
+            };
+            param_types.push(type_name);
             if *self.peek() == Tok::Comma {
                 self.advance();
             }
         }
-        Ok(params)
+        Ok((params, param_types))
     }
 
     // ── Statement dispatch ─────────────────────────────────────────────────────
@@ -915,7 +1056,7 @@ impl Parser {
         self.expect_ident("each")?;
         let var = self.consume_ident()?;
         self.expect_ident("in")?;
-        let range_addr = self.parse_for_each_source()?;
+        let source = self.parse_for_each_source()?;
         self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_ident("next"))?;
         self.expect_ident("next")?;
@@ -923,23 +1064,25 @@ impl Parser {
             self.advance();
         }
         self.skip_nl();
-        Ok(Stmt::ForEach {
-            var,
-            range_addr,
-            body,
-        })
+        Ok(Stmt::ForEach { var, source, body })
     }
 
-    fn parse_for_each_source(&mut self) -> Result<String, String> {
+    fn parse_for_each_source(&mut self) -> Result<ForEachSource, String> {
         if self.is_ident("range") {
             self.advance();
             self.expect_tok(Tok::LParen)?;
             let addr = self.consume_str()?.to_uppercase();
             self.expect_tok(Tok::RParen)?;
-            Ok(addr)
+            Ok(ForEachSource::Range(addr))
         } else {
-            self.consume_ident()?;
-            Ok(String::new())
+            let name = self.consume_ident()?;
+            if *self.peek() == Tok::Dot && self.is_ident_at(1, "keys") {
+                self.advance();
+                self.advance();
+                Ok(ForEachSource::DictionaryKeys(name))
+            } else {
+                Ok(ForEachSource::ObjectVar(name))
+            }
         }
     }
 
@@ -1285,6 +1428,23 @@ impl Parser {
             });
         }
 
+        // ── With <collection>.Item(...) / <collection>(...) ────────────────
+        // Collection object items can themselves be With targets without an
+        // intermediate Set variable. Runtime evaluation still validates that
+        // the selected item is an object.
+        if ((*self.peek() == Tok::Dot
+            && self.is_ident_at(1, "item")
+            && *self.peek_at(2) == Tok::LParen)
+            || (matches!(self.peek(), Tok::Ident(_))
+                && (*self.peek_at(1) == Tok::LParen
+                    || (*self.peek_at(1) == Tok::Dot
+                        && self.is_ident_at(2, "item")
+                        && *self.peek_at(3) == Tok::LParen))))
+            && let Some(obj) = self.parse_object_expr()?
+        {
+            return self.finish_with(WithTarget::Object(obj));
+        }
+
         // ── With <identifier> ────────────────────────────────────────────────
         // A Set-assigned Range/Worksheet object variable OR a UDT variable.
         // The parser can't tell which; the VM resolves it (see
@@ -1345,6 +1505,11 @@ impl Parser {
             }
         };
 
+        if head == "add" || head == "remove" {
+            self.advance(); // method name
+            return self.parse_collection_method_stmt(CollectionTarget::CurrentWith, &head);
+        }
+
         // `.Cells(r, c)...` / `.Range("addr")...` — a qualified member of the
         // With target, not a field of it. Guarded on an immediate `(` so a
         // genuine UDT field literally named "cells"/"range" still parses as
@@ -1370,6 +1535,29 @@ impl Parser {
                 WithMember::Range { addr, fields }
             };
             return self.finish_with_dot(member, &head);
+        }
+
+        if *self.peek_at(1) != Tok::Eq
+            && *self.peek_at(1) != Tok::Dot
+            && !matches!(self.peek_at(1), Tok::Newline | Tok::Eof | Tok::Colon)
+        {
+            self.advance(); // method name
+            let args = self.parse_method_call_args()?;
+            if *self.peek() == Tok::Eq {
+                self.advance();
+                let value = self.parse_expr()?;
+                return Ok(Stmt::ObjectPropertyLet {
+                    target: ObjectTarget::CurrentWith,
+                    member: head,
+                    args,
+                    value,
+                });
+            }
+            return Ok(Stmt::ObjectMethodCall {
+                target: ObjectTarget::CurrentWith,
+                method: head,
+                args,
+            });
         }
 
         let mut fields = vec![self.consume_ident()?.to_lowercase()];
@@ -1556,14 +1744,10 @@ impl Parser {
             if self.is_ident("as") {
                 self.advance();
                 let type_name = self.consume_ident()?.to_lowercase();
-                if !Self::is_vba_builtin_type(&type_name) {
-                    // DimArrayRecord doesn't track a lower bound (no case
-                    // needs it) — only the upper-bound expression carries
-                    // over, same as before this method gained `lo To hi`.
-                    let upper_only = sizes.into_iter().map(|d| d.upper).collect();
+                if type_name == "object" || !Self::is_vba_builtin_type(&type_name) {
                     return Ok(Stmt::DimArrayRecord {
                         name,
-                        sizes: upper_only,
+                        sizes,
                         type_name,
                     });
                 }
@@ -1574,9 +1758,42 @@ impl Parser {
             let var = self.consume_ident()?;
             if self.is_ident("as") {
                 self.advance();
+                let instantiate = if self.is_ident("new") {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
                 let type_name = self.consume_ident()?.to_lowercase();
+                if instantiate && type_name == "collection" {
+                    return Ok(Stmt::DimObjectNew {
+                        var,
+                        type_name,
+                        value: ObjectExpr::NewCollection,
+                    });
+                }
+                if instantiate
+                    && type_name == "scripting"
+                    && *self.peek() == Tok::Dot
+                    && self.is_ident_at(1, "dictionary")
+                {
+                    self.advance();
+                    self.advance();
+                    return Ok(Stmt::DimObjectNew {
+                        var,
+                        type_name: "scripting.dictionary".to_string(),
+                        value: ObjectExpr::NewDictionary,
+                    });
+                }
+                if instantiate {
+                    return Ok(Stmt::DimObjectNew {
+                        var,
+                        value: ObjectExpr::NewClass(type_name.clone()),
+                        type_name,
+                    });
+                }
                 // Emit DimRecord only for non-built-in types (user-defined types).
-                if !Self::is_vba_builtin_type(&type_name) {
+                if type_name == "object" || !Self::is_vba_builtin_type(&type_name) {
                     return Ok(Stmt::DimRecord { var, type_name });
                 }
             }
@@ -1639,7 +1856,73 @@ impl Parser {
     /// macro that happens to use an unmodeled `Set` target should still run.
     fn parse_set(&mut self) -> Result<Stmt, String> {
         self.expect_ident("set")?;
-        let var = self.consume_ident()?;
+        let current_with_member = if *self.peek() == Tok::Dot {
+            self.advance();
+            Some(self.consume_ident()?)
+        } else {
+            None
+        };
+        let var = if current_with_member.is_none() {
+            self.consume_ident()?
+        } else {
+            String::new()
+        };
+        if let Some(member) = current_with_member {
+            let args = if *self.peek() == Tok::LParen {
+                self.advance();
+                let args = self.parse_arg_list()?;
+                self.expect_tok(Tok::RParen)?;
+                args
+            } else {
+                Vec::new()
+            };
+            self.expect_tok(Tok::Eq)?;
+            let value = self
+                .parse_object_expr()?
+                .ok_or_else(|| "Property Set requires an object expression".to_string())?;
+            return Ok(Stmt::SetObjectMember {
+                target: ObjectTarget::CurrentWith,
+                member,
+                args,
+                value,
+            });
+        }
+        if *self.peek() == Tok::LParen {
+            self.advance();
+            let args = self.parse_arg_list()?;
+            self.expect_tok(Tok::RParen)?;
+            self.expect_tok(Tok::Eq)?;
+            let value = self
+                .parse_object_expr()?
+                .ok_or_else(|| "object-array Set requires an object expression".to_string())?;
+            return Ok(Stmt::SetObjectArray {
+                name: var,
+                indices: args,
+                value,
+            });
+        }
+        if *self.peek() == Tok::Dot {
+            self.advance();
+            let member = self.consume_ident()?;
+            let args = if *self.peek() == Tok::LParen {
+                self.advance();
+                let args = self.parse_arg_list()?;
+                self.expect_tok(Tok::RParen)?;
+                args
+            } else {
+                Vec::new()
+            };
+            self.expect_tok(Tok::Eq)?;
+            let value = self
+                .parse_object_expr()?
+                .ok_or_else(|| "Property Set requires an object expression".to_string())?;
+            return Ok(Stmt::SetObjectMember {
+                target: ObjectTarget::Variable(var),
+                member,
+                args,
+                value,
+            });
+        }
         self.expect_tok(Tok::Eq)?;
         let rhs_name = match self.peek() {
             Tok::Ident(name) => name.clone(),
@@ -1673,12 +1956,70 @@ impl Parser {
     /// caller falls back to `skip_to_eol` on `None`.
     fn parse_object_expr(&mut self) -> Result<Option<ObjectExpr>, String> {
         match self.peek().clone() {
+            Tok::Dot if self.is_ident_at(1, "item") && *self.peek_at(2) == Tok::LParen => {
+                self.advance(); // '.'
+                self.advance(); // 'item'
+                self.advance(); // '('
+                let index = self.parse_expr()?;
+                self.expect_tok(Tok::RParen)?;
+                Ok(Some(ObjectExpr::CollectionItem {
+                    target: CollectionTarget::CurrentWith,
+                    index: Box::new(index),
+                }))
+            }
+            Tok::Dot if matches!(self.peek_at(1), Tok::Ident(_)) => {
+                self.advance();
+                let member = self.consume_ident()?;
+                if *self.peek() == Tok::LParen {
+                    self.advance();
+                    let args = self.parse_arg_list()?;
+                    self.expect_tok(Tok::RParen)?;
+                    Ok(Some(ObjectExpr::MethodCall {
+                        target: ObjectTarget::CurrentWith,
+                        method: member,
+                        args,
+                    }))
+                } else {
+                    Ok(Some(ObjectExpr::Member {
+                        target: ObjectTarget::CurrentWith,
+                        member,
+                    }))
+                }
+            }
+            Tok::Ident(ref s) if s == "new" => {
+                self.advance();
+                if self.is_ident("collection") {
+                    self.advance();
+                    Ok(Some(ObjectExpr::NewCollection))
+                } else if self.is_ident("scripting")
+                    && *self.peek_at(1) == Tok::Dot
+                    && self.is_ident_at(2, "dictionary")
+                {
+                    self.advance();
+                    self.advance();
+                    self.advance();
+                    Ok(Some(ObjectExpr::NewDictionary))
+                } else {
+                    Ok(Some(ObjectExpr::NewClass(self.consume_ident()?)))
+                }
+            }
             Tok::Ident(ref s) if s == "range" => {
                 self.advance();
                 self.expect_tok(Tok::LParen)?;
                 let addr = self.consume_str()?.to_uppercase();
                 self.expect_tok(Tok::RParen)?;
                 self.parse_object_suffix(ObjectExpr::RangeLit(addr))
+            }
+            Tok::Ident(ref s) if matches!(s.as_str(), "worksheets" | "sheets") => {
+                let method = self.consume_ident()?;
+                self.expect_tok(Tok::LParen)?;
+                let sheet = self.parse_sheet_key()?;
+                self.expect_tok(Tok::RParen)?;
+                Ok(Some(ObjectExpr::MethodCall {
+                    target: ObjectTarget::Variable("thisworkbook".to_string()),
+                    method,
+                    args: vec![sheet],
+                }))
             }
             Tok::Ident(ref s) if s == "union" => {
                 self.advance();
@@ -1698,14 +2039,79 @@ impl Parser {
                 self.expect_tok(Tok::RParen)?;
                 self.parse_object_suffix(ObjectExpr::Union(parts))
             }
+            Tok::Ident(ref name)
+                if matches!(name.as_str(), "createobject" | "getobject")
+                    && *self.peek_at(1) == Tok::LParen =>
+            {
+                // These two built-ins cross elixcee's external-object
+                // boundary.  Their call syntax is indistinguishable from a
+                // Collection's default `Item` member at this stage, so keep
+                // them on the established Unsupported/security path instead
+                // of treating them as `collection(index)`.
+                Ok(None)
+            }
             Tok::Ident(name) => {
                 // A bare identifier in object position: an existing object
-                // variable (`Set b = a`, `Set b = a.Areas(1)`). Anything
-                // followed by '(' here (a function call we don't model,
-                // e.g. `CreateObject(...)`) is left unrecognized.
+                // variable (`Set b = a`, `Set b = a.Areas(1)`). A directly
+                // following argument list is Collection's default `Item`
+                // member (`Set b = items(1)`); known external object
+                // factories are excluded above and stay Unsupported.
                 self.advance();
                 if *self.peek() == Tok::LParen {
-                    Ok(None)
+                    self.advance();
+                    let indices = self.parse_arg_list()?;
+                    self.expect_tok(Tok::RParen)?;
+                    if indices.len() == 1 {
+                        Ok(Some(ObjectExpr::CollectionItem {
+                            target: CollectionTarget::Variable(name),
+                            index: Box::new(indices.into_iter().next().unwrap()),
+                        }))
+                    } else {
+                        Ok(Some(ObjectExpr::ObjectArrayItem { name, indices }))
+                    }
+                } else if *self.peek() == Tok::Dot
+                    && self.is_ident_at(1, "item")
+                    && *self.peek_at(2) == Tok::LParen
+                {
+                    self.advance(); // '.'
+                    self.advance(); // 'item'
+                    self.advance(); // '('
+                    let args = self.parse_arg_list()?;
+                    self.expect_tok(Tok::RParen)?;
+                    if args.len() == 1 {
+                        Ok(Some(ObjectExpr::CollectionItem {
+                            target: CollectionTarget::Variable(name),
+                            index: Box::new(args.into_iter().next().unwrap()),
+                        }))
+                    } else {
+                        Ok(Some(ObjectExpr::MethodCall {
+                            target: ObjectTarget::Variable(name),
+                            method: "item".to_string(),
+                            args,
+                        }))
+                    }
+                } else if *self.peek() == Tok::Dot
+                    && (self.is_ident_at(1, "areas") || self.is_ident_at(1, "specialcells"))
+                {
+                    self.parse_object_suffix(ObjectExpr::Var(name))
+                } else if *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
+                    self.advance();
+                    let member = self.consume_ident()?;
+                    if *self.peek() == Tok::LParen {
+                        self.advance();
+                        let args = self.parse_arg_list()?;
+                        self.expect_tok(Tok::RParen)?;
+                        Ok(Some(ObjectExpr::MethodCall {
+                            target: ObjectTarget::Variable(name),
+                            method: member,
+                            args,
+                        }))
+                    } else {
+                        Ok(Some(ObjectExpr::Member {
+                            target: ObjectTarget::Variable(name),
+                            member,
+                        }))
+                    }
                 } else {
                     self.parse_object_suffix(ObjectExpr::Var(name))
                 }
@@ -1714,7 +2120,7 @@ impl Parser {
         }
     }
 
-    /// Chains zero or more `.Areas(n)` / `.SpecialCells(xlCellTypeVisible)`
+    /// Chains zero or more `.Areas(n)` / `.SpecialCells(Type[, Value])`
     /// suffixes onto `base`. Any other `.property` (notably `.Value`, which
     /// belongs to a different grammar entirely — see `Stmt::RecordSet`'s
     /// object-variable special case in the VM) is left unconsumed: this
@@ -1739,31 +2145,27 @@ impl Parser {
                 cur = ObjectExpr::Area(Box::new(cur), Box::new(index));
             } else {
                 self.expect_tok(Tok::LParen)?;
-                let recognized = match self.peek().clone() {
-                    Tok::Ident(ref s) if s == "xlcelltypevisible" => {
-                        self.advance();
-                        true
-                    }
-                    Tok::Int(12) => {
-                        self.advance();
-                        true
-                    }
-                    _ => false,
-                };
-                if !recognized {
-                    // Unrecognized SpecialCells type — consume through the
-                    // matching ')' so the caller's eventual `skip_to_eol`
-                    // still lands cleanly, then bail.
-                    while *self.peek() != Tok::RParen && *self.peek() != Tok::Eof {
-                        self.advance();
-                    }
-                    if *self.peek() == Tok::RParen {
-                        self.advance();
-                    }
-                    return Ok(None);
+                if self.is_ident("type") && *self.peek_at(1) == Tok::ColonEq {
+                    self.advance();
+                    self.advance();
                 }
+                let cell_type = self.parse_expr()?;
+                let value = if *self.peek() == Tok::Comma {
+                    self.advance();
+                    if self.is_ident("value") && *self.peek_at(1) == Tok::ColonEq {
+                        self.advance();
+                        self.advance();
+                    }
+                    Some(Box::new(self.parse_expr()?))
+                } else {
+                    None
+                };
                 self.expect_tok(Tok::RParen)?;
-                cur = ObjectExpr::SpecialCellsVisible(Box::new(cur));
+                cur = ObjectExpr::SpecialCells {
+                    base: Box::new(cur),
+                    cell_type: Box::new(cell_type),
+                    value,
+                };
             }
         }
         Ok(Some(cur))
@@ -1830,6 +2232,20 @@ impl Parser {
     fn parse_call_stmt(&mut self) -> Result<Stmt, String> {
         self.expect_ident("call")?;
         let name = self.consume_ident()?;
+        if *self.peek() == Tok::Dot {
+            self.advance();
+            let method = self.consume_ident()?;
+            if method == "add" || method == "remove" {
+                return self
+                    .parse_collection_method_stmt(CollectionTarget::Variable(name), &method);
+            }
+            let args = self.parse_method_call_args()?;
+            return Ok(Stmt::ObjectMethodCall {
+                target: ObjectTarget::Variable(name),
+                method,
+                args,
+            });
+        }
         // Real VBA's `Call` grammar is `Call name [(argumentlist)]` — the
         // parens are optional, required only when passing arguments. Found
         // missing (`Call Foo` with no args was a syntax error, while
@@ -1848,6 +2264,24 @@ impl Parser {
         Ok(Stmt::CallSub { name, args })
     }
 
+    fn parse_method_call_args(&mut self) -> Result<Vec<Expr>, String> {
+        if *self.peek() == Tok::LParen {
+            self.advance();
+            let args = self.parse_arg_list()?;
+            self.expect_tok(Tok::RParen)?;
+            return Ok(args);
+        }
+        if self.is_stmt_end() {
+            return Ok(Vec::new());
+        }
+        let mut args = vec![self.parse_expr()?];
+        while *self.peek() == Tok::Comma {
+            self.advance();
+            args.push(self.parse_expr()?);
+        }
+        Ok(args)
+    }
+
     // ── Range family ───────────────────────────────────────────────────────────
 
     fn parse_range_stmt(&mut self) -> Result<Stmt, String> {
@@ -1855,6 +2289,15 @@ impl Parser {
         self.expect_tok(Tok::LParen)?;
         let addr = self.consume_str()?;
         self.expect_tok(Tok::RParen)?;
+        if *self.peek() == Tok::Eq {
+            self.advance();
+            let value = self.parse_expr()?;
+            return Ok(Stmt::RangeWrite {
+                addr,
+                is_formula: false,
+                value,
+            });
+        }
         self.expect_tok(Tok::Dot)?;
 
         let prop = self.consume_ident()?;
@@ -2124,8 +2567,10 @@ impl Parser {
         self.expect_tok(Tok::Comma)?;
         let col = self.parse_expr()?;
         self.expect_tok(Tok::RParen)?;
-        self.expect_tok(Tok::Dot)?;
-        self.expect_ident("value")?;
+        if *self.peek() == Tok::Dot {
+            self.advance();
+            self.expect_ident("value")?;
+        }
         self.expect_tok(Tok::Eq)?;
         let value = self.parse_expr()?;
         Ok(Stmt::CellWrite { row, col, value })
@@ -2238,14 +2683,26 @@ impl Parser {
         let method = self.consume_ident()?;
         match method.as_str() {
             "delete" => Ok(Stmt::SheetsDelete { sheet }),
+            "activate" | "select" => Ok(Stmt::SheetActivate { sheet }),
+            "name" | "visible" => {
+                self.expect_tok(Tok::Eq)?;
+                let value = self.parse_expr()?;
+                Ok(Stmt::SheetPropertySet {
+                    sheet,
+                    property: method,
+                    value,
+                })
+            }
             "cells" => {
                 self.expect_tok(Tok::LParen)?;
                 let row = self.parse_expr()?;
                 self.expect_tok(Tok::Comma)?;
                 let col = self.parse_expr()?;
                 self.expect_tok(Tok::RParen)?;
-                self.expect_tok(Tok::Dot)?;
-                self.expect_ident("value")?;
+                if *self.peek() == Tok::Dot {
+                    self.advance();
+                    self.expect_ident("value")?;
+                }
                 self.expect_tok(Tok::Eq)?;
                 let value = self.parse_expr()?;
                 Ok(Stmt::SheetCellWrite {
@@ -2259,14 +2716,18 @@ impl Parser {
                 self.expect_tok(Tok::LParen)?;
                 let addr = self.consume_str()?;
                 self.expect_tok(Tok::RParen)?;
-                self.expect_tok(Tok::Dot)?;
-                let prop = self.consume_ident()?;
-                let is_formula = match prop.as_str() {
-                    "value" => false,
-                    "formula" => true,
-                    other => {
-                        return Err(format!("unexpected property after Range(...): {}", other));
+                let is_formula = if *self.peek() == Tok::Dot {
+                    self.advance();
+                    let prop = self.consume_ident()?;
+                    match prop.as_str() {
+                        "value" => false,
+                        "formula" => true,
+                        other => {
+                            return Err(format!("unexpected property after Range(...): {}", other));
+                        }
                     }
+                } else {
+                    false
                 };
                 self.expect_tok(Tok::Eq)?;
                 let value = self.parse_expr()?;
@@ -2450,6 +2911,12 @@ impl Parser {
             self.advance();
             let value = self.parse_expr()?;
             Ok(Stmt::Assignment { var: name, value })
+        } else if *self.peek() == Tok::Dot
+            && (self.is_ident_at(1, "add") || self.is_ident_at(1, "remove"))
+        {
+            self.advance(); // '.'
+            let method = self.consume_ident()?;
+            self.parse_collection_method_stmt(CollectionTarget::Variable(name), &method)
         } else if *self.peek() == Tok::Dot && self.is_ident_at(1, "copy") {
             // <var>.Copy [Destination:=Range(addr)] — the object-variable
             // sibling of `Range("addr").Copy` (see `parse_range_stmt`'s
@@ -2513,6 +2980,31 @@ impl Parser {
             // p.field = val  /  p.a.b = val  /  p.method (noop)
             self.advance(); // consume first '.'
             let field = self.consume_ident()?.to_lowercase();
+            if matches!(field.as_str(), "activate" | "select" | "removeall") && self.is_stmt_end() {
+                return Ok(Stmt::ObjectMethodCall {
+                    target: ObjectTarget::Variable(name),
+                    method: field,
+                    args: Vec::new(),
+                });
+            }
+            if *self.peek() != Tok::Eq && *self.peek() != Tok::Dot && !self.is_stmt_end() {
+                let args = self.parse_method_call_args()?;
+                if *self.peek() == Tok::Eq {
+                    self.advance();
+                    let value = self.parse_expr()?;
+                    return Ok(Stmt::ObjectPropertyLet {
+                        target: ObjectTarget::Variable(name),
+                        member: field,
+                        args,
+                        value,
+                    });
+                }
+                return Ok(Stmt::ObjectMethodCall {
+                    target: ObjectTarget::Variable(name),
+                    method: field,
+                    args,
+                });
+            }
             let mut fields = vec![field];
             // Collect additional .field segments (nested access)
             while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
@@ -2558,6 +3050,88 @@ impl Parser {
                 ),
             })
         }
+    }
+
+    /// Parse the data-only subset of VBA's built-in Collection methods.
+    /// Both the idiomatic statement form (`c.Add value, key`) and a
+    /// parenthesized form are accepted. `Add` keeps all four VBA argument
+    /// slots so keyed insertion and Before/After positioning do not need a
+    /// later AST break.
+    fn parse_collection_method_stmt(
+        &mut self,
+        target: CollectionTarget,
+        method: &str,
+    ) -> Result<Stmt, String> {
+        let parenthesized = if *self.peek() == Tok::LParen {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        if method == "remove" {
+            if self.is_ident("index") && *self.peek_at(1) == Tok::ColonEq {
+                self.advance();
+                self.advance();
+            }
+            let index = self.parse_expr()?;
+            if parenthesized {
+                self.expect_tok(Tok::RParen)?;
+            }
+            return Ok(Stmt::CollectionRemove { target, index });
+        }
+
+        let mut slots: [Option<Expr>; 4] = [None, None, None, None];
+        let mut positional = 0usize;
+        while !(parenthesized && *self.peek() == Tok::RParen) && !self.is_stmt_end() {
+            if *self.peek() == Tok::Comma {
+                positional = positional.saturating_add(1);
+                self.advance();
+                continue;
+            }
+
+            let named_slot =
+                if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::ColonEq {
+                    let name = self.consume_ident()?;
+                    self.advance(); // ':='
+                    Some(match name.as_str() {
+                        "item" => 0,
+                        "key" => 1,
+                        "before" => 2,
+                        "after" => 3,
+                        _ => return Err(format!("Collection.Add: unknown argument '{name}'")),
+                    })
+                } else {
+                    None
+                };
+            let slot = named_slot.unwrap_or(positional);
+            if slot >= slots.len() {
+                return Err("Collection.Add: too many arguments".to_string());
+            }
+            if slots[slot].is_some() {
+                return Err("Collection.Add: duplicate argument".to_string());
+            }
+            slots[slot] = Some(self.parse_expr()?);
+
+            if *self.peek() == Tok::Comma {
+                self.advance();
+                positional = positional.saturating_add(1);
+            } else {
+                break;
+            }
+        }
+        if parenthesized {
+            self.expect_tok(Tok::RParen)?;
+        }
+        let [item, key, before, after] = slots;
+        let item = item.ok_or_else(|| "Collection.Add requires an item".to_string())?;
+        Ok(Stmt::CollectionAdd {
+            target,
+            item,
+            key,
+            before,
+            after,
+        })
     }
 
     // ── Expression parser ──────────────────────────────────────────────────────
@@ -2853,6 +3427,17 @@ impl Parser {
                     "columns" => self.parse_rows_cols_count("columns", Expr::ColsCount),
                     "cells" => self.parse_cells_expr(),
                     "range" => self.parse_range_expr(),
+                    "worksheets" | "sheets"
+                        if *self.peek_at(1) == Tok::Dot && self.is_ident_at(2, "count") =>
+                    {
+                        self.advance();
+                        self.advance();
+                        self.advance();
+                        Ok(Expr::FuncCall {
+                            name: "__worksheets_count".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
                     "worksheets" | "sheets" => self.parse_sheet_cell_read(),
                     "workbooks" => self.parse_workbook_qualified_read(),
                     "application" => self.parse_application_wsf_expr(),
@@ -2862,9 +3447,49 @@ impl Parser {
                     // `ActiveSheet` (e.g. an unmodeled `Set ws =
                     // ActiveSheet`) falls through to `parse_ident_expr`
                     // like any other unrecognized bare identifier.
+                    "activesheet"
+                        if *self.peek_at(1) == Tok::Dot
+                            && (self.is_ident_at(2, "name")
+                                || self.is_ident_at(2, "index")
+                                || self.is_ident_at(2, "visible")) =>
+                    {
+                        self.advance();
+                        self.advance();
+                        let property = self.consume_ident()?;
+                        Ok(Expr::FuncCall {
+                            name: format!("__worksheet_{}", property),
+                            args: vec![Expr::ActiveSheetRef],
+                        })
+                    }
                     "activesheet" if *self.peek_at(1) == Tok::Dot => {
                         self.advance();
                         self.parse_sheet_property_read(Expr::ActiveSheetRef)
+                    }
+                    "thisworkbook" | "activeworkbook"
+                        if *self.peek_at(1) == Tok::Dot && self.is_ident_at(2, "name") =>
+                    {
+                        self.advance();
+                        self.advance();
+                        self.advance();
+                        Ok(Expr::FuncCall {
+                            name: "__workbook_name".to_string(),
+                            args: Vec::new(),
+                        })
+                    }
+                    "thisworkbook" | "activeworkbook"
+                        if *self.peek_at(1) == Tok::Dot
+                            && (self.is_ident_at(2, "worksheets")
+                                || self.is_ident_at(2, "sheets"))
+                            && *self.peek_at(3) == Tok::Dot
+                            && self.is_ident_at(4, "count") =>
+                    {
+                        for _ in 0..5 {
+                            self.advance();
+                        }
+                        Ok(Expr::FuncCall {
+                            name: "__worksheets_count".to_string(),
+                            args: Vec::new(),
+                        })
                     }
                     // `ThisWorkbook.Worksheets(...)` / `ActiveWorkbook.
                     // Worksheets(...)` (Milestone B7c item 6) — see the
@@ -2918,6 +3543,27 @@ impl Parser {
             // needs no parser state and works at any nesting depth.
             Tok::Dot => {
                 self.advance(); // consume '.'
+                if self.is_ident("item") && *self.peek_at(1) == Tok::LParen {
+                    self.advance(); // 'item'
+                    self.advance(); // '('
+                    let index = self.parse_expr()?;
+                    self.expect_tok(Tok::RParen)?;
+                    return Ok(Expr::CollectionItem {
+                        target: CollectionTarget::CurrentWith,
+                        index: Box::new(index),
+                    });
+                }
+                if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::LParen {
+                    let method = self.consume_ident()?;
+                    self.advance(); // '('
+                    let args = self.parse_arg_list()?;
+                    self.expect_tok(Tok::RParen)?;
+                    return Ok(Expr::ObjectMethodCall {
+                        target: ObjectTarget::CurrentWith,
+                        method,
+                        args,
+                    });
+                }
                 let mut fields = vec![self.consume_ident()?.to_lowercase()];
                 while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
                     self.advance(); // consume '.'
@@ -3053,8 +3699,10 @@ impl Parser {
                 self.expect_tok(Tok::Comma)?;
                 let col = self.parse_expr()?;
                 self.expect_tok(Tok::RParen)?;
-                self.expect_tok(Tok::Dot)?;
-                self.expect_ident("value")?;
+                if *self.peek() == Tok::Dot {
+                    self.advance();
+                    self.expect_ident("value")?;
+                }
                 Ok(Expr::SheetCellRead {
                     sheet: Box::new(sheet),
                     row: Box::new(row),
@@ -3065,13 +3713,19 @@ impl Parser {
                 self.expect_tok(Tok::LParen)?;
                 let addr = self.consume_str()?.to_uppercase();
                 self.expect_tok(Tok::RParen)?;
-                self.expect_tok(Tok::Dot)?;
-                self.expect_ident("value")?;
+                if *self.peek() == Tok::Dot {
+                    self.advance();
+                    self.expect_ident("value")?;
+                }
                 Ok(Expr::SheetRangeRead {
                     sheet: Box::new(sheet),
                     addr,
                 })
             }
+            "name" | "index" | "visible" => Ok(Expr::FuncCall {
+                name: format!("__worksheet_{}", prop),
+                args: vec![sheet],
+            }),
             other => Err(format!(
                 "unexpected property after sheet reference: {}",
                 other
@@ -3096,6 +3750,13 @@ impl Parser {
         let workbook = self.parse_sheet_key()?;
         self.expect_tok(Tok::RParen)?;
         self.expect_tok(Tok::Dot)?;
+        if self.is_ident("name") {
+            self.advance();
+            return Ok(Expr::FuncCall {
+                name: "__workbook_name".to_string(),
+                args: vec![workbook],
+            });
+        }
         if !(self.is_ident("worksheets") || self.is_ident("sheets")) {
             return Err(format!(
                 "expected Worksheets(...)/Sheets(...) after Workbooks(...), got {:?}",
@@ -3155,6 +3816,27 @@ impl Parser {
             }
             Ok(Expr::FuncCall { name, args })
         } else if *self.peek() == Tok::Dot
+            && self.is_ident_at(1, "item")
+            && *self.peek_at(2) == Tok::LParen
+        {
+            self.advance(); // '.'
+            self.advance(); // 'item'
+            self.advance(); // '('
+            let args = self.parse_arg_list()?;
+            self.expect_tok(Tok::RParen)?;
+            if args.len() == 1 {
+                Ok(Expr::CollectionItem {
+                    target: CollectionTarget::Variable(name),
+                    index: Box::new(args.into_iter().next().unwrap()),
+                })
+            } else {
+                Ok(Expr::ObjectMethodCall {
+                    target: ObjectTarget::Variable(name),
+                    method: "item".to_string(),
+                    args,
+                })
+            }
+        } else if *self.peek() == Tok::Dot
             && (self.is_ident_at(1, "range") || self.is_ident_at(1, "cells"))
             && *self.peek_at(2) == Tok::LParen
         {
@@ -3174,6 +3856,20 @@ impl Parser {
             // must still fall through to the generic `RecordGet` path).
             self.advance(); // '.'
             self.parse_sheet_cell_read()
+        } else if *self.peek() == Tok::Dot
+            && matches!(self.peek_at(1), Tok::Ident(_))
+            && *self.peek_at(2) == Tok::LParen
+        {
+            self.advance(); // '.'
+            let method = self.consume_ident()?;
+            self.advance(); // '('
+            let args = self.parse_arg_list()?;
+            self.expect_tok(Tok::RParen)?;
+            Ok(Expr::ObjectMethodCall {
+                target: ObjectTarget::Variable(name),
+                method,
+                args,
+            })
         } else if *self.peek() == Tok::Dot {
             // p.field  or  p.a.b.c
             self.advance(); // consume '.'
@@ -3287,7 +3983,7 @@ pub fn resolve_entrypoint<'a>(
     let entrypoint = entrypoint.to_lowercase();
     if let Some((module_part, sub_part)) = entrypoint.rsplit_once('.') {
         for (name, prog) in modules {
-            if name == module_part {
+            if name == module_part && !prog.is_class_module {
                 return match prog.subs.iter().find(|s| s.name == sub_part) {
                     Some(sub) => EntrypointResolution::Found(sub),
                     None => EntrypointResolution::NotFound,
@@ -3297,6 +3993,9 @@ pub fn resolve_entrypoint<'a>(
         EntrypointResolution::NotFound
     } else {
         for (_, prog) in modules {
+            if prog.is_class_module {
+                continue;
+            }
             if let Some(sub) = prog.subs.iter().find(|s| s.name == entrypoint) {
                 return EntrypointResolution::Found(sub);
             }
@@ -3315,6 +4014,9 @@ pub fn find_cross_module_sub_collisions(
     let mut by_name: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     for (module_name, prog) in modules {
+        if prog.is_class_module {
+            continue;
+        }
         for sub in &prog.subs {
             by_name
                 .entry(sub.name.clone())
@@ -3336,6 +4038,9 @@ pub fn find_cross_module_func_collisions(
     let mut by_name: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     for (module_name, prog) in modules {
+        if prog.is_class_module {
+            continue;
+        }
         for func in &prog.funcs {
             by_name
                 .entry(func.name.clone())
@@ -3934,6 +4639,268 @@ mod tests {
             "Sub MySub()\n    For Each cell In Range(\"A1:A5\")\n        x = 1\n    Next cell\nEnd Sub\n",
         );
         assert!(matches!(&body[0], Stmt::ForEach { var, .. } if var == "cell"));
+    }
+    #[test]
+    fn test_collection_construction_methods_and_iteration_parse() {
+        let body = parse_body(concat!(
+            "Sub MySub()\n",
+            "    Dim items As New Collection\n",
+            "    items.Add \"alpha\", \"first\"\n",
+            "    items.Add Item:=\"zero\", Before:=1\n",
+            "    x = items.Item(\"first\")\n",
+            "    y = items(1)\n",
+            "    items.Remove Index:=\"first\"\n",
+            "    For Each item In items\n",
+            "        y = item\n",
+            "    Next item\n",
+            "End Sub\n",
+        ));
+        assert!(matches!(
+            &body[0],
+            Stmt::DimObjectNew {
+                var,
+                type_name,
+                value: ObjectExpr::NewCollection
+            } if var == "items" && type_name == "collection"
+        ));
+        assert!(matches!(
+            &body[1],
+            Stmt::CollectionAdd {
+                target: CollectionTarget::Variable(collection),
+                key: Some(_),
+                ..
+            } if collection == "items"
+        ));
+        assert!(matches!(
+            &body[2],
+            Stmt::CollectionAdd {
+                target: CollectionTarget::Variable(collection),
+                before: Some(_),
+                ..
+            } if collection == "items"
+        ));
+        assert!(matches!(
+            &body[3],
+            Stmt::Assignment {
+                value: Expr::CollectionItem {
+                    target: CollectionTarget::Variable(collection),
+                    ..
+                },
+                ..
+            } if collection == "items"
+        ));
+        assert!(matches!(
+            &body[4],
+            Stmt::Assignment {
+                value: Expr::FuncCall { name, .. },
+                ..
+            } if name == "items"
+        ));
+        assert!(matches!(
+            &body[5],
+            Stmt::CollectionRemove {
+                target: CollectionTarget::Variable(collection),
+                ..
+            } if collection == "items"
+        ));
+        assert!(matches!(
+            &body[6],
+            Stmt::ForEach {
+                source: ForEachSource::ObjectVar(collection),
+                ..
+            } if collection == "items"
+        ));
+    }
+    #[test]
+    fn test_collection_object_item_and_with_members_parse() {
+        let body = parse_body(concat!(
+            "Sub MySub()\n",
+            "    Set fromExplicit = items.Item(1)\n",
+            "    Set fromDefault = items(\"key\")\n",
+            "    With items\n",
+            "        .Add fromExplicit, \"object\"\n",
+            "        n = .Count\n",
+            "        v = .Item(1)\n",
+            "        Set fromWith = .Item(\"object\")\n",
+            "        .Remove 1\n",
+            "    End With\n",
+            "End Sub\n",
+        ));
+        assert!(matches!(
+            &body[0],
+            Stmt::Set {
+                value: ObjectExpr::CollectionItem {
+                    target: CollectionTarget::Variable(name),
+                    ..
+                },
+                ..
+            } if name == "items"
+        ));
+        assert!(matches!(
+            &body[1],
+            Stmt::Set {
+                value: ObjectExpr::CollectionItem {
+                    target: CollectionTarget::Variable(name),
+                    ..
+                },
+                ..
+            } if name == "items"
+        ));
+        let Stmt::With {
+            body: with_body, ..
+        } = &body[2]
+        else {
+            panic!("expected With statement");
+        };
+        assert!(matches!(
+            &with_body[0].stmt,
+            Stmt::CollectionAdd {
+                target: CollectionTarget::CurrentWith,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &with_body[1].stmt,
+            Stmt::Assignment {
+                value: Expr::WithDot(fields),
+                ..
+            } if fields == &["count"]
+        ));
+        assert!(matches!(
+            &with_body[2].stmt,
+            Stmt::Assignment {
+                value: Expr::CollectionItem {
+                    target: CollectionTarget::CurrentWith,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            &with_body[3].stmt,
+            Stmt::Set {
+                value: ObjectExpr::CollectionItem {
+                    target: CollectionTarget::CurrentWith,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            &with_body[4].stmt,
+            Stmt::CollectionRemove {
+                target: CollectionTarget::CurrentWith,
+                ..
+            }
+        ));
+    }
+    #[test]
+    fn test_collection_object_item_can_be_a_direct_with_target() {
+        let body = parse_body(concat!(
+            "Sub MySub()\n",
+            "    With parent.Item(1)\n",
+            "        n = .Count\n",
+            "    End With\n",
+            "End Sub\n",
+        ));
+        assert!(matches!(
+            &body[0],
+            Stmt::With {
+                target: WithTarget::Object(ObjectExpr::CollectionItem {
+                    target: CollectionTarget::Variable(name),
+                    ..
+                }),
+                ..
+            } if name == "parent"
+        ));
+    }
+
+    #[test]
+    fn call_collection_add_and_remove_parse_to_collection_statements() {
+        let body = parse_body(concat!(
+            "Sub MySub()\n",
+            "    Call items.Add(1, \"one\")\n",
+            "    Call items.Remove(\"one\")\n",
+            "End Sub\n",
+        ));
+        assert!(matches!(
+            &body[0],
+            Stmt::CollectionAdd {
+                target: CollectionTarget::Variable(name),
+                key: Some(_),
+                ..
+            } if name == "items"
+        ));
+        assert!(matches!(
+            &body[1],
+            Stmt::CollectionRemove {
+                target: CollectionTarget::Variable(name),
+                ..
+            } if name == "items"
+        ));
+    }
+
+    #[test]
+    fn exported_class_module_captures_fields_and_methods() {
+        let program = parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "BEGIN\n",
+            "  MultiUse = -1\n",
+            "END\n",
+            "Attribute VB_Name = \"Counter\"\n",
+            "Private total As Long\n",
+            "Public Sub Add(value)\n",
+            "    total = total + value\n",
+            "End Sub\n",
+            "Public Function Current()\n",
+            "    Current = total\n",
+            "End Function\n",
+        ))
+        .unwrap();
+        assert!(program.is_class_module);
+        assert_eq!(program.module_name.as_deref(), Some("Counter"));
+        assert_eq!(
+            program.class_fields,
+            vec![ClassFieldDef {
+                name: "total".to_string(),
+                type_name: Some("long".to_string()),
+                access: AccessModifier::Private,
+            }]
+        );
+        assert_eq!(program.subs[0].name, "add");
+        assert_eq!(program.funcs[0].name, "current");
+        assert!(program.module_diagnostics.is_empty());
+    }
+
+    #[test]
+    fn class_method_statement_and_expression_calls_parse() {
+        let body = parse_body(concat!(
+            "Sub MySub()\n",
+            "    Call item.Increment(2)\n",
+            "    Call item.Reset\n",
+            "    value = item.Current()\n",
+            "    With item\n",
+            "        .Increment 3\n",
+            "        inside = .Current()\n",
+            "    End With\n",
+            "End Sub\n",
+        ));
+        assert!(matches!(&body[0], Stmt::ObjectMethodCall { method, .. } if method == "increment"));
+        assert!(
+            matches!(&body[1], Stmt::ObjectMethodCall { method, args, .. } if method == "reset" && args.is_empty())
+        );
+        assert!(
+            matches!(&body[2], Stmt::Assignment { value: Expr::ObjectMethodCall { method, .. }, .. } if method == "current")
+        );
+        let Stmt::With { body, .. } = &body[3] else {
+            panic!("expected With");
+        };
+        assert!(
+            matches!(&body[0].stmt, Stmt::ObjectMethodCall { method, .. } if method == "increment")
+        );
+        assert!(
+            matches!(&body[1].stmt, Stmt::Assignment { value: Expr::ObjectMethodCall { method, .. }, .. } if method == "current")
+        );
     }
     #[test]
     fn test_call_stmt() {
@@ -4678,17 +5645,44 @@ mod tests {
     }
 
     #[test]
-    fn set_specialcells_visible_parses_to_object_expr_special_cells_visible() {
+    fn set_specialcells_parses_type_and_optional_value_expressions() {
         let body = parse_body(
-            "Sub MySub()\n    Set u = Range(\"A1:A3\")\n    Set v = u.SpecialCells(xlCellTypeVisible)\nEnd Sub\n",
+            "Sub MySub()\n    Set u = Range(\"A1:A3\")\n    Set v = u.SpecialCells(xlCellTypeConstants, xlNumbers + xlTextValues)\nEnd Sub\n",
         );
         assert_eq!(
             body[1],
             Stmt::Set {
                 var: "v".into(),
-                value: ObjectExpr::SpecialCellsVisible(Box::new(ObjectExpr::Var("u".into()))),
+                value: ObjectExpr::SpecialCells {
+                    base: Box::new(ObjectExpr::Var("u".into())),
+                    cell_type: Box::new(Expr::Var("xlcelltypeconstants".into())),
+                    value: Some(Box::new(Expr::BinOp {
+                        lhs: Box::new(Expr::Var("xlnumbers".into())),
+                        op: VbaBinOp::Add,
+                        rhs: Box::new(Expr::Var("xltextvalues".into())),
+                    })),
+                },
             }
         );
+    }
+
+    #[test]
+    fn set_specialcells_accepts_vba_named_arguments() {
+        let body = parse_body(
+            "Sub MySub()\n    Set u = Range(\"A1:A3\")\n    Set v = u.SpecialCells(Type:=xlCellTypeConstants, Value:=xlTextValues)\nEnd Sub\n",
+        );
+        assert!(matches!(
+            &body[1],
+            Stmt::Set {
+                value: ObjectExpr::SpecialCells {
+                    cell_type,
+                    value: Some(value),
+                    ..
+                },
+                ..
+            } if **cell_type == Expr::Var("xlcelltypeconstants".into())
+                && **value == Expr::Var("xltextvalues".into())
+        ));
     }
 
     #[test]
@@ -4699,6 +5693,9 @@ mod tests {
         let body = parse_body(
             "Sub MySub()\n    Set d = CreateObject(\"Scripting.Dictionary\")\nEnd Sub\n",
         );
+        assert!(matches!(body[0], Stmt::Unsupported { .. }), "{:?}", body[0]);
+
+        let body = parse_body("Sub MySub()\n    Set d = GetObject(\"book.xlsx\")\nEnd Sub\n");
         assert!(matches!(body[0], Stmt::Unsupported { .. }), "{:?}", body[0]);
     }
 
@@ -5053,5 +6050,34 @@ mod tests {
         );
         let error = parse(&source).unwrap_err();
         assert!(error.contains("too many tokens"));
+    }
+
+    #[test]
+    fn class_properties_types_access_and_implements_are_preserved() {
+        let program = parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Holder\"\n",
+            "Implements IReadable\n",
+            "Private child As Child\n",
+            "Public Property Get Item() As Child\n",
+            "    Set Item = child\n",
+            "End Property\n",
+            "Friend Property Set Item(ByVal value As Child)\n",
+            "    Set child = value\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        assert_eq!(program.implements, vec!["ireadable"]);
+        assert_eq!(program.class_fields[0].type_name.as_deref(), Some("child"));
+        assert_eq!(program.class_fields[0].access, AccessModifier::Private);
+        assert_eq!(program.properties.len(), 2);
+        assert_eq!(program.properties[0].kind, PropertyKind::Get);
+        assert_eq!(program.properties[0].return_type.as_deref(), Some("child"));
+        assert_eq!(program.properties[1].kind, PropertyKind::Set);
+        assert_eq!(program.properties[1].access, AccessModifier::Friend);
+        assert_eq!(
+            program.properties[1].param_types,
+            vec![Some("child".to_string())]
+        );
     }
 }

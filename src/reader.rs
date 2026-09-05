@@ -223,6 +223,16 @@ pub struct WorkbookSheet {
     /// like `tables`; `Vm::add_data_validation_on_sheet`/`remove_data_validation_on_sheet`
     /// mutate the `Vm`-side copy afterward. Always empty for `.ods`.
     pub data_validations: Vec<DataValidationRule>,
+    /// Cell ranges carrying worksheet conditional-format rules. Each outer
+    /// entry is one `<conditionalFormatting>` block and retains its complete
+    /// `sqref` set so `xlCellTypeSameFormatConditions` can compare rule-group
+    /// identity, not merely whether a cell has any conditional format.
+    pub conditional_format_ranges: Vec<Vec<MergeRect>>,
+    /// 1-based cells with legacy worksheet comments/notes. Comment text is
+    /// intentionally not loaded: `SpecialCells(xlCellTypeComments)` only
+    /// needs membership, while unknown comment-part bytes remain handled by
+    /// the package passthrough layer.
+    pub comment_cells: Vec<(u32, u32)>,
     /// Standalone (worksheet-level) `<autoFilter>`, when present (0.16.0-B) -- `None` for
     /// a sheet with no autofilter at all, distinct from `Some` with an empty `columns`
     /// list (a bare `<autoFilter ref="...">` with no active criteria, real Excel's own
@@ -595,6 +605,53 @@ pub(crate) fn xlsx_data_validations(sheet_xml: &str) -> Vec<DataValidationRule> 
         .iter()
         .filter_map(|span| parse_data_validation_xml(span))
         .collect()
+}
+
+/// Parses each worksheet-level conditional-format block's `sqref`. Rule
+/// bodies remain opaque; block identity is sufficient for both All and Same
+/// format-condition `SpecialCells` queries.
+pub(crate) fn xlsx_conditional_format_ranges(sheet_xml: &str) -> Vec<Vec<MergeRect>> {
+    extract_all_raw_elements(sheet_xml, "conditionalFormatting")
+        .into_iter()
+        .filter_map(|span| {
+            let mut iter = XmlIter::new(&span);
+            while let Some(ev) = iter.next_ev() {
+                match ev {
+                    Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs)
+                        if tag.split(':').next_back() == Some("conditionalFormatting") =>
+                    {
+                        let ranges = attr_get(&attrs, "sqref")
+                            .map(parse_sqref)
+                            .unwrap_or_default();
+                        return (!ranges.is_empty()).then_some(ranges);
+                    }
+                    _ => {}
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// Parses legacy comment/note anchors from an `xl/comments*.xml` part.
+pub(crate) fn xlsx_comment_cells(comments_xml: &str) -> Vec<(u32, u32)> {
+    let mut iter = XmlIter::new(comments_xml);
+    let mut cells = HashSet::new();
+    while let Some(ev) = iter.next_ev() {
+        match ev {
+            Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs)
+                if tag.split(':').next_back() == Some("comment") =>
+            {
+                if let Some(cell) = attr_get(&attrs, "ref").and_then(parse_cell_ref) {
+                    cells.insert(cell);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut cells: Vec<_> = cells.into_iter().collect();
+    cells.sort_unstable();
+    cells
 }
 
 /// One `<tableColumn>` entry inside a `<table>`'s `<tableColumns>` (0.16.0-A1).
@@ -1049,6 +1106,7 @@ enum Ev<'a> {
 struct XmlIter<'a> {
     s: &'a str,
     malformed: bool,
+    recycled_attrs: Vec<Attr<'a>>,
 }
 
 impl<'a> XmlIter<'a> {
@@ -1056,6 +1114,7 @@ impl<'a> XmlIter<'a> {
         XmlIter {
             s,
             malformed: false,
+            recycled_attrs: Vec::new(),
         }
     }
 
@@ -1161,7 +1220,10 @@ impl<'a> XmlIter<'a> {
                 .find(|c: char| c.is_ascii_whitespace())
                 .unwrap_or(tag_body.len());
             let name = &tag_body[..name_end];
-            let attrs = match parse_attrs_strict(&tag_body[name_end..]) {
+            let attrs = match parse_attrs_strict(
+                &tag_body[name_end..],
+                std::mem::take(&mut self.recycled_attrs),
+            ) {
                 Ok(attrs) if !name.is_empty() => attrs,
                 _ => {
                     self.malformed = true;
@@ -1174,24 +1236,36 @@ impl<'a> XmlIter<'a> {
             return Some(Ev::Open(name, attrs));
         }
     }
+
+    /// Worksheet consumers return each fully processed event's storage. Names
+    /// still borrow the immutable XML, while owned entity-expanded values are
+    /// dropped on clear, exactly as when the event was previously dropped.
+    fn recycle_attributes(&mut self, event: Ev<'a>) {
+        if let Ev::Open(_, mut attrs) | Ev::SelfClose(_, mut attrs) = event {
+            attrs.clear();
+            self.recycled_attrs = attrs;
+        }
+    }
 }
 
 /// Find the byte position of the unquoted `>` that closes the current tag body.
 fn find_tag_close(s: &str) -> Option<usize> {
     let mut in_quote = false;
-    let mut qchar = '"';
-    for (i, c) in s.char_indices() {
+    let mut qchar = b'"';
+    // XML delimiters are ASCII; byte scanning preserves UTF-8 boundaries while
+    // avoiding decoding every character in a quoted attribute value.
+    for (i, &c) in s.as_bytes().iter().enumerate() {
         if in_quote {
             if c == qchar {
                 in_quote = false;
             }
         } else {
             match c {
-                '"' | '\'' => {
+                b'"' | b'\'' => {
                     in_quote = true;
                     qchar = c;
                 }
-                '>' => return Some(i),
+                b'>' => return Some(i),
                 _ => {}
             }
         }
@@ -1229,8 +1303,8 @@ fn parse_attrs(mut s: &str) -> Vec<Attr<'_>> {
 /// Parse and validate attributes in one pass. `XmlIter` uses this strict path so
 /// malformed attributes cannot be silently truncated into a partial element.
 /// Other targeted XML helpers intentionally retain the permissive `parse_attrs`.
-fn parse_attrs_strict(mut s: &str) -> Result<Vec<Attr<'_>>, ()> {
-    let mut attrs = Vec::new();
+fn parse_attrs_strict<'a>(mut s: &'a str, mut attrs: Vec<Attr<'a>>) -> Result<Vec<Attr<'a>>, ()> {
+    debug_assert!(attrs.is_empty());
     loop {
         s = s.trim_start();
         if s.is_empty() {
@@ -1556,15 +1630,6 @@ fn validate_zip_archive_with_budget<R: Read + Seek>(
     Ok(())
 }
 
-fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|window| {
-        window
-            .iter()
-            .zip(needle)
-            .all(|(actual, expected)| actual.to_ascii_lowercase() == *expected)
-    })
-}
-
 struct XmlBudgetValidator<'xml> {
     name: String,
     elements: usize,
@@ -1665,9 +1730,22 @@ impl<'xml> XmlBudgetValidator<'xml> {
             self.open_tags.push(tag);
         }
 
-        self.attribute_names.clear();
-        for attr in attrs {
-            if !self.attribute_names.insert(attr.name) {
+        // Cell/row tags usually have at most a handful of attributes. Compare
+        // those directly, keeping the hash set for larger lists so adversarial
+        // input cannot turn duplicate detection into unbounded quadratic work.
+        let small_attributes = attrs.len() <= 8;
+        if !small_attributes {
+            self.attribute_names.clear();
+        }
+        for (index, attr) in attrs.iter().enumerate() {
+            let duplicate = if small_attributes {
+                attrs[..index]
+                    .iter()
+                    .any(|previous| previous.name == attr.name)
+            } else {
+                !self.attribute_names.insert(attr.name)
+            };
+            if duplicate {
                 return Err(format!(
                     "XML element has a duplicate attribute: {} ({tag})",
                     self.name
@@ -1708,7 +1786,6 @@ impl<'xml> XmlBudgetValidator<'xml> {
 }
 
 fn validate_xml_preamble(name: &str, xml: &str) -> Result<(), String> {
-    let raw = xml.as_bytes();
     if xml
         .chars()
         .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
@@ -1717,9 +1794,19 @@ fn validate_xml_preamble(name: &str, xml: &str) -> Result<(), String> {
             "XML document contains a forbidden control character: {name}"
         ));
     }
-    if contains_ascii_case_insensitive(raw, b"<!doctype")
-        || contains_ascii_case_insensitive(raw, b"<!entity")
-    {
+    // Both forbidden literals have the same case-independent ASCII prefix.
+    // Search that prefix once instead of lowercasing windows at every byte in
+    // two whole-document passes. Still inspect EVERY occurrence, even inside
+    // comments/CDATA/attributes, preserving the conservative rejection policy.
+    if xml.match_indices("<!").any(|(index, _)| {
+        let tail = &xml.as_bytes()[index..];
+        [b"<!doctype".as_slice(), b"<!entity".as_slice()]
+            .iter()
+            .any(|needle| {
+                tail.get(..needle.len())
+                    .is_some_and(|value| value.eq_ignore_ascii_case(needle))
+            })
+    }) {
         return Err(format!(
             "XML document uses a forbidden DTD or entity declaration: {name}"
         ));
@@ -1932,7 +2019,7 @@ pub(crate) fn content_type_decls(xml: &str) -> ContentTypeDecls {
 /// selectively — see docs/xlsx-worksheet-preservation-0.10.0-design.md §8.
 pub(crate) fn extract_root_attrs(xml: &str, local_name: &str) -> Option<String> {
     let (start, tag_close_rel, full_name) = find_next_open_tag(xml, 0)?;
-    if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
+    if full_name.rsplit(':').next().unwrap_or(full_name) != local_name {
         return None;
     }
     let after_name = &xml[start + 1 + full_name.len()..];
@@ -1994,10 +2081,16 @@ pub(crate) fn ensure_r_prefix_bound(attrs: &str) -> Option<String> {
 /// (`sheetViews`, `sheetPr`, `sheetFormatPr`, `dataValidations`, `autoFilter`,
 /// `pageMargins` don't self-nest).
 pub(crate) fn extract_raw_element(xml: &str, local_name: &str) -> Option<String> {
+    // XML tag names are literal bytes (not entity-expanded). A missing local
+    // name therefore proves absence, without visiting every cell tag in a large
+    // sheet. A hit is only a prefilter: the normal tag-boundary checks still run.
+    if !xml.contains(local_name) {
+        return None;
+    }
     let mut search_from = 0;
     loop {
         let (tag_start, tag_close_rel, full_name) = find_next_open_tag(xml, search_from)?;
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != local_name {
             search_from = tag_start + 1;
             continue;
         }
@@ -2026,10 +2119,13 @@ pub(crate) fn extract_raw_element(xml: &str, local_name: &str) -> Option<String>
 /// — its children are `cfRule`/`extLst`, never another `conditionalFormatting`). Stops the
 /// scan (rather than misparsing) if an opening tag's matching close tag is missing.
 pub(crate) fn extract_all_raw_elements(xml: &str, local_name: &str) -> Vec<String> {
+    if !xml.contains(local_name) {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let mut search_from = 0;
     while let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(xml, search_from) {
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != local_name {
             search_from = tag_start + 1;
             continue;
         }
@@ -2057,11 +2153,12 @@ pub(crate) fn extract_all_raw_elements(xml: &str, local_name: &str) -> Vec<Strin
 /// Shared scan primitive for `extract_root_attrs`/`extract_raw_element`: finds the next
 /// opening or self-closing tag at or after byte offset `from` (skipping closing tags,
 /// comments, CDATA, and processing instructions/XML declarations), returning
-/// `(tag_start, tag_close_rel, local_name)` — `tag_start` is the byte offset of the tag's
+/// `(tag_start, tag_close_rel, full_name)` — `tag_start` is the byte offset of the tag's
 /// `<`, `tag_close_rel` is the offset of its terminating unquoted `>` relative to just
-/// after the tag name, and `local_name` has any namespace prefix stripped. `None` if no
-/// more tags exist.
-fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize, String)> {
+/// after the tag name, and `full_name` borrows the original bytes, including its
+/// namespace prefix, instead of allocating a string for each scanned cell tag.
+/// `None` if no more tags exist.
+fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize, &str)> {
     loop {
         let rel = xml[search_from..].find('<')?;
         let tag_start = search_from + rel;
@@ -2073,7 +2170,7 @@ fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize
         let name_end = after_lt
             .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
             .unwrap_or(after_lt.len());
-        let full_name = after_lt[..name_end].to_string();
+        let full_name = &after_lt[..name_end];
         let rest = &after_lt[name_end..];
         let tag_close_rel = find_tag_close(rest)?;
         return Some((tag_start, tag_close_rel, full_name));
@@ -2108,7 +2205,7 @@ pub(crate) fn extract_hyperlinks(xml: &str, include_relationship_backed: bool) -
     while let Some((tag_start, tag_close_rel, full_name)) =
         find_next_open_tag(&container, search_from)
     {
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != "hyperlink" {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != "hyperlink" {
             search_from = tag_start + 1;
             continue;
         }
@@ -2146,7 +2243,7 @@ pub(crate) fn extract_defined_name_elements(xml: &str) -> Vec<(String, (usize, u
     while let Some((tag_start, tag_close_rel, full_name)) =
         find_next_open_tag(&container, search_from)
     {
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != "definedName" {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != "definedName" {
             search_from = tag_start + 1;
             continue;
         }
@@ -2328,6 +2425,36 @@ mod opaque_fragment_tests {
     fn extract_raw_element_returns_none_when_absent() {
         let xml = "<worksheet><sheetData/></worksheet>";
         assert_eq!(extract_raw_element(xml, "sheetViews"), None);
+    }
+
+    #[test]
+    fn opaque_tag_scanner_borrows_prefixed_unicode_name() {
+        let xml = "<x:表示 flag='a>b'/>";
+        let (start, close, name) = find_next_open_tag(xml, 0).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(name, "x:表示");
+        assert_eq!(name.as_ptr(), xml[1..].as_ptr());
+        assert_eq!(1 + name.len() + close, xml.len() - 1);
+    }
+
+    #[test]
+    fn opaque_name_prefilter_still_requires_exact_tag_boundaries() {
+        let xml = concat!(
+            "<worksheet note='sheetViews'><sheetData><row><c><v>",
+            "sheetViews conditionalFormatting</v></c></row></sheetData>",
+            "<sheetViewsExtra/><conditionalFormattingRule/></worksheet>"
+        );
+        assert_eq!(extract_raw_element(xml, "sheetViews"), None);
+        assert!(extract_all_raw_elements(xml, "conditionalFormatting").is_empty());
+    }
+
+    #[test]
+    fn opaque_name_prefilter_preserves_prefixes_quotes_and_repeated_fragments() {
+        let first = "<x:表示 note='a>b'>日本語 &amp; text</x:表示>";
+        let second = "<y:表示 value=\"sheetViews\"/>";
+        let xml = format!("<root xmlns:x='urn:x' xmlns:y='urn:y'>{first}{second}</root>");
+        assert_eq!(extract_raw_element(&xml, "表示").as_deref(), Some(first));
+        assert_eq!(extract_all_raw_elements(&xml, "表示"), vec![first, second]);
     }
 
     #[test]
@@ -3071,20 +3198,30 @@ fn read_workbook_from_archive<R: Read + Seek>(
         // this one sheet, same OPC convention as hyperlinks/drawings. Tolerant of a
         // missing `.rels`/unresolvable target/unparseable table part -- each just
         // contributes nothing, matching this reader's convention elsewhere.
+        let sheet_rels_name = crate::part_rels_name(&zip_path);
+        let has_sheet_rels = archive.file_names().any(|name| name == sheet_rels_name);
+        let sheet_rels_xml = if has_sheet_rels {
+            Some(zip_read_text_with_budget(
+                &mut archive,
+                &sheet_rels_name,
+                &budget,
+            )?)
+        } else {
+            None
+        };
+        let sheet_rels_base = crate::rels_target_dir(&sheet_rels_name).to_string();
         let mut tables = Vec::new();
         let table_rids = xlsx_table_part_rids(&sheet_xml);
         if !table_rids.is_empty()
-            && let Ok(sheet_rels_xml) =
-                zip_read_text_with_budget(&mut archive, &crate::part_rels_name(&zip_path), &budget)
+            && let Some(sheet_rels_xml) = &sheet_rels_xml
         {
             budget.check()?;
-            let table_rels = xlsx_rels(&sheet_rels_xml, "/table");
-            let base = crate::rels_target_dir(&crate::part_rels_name(&zip_path)).to_string();
+            let table_rels = xlsx_rels(sheet_rels_xml, "/table");
             for rid in &table_rids {
                 let Some(target) = table_rels.get(rid) else {
                     continue;
                 };
-                let resolved = crate::normalize_part_path(&format!("{base}{target}"));
+                let resolved = crate::normalize_part_path(&format!("{sheet_rels_base}{target}"));
                 if let Ok(table_xml) = zip_read_text_with_budget(&mut archive, &resolved, &budget)
                     && let Some(mut t) = parse_table_xml(&table_xml)
                 {
@@ -3094,6 +3231,20 @@ fn read_workbook_from_archive<R: Read + Seek>(
             }
         }
         let data_validations = xlsx_data_validations(&sheet_xml);
+        let conditional_format_ranges = xlsx_conditional_format_ranges(&sheet_xml);
+        let mut comment_cells = HashSet::new();
+        if let Some(sheet_rels_xml) = &sheet_rels_xml {
+            for target in xlsx_rels(sheet_rels_xml, "/comments").into_values() {
+                let resolved = crate::normalize_part_path(&format!("{sheet_rels_base}{target}"));
+                let exists = archive.file_names().any(|name| name == resolved);
+                if exists {
+                    let comments_xml = zip_read_text_with_budget(&mut archive, &resolved, &budget)?;
+                    comment_cells.extend(xlsx_comment_cells(&comments_xml));
+                }
+            }
+        }
+        let mut comment_cells: Vec<_> = comment_cells.into_iter().collect();
+        comment_cells.sort_unstable();
         let autofilter = xlsx_autofilter(&sheet_xml);
         sheets.push(BufferSheet {
             sheet: WorkbookSheet {
@@ -3115,6 +3266,8 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 column_styles: sheet_data.column_styles,
                 tables,
                 data_validations,
+                conditional_format_ranges,
+                comment_cells,
                 autofilter,
             },
             formulas: sheet_data.formulas,
@@ -3599,7 +3752,7 @@ pub(crate) fn extract_records(xml: &str, container: &str, record: &str) -> Vec<S
     while let Some((tag_start, tag_close_rel, full_name)) =
         find_next_open_tag(&container_span, search_from)
     {
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != record {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != record {
             search_from = tag_start + 1;
             continue;
         }
@@ -4319,7 +4472,8 @@ fn xlsx_sheet_cells_impl(
                         }
                     }
                     "c" => {
-                        cur_type = attr_get(attrs, "t").unwrap_or("").to_string();
+                        cur_type.clear();
+                        cur_type.push_str(attr_get(attrs, "t").unwrap_or(""));
                         in_v = false;
                         if let Some(r) = attr_get(attrs, "r")
                             && let Some((row, col)) = parse_cell_ref(r)
@@ -4472,6 +4626,7 @@ fn xlsx_sheet_cells_impl(
             cur_type.clear();
             in_shared_string_value = false;
         }
+        iter.recycle_attributes(ev);
     }
     if let Some(validator) = validator {
         validator.finish(iter.malformed)?;
@@ -5209,6 +5364,39 @@ mod data_validation_parsing_tests {
     }
 
     #[test]
+    fn xlsx_conditional_format_ranges_preserves_block_and_multi_area_membership() {
+        let xml = r#"<worksheet><conditionalFormatting sqref="A1:A3 C5"><cfRule type="expression"><formula>A1&gt;0</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="D2:D4"><cfRule type="cellIs"/></conditionalFormatting></worksheet>"#;
+        assert_eq!(
+            xlsx_conditional_format_ranges(xml),
+            vec![
+                vec![((1, 1), (3, 1)), ((5, 3), (5, 3))],
+                vec![((2, 4), (4, 4))],
+            ]
+        );
+    }
+
+    #[test]
+    fn xlsx_comment_cells_reads_and_deduplicates_legacy_comment_anchors() {
+        let xml = r#"<comments><authors><author>A</author></authors><commentList><comment ref="C3" authorId="0"><text><t>note</t></text></comment><comment ref="A1" authorId="0"/><comment ref="C3" authorId="0"/></commentList></comments>"#;
+        assert_eq!(xlsx_comment_cells(xml), vec![(1, 1), (3, 3)]);
+    }
+
+    #[test]
+    fn real_fixture_threads_conditional_format_and_comment_membership_into_sheet_model() {
+        let path = format!(
+            "{}/compat/oracle-excel-com/fixtures/pristine/fixture4_hyperlink_comment_name.xlsm",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let sheets = read_workbook(&path).expect("real fixture must load");
+        assert_eq!(sheets.len(), 1);
+        assert_eq!(
+            sheets[0].conditional_format_ranges,
+            vec![vec![((1, 2), (5, 2))]]
+        );
+        assert_eq!(sheets[0].comment_cells, vec![(4, 3)]);
+    }
+
+    #[test]
     fn xlsx_autofilter_is_none_without_an_autofilter_element() {
         assert!(xlsx_autofilter("<worksheet></worksheet>").is_none());
     }
@@ -5397,6 +5585,8 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             column_styles: Vec::new(),
                             tables: Vec::new(),
                             data_validations: Vec::new(),
+                            conditional_format_ranges: Vec::new(),
+                            comment_cells: Vec::new(),
                             autofilter: None,
                         });
                         in_sheet = true;
@@ -6780,6 +6970,104 @@ mod from_bytes_tests {
         let error =
             validate_xml_budget("sheet.xml", r#"<worksheet ref="A1" ref="B1"/>"#).unwrap_err();
         assert!(error.contains("duplicate attribute"));
+    }
+
+    #[test]
+    fn xml_attribute_duplicate_checks_cover_both_sides_of_small_list_threshold() {
+        for count in [0, 1, 7, 8, 9, 32] {
+            let attrs: String = (0..count).map(|i| format!(" a{i}='日本語>{i}'")).collect();
+            let valid = format!("<root><c{attrs}/><c a0='again'/><c{attrs}/></root>");
+            validate_xml_budget("sheet.xml", &valid).unwrap();
+            if count > 0 {
+                for duplicate in [0, count - 1] {
+                    let invalid = format!("<root><c{attrs} a{duplicate}='duplicate'/></root>");
+                    assert!(
+                        validate_xml_budget("sheet.xml", &invalid)
+                            .unwrap_err()
+                            .contains("duplicate attribute")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn byte_tag_close_scan_preserves_unicode_quotes_and_unterminated_errors() {
+        for body in ["x 日本語='a>b'", "x a=\"日本語>🙂\" b='\"'", "x/", "x"] {
+            let xml = format!("{body}>tail");
+            assert_eq!(find_tag_close(&xml), Some(body.len()));
+        }
+        for body in ["x a='日本語>", "x a=\"🙂>", "x", ""] {
+            assert_eq!(find_tag_close(body), None);
+        }
+    }
+
+    #[test]
+    fn worksheet_attribute_storage_is_reused_without_leaking_values_or_names() {
+        let xml =
+            "<root first='&amp;' second='日本語'><c t='n' r='A1'><v>1</v></c><c r='B1'/></root>";
+        let mut iter = XmlIter::new(xml);
+        let root = iter.next_ev().unwrap();
+        let Ev::Open(_, ref attrs) = root else {
+            panic!("root event")
+        };
+        assert_eq!(attr_get(attrs, "first"), Some("&"));
+        let pointer = attrs.as_ptr();
+        iter.recycle_attributes(root);
+        let cell = iter.next_ev().unwrap();
+        let Ev::Open(_, ref attrs) = cell else {
+            panic!("cell event")
+        };
+        assert_eq!(attrs.as_ptr(), pointer);
+        assert_eq!(attrs.len(), 2);
+        assert_eq!(attr_get(attrs, "first"), None);
+        assert_eq!(attr_get(attrs, "t"), Some("n"));
+        iter.recycle_attributes(cell);
+        while let Some(event) = iter.next_ev() {
+            if let Ev::SelfClose(_, ref attrs) = event {
+                assert_eq!(attrs.as_ptr(), pointer);
+                assert_eq!(attrs.len(), 1);
+                assert_eq!(attr_get(attrs, "r"), Some("B1"));
+                assert_eq!(attr_get(attrs, "t"), None);
+            }
+            iter.recycle_attributes(event);
+        }
+        assert!(!iter.malformed);
+    }
+
+    #[test]
+    fn declaration_prefilter_matches_the_previous_byte_window_policy() {
+        for declaration in [
+            "<!doctype",
+            "<!ENTITY",
+            "<!DoCtYpE",
+            "<!eNtItY",
+            "<!entityX",
+            "<!enti",
+            "<!",
+            "🙂",
+        ] {
+            for (prefix, suffix) in [
+                ("", ""),
+                ("日本語<!-- ", " -->"),
+                ("<![CDATA[", "]]>"),
+                ("<root a='", "'/>"),
+            ] {
+                let xml = format!("{prefix}{declaration}{suffix}");
+                let expected = [b"<!doctype".as_slice(), b"<!entity".as_slice()]
+                    .iter()
+                    .any(|needle| {
+                        xml.as_bytes()
+                            .windows(needle.len())
+                            .any(|window| window.eq_ignore_ascii_case(needle))
+                    });
+                assert_eq!(
+                    validate_xml_preamble("test.xml", &xml).is_err(),
+                    expected,
+                    "{xml}"
+                );
+            }
+        }
     }
 
     #[test]

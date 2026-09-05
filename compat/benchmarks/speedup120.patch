@@ -1,0 +1,173 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -3869,20 +3869,25 @@
+     let mut shared_strings: Vec<String> = Vec::new();
+     for sheet_name in &sheet_names {
+         if let Some(cells) = vm.get_sheet_cells(sheet_name) {
+-            let mut sorted: Vec<_> = cells.keys().collect();
+-            sorted.sort();
+-            for key in sorted {
++            // Only strings need deterministic shared-string indices. Keep
++            // their coordinate order without sorting/hash-looking-up every
++            // numeric cell in the workbook.
++            let mut sorted: Vec<_> = cells
++                .iter()
++                .filter_map(|(key, cell)| match &cell.value {
++                    Variant::Str(value) => Some((key, value)),
++                    _ => None,
++                })
++                .collect();
++            sorted.sort_unstable_by_key(|(key, _)| *key);
++            for (_, value) in sorted {
+                 // Variant::Error is deliberately excluded: a real error cell is written as
+                 // t="e" with its literal error text in <v> (see xlsx_cell_xml below), never
+                 // shared-string indexed -- confirmed against real Excel-authored output,
+                 // which never puts e.g. "#VALUE!" in xl/sharedStrings.xml either.
+-                let s = match &cells[key].value {
+-                    Variant::Str(s) => s.as_str().to_string(),
+-                    _ => continue,
+-                };
+-                if !str_index.contains_key(&s) {
+-                    str_index.insert(s.clone(), shared_strings.len());
+-                    shared_strings.push(s);
++                if !str_index.contains_key(value.as_str()) {
++                    str_index.insert(value.clone(), shared_strings.len());
++                    shared_strings.push(value.clone());
+                 }
+             }
+         }
+--- a/src/reader.rs
++++ b/src/reader.rs
+@@ -1989,7 +1989,7 @@
+ /// selectively — see docs/xlsx-worksheet-preservation-0.10.0-design.md §8.
+ pub(crate) fn extract_root_attrs(xml: &str, local_name: &str) -> Option<String> {
+     let (start, tag_close_rel, full_name) = find_next_open_tag(xml, 0)?;
+-    if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
++    if full_name.rsplit(':').next().unwrap_or(full_name) != local_name {
+         return None;
+     }
+     let after_name = &xml[start + 1 + full_name.len()..];
+@@ -2051,10 +2051,16 @@
+ /// (`sheetViews`, `sheetPr`, `sheetFormatPr`, `dataValidations`, `autoFilter`,
+ /// `pageMargins` don't self-nest).
+ pub(crate) fn extract_raw_element(xml: &str, local_name: &str) -> Option<String> {
++    // XML tag names are literal bytes (not entity-expanded). A missing local
++    // name therefore proves absence, without visiting every cell tag in a large
++    // sheet. A hit is only a prefilter: the normal tag-boundary checks still run.
++    if !xml.contains(local_name) {
++        return None;
++    }
+     let mut search_from = 0;
+     loop {
+         let (tag_start, tag_close_rel, full_name) = find_next_open_tag(xml, search_from)?;
+-        if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
++        if full_name.rsplit(':').next().unwrap_or(full_name) != local_name {
+             search_from = tag_start + 1;
+             continue;
+         }
+@@ -2083,10 +2089,13 @@
+ /// — its children are `cfRule`/`extLst`, never another `conditionalFormatting`). Stops the
+ /// scan (rather than misparsing) if an opening tag's matching close tag is missing.
+ pub(crate) fn extract_all_raw_elements(xml: &str, local_name: &str) -> Vec<String> {
++    if !xml.contains(local_name) {
++        return Vec::new();
++    }
+     let mut out = Vec::new();
+     let mut search_from = 0;
+     while let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(xml, search_from) {
+-        if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
++        if full_name.rsplit(':').next().unwrap_or(full_name) != local_name {
+             search_from = tag_start + 1;
+             continue;
+         }
+@@ -2114,11 +2123,12 @@
+ /// Shared scan primitive for `extract_root_attrs`/`extract_raw_element`: finds the next
+ /// opening or self-closing tag at or after byte offset `from` (skipping closing tags,
+ /// comments, CDATA, and processing instructions/XML declarations), returning
+-/// `(tag_start, tag_close_rel, local_name)` — `tag_start` is the byte offset of the tag's
++/// `(tag_start, tag_close_rel, full_name)` — `tag_start` is the byte offset of the tag's
+ /// `<`, `tag_close_rel` is the offset of its terminating unquoted `>` relative to just
+-/// after the tag name, and `local_name` has any namespace prefix stripped. `None` if no
+-/// more tags exist.
+-fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize, String)> {
++/// after the tag name, and `full_name` borrows the original bytes, including its
++/// namespace prefix, instead of allocating a string for each scanned cell tag.
++/// `None` if no more tags exist.
++fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize, &str)> {
+     loop {
+         let rel = xml[search_from..].find('<')?;
+         let tag_start = search_from + rel;
+@@ -2130,7 +2140,7 @@
+         let name_end = after_lt
+             .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+             .unwrap_or(after_lt.len());
+-        let full_name = after_lt[..name_end].to_string();
++        let full_name = &after_lt[..name_end];
+         let rest = &after_lt[name_end..];
+         let tag_close_rel = find_tag_close(rest)?;
+         return Some((tag_start, tag_close_rel, full_name));
+@@ -2165,7 +2175,7 @@
+     while let Some((tag_start, tag_close_rel, full_name)) =
+         find_next_open_tag(&container, search_from)
+     {
+-        if full_name.rsplit(':').next().unwrap_or(&full_name) != "hyperlink" {
++        if full_name.rsplit(':').next().unwrap_or(full_name) != "hyperlink" {
+             search_from = tag_start + 1;
+             continue;
+         }
+@@ -2203,7 +2213,7 @@
+     while let Some((tag_start, tag_close_rel, full_name)) =
+         find_next_open_tag(&container, search_from)
+     {
+-        if full_name.rsplit(':').next().unwrap_or(&full_name) != "definedName" {
++        if full_name.rsplit(':').next().unwrap_or(full_name) != "definedName" {
+             search_from = tag_start + 1;
+             continue;
+         }
+@@ -2384,7 +2394,37 @@
+     #[test]
+     fn extract_raw_element_returns_none_when_absent() {
+         let xml = "<worksheet><sheetData/></worksheet>";
++        assert_eq!(extract_raw_element(xml, "sheetViews"), None);
++    }
++
++    #[test]
++    fn opaque_tag_scanner_borrows_prefixed_unicode_name() {
++        let xml = "<x:表示 flag='a>b'/>";
++        let (start, close, name) = find_next_open_tag(xml, 0).unwrap();
++        assert_eq!(start, 0);
++        assert_eq!(name, "x:表示");
++        assert_eq!(name.as_ptr(), xml[1..].as_ptr());
++        assert_eq!(1 + name.len() + close, xml.len() - 1);
++    }
++
++    #[test]
++    fn opaque_name_prefilter_still_requires_exact_tag_boundaries() {
++        let xml = concat!(
++            "<worksheet note='sheetViews'><sheetData><row><c><v>",
++            "sheetViews conditionalFormatting</v></c></row></sheetData>",
++            "<sheetViewsExtra/><conditionalFormattingRule/></worksheet>"
++        );
+         assert_eq!(extract_raw_element(xml, "sheetViews"), None);
++        assert!(extract_all_raw_elements(xml, "conditionalFormatting").is_empty());
++    }
++
++    #[test]
++    fn opaque_name_prefilter_preserves_prefixes_quotes_and_repeated_fragments() {
++        let first = "<x:表示 note='a>b'>日本語 &amp; text</x:表示>";
++        let second = "<y:表示 value=\"sheetViews\"/>";
++        let xml = format!("<root xmlns:x='urn:x' xmlns:y='urn:y'>{first}{second}</root>");
++        assert_eq!(extract_raw_element(&xml, "表示").as_deref(), Some(first));
++        assert_eq!(extract_all_raw_elements(&xml, "表示"), vec![first, second]);
+     }
+ 
+     #[test]
+@@ -3682,7 +3722,7 @@
+     while let Some((tag_start, tag_close_rel, full_name)) =
+         find_next_open_tag(&container_span, search_from)
+     {
+-        if full_name.rsplit(':').next().unwrap_or(&full_name) != record {
++        if full_name.rsplit(':').next().unwrap_or(full_name) != record {
+             search_from = tag_start + 1;
+             continue;
+         }

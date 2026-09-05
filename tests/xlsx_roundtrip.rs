@@ -308,6 +308,91 @@ fn tmp_path(name: &str) -> String {
 }
 
 #[test]
+fn buffered_zip_crosses_xml_and_output_buffers_without_losing_tail_bytes() {
+    use calamine::{Data, Reader, Xlsx, open_workbook};
+    use elixcee::vm::Variant;
+
+    let mut vm = Vm::new();
+    let sheet = vm.sheet_names()[0].clone();
+    let mut state = 0x1234_5678_u32;
+    let values: Vec<Vec<Variant>> = (1..=2000)
+        .map(|row| {
+            let mut text = format!(" {row}:日本語 &<>\" ");
+            for _ in 0..96 {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                text.push(char::from(b'!' + (state % 90) as u8));
+            }
+            vec![Variant::Str(text), Variant::Integer(row)]
+        })
+        .collect();
+    vm.write_rect(&sheet, (1, 1), &values);
+    let output = tmp_path("buffer_boundaries.xlsx");
+    // Repeat in place to exercise atomic replacement as well as first save.
+    for _ in 0..2 {
+        save_workbook(&vm, &output).unwrap();
+        let bytes = std::fs::read(&output).unwrap();
+        assert!(bytes.len() > 64 * 1024, "cross compressed output buffer");
+        let entries = read_all_zip_entries(&bytes);
+        assert!(entries["xl/worksheets/sheet1.xml"].len() > 64 * 1024);
+        assert!(entries["xl/sharedStrings.xml"].len() > 64 * 1024);
+        let mut workbook: Xlsx<_> = open_workbook(&output).unwrap();
+        let range = workbook.worksheet_range(&sheet).unwrap();
+        for (index, row) in values.iter().enumerate() {
+            let Variant::Str(text) = &row[0] else {
+                unreachable!()
+            };
+            assert_eq!(range.get((index, 0)), Some(&Data::String(text.clone())));
+            assert_eq!(
+                range.get((index, 1)),
+                Some(&Data::Float((index + 1) as f64))
+            );
+        }
+        let mut reloaded = Vm::new();
+        reloaded.load_workbook_file(&output).unwrap();
+        assert_eq!(reloaded.read_rect(&sheet, 1, 1, 2000, 2), values);
+    }
+    std::fs::remove_file(output).unwrap();
+}
+
+#[test]
+fn shared_strings_keep_coordinate_order_and_deduplicate_among_numeric_cells() {
+    use elixcee::vm::Variant;
+
+    let mut vm = Vm::new();
+    let sheet = vm.sheet_names()[0].clone();
+    let numbers: Vec<_> = (1..=1000).map(|n| vec![Variant::Integer(n)]).collect();
+    vm.write_rect(&sheet, (1, 1), &numbers);
+    // Insert in reverse coordinate order; numeric cells must not affect SST IDs.
+    for (row, col, value) in [
+        (900, 2, "終端"),
+        (50, 2, "先頭"),
+        (2, 3, " &<> "),
+        (1, 4, "先頭"),
+    ] {
+        vm.write_rect(&sheet, (row, col), &[vec![Variant::Str(value.into())]]);
+    }
+    let output = tmp_path("shared_strings_numeric_mix.xlsx");
+    save_workbook(&vm, &output).unwrap();
+    let entries = read_all_zip_entries(&std::fs::read(&output).unwrap());
+    let strings = std::str::from_utf8(&entries["xl/sharedStrings.xml"]).unwrap();
+    assert!(strings.contains("uniqueCount=\"3\""));
+    assert!(strings.contains(concat!(
+        "<si><t>先頭</t></si>\n",
+        "<si><t xml:space=\"preserve\"> &amp;&lt;&gt; </t></si>\n",
+        "<si><t>終端</t></si>\n"
+    )));
+    let mut reloaded = Vm::new();
+    reloaded.load_workbook_file(&output).unwrap();
+    assert_eq!(
+        reloaded.read_rect(&sheet, 1, 1, 1000, 4),
+        vm.read_rect(&sheet, 1, 1, 1000, 4)
+    );
+    std::fs::remove_file(output).unwrap();
+}
+
+#[test]
 fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types() {
     let (fixture_bytes, vba_bytes, table_bytes, styles_bytes) = build_fixture_xlsm();
     let source_path = tmp_path("source.xlsm");

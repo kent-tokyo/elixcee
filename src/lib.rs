@@ -383,7 +383,7 @@ type RangeBounds = ((u32, u32), (u32, u32));
 /// for `resolve_pending_number_formats`'s "effective" (edits applied) return value.
 type StyleIndexMap = std::collections::HashMap<String, std::collections::HashMap<(u32, u32), u32>>;
 
-/// `<cols>` emission's merge-by-exact-range accumulator (`build_xlsx_sheet`) --
+/// `<cols>` emission's merge-by-exact-range accumulator (`write_xlsx_sheet`) --
 /// `(hidden, width, style)`, one entry per exact `(min,max)` range.
 type ColAttrsMap = std::collections::BTreeMap<(u32, u32), (bool, Option<f64>, Option<u32>)>;
 
@@ -1069,6 +1069,14 @@ impl PyVm {
         save_workbook_impl(&self.inner, path).map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
     }
 
+    /// Save an XLSX without the final filesystem durability barrier. This can be
+    /// faster for disposable/cache outputs, but a crash or power loss may leave
+    /// the published file unwritten. Use ``save_workbook`` for durable output.
+    fn save_workbook_fast(&self, path: &str) -> PyResult<()> {
+        save_workbook_impl_with_sync(&self.inner, path, false)
+            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
+    }
+
     /// Return the active sheet's non-empty cells as a **pandas DataFrame**.
     ///
     /// Row indices and column indices are 1-based integers (matching VBA / Excel
@@ -1236,9 +1244,7 @@ impl PyVm {
             .inner
             .resolve_sheet_key(sheet)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        let target_row = self.inner.next_append_row(&key);
-        self.inner.write_rect(&key, (target_row, 1), &[row]);
-        Ok(target_row)
+        Ok(self.inner.append_row_values(&key, row))
     }
 
     /// Values-only iteration over a rectangular region, 1-based bounds.
@@ -3263,6 +3269,12 @@ pub fn save_workbook(vm: &Vm, path: &str) -> Result<(), String> {
     save_workbook_impl(vm, path)
 }
 
+/// Save an XLSX without the final filesystem durability barrier. Intended for
+/// disposable/cache outputs; durable callers should use [`save_workbook`].
+pub fn save_workbook_fast(vm: &Vm, path: &str) -> Result<(), String> {
+    save_workbook_impl_with_sync(vm, path, false)
+}
+
 #[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None, timeout_ms = None))]
@@ -3299,12 +3311,16 @@ fn create_stream(
 }
 
 fn save_workbook_impl(vm: &Vm, path: &str) -> Result<(), String> {
+    save_workbook_impl_with_sync(vm, path, true)
+}
+
+fn save_workbook_impl_with_sync(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     validate_output_extension(path)?;
     reject_symlink_output(path)?;
     if path.to_lowercase().ends_with(".ods") {
         return save_ods_impl(vm, path);
     }
-    save_xlsx_impl(vm, path)
+    save_xlsx_impl(vm, path, sync)
 }
 
 /// Keep the file-format contract explicit: the writer must not silently emit
@@ -3372,8 +3388,23 @@ fn reject_symlink_output(path: &str) -> Result<(), String> {
 /// Keeping the temporary file in the same directory preserves rename's
 /// atomicity on platforms that support replacing an existing file atomically.
 fn write_output_atomically(path: &str, data: &[u8]) -> Result<(), String> {
-    use std::fs::OpenOptions;
     use std::io::Write;
+
+    let (temporary, mut file) = create_atomic_output_temp(path)?;
+    let write_result = file
+        .write_all(data)
+        .and_then(|_| file.flush())
+        .and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("cannot write temporary output: {error}"));
+    }
+    publish_atomic_output(path, &temporary)
+}
+
+fn create_atomic_output_temp(path: &str) -> Result<(std::path::PathBuf, std::fs::File), String> {
+    use std::fs::OpenOptions;
 
     let output = std::path::Path::new(path);
     let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
@@ -3394,7 +3425,7 @@ fn write_output_atomically(path: &str, data: &[u8]) -> Result<(), String> {
 
     for attempt in 0..100u32 {
         let temporary = parent.join(format!("{prefix}-{attempt}"));
-        let mut file = match OpenOptions::new()
+        let file = match OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary)
@@ -3404,45 +3435,41 @@ fn write_output_atomically(path: &str, data: &[u8]) -> Result<(), String> {
             Err(error) => return Err(format!("cannot create temporary output: {error}")),
         };
 
-        let write_result = existing_permissions
-            .as_ref()
-            .map(|permissions| file.set_permissions(permissions.clone()))
-            .transpose()
-            .map(|result| result.map(|_| ()))
-            .and_then(|_| file.write_all(data))
-            .and_then(|_| file.flush())
-            .and_then(|_| file.sync_all());
-        drop(file);
-        if let Err(error) = write_result {
+        if let Some(permissions) = existing_permissions.as_ref()
+            && let Err(error) = file.set_permissions(permissions.clone())
+        {
             let _ = std::fs::remove_file(&temporary);
-            return Err(format!("cannot write temporary output: {error}"));
+            return Err(format!("cannot set temporary output permissions: {error}"));
         }
-
-        let result = {
-            #[cfg(not(windows))]
-            {
-                std::fs::rename(&temporary, output)
-            }
-            #[cfg(windows)]
-            {
-                match std::fs::rename(&temporary, output) {
-                    Ok(()) => Ok(()),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                        std::fs::remove_file(output)
-                            .and_then(|_| std::fs::rename(&temporary, output))
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-        };
-        if let Err(error) = result {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(format!("cannot publish output: {error}"));
-        }
-        return Ok(());
+        return Ok((temporary, file));
     }
 
     Err("cannot allocate a unique temporary output path".to_string())
+}
+
+fn publish_atomic_output(path: &str, temporary: &std::path::Path) -> Result<(), String> {
+    let output = std::path::Path::new(path);
+    let result = {
+        #[cfg(not(windows))]
+        {
+            std::fs::rename(temporary, output)
+        }
+        #[cfg(windows)]
+        {
+            match std::fs::rename(temporary, output) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    std::fs::remove_file(output).and_then(|_| std::fs::rename(temporary, output))
+                }
+                Err(error) => Err(error),
+            }
+        }
+    };
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(temporary);
+        return Err(format!("cannot publish output: {error}"));
+    }
+    Ok(())
 }
 
 /// 0.10.0-D, slice D1: one worksheet's complete set of output identifiers, computed once
@@ -3757,7 +3784,7 @@ fn carry_over_rels(
     raw_entries: &std::collections::HashMap<String, Vec<u8>>,
     rels_part: &str,
     target_base: &str,
-    passthrough: &[(String, Vec<u8>)],
+    passthrough_names: &[String],
     skip_types: &[&str],
 ) -> Vec<(String, String)> {
     let Some(rels_xml) = raw_entries
@@ -3771,7 +3798,7 @@ fn carry_over_rels(
         .filter(|(ty, _)| !skip_types.contains(&ty.as_str()))
         .filter(|(_, target)| {
             let resolved = normalize_part_path(&format!("{}{}", target_base, target));
-            passthrough.iter().any(|(name, _)| *name == resolved)
+            passthrough_names.contains(&resolved)
         })
         .collect()
 }
@@ -3823,9 +3850,9 @@ fn rewrite_defined_names_xml(
     }
 }
 
-fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
+fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     use std::collections::HashMap;
-    use std::io::{Cursor, Write};
+    use std::io::Write;
     use zip::CompressionMethod;
     use zip::write::ZipWriter;
 
@@ -3842,20 +3869,25 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     let mut shared_strings: Vec<String> = Vec::new();
     for sheet_name in &sheet_names {
         if let Some(cells) = vm.get_sheet_cells(sheet_name) {
-            let mut sorted: Vec<_> = cells.keys().collect();
-            sorted.sort();
-            for key in sorted {
+            // Only strings need deterministic shared-string indices. Keep
+            // their coordinate order without sorting/hash-looking-up every
+            // numeric cell in the workbook.
+            let mut sorted: Vec<_> = cells
+                .iter()
+                .filter_map(|(key, cell)| match &cell.value {
+                    Variant::Str(value) => Some((key, value)),
+                    _ => None,
+                })
+                .collect();
+            sorted.sort_unstable_by_key(|(key, _)| *key);
+            for (_, value) in sorted {
                 // Variant::Error is deliberately excluded: a real error cell is written as
                 // t="e" with its literal error text in <v> (see xlsx_cell_xml below), never
                 // shared-string indexed -- confirmed against real Excel-authored output,
                 // which never puts e.g. "#VALUE!" in xl/sharedStrings.xml either.
-                let s = match &cells[key].value {
-                    Variant::Str(s) => s.as_str().to_string(),
-                    _ => continue,
-                };
-                if !str_index.contains_key(&s) {
-                    str_index.insert(s.clone(), shared_strings.len());
-                    shared_strings.push(s);
+                if !str_index.contains_key(value.as_str()) {
+                    str_index.insert(value.clone(), shared_strings.len());
+                    shared_strings.push(value.clone());
                 }
             }
         }
@@ -3900,11 +3932,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     let mut passthrough_styles: Option<Vec<u8>> = None;
     // Original worksheet XML text, keyed by lowercased sheet name (matching
     // `worksheet_origins`'/`sheet_names()`'s own key space) — the source for
-    // 0.10.0-B's opaque-fragment passthrough (see `build_xlsx_sheet`'s
+    // 0.10.0-B's opaque-fragment passthrough (see `write_xlsx_sheet`'s
     // `root_attrs`/`sheet_views` params). Only populated for sheets with a known
     // `WorksheetOrigin` whose `original_part_name` resolves to a real passthrough
     // entry; a new sheet (no origin) or an .ods source (no `raw_entries` at all)
-    // falls back to `build_xlsx_sheet`'s hardcoded minimal defaults.
+    // falls back to `write_xlsx_sheet`'s hardcoded minimal defaults.
     let mut sheet_source_xml: HashMap<String, String> = HashMap::new();
     // Original xl/workbook.xml text -- the source for 0.10.0-C's opaque-fragment
     // passthrough (see `OpaqueWorkbookFragments`), same mechanism as `sheet_source_xml`
@@ -3975,8 +4007,38 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             .map(|t| (t.source_part.as_str(), t.pending_edits.as_slice()))
             .collect();
 
-        for (name, bytes) in &raw_entries {
-            if is_writer_owned_part(name) {
+        let passthrough_names: Vec<String> = raw_entries
+            .keys()
+            .filter(|name| !is_writer_owned_part(name))
+            .filter(|name| is_xlsm_output || !name.starts_with("xl/vbaProject"))
+            .filter(|name| !prunable_parts.contains(*name))
+            .cloned()
+            .collect();
+
+        // Carry relationship metadata before consuming `raw_entries`; the byte payloads
+        // themselves are moved into `passthrough` below, avoiding a second in-memory copy.
+        carried_rels.extend(carry_over_rels(
+            &raw_entries,
+            "xl/_rels/workbook.xml.rels",
+            "xl/",
+            &passthrough_names,
+            &[
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet",
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings",
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles",
+                "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
+            ],
+        ));
+        carried_root_rels.extend(carry_over_rels(
+            &raw_entries,
+            "_rels/.rels",
+            "",
+            &passthrough_names,
+            &["http://schemas.openxmlformats.org/package/2006/relationships/officeDocument"],
+        ));
+
+        for (name, bytes) in raw_entries {
+            if is_writer_owned_part(&name) {
                 continue;
             }
             // Excel's own "Save As .xlsx" behavior: a macro project never
@@ -3984,15 +4046,15 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
             if !is_xlsm_output && name.starts_with("xl/vbaProject") {
                 continue;
             }
-            if prunable_parts.contains(name) {
+            if prunable_parts.contains(&name) {
                 continue;
             }
             let bytes = match table_edits.get(name.as_str()) {
                 Some(edits) => {
-                    let xml = String::from_utf8_lossy(bytes);
+                    let xml = String::from_utf8_lossy(&bytes);
                     reader::apply_table_edits(&xml, edits).into_bytes()
                 }
-                None => bytes.clone(),
+                None => bytes,
             };
             passthrough.push((name.clone(), bytes));
 
@@ -4041,26 +4103,6 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         // file is just as writer-owned/hardcoded as the workbook one (XLSX_ROOT_RELS),
         // and orphaned docProps/core.xml + docProps/app.xml relationships were found
         // missing the exact same way theme/calcChain were.
-        carried_rels.extend(carry_over_rels(
-            &raw_entries,
-            "xl/_rels/workbook.xml.rels",
-            "xl/",
-            &passthrough,
-            &[
-                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet",
-                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings",
-                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles",
-                "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
-            ],
-        ));
-        carried_root_rels.extend(carry_over_rels(
-            &raw_entries,
-            "_rels/.rels",
-            "",
-            &passthrough,
-            &["http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"],
-        ));
-
         // Deterministic, reviewable output order.
         passthrough.sort_by(|a, b| a.0.cmp(&b.0));
         carried_overrides.sort_by(|a, b| a.0.cmp(&b.0));
@@ -4168,8 +4210,12 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
     passthrough.sort_by(|a, b| a.0.cmp(&b.0));
     carried_overrides.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let cursor = Cursor::new(Vec::<u8>::new());
-    let mut zip = ZipWriter::new(cursor);
+    let (temporary, file) = create_atomic_output_temp(path)?;
+    // ZIP headers and streamed XML produce many small writes. Bound the buffer
+    // independently of workbook size and flush it before syncing/publishing.
+    // Data descriptors avoid seeking back to patch each local header, which
+    // would otherwise flush BufWriter before the buffer is full.
+    let mut zip = ZipWriter::new_stream(std::io::BufWriter::with_capacity(64 * 1024, file));
     let deflated =
         zip::write::SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
@@ -4428,25 +4474,30 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
 
         zip.start_file(plan.output_part_name.as_str(), deflated)
             .map_err(|e| e.to_string())?;
-        zip.write_all(
-            build_xlsx_sheet(
-                vm,
-                sheet_name,
-                &str_index,
-                &fragments,
-                style_override,
-                row_style_override,
-                column_style_override,
-            )
-            .as_bytes(),
+        // Batch XML fragments before compression as well as compressed bytes
+        // before filesystem writes. Memory remains bounded for large sheets.
+        let mut sheet_sink = ZipXmlSink(std::io::BufWriter::with_capacity(64 * 1024, &mut zip));
+        write_xlsx_sheet(
+            vm,
+            sheet_name,
+            &str_index,
+            &fragments,
+            style_override,
+            row_style_override,
+            column_style_override,
+            &mut sheet_sink,
         )
         .map_err(|e| e.to_string())?;
+        // Unlike flush(), into_inner() drains our buffer without forcing a
+        // compressor sync-flush. Propagate drain errors before starting a part.
+        sheet_sink.0.into_inner().map_err(|e| e.to_string())?;
     }
 
     zip.start_file("xl/sharedStrings.xml", deflated)
         .map_err(|e| e.to_string())?;
-    zip.write_all(build_xlsx_shared_strings(&shared_strings).as_bytes())
-        .map_err(|e| e.to_string())?;
+    let mut strings_sink = std::io::BufWriter::with_capacity(64 * 1024, &mut zip);
+    write_xlsx_shared_strings(&mut strings_sink, &shared_strings).map_err(|e| e.to_string())?;
+    strings_sink.into_inner().map_err(|e| e.to_string())?;
 
     zip.start_file("xl/styles.xml", deflated)
         .map_err(|e| e.to_string())?;
@@ -4459,8 +4510,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str) -> Result<(), String> {
         zip.write_all(bytes).map_err(|e| e.to_string())?;
     }
 
-    let data = zip.finish().map_err(|e| e.to_string())?.into_inner();
-    write_output_atomically(path, &data)?;
+    let mut file = zip.finish().map_err(|e| e.to_string())?.into_inner();
+    file.flush().map_err(|e| e.to_string())?;
+    if sync {
+        file.get_ref().sync_all().map_err(|e| e.to_string())?;
+    }
+    drop(file);
+    publish_atomic_output(path, &temporary)?;
     Ok(())
 }
 
@@ -4491,7 +4547,7 @@ fn build_xlsx_root_rels(carried_root_rels: &[(String, String)]) -> String {
 // Without it, `openpyxl.load_workbook()` raises `UserWarning: Workbook contains no default
 // style` on reopen (known gap 30) -- schema-legal, non-fatal, but a spurious warning for
 // every from-scratch `Vm()` save with no style edits at all.
-const XLSX_STYLES: &str = concat!(
+pub(crate) const XLSX_STYLES: &str = concat!(
     "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
     "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
     "<fonts><font/></fonts>\n",
@@ -5121,7 +5177,7 @@ fn build_xlsx_workbook(
     worksheet_plans: &[WorksheetOutputPlan],
     fragments: &OpaqueWorkbookFragments,
 ) -> String {
-    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
+    let mut out = String::new();
     match fragments.root_attrs {
         Some(attrs) => {
             out.push_str("<workbook ");
@@ -5253,7 +5309,7 @@ fn build_xlsx_workbook_rels(
 /// from the SOURCE worksheet XML (see `save_xlsx_impl`'s `sheet_source_xml`), re-emitted
 /// verbatim at the correct `CT_Worksheet` schema position (§8) rather than reconstructed.
 /// Every field is `None` for a sheet with no known `WorksheetOrigin` (new sheet, or an
-/// `.ods` source), in which case `build_xlsx_sheet`'s behavior is unchanged from before
+/// `.ods` source), in which case `write_xlsx_sheet`'s behavior is unchanged from before
 /// 0.10.0-B.
 #[derive(Default)]
 struct OpaqueWorksheetFragments<'a> {
@@ -5289,7 +5345,7 @@ struct OpaqueWorksheetFragments<'a> {
     /// Raw `<hyperlink .../>` spans (see `reader::extract_hyperlinks`) — NOT the whole
     /// source `<hyperlinks>` container. Location-only children are always included;
     /// r:id-bearing ones only when the caller passed `rels_survived` to
-    /// `extract_hyperlinks`. `build_xlsx_sheet` synthesizes the `<hyperlinks>`/
+    /// `extract_hyperlinks`. `write_xlsx_sheet` synthesizes the `<hyperlinks>`/
     /// `</hyperlinks>` wrapper itself, based on whether this list is empty:
     /// `CT_Hyperlinks`' `<hyperlink>` child is `minOccurs="1"` (confirmed against the real
     /// XSD), so an empty container is invalid XML and must be omitted entirely rather
@@ -5313,7 +5369,49 @@ struct OpaqueWorksheetFragments<'a> {
     legacy_drawing: Option<&'a str>,
 }
 
-fn build_xlsx_sheet(
+trait XmlSink {
+    fn xml_str(&mut self, value: &str) -> std::io::Result<()>;
+    fn xml_char(&mut self, value: char) -> std::io::Result<()>;
+    fn xml_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()>;
+}
+
+impl XmlSink for String {
+    fn xml_str(&mut self, value: &str) -> std::io::Result<()> {
+        self.push_str(value);
+        Ok(())
+    }
+
+    fn xml_char(&mut self, value: char) -> std::io::Result<()> {
+        self.push(value);
+        Ok(())
+    }
+
+    fn xml_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        use std::fmt::Write as _;
+        self.write_fmt(args)
+            .map_err(|_| std::io::Error::other("XML string formatting failed"))
+    }
+}
+
+struct ZipXmlSink<W>(W);
+
+impl<W: std::io::Write> XmlSink for ZipXmlSink<W> {
+    fn xml_str(&mut self, value: &str) -> std::io::Result<()> {
+        self.0.write_all(value.as_bytes())
+    }
+
+    fn xml_char(&mut self, value: char) -> std::io::Result<()> {
+        let mut buf = [0u8; 4];
+        self.0.write_all(value.encode_utf8(&mut buf).as_bytes())
+    }
+
+    fn xml_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        std::io::Write::write_fmt(&mut self.0, args)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_xlsx_sheet<W: XmlSink>(
     vm: &Vm,
     sheet_name: &str,
     str_index: &std::collections::HashMap<String, usize>,
@@ -5321,17 +5419,18 @@ fn build_xlsx_sheet(
     style_override: Option<&std::collections::HashMap<(u32, u32), u32>>,
     row_style_override: Option<&std::collections::HashMap<u32, u32>>,
     column_style_override: Option<&[(u32, u32, u32)]>,
-) -> String {
-    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
+    out: &mut W,
+) -> std::io::Result<()> {
+    out.xml_str("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")?;
     match fragments.root_attrs {
         Some(attrs) => {
-            out.push_str("<worksheet ");
-            out.push_str(attrs);
-            out.push_str(">\n");
+            out.xml_str("<worksheet ")?;
+            out.xml_str(attrs)?;
+            out.xml_str(">\n")?;
         }
-        None => out.push_str(
+        None => out.xml_str(
             "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
-        ),
+        )?,
     }
     // CT_Worksheet order (§8): sheetPr, dimension, sheetViews, sheetFormatPr, cols,
     // sheetData, ... — dimension is deliberately never emitted here (see design doc's
@@ -5346,8 +5445,8 @@ fn build_xlsx_sheet(
     .into_iter()
     .flatten()
     {
-        out.push_str(fragment);
-        out.push('\n');
+        out.xml_str(fragment)?;
+        out.xml_char('\n')?;
     }
 
     let sheet_key = sheet_name.to_lowercase();
@@ -5404,30 +5503,30 @@ fn build_xlsx_sheet(
         }
     }
     if !col_attrs.is_empty() {
-        out.push_str("<cols>\n");
+        out.xml_str("<cols>\n")?;
         for ((min, max), (hidden, width, style)) in col_attrs {
             let width_attr = width
                 .map(|w| format!(" customWidth=\"1\" width=\"{w}\""))
                 .unwrap_or_default();
             let style_attr = style.map(|s| format!(" style=\"{s}\"")).unwrap_or_default();
             let hidden_attr = if hidden { " hidden=\"1\"" } else { "" };
-            out.push_str(&format!(
+            out.xml_fmt(format_args!(
                 "<col min=\"{min}\" max=\"{max}\"{width_attr}{style_attr}{hidden_attr}/>\n"
-            ));
+            ))?;
         }
-        out.push_str("</cols>\n");
+        out.xml_str("</cols>\n")?;
     }
 
-    out.push_str("<sheetData>\n");
+    out.xml_str("<sheetData>\n")?;
 
     if let Some(cells) = vm.get_sheet_cells(sheet_name) {
-        // Group by row first to avoid O(max_row × total_cells) scanning. `None` content
-        // marks a value-less cell carried only by `style_indices` (see below).
-        let mut by_row: std::collections::BTreeMap<u32, Vec<(u32, Option<&vm::CellContent>)>> =
-            std::collections::BTreeMap::new();
+        // One flat coordinate sort avoids a tree lookup per cell and a separate
+        // allocation per row. `None` is style-only; column zero is an empty-row
+        // marker, never a cell (including for sparse hidden/height/style rows).
+        let mut ordered_cells = Vec::with_capacity(cells.len());
         for (&(r, c), v) in cells.iter() {
             if r > 0 && c > 0 {
-                by_row.entry(r).or_default().push((c, Some(v)));
+                ordered_cells.push(((r, c), Some(v)));
             }
         }
         // A value-less, pre-formatted cell (e.g. a merged-cell anchor styled but never
@@ -5444,7 +5543,7 @@ fn build_xlsx_sheet(
         if let Some(styles) = style_indices {
             for &(r, c) in styles.keys() {
                 if r > 0 && c > 0 && !cells.contains_key(&(r, c)) {
-                    by_row.entry(r).or_default().push((c, None));
+                    ordered_cells.push(((r, c), None));
                 }
             }
         }
@@ -5456,21 +5555,23 @@ fn build_xlsx_sheet(
         // that's what a real <row>-element-per-row source already looks like.
         for iv in hidden_rows {
             for r in iv.start..=iv.end {
-                by_row.entry(r).or_default();
+                ordered_cells.push(((r, 0), None));
             }
         }
         if let Some(heights) = row_heights {
             for &r in heights.keys() {
-                by_row.entry(r).or_default();
+                ordered_cells.push(((r, 0), None));
             }
         }
         if let Some(styles) = row_styles {
             for &r in styles.keys() {
-                by_row.entry(r).or_default();
+                ordered_cells.push(((r, 0), None));
             }
         }
-        for (row, mut row_cells) in by_row {
-            row_cells.sort_by_key(|&(c, _)| c);
+        ordered_cells.sort_unstable_by_key(|&(position, _)| position);
+        let mut cell_ref_buffer = [0u8; 17];
+        for row_cells in ordered_cells.chunk_by(|a, b| a.0.0 == b.0.0) {
+            let row = row_cells[0].0.0;
             let row_hidden = hidden_rows
                 .iter()
                 .any(|iv| iv.start <= row && row <= iv.end);
@@ -5484,39 +5585,42 @@ fn build_xlsx_sheet(
                 .map(|s| format!(" s=\"{s}\" customFormat=\"1\""))
                 .unwrap_or_default();
 
-            out.push_str(&format!(
+            out.xml_fmt(format_args!(
                 "<row r=\"{row}\"{height_attr}{style_attr}{hidden_attr}>\n"
-            ));
-            for (c, content) in row_cells {
-                let cell_ref = format!("{}{}", xlsx_col_letters(c), row);
+            ))?;
+            for &((_, c), content) in row_cells {
+                if c == 0 {
+                    continue;
+                }
+                let cell_ref = xlsx_cell_ref(row, c, &mut cell_ref_buffer);
                 let style_idx = style_indices.and_then(|m| m.get(&(row, c)).copied());
                 match content {
                     Some(content) => {
-                        if let Some(xml) = xlsx_cell_xml(
-                            &cell_ref,
+                        if xlsx_cell_xml(
+                            out,
+                            cell_ref,
                             &content.value,
                             str_index,
                             style_idx,
                             content.formula.as_deref(),
-                        ) {
-                            out.push_str(&xml);
-                            out.push('\n');
+                        )? {
+                            out.xml_char('\n')?;
                         }
                     }
                     // Value-less, style-only cell — matches real Excel's own
                     // `<c r="A1" s="5"/>` shape for a formatted-but-empty cell.
                     None => {
                         if let Some(idx) = style_idx {
-                            out.push_str(&format!("<c r=\"{cell_ref}\" s=\"{idx}\"/>\n"));
+                            out.xml_fmt(format_args!("<c r=\"{cell_ref}\" s=\"{idx}\"/>\n"))?;
                         }
                     }
                 }
             }
-            out.push_str("</row>\n");
+            out.xml_str("</row>\n")?;
         }
     }
 
-    out.push_str("</sheetData>\n");
+    out.xml_str("</sheetData>\n")?;
 
     // <autoFilter> — schema-ordered after <sheetData>/before <mergeCells> (CT_Worksheet's
     // real sequence has sheetCalcPr/sheetProtection/protectedRanges/scenarios/autoFilter
@@ -5537,22 +5641,22 @@ fn build_xlsx_sheet(
         fragments.auto_filter.map(str::to_string)
     };
     if let Some(af) = af_output {
-        out.push_str(&af);
-        out.push('\n');
+        out.xml_str(&af)?;
+        out.xml_char('\n')?;
     }
 
     // <mergeCells> — schema-ordered after <sheetData>.
     if let Some(merges) = vm.merged_ranges.get(&sheet_key)
         && !merges.is_empty()
     {
-        out.push_str(&format!("<mergeCells count=\"{}\">\n", merges.len()));
+        out.xml_fmt(format_args!("<mergeCells count=\"{}\">\n", merges.len()))?;
         for rect in merges {
-            out.push_str(&format!(
+            out.xml_fmt(format_args!(
                 "<mergeCell ref=\"{}\"/>\n",
                 merge_rect_to_a1(rect)
-            ));
+            ))?;
         }
-        out.push_str("</mergeCells>\n");
+        out.xml_str("</mergeCells>\n")?;
     }
 
     // CT_Worksheet order (§8): mergeCells, phoneticPr, conditionalFormatting,
@@ -5565,12 +5669,12 @@ fn build_xlsx_sheet(
     // `dxfId` stays valid regardless of any style mutation — see
     // `OpaqueWorksheetFragments::conditional_formatting`'s own doc comment.
     if let Some(pp) = fragments.phonetic_pr {
-        out.push_str(pp);
-        out.push('\n');
+        out.xml_str(pp)?;
+        out.xml_char('\n')?;
     }
     for cf in fragments.conditional_formatting {
-        out.push_str(cf);
-        out.push('\n');
+        out.xml_str(cf)?;
+        out.xml_char('\n')?;
     }
     // 0.16.0-C: an untouched sheet's `<dataValidations>` passes through byte-identical
     // exactly as before this feature existed (`fragments.data_validations`, captured
@@ -5584,8 +5688,8 @@ fn build_xlsx_sheet(
         fragments.data_validations.map(str::to_string)
     };
     if let Some(dv) = dv_output {
-        out.push_str(&dv);
-        out.push('\n');
+        out.xml_str(&dv)?;
+        out.xml_char('\n')?;
     }
 
     // <hyperlinks> — reconstructed from filtered children, not a single opaque blob
@@ -5594,22 +5698,22 @@ fn build_xlsx_sheet(
     // r:id-backed and got filtered out, the container itself must be omitted entirely --
     // an empty `<hyperlinks/>` would be invalid XML, not merely "nothing to show".
     if !fragments.hyperlinks.is_empty() {
-        out.push_str("<hyperlinks>\n");
+        out.xml_str("<hyperlinks>\n")?;
         for hyperlink in fragments.hyperlinks {
-            out.push_str(hyperlink);
-            out.push('\n');
+            out.xml_str(hyperlink)?;
+            out.xml_char('\n')?;
         }
-        out.push_str("</hyperlinks>\n");
+        out.xml_str("</hyperlinks>\n")?;
     }
 
     if let Some(pm) = fragments.page_margins {
-        out.push_str(pm);
-        out.push('\n');
+        out.xml_str(pm)?;
+        out.xml_char('\n')?;
     }
 
     if let Some(ps) = fragments.page_setup {
-        out.push_str(ps);
-        out.push('\n');
+        out.xml_str(ps)?;
+        out.xml_char('\n')?;
     }
 
     // CT_Worksheet order (§8): ... pageMargins, pageSetup, headerFooter, rowBreaks,
@@ -5619,21 +5723,21 @@ fn build_xlsx_sheet(
     // drawing/legacyDrawing's schema-correct position is still simply "right after
     // pageSetup" until one of those unemitted slots is restored too.
     if let Some(d) = fragments.drawing {
-        out.push_str(d);
-        out.push('\n');
+        out.xml_str(d)?;
+        out.xml_char('\n')?;
     }
     if let Some(ld) = fragments.legacy_drawing {
-        out.push_str(ld);
-        out.push('\n');
+        out.xml_str(ld)?;
+        out.xml_char('\n')?;
     }
 
     if let Some(tp) = fragments.table_parts {
-        out.push_str(tp);
-        out.push('\n');
+        out.xml_str(tp)?;
+        out.xml_char('\n')?;
     }
 
-    out.push_str("</worksheet>\n");
-    out
+    out.xml_str("</worksheet>\n")?;
+    Ok(())
 }
 
 // `style_idx` is the cell's original `s="N"` index (Milestone: safe round-trip,
@@ -5641,61 +5745,68 @@ fn build_xlsx_sheet(
 // source (see `Vm::cell_style_indices`), `None` for a cell built purely in-VBA.
 // Always safe to re-emit unchanged: no VBA statement in this VM ever mutates a
 // cell's style (see `Vm::cell_style_indices`'s own doc comment).
-fn xlsx_cell_xml(
+fn xlsx_cell_xml<W: XmlSink>(
+    out: &mut W,
     cell_ref: &str,
     v: &Variant,
     str_index: &std::collections::HashMap<String, usize>,
     style_idx: Option<u32>,
     formula: Option<&str>,
-) -> Option<String> {
-    let s_attr = style_idx
-        .map(|idx| format!(" s=\"{}\"", idx))
-        .unwrap_or_default();
+) -> std::io::Result<bool> {
+    let s_attr = style_idx.map(|idx| format!(" s=\"{}\"", idx));
     // A loaded cell's formula text (no leading `=`, matching how <f> is written in the
     // file -- see WorkbookSheet::formulas' doc comment); a VBA-assigned formula
     // (Vm::set_cell_formula) may still carry one, so it's stripped here too rather than
     // trusting the source. Emitted before <v>, matching real Excel's own element order.
-    let f_tag = formula
-        .map(|f| format!("<f>{}</f>", xml_escape(f.trim().trim_start_matches('='))))
-        .unwrap_or_default();
+    let f_tag = formula.map(|f| xml_escape(f.trim().trim_start_matches('=')));
     match v {
-        Variant::Integer(n) => Some(format!(
-            "<c r=\"{}\"{}>{}<v>{}</v></c>",
-            cell_ref, s_attr, f_tag, n
-        )),
-        Variant::Float(f) => Some(format!(
-            "<c r=\"{}\"{}>{}<v>{}</v></c>",
-            cell_ref, s_attr, f_tag, f
-        )),
-        Variant::Date(s) => Some(format!(
-            "<c r=\"{}\"{}>{}<v>{}</v></c>",
-            cell_ref, s_attr, f_tag, s
-        )),
+        Variant::Integer(n) => {
+            write_cell_value(out, cell_ref, s_attr.as_deref(), f_tag.as_deref(), n)?;
+            Ok(true)
+        }
+        Variant::Float(f) => {
+            write_cell_value(out, cell_ref, s_attr.as_deref(), f_tag.as_deref(), f)?;
+            Ok(true)
+        }
+        Variant::Date(s) => {
+            write_cell_value(out, cell_ref, s_attr.as_deref(), f_tag.as_deref(), s)?;
+            Ok(true)
+        }
         Variant::Str(s) => {
             let idx = str_index[s.as_str()];
-            Some(format!(
-                "<c r=\"{}\"{} t=\"s\">{}<v>{}</v></c>",
-                cell_ref, s_attr, f_tag, idx
-            ))
+            out.xml_fmt(format_args!(
+                "<c r=\"{}\"{} t=\"s\">",
+                cell_ref,
+                s_attr.as_deref().unwrap_or_default()
+            ))?;
+            write_formula_tag(out, f_tag.as_deref())?;
+            out.xml_fmt(format_args!("<v>{idx}</v></c>"))?;
+            Ok(true)
         }
         // t="e" with the literal error text in <v>, never shared-string indexed -- matches
         // real Excel's own shape exactly (confirmed against fixture5_chart_image_freeze_
         // print.xlsm's D8, a real #VALUE! cell). Writing this as t="s" (the pre-fix
         // behavior) round-tripped the cell as an ordinary string, not an error.
-        Variant::Error(e) => Some(format!(
-            "<c r=\"{}\"{} t=\"e\">{}<v>{}</v></c>",
-            cell_ref,
-            s_attr,
-            f_tag,
-            e.as_str()
-        )),
-        Variant::Boolean(b) => Some(format!(
-            "<c r=\"{}\"{} t=\"b\">{}<v>{}</v></c>",
-            cell_ref,
-            s_attr,
-            f_tag,
-            if *b { 1 } else { 0 }
-        )),
+        Variant::Error(e) => {
+            out.xml_fmt(format_args!(
+                "<c r=\"{}\"{} t=\"e\">",
+                cell_ref,
+                s_attr.as_deref().unwrap_or_default()
+            ))?;
+            write_formula_tag(out, f_tag.as_deref())?;
+            out.xml_fmt(format_args!("<v>{}</v></c>", e.as_str()))?;
+            Ok(true)
+        }
+        Variant::Boolean(b) => {
+            out.xml_fmt(format_args!(
+                "<c r=\"{}\"{} t=\"b\">",
+                cell_ref,
+                s_attr.as_deref().unwrap_or_default()
+            ))?;
+            write_formula_tag(out, f_tag.as_deref())?;
+            out.xml_fmt(format_args!("<v>{}</v></c>", if *b { 1 } else { 0 }))?;
+            Ok(true)
+        }
         // A cell with no formula and no value carries no information worth writing --
         // omitted (`formula.map` -> `None`), as before. A FORMULA cell whose cached
         // value just happens to be Empty (freshly typed and not yet recalculated, or
@@ -5706,11 +5817,76 @@ fn xlsx_cell_xml(
         // schema (<v> is optional) and avoids inventing a number that was never
         // computed. See `Vm::populate_from_sheets`'s matching reader-side fix -- a
         // formula-only cell now round-trips correctly on reload too, not just on save.
-        Variant::Empty => formula.map(|_| format!("<c r=\"{}\"{}>{}</c>", cell_ref, s_attr, f_tag)),
-        Variant::Null | Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => None,
+        Variant::Empty => {
+            let Some(formula) = f_tag.as_deref() else {
+                return Ok(false);
+            };
+            out.xml_fmt(format_args!(
+                "<c r=\"{}\"{}>",
+                cell_ref,
+                s_attr.as_deref().unwrap_or_default(),
+            ))?;
+            write_formula_tag(out, Some(formula))?;
+            out.xml_str("</c>")?;
+            Ok(true)
+        }
+        Variant::Null | Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => Ok(false),
     }
 }
 
+fn write_formula_tag<W: XmlSink>(
+    out: &mut W,
+    escaped_formula: Option<&str>,
+) -> std::io::Result<()> {
+    if let Some(formula) = escaped_formula {
+        out.xml_fmt(format_args!("<f>{formula}</f>"))?;
+    }
+    Ok(())
+}
+
+fn write_cell_value<W: XmlSink, T: std::fmt::Display>(
+    out: &mut W,
+    cell_ref: &str,
+    style_attr: Option<&str>,
+    formula: Option<&str>,
+    value: T,
+) -> std::io::Result<()> {
+    out.xml_fmt(format_args!(
+        "<c r=\"{}\"{}>",
+        cell_ref,
+        style_attr.unwrap_or_default()
+    ))?;
+    write_formula_tag(out, formula)?;
+    out.xml_fmt(format_args!("<v>{value}</v></c>"))?;
+    Ok(())
+}
+
+fn write_xlsx_shared_strings<W: std::io::Write>(
+    out: &mut W,
+    strings: &[String],
+) -> std::io::Result<()> {
+    let count = strings.len();
+    write!(
+        out,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+         <sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" \
+         count=\"{count}\" uniqueCount=\"{count}\">\n"
+    )?;
+    for s in strings {
+        if s.trim() != s.as_str() {
+            writeln!(
+                out,
+                "<si><t xml:space=\"preserve\">{}</t></si>",
+                xml_escape(s)
+            )?;
+        } else {
+            writeln!(out, "<si><t>{}</t></si>", xml_escape(s))?;
+        }
+    }
+    out.write_all(b"</sst>\n")
+}
+
+#[allow(dead_code)]
 fn build_xlsx_shared_strings(strings: &[String]) -> String {
     let count = strings.len();
     let mut out = format!(
@@ -5750,6 +5926,107 @@ mod shared_strings_tests {
         assert!(xml.contains("<si><t>plain</t></si>"));
         assert!(xml.contains("<si><t xml:space=\"preserve\"> leading and trailing </t></si>"));
         assert!(xml.contains("<si><t xml:space=\"preserve\">trailing </t></si>"));
+    }
+}
+
+/// Allocation-free A1 address: a u32 column takes at most seven letters and a
+/// u32 row ten decimal digits. Keep the full u32 range of the existing writer.
+fn xlsx_cell_ref(mut row: u32, mut col: u32, buffer: &mut [u8; 17]) -> &str {
+    let mut start = buffer.len();
+    loop {
+        start -= 1;
+        buffer[start] = b'0' + (row % 10) as u8;
+        row /= 10;
+        if row == 0 {
+            break;
+        }
+    }
+    while col > 0 {
+        col -= 1;
+        start -= 1;
+        buffer[start] = b'A' + (col % 26) as u8;
+        col /= 26;
+    }
+    std::str::from_utf8(&buffer[start..]).expect("A1 addresses contain only ASCII")
+}
+
+#[cfg(test)]
+mod cell_ref_tests {
+    use super::{OpaqueWorksheetFragments, Vm, write_xlsx_sheet, xlsx_cell_ref, xlsx_col_letters};
+    use crate::{
+        types::Variant,
+        vm::{Interval, SheetVisibility},
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn flat_coordinate_sort_preserves_sparse_and_overlapping_row_metadata() {
+        let mut vm = Vm::new();
+        let name = vm.sheet_names()[0].clone();
+        let key = name.to_lowercase();
+        // Reverse insertion order, a column-name boundary, and Excel's far edge.
+        for (r, c, value) in [(1_048_576, 16_384, 9), (3, 27, 27), (3, 1, 1)] {
+            vm.write_rect(&name, (r, c), &[vec![Variant::Integer(value)]]);
+        }
+        vm.cell_style_indices
+            .insert(key.clone(), HashMap::from([((3, 2), 0), ((19, 26), 0)]));
+        vm.row_heights
+            .insert(key.clone(), HashMap::from([(9, 20.0), (17, 30.5)]));
+        vm.row_styles
+            .insert(key.clone(), HashMap::from([(9, 0), (15, 0)]));
+        vm.sheet_visibility.insert(
+            key,
+            SheetVisibility {
+                hidden_rows: vec![Interval { start: 9, end: 11 }],
+                hidden_columns: vec![],
+            },
+        );
+        let mut xml = String::new();
+        write_xlsx_sheet(
+            &vm,
+            &name,
+            &HashMap::new(),
+            &OpaqueWorksheetFragments::default(),
+            None,
+            None,
+            None,
+            &mut xml,
+        )
+        .unwrap();
+        let data = xml
+            .split_once("<sheetData>\n")
+            .unwrap()
+            .1
+            .split_once("</sheetData>")
+            .unwrap()
+            .0;
+        assert_eq!(
+            data,
+            concat!(
+                "<row r=\"3\">\n<c r=\"A3\"><v>1</v></c>\n<c r=\"B3\" s=\"0\"/>\n<c r=\"AA3\"><v>27</v></c>\n</row>\n",
+                "<row r=\"9\" customHeight=\"1\" ht=\"20\" s=\"0\" customFormat=\"1\" hidden=\"1\">\n</row>\n",
+                "<row r=\"10\" hidden=\"1\">\n</row>\n<row r=\"11\" hidden=\"1\">\n</row>\n",
+                "<row r=\"15\" s=\"0\" customFormat=\"1\">\n</row>\n",
+                "<row r=\"17\" customHeight=\"1\" ht=\"30.5\">\n</row>\n",
+                "<row r=\"19\">\n<c r=\"Z19\" s=\"0\"/>\n</row>\n",
+                "<row r=\"1048576\">\n<c r=\"XFD1048576\"><v>9</v></c>\n</row>\n"
+            )
+        );
+    }
+
+    #[test]
+    fn stack_cell_reference_matches_existing_format_across_column_boundaries() {
+        let mut buffer = [0; 17];
+        for row in [0, 1, 9, 10, 99, 100, 1_048_576, u32::MAX] {
+            for col in (0..=16_384).chain([u32::MAX]) {
+                assert_eq!(
+                    xlsx_cell_ref(row, col, &mut buffer),
+                    format!("{}{row}", xlsx_col_letters(col))
+                );
+            }
+        }
+        // Reuse after a maximal address must not leak the previous tail.
+        assert_eq!(xlsx_cell_ref(1, 1, &mut buffer), "A1");
     }
 }
 
@@ -5883,7 +6160,7 @@ fn rebuild_counted_container(
 /// Regenerates `<dataValidations>` for a sheet whose rules were touched (add/remove/a
 /// real structural-edit shift, or a sheet-copy landing with no original XML of its own)
 /// since load -- `vm.data_validations_touched` gates whether this runs at all (see
-/// `build_xlsx_sheet`'s own call site: an untouched sheet's original fragment is passed
+/// `write_xlsx_sheet`'s own call site: an untouched sheet's original fragment is passed
 /// through byte-identical instead, this function is never even called for it). Each
 /// rule's `raw_span` is used as-is UNLESS `dirty` (a structural-edit shift updated its
 /// parsed `sqref` but not yet its `raw_span`), in which case exactly the `sqref`
@@ -6071,7 +6348,7 @@ fn build_filter_column_xml(fc: &reader::FilterColumn) -> String {
 /// Regenerates `<autoFilter>` for a sheet whose autofilter was touched (add/remove/set/
 /// clear a filter column, a real structural-edit shift, or a copy landing with no
 /// original XML of its own) since load -- `vm.autofilters_touched` gates whether this
-/// runs at all (see `build_xlsx_sheet`'s own call site: an untouched sheet's original
+/// runs at all (see `write_xlsx_sheet`'s own call site: an untouched sheet's original
 /// fragment passes through byte-identical instead). Each `FilterColumn`'s `raw_span` is
 /// used as-is unless `dirty` (a structural-edit shift updated `col_offset` but not yet
 /// `raw_span`, patched via `with_attr`) or absent (a freshly set/replaced column, built

@@ -1,69 +1,39 @@
-# What remains unverified against real Microsoft Excel
+# Excel scenario adapter: unverified boundary
 
-Everything. No scenario in `../corpus/scenarios.json` has ever been run against real
-Excel. This is the complete, explicit list of what a future Windows+Excel session would
-need to confirm — framed as exactly that, not as a residual gap in an otherwise-verified
-result.
+The corpus-wide Windows/Excel COM runner remains unverified scaffolding.
+[RunScenario.ps1](RunScenario.ps1) is not a validated production runner.
+This status is specific to **scenario execution**, not every Excel-related test:
+the separate [0.9.0-A workbook record](results/0.9.0-A_summary.md) covers selected
+Excel-for-Mac authored/reopened fixtures, but not post-save macro execution.
 
-## Why nothing here is verified
+## Evidence still required
 
-This session runs on macOS with no Windows and no licensed Excel install, and neither is
-reachable from this environment. That was an explicit, upfront scoping decision (not
-discovered partway through) — see the milestone brief this work was built under. The
-corpus, both runners, the normalizer, and the classifier were all built to be
-oracle-agnostic specifically so this gap has a clear, mechanical way to close later
-(`CONTRACT.md` + `RunScenario.ps1`), rather than requiring a redesign.
+1. Execute the [scenario corpus](../corpus/scenarios.json) on a real, licensed
+   Windows/Excel installation, recording Excel version/build and host details.
+2. Validate the adapter's setup, macro loading, workbook isolation, timeout,
+   exception handling, and cleanup before trusting its output.
+3. Resolve representation differences such as elixcee's array/record JSON
+   placeholders. Do not invent a MATCH when the outputs are not comparable.
+4. Feed validated output into the existing normalizer/classifier and report
+   MATCH, divergence, unsupported, nondeterministic, and unavailable separately.
+5. Keep results tied to the exact source/binary and input corpus. A rerun is needed
+   when implementation or fixtures change.
+6. Verify post-save macro execution independently if making preservation-plus-execution claims.
 
-## Itemized
+Older milestone reports mention parser gaps that may now be implemented.
+Use [FUNCTIONS](../../FUNCTIONS.md) for current coverage, not that historical list.
 
-1. **Every one of the ~580 scenarios in `../corpus/scenarios.json`** — arithmetic,
-   boolean logic, string functions, range read/write, control flow (For/Do
-   While/If/Select Case), arrays, type conversion, worksheet functions
-   (`Application.WorksheetFunction.*`), nested Sub/Function calls, error handling
-   (`On Error`), the deliberately-not-yet-implemented functions in the
-   `unsupported_functions` category, and the deliberately time-dependent
-   `nondeterministic` category. See `../corpus/results/classify-results.json` for the
-   full list with LibreOffice's (not Excel's) measured outcome per scenario.
+## What other evidence does not establish
 
-2. **Whether elixcee's `[array]`/`[record]` CLI serialization placeholders correspond to
-   anything comparable in real Excel's output at all** — flagged in
-   `../corpus/normalize.mjs`'s doc comment as a case that can never resolve to MATCH
-   under the current CLI contract; unverified whether a real Excel comparison would need
-   a richer elixcee output mode instead of working around it on the comparison side.
+- LibreOffice results do not establish agreement with Microsoft Excel.
+  ORACLE_UNAVAILABLE is a missing measurement, not a pass or a semantic mismatch.
+- Synthetic expected outcomes and independently written semantic references do not
+  replace a live Excel run.
+- Successful reopening does not prove that all workbook features survived or that
+  VBA still executes correctly after save.
+- One successful run cannot settle every Excel version, workbook feature, or
+  nondeterministic case.
 
-3. **Whether the `\` integer-division operator, infix `And`/`Or`/`Not`/`Xor` in a value
-   expression, typed `Function` parameter/return annotations, comma-separated
-   multi-variable `Dim`, and `With` over a `Range` object** — all valid VBA syntax that
-   elixcee's parser rejected during this milestone's corpus run (see
-   `../corpus/results/elixcee-results.json` for the exact `E2001`/`E1002` errors) — are
-   gaps worth prioritizing. A real Excel run doesn't change whether elixcee supports
-   these, but confirms whether real-world VBA actually relies on them enough to matter.
-
-4. **LibreOffice's own measured MATCH rate is not a proxy for an Excel MATCH rate.**
-   LibreOffice's VBA-compatibility layer has its own, independently-implemented semantics
-   (see `../corpus/README.md`) — a MATCH between elixcee and LibreOffice says nothing
-   about whether either agrees with Excel on that scenario, and a divergence between
-   elixcee and LibreOffice says nothing about which one (if either) matches Excel.
-
-5. **Every scenario that timed out under LibreOffice** (see `../corpus/README.md`'s
-   "Known, reproducible limitation" section — expected to be the large majority of the
-   corpus, since nearly every scenario exercises `Range`/`Cells`) has **no measured data
-   point at all**, from either oracle, for whether elixcee's output is correct. A real
-   Excel run is the only way to learn anything about elixcee's correctness on these,
-   since LibreOffice could not execute them either.
-
-6. **Which exact Excel version/build to standardize on.** Excel's own worksheet-function
-   surface has changed across versions (see `FUNCTIONS.md`'s version-legend column, e.g.
-   `XLOOKUP` requiring 365/2021+) — a scenario that's UNSUPPORTED against Excel 2016 might
-   be a real MATCH-or-BUG question against Microsoft 365. `CONTRACT.md`'s result schema
-   requires recording the actual running version specifically so this doesn't get
-   silently averaged away.
-
-## What would NOT still be unverified after a real run
-
-Running `RunScenario.ps1`/`.vbs` (once implemented — they are untested scaffolding right
-now, see their own header comments) against the existing `scenarios.json` and feeding the
-output into `../corpus/run-classify.mjs` (with the one-line results-glob addition noted in
-`CONTRACT.md`) would close all six items above in a single pass, using the exact same
-scenario corpus, normalizer, and classifier already built and already exercised against
-LibreOffice — no redesign needed, only the adapter itself.
+Follow the [Windows execution plan](WINDOWS_EXECUTION.md) and
+[adapter contract](CONTRACT.md) when a suitable environment is available.
+This documentation cleanup did not execute the Windows adapter or add Excel evidence.

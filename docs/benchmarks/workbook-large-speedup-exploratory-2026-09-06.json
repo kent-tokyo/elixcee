@@ -1,0 +1,350 @@
+{
+  "date": "2026-09-06",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "python": "3.13.6",
+  "openpyxl": "3.1.2",
+  "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+  "binary_sha256": {
+    "before": "86deaaf3ab974aa6e02b2dc7f640be3f843d94f7911f8d229c8ec8280f087c5b",
+    "after": "94286a3b540be0a8420dd4ee48f3e801e543958a9d52f048758dfcec106a5a68"
+  },
+  "after_source_sha256": {
+    "src/lib.rs": "1eac8aa5826008d34aea7b7aa5d0c64794b1ee2e6008d9fecc8b977b949b36df",
+    "src/reader.rs": "9f96c2ff19c2dd17379a1833d9ed38f4dff87dd08ddf24efb475c24d85418b67",
+    "src/vm/mod.rs": "ff9e52f952c3170307417df027df9d568564bd6d8f597b00477333cf8f0a11ca",
+    "Cargo.toml": "76b5a3ea031c9d963bcda6f10b0a4f2a8f10af05e31b42a5fbb55ab9e388d2c4",
+    "Cargo.lock": "44757791156ddc463d456855326fa1fb9a12c7d07197d06a3f402bee2781409d",
+    "examples/bench_workbook.rs": "30ddf3800d6f48e342ddba601b4c47265336a09a7ae89d1e36135e9c9997e7bb",
+    "compat/benchmarks/large_workbook_speed.py": "21014933cbc16cf1fe80912c4c530a4f72d038f0b54d35fef5b98bdd077b9939",
+    "compat/benchmarks/paired_speedup.py": "ec7d9c7e0e0c0a41e699457c28608b34c30556fe5e235d4263d103b9feb888db",
+    "compat/benchmarks/equal_workbook_speed.py": "edae5b2512c7151dd92ba125cd3b3884b59a157d51dcc20cd88dd2fc1889cd41",
+    "compat/benchmarks/compare_closedxml.py": "b8e1d0cff12f02780ac41f82f2ee0ed6d136d22e5022620e81e00db2135e3d61"
+  },
+  "pairs": 4,
+  "warmups_per_engine_per_fixture": 3,
+  "target_speedup": 1.2,
+  "confirmation": false,
+  "timing": "load/edit first sheet A1/B1/standard durable save/rename/reload; startup, preload, assertions and destruction excluded",
+  "validation": "all decompressed ZIP members byte-identical each pair; independent streaming openpyxl all-cell/formula checks each ten pairs and final",
+  "safety": "unchanged XML/ZIP budgets; 1m cells split across four 250k-cell sheets",
+  "host_load_start": [
+    5.3544921875,
+    5.5791015625,
+    6.42919921875
+  ],
+  "fixtures": [
+    {
+      "fixture": "100k",
+      "rows_per_sheet": 10000,
+      "columns": 10,
+      "sheets": 1,
+      "cells": 100000,
+      "fixture_sha256": "151e5772ae3b66d1b4c1586e1496700641ae5dd873e37fc8e6a1c20b421e2b10",
+      "versions": {
+        "before": "1.0.1",
+        "after": "1.0.1"
+      },
+      "summaries": {
+        "before": {
+          "load_ms": {
+            "p50": 46.489458,
+            "p95": 50.250916
+          },
+          "mutate_ms": {
+            "p50": 0.013708000000001164,
+            "p95": 0.015084000000001652
+          },
+          "save_ms": {
+            "p50": 78.40675,
+            "p95": 83.73099999999997
+          },
+          "reload_ms": {
+            "p50": 39.25414600000003,
+            "p95": 40.64820799999998
+          },
+          "total_ms": {
+            "p50": 165.962625,
+            "p95": 170.182708
+          }
+        },
+        "after": {
+          "load_ms": {
+            "p50": 42.2958965,
+            "p95": 43.806083
+          },
+          "mutate_ms": {
+            "p50": 0.01460400000000206,
+            "p95": 0.015500000000002956
+          },
+          "save_ms": {
+            "p50": 63.331979,
+            "p95": 65.753
+          },
+          "reload_ms": {
+            "p50": 34.856958999999996,
+            "p95": 35.091167
+          },
+          "total_ms": {
+            "p50": 140.1067295,
+            "p95": 144.653167
+          }
+        }
+      },
+      "p50_speedup": 1.1845442798663002,
+      "median_paired_speedup": 1.1866827442172214,
+      "target_met": false,
+      "zip_parts_verified": true,
+      "output_bytes": {
+        "before": 306676,
+        "after": 306676
+      },
+      "orders": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "samples": {
+        "before": [
+          {
+            "pair": 1,
+            "load_ms": 46.659,
+            "mutate_ms": 0.01345799999999997,
+            "save_ms": 76.57383300000001,
+            "reload_ms": 39.21179200000002,
+            "total_ms": 162.45808300000002
+          },
+          {
+            "pair": 2,
+            "load_ms": 45.79875,
+            "mutate_ms": 0.013958000000002357,
+            "save_ms": 77.54325,
+            "reload_ms": 39.20679199999999,
+            "total_ms": 162.56275
+          },
+          {
+            "pair": 3,
+            "load_ms": 46.319916,
+            "mutate_ms": 0.015084000000001652,
+            "save_ms": 83.73099999999997,
+            "reload_ms": 39.29650000000004,
+            "total_ms": 169.3625
+          },
+          {
+            "pair": 4,
+            "load_ms": 50.250916,
+            "mutate_ms": 0.013334000000007507,
+            "save_ms": 79.27025,
+            "reload_ms": 40.64820799999998,
+            "total_ms": 170.182708
+          }
+        ],
+        "after": [
+          {
+            "pair": 1,
+            "load_ms": 42.620959,
+            "mutate_ms": 0.014791000000002441,
+            "save_ms": 63.01266699999999,
+            "reload_ms": 34.543958,
+            "total_ms": 140.192375
+          },
+          {
+            "pair": 2,
+            "load_ms": 43.806083,
+            "mutate_ms": 0.013249999999999318,
+            "save_ms": 65.753,
+            "reload_ms": 35.080833999999996,
+            "total_ms": 144.653167
+          },
+          {
+            "pair": 3,
+            "load_ms": 41.146667,
+            "mutate_ms": 0.014417000000001678,
+            "save_ms": 63.651291,
+            "reload_ms": 34.633084,
+            "total_ms": 139.445459
+          },
+          {
+            "pair": 4,
+            "load_ms": 41.970833999999996,
+            "mutate_ms": 0.015500000000002956,
+            "save_ms": 62.943583000000004,
+            "reload_ms": 35.091167,
+            "total_ms": 140.021084
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "400k",
+      "rows_per_sheet": 40000,
+      "columns": 10,
+      "sheets": 1,
+      "cells": 400000,
+      "fixture_sha256": "c58e6e55d552b1b04ee20be4994ea4e4c054b6ae4efd4172495b2fd2714a6b39",
+      "versions": {
+        "before": "1.0.1",
+        "after": "1.0.1"
+      },
+      "summaries": {
+        "before": {
+          "load_ms": {
+            "p50": 205.1721875,
+            "p95": 214.019583
+          },
+          "mutate_ms": {
+            "p50": 0.017666999999988775,
+            "p95": 0.019707999999980075
+          },
+          "save_ms": {
+            "p50": 319.1523965,
+            "p95": 339.61741700000005
+          },
+          "reload_ms": {
+            "p50": 157.3272705,
+            "p95": 158.98858299999995
+          },
+          "total_ms": {
+            "p50": 677.2212295,
+            "p95": 712.643375
+          }
+        },
+        "after": {
+          "load_ms": {
+            "p50": 175.355958,
+            "p95": 194.785083
+          },
+          "mutate_ms": {
+            "p50": 0.01850000000000307,
+            "p95": 0.02349999999998431
+          },
+          "save_ms": {
+            "p50": 233.04293749999997,
+            "p95": 247.38687500000006
+          },
+          "reload_ms": {
+            "p50": 146.68489599999995,
+            "p95": 151.19591600000007
+          },
+          "total_ms": {
+            "p50": 556.6771665,
+            "p95": 590.153917
+          }
+        }
+      },
+      "p50_speedup": 1.2165421365454911,
+      "median_paired_speedup": 1.2200617492040045,
+      "target_met": true,
+      "zip_parts_verified": true,
+      "output_bytes": {
+        "before": 1229809,
+        "after": 1229809
+      },
+      "orders": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "samples": {
+        "before": [
+          {
+            "pair": 1,
+            "load_ms": 214.019583,
+            "mutate_ms": 0.01779199999998582,
+            "save_ms": 339.61741700000005,
+            "reload_ms": 158.98858299999995,
+            "total_ms": 712.643375
+          },
+          {
+            "pair": 2,
+            "load_ms": 198.491167,
+            "mutate_ms": 0.01616600000002677,
+            "save_ms": 315.070834,
+            "reload_ms": 157.85366599999998,
+            "total_ms": 671.431833
+          },
+          {
+            "pair": 3,
+            "load_ms": 211.853208,
+            "mutate_ms": 0.01754199999999173,
+            "save_ms": 310.497958,
+            "reload_ms": 153.9184590000001,
+            "total_ms": 676.2871670000001
+          },
+          {
+            "pair": 4,
+            "load_ms": 198.10075,
+            "mutate_ms": 0.019707999999980075,
+            "save_ms": 323.233959,
+            "reload_ms": 156.80087500000002,
+            "total_ms": 678.155292
+          }
+        ],
+        "after": [
+          {
+            "pair": 1,
+            "load_ms": 194.785083,
+            "mutate_ms": 0.01604199999999878,
+            "save_ms": 247.38687500000006,
+            "reload_ms": 147.96591699999993,
+            "total_ms": 590.153917
+          },
+          {
+            "pair": 2,
+            "load_ms": 177.2445,
+            "mutate_ms": 0.01779200000001424,
+            "save_ms": 236.21487499999995,
+            "reload_ms": 151.19591600000007,
+            "total_ms": 564.673083
+          },
+          {
+            "pair": 3,
+            "load_ms": 173.46741600000001,
+            "mutate_ms": 0.02349999999998431,
+            "save_ms": 229.786459,
+            "reload_ms": 145.40387499999997,
+            "total_ms": 548.68125
+          },
+          {
+            "pair": 4,
+            "load_ms": 173.008084,
+            "mutate_ms": 0.019207999999991898,
+            "save_ms": 229.87099999999998,
+            "reload_ms": 144.075958,
+            "total_ms": 546.97425
+          }
+        ]
+      }
+    }
+  ],
+  "host_load_end": [
+    4.876953125,
+    5.458984375,
+    6.3662109375
+  ]
+}

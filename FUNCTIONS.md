@@ -1,6 +1,7 @@
 # elixcee — Function & VBA Coverage Reference
 
-Complete reference for VBA syntax and worksheet functions supported by elixcee.
+Coverage reference for **elixcee 1.0.2**. See [CHANGELOG](CHANGELOG.md) for versioned changes.
+“Done”/“Active” describes the documented subset, not complete Excel equivalence or release status.
 Each worksheet function shows the minimum Excel version in which it was introduced as a built-in.
 
 ---
@@ -37,7 +38,7 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | Do While loop | `Do While x > 0 ... Loop` | Done |
 | Select Case | `Select Case x ... End Select` | Done |
 | While / Wend | `While x > 0 ... Wend` | Done |
-| For Each | `For Each item In collection` | Done |
+| For Each | `For Each cell In Range("A1:A5")`, `For Each item In collection` | Done (Range / built-in Collection / Dictionary.Keys) |
 | With block (sheet) | `With Sheets("Sheet1") ... End With` | Done |
 | With block (UDT) | `With p ... .Field = val ... End With` | Done |
 | On Error Resume Next | `On Error Resume Next` | Done |
@@ -58,6 +59,112 @@ Each worksheet function shows the minimum Excel version in which it was introduc
 | Named ranges | `Range("A1:B3").Name = "MyData"` | Done |
 | Debug.Print | `Debug.Print x` | Done (no-op) |
 | Option Explicit | `Option Explicit` | Done (ignored) |
+
+### Collection Object
+
+| Property / Method | Behavior |
+|---|---|
+| `Dim c As New Collection` / `Set c = New Collection` | **Active** — creates an empty built-in Collection |
+| `c.Add item [, key] [, before] [, after]` | **Active** — Variant values, case-insensitive string keys, and 1-based positioning; named arguments are accepted |
+| `c.Add objectVariable` | **Active** — preserves Range/Worksheet/Workbook/Collection/class-instance identity |
+| `Call c.Add(...)` / `Call c.Remove(...)` | **Active** — parenthesized `Call` spelling preserves the same key/order semantics |
+| `c.Count` | **Active** |
+| `c.Item(index_or_key)` / `c(index_or_key)` | **Active** — numeric indices are 1-based |
+| `Set x = c.Item(index_or_key)` / `Set x = c(index_or_key)` | **Active** — retrieves an object-valued item without losing identity |
+| `c.Remove index_or_key` | **Active** |
+| `For Each item In c` | **Active** — iterates over a stable value/object snapshot in insertion order |
+| `Set alias = c` | **Active** — aliases share Add/Remove mutations |
+| `With c ... .Add/.Remove/.Count/.Item ... End With` | **Active** — object-valued `Item` may also be a direct With target |
+
+Object-valued items must originate from a live Set-assigned object variable or
+another Collection item, and must be retrieved with `Set`; plain scalar
+assignment reports an explicit error. Collection size uses the same
+configurable element budget as VBA arrays. Unreachable nested/self-referential
+Collection graphs are reclaimed by VM reachability.
+
+### In-memory Dictionary
+
+`Scripting.Dictionary` is active in the **1.0.2 VM-local adapter**, not a COM object.
+
+| Operation | Supported subset |
+|---|---|
+| `Dim d As New Scripting.Dictionary` / `Set d = New Scripting.Dictionary` | New VM-local dictionary |
+| `d.Add key, item` / `d.Exists(key)` | Insert unique keys / query membership |
+| `d.Item(key)` / `d(key)` | Read an existing item; object values require `Set` |
+| `d.Remove key` / `d.RemoveAll` / `d.Count` | Delete / clear / size |
+| `d.CompareMode = 0` or `1` | Case-sensitive default or lowercase-normalized text comparison; cannot change mode while entries remain |
+| `For Each key In d.Keys` | Snapshot of normalized string keys in insertion order |
+
+Keys are coerced with VBA string conversion: numeric and string keys with the same
+text collide, empty keys are rejected, and text mode stores lowercased keys.
+This is **not full Scripting.Dictionary key-type/locale compatibility**. Item assignment,
+full Keys/Items array semantics, and unlisted members are not promised.
+`CreateObject`, COM, filesystem, and network access remain blocked.
+
+### Class Modules
+
+| Construct | Behavior |
+|---|---|
+| Exported `.cls` / `VERSION 1.0 CLASS` | **Active** — registered outside the standard-module procedure namespace |
+| `Dim x As New ClassName` / `Set x = New ClassName` | **Active** — creates a VM-local object identity and runs zero-argument `Class_Initialize` when present |
+| Module-level instance fields | **Active** — scalar and object-valued state; names are case-insensitive and `Private` access is enforced |
+| `Call x.Method(...)` / `x.Method args` | **Active** — invokes a class `Sub`; zero-argument calls use the explicit `Call x.Method` spelling |
+| `value = x.Function(...)` / `Set value = x.Function(...)` | **Active** — invokes scalar- or object-returning class `Function`; typed scalar/object arguments are supported |
+| `Property Get` / `Property Let` / `Property Set` | **Active** — scalar/object and indexed properties; object assignment and retrieval require `Set` |
+| Object-valued parameters | **Active** — typed class/object parameters preserve reference identity in class Subs and Functions |
+| `Class_Terminate` | **Active** — runs once when an unreachable instance is reclaimed; termination failures propagate |
+| `Implements InterfaceName` | **Active** — validates Sub/Function/Property signatures; an interface-typed variable dispatches only its contract to VBA-style `Interface_Member` implementations, while a concrete-typed variable uses direct members |
+| `Public` / `Private` / `Friend` | **Active** — private class members are class-only; Friend remains project-visible |
+| `Dim objects(...) As ClassName` | **Active** — fixed/dynamic, multidimensional object arrays with `Set`, `ReDim [Preserve]`, and `Erase` |
+| `With x` / `With collection.Item(...)` | **Active** — field and method access keeps the same instance identity |
+| Collection storage / `For Each` | **Active** — class instances are object-valued Collection entries |
+
+Property index arguments and class Function arguments preserve declared
+scalar/object types. Interface static types are retained across assignment,
+typed parameters, class fields, and `With`. Function calls require parentheses;
+a zero-argument Sub uses explicit `Call x.Method`.
+
+### Range Object
+
+| Property / Method | Behavior |
+|---|---|
+| `Range("A1")` / `Cells(1, 1)` without `.Value` | **Active** — default `Value` read/write; a multi-cell read returns a Variant array |
+| `Set r = Range("B2:D4")` then `r.Cells(row, col)` | **Active** — 1-based coordinates relative to the first area's top-left cell |
+| `r.Range("A1:B2")` | **Active** — A1 address relative to the first area's top-left cell |
+| `r(row, col)` / `r.Item(row, col)` | **Active** — default Range `Item`, returning a Range object in `Set` context or its default value in scalar context |
+| `r(index)` / `r.Item(index)` | **Active** — 1-based row-major item within the first area; out-of-range access is rejected |
+| `With r ... .Cells/.Range/.Value ... End With` | **Active** — all relative members share the same captured Range target |
+
+Relative addressing currently anchors to the first area of a multi-area Range.
+`SpecialCells(Type[, Value])` supports every `XlCellType` constant:
+`xlCellTypeAllFormatConditions`, `xlCellTypeSameFormatConditions`,
+`xlCellTypeAllValidation`, `xlCellTypeSameValidation`, `xlCellTypeComments`,
+`xlCellTypeFormulas`, `xlCellTypeConstants`, `xlCellTypeBlanks`,
+`xlCellTypeLastCell`, and `xlCellTypeVisible`. Constants and formulas accept
+the additive `xlNumbers` / `xlTextValues` / `xlLogical` / `xlErrors` mask.
+Legacy comments/notes are recognized; threaded comments are outside this model.
+`SameValidation` and `SameFormatConditions` use the receiver's first cell as
+their deterministic anchor. Conditional-format sameness means membership in
+the same worksheet `<conditionalFormatting>` rule block(s), because rule
+evaluation itself remains opaque.
+
+### Worksheet / Workbook Objects
+
+| Property / Method | Behavior |
+|---|---|
+| `Worksheets(key)` / `Sheets(key)` | **Active** — string name or 1-based index; usable directly or with `Set ws = ...` |
+| `ws.Name` | **Active** — readable/writable; live Worksheet and Range references survive the rename |
+| `ws.Index` | **Active** — read-only, 1-based workbook tab position |
+| `ws.Visible` | **Active** — readable/writable with `xlSheetVisible`, `xlSheetHidden`, or `xlSheetVeryHidden`; hiding the active or last visible sheet is rejected |
+| `ws.UsedRange` | **Active** — returns the occupied rectangle, or `A1` for an empty sheet |
+| `ws.Activate` / `ws.Select` | **Active** — changes `ActiveSheet`; hidden sheets are rejected |
+| `ThisWorkbook.Name` / `ActiveWorkbook.Name` / `wb.Name` | **Active** — current loaded workbook name |
+| `ThisWorkbook.ActiveSheet` / `wb.ActiveSheet` | **Active** — returns the current Worksheet reference |
+| `Worksheets.Count` / `Sheets.Count` / `wb.Worksheets.Count` | **Active** — current worksheet count |
+
+This is an in-memory object-model subset. Save/SaveAs/Close, external links,
+windows, charts, pivots, and other desktop or external-effect members are not
+part of the supported contract.
 
 ### Application Object
 

@@ -662,7 +662,15 @@ class Vm:
     # ── I/O ───────────────────────────────────────────────────────────────────
 
     def save_workbook(self, path: str) -> None:
-        """Save all sheets to *path*.  Supports ``.xlsx`` and ``.ods``."""
+        """Durably save all sheets to ``.xlsx``, ``.xlsm``, or ``.ods``."""
+        ...
+
+    def save_workbook_fast(self, path: str) -> None:
+        """Save disposable XLSX/XLSM output without the final filesystem sync.
+
+        This has weaker crash/power-loss durability than ``save_workbook``.
+        ODS output still uses the normal durable path. Safe-path checks remain active.
+        """
         ...
 
     def cells_df(self) -> "pandas.DataFrame":  # type: ignore[name-defined]  # noqa: F821

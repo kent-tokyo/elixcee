@@ -129,6 +129,20 @@ pub enum Expr {
     /// Only the `Is Nothing` shape is modeled: a general `a Is b` object-
     /// identity comparison is still unparsed, exactly as before.
     IsNothing(String),
+    /// `<collection>.Item(index_or_key)` — the explicit form of the
+    /// Collection default member (`collection(index_or_key)`). The parser
+    /// cannot know the variable's runtime object type, so the VM validates
+    /// that `collection` really holds a Collection reference.
+    CollectionItem {
+        target: CollectionTarget,
+        index: Box<Expr>,
+    },
+    /// A value-returning method on a class-module instance.
+    ObjectMethodCall {
+        target: ObjectTarget,
+        method: String,
+        args: Vec<Expr>,
+    },
     /// A bare `.member` *read* inside a `With` body, e.g. the right-hand
     /// side of `.Value = .Value + 1`. Same runtime resolution as
     /// `Stmt::WithDot`, and likewise valid at any nesting depth.
@@ -212,13 +226,32 @@ pub enum Axis {
 /// always evaluates to a `Variant` in `Vm::eval_expr`, `ObjectExpr` always
 /// evaluates to an `ObjectRef` in `Vm::eval_object_expr`. Only ever appears
 /// as `Stmt::Set`'s RHS, or nested inside another `ObjectExpr` (`Union`'s
-/// args, `Area`'s target, `SpecialCellsVisible`'s target) — the parser only
+/// args, `Area`'s target, `SpecialCells`' target) — the parser only
 /// ever constructs one when it can fully recognize the shape; an
 /// unrecognized `Set <var> = <rhs>` becomes `Stmt::Unsupported` instead of
 /// a hard parse error (see `parse_set`), same no-op-on-unknown-construct
 /// precedent as `Stmt::Dim`/`Stmt::Unsupported` elsewhere.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ObjectExpr {
+    /// `New Collection`, used by both `Set c = New Collection` and
+    /// `Dim c As New Collection`.
+    NewCollection,
+    /// `New Scripting.Dictionary`, the pure in-memory adapter. External
+    /// `CreateObject` remains blocked by the security boundary.
+    NewDictionary,
+    /// `New <ClassName>` for a class module registered in a multi-module
+    /// project. Resolution is deferred to the VM so parsing does not depend
+    /// on source-file ordering.
+    NewClass(String),
+    /// An object-valued item retrieved from a Collection, either through a
+    /// named variable (`Set x = c.Item(1)` / `Set x = c(1)`) or the active
+    /// With target (`Set x = .Item(1)`).
+    CollectionItem {
+        target: CollectionTarget,
+        index: Box<Expr>,
+    },
+    /// A multi-dimensional object-array element on the right side of `Set`.
+    ObjectArrayItem { name: String, indices: Vec<Expr> },
     /// `Range("A1:B2")` / `Range("A1:A3,C1:C3")` — a literal address,
     /// resolved against the active sheet at `Set`-evaluation time (real
     /// VBA fixes a Range object's parent worksheet at creation, not at
@@ -228,16 +261,29 @@ pub enum ObjectExpr {
     /// underlying `RangeRef` by value already gives real `Set` reference
     /// semantics here — see the doc on `Vm::object_variables`.
     Var(String),
+    /// An object-valued class field or Property Get result.
+    Member {
+        target: ObjectTarget,
+        member: String,
+    },
+    /// An object-returning class method call used on the right side of `Set`.
+    MethodCall {
+        target: ObjectTarget,
+        method: String,
+        args: Vec<Expr>,
+    },
     /// `Union(range1, range2, ...)` (Milestone B7c item 2).
     Union(Vec<ObjectExpr>),
     /// `<range>.Areas(n)` (Milestone B7c item 3) — 1-based, real VBA
     /// indexing. `n` is a plain VBA expression (evaluated as an Integer).
     Area(Box<ObjectExpr>, Box<Expr>),
-    /// `<range>.SpecialCells(xlCellTypeVisible)` (Milestone B7c item 4) —
-    /// only the `xlCellTypeVisible` constant (or its literal value, `12`)
-    /// is recognized; every other `SpecialCells` type is unmodeled and
-    /// falls back to `Stmt::Unsupported` at parse time.
-    SpecialCellsVisible(Box<ObjectExpr>),
+    /// `<range>.SpecialCells(Type[, Value])`. `Value` is the optional
+    /// `XlSpecialCellsValue` bit mask used by Constants and Formulas.
+    SpecialCells {
+        base: Box<ObjectExpr>,
+        cell_type: Box<Expr>,
+        value: Option<Box<Expr>>,
+    },
 }
 
 /// What a `With` block targets, kept unevaluated so the VM can resolve it
@@ -347,6 +393,22 @@ pub enum Stmt {
         var: String,
         value: ObjectExpr,
     },
+    /// `collection.Add item [, key] [, before] [, after]`. Optional
+    /// arguments may also use their VBA names (`Key:=`, `Before:=`,
+    /// `After:=`). The VM preserves a bare Set-assigned object variable as
+    /// an object-valued entry; other expressions evaluate to Variant values.
+    CollectionAdd {
+        target: CollectionTarget,
+        item: Expr,
+        key: Option<Expr>,
+        before: Option<Expr>,
+        after: Option<Expr>,
+    },
+    /// `collection.Remove index_or_key`.
+    CollectionRemove {
+        target: CollectionTarget,
+        index: Expr,
+    },
     /// `Range(dest_addr).Paste` / `Range(dest_addr).PasteSpecial
     /// [Transpose:=<expr>]` (Milestone B6b) — pastes the VM's clipboard
     /// contents into `dest_addr`. Real VBA only exposes `Transpose:=` on
@@ -450,6 +512,17 @@ pub enum Stmt {
         is_formula: bool,
         value: Expr,
     },
+    /// In-memory Worksheet properties currently exposed by VBA: `Name` and
+    /// `Visible`. The sheet expression uses the same resolver as Cells/Range.
+    SheetPropertySet {
+        sheet: Expr,
+        property: String,
+        value: Expr,
+    },
+    /// `Worksheet.Activate` / `.Select` for any supported sheet qualifier.
+    SheetActivate {
+        sheet: Expr,
+    },
     WithSheet {
         sheet_name: String,
         body: Vec<SpannedStmt>,
@@ -467,7 +540,7 @@ pub enum Stmt {
     },
     ForEach {
         var: String,
-        range_addr: String, // Range("A1:B10") address; variable iterables TBD
+        source: ForEachSource,
         body: Vec<SpannedStmt>,
     },
     If {
@@ -515,6 +588,34 @@ pub enum Stmt {
     CallSub {
         name: String,
         args: Vec<Expr>,
+    },
+    /// A Sub-like method invocation on a class-module instance. The VM
+    /// resolves the target dynamically; non-class With targets retain the
+    /// historical no-op behavior for unknown dotted methods.
+    ObjectMethodCall {
+        target: ObjectTarget,
+        method: String,
+        args: Vec<Expr>,
+    },
+    /// `Set object.member = value`, including Property Set dispatch.
+    SetObjectMember {
+        target: ObjectTarget,
+        member: String,
+        args: Vec<Expr>,
+        value: ObjectExpr,
+    },
+    /// `object.property(index, ...) = value` for an indexed Property Let.
+    ObjectPropertyLet {
+        target: ObjectTarget,
+        member: String,
+        args: Vec<Expr>,
+        value: Expr,
+    },
+    /// `Set objects(i, ...) = value` for an object array.
+    SetObjectArray {
+        name: String,
+        indices: Vec<Expr>,
+        value: ObjectExpr,
     },
     /// A truly no-op `Dim`-shaped statement: reached only when no variable
     /// name was actually available to record (a modifier — `Static`/
@@ -583,9 +684,15 @@ pub enum Stmt {
         var: String,
         type_name: String,
     }, // Dim p As PersonType
+    /// `Dim x As New ClassName/Collection`, preserving the declared object type.
+    DimObjectNew {
+        var: String,
+        type_name: String,
+        value: ObjectExpr,
+    },
     DimArrayRecord {
         name: String,
-        sizes: Vec<Expr>,
+        sizes: Vec<ArrayDim>,
         type_name: String,
     }, // Dim arr(10) As MyType
     /// `Dim a As Integer, b As Range, c(3) As MyType` — a comma-separated
@@ -614,10 +721,54 @@ pub enum Stmt {
     },
 }
 
+/// The iterable accepted by `For Each`. Range iteration retains its
+/// single-cell object/default-value behavior; a variable source is resolved
+/// at runtime and currently accepts a real `Collection` object.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForEachSource {
+    Range(String),
+    ObjectVar(String),
+    DictionaryKeys(String),
+}
+
+/// A Collection member receiver. `CurrentWith` is resolved against the
+/// innermost runtime With target, so nested control-flow blocks retain the
+/// same behavior as other bare-dot members.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CollectionTarget {
+    Variable(String),
+    CurrentWith,
+}
+
+/// Receiver for a class-module method. `CurrentWith` uses the innermost
+/// runtime With target, matching `CollectionTarget`'s resolution rule.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObjectTarget {
+    Variable(String),
+    CurrentWith,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccessModifier {
+    #[default]
+    Public,
+    Private,
+    Friend,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassFieldDef {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub access: AccessModifier,
+}
+
 #[derive(Debug, Clone)]
 pub struct SubDef {
     pub name: String,
     pub params: Vec<String>,
+    pub param_types: Vec<Option<String>>,
+    pub access: AccessModifier,
     pub body: Vec<SpannedStmt>,
 }
 
@@ -625,6 +776,27 @@ pub struct SubDef {
 pub struct FuncDef {
     pub name: String,
     pub params: Vec<String>,
+    pub param_types: Vec<Option<String>>,
+    pub return_type: Option<String>,
+    pub access: AccessModifier,
+    pub body: Vec<SpannedStmt>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PropertyKind {
+    Get,
+    Let,
+    Set,
+}
+
+#[derive(Debug, Clone)]
+pub struct PropertyDef {
+    pub name: String,
+    pub kind: PropertyKind,
+    pub params: Vec<String>,
+    pub param_types: Vec<Option<String>>,
+    pub return_type: Option<String>,
+    pub access: AccessModifier,
     pub body: Vec<SpannedStmt>,
 }
 
@@ -642,7 +814,18 @@ pub struct TypeDef {
 pub struct Program {
     pub subs: Vec<SubDef>,
     pub funcs: Vec<FuncDef>,
+    pub properties: Vec<PropertyDef>,
     pub type_defs: Vec<TypeDef>,
+    /// True for an exported `.cls` source (`VERSION 1.0 CLASS`) or when the
+    /// file loader marks a `.cls` path. Class procedures are registered as
+    /// instance methods rather than merged into the standard-module scope.
+    pub is_class_module: bool,
+    /// Module-level instance fields declared by a class module. Types and
+    /// access modifiers are intentionally not enforced in this first
+    /// class-object subset; names remain case-insensitive.
+    pub class_fields: Vec<ClassFieldDef>,
+    /// Class/interface names named by module-level `Implements` clauses.
+    pub implements: Vec<String>,
     /// Module-level lines that are unsupported/unevaluated (e.g. a
     /// module-level `Const`, which never actually sets its value —
     /// see `check::run_check`). Each entry is `(reason, span)`.

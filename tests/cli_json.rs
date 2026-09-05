@@ -97,6 +97,27 @@ fn json_multi_file_run_resolves_qualified_entrypoint() {
 }
 
 #[test]
+fn json_multi_file_run_recognizes_cls_extension_without_export_header() {
+    let main_path = write_vba(
+        "Attribute VB_Name = \"MainMod\"\nSub Main()\n    Set item = New Counter\n    Call item.Add(5)\n    Cells(1, 1).Value = item.Current()\nEnd Sub\n",
+        "class_extension_main",
+    );
+    let class_path = std::env::temp_dir().join("elixcee_cli_json_counter.cls");
+    fs::write(
+        &class_path,
+        "Attribute VB_Name = \"Counter\"\nPrivate total As Long\nPublic Sub Add(value)\n    total = total + value\nEnd Sub\nPublic Function Current()\n    Current = total\nEnd Function\n",
+    )
+    .expect("write class module");
+    let (ok, value) = run_json_with_args(&[
+        main_path.as_os_str(),
+        class_path.as_os_str(),
+        std::ffi::OsStr::new("Main"),
+    ]);
+    assert!(ok, "{:?}", value);
+    assert_eq!(value["cells"][0]["value"], 5);
+}
+
+#[test]
 fn json_multi_file_run_rejects_a_genuine_sub_collision() {
     let a = write_vba("Sub Main()\n    x = 1\nEnd Sub\n", "collide_a");
     let b = write_vba("Sub Main()\n    x = 2\nEnd Sub\n", "collide_b");

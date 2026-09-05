@@ -1,18 +1,20 @@
 # elixcee v1 support contract
 
-This document defines what `elixcee 1.0` supports and what it deliberately does
-not claim. It is the public release boundary for the documented data-processing
-subset, not a promise to emulate the Excel desktop application.
+This document defines the v1 support policy, not a promise to emulate the Excel
+desktop application. Current coverage is documented for **1.0.2**.
+Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
 
 ## Supported contract
 
-- Rust, Python, CLI, and experimental JavaScript/WASM interfaces use the same
-  documented workbook and diagnostic model where the interface is available.
+- Rust, Python, and CLI share the native workbook/diagnostic core. The private,
+  unpublished JavaScript package uses the WASM reader but has its own workbook
+  facade and writer; native preservation and VBA APIs do not automatically apply.
 - Workbook coordinates are 1-based in the VBA and Python-facing APIs.
 - The supported input formats are `.xlsx`, `.xlsm`, and `.ods`, subject to the
   reader and model limits in [docs/limits.md](limits.md).
 - Data-processing VBA constructs, formulas, ranges, multiple worksheets,
-  structured diagnostics, and documented workbook editing operations are
+  the documented built-in `Collection` and class-module subsets, structured
+  diagnostics, and documented workbook editing operations are
   supported only to the extent listed in [FUNCTIONS.md](../FUNCTIONS.md) and
   the public API signatures.
 - Default safety behavior rejects blocked external effects, malformed or
@@ -58,9 +60,10 @@ injection, path traversal, or resource-exhaustion risk.
 
 Each release records implementation tests and static checks separately from
 measurements requiring Microsoft Excel, large fixtures, or another independent
-oracle. For v1.0.1, the local offline gate covers the checked-in Rust workspace,
-property/integration tests, clippy, dependency policy, feature compilation, and
-the checked-in reader-measurement contract. Dated macOS reader measurements are
+oracle. For v1.0.2, the local gate covers the Rust workspace/all-target tests,
+strict clippy/Rustdoc, fresh dependency audit, feature compilation, packaged
+crate/wheel/sdist, JavaScript differential/type checks, and the checked-in
+reader-measurement contract. Dated macOS reader measurements are
 available under `docs/measurements/`; Excel-oracle and cross-platform results
 remain separate evidence and must not be inferred from the local gate.
 

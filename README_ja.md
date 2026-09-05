@@ -6,7 +6,8 @@ Microsoft Excelなしで、データ処理向けのExcel VBAのサブセット�
 テスト・診断するRust製ランタイムです。PyO3によるPython API、単体CLI、
 実験的な`@elixcee/xlsx` JavaScript/WASMパッケージを提供します。
 
-現在のリリースは **1.0.1** です。
+バージョンは **1.0.2** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+JavaScriptパッケージはprivate・未公開です。
 
 Excelデスクトップアプリの完全な代替ではありません。画面更新、グラフ、
 ダイアログなどのUI機能は、スキップ・簡易モデル化・エラー化されます。
@@ -56,7 +57,7 @@ End Sub
 print(vm.get_cell(1, 2))       # 20
 ```
 
-数式評価、範囲、シート、スタイル、テーブル、データ検証、AutoFilter、
+数式評価、範囲、シート、VBA `Collection`／class moduleサブセット、スタイル、テーブル、データ検証、AutoFilter、
 名前定義、pandas連携、`.xlsx`/`.xlsm`/`.ods`入出力にも対応しています。
 APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 
@@ -70,20 +71,14 @@ APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 `Vm(timeout_ms=N)`または`run_macro(..., timeout_ms=N)`でVBA実行時間を制限できます。
 同じ`Vm`で同じソースを再実行する場合は、解析済みASTを再利用します。
 `vm.fork()`でバッチ処理用の独立したVMコピーを作成できます。
-`vm.snapshot()`で全シートの独立した読み取り専用スナップショットを取得できます。
-`include_formulas=True`を指定すると、計算結果とは別に保存数式も取得できます。
-スナップショットにはワークシートのタブ順も含まれます。
-スナップショットには実行時の名前定義も含まれます。
-スナップショットには現在の`calculation_mode`（`automatic`または`manual`）も含まれます。
-スナップショットにはシートごとの表示状態（`visible`、`hidden`、`veryHidden`）も含まれます。
-スナップショットにはシートごとの結合セル範囲もA1記法で含まれます。
-スナップショットには非表示行・列の区間も含まれます。
+`vm.snapshot()`は全シートの値、タブ順、名前定義、計算モード、表示状態、結合範囲、非表示区間を返します。
+`include_formulas=True`で数式本文も追加できます。CLIのsnapshotとは異なる、より詳細な形式です。
 `diagnose_macro(vba_code, macro_name, workbook_path)`でCLIの`diagnose --json`と同じ構造化診断JSONを取得できます。
 
 通常readerでは`load_workbook(..., max_work_units=N, timeout_ms=N,
 cancellation=token)`で総work量、期限、協調キャンセルを指定できます。CLIの
-`snapshot`と`--file`読込では`--max-work-units N`、`--timeout-ms N`、
-`--cancel-file PATH`に加えてSIGINTも利用できます。キャンセルは協調方式のため、
+`snapshot`は`--max-work-units N`、`--timeout-ms N`、`--cancel-file PATH`を受け付けます。
+runの`--file`読込は既定budgetとSIGINTによる中断に対応し、これら3つのオプションは受け付けません。キャンセルは協調方式のため、
 OSのブロッキング読込中は次のZIP chunk境界で検出されます。
 
 対応するVBA構文・ワークシート関数は[FUNCTIONS.md](FUNCTIONS.md)にまとめています。
@@ -97,4 +92,5 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-計画は[ROADMAP.md](ROADMAP.md)、ライセンスは[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を参照してください。
+計画は[ROADMAP.md](ROADMAP.md)、文書一覧は[docs/README.md](docs/README.md)、
+ライセンスは[MITの説明](docs/licensing.md)と[第三者表記](THIRD_PARTY_NOTICES.md)を参照してください。

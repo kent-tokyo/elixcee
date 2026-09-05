@@ -4,8 +4,9 @@
 
 This document defines how compatibility is measured for the experimental
 `@elixcee/xlsx` package against [`xlsx@0.18.5`](https://www.npmjs.com/package/xlsx)
-(SheetJS), reachable via `"xlsx": "npm:@elixcee/xlsx@^1.0.0"` with no application code
-changes.
+(SheetJS). npm-alias replacement is a future distribution goal, not an installation
+instruction: the package is currently private at `0.0.0-development`, not published.
+See the [package README](../packages/xlsx/README.md) for the implemented subset.
 
 ## Definition of compatibility
 

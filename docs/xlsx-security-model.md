@@ -2,248 +2,134 @@
 
 ## Threat model
 
-Spreadsheet files are untrusted input: email attachments, user uploads, files passed
-between organizations. `@elixcee/xlsx` aims for behavioral compatibility with
-`xlsx@0.18.5`, but **"same behavior as the oracle" must never mean "same vulnerabilities
-as the oracle."** Where matching SheetJS would mean reproducing a resource-exhaustion or
-object-injection vector, `@elixcee/xlsx` diverges deliberately and the divergence is
-recorded, not hidden. See [`docs/xlsx-compatibility-goal.md`](xlsx-compatibility-goal.md)
-for how this fits the overall compatibility definition.
+Workbooks and caller-supplied worksheet objects are untrusted input.
+Compatibility with `xlsx@0.18.5` must not reproduce unsafe behavior.
+The [compatibility goal](xlsx-compatibility-goal.md) separates normal-input
+compatibility from intentional security and resource-limit differences.
 
-## Existing limits (1.0.1)
+This describes implemented safeguards, not immunity to unknown vulnerabilities.
+Versioned changes and future Unreleased work are distinguished in
+[CHANGELOG](../CHANGELOG.md).
 
-| Limit | Value | Where |
-|---|---|---|
-| ZIP entry count | 10,000 entries | `ZIP_MAX_ENTRIES`, `src/reader.rs` |
-| Per-ZIP-entry decompressed size | 256 MiB | `ZIP_ENTRY_MAX_BYTES`, `src/reader.rs` |
-| Total decompressed size | 1 GiB | `ZIP_MAX_TOTAL_BYTES`, `src/reader.rs` |
-| Per-entry compression ratio | 1,000:1 | `ZIP_MAX_COMPRESSION_RATIO`, `src/reader.rs` |
-| Overall read work budget | 2 GiB-equivalent units by default; declared entry bytes plus 4 KiB per entry | `DEFAULT_READ_MAX_WORK_UNITS`, `ReadOptions` |
-| XML elements per document | 1,000,000 | `XML_MAX_ELEMENTS`, `src/reader.rs` |
-| XML attributes per document | 2,000,000 | `XML_MAX_ATTRIBUTES`, `src/reader.rs` |
-| XML attribute value | 16 MiB | `XML_MAX_ATTRIBUTE_VALUE_BYTES`, `src/reader.rs` |
-| XML text node | 64 MiB | `XML_MAX_TEXT_NODE_BYTES`, `src/reader.rs` |
-| XML control characters | C0 controls rejected except TAB/LF/CR | `validate_xml_budget`, `src/reader.rs` |
-| XML nesting depth | 1,024 | `XML_MAX_DEPTH`, `src/reader.rs` |
-| Workbook sheets | 4,096 | `WORKBOOK_MAX_SHEETS`, `src/reader.rs` |
-| Cells per sheet | 5,000,000 | `SHEET_MAX_CELLS`, `src/reader.rs` |
-| Merged ranges per sheet | 1,000,000 | `SHEET_MAX_MERGES`, `src/reader.rs` |
-| Shared strings | 1,000,000 entries / 256 MiB | `SHARED_STRINGS_MAX_*`, `src/reader.rs` |
-| Formula input | 1 MiB | `MAX_FORMULA_BYTES`, `src/formula/parser.rs` |
-| Formula references | 100,000 | `MAX_FORMULA_REFS`, `src/formula/parser.rs` |
-| Formula AST nodes | 200,000 | `MAX_FORMULA_NODES`, `src/formula/parser.rs` |
-| Formula nesting depth | 256 | `MAX_FORMULA_DEPTH`, `src/formula/parser.rs` |
-| VBA instruction budget | 10,000,000 per run | `DEFAULT_MAX_VBA_INSTRUCTIONS`, `src/vm/mod.rs` |
-| VBA call depth | 256 frames | `DEFAULT_MAX_VBA_CALL_DEPTH`, `src/vm/mod.rs` |
-| VBA string value | 16 MiB | `DEFAULT_MAX_VBA_STRING_BYTES`, `src/vm/mod.rs` |
-| VBA/runtime array | 10,000,000 elements | `DEFAULT_MAX_VBA_ARRAY_ELEMENTS`, `src/vm/mod.rs` |
-| VBA materialized cells | 5,000,000 across all sheets | `DEFAULT_MAX_VBA_CELLS`, `src/vm/mod.rs` |
-| Defined names | 100,000 | `DEFINED_NAMES_MAX_COUNT`, `src/reader.rs` |
-| Defined-name formula text | 1 MiB | `DEFINED_NAME_MAX_TEXT_BYTES`, `src/reader.rs` |
-| VBA source | 4 MiB | `MAX_VBA_SOURCE_BYTES`, `src/parser/mod.rs` |
-| VBA identifier | 1,024 characters | `MAX_VBA_IDENTIFIER_CHARS`, `src/parser/mod.rs` |
-| VBA tokens | 1,000,000 | `MAX_VBA_TOKENS`, `src/parser/mod.rs` |
+## Existing limits (1.0.2)
 
-Python callers may adjust these VBA budgets with `Vm.set_budgets()`. An omitted argument
-uses its safe default; an explicit `None` opts out of that one limit. New VMs retain the
-safe defaults above.
+The numeric inventory and calibration notes are maintained in **[Resource limits](limits.md)**.
+Do not duplicate thresholds here: ZIP, XML, workbook model, formula, VBA parser,
+instruction, call-depth, string, array, and cell limits apply at different layers.
 
-At runtime, the default VM rejects the blocked external-effect class with a `SECURITY:`
-error. This rejection is not suppressible by `On Error Resume Next`; unrelated unsupported
-statements retain their existing no-op behavior.
+- ZIP metadata is checked before parts are consumed: entry count, decompressed size,
+  total size, compression ratio, work budget, and unsafe entry paths.
+- The reader rejects absolute paths, parent components, and NUL in ZIP entry names.
+  Shared ZIP checks cover file/buffer input, streaming, and save passthrough paths.
+- XML parsing rejects forbidden declarations, malformed/incomplete documents,
+  invalid controls, and over-budget structures. Worksheet validation and construction
+  share one event pass; other parts are validated before their specific parser.
+- Formula strings in loaded cells remain subject to XML limits; evaluator/parser
+  limits apply when a formula is parsed. Do not confuse storage with evaluation.
+- VBA budget failures and blocked external effects are not suppressed by
+  On Error Resume Next. Unrelated unsupported statements can still be no-ops.
+- Python `Vm.set_budgets()` uses safe defaults for omitted arguments; explicit
+  None disables that individual VM limit. This does not disable all reader limits.
 
-The reader also rejects absolute paths, parent-directory components, and NUL bytes in
-ZIP entry names before any workbook part is consumed. All these checks run for the
-path-based reader, the bytes-based reader, raw passthrough used during save, and the
-streaming reader's shared ZIP path.
+The XML iterator is nonrecursive, but flat parsing alone does not bound CPU or memory.
+Multiple limits interact: a sheet may hit XML limits before its cell-count limit.
 
-The XML reader rejects DTD/ENTITY declarations, forbidden XML 1.0 control characters,
-and incomplete documents. Normal-reader worksheet XML performs those checks, resource
-accounting, shared-string validation, and cell construction in one event pass; other XML
-parts are validated before their workbook-specific parser consumes them. The following
-boundary remains explicit:
+## packages/xlsx (JS) limits
 
-- Formula strings outside defined names remain bounded by the existing XML text-node limit.
-- Deadline and cancellation are cooperative. A blocking operating-system filesystem read
-  cannot be preempted; the request is observed at the next ZIP read/check boundary.
+The JS read path uses Rust/WASM validation. In-memory utilities have separate guards:
 
-XML nesting depth is a partial exception: `src/reader.rs`'s `XmlIter` is a flat,
-non-recursive pull parser (no DOM tree, no recursive descent), so pathological nesting
-depth cannot cause a Rust stack overflow the way a recursive-descent or DOM-building
-parser could. It can still cost time/memory through model construction, which is why the
-explicit document and workbook-model budgets above are complemented by the dated
-measurement artifacts under `docs/measurements/` and the remaining cross-platform
-validation described below.
+| Guard | Behavior |
+|---|---|
+| !ref rectangle | More than 5,000,000 cells fails before formulae/CSV/TXT/JSON/HTML iteration |
+| Nonfinite column index | encode_col(+Infinity) is rejected |
 
-## `packages/xlsx` (JS) limits — distinct from the Rust reader above
-
-The table above is specific to `src/reader.rs` (untrusted ZIP/XML file parsing).
-`packages/xlsx` is a separate subsystem (in-memory JS worksheet-object manipulation, no
-file I/O yet) with its own, much smaller limit set:
-
-| Limit | Value | Where | Registered as |
-|---|---|---|---|
-| `!ref` rectangle cell count (`sheet_to_formulae`/`sheet_to_csv`/`sheet_to_txt`/`sheet_to_json`/`sheet_to_html`) | 5,000,000 cells | `packages/xlsx/src/internal/range-guard.cjs` | `ELIXCEE_RANGE_TOO_LARGE`, `compat/differential/classify.mjs`'s `SAFETY_DIVERGENCE_REGISTRY` |
-| Non-finite column/row index (`encode_col`) | rejects `+Infinity` | `packages/xlsx/src/index.cjs` | `ELIXCEE_NON_FINITE_INDEX`, same registry |
-
-Both were added only after empirically confirming the real oracle actually hangs/loops
-on the corresponding input (a timeout-guarded subprocess run, not a speculative guard) —
-per this project's standing rule against adding resource limits without measurement. See
-[`docs/limits.md`](limits.md) for the time/RSS measurement behind the 5,000,000-cell
-threshold specifically.
+The package now includes file APIs; the utility guards are not substitutes for
+reader validation. Historical range-cost probes and the exact threshold boundary
+are recorded in [limits](limits.md), not a guarantee of elapsed time on every host.
 
 ## Remaining validation
 
-| Item | Current boundary | Remaining evidence |
+| Item | Implemented boundary | Remaining evidence |
 |---|---|---|
-| OS-signal reader interruption | CLI SIGINT and cancel-file support are implemented | Linux/Windows real-signal E2E calibration |
-| Synchronous WASM cancellation | Default reader limits apply, but a running call cannot observe JavaScript cancellation | Worker termination or a future asynchronous API contract |
+| Native reader cancellation | Cooperative chunk/part checks; SIGINT, plus snapshot cancel-file | Linux/Windows real-signal calibration |
+| Deadline | Cooperative checks; cannot preempt a blocking filesystem call | Hard process isolation and host-specific behavior |
+| Synchronous WASM | Default limits; no JS cancellation during a running call | Worker termination or future async contract |
+| Resources | Dated macOS large-file, signal, and reclamation tests | Cross-platform and long-duration CPU/RSS/fuzz coverage |
 
-The implemented work budget and chunk-level cooperative deadline/cancellation checks have
-dated macOS large-file, signal, and reclamation measurements under `docs/measurements/`.
-Those results are not cross-platform guarantees; the per-layer limits above remain the
-active safety boundary.
+See [measurement records](measurements/README.md) and [roadmap](../ROADMAP.md).
+Worker termination is distinct from a cooperative READER_CANCELED result.
 
 ## Prototype-pollution-safe key handling
 
-Excel data can legitimately contain the strings `__proto__`, `constructor`, or
-`prototype` — as a header cell, a sheet name, or any other value that becomes a
-JavaScript object key in the SheetJS-compatible surface. `@elixcee/xlsx` must preserve
-that data (it is normal, if unusual, spreadsheet content) **without ever mutating an
-Object's prototype.** The specific call sites where a spreadsheet-derived string becomes
-an object key:
+Spreadsheet-derived strings such as __proto__, constructor, and prototype must
+remain data, without changing an object's prototype.
 
-- `utils.sheet_to_json`'s header-row-derived keys become the property names of every
-  emitted row object. **Implemented (Phase 1B-3):** the only reachable hazard is an
-  explicit `opts.header` array containing the literal string `"__proto__"` — the default
-  header-inference path can never produce that literal key (it always gets renamed to
-  `"__proto___NaN"` as an accidental side effect of the oracle's own header-collision
-  counter, reproduced as-is since it isn't itself a hazard — see
-  `packages/xlsx/src/index.cjs`'s `sheetToJson` doc comment). `constructor`/`prototype`/
-  `toString`/`hasOwnProperty` are ordinary (non-accessor) properties and need no special
-  handling — confirmed live these already match the oracle with plain assignment.
-  `makeJsonRow`'s `setJsonRowKey` uses `Object.defineProperty` for every row-key write, so
-  a `"__proto__"` header retains its value as ordinary own data instead of the oracle's
-  own behavior (silently dropping a primitive value, or corrupting that specific row
-  object's own prototype for an object value — both confirmed live, both registered in
-  `compat/differential/classify.mjs`'s `SECURITY_DIVERGENCE_REGISTRY`).
-- Sheet-name-keyed access — `workbook.Sheets[name]` and `utils.book_append_sheet`'s
-  internal sheet-name map. **Implemented (Phase 1A):** see `bookAppendSheet`'s
-  `Object.defineProperty` use and `SECURITY_DIVERGENCE_REGISTRY`'s
-  `book_append_sheet:proto_key_pollution` entry.
+- sheet_to_json writes row keys using Object.defineProperty, including explicit
+  header arrays containing __proto__.
+- book_append_sheet and table_to_book safely construct sheet-name maps.
+- Default header inference retains the reference's renamed __proto___NaN text;
+  that compatibility quirk is separate from explicit-header prototype injection.
 
-Any code that builds one of these key-indexed structures must use `Object.defineProperty`
-(or `Object.create(null)`/a `Map`), never a plain `row[key] = value` bracket assignment,
-so that a crafted `"__proto__"` key is stored as ordinary data instead of reaching (or
-being silently swallowed by) the object's own `[[Prototype]]`.
+Use own-data-property creation, a null-prototype object, or Map wherever an untrusted
+key becomes a property. Do not replace this with unchecked bracket assignment.
+See [known differences](compatibility-known-defects.md) and the
+[classification registry](../compat/differential/classify.mjs) for fixtures.
 
-The same rule caught a second, distinct instance during Phase 1C: `utils.table_to_book`'s
-internal sheet-to-workbook construction assigns `sheets[n] = sheet` where `n` comes from a
-caller-controlled `opts.sheet` — confirmed live the oracle's own `wb.Sheets` prototype
-gets corrupted the same way for `opts.sheet: "__proto__"`. Fixed identically
-(`Object.defineProperty`) in `sheetToWorkbookSafe` (`packages/xlsx/src/index.cjs`).
+## HTML-injection-safe attribute/URL handling
 
-## HTML-injection-safe attribute/URL handling (`sheet_to_html`, Phase 1C)
+sheet_to_html applies three independent protections:
 
-`utils.sheet_to_html` renders a worksheet as an HTML `<table>` — reading + live-probing
-the oracle's own `make_html_row`/`make_html_preamble` source surfaced three distinct
-HTML-injection-shaped findings, handled three different ways:
+1. Attribute values are escaped, separately from text content. Text escaping may
+   render line breaks as br tags and must not be used as an attribute escaper.
+2. Hyperlink targets are allow-listed: http(s), mailto, tel, ftp, relative, and
+   fragment targets. Leading/trailing whitespace, ASCII controls, and backslashes
+   are rejected to avoid browser normalization ambiguity. Rejected links render as text.
+3. cell.h markup is escaped by default. rawHtml:true is an explicit opt-in for
+   independently trusted markup, not a sanitizer.
 
-1. **Fixed.** `data-t`/`data-v`/`data-z`/`id` (both the per-cell `id` and `opts.id`,
-   table-level and per-cell) are built by the oracle via raw string concatenation with NO
-   escaping at all — confirmed live: a cell value or `opts.id` containing `"` breaks out
-   of the attribute and injects an arbitrary `onXXX` handler that fires the instant the
-   returned markup is rendered by a browser (this function's output is documented as
-   ready-to-render HTML, a common real-world use — SheetJS's own docs show it for exactly
-   that). Applies to any cell value/number-format string/id containing one of `&<>'"` or a
-   U+0000-U+001F control character — ordinary spreadsheet content, not just a crafted
-   probe. `packages/xlsx` escapes every attribute value it builds (`escapeHtmlAttr`,
-   distinct from the text-content escaper `escapeHtmlText` — the two must NOT be shared,
-   since the text-content escaper substitutes `\n` with a literal `<br/>` tag, which would
-   itself be an escaping bug if applied inside a quoted attribute value). Registered as
-   `sheet_to_html:unescaped_attribute`.
-2. **Fixed, separately.** `cell.l.Target` is embedded into `href="..."` with no URI-scheme
-   check at all — confirmed live: a `javascript:` Target produces a clickable,
-   code-executing link in the generated HTML. Quote-escaping (finding 1) does **not** fix
-   this — no quote character is needed to make a `href` value dangerous, so this is a
-   distinct failure mode requiring a distinct fix (a scheme check, not a character
-   escaper) and its own registry entry. `packages/xlsx` allow-lists `http(s)`/`mailto`/
-   `tel`/`ftp`/relative/fragment targets (`isSafeHrefTarget`). Leading/trailing whitespace,
-   ASCII control characters, and backslashes are rejected before those checks so browser URL
-   normalization cannot change the intended scheme or host. Anything else renders as plain text
-   with no `<a>` wrapper at all, rather than a link to a rejected scheme.
-   Registered as `sheet_to_html:unsafe_href_scheme`.
-3. **Fixed by default.** `cell.h` is a documented raw-HTML rich-text rendering field,
-   but it remains caller-controlled markup. `packages/xlsx` escapes it by default;
-   callers that have independently trusted the markup may explicitly pass `rawHtml: true`
-   to retain the oracle-compatible passthrough behavior.
+These are registered security divergences whether content came from a file or a caller.
 
-The fixed findings are registered in `SECURITY_DIVERGENCE_REGISTRY` (not
-`SAFETY_DIVERGENCE_REGISTRY`) — HTML/script injection is a security concern regardless of
-whether the dangerous value entered via untrusted file content or a caller-supplied value,
-unlike the resource-exhaustion divergences above where the file-vs-argument distinction
-matters for the reader's own future threat model.
+## Safe input paths
 
-## Safe input paths (`read_workbook`, Phase S1)
+The native path reader accepts .xlsx, .xlsm, and .ods, case-insensitively.
+Unsupported/missing extensions are rejected before opening the file.
+The extension-independent buffer API reads an in-memory OOXML ZIP.
+The VM preserves the reader's path-minimizing unsupported-extension error;
+this is not a promise that every diagnostic is free of file paths.
 
-The path-based reader accepts only `.xlsx`, `.xlsm`, and `.ods` (case-insensitive)
-extensions. A missing or unsupported extension is rejected before the file is opened,
-with a deterministic error that does not echo the caller's path. The
-`read_workbook_from_bytes` buffer API remains extension-independent because its input is
-already an in-memory OOXML ZIP buffer.
+## Safe output paths
 
-The VM's path-based workbook loader preserves this unsupported-extension error instead of
-wrapping it with the original path, so the same input boundary and path-minimization rule
-hold above the low-level reader as well.
+The native writer rejects unsupported extensions before creating output.
+It checks existing destination/path components for symlinks and rejects unsafe
+redirects; platform-managed temporary aliases such as macOS /tmp are allowed.
+These path checks do not establish a race-free sandbox against concurrent filesystem
+mutation by another actor.
 
-## Safe output paths (`save_workbook`, Phase S3)
+XLSX/ODS output is serialized into a same-directory temporary file. Standard save
+flushes and syncs it before rename; existing regular-file permissions are preserved
+and read-only destinations rejected. Platform replacement fallback behavior is
+not a universal atomic-replacement guarantee.
 
-The writer accepts only `.xlsx`, `.xlsm`, and `.ods` output extensions. Other extensions are
-rejected before any destination or temporary file is created, preventing an XLSX payload from
-being silently written under an unrelated format name.
-
-Before creating an XLSX or ODS output, the writer inspects every existing component of the
-destination with `symlink_metadata`. An existing symbolic link at the file or parent-directory
-level is rejected with a deterministic error instead of being followed, so an in-place or
-save-as operation cannot redirect the workbook bytes to a different target. Platform-managed
-temporary-directory aliases (such as macOS `/tmp`) are allowed so normal temporary output
-continues to work. A missing path component remains valid and is created by the normal writer.
-
-The writer serializes XLSX/ODS bytes into a same-directory temporary file, flushes and syncs
-that file, then publishes it with a rename. This prevents a failed serialization or write from
-leaving a partially written destination; on platforms where replacing an existing file cannot
-be atomic, the platform-specific replacement fallback is used. When replacing an existing
-regular file, its permissions are copied to the temporary file first; read-only destinations
-are rejected before serialization so the replacement path cannot bypass that protection.
+The 1.0.2 explicitly selected save_workbook_fast path omits the final sync
+and has weaker crash durability. It must not be compared with durable competitors
+as if guarantees were identical. This native policy does not describe the separate
+JS writer. See [equal-durability measurements](benchmarks/workbook-equal-durable-2026-09-06.md).
 
 ## Intentional non-compatibility policy
 
-When matching the oracle's behavior on a given input would mean reproducing a resource-
-exhaustion vector (zip bomb, XML/entity blowup, unbounded string/entry counts) or an
-object-injection vector (prototype pollution), `@elixcee/xlsx` diverges on purpose. This
-divergence is not a bug and not something to hide: the differential-testing harness
-classifies it explicitly as `INTENTIONAL_SECURITY_DIVERGENCE` (defined in
-[`compat/differential/classify.mjs`](../compat/differential/classify.mjs)) rather than
-folding it into `MATCH` or silently omitting it from a compatibility report.
+The differential harness classifies security and resource-limit divergences explicitly;
+it does not count them as MATCH or hide the failed cases.
+See [classify.mjs](../compat/differential/classify.mjs).
 
-## The oracle itself is a validating example
-
-`npm audit` against the installed `compat/` devDependencies reports
-that `xlsx@0.18.5` — the exact version pinned as the compatibility oracle, per the
-project's own instruction to target npm's widely-used `0.18.5` rather than the latest
-SheetJS release — carries two known high-severity advisories: Prototype Pollution
-([GHSA-4r6h-8v6p-xvw6](https://github.com/advisories/GHSA-4r6h-8v6p-xvw6), fixed in
-0.19.3) and a ReDoS
-([GHSA-5pgg-2g8v-p4x9](https://github.com/advisories/GHSA-5pgg-2g8v-p4x9), fixed in
-0.20.2). This is expected: `xlsx` here is a `devDependency`
-used only to drive the oracle/differential harness, never shipped to an `@elixcee/xlsx`
-consumer. It is, however, direct, concrete confirmation of why this document's
-"intentional non-compatibility policy" exists — the oracle we are matching behavior
-against is a real, currently-vulnerable version of a real package, not a hypothetical.
+The pinned xlsx oracle is a development/test dependency, not this package's runtime
+reader. Prior dependency checks identified
+[prototype pollution](https://github.com/advisories/GHSA-4r6h-8v6p-xvw6) and
+[ReDoS](https://github.com/advisories/GHSA-5pgg-2g8v-p4x9) advisories for that oracle.
+These are historical references, not a fresh dependency audit. Keep test fixtures
+isolated and recheck the advisory database before release.
 
 ## Open items
 
-- Cross-platform calibration of the implemented reader limits and cancellation paths.
-- Whether some limits should be user-configurable (an options field) vs. fixed
-  constants — SheetJS itself has no such options, so any configurability here is new
-  surface area that needs its own compatibility reasoning, not an automatic yes.
+Cross-platform resource/cancellation calibration, long-duration fuzzing and isolation,
+and any new user-configurable limit surface remain separate roadmap work.
+Do not weaken a safeguard simply to match a reference package.

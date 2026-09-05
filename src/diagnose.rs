@@ -15,9 +15,10 @@
 //! object, and every other subcommand's contract stays untouched.
 //!
 //! Explicit non-goals (see `docs/agent-contract.md` for the full list):
-//! hidden/filtered rows, Excel Tables, a real `Collection` object, real
-//! multi-workbook execution, and `Dim arr(1 To N)` non-zero-lower-bound
-//! tracking are all out of scope. (Copy/Paste shape/clipboard validation
+//! hidden/filtered rows, Excel Tables, real multi-workbook execution, and
+//! class-module-specific diagnosis are out of scope. (`Collection` and the
+//! basic class-module runtime have since landed, but add no diagnose-only
+//! root-cause category.) Copy/Paste shape/clipboard validation
 //! shipped in Milestone B6b, merged-cell-aware Paste conflicts in Milestone
 //! B6c2, and a multi-area (`Areas`) Range foundation — diagnose-only, never
 //! completes a multi-area paste — in Milestone B7a; all three superseding

@@ -4,7 +4,8 @@ Run and test a practical subset of Excel VBA without Microsoft Excel. The core i
 Rust, with a Python API (PyO3), a standalone CLI, and an experimental
 `@elixcee/xlsx` JavaScript/WASM package.
 
-Current release: **1.0.1**.
+Version: **1.0.2**. See the [changelog](CHANGELOG.md) for versioned changes.
+The experimental JS package remains private and is not published. [English](README.md) | [日本語](README_ja.md) | [中文](README_zh.md)
 
 elixcee is intended for data-processing macros. It is not a replacement for the
 Excel desktop application: UI features such as charts, dialogs, and screen
@@ -39,9 +40,9 @@ elixcee diagnose <file.bas>... <MacroName> --file input.xlsx [--json]
 elixcee diagnose-workbook fixture.toml [--json] [--seed N] [--case N] [--cases N]
 ```
 
-The run command accepts one or more standard VBA modules (`.bas`, `.vbs`, or
-`.txt`). Use `Module.Sub` for a qualified entry point in a multi-module run.
-`--json` emits one stable JSON object on stdout; see
+The run command accepts standard VBA modules (`.bas`, `.vbs`, `.txt`) and
+exported class modules (`.cls`). Use `Module.Sub` for a qualified entry point in a multi-module run.
+For valid invocations, `--json` emits a result/error JSON object on stdout; see
 [docs/agent-contract.md](docs/agent-contract.md) for the contract.
 
 ## Python quick start
@@ -59,7 +60,7 @@ End Sub
 print(vm.get_cell(1, 2))       # 20
 
 vm = elixcee.load_workbook("input.xlsx")
-vm.run(vba_code, "ProcessData")
+vm.run("Sub ProcessData()\n    Cells(1, 1).Value = 42\nEnd Sub", "ProcessData")
 vm.save_workbook("output.xlsx")
 
 # Optional reader resource controls (the cancellation check is cooperative).
@@ -89,16 +90,10 @@ The read-only CLI snapshot accepts `--max-work-units N`, `--timeout-ms N`, and
 `--cancel-file PATH`. Creating the cancel-file while a read is in progress
 requests a cooperative stop; a blocking filesystem read cannot be forcibly
 interrupted by this mechanism.
-Repeated runs of the same source on one `Vm` reuse its parsed AST.
-Use `vm.fork()` to create an isolated copy for batch execution.
-Use `vm.snapshot()` to obtain a detached read-only view of all sheets.
-Pass `include_formulas=True` to include stored formulas separately from values.
-Snapshots also include the workbook's worksheet tab order.
-Snapshots also include runtime defined names.
-Snapshots include the current `calculation_mode` (`automatic` or `manual`).
-Snapshots include per-sheet visibility states (`visible`, `hidden`, or `veryHidden`).
-Snapshots include per-sheet merged ranges in A1 notation.
-Snapshots include hidden row and column intervals.
+Repeated runs on one `Vm` reuse the parsed AST; `vm.fork()` creates an isolated batch copy.
+`vm.snapshot()` returns detached sheet values, tab order, defined names, calculation mode,
+visibility, merges, and hidden intervals. Set `include_formulas=True` for formula text.
+This is richer than the CLI snapshot schema.
 Use `diagnose_macro(vba_code, macro_name, workbook_path)` for structured
 diagnostics matching the CLI `diagnose --json` contract.
 
@@ -107,7 +102,8 @@ diagnostics matching the CLI `diagnose --json` contract.
 The interpreter supports common data-processing constructs including
 `Sub`/`Function`, variables and arrays, `If`, `For`, `For Each`, `Do`,
 `Select Case`, `With`, `On Error`, user-defined types, named ranges, multiple
-sheets, and Excel-style `Range`/`Cells` operations. Formula support includes
+sheets, Excel-style `Range`/`Cells` operations, and the documented built-in VBA
+`Collection`, in-memory Dictionary, and class-module subsets (see the documented limits). Formula support includes
 arithmetic, comparisons, criteria functions, lookup functions, date/time,
 text, statistical, financial, logical, and dynamic-array functions.
 
@@ -146,12 +142,10 @@ python3 scripts/check-reader-measurements.py --self-test
 bash scripts/check-measurement-boundary.sh
 ```
 
-依存監査は、ネットワークアクセスを必要としないローカル検証として実行できます。
-`cargo audit --no-fetch`と`cargo deny check --disable-fetch`は、手元にある advisory DB と
-リポジトリ内の`deny.toml`を使用します。advisory DBが古い場合は、結果が最新の公開情報を
-反映していない可能性があります。
+Offline dependency checks use the local advisory database and `deny.toml`.
+A stale database does not establish the absence of newly published advisories.
 
 The short-term plan is in [ROADMAP.md](ROADMAP.md). Public design and policy
 documents are in [docs/](docs/).
 
-License: MIT. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+License: [MIT licensing information](docs/licensing.md). See [third-party notices](THIRD_PARTY_NOTICES.md).

@@ -1,55 +1,36 @@
 # Python differential tests
 
-Compares elixcee's Python-native worksheet APIs against `openpyxl`'s own read
-of the same fixtures — see the Python API section in `README.md`:
+Manual/local checks against openpyxl using the same worksheet fixtures.
+openpyxl is a test-only oracle, not an elixcee runtime dependency.
+API signatures are in [elixcee.pyi](../../elixcee.pyi); these scripts do not establish
+complete openpyxl API or Microsoft Excel compatibility.
 
-- `bulk_range_check.py`: the bulk worksheet range/row API (R1 + P1 remainder)
-  — `get_range`/`set_range`/`append_row`/`iter_rows`/`iter_cols`/`max_row`/
-  `max_column`/`calculate_dimension`.
-- `sheet_ops_check.py`: sheet management + workbook metadata (P1 core 3 +
-  remainder + P2 hidden row/col + copy_sheet + defined_names + sheet_state +
-  row height/column width) —
-  `rename_sheet`/`move_sheet`/`copy_sheet`/`merged_cells`/`merge_cells`/
-  `unmerge_cells`/`hidden_rows`/`hidden_columns`/`set_row_hidden`/
-  `set_column_hidden`/`defined_names`/`sheet_state`/`row_height`/
-  `column_width`, plus PyO3-layer bound-check pins for `sort_range`/
-  `merge_cells` (no openpyxl comparison needed for those). `sheet_state`'s
-  and `row_height`/`column_width`'s fixtures are openpyxl-AUTHORED, not one
-  of the real Excel fixtures (none has a hidden/veryHidden sheet or a
-  genuine custom row height/column width). `row_height`/`column_width` now
-  also cover an elixcee `save()` round trip (writer fix, no real-Excel
-  fixture to validate against, same standing constraint) — `sheet_state`
-  still doesn't (separate, still-open gap; `set_row_height`/
-  `set_column_width` write-support APIs also remain deferred).
+| Script | Scope |
+|---|---|
+| bulk_range_check.py | Bulk range read/write, append, row/column iteration, dimensions |
+| sheet_ops_check.py | Sheet operations, metadata, merges, styles, validation, filtering, and related regression cases |
 
-This is the one place in the repo with a genuine, disclosed new dependency:
-`openpyxl` is a **test-only oracle**, never a runtime dependency of the
-shipped `elixcee` package (`pyproject.toml` declares none, and this stays
-true — nothing here is imported by anything under `src/`). It exists here for
-the same reason `compat/differential/`'s JS harness exists against the `xlsx`
-npm package: independent agreement with a second, differently-implemented
-reader is a stronger signal than internal self-consistency alone.
+See each script's test methods for exact coverage. Some fixtures are openpyxl-authored,
+others come from the Excel fixture set; do not label every case “Excel-authored.”
+Some tests verify elixcee bounds/errors without an independent comparison.
 
-## One-time setup
+## Setup and run
 
-```
-pip install openpyxl
+From the repository root, with an activated Python environment:
+
+```sh
+pip install maturin openpyxl
 maturin develop --release --features python
-```
-
-## Run
-
-```
 python3 compat/differential-python/bulk_range_check.py
 python3 compat/differential-python/sheet_ops_check.py
 ```
 
-Plain stdlib `unittest`, no test runner required. Exits non-zero on any
-failure.
+These are stdlib unittest scripts and exit nonzero on failure.
+For performance comparisons use the separate
+[benchmark protocol](../../docs/benchmarks/README.md), including its fixed versions.
 
-## Not wired into CI
+## CI boundary
 
-No existing CI job runs `maturin develop` or any Python code today (see
-`.github/workflows/ci.yml`). Adding one is a separate infrastructure decision
-from this feature round — this script is a documented manual/local step for
-now, matching this round's own regression checklist.
+The [CI workflow](../../.github/workflows/ci.yml) runs Python-based checks and Rust
+Python-feature compilation, but does not currently run these two differential scripts.
+A compile check is not an installed-extension integration test.

@@ -58,6 +58,16 @@ fn start_cli_cancellation_watcher(
     cancellation: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
+    // Observe already-present cancellation synchronously. A small workbook
+    // can finish before the watcher thread's first 25 ms poll, which made a
+    // pre-existing cancel file nondeterministically ineffective.
+    let initially_cancelled = CLI_SIGNAL_CANCELLED.load(Ordering::Relaxed)
+        || cancel_file
+            .as_deref()
+            .is_some_and(|path| std::path::Path::new(path).exists());
+    if initially_cancelled {
+        cancellation.store(true, Ordering::Relaxed);
+    }
     thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
             let file_cancelled = cancel_file
@@ -153,11 +163,18 @@ fn derive_module_name(path: &str) -> String {
 fn load_one_module(path: &str) -> Result<LoadedModule, LoadModuleError> {
     let code = fs::read_to_string(path)
         .map_err(|e| LoadModuleError::Io(format!("cannot read '{}': {}", path, e)))?;
-    let program = parser::parse_with_span(&code).map_err(|e| LoadModuleError::Parse {
+    let mut program = parser::parse_with_span(&code).map_err(|e| LoadModuleError::Parse {
         message: e.message,
         span: e.span,
         source: code.clone(),
     })?;
+    if std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cls"))
+    {
+        program.is_class_module = true;
+    }
     let name = program
         .module_name
         .clone()
@@ -340,7 +357,7 @@ fn run_check_command(args: &[String]) -> ! {
         for m in &modules {
             let mut others: std::collections::HashSet<String> = std::collections::HashSet::new();
             for other in &modules {
-                if other.name != m.name {
+                if other.name != m.name && !other.program.is_class_module {
                     others.extend(other.program.subs.iter().map(|s| s.name.clone()));
                     others.extend(other.program.funcs.iter().map(|f| f.name.clone()));
                 }

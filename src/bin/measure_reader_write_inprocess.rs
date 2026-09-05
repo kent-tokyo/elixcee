@@ -48,7 +48,12 @@ fn main() {
         .unwrap_or_else(|| usage("missing iteration count"))
         .parse()
         .unwrap_or_else(|_| usage("iteration count must be a positive integer"));
-    if iterations < 2 || args.next().is_some() {
+    let fast = match args.next().as_deref() {
+        None => false,
+        Some("--fast") => true,
+        Some(_) => usage("only --fast may follow the iteration count"),
+    };
+    if iterations < 2 {
         usage("iterations must be at least 2 and no extra arguments are allowed");
     }
 
@@ -59,14 +64,17 @@ fn main() {
     for iteration in 1..=iterations {
         let iteration_started = Instant::now();
         let mut vm = elixcee::vm::Vm::new();
+        let load_started = Instant::now();
         vm.load_workbook_file(&fixture).unwrap_or_else(|error| {
             eprintln!("iteration {iteration} load failed: {error}");
             std::process::exit(1);
         });
+        let load_ms = load_started.elapsed().as_secs_f64() * 1000.0;
         let sheet = vm.sheet_names().into_iter().next().unwrap_or_else(|| {
             eprintln!("iteration {iteration}: workbook has no sheets");
             std::process::exit(1);
         });
+        let mutate_started = Instant::now();
         vm.write_rect(
             &sheet,
             (1, 1),
@@ -76,21 +84,31 @@ fn main() {
             eprintln!("iteration {iteration} formula mutation failed: {error}");
             std::process::exit(1);
         });
+        let mutate_ms = mutate_started.elapsed().as_secs_f64() * 1000.0;
         let output = std::env::temp_dir().join(format!(
             "elixcee-inprocess-write-{}-{}.xlsx",
             std::process::id(),
             iteration
         ));
-        elixcee::save_workbook(&vm, output.to_str().unwrap()).unwrap_or_else(|error| {
+        let save_started = Instant::now();
+        let save_result = if fast {
+            elixcee::save_workbook_fast(&vm, output.to_str().unwrap())
+        } else {
+            elixcee::save_workbook(&vm, output.to_str().unwrap())
+        };
+        save_result.unwrap_or_else(|error| {
             eprintln!("iteration {iteration} save failed: {error}");
             std::process::exit(1);
         });
+        let save_ms = save_started.elapsed().as_secs_f64() * 1000.0;
         drop(vm);
+        let reload_started = Instant::now();
         let saved =
             elixcee::reader::read_workbook(output.to_str().unwrap()).unwrap_or_else(|error| {
                 eprintln!("iteration {iteration} verification read failed: {error}");
                 std::process::exit(1);
             });
+        let reload_ms = reload_started.elapsed().as_secs_f64() * 1000.0;
         let cells = saved.iter().map(|sheet| sheet.cells.len()).sum::<usize>();
         let verified = saved.first().is_some_and(|sheet| {
             matches!(
@@ -114,9 +132,13 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         let allocator_json = "\"allocator_stats\":null".to_string();
         observations.push(format!(
-            "{{\"iteration\":{},\"cells\":{},\"wall_ms\":{:.3},{} }}",
+            "{{\"iteration\":{},\"cells\":{},\"load_ms\":{:.3},\"mutate_ms\":{:.3},\"save_ms\":{:.3},\"reload_ms\":{:.3},\"wall_ms\":{:.3},{} }}",
             iteration,
             black_box(cells),
+            load_ms,
+            mutate_ms,
+            save_ms,
+            reload_ms,
             iteration_started.elapsed().as_secs_f64() * 1000.0,
             allocator_json
         ));
@@ -130,9 +152,10 @@ fn main() {
     #[cfg(not(target_os = "macos"))]
     let baseline_json = "\"allocator_stats_supported\":false".to_string();
     println!(
-        "{{\"fixture\":{},\"iterations\":{},\"wall_ms\":{:.3},{},\"observations\":[{}]}}",
+        "{{\"fixture\":{},\"iterations\":{},\"fast\":{},\"wall_ms\":{:.3},{},\"observations\":[{}]}}",
         json_string(&fixture),
         iterations,
+        fast,
         started.elapsed().as_secs_f64() * 1000.0,
         baseline_json,
         observations.join(",")
@@ -140,6 +163,8 @@ fn main() {
 }
 
 fn usage(message: &str) -> ! {
-    eprintln!("{message}\nusage: measure_reader_write_inprocess <fixture.xlsx> <iterations>");
+    eprintln!(
+        "{message}\nusage: measure_reader_write_inprocess <fixture.xlsx> <iterations> [--fast]"
+    );
     std::process::exit(2);
 }

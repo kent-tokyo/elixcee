@@ -2,7 +2,13 @@
 set -euo pipefail
 
 manifest="Cargo.toml"
+if ! rg -Fq '"compat/benchmarks/"' "$manifest"; then
+  echo "measurement boundary: benchmark dependencies must be excluded from package" >&2
+  exit 1
+fi
 for path in \
+  examples/bench_workbook.rs \
+  src/bin/measure_formula_dirty.rs \
   src/bin/measure_reader_inprocess.rs \
   src/bin/measure_reader_vm_load.rs \
   src/bin/measure_reader_write_inprocess.rs; do

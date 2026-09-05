@@ -1,11 +1,9 @@
 # Resource limits
 
-This file records the empirical basis for elixcee's own resource limits — each one added
-only after measuring a real, confirmed cost on the real oracle (or, for `src/reader.rs`,
-a crafted malicious input), never speculatively. See
-[`docs/xlsx-security-model.md`](xlsx-security-model.md) for the full limits inventory and
-threat model context; this file is where the *sizing* decision for each limit is worked
-through and kept up to date as new measurements arrive.
+This file lists enforced resource ceilings and their dated calibration evidence.
+Some thresholds are conservative safeguards, not fully calibrated capacity guarantees.
+See the [security model](xlsx-security-model.md) for threats and
+[measurements](measurements/README.md) for platform-specific evidence.
 
 Path-based workbook input is restricted to `.xlsx`, `.xlsm`, and `.ods` (case-insensitive)
 before opening the file. Unsupported or missing extensions return a deterministic error;
@@ -33,18 +31,17 @@ to exactly the target cell count, measured in a fresh subprocess per case
 | 1,000,000 | `sheet_to_formulae` | 365 ms | 122 MB | 385 ms | 91 MB |
 | 1,000,000 | `sheet_to_csv` | 385 ms | 126 MB | 404 ms | 97 MB |
 | 1,000,000 | `sheet_to_txt` | 382 ms | 130 MB | 457 ms | 147 MB |
-| 5,000,000 | `sheet_to_formulae` | 2,176 ms | 248 MB | not measured (blocked by the guard — see below) | |
+| 5,000,000 | `sheet_to_formulae` | 2,176 ms | 248 MB | not measured (historical record; see note below) | |
 | 5,000,000 | `sheet_to_csv` | 2,391 ms | 250 MB | not measured | |
 | 5,000,000 | `sheet_to_txt` | 2,168 ms | 260 MB | not measured | |
 | 10,000,000 | `sheet_to_formulae` | 4,897 ms | 229 MB | not measured | |
 | 10,000,000 | `sheet_to_csv` | 5,950 ms | 329 MB | not measured | |
 | 10,000,000 | `sheet_to_txt` | 5,277 ms | 346 MB | not measured | |
 
-elixcee wasn't measured at 5M/10M directly (the guard itself blocks those calls through
-the public API — measuring would require bypassing it). At 100K/1M, elixcee's wall time
-and RSS are in the same order of magnitude as the oracle's (same O(rows × cols) walk
-shape, same language), which is the basis for treating the oracle's 5M/10M numbers as a
-reliable proxy for what elixcee's own cost would be at those sizes if unguarded.
+The historical probe did not measure elixcee at 5M/10M. Its original explanation
+that the guard blocks both is incorrect for the current strict `>` comparison:
+exactly 5,000,000 cells passes this guard; 10,000,000 does not. Oracle timings are
+not measured elixcee timings and must not be substituted for them.
 
 ### Decision: keep `MAX_RANGE_CELLS = 5,000,000`
 
@@ -52,10 +49,12 @@ At the threshold itself, the cost is ~2.2-2.4s and ~250MB RSS — noticeably slo
 single synchronous call but not a severe hang, and the point beyond which cost keeps
 climbing linearly with no natural ceiling (10M already reaches 5-6s / up to ~345MB, and
 the original full-grid probe — `A1:XFD1048576`, ~17.18 billion cells — did not return
-within 25s at all). 5,000,000 cells is also far beyond what any realistic populated
-worksheet needs for these in-memory JS APIs — the number is chosen to reject
-pathologically large ranges specifically, not to constrain normal use. No adjustment from
-the original value.
+within 25s at all). This ceiling also constrains legitimate large workloads. It is a safety/performance
+tradeoff, not a claim about the maximum useful worksheet size. The value is unchanged.
+
+The XML element ceiling can be reached before the model's cell ceiling. The
+[1m-cell benchmark](benchmarks/workbook-large-speedup-2026-09-06.md) uses four sheets;
+it does not establish support for one million cells on a single sheet.
 
 ## `src/reader.rs`: ZIP archive limits
 
@@ -77,7 +76,7 @@ After the ZIP checks, every XML part is subject to these document-level limits:
 | Attributes per document | 2,000,000 | `XML_MAX_ATTRIBUTES` |
 | Attribute value length | 16 MiB | `XML_MAX_ATTRIBUTE_VALUE_BYTES` |
 | Text node length | 64 MiB | `XML_MAX_TEXT_NODE_BYTES` |
-| XML control characters | C0 controls rejected except TAB/LF/CR | `validate_xml_budget` |
+| XML control characters | Parser rejects control characters except TAB/LF/CR | `validate_xml_budget` |
 | Nesting depth | 1,024 | `XML_MAX_DEPTH` |
 
 The materialized workbook model also has these limits:
@@ -124,11 +123,12 @@ VBA parsing applies these input limits before constructing a program AST:
 | VBA identifier | 1,024 characters | `MAX_VBA_IDENTIFIER_CHARS` |
 | VBA tokens | 1,000,000 | `MAX_VBA_TOKENS` |
 
-These are build-time safeguards, not claims that arbitrary hostile files are safe. The
-limits are checked from ZIP metadata before part parsing; path traversal is rejected at
+These are runtime-enforced safeguards with compiled defaults, not a claim that
+arbitrary hostile files are safe. ZIP metadata limits are checked before part parsing;
+XML/model/formula/VBA limits are checked in their respective processing stages; path traversal is rejected at
 the same boundary, and DTD/ENTITY declarations are rejected. The reader also exposes a
 total-work budget, deadline, and cooperative cancellation; native CLI cancellation can
-be requested by SIGINT or a cancel file. Dated macOS large-input, cancellation, and
+be requested by SIGINT, with a cancel-file option on `snapshot`. Dated macOS large-input, cancellation, and
 resource-reclamation measurements are stored in `docs/measurements/`. The thresholds
 remain conservative because Linux/Windows and independent-oracle calibration is not yet
 complete.

@@ -1,16 +1,13 @@
 # Compatibility-known defects
 
-A running log of oracle (`xlsx@0.18.5`) behaviors that look like bugs but are
-deliberately reproduced anyway, because compatibility with the real, currently-shipping
-package takes priority over "fixing" something on its behalf. Each entry is a compat
-decision on record, not something to silently normalize or reject later without updating
-this file and its differential test coverage.
+A record of compatibility decisions against the pinned `xlsx@0.18.5` oracle,
+not necessarily the latest upstream release. Harmless quirks may be reproduced;
+security-related differences are explicitly classified and must not be silently changed.
 
 Contrast with [`docs/xlsx-security-model.md`](xlsx-security-model.md)'s intentional
-*divergences* — those are cases where elixcee deliberately does NOT match the oracle
-(because matching would mean replicating a DoS/injection vector). The entries below are
-the opposite: elixcee DOES match the oracle, even though the oracle's behavior is itself
-questionable, because there's no security reason not to.
+*divergences* — cases where elixcee deliberately does NOT match the oracle.
+Most entries below preserve harmless quirks; the final raw-HTML entry instead
+documents a safe default with an explicit trusted-markup opt-in.
 
 ---
 
@@ -33,11 +30,9 @@ inaccurate) error message text, since real-world code may already depend on eith
 `compat/differential/xlsx-utils.test.mjs`'s `book_append_sheet` scenarios for the
 differential coverage (`"Sheet:1"` is one of the tested special-character names).
 
-**Applies to future write-path work too**: when `packages/xlsx` eventually implements
-XLSX writing, do not add validation or normalization for colon-containing sheet names
-beyond what the oracle itself does — differential-test whatever the oracle actually
-writes to the ZIP for such a name, rather than assuming Excel's own (stricter, and
-UI-context-dependent) rules apply.
+This utility compatibility decision does not establish that Excel accepts the resulting
+file. The JS writer now exists; its behavior must be tested separately from both this
+utility and the Rust reader's stricter worksheet-name validation.
 
 ---
 
@@ -145,10 +140,8 @@ that feature for callers that have independently established the markup is trust
 `sheet_to_html` also rejects hyperlink targets with leading/trailing whitespace, ASCII control
 characters, or backslashes to avoid browser URL-normalization ambiguity.
 
-`packages/xlsx` has no file reader yet, so `.h` can only reach `sheet_to_html` via a
-caller explicitly setting it on a cell object — the caller is responsible for only putting
-known-safe HTML there, exactly as a real SheetJS consumer already must be today (this is
-not a gap introduced by this package; it is the oracle's own documented contract for this
-field). The default path is the safe path for attacker-controlled `.h` content. See
+`packages/xlsx` now includes a file reader. Regardless of how a cell object was
+obtained, callers must independently trust its markup before enabling `rawHtml`.
+The default escaped path should be used for attacker-controlled `.h` content. See
 `compat/differential/xlsx-utils.test.mjs`'s
 `sheet_to_html` fixtures for the differential coverage of this exact behavior.

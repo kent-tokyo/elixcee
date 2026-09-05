@@ -6,7 +6,8 @@ use std::collections::HashSet;
 
 use crate::diagnostics::{SourceLocation, json_string, locate};
 use crate::parser::{
-    self, CaseMatch, Expr, Program, SourceSpan, SpannedStmt, Stmt, WithMember, WithTarget,
+    self, CaseMatch, Expr, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, WithMember,
+    WithTarget,
 };
 use crate::vm;
 
@@ -52,7 +53,7 @@ fn run_check_impl(
     macro_name: Option<&str>,
     other_module_names: &HashSet<String>,
 ) -> Vec<Diagnostic> {
-    let prog = match parser::parse_with_span(source) {
+    let mut prog = match parser::parse_with_span(source) {
         Ok(prog) => prog,
         Err(e) => {
             let location = locate(source, file, e.span);
@@ -65,6 +66,13 @@ fn run_check_impl(
             }];
         }
     };
+    if std::path::Path::new(file)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cls"))
+    {
+        prog.is_class_module = true;
+    }
 
     let mut diags = Vec::new();
 
@@ -73,7 +81,8 @@ fn run_check_impl(
         // identifier at parse time, so `SubDef.name` is always lowercase —
         // comparing against `name.to_lowercase()` reproduces run_sub's
         // case-insensitive match precisely (not just approximately).
-        let found = prog.subs.iter().any(|s| s.name == name.to_lowercase());
+        let found =
+            !prog.is_class_module && prog.subs.iter().any(|s| s.name == name.to_lowercase());
         if !found {
             diags.push(Diagnostic {
                 severity: "error",
@@ -97,7 +106,7 @@ fn run_check_impl(
     }
 
     for sub in &prog.subs {
-        let local_names = local_scope_names(&sub.name, &sub.params, &sub.body);
+        let local_names = class_scope_names(&prog, &sub.name, &sub.params, &sub.body);
         walk_body(
             &sub.body,
             &prog,
@@ -109,9 +118,22 @@ fn run_check_impl(
         );
     }
     for func in &prog.funcs {
-        let local_names = local_scope_names(&func.name, &func.params, &func.body);
+        let local_names = class_scope_names(&prog, &func.name, &func.params, &func.body);
         walk_body(
             &func.body,
+            &prog,
+            &local_names,
+            other_module_names,
+            source,
+            file,
+            &mut diags,
+        );
+    }
+    for property in &prog.properties {
+        let local_names =
+            class_scope_names(&prog, &property.name, &property.params, &property.body);
+        walk_body(
+            &property.body,
             &prog,
             &local_names,
             other_module_names,
@@ -138,7 +160,9 @@ fn unsupported_diagnostic_kind(reason: &str) -> (&'static str, &'static str, &'s
         "wscript",
         "filesystemobject",
         "open ",
+        "'open'",
         "kill ",
+        "'kill'",
     ]
     .iter()
     .any(|needle| lower.contains(needle));
@@ -159,6 +183,20 @@ fn local_scope_names(own_name: &str, params: &[String], body: &[SpannedStmt]) ->
     let mut names: HashSet<String> = params.iter().cloned().collect();
     names.insert(own_name.to_string());
     collect_declared_names(body, &mut names);
+    names
+}
+
+fn class_scope_names(
+    prog: &Program,
+    own_name: &str,
+    params: &[String],
+    body: &[SpannedStmt],
+) -> HashSet<String> {
+    let mut names = local_scope_names(own_name, params, body);
+    if prog.is_class_module {
+        names.extend(prog.class_fields.iter().map(|field| field.name.clone()));
+        names.insert("me".to_string());
+    }
     names
 }
 
@@ -190,6 +228,17 @@ fn is_resolvable(
         || prog.subs.iter().any(|s| s.name == name)
         || prog.funcs.iter().any(|f| f.name == name)
         || other_module_names.contains(name)
+        // Parser-only lowerings for built-in Worksheet/Workbook members.
+        // They are evaluated directly by `Vm::eval_expr`, not by the VBA
+        // builtin registry probed below.
+        || matches!(
+            name,
+            "__worksheet_name"
+                | "__worksheet_index"
+                | "__worksheet_visible"
+                | "__worksheets_count"
+                | "__workbook_name"
+        )
         || vm::is_known_builtin_function(name)
 }
 
@@ -210,6 +259,7 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::RangeWrite { .. } => {}
             Stmt::RangeCopy { .. } => {}
             Stmt::RangeObjectCopy { .. } => {}
+            Stmt::CollectionAdd { .. } | Stmt::CollectionRemove { .. } => {}
             Stmt::Set { var, .. } => {
                 names.insert(var.clone());
             }
@@ -227,6 +277,7 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::RangeName { .. } => {}
             Stmt::SheetCellWrite { .. } => {}
             Stmt::SheetRangeWrite { .. } => {}
+            Stmt::SheetPropertySet { .. } | Stmt::SheetActivate { .. } => {}
             Stmt::WithSheet { body, .. } => collect_declared_names(body, names),
             Stmt::SheetsAdd => {}
             Stmt::SheetsDelete { .. } => {}
@@ -262,6 +313,12 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::GoTo(_) => {}
             Stmt::Resume { .. } => {}
             Stmt::CallSub { .. } => {}
+            Stmt::ObjectMethodCall { .. } => {}
+            Stmt::SetObjectMember { .. } => {}
+            Stmt::ObjectPropertyLet { .. } => {}
+            Stmt::SetObjectArray { name, .. } => {
+                names.insert(name.clone());
+            }
             Stmt::Dim => {}
             Stmt::DimBare { var } => {
                 names.insert(var.clone());
@@ -294,13 +351,18 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             Stmt::DimRecord { var, .. } => {
                 names.insert(var.clone());
             }
+            Stmt::DimObjectNew { var, .. } => {
+                names.insert(var.clone());
+            }
             Stmt::DimArrayRecord { name, .. } => {
                 names.insert(name.clone());
             }
             Stmt::DimMulti(decls) => {
                 for d in decls {
                     match d {
-                        Stmt::DimRecord { var, .. } | Stmt::DimBare { var } => {
+                        Stmt::DimRecord { var, .. }
+                        | Stmt::DimObjectNew { var, .. }
+                        | Stmt::DimBare { var } => {
                             names.insert(var.clone());
                         }
                         Stmt::DimArray { name, .. } | Stmt::DimArrayRecord { name, .. } => {
@@ -363,6 +425,8 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[SpannedStmt]> {
         | Stmt::RangeWrite { .. }
         | Stmt::RangeCopy { .. }
         | Stmt::RangeObjectCopy { .. }
+        | Stmt::CollectionAdd { .. }
+        | Stmt::CollectionRemove { .. }
         | Stmt::Set { .. }
         | Stmt::RangePaste { .. }
         | Stmt::SheetRangePaste { .. }
@@ -378,6 +442,8 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[SpannedStmt]> {
         | Stmt::RangeName { .. }
         | Stmt::SheetCellWrite { .. }
         | Stmt::SheetRangeWrite { .. }
+        | Stmt::SheetPropertySet { .. }
+        | Stmt::SheetActivate { .. }
         | Stmt::SheetsAdd
         | Stmt::SheetsDelete { .. }
         | Stmt::ExitFor
@@ -390,6 +456,10 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[SpannedStmt]> {
         | Stmt::Label(_)
         | Stmt::Resume { .. }
         | Stmt::CallSub { .. }
+        | Stmt::ObjectMethodCall { .. }
+        | Stmt::SetObjectMember { .. }
+        | Stmt::ObjectPropertyLet { .. }
+        | Stmt::SetObjectArray { .. }
         | Stmt::Dim
         | Stmt::DimBare { .. }
         | Stmt::DimArray { .. }
@@ -400,6 +470,7 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[SpannedStmt]> {
         | Stmt::MsgBox { .. }
         | Stmt::RecordSet { .. }
         | Stmt::DimRecord { .. }
+        | Stmt::DimObjectNew { .. }
         | Stmt::DimArrayRecord { .. }
         | Stmt::DimMulti(_)
         | Stmt::RecordSetNested { .. }
@@ -478,6 +549,12 @@ fn collect_func_calls<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
                 collect_func_calls(i, out);
             }
         }
+        Expr::CollectionItem { index, .. } => collect_func_calls(index, out),
+        Expr::ObjectMethodCall { args, .. } => {
+            for arg in args {
+                collect_func_calls(arg, out);
+            }
+        }
         _ => {}
     }
 }
@@ -540,7 +617,7 @@ pub fn compile_check_errors(
     other_module_names: &HashSet<String>,
 ) -> Option<(String, SourceSpan)> {
     for sub in &prog.subs {
-        let local_names = local_scope_names(&sub.name, &sub.params, &sub.body);
+        let local_names = class_scope_names(prog, &sub.name, &sub.params, &sub.body);
         let mut labels = HashSet::new();
         collect_labels(&sub.body, &mut labels);
         if let Some(v) = check_body_for_compile_errors(
@@ -554,11 +631,25 @@ pub fn compile_check_errors(
         }
     }
     for func in &prog.funcs {
-        let local_names = local_scope_names(&func.name, &func.params, &func.body);
+        let local_names = class_scope_names(prog, &func.name, &func.params, &func.body);
         let mut labels = HashSet::new();
         collect_labels(&func.body, &mut labels);
         if let Some(v) = check_body_for_compile_errors(
             &func.body,
+            prog,
+            &local_names,
+            other_module_names,
+            &labels,
+        ) {
+            return Some(v);
+        }
+    }
+    for property in &prog.properties {
+        let local_names = class_scope_names(prog, &property.name, &property.params, &property.body);
+        let mut labels = HashSet::new();
+        collect_labels(&property.body, &mut labels);
+        if let Some(v) = check_body_for_compile_errors(
+            &property.body,
             prog,
             &local_names,
             other_module_names,
@@ -680,7 +771,7 @@ fn collect_extra_compile_diagnostics(
     diags: &mut Vec<Diagnostic>,
 ) {
     for sub in &prog.subs {
-        let local_names = local_scope_names(&sub.name, &sub.params, &sub.body);
+        let local_names = class_scope_names(prog, &sub.name, &sub.params, &sub.body);
         let mut labels = HashSet::new();
         collect_labels(&sub.body, &mut labels);
         collect_extra_compile_diagnostics_body(
@@ -694,11 +785,25 @@ fn collect_extra_compile_diagnostics(
         );
     }
     for func in &prog.funcs {
-        let local_names = local_scope_names(&func.name, &func.params, &func.body);
+        let local_names = class_scope_names(prog, &func.name, &func.params, &func.body);
         let mut labels = HashSet::new();
         collect_labels(&func.body, &mut labels);
         collect_extra_compile_diagnostics_body(
             &func.body,
+            prog,
+            &local_names,
+            &labels,
+            source,
+            file,
+            diags,
+        );
+    }
+    for property in &prog.properties {
+        let local_names = class_scope_names(prog, &property.name, &property.params, &property.body);
+        let mut labels = HashSet::new();
+        collect_labels(&property.body, &mut labels);
+        collect_extra_compile_diagnostics_body(
+            &property.body,
             prog,
             &local_names,
             &labels,
@@ -954,10 +1059,38 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         Stmt::RangeWrite { value, .. } => out.push(value),
         Stmt::RangeCopy { .. } => {}
         Stmt::RangeObjectCopy { .. } => {}
-        // `Set`'s RHS is an `ObjectExpr`, a separate AST from `Expr` — its
-        // one nested `Expr` (an `Areas(n)` index) isn't walked for
-        // undefined-function detection; out of scope for this pass.
-        Stmt::Set { .. } => {}
+        Stmt::CollectionAdd {
+            item,
+            key,
+            before,
+            after,
+            ..
+        } => {
+            out.push(item);
+            if let Some(e) = key {
+                out.push(e);
+            }
+            if let Some(e) = before {
+                out.push(e);
+            }
+            if let Some(e) = after {
+                out.push(e);
+            }
+        }
+        Stmt::CollectionRemove { index, .. } => out.push(index),
+        Stmt::Set { value, .. } => collect_object_exprs(value, out),
+        Stmt::SetObjectMember { args, value, .. } => {
+            out.extend(args);
+            collect_object_exprs(value, out);
+        }
+        Stmt::ObjectPropertyLet { args, value, .. } => {
+            out.extend(args);
+            out.push(value);
+        }
+        Stmt::SetObjectArray { indices, value, .. } => {
+            out.extend(indices);
+            collect_object_exprs(value, out);
+        }
         Stmt::RangePaste { transpose, .. } => {
             if let Some(e) = transpose {
                 out.push(e);
@@ -1012,6 +1145,11 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             out.push(sheet);
             out.push(value);
         }
+        Stmt::SheetPropertySet { sheet, value, .. } => {
+            out.push(sheet);
+            out.push(value);
+        }
+        Stmt::SheetActivate { sheet } => out.push(sheet),
         Stmt::WithSheet { .. } => {}
         Stmt::SheetsAdd => {}
         Stmt::SheetsDelete { sheet } => out.push(sheet),
@@ -1062,6 +1200,11 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
                 out.push(a);
             }
         }
+        Stmt::ObjectMethodCall { args, .. } => {
+            for arg in args {
+                out.push(arg);
+            }
+        }
         Stmt::Dim => {}
         Stmt::DimBare { .. } => {}
         Stmt::DimArray { sizes, .. } => {
@@ -1093,6 +1236,8 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             if let WithTarget::Cells(row, col) = target {
                 out.push(row);
                 out.push(col);
+            } else if let WithTarget::Object(object) = target {
+                collect_object_exprs(object, out);
             }
         }
         Stmt::WithDot { member, value } => {
@@ -1105,9 +1250,13 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         Stmt::MsgBox { message } => out.push(message),
         Stmt::RecordSet { value, .. } => out.push(value),
         Stmt::DimRecord { .. } => {}
+        Stmt::DimObjectNew { value, .. } => collect_object_exprs(value, out),
         Stmt::DimArrayRecord { sizes, .. } => {
             for s in sizes {
-                out.push(s);
+                if let Some(lower) = &s.lower {
+                    out.push(lower);
+                }
+                out.push(&s.upper);
             }
         }
         Stmt::DimMulti(decls) => {
@@ -1143,6 +1292,40 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             }
             if let Some(e) = help_context {
                 out.push(e);
+            }
+        }
+    }
+}
+
+fn collect_object_exprs<'a>(object: &'a ObjectExpr, out: &mut Vec<&'a Expr>) {
+    match object {
+        ObjectExpr::NewCollection
+        | ObjectExpr::NewDictionary
+        | ObjectExpr::NewClass(_)
+        | ObjectExpr::RangeLit(_)
+        | ObjectExpr::Var(_) => {}
+        ObjectExpr::Member { .. } => {}
+        ObjectExpr::MethodCall { args, .. } => out.extend(args),
+        ObjectExpr::CollectionItem { index, .. } => out.push(index),
+        ObjectExpr::ObjectArrayItem { indices, .. } => out.extend(indices),
+        ObjectExpr::Area(base, index) => {
+            collect_object_exprs(base, out);
+            out.push(index);
+        }
+        ObjectExpr::Union(parts) => {
+            for part in parts {
+                collect_object_exprs(part, out);
+            }
+        }
+        ObjectExpr::SpecialCells {
+            base,
+            cell_type,
+            value,
+        } => {
+            collect_object_exprs(base, out);
+            out.push(cell_type);
+            if let Some(value) = value {
+                out.push(value);
             }
         }
     }
@@ -1368,6 +1551,30 @@ fn walk_expr(
             for i in indices {
                 walk_expr(
                     i,
+                    prog,
+                    local_names,
+                    other_module_names,
+                    stmt_span,
+                    source,
+                    file,
+                    diags,
+                );
+            }
+        }
+        Expr::CollectionItem { index, .. } => walk_expr(
+            index,
+            prog,
+            local_names,
+            other_module_names,
+            stmt_span,
+            source,
+            file,
+            diags,
+        ),
+        Expr::ObjectMethodCall { args, .. } => {
+            for arg in args {
+                walk_expr(
+                    arg,
                     prog,
                     local_names,
                     other_module_names,
@@ -1614,6 +1821,26 @@ mod tests {
     }
 
     #[test]
+    fn undefined_call_inside_a_collection_object_item_index_is_reported() {
+        let diags = run_check(
+            "Sub Main()\n    Set items = New Collection\n    Set x = items.Item(Bogus(1))\nEnd Sub\n",
+            "f.bas",
+            Some("Main"),
+        );
+        assert_eq!(codes(&diags), vec!["E1002"]);
+    }
+
+    #[test]
+    fn undefined_call_inside_a_collection_direct_with_target_is_reported() {
+        let diags = run_check(
+            "Sub Main()\n    Set items = New Collection\n    With items.Item(Bogus(1))\n    End With\nEnd Sub\n",
+            "f.bas",
+            Some("Main"),
+        );
+        assert_eq!(codes(&diags), vec!["E1002"]);
+    }
+
+    #[test]
     fn undefined_call_inside_select_case_condition_is_reported() {
         let diags = run_check(
             "Sub Main()\n\
@@ -1775,6 +2002,25 @@ mod tests {
                 .message
                 .contains("CreateObject".to_lowercase().as_str())
         );
+    }
+
+    #[test]
+    fn common_external_effect_forms_are_all_blocked() {
+        for (construct, source) in [
+            ("GetObject", "Set b = GetObject(\"book.xlsx\")"),
+            ("Shell", "Shell \"echo unsafe\""),
+            ("Open", "Open \"output.txt\" For Output As #1"),
+            ("Kill", "Kill \"output.txt\""),
+        ] {
+            let diags = run_check(
+                &format!("Sub Main()\n    {source}\nEnd Sub\n"),
+                "f.bas",
+                Some("Main"),
+            );
+            assert_eq!(codes(&diags), vec!["E1010"], "{construct}");
+            assert_eq!(diags[0].severity, "error", "{construct}");
+            assert_eq!(diags[0].kind, "blocked_external_effect", "{construct}");
+        }
     }
 
     #[test]
