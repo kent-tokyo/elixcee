@@ -4,7 +4,12 @@
 
 ## [Unreleased]
 
-次の開発分はここに記録します。
+
+## [1.0.3] - 2026-09-06
+
+- G5の保存メモリ削減を段階実装しました。画像・VBAなどの大きなpassthrough payload、未編集table、条件付きworksheet rels、未編集stylesをsource ZIPから遅延copyし、worksheet/workbook XMLとpassthrough XMLを出力単位で解放します。編集対象partは従来どおり保持・patchします。
+- Python追記Writerに行単位・総work量・列数の上限を実装し、abort時のtemp cleanup、close-before-rename、sync経路を共通化しました。`create_stream_bounded`、RSS/temp disk測定、XML escape／巨大文字列校正、3 OS手動CI matrix、測定JSON validatorを追加しました。
+- G5のローカル検証としてRust全workspace／全target 1,709件、XLSX round-trip 52件、strict clippy、rustfmt、actionlintを確認しました。Linux/Windows実測、Excel再open、constant-memory保証、workbook rels等の完全遅延化は未完了です。
 
 ## [1.0.2] - 2026-09-06
 
@@ -20,6 +25,13 @@
 - 公開されている低レベルcell map経由で数式本文が変更された場合も、warmな依存計画を無効化して再評価するよう修正しました。
 - worksheet XMLを一時的な巨大`String`へ構築せず、保存先の`ZipWriter`へ直接ストリーミングするsink経路へ変更しました。passthrough entry全量保持の削減は引き続き未完了です。
 - passthrough entry はメタデータ解析後に所有権移動するようにし、保存用payloadの不要な二重cloneを除去しました。raw ZIP全体の遅延展開は引き続き未完了です。
+- 通常Writerのshared-string本文をindexと別の`Vec<String>`へ二重保持せず、所有indexから直接出力するようにしました。style／全補助索引とraw ZIP全体の遅延展開は引き続き未完了です。
+- 保存時の画像・VBAなど非XML passthrough payloadをraw mapへ常駐させず、元ZIPから一件ずつ再読込して転送するようにしました。XML／relsの遅延展開と全体のconstant-memory化は引き続き未完了です。
+- 遅延passthrough partは一時`Vec<u8>`を作らず、元ZIPのentryから出力ZIPへ直接copyするようにしました。必要なXML／relsとVM全セル保持は引き続きメモリ上に残ります。
+- 保存時のwriter-owned styles/workbook/[Content_Types] partはraw mapから所有権移動し、解析用値との不要なcloneを削減しました。cell/row/column style編集のeffective mapは対象sheetだけをoverlay cloneします。
+- worksheet source XMLも削除判定後に所有権移動し、raw mapとの重複cloneを削減しました。
+- font/fill/borderを変更しないstyle編集では、巨大な共有style tableを展開せずcellXfsだけを再構成するようにしました。
+- 遅延passthroughの直接copy前に元ZIPを再検証し、entryの実コピー量が期待サイズと一致することを確認するようにしました。
 - dirty/full-rescan の代表値一致を検査しながら p50/p95 を出力する、formula dirty propagation のローカル校正バイナリを追加しました。
 - formula dirty propagation の校正を100式／1,000式のcontrolled matrixへ拡張し、各ケースのp50/p95とfull-rescan一致を記録しました。
 - formula dirty propagation の測定バイナリに、Unixのpeak RSS・user/system CPUカウンタ出力を追加しました。

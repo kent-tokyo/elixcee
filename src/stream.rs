@@ -4,9 +4,8 @@
 //! module provides a separate pipeline API whose worker owns the ZIP entry and sends
 //! one decoded row at a time, so callers do not need to materialize a workbook.
 
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::sync::{
     Mutex,
     mpsc::{self, Receiver, RecvTimeoutError},
@@ -14,7 +13,7 @@ use std::sync::{
 use std::time::Duration;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyList};
+use pyo3::types::{PyAny, PyList, PyString};
 
 use crate::reader::{self, SheetCell};
 use crate::{Variant, variant_to_py};
@@ -23,13 +22,13 @@ const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 /// Refuse an unterminated or hostile worksheet row before it can grow without bound.
 /// This keeps the forward-only API bounded even when given malformed XML.
 const MAX_STREAM_ROW_BYTES: usize = 16 * 1024 * 1024;
-/// Bound the pending rows retained by the append-only writer before `close()`
-/// materializes them into the normal workbook writer.
+/// Cumulative accepted-value budget for the append-only writer. Rows are written
+/// directly to ZIP; this is an admission limit, not a measurement of retained RSS.
 const MAX_STREAM_WRITER_BYTES: usize = 64 * 1024 * 1024;
 type StreamRowResult = Result<(u32, Vec<Variant>), String>;
 
 fn estimated_variant_bytes(value: &Variant) -> usize {
-    match value {
+    let payload: usize = match value {
         Variant::Str(text) => text.len(),
         Variant::Array(values) => values.iter().fold(0, |total, value| {
             total.saturating_add(estimated_variant_bytes(value))
@@ -42,8 +41,9 @@ fn estimated_variant_bytes(value: &Variant) -> usize {
                 .saturating_add(key.len())
                 .saturating_add(estimated_variant_bytes(value))
         }),
-        _ => std::mem::size_of_val(value),
-    }
+        _ => 0,
+    };
+    std::mem::size_of_val(value).saturating_add(payload)
 }
 
 fn append_row_token(
@@ -424,14 +424,23 @@ impl PyStreamReader {
 #[pyclass(name = "StreamWriter")]
 pub struct PyStreamWriter {
     path: String,
-    temporary: PathBuf,
-    zip: Option<zip::write::ZipWriter<File>>,
+    temporary: crate::TemporaryOutput,
+    zip: Option<StreamZip>,
     row_count: usize,
     pending_bytes: usize,
     max_pending_bytes: usize,
+    max_row_bytes: Option<usize>,
     max_rows: Option<usize>,
     max_columns: Option<usize>,
     active: bool,
+}
+
+type StreamZip = zip::write::ZipWriter<BufWriter<File>>;
+
+impl Drop for PyStreamWriter {
+    fn drop(&mut self) {
+        self.abort();
+    }
 }
 
 fn column_name(mut column: usize) -> String {
@@ -455,7 +464,7 @@ fn stream_cell_xml(value: &Variant, row: usize, col: usize) -> Option<String> {
             if *value { 1 } else { 0 }
         ),
         Variant::Str(value) => format!(
-            "<c r=\"{reference}\" t=\"inlineStr\"><is><t>{}</t></is></c>",
+            "<c r=\"{reference}\" t=\"inlineStr\"><is><t xml:space=\"preserve\">{}</t></is></c>",
             crate::xml_escape(value)
         ),
         Variant::Error(value) => format!(
@@ -469,60 +478,42 @@ fn stream_cell_xml(value: &Variant, row: usize, col: usize) -> Option<String> {
     })
 }
 
-fn open_stream_writer_zip(path: &str) -> Result<(PathBuf, zip::write::ZipWriter<File>), String> {
-    let output = std::path::Path::new(path);
-    let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let name = output
-        .file_name()
-        .ok_or_else(|| "output path must name a file".to_string())?
-        .to_string_lossy();
-    for attempt in 0..100u32 {
-        let temporary = parent.join(format!(
-            ".{name}.elixcee-stream-{}-{attempt}",
-            std::process::id()
-        ));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => {
-                let mut zip = zip::write::ZipWriter::new(file);
-                let options = zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Deflated);
-                let parts = [
-                    (
-                        "[Content_Types].xml",
-                        "<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/></Types>",
-                    ),
-                    (
-                        "_rels/.rels",
-                        "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>",
-                    ),
-                    (
-                        "xl/workbook.xml",
-                        "<?xml version=\"1.0\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>",
-                    ),
-                    (
-                        "xl/_rels/workbook.xml.rels",
-                        "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/></Relationships>",
-                    ),
-                ];
-                for (part, content) in parts {
-                    zip.start_file(part, options).map_err(|e| e.to_string())?;
-                    zip.write_all(content.as_bytes())
-                        .map_err(|e| e.to_string())?;
-                }
-                zip.start_file("xl/worksheets/sheet1.xml", options)
-                    .map_err(|e| e.to_string())?;
-                zip.write_all(b"<?xml version=\"1.0\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>").map_err(|e| e.to_string())?;
-                return Ok((temporary, zip));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("cannot create temporary stream output: {error}")),
-        }
+fn open_stream_writer_zip(path: &str) -> Result<(crate::TemporaryOutput, StreamZip), String> {
+    let (temporary, file) = crate::create_atomic_output_temp(path)?;
+    let temporary = crate::TemporaryOutput(temporary);
+    let mut zip = zip::write::ZipWriter::new(BufWriter::with_capacity(STREAM_BUFFER_BYTES, file));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let parts = [
+        (
+            "[Content_Types].xml",
+            "<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/></Types>",
+        ),
+        (
+            "_rels/.rels",
+            "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>",
+        ),
+        (
+            "xl/workbook.xml",
+            "<?xml version=\"1.0\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>",
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        ),
+    ];
+    for (part, content) in parts {
+        zip.start_file(part, options).map_err(|e| e.to_string())?;
+        zip.write_all(content.as_bytes())
+            .map_err(|e| e.to_string())?;
     }
-    Err("cannot allocate a unique temporary stream output path".to_string())
+    zip.start_file("xl/worksheets/sheet1.xml", options)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(
+        b"<?xml version=\"1.0\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>",
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((temporary, zip))
 }
 
 pub(crate) fn stream_writer_from_path(
@@ -548,10 +539,38 @@ pub(crate) fn stream_writer_from_path(
         row_count: 0,
         pending_bytes: 0,
         max_pending_bytes,
+        max_row_bytes: None,
         max_rows,
         max_columns,
         active: true,
     })
+}
+
+pub(crate) fn bounded_writer_from_path(
+    path: &str,
+    max_row_bytes: usize,
+    max_work_bytes: usize,
+    max_rows: usize,
+    max_columns: usize,
+) -> PyResult<PyStreamWriter> {
+    if max_row_bytes == 0 || max_work_bytes == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "max_row_bytes and max_work_bytes must be greater than zero",
+        ));
+    }
+    if !(1..=1_048_576).contains(&max_rows) || !(1..=16_384).contains(&max_columns) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "bounded writer requires 1..1048576 rows and 1..16384 columns",
+        ));
+    }
+    let mut writer = stream_writer_from_path(
+        path,
+        Some(max_work_bytes),
+        Some(max_rows),
+        Some(max_columns),
+    )?;
+    writer.max_row_bytes = Some(max_row_bytes);
+    Ok(writer)
 }
 
 #[pymethods]
@@ -571,45 +590,61 @@ impl PyStreamWriter {
     }
     fn __exit__(
         &mut self,
-        _ty: Option<&Bound<'_, PyAny>>,
+        ty: Option<&Bound<'_, PyAny>>,
         _value: Option<&Bound<'_, PyAny>>,
         _tb: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<bool> {
-        self.close()?;
+        if ty.is_some() {
+            self.abort();
+        } else {
+            self.close()?;
+        }
         Ok(false)
     }
 
-    /// Whether this writer has already materialized its rows and closed.
+    /// Whether this writer has finalized its ZIP and closed.
     #[getter]
     fn closed(&self) -> bool {
         !self.active
     }
 
-    /// Number of rows accepted and retained until `close()`.
+    /// Number of rows successfully appended to the temporary ZIP.
     #[getter]
     fn row_count(&self) -> usize {
         self.row_count
     }
 
-    /// Estimated bytes retained by pending rows.
+    /// Cumulative accepted-value estimate, reset on close; not retained memory.
     #[getter]
     fn pending_bytes(&self) -> usize {
         self.pending_bytes
     }
 
-    /// Maximum estimated pending-row budget for this writer.
+    /// Maximum cumulative accepted-value estimate (including per-cell overhead).
     #[getter]
     fn max_pending_bytes(&self) -> usize {
         self.max_pending_bytes
     }
 
-    /// Maximum number of pending rows accepted by this writer.
+    /// Separate per-row estimate in bounded mode; None in legacy mode.
+    #[getter]
+    fn max_row_bytes(&self) -> Option<usize> {
+        self.max_row_bytes
+    }
+
+    /// Total admitted work, including already-written rows.
+    #[getter]
+    fn max_work_bytes(&self) -> usize {
+        self.max_pending_bytes
+    }
+
+    /// Maximum number of rows accepted by this writer.
     #[getter]
     fn max_rows(&self) -> Option<usize> {
         self.max_rows
     }
 
-    /// Maximum number of columns accepted in each pending row.
+    /// Maximum number of columns accepted in each row.
     #[getter]
     fn max_columns(&self) -> Option<usize> {
         self.max_columns
@@ -621,17 +656,6 @@ impl PyStreamWriter {
                 "stream writer is closed",
             ));
         }
-        let mut row = Vec::new();
-        for item in values.try_iter()? {
-            row.push(crate::py_to_variant(&item?)?);
-        }
-        if row.is_empty() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "row must not be empty",
-            ));
-        }
-        validate_writer_row_columns(row.len(), self.max_columns)
-            .map_err(PyErr::new::<pyo3::exceptions::PyMemoryError, _>)?;
         if self
             .max_rows
             .is_some_and(|max_rows| self.row_count >= max_rows)
@@ -641,29 +665,75 @@ impl PyStreamWriter {
                 "stream writer pending rows exceed the limit of {max_rows} rows"
             )));
         }
-        let row_bytes = row.iter().fold(0usize, |total, value| {
-            total.saturating_add(estimated_variant_bytes(value))
-        });
-        if self.pending_bytes.saturating_add(row_bytes) > self.max_pending_bytes {
-            return Err(PyErr::new::<pyo3::exceptions::PyMemoryError, _>(format!(
+        let budget_error = || {
+            PyErr::new::<pyo3::exceptions::PyMemoryError, _>(format!(
                 "stream writer pending rows exceed the limit of {} bytes",
                 self.max_pending_bytes
-            )));
-        }
-        self.pending_bytes = self.pending_bytes.saturating_add(row_bytes);
-        let row_number = self.row_count + 1;
-        let mut xml = format!("<row r=\"{row_number}\">");
-        for (column, value) in row.iter().enumerate() {
-            if let Some(cell) = stream_cell_xml(value, row_number, column + 1) {
-                xml.push_str(&cell);
+            ))
+        };
+        let mut row = Vec::new();
+        let mut accepted_bytes = self.pending_bytes;
+        for item in values.try_iter()? {
+            let item = item?;
+            // At most one excess item is pulled to discover a too-wide row.
+            // Check before conversion, which may itself allocate a string.
+            validate_writer_row_columns(row.len() + 1, self.max_columns)
+                .map_err(PyErr::new::<pyo3::exceptions::PyMemoryError, _>)?;
+            let minimum_bytes = std::mem::size_of::<Variant>().saturating_add(
+                if let Ok(text) = item.cast::<PyString>() {
+                    text.to_str()?.len()
+                } else {
+                    0
+                },
+            );
+            let row_bytes = accepted_bytes - self.pending_bytes;
+            if self.max_row_bytes.is_some_and(|limit| {
+                row_bytes
+                    .checked_add(minimum_bytes)
+                    .is_none_or(|bytes| bytes > limit)
+            }) {
+                return Err(PyErr::new::<pyo3::exceptions::PyMemoryError, _>(
+                    "stream writer row exceeds max_row_bytes",
+                ));
             }
+            if accepted_bytes
+                .checked_add(minimum_bytes)
+                .is_none_or(|bytes| bytes > self.max_pending_bytes)
+            {
+                return Err(budget_error());
+            }
+            let value = crate::py_to_variant(&item)?;
+            accepted_bytes = accepted_bytes
+                .checked_add(estimated_variant_bytes(&value))
+                .filter(|bytes| *bytes <= self.max_pending_bytes)
+                .ok_or_else(budget_error)?;
+            row.push(value);
         }
-        xml.push_str("</row>");
-        self.zip
-            .as_mut()
-            .expect("active stream writer has a ZIP")
-            .write_all(xml.as_bytes())
-            .map_err(|error| PyErr::new::<pyo3::exceptions::PyIOError, _>(error.to_string()))?;
+        if row.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "row must not be empty",
+            ));
+        }
+        let row_number = self.row_count + 1;
+        // Validate/collect one bounded row before committing any bytes, then emit
+        // one cell at a time instead of allocating a second whole-row XML buffer.
+        let write_result = (|| -> std::io::Result<()> {
+            let zip = self.zip.as_mut().expect("active stream writer has a ZIP");
+            write!(zip, "<row r=\"{row_number}\">")?;
+            for (column, value) in row.iter().enumerate() {
+                if let Some(cell) = stream_cell_xml(value, row_number, column + 1) {
+                    zip.write_all(cell.as_bytes())?;
+                }
+            }
+            zip.write_all(b"</row>")
+        })();
+        if let Err(error) = write_result {
+            self.abort();
+            return Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(
+                error.to_string(),
+            ));
+        }
+        self.pending_bytes = accepted_bytes;
         self.row_count += 1;
         Ok(())
     }
@@ -671,26 +741,38 @@ impl PyStreamWriter {
         if !self.active {
             return Ok(());
         }
-        let mut zip = self.zip.take().expect("active stream writer has a ZIP");
-        zip.write_all(b"</sheetData></worksheet>")
-            .map_err(|error| PyErr::new::<pyo3::exceptions::PyIOError, _>(error.to_string()))?;
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        zip.start_file("xl/styles.xml", options)
-            .map_err(|error| PyErr::new::<pyo3::exceptions::PyIOError, _>(error.to_string()))?;
-        zip.write_all(crate::XLSX_STYLES.as_bytes())
-            .map_err(|error| PyErr::new::<pyo3::exceptions::PyIOError, _>(error.to_string()))?;
-        let mut file = zip
-            .finish()
-            .map_err(|error| PyErr::new::<pyo3::exceptions::PyIOError, _>(error.to_string()))?;
-        file.flush()
-            .and_then(|_| file.sync_all())
-            .map_err(|error| PyErr::new::<pyo3::exceptions::PyIOError, _>(error.to_string()))?;
-        std::fs::rename(&self.temporary, &self.path)
-            .map_err(|error| PyErr::new::<pyo3::exceptions::PyIOError, _>(error.to_string()))?;
-        self.pending_bytes = 0;
         self.active = false;
-        Ok(())
+        let result = (|| -> Result<(), String> {
+            let mut zip = self.zip.take().expect("active stream writer has a ZIP");
+            zip.write_all(b"</sheetData></worksheet>")
+                .map_err(|error| error.to_string())?;
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("xl/styles.xml", options)
+                .map_err(|error| error.to_string())?;
+            zip.write_all(crate::XLSX_STYLES.as_bytes())
+                .map_err(|error| error.to_string())?;
+            let mut file = zip.finish().map_err(|error| error.to_string())?;
+            file.flush()
+                .and_then(|_| file.get_ref().sync_all())
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        })(); // The ZIP/file is closed here, before publication on every OS.
+        let result =
+            result.and_then(|_| crate::publish_atomic_output(&self.path, &self.temporary.0));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&self.temporary.0);
+        }
+        self.pending_bytes = 0;
+        result.map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
+    }
+
+    /// Discard temporary output without publishing; safe after close or failure.
+    fn abort(&mut self) {
+        self.active = false;
+        self.zip = None; // Close before unlink on Windows too.
+        let _ = std::fs::remove_file(&self.temporary.0);
+        self.pending_bytes = 0;
     }
 }
 
@@ -787,7 +869,10 @@ mod tests {
                 elements: vec![Variant::Str("value".to_string())],
             }),
         ]);
-        assert_eq!(estimated_variant_bytes(&value), 3 + 5 + 5);
+        assert_eq!(
+            estimated_variant_bytes(&value),
+            5 * std::mem::size_of::<Variant>() + 3 + 5 + 5
+        );
     }
 
     #[test]

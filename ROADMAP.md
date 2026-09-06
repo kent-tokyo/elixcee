@@ -1,6 +1,6 @@
 # elixcee Roadmap
 
-更新日: 2026-09-06。対象versionは **1.0.2** です。
+更新日: 2026-09-06。対象versionは **1.0.3** です。
 完了項目は記載した実装・測定の範囲に限ります。公開先の状態はリリースごとに別途確認します。
 版ごとの変更は [CHANGELOG](CHANGELOG.md)、実装範囲は
 [FUNCTIONS](FUNCTIONS.md)、保証範囲は [v1契約](docs/v1-support-contract.md) を参照してください。
@@ -19,11 +19,149 @@ JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公�
 
 ## 次の実行順
 
-1. **P0 大規模I/O**: passthrough ZIPの遅延展開とpeak RSSを調べ、同一耐久性・出力同値で比較する。
-2. **P0 再測定**: quiet-hostで小規模／大規模の中央値・p95と、style／数式密度別の結果を確認する。
-3. **P0 数式校正**: dirty/full再走査の一致と、より大きい依存グラフ・RSS・CPUを検証する。
-4. **P1/P2 性能候補**: 下表から、一度に一つの変更を実装して回帰を確認する。
-5. **互換性・配布ゲート**: Excel oracle、3 OS、clean-install、安全性の証拠を揃える。
+1. **G0–G1 土台**: 下記3領域の現状を固定し、Writerの入力受け入れを先に有界化する。
+2. **G2 OOXML保持**: owner XML・relationship・partを一組として往復検証する。保持と編集・再計算は分離する。
+3. **G3–G4 数式**: シート横断の評価基盤を整え、既存関数の意味論校正と不足機能追加を小さな組に分ける。
+4. **G5 メモリ**: 通常保存のpassthrough遅延処理と、追記専用Writerの行数非依存メモリを別々に実装・測定する。
+5. **G6 判定**: quiet-host再測定、Excel oracle、3 OS、配布・安全性ゲート。以下の性能バックログも継続する。
+
+## 互換性・数式・省メモリ強化（G0–G6）
+
+1.0.3公開後の開発計画です。次の変更はUnreleasedに記録します。
+各PhaseはBUILDを小さく実装し、MEASUREが未完なら未検証として残します。
+EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけでの優劣は達成条件にしません。
+
+### G0 — 現状・合格条件の固定（X0 / S0）
+
+- [x] ソース棚卸し: drawing/legacyDrawingの選択的保持はあるが、workbookの`pivotCaches`／`externalReferences`は再出力していない。partの存在だけでは接続を保証できない。
+- [x] 数式はA1/RC・シート修飾参照のparse/rewriteと評価を分離しており、シート修飾参照の評価は現在拒否する。
+- [x] 通常Writerは元ZIP全展開・セルmap・文字列索引を保持。Python追記WriterはZIPへ逐次出力するが、行の収集とXML生成があり、`pending_bytes`は保持RSSではなく累積受け入れ量。
+- [ ] 機械可読matrix: Charts / Pivot / Drawings / External Linksごとにread・preserve・edit・recalculate・Excel再openを別状態にし、fixtureと結ぶ。
+
+### G1 — Writerの受け入れ上限（S1 / X5、最初のBUILD）
+
+- [x] 行数はiterator開始前、列数と累積推定byte数はセル取り込み中に検査。空文字列でもセル本体の費用を計上する。
+- [x] 不正型・iterator例外・予算超過で、拒否行のXML／行数／byteカウンタを更新しない。正常行を追加して再開できる回帰を追加する。
+- [x] インストールしたwheelのPythonテストをCI設定へ追加。上限直前／一致／超過と、保存前の既存出力保護をローカル検証（この変更のGitHub CI実行は未確認）。
+- [ ] MEASURE: 巨大な単一文字列、XML escape拡大、allocator／Python入力側のメモリも含めRSSを校正する。ここだけではconstant-memory達成にしない。
+
+2026-09-06 macOSローカル: [Python回帰10件](tests/python/test_stream_writer_limits.py)は
+公開1.0.3で5件の問題を検出し、修正版wheelでは10/10成功。Rust全workspace／全target
+1,709 tests、全feature strict clippyも成功。これはG1のBUILD検証で、RSS／Excel互換性の測定ではありません。
+
+### G2 — OOXMLの接続を保つ（X2 / X4）
+
+- [ ] G2a: `pivotCaches`／`externalReferences`のowner要素と再採番後r:idの対応を保存。cacheId・外部参照の順序・content types・namespaceも検査する。
+- [ ] G2b: worksheet → Drawing → Chart / image、およびPivotTable → cache definition → recordsの到達性と未編集payloadを検証。missing target・重複ID・共有partの削除もfixture化する。
+- [ ] G2c: sheet rename／行列挿入削除に伴うchart参照・anchor・pivot sourceを更新する。更新できない編集は明示診断／拒否し、古い参照を黙って保存しない。
+- [ ] G2d: Charts / Drawingsの作成・編集API、Pivotのsource/cache更新を一機能ずつ追加。描画再現・Pivot再集計は保持とは別の未完項目として扱う。
+- [ ] External Linksは既定で非取得・非実行。保持するURLを辿らない。削除／拒否policyと外部参照数式の非評価を明示する。
+- [ ] MEASURE: 自作最小packageとExcel由来fixtureで、part／rels／owner／cacheを比較し、実Excelの修復警告と編集後の再利用を確認する。
+
+### G3 — Workbook単位の数式評価（X3）
+
+- [ ] 安定sheet ID付き参照解決、workbook/sheet-local name、構造化参照を段階導入。現在の単一sheet lookupと誤って混在させない。
+- [ ] シート横断dirty graph、循環検出、manual→automatic、削除／rename、cached valueの扱いを統合。既存の総work・深さ・参照budgetを維持する。
+- [ ] 型変換、Empty／Error、1900/1904日付、丸め、IF/IFERRORの遅延評価を独立期待値で校正する。
+- [ ] MEASURE: 複数sheetの鎖／fan-out／循環でfull再走査との一致、p50/p95・CPU・RSSを測定する。
+
+### G4 — 関数・配列互換性の拡張（X3）
+
+- [ ] dispatcherからcanonical関数名とaliasを棚卸しし、FUNCTIONS・引数形・未対応mode・oracle fixtureとの対応を検査する。aliasを水増し計上しない。
+- [ ] 第1組は参照／条件集計／検索、次に日付／統計／金融。既存SUMIFS・XLOOKUP等を再実装せず、未対応modeと意味論差分から埋める。
+- [ ] 動的配列のspill衝突・shape・依存更新を整えてから、既存FILTER／LET／LAMBDA等の配列経路を拡張する。
+- [ ] MEASURE: Excel／EPPlus／Aspose.Cellsはversion・計算設定・license利用条件を固定して比較。実行していない公式対応表と、実測一致率を分ける。
+
+### G5 — 保存メモリの段階削減（X4 / X5）
+
+進行中。G5c/G5dと共通のabort実装は完了。G5a/G5bとRSS測定が残っているため、
+G5全体は未完了であり、constant-memoryを主張しない。
+
+- [x] G5a 部分 BUILD: 画像・VBAと、関係解析対象外のXML payloadをraw mapへ保持せず、元ZIPから一件ずつdestinationへ直接copyする経路へ変更した。未編集table XMLと、新規table追加が無い場合のworksheet `.rels` XMLも遅延copyへ移し、編集対象tableや新規table用relsだけを保持してpatchする。worksheet source XMLは保存ループで1シートずつ所有権移動して処理済みpayloadを解放し、workbook XMLもowned fragment抽出後に元全文を解放する。copy前のZIP再検証とentry期待サイズ一致を確認し、reader回帰テストで1 MiBの画像payloadが索引上空のまま保持されることも固定した。workbook rels等の完全遅延化、元file全体の同一性測定、CRC／3 OS検証は未完了のため、G5a全体は未完了。
+- [x] G5b 部分 BUILD: shared-string本文を`Vec<String>`へ二重保持せず、所有するindexから参照を座標順に並べて直接出力する経路へ変更した。未編集styles XMLはstyle解決後に解放し、元ZIPから直接copyする。passthrough XMLも出力時に一件ずつdrainして処理済みpayloadを解放する。styles/workbook/[Content_Types]/worksheetのwriter-owned cloneも所有権移動し、cell/row/column style編集時は対象sheetだけをoverlay cloneするようにした。font/fill/borderを使わないstyle編集ではcellXfsだけを展開する。その他の補助索引とdisk spoolは未完了のため、G5b全体は未完了。
+- [x] G5c BUILD: 追記専用APIに`create_stream_bounded`を追加し、「1行上限」と「総work量」を分けた。既存`max_pending_bytes`の累積制限は維持し、stub・README・limitsへ移行例を追加した。
+- [x] G5d BUILD: bounded追記Writerは固定worksheet構造・列上限・row buffer・64 KiB codec bufferを使い、inline stringsでunique stringsを蓄積しない。通常VMの全セル保持は対象外。
+- [x] 共通 BUILD: I/O失敗・context例外時のabort、temp削除、close失敗後の状態、Windowsのclose-before-rename、標準syncの経路を実装した。Windows実機検証は未完。
+- [ ] MEASURE: 通常保存と追記を別processで測り、10万→100万行のRSS増分・p95・temp disk・出力同値を記録。通常VMの全セル保持までconstant-memoryと呼ばない。
+
+測定入口: `python3 scripts/measure-stream-writer-memory.py --mode append --rows 100000 250000 1000000`。
+入力形状は`--value-profile plain|escape|giant`で切り替え、XML escape膨張と1 MiB単一文字列を
+行数スケール測定と分離して校正する。
+RSS取得はmacOS/Linuxでは`ru_maxrss`、WindowsではWin32のpeak working setを使うため、
+同じchild-process harnessを3 OSで実行できる。
+`.github/workflows/ci.yml`には、通常CIを重くしない`workflow_dispatch`限定の
+Ubuntu/macOS/Windows測定matrixを追加した。Actions実行と結果の固定は未完了である。
+測定スクリプトの`--output`でJSONを保存し、workflowはOS別artifactとして保管する。
+`check-stream-writer-measurements.py`でschema、p50/p95、全sampleの出力検証を自動検査する。
+validator自身の正常系・schema破損・p95逆転・未検証sampleのself-testもCIで実行する。
+遠隔の直近成功CI（release commit `43cf3d0`）にはこの手動G5 jobがまだ含まれないため、
+既存CI成功をG5の3 OS測定根拠には昇格しない。
+通常保存は`--mode normal`で同じ別process harnessを使う。
+`--repetitions N`を指定すると各caseのp50/p95を集計し、caseディレクトリの
+peak temp disk使用量も記録する（10ms pollingの観測値）。
+出力は別processのpeak RSS、wall time、出力byte、行数を保存し、同一入力を再読込して
+値一致を確認してから記録する。未実行・wheel未確認の結果はG5完了根拠にしない。
+
+部分測定（2026-09-06、macOS arm64、CPython 3.13、修正版wheel）:
+
+| 追記行数 | peak RSS | wall time | 出力 | 検証 |
+|---:|---:|---:|---:|---|
+| 100,000 | 18.33 MiB | 325 ms | 1.43 MiB | ZIP／最終行 OK |
+| 250,000 | 18.45 MiB | 752 ms | 3.68 MiB | ZIP／最終行 OK |
+| 1,000,000 | 18.42 MiB | 2,901 ms | 14.93 MiB | ZIP／最終行 OK |
+
+追記経路のこの3点ではRSS増分は約0.08 MiBだったが、Python入力・allocator・ZIP
+metadataの影響を含む一環境の結果であり、通常Writerのconstant-memoryや3 OS対応を示さない。
+
+通常保存の部分測定（2026-09-06、macOS arm64、CPython 3.13、1列）:
+
+| 行数 | peak RSS | wall time | 出力 | 検証 |
+|---:|---:|---:|---:|---|
+| 10,000 | 22.01 MiB | 37 ms | 61.2 KiB | ZIP／最終行／再読込 OK |
+| 25,000 | 26.06 MiB | 75 ms | 149.4 KiB | ZIP／最終行／再読込 OK |
+| 50,000 | 33.63 MiB | 133 ms | 295.0 KiB | ZIP／最終行／再読込 OK |
+
+100,000行以上の通常保存は、現行ReaderのXML要素上限（1,000,000）に先に達するため、
+この条件では未測定。上限を緩めることは安全性仕様の変更になるため、G5完了条件とは
+別に扱う。
+
+新規VMの通常Writer測定（同日、3列、`--mode normal-fresh`）:
+
+| 行数 | peak RSS | wall time | 出力 | 検証 |
+|---:|---:|---:|---:|---|
+| 100,000 | 109.25 MiB | 182 ms | 1.24 MiB | ZIP／最終行 OK |
+| 250,000 | 200.42 MiB | 436 ms | 3.11 MiB | ZIP／最終行 OK |
+| 1,000,000 | 748.54 MiB | 1,802 ms | 12.43 MiB | ZIP／最終行 OK |
+
+この行列はVM全セル保持を含むためRSSは行数依存であり、通常VMをconstant-memoryとは呼ばない。
+
+入力形状校正（2026-09-06、macOS arm64、CPython 3.13、追記、各3回）:
+
+| profile | 行数×列数 | peak RSS p50/p95 | peak temp disk | 出力検証 |
+|---|---:|---:|---:|---|
+| escape | 1,000×2 | 19.39/19.44 MiB | 561.5 KiB | ZIP／最終行 OK |
+| giant | 10×2 | 31.62/32.52 MiB | 12.5 KiB | ZIP／最終行 OK |
+
+`giant`の1 MiB文字列は同一内容のためDeflate後の出力が小さくなる。これは入力側の
+文字列・escape・allocatorの校正であり、constant-memoryや3 OS対応の証拠ではない。
+
+1M行の反復測定（同日、append 3回／normal-fresh 2回）では、appendのwall p50/p95が
+2,718/2,935 ms、peak RSS p50/p95が18.55/18.59 MiB、normal-freshのwall p50/p95が
+1,783/2,672 ms、peak RSS p50/p95が748.55/750.44 MiBだった。いずれも出力検証に成功した。
+temp directoryの1M行観測はappend 3回で14.24 MiB、normal-fresh単発で12.43 MiB
+（いずれも最終出力サイズと一致）だった。監視を含むwall timeはI/O負荷で大きく変動するため、
+前段のp50/p95と混ぜず別観測として扱う。
+
+### G6 — 互換性・資源・公開判定
+
+- [ ] G2の接続graphとExcel再open、G3–G4の独立oracle、G5の行数別RSSを根拠として、対応matrixと既知の損失を更新する。
+- [ ] Linux/macOS/Windows、失敗時の元出力保護、fuzz・依存監査・Python/Rust API回帰を実施する。
+- [ ] 大規模速度は同じ入力・編集・耐久性・反復条件で再測定。互換性やRSSの悪化を速度向上で相殺しない。
+
+比較仕様の参照先（実測証拠ではありません）:
+[EPPlus公式対応表](https://github.com/EPPlusSoftware/EPPlus/wiki/Supported-Functions)、
+[Aspose.Cells計算仕様](https://docs.aspose.com/cells/net/calculate-formulas/)、
+[OOXML PivotCaches](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.pivotcaches?view=openxml-3.0.1)。
 
 ## 性能バックログ（優先順）
 
@@ -118,9 +256,9 @@ JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公�
 
 ## 配布・サポートゲート
 
-1.0.2のローカル検証（2026-09-06、macOS）:
+1.0.3のローカル検証（2026-09-06、macOS）:
 
-- [x] Rust全workspace／全targetの1,705 tests、strict clippy／Rustdoc、依存監査、測定記録検証。
+- [x] Rust全workspace／全targetの1,709 tests、strict clippy／Rustdoc、依存監査、測定記録検証。
 - [x] crate検証、wheel／sdist生成、独立Python環境でのimport・VBA・通常／fast保存往復。
 - [x] JS型／differential／WASM bundle／packed consumerと、VBA corpus 581件・意味論386件の既存ゲート。
 

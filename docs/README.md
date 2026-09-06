@@ -1,6 +1,6 @@
 # Documentation map
 
-Documentation version: **1.0.2**. API/coverage pages describe this version;
+Documentation version: **1.0.3**. API/coverage pages describe this version;
 dated benchmark records retain their original baseline and source hashes.
 The JavaScript package remains private at 0.0.0-development.
 

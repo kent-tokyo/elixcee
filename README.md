@@ -4,7 +4,7 @@ Run and test a practical subset of Excel VBA without Microsoft Excel. The core i
 Rust, with a Python API (PyO3), a standalone CLI, and an experimental
 `@elixcee/xlsx` JavaScript/WASM package.
 
-Version: **1.0.2**. See the [changelog](CHANGELOG.md) for versioned changes.
+Version: **1.0.3**. See the [changelog](CHANGELOG.md) for versioned changes.
 The experimental JS package remains private and is not published. [English](README.md) | [日本語](README_ja.md) | [中文](README_zh.md)
 
 elixcee is intended for data-processing macros. It is not a replacement for the
@@ -80,7 +80,10 @@ materializing the whole workbook. Set `include_row_numbers=True` to receive
 `(row_number, values)` tuples, or `max_rows=N`/`max_row_bytes=N`/`max_columns=N` to bound a read.
 Set `timeout_ms=N` to bound how long each `next()` waits for another row.
 `create_stream(path)` provides an append-only XLSX row writer. Set
-`max_rows=N`, `max_columns=N`, and/or `max_pending_bytes=N` to bound pending output.
+`max_rows=N`, `max_columns=N`, and/or `max_pending_bytes=N` to bound accepted output.
+The byte budget is cumulative until close, not retained RSS; this is not a
+constant-memory guarantee. See [limits and Unreleased G1 changes](docs/limits.md).
+For a separate per-row and total-work budget, use `create_stream_bounded(...)`.
 
 `Vm(on_msgbox="skip")` is the default. Use `on_msgbox="error"` to make a
 `MsgBox` call raise an error. Set `Vm(timeout_ms=N)` or pass `timeout_ms=N`

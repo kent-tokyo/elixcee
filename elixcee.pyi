@@ -18,6 +18,14 @@ def open_stream(
     timeout_ms: int | None = None,
 ) -> StreamReader: ...
 def create_stream(path: str, max_pending_bytes: int | None = None, max_rows: int | None = None, max_columns: int | None = None) -> StreamWriter: ...
+def create_stream_bounded(
+    path: str,
+    *,
+    max_row_bytes: int = 16_777_216,
+    max_work_bytes: int = 1_073_741_824,
+    max_rows: int = 1_048_576,
+    max_columns: int = 16_384,
+) -> StreamWriter: ...
 
 class ReadCancellation:
     """Cooperative cancellation handle for a workbook read."""
@@ -46,7 +54,13 @@ class StreamReader:
     def __next__(self) -> list[Any] | tuple[int, list[Any]]: ...
 
 class StreamWriter:
-    """Append-only XLSX writer for row pipelines."""
+    """Append-only XLSX writer for row pipelines.
+
+    max_pending_bytes is a cumulative accepted-value estimate, not retained RSS.
+    Unreleased G1 includes per-cell overhead (also for empty strings) and rejects
+    over-budget rows during iteration without committing their values/counters.
+    This is not a constant-memory guarantee.
+    """
     def __init__(self, path: str, max_pending_bytes: int | None = None, max_rows: int | None = None, max_columns: int | None = None) -> None: ...
     def __enter__(self) -> StreamWriter: ...
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool: ...
@@ -58,6 +72,10 @@ class StreamWriter:
     def pending_bytes(self) -> int: ...
     @property
     def max_pending_bytes(self) -> int: ...
+    @property
+    def max_row_bytes(self) -> int | None: ...
+    @property
+    def max_work_bytes(self) -> int: ...
     @property
     def max_rows(self) -> int | None: ...
     @property

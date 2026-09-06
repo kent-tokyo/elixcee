@@ -4,6 +4,7 @@ on:
   push:
     branches: [master, 'release/**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -97,12 +98,88 @@ jobs:
       - name: cargo check --features python --lib
         run: cargo check --features python --lib
 
+      - name: install Python package and verify stream writer admission limits
+        run: |
+          python -m pip install .
+          python -I tests/python/test_stream_writer_limits.py
+
       # elixcee-types only, matching the standing policy that root crate's
       # pre-existing clippy warnings aren't a release blocker (tracked
       # separately in tasks/todo.md) — this crate is held to -D warnings
       # because it started clean and should stay that way.
       - name: cargo clippy -p elixcee-types
         run: cargo clippy -p elixcee-types --all-targets -- -D warnings
+
+  # Heavy, evidence-producing G5 measurements are manual so ordinary CI remains
+  # bounded. The matrix deliberately uses the same child-process harness on all
+  # three hosted OS families; the script selects ru_maxrss or Win32 peak working
+  # set as appropriate. Results stay in the workflow log until a checked-in,
+  # version-pinned run is promoted to docs/measurements/.
+  stream-writer-measurement:
+    if: github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and install development wheel
+        run: python -m pip install .
+
+      - name: Measure append scaling
+        run: >-
+          python scripts/measure-stream-writer-memory.py
+          --mode append
+          --rows 100000 250000 1000000
+          --columns 3
+          --repetitions 3
+          --value-profile plain
+          --output g5-${{ runner.os }}-scaling.json
+
+      - name: Measure XML escape calibration
+        run: >-
+          python scripts/measure-stream-writer-memory.py
+          --mode append
+          --rows 1000
+          --columns 2
+          --repetitions 3
+          --value-profile escape
+          --output g5-${{ runner.os }}-escape.json
+
+      - name: Measure giant-string calibration
+        run: >-
+          python scripts/measure-stream-writer-memory.py
+          --mode append
+          --rows 10
+          --columns 2
+          --repetitions 3
+          --value-profile giant
+          --output g5-${{ runner.os }}-giant.json
+
+      - name: Validate G5 measurement reports
+        run: >-
+          python scripts/check-stream-writer-measurements.py
+          g5-${{ runner.os }}-scaling.json
+          g5-${{ runner.os }}-escape.json
+          g5-${{ runner.os }}-giant.json
+
+      - name: Validate measurement validator
+        run: python scripts/check-stream-writer-measurements.py --self-test
+
+      - name: Upload G5 measurement reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-stream-writer-${{ runner.os }}
+          path: g5-${{ runner.os }}-*.json
+          if-no-files-found: error
 
   # Format/lint/doc checks that were, until now, only ever run by hand — and only
   # sometimes: `test`'s own clippy step is scoped to `-p elixcee-types --all-targets`

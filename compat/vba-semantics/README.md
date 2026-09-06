@@ -68,7 +68,7 @@ a real bug into a passing case by weakening what's expected.
 The checked-in [report](results/report.json) contains 386 cases:
 347 MATCH_DOCUMENTED_SEMANTICS, 23 EXPECTED_ERROR, 2 NONDETERMINISTIC,
 14 KNOWN_LIMITATION, and zero BUG/UNCLASSIFIED.
-Rechecked locally on macOS on 2026-09-06 with the **1.0.2 release CLI**.
+Rechecked locally on macOS on 2026-09-06 with the **1.0.3 release CLI**.
 This is a documented-semantics reference suite, not live Microsoft Excel execution.
 
 Current expected answers and disclosed limitations are in

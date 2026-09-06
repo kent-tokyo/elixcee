@@ -6,7 +6,7 @@ elixcee 是一个使用 Rust 编写的无头运行时，可在不安装 Microsof
 
 它不是 Excel 桌面应用的完整替代品。屏幕更新、图表和对话框等 UI 功能会被跳过、简化建模或报告错误。
 
-版本：**1.0.2**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+版本：**1.0.3**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 JavaScript 包仍为 private，尚未发布。
 
 ## 安装
@@ -63,7 +63,10 @@ VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
 或用 `max_columns=N` 限制每行列数，
 或用 `timeout_ms=N` 限制等待下一行的时间（毫秒），
 `create_stream(path)` 提供 XLSX 追加式写入器；可用 `max_rows=N` 或
-`max_columns=N` 或 `max_pending_bytes=N` 限制待处理输出。
+`max_columns=N` 或 `max_pending_bytes=N` 限制接受的输出量。
+字节预算累计到close，并非实际保留RSS或恒定内存保证。
+参见[限制与Unreleased G1变更](docs/limits.md)。
+如需分别限制单行和总工作量，请使用`create_stream_bounded(...)`。
 可用 `Vm(timeout_ms=N)` 或 `run_macro(..., timeout_ms=N)` 限制 VBA 执行时间。
 同一个 `Vm` 重复执行相同源码时会复用已解析的 AST。
 可使用 `vm.fork()` 创建用于批处理的独立 VM 副本。

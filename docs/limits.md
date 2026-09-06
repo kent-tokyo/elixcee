@@ -9,6 +9,38 @@ Path-based workbook input is restricted to `.xlsx`, `.xlsm`, and `.ods` (case-in
 before opening the file. Unsupported or missing extensions return a deterministic error;
 the in-memory OOXML buffer reader is intentionally extension-independent.
 
+## Python append-only writer (Unreleased G1)
+
+`create_stream` writes accepted rows to a temporary ZIP, retaining one row's values
+and generated XML during `append`, not all accepted rows until `close`.
+The existing `max_pending_bytes` default (64 MiB) remains a **cumulative admission
+budget**, not an RSS cap. `pending_bytes` counts accepted estimates until close
+and then resets to zero. `max_rows` and `max_columns` are optional positive limits.
+
+G1 checks the row-count limit before opening the iterable, then checks column and
+byte limits while consuming each item. Detecting excess width consumes at most
+one extra item, without converting that item. The estimate includes a `Variant`
+slot per cell plus UTF-8 payload; empty strings no longer have zero cost. This
+is stricter than released 1.0.3 string accounting. Rejected rows do not change
+the accepted counters or write partial row XML; valid rows may then be appended.
+
+This does **not** bound caller-owned Python memory, execution time of arbitrary
+Python iterators/conversions, Python UTF-8 conversion caches, allocator overhead,
+or XML-escaping expansion to exactly that byte count. ZIP buffering and metadata
+also consume memory. I/O-error abort/cleanup and row-count-independent RSS remain
+separate [G5 work](../ROADMAP.md). Use process isolation for hostile Python code.
+The materialized VM writer still holds the workbook and raw passthrough payloads;
+neither path is advertised as fully constant-memory.
+
+Regression: `python -I tests/python/test_stream_writer_limits.py` against an
+installed development wheel. This is a small-fixture gate, not an RSS measurement.
+The separate `create_stream_bounded` API is experimental until its implementation
+has passed the Rust/Python CI build and large-process RSS measurement.
+The reproducible measurement entry point is
+`scripts/measure-stream-writer-memory.py`; it uses one child process per row-count
+case and records peak RSS, wall time, output size, and rows. It intentionally does
+not infer constant-memory from two cases.
+
 ## `packages/xlsx`: `MAX_RANGE_CELLS` (`ELIXCEE_RANGE_TOO_LARGE`)
 
 `sheet_to_formulae`, `sheet_to_csv`, `sheet_to_txt` (which delegates to `sheet_to_csv`),

@@ -38,6 +38,23 @@ content type on supported save paths. Unmodeled worksheet objects can still be
 lost or disconnected, so the README's compatibility warning takes precedence
 over any assumption of lossless editing.
 
+The [G0–G6 strengthening plan](../ROADMAP.md) separates connected OOXML
+preservation from object editing/recalculation, workbook-wide formula evaluation,
+and memory-bounded output. In particular, passing through a Pivot cache or external
+link part currently does not restore the omitted `pivotCaches` or
+`externalReferences` owner elements in regenerated workbook XML.
+
+The native VM writer now retains worksheet/workbook/styles/rels XML and only
+edited table XML for relationship and structural analysis, while copying other XML and non-XML
+passthrough payloads directly from the source ZIP one at a time during output,
+without a payload-sized intermediate buffer.
+Python's
+append-only writer already writes each accepted row to ZIP, but materializes one
+row and its XML; its cumulative byte counter is not retained-memory telemetry.
+G1 tightens admission checks; deferred G5 addresses lazy passthrough, including
+unchanged table parts, row/work
+budget separation, failure cleanup, and independently measured memory scaling.
+
 ## JavaScript/WASM package
 
 `packages/xlsx` provides synchronous `read`/`readFile`/`readFileSync` and

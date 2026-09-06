@@ -6,7 +6,7 @@ Microsoft Excelなしで、データ処理向けのExcel VBAのサブセット�
 テスト・診断するRust製ランタイムです。PyO3によるPython API、単体CLI、
 実験的な`@elixcee/xlsx` JavaScript/WASMパッケージを提供します。
 
-バージョンは **1.0.2** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+バージョンは **1.0.3** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 JavaScriptパッケージはprivate・未公開です。
 
 Excelデスクトップアプリの完全な代替ではありません。画面更新、グラフ、
@@ -67,7 +67,10 @@ APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 `max_columns=N`では1行の列数上限も指定できます。
 `timeout_ms=N`では次の行を待つ時間（ミリ秒）を制限できます。
 `create_stream(path)`はXLSX用の追記型writerです。`max_rows=N`や
-`max_columns=N`や`max_pending_bytes=N`も指定して、保留中の出力を制限できます。
+`max_columns=N`や`max_pending_bytes=N`で受け入れる出力を制限できます。
+byte予算はcloseまでの累積値で、保持RSSやconstant-memoryの保証ではありません。
+[制限とUnreleased G1の変更](docs/limits.md)を参照してください。
+行ごとの上限と総作業量を分ける場合は`create_stream_bounded(...)`を使います。
 `Vm(timeout_ms=N)`または`run_macro(..., timeout_ms=N)`でVBA実行時間を制限できます。
 同じ`Vm`で同じソースを再実行する場合は、解析済みASTを再利用します。
 `vm.fork()`でバッチ処理用の独立したVMコピーを作成できます。

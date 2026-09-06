@@ -1945,13 +1945,13 @@ pub(crate) fn validate_shared_string_refs_for_stream(
 
 // ── Raw ZIP passthrough (Milestone: safe round-trip) ───────────────────────────
 
-/// Every ZIP entry's decompressed bytes, keyed by entry name — used only by
-/// `save_xlsx_impl` (`src/lib.rs`) at save time, to pass through OOXML parts this
-/// reader doesn't parse (`xl/vbaProject.bin`, tables, named ranges, full styles,
-/// etc.) unchanged instead of losing them on every save. Not called from any
-/// read-only path (`check`/`snapshot`/`diagnose`/`test-workbook` never write a
-/// workbook back out), so those paths never pay this cost — see
-/// `docs/xlsx-architecture.md`.
+/// Save-analysis XML/rels entry bytes and all entry names, keyed by entry name —
+/// used only by `save_xlsx_impl` (`src/lib.rs`) at save time. Unneeded XML and
+/// binary payloads are represented by an empty vector and reopened from the
+/// source ZIP at output time, so images, VBA projects, drawings, and properties
+/// do not occupy a large save-time memory copy. Not called from any read-only
+/// path (`check`/`snapshot`/`diagnose`/`test-workbook` never write a workbook
+/// back out), so those paths never pay this cost — see `docs/xlsx-architecture.md`.
 pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -1964,14 +1964,134 @@ pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>
         }
         let name = entry.name().to_string();
         let mut buf = Vec::new();
-        entry
-            .by_ref()
-            .take(ZIP_ENTRY_MAX_BYTES)
-            .read_to_end(&mut buf)
-            .map_err(|e| e.to_string())?;
+        // Relationship analysis and the writer's structural edits need these
+        // XML families. Other XML parts are passed through on demand by the
+        // save path, avoiding retention of large drawings/charts/properties.
+        let needed_for_save = name.ends_with(".rels")
+            || name == "[Content_Types].xml"
+            || name == "xl/workbook.xml"
+            || name == "xl/styles.xml"
+            || name.starts_with("xl/worksheets/")
+            || name.starts_with("xl/tables/");
+        if needed_for_save {
+            entry
+                .by_ref()
+                .take(ZIP_ENTRY_MAX_BYTES)
+                .read_to_end(&mut buf)
+                .map_err(|e| e.to_string())?;
+        }
         out.insert(name, buf);
     }
     Ok(out)
+}
+
+/// Copy one deferred passthrough entry directly from an open source archive to
+/// the destination writer. It never allocates a buffer proportional to the
+/// entry payload.
+pub(crate) fn copy_raw_zip_entry<R: Read + Seek, W: std::io::Write>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    out: &mut W,
+) -> Result<(), String> {
+    let mut entry = archive.by_name(name).map_err(|e| e.to_string())?;
+    let expected = entry.size();
+    let copied = std::io::copy(&mut entry.by_ref().take(ZIP_ENTRY_MAX_BYTES), out)
+        .map_err(|e| e.to_string())?;
+    if copied != expected {
+        return Err(format!(
+            "ZIP passthrough entry was truncated: {name} ({copied} of {expected} bytes)"
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_raw_zip_archive<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<(), String> {
+    validate_zip_archive(archive)
+}
+
+#[cfg(test)]
+mod raw_zip_passthrough_tests {
+    use super::{copy_raw_zip_entry, read_raw_zip_entries};
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+
+    struct ShortWriter {
+        bytes: Vec<u8>,
+        limit: usize,
+    }
+
+    impl Write for ShortWriter {
+        fn write(&mut self, input: &[u8]) -> std::io::Result<usize> {
+            let count = input.len().min(self.limit.saturating_sub(self.bytes.len()));
+            self.bytes.extend_from_slice(&input[..count]);
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn archive_bytes() -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("xl/media/image1.bin", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"payload").unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn read_index_keeps_deferred_payloads_out_of_memory() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("xl/worksheets/sheet1.xml", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"<worksheet/>").unwrap();
+        writer
+            .start_file("xl/media/image1.bin", SimpleFileOptions::default())
+            .unwrap();
+        let payload: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+        writer.write_all(&payload).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let path = std::env::temp_dir().join(format!(
+            "elixcee-raw-zip-{}-{}.xlsx",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        let entries = read_raw_zip_entries(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(
+            entries.get("xl/worksheets/sheet1.xml").unwrap(),
+            b"<worksheet/>"
+        );
+        assert!(entries.get("xl/media/image1.bin").unwrap().is_empty());
+    }
+
+    #[test]
+    fn copies_deferred_entry_without_changing_payload() {
+        let mut archive = zip::ZipArchive::new(Cursor::new(archive_bytes())).unwrap();
+        let mut output = Vec::new();
+        copy_raw_zip_entry(&mut archive, "xl/media/image1.bin", &mut output).unwrap();
+        assert_eq!(output, b"payload");
+    }
+
+    #[test]
+    fn rejects_a_destination_that_cannot_accept_the_full_payload() {
+        let mut archive = zip::ZipArchive::new(Cursor::new(archive_bytes())).unwrap();
+        let mut output = ShortWriter {
+            bytes: Vec::new(),
+            limit: 3,
+        };
+        let error = copy_raw_zip_entry(&mut archive, "xl/media/image1.bin", &mut output);
+        assert!(error.is_err());
+        assert_eq!(output.bytes, b"pay");
+    }
 }
 
 /// `(defaults, overrides)` — see `content_type_decls`.
