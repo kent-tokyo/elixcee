@@ -54,6 +54,8 @@ The native VM writer now retains worksheet/workbook/styles/rels XML and only
 edited table XML for relationship and structural analysis, while copying other XML and non-XML
 passthrough payloads directly from the source ZIP one at a time during output,
 without a payload-sized intermediate buffer.
+Read-only defined-name loading is narrower still: it validates the source ZIP and
+reads only `xl/workbook.xml`, without indexing sibling worksheet or table payloads.
 Python's
 append-only writer already writes each accepted row to ZIP, but materializes one
 row and its XML; its cumulative byte counter is not retained-memory telemetry.

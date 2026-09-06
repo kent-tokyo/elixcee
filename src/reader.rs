@@ -1985,6 +1985,38 @@ pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>
     Ok(out)
 }
 
+/// Read one bounded ZIP entry, returning `None` when the entry is absent.
+/// The archive is still fully validated before the lookup result is returned.
+///
+/// This is intentionally separate from `read_raw_zip_entries`: callers that need a
+/// single small XML part (for example `xl/workbook.xml` for defined names) should not
+/// pay the save-path analysis cost of reading worksheet/table XML as well.
+pub(crate) fn read_raw_zip_entry_if_present(
+    path: &str,
+    name: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    validate_zip_archive(&mut archive)?;
+    let Ok(mut entry) = archive.by_name(name) else {
+        return Ok(None);
+    };
+    let mut buf = Vec::with_capacity(entry.size().min(ZIP_ENTRY_MAX_BYTES) as usize);
+    entry
+        .by_ref()
+        .take(ZIP_ENTRY_MAX_BYTES)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    if buf.len() as u64 != entry.size() {
+        return Err(format!(
+            "ZIP entry was truncated: {name} ({} of {} bytes)",
+            buf.len(),
+            entry.size()
+        ));
+    }
+    Ok(Some(buf))
+}
+
 /// Copy one deferred passthrough entry directly from an open source archive to
 /// the destination writer. It never allocates a buffer proportional to the
 /// entry payload.
@@ -2013,7 +2045,7 @@ pub(crate) fn validate_raw_zip_archive<R: Read + Seek>(
 
 #[cfg(test)]
 mod raw_zip_passthrough_tests {
-    use super::{copy_raw_zip_entry, read_raw_zip_entries};
+    use super::{copy_raw_zip_entry, read_raw_zip_entries, read_raw_zip_entry_if_present};
     use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
 
@@ -2079,6 +2111,34 @@ mod raw_zip_passthrough_tests {
         let mut output = Vec::new();
         copy_raw_zip_entry(&mut archive, "xl/media/image1.bin", &mut output).unwrap();
         assert_eq!(output, b"payload");
+    }
+
+    #[test]
+    fn reads_only_the_requested_entry() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("xl/workbook.xml", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"<workbook/>").unwrap();
+        writer
+            .start_file("xl/worksheets/sheet1.xml", SimpleFileOptions::default())
+            .unwrap();
+        let payload: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+        writer.write_all(&payload).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let path = std::env::temp_dir().join(format!(
+            "elixcee-raw-entry-{}-{}.xlsx",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, bytes).unwrap();
+
+        let workbook = read_raw_zip_entry_if_present(path.to_str().unwrap(), "xl/workbook.xml")
+            .unwrap()
+            .unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(workbook, b"<workbook/>");
     }
 
     #[test]

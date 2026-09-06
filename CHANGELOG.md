@@ -6,6 +6,8 @@
 
 次の変更はここに記録します。
 
+- G5aの内部経路として、defined namesの読込・報告で`xl/workbook.xml`だけを検証付き取得し、worksheet/table等の兄弟payloadを再読込・保持しないようにしました。保存時の全part遅延化やconstant-memory達成を意味しません。
+
 ## [1.0.4] - 2026-09-07
 
 - READMEとv1 support contractの製品説明を、VBA実行専用ではなく、数式計算・workbook編集・保存・VBA実行を含むヘッドレスworkbook自動化ランタイムとして整理しました。

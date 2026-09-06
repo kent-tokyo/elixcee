@@ -8313,12 +8313,12 @@ impl Vm {
     pub(crate) fn load_simple_defined_names(&mut self, path: &str) -> Result<(), String> {
         self.loaded_named_ranges.clear();
         self.scoped_named_ranges.clear();
-        let raw_entries = reader::read_raw_zip_entries(path)
-            .map_err(|e| format!("cannot read '{}': {}", path, e))?;
-        let Some(xml) = raw_entries
-            .get("xl/workbook.xml")
-            .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+        let Some(bytes) = reader::read_raw_zip_entry_if_present(path, "xl/workbook.xml")
+            .map_err(|e| format!("cannot read '{}': {}", path, e))?
         else {
+            return Ok(());
+        };
+        let Ok(xml) = String::from_utf8(bytes) else {
             return Ok(());
         };
         for decl in reader::xlsx_defined_name_decls(&xml)? {
@@ -8397,12 +8397,12 @@ impl Vm {
         let Some(path) = self.loaded_workbook_path.as_deref() else {
             return Ok(HashMap::new());
         };
-        let raw_entries = reader::read_raw_zip_entries(path)
-            .map_err(|e| format!("cannot read '{}': {}", path, e))?;
-        let Some(xml) = raw_entries
-            .get("xl/workbook.xml")
-            .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+        let Some(bytes) = reader::read_raw_zip_entry_if_present(path, "xl/workbook.xml")
+            .map_err(|e| format!("cannot read '{}': {}", path, e))?
         else {
+            return Ok(HashMap::new());
+        };
+        let Ok(xml) = String::from_utf8(bytes) else {
             return Ok(HashMap::new());
         };
         Ok(reader::xlsx_defined_names(&xml)?.into_iter().collect())
