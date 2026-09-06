@@ -2,14 +2,25 @@
 
 Run and test a practical subset of Excel VBA without Microsoft Excel. The core is
 Rust, with a Python API (PyO3), a standalone CLI, and an experimental
-`@elixcee/xlsx` JavaScript/WASM package.
+`@elixcee/xlsx` JavaScript/WASM package. It is a headless workbook runtime: in
+addition to VBA execution, it can calculate formulas, edit workbook data and
+metadata, and save the result as XLSX/XLSM/ODS.
 
-Version: **1.0.3**. See the [changelog](CHANGELOG.md) for versioned changes.
+Version: **1.0.4**. See the [changelog](CHANGELOG.md) for versioned changes.
 The experimental JS package remains private and is not published. [English](README.md) | [日本語](README_ja.md) | [中文](README_zh.md)
 
-elixcee is intended for data-processing macros. It is not a replacement for the
-Excel desktop application: UI features such as charts, dialogs, and screen
-updates are skipped, modeled, or reported according to the operation.
+elixcee is not only a macro runner. It is intended for headless Excel
+workbook automation: use it for direct data edits and formula recalculation,
+or execute data-processing VBA against the same workbook model. It is not a
+replacement for the Excel desktop application: UI features such as charts,
+dialogs, and screen updates are skipped, modeled, or reported according to the
+operation.
+
+Choose elixcee when the workflow needs one or more of these without a desktop
+Excel installation: read/edit/save `.xlsx` or `.xlsm`, calculate supported
+formulas, run and diagnose supported VBA, or test workbook behavior in CI.
+For a complete Excel desktop object model or full OOXML feature compatibility,
+check the documented support boundaries before adopting it.
 
 ## Install
 
@@ -60,8 +71,15 @@ End Sub
 print(vm.get_cell(1, 2))       # 20
 
 vm = elixcee.load_workbook("input.xlsx")
+vm.set_cell(1, 1, 10)                              # edit a cell
+vm.set_cell_formula(1, 2, "=A1*2")                # add a formula
+vm.recalculate()                                  # recalculate formula cells
 vm.run("Sub ProcessData()\n    Cells(1, 1).Value = 42\nEnd Sub", "ProcessData")
 vm.save_workbook("output.xlsx")
+
+# Cell/formula edits also support bounded undo/redo.
+vm.set_cell(1, 1, 20)
+vm.undo()
 
 # Optional reader resource controls (the cancellation check is cooperative).
 cancel = elixcee.ReadCancellation()
@@ -70,7 +88,8 @@ vm = elixcee.load_workbook(
 )
 ```
 
-The Python API also provides formula evaluation, ranges, sorting, merges,
+The Python API provides headless formula calculation, cell/range editing,
+bounded undo/redo, formula evaluation, ranges, sorting, merges,
 hidden rows/columns, sheet management, styles, tables, data validation,
 AutoFilter, defined-name inspection, pandas export, and `.xlsx`/`.xlsm`/`.ods`
 workbook I/O. See [elixcee.pyi](elixcee.pyi) for signatures and behavior.

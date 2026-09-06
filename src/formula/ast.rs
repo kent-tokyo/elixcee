@@ -42,10 +42,9 @@ pub enum FormulaExpr {
         /// (0.14.0-A) treats it as anchored, and how it round-trips to text.
         abs_col: bool,
         abs_row: bool,
-        /// `Some` for `Sheet2!A1` (0.14.0-A2). `evaluate` explicitly refuses to
-        /// evaluate any expression containing a qualified reference — see
-        /// `eval::references_another_sheet` — rather than ever silently reading
-        /// the *active* sheet's cell as if it were the qualified one.
+        /// `Some` for `Sheet2!A1` (0.14.0-A2). The single-sheet evaluator
+        /// rejects this form; the workbook evaluator resolves it against the
+        /// referenced sheet instead of silently reading the host sheet.
         sheet: Option<SheetQualifier>,
     },
     Range {

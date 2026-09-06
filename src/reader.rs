@@ -3195,6 +3195,29 @@ pub(crate) fn workbook_rels_decls(xml: &str) -> Vec<(String, String)> {
     rels
 }
 
+/// Same relationship declarations as workbook_rels_decls, retaining the source Id.
+/// Writer-owned relationship files are regenerated with fresh ids, so owner XML that
+/// carries an r:id needs this three-field view to be safely rewritten.
+pub(crate) fn workbook_rels_decls_with_ids(xml: &str) -> Vec<(String, String, String)> {
+    let mut rels = vec![];
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev {
+            let local = tag.split(':').next_back().unwrap_or(tag);
+            if local == "Relationship"
+                && let (Some(id), Some(ty), Some(target)) = (
+                    attr_get(attrs, "Id"),
+                    attr_get(attrs, "Type"),
+                    attr_get(attrs, "Target"),
+                )
+            {
+                rels.push((id.to_string(), ty.to_string(), target.to_string()));
+            }
+        }
+    }
+    rels
+}
+
 // ── XLSX reader ───────────────────────────────────────────────────────────────
 
 /// Resolves a worksheet relationship target relative to `xl/` and rejects targets that
@@ -3519,26 +3542,32 @@ fn validate_workbook_sheets(
     Ok(())
 }
 
-/// Returns `[(name, raw_text)]` in document order, from every
-/// `<definedName name="...">TEXT</definedName>` inside `xl/workbook.xml`'s
-/// `<definedNames>`. `raw_text` is the exact formula-text content (e.g.
-/// `"Sheet1!$A$1:$A$3"`), unresolved -- see `Vm::defined_names`'s own doc
-/// comment for why resolving it into a sheet+address isn't attempted.
-/// `localSheetId`-scoped (sheet-local) and workbook-scoped names are not
-/// distinguished here -- both are returned under their own `name` attribute
-/// exactly as written; `Vm::defined_names` is what decides how to flatten
-/// them into one map.
-pub(crate) fn xlsx_defined_names(xml: &str) -> Result<Vec<(String, String)>, String> {
+/// A workbook defined-name declaration. `local_sheet_id` is the zero-based
+/// worksheet position from OOXML's `localSheetId` attribute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct XlsxDefinedName {
+    pub name: String,
+    pub local_sheet_id: Option<usize>,
+    pub raw_text: String,
+}
+
+/// Returns defined-name declarations in document order, preserving scope.
+pub(crate) fn xlsx_defined_name_decls(xml: &str) -> Result<Vec<XlsxDefinedName>, String> {
     let mut iter = XmlIter::new(xml);
     let mut result = vec![];
     let mut current_name: Option<String> = None;
+    let mut current_local_sheet_id = None;
     let mut current_text = String::new();
     while let Some(ev) = iter.next_ev() {
         match &ev {
             Ev::Open(tag, attrs) => {
                 let local = tag.split(':').next_back().unwrap_or(tag);
                 if local == "definedName" {
-                    current_name = attr_get(attrs, "name").map(|s| s.to_string());
+                    current_name = attr_get(attrs, "name").map(str::to_string);
+                    current_local_sheet_id = attr_get(attrs, "localSheetId")
+                        .map(|value| value.parse::<usize>())
+                        .transpose()
+                        .map_err(|_| "invalid defined-name localSheetId".to_string())?;
                     current_text.clear();
                 }
             }
@@ -3553,7 +3582,11 @@ pub(crate) fn xlsx_defined_names(xml: &str) -> Result<Vec<(String, String)>, Str
                             DEFINED_NAMES_MAX_COUNT, DEFINED_NAMES_MAX_COUNT
                         ));
                     }
-                    result.push((name, current_text.clone()));
+                    result.push(XlsxDefinedName {
+                        name,
+                        local_sheet_id: current_local_sheet_id.take(),
+                        raw_text: current_text.clone(),
+                    });
                 }
             }
             Ev::Text(text) => {
@@ -3571,6 +3604,22 @@ pub(crate) fn xlsx_defined_names(xml: &str) -> Result<Vec<(String, String)>, Str
         }
     }
     Ok(result)
+}
+
+/// Returns `[(name, raw_text)]` in document order, from every
+/// `<definedName name="...">TEXT</definedName>` inside `xl/workbook.xml`'s
+/// `<definedNames>`. `raw_text` is the exact formula-text content (e.g.
+/// `"Sheet1!$A$1:$A$3"`), unresolved -- see `Vm::defined_names`'s own doc
+/// comment for why resolving it into a sheet+address isn't attempted.
+/// `localSheetId`-scoped (sheet-local) and workbook-scoped names are not
+/// distinguished here -- both are returned under their own `name` attribute
+/// exactly as written; `Vm::defined_names` is what decides how to flatten
+/// them into one map.
+pub(crate) fn xlsx_defined_names(xml: &str) -> Result<Vec<(String, String)>, String> {
+    Ok(xlsx_defined_name_decls(xml)?
+        .into_iter()
+        .map(|decl| (decl.name, decl.raw_text))
+        .collect())
 }
 
 /// Returns `{rId → target_path}` for relationships whose `Type` ends with
@@ -6060,6 +6109,29 @@ mod defined_names_tests {
             vec![
                 ("MyRange".to_string(), "Sheet1!$A$1:$A$3".to_string()),
                 ("Other".to_string(), "Sheet1!$B$1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn xlsx_defined_name_decls_preserve_local_sheet_scope() {
+        let xml = r#"<workbook><definedNames>
+<definedName name="Global">$A$1:$A$3</definedName>
+<definedName name="Local" localSheetId="1">$B$2</definedName>
+</definedNames></workbook>"#;
+        assert_eq!(
+            xlsx_defined_name_decls(xml).unwrap(),
+            vec![
+                XlsxDefinedName {
+                    name: "Global".to_string(),
+                    local_sheet_id: None,
+                    raw_text: "$A$1:$A$3".to_string(),
+                },
+                XlsxDefinedName {
+                    name: "Local".to_string(),
+                    local_sheet_id: Some(1),
+                    raw_text: "$B$2".to_string(),
+                },
             ]
         );
     }

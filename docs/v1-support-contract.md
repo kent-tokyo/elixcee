@@ -1,7 +1,9 @@
 # elixcee v1 support contract
 
-This document defines the v1 support policy, not a promise to emulate the Excel
-desktop application. Current coverage is documented for **1.0.3**.
+This document defines the v1 support policy for a headless workbook automation
+runtime, not a promise to emulate the Excel desktop application. The runtime
+supports direct workbook edits and formula calculation as well as the
+documented VBA subset. Current coverage is documented for **1.0.4**.
 Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
 
 ## Supported contract
@@ -60,7 +62,7 @@ injection, path traversal, or resource-exhaustion risk.
 
 Each release records implementation tests and static checks separately from
 measurements requiring Microsoft Excel, large fixtures, or another independent
-oracle. For v1.0.3, the local gate covers the Rust workspace/all-target tests,
+oracle. For v1.0.4, the local gate covers the Rust workspace/all-target tests,
 strict clippy/Rustdoc, fresh dependency audit, feature compilation, packaged
 crate/wheel/sdist, JavaScript differential/type checks, and the checked-in
 reader-measurement contract. Dated macOS reader measurements are

@@ -4,6 +4,44 @@
 
 ## [Unreleased]
 
+次の変更はここに記録します。
+
+## [1.0.4] - 2026-09-07
+
+- READMEとv1 support contractの製品説明を、VBA実行専用ではなく、数式計算・workbook編集・保存・VBA実行を含むヘッドレスworkbook自動化ランタイムとして整理しました。
+- G3の初段として、sheet-local named rangeの登録APIをRust VM／Pythonへ追加し、formula評価でhost sheetのlocal nameをglobal nameより優先するようにしました。ロード時は単純A1／範囲definedNameをscope付きで取り込み、単純なqualified targetも評価します。dynamic／structured nameは未対応です。
+- ロード済みの単純definedNameについて、行／列の挿入・削除およびsheet rename時に参照先を追従させるようにしました。sheet移動・追加に伴うlocalSheetIdの完全更新は未対応です。
+- `OFFSET`で表現できるdynamic definedNameを数式ASTへ展開し、`SUM(DynamicRange)`などの集計入力として評価できるようにしました。structured／external referenceは未対応です。
+- 単純な`TableName[ColumnName]`をtableのデータ行範囲へ評価時に正規化し、`SUM(TableName[ColumnName])`をworkbook依存グラフで評価できるようにしました。複雑なspecifierは未対応です。
+- `[#Headers]`、`[#Data]`、`[#Totals]`、`[#All]`と列指定の静的specifierをtable範囲へ正規化できるようにしました。`[@Column]`などhost行依存のspecifierは未対応です。
+- 同一tableのデータ行で`Table[@Column]`および`Table[[#This Row],[Column]]`をhost行のセル参照へ正規化できるようにしました。table外・別sheetの暗黙的な行コンテキストは未対応です。
+- `Table[[Column1]:[Column2]]`と各静的specifierの連続複数列指定をtable範囲へ正規化できるようにしました。
+- table名・列名に数字が含まれる場合も内部正規化識別子がセル参照と衝突しないようにし、列削除後のstructured formula追従を回帰テストで固定しました。
+- structured referenceの正規化で、文字列リテラル内と長い識別子の一部を変換対象から除外し、循環するformula dependency graphをWASM診断の`hasFormulaCycle`で報告できるようにしました。循環式の再計算は従来どおりcached valueを使うbest-effortです。
+- `IF`の条件式がExcel Error値を返した場合に、真偽分岐でErrorをfalse扱いせず、そのError値を伝播するようにしました。真の分岐・偽の分岐は従来どおり必要な側だけを遅延評価します。
+- `NOT`の引数がExcel Error値の場合も、Errorをfalse扱いせず伝播するようにしました。
+- `AND`/`OR`は全引数を評価し、真偽値で途中決定できる場合でもExcel Error値を結果へ伝播するようにしました。`IFERROR`での回復も回帰テストで固定しています。
+- `XOR`も全引数を評価し、引数中のExcel Error値を結果へ伝播するようにしました。
+- workbook formula dependency graphのready nodeと循環残りを安定ソートし、同じ入力での再計算・診断順を決定的にしました。
+- 循環参照診断がqualifiedなcross-sheet cell referenceも依存辺として扱う回帰を追加しました。
+
+- Pivot cache ownerの再出力と、cache definition／recordsへ至る内部relationship到達性の保存時検査を追加しました。Pivotの再集計・編集は未対応です。
+- sheet rename／row・column構造編集／sheet move・delete後は、参照更新未実装のDrawing／Pivot ownerを保存時に復元しない安全境界を追加しました。値セル編集では従来どおり保持します。
+
+- LogiSheets対抗トラックを追加し、workbook数式依存関係・共有Rust/WASM runtime・undo/redo・安全なplugin/AI境界をL0–L6へ分解しました。
+- シート修飾参照を含むformulaについて、workbook全体の依存順再計算を追加しました。WASM/Node/browser API、増分dependency graph、undo/redoは引き続き未完了です。
+- 大きなrangeを全セル展開せずにformula node間の依存辺を構築するinterval-style経路と、単純なruntime named rangeのformula展開を追加しました。
+- workbook dirty trackingを追加し、値セルの変更から直接参照・range参照・formula chainの依存先だけを差分再計算します。完全なinterval tree、動的/structured named range、WASM/Node/browser parityは未完了です。
+- 共有Rust formula runtimeのfull workbook計算をWASM `calculateWorkbook(bytes)`として追加し、Node/browser同梱bridgeを更新しました。JS側の増分API、diagnostics、worker/async loadingは未完了です。
+- WASMに`diagnoseWorkbook(bytes)`を追加し、シート数・数式数・qualified formula数・parse error数を構造化JSONで取得できるようにしました。
+- Rust VM・Python APIに、セル/範囲値とセル数式の最大128操作undo/redoを追加しました。シート操作とJS/WASM history APIは未完了です。
+- Rust VM・Python APIにedit transactionのbegin/commit/abortを追加し、abort時に編集内容とprior undo/redo履歴を復元します。ネストしたtransactionは拒否します。
+- WASMにstateful `WorkbookEditor`を追加し、`setNumber`・`recalculate`・`undo`/`redo`・transactionをNode/browserの共有Rust runtimeから利用できるようにしました。OOXML書き込みは従来どおりJavaScript側です。
+- 互換root exportを変更せず、`@elixcee/xlsx/runtime`サブパスから`WorkbookEditor`・`calculateWorkbook`・`diagnoseWorkbook`を利用できるようにしました。
+- WASM smokeにruntimeサブパスのNode／browser条件検証と、意図的に更新したpayload baselineに対する10%サイズ成長ゲートを追加しました。現行のbaselineはWorkbookEditor追加後の実測値です。
+- externalReferences ownerを再生成workbookへ戻し、sourceのType/Targetに対応する新しいrelationship IDへ書き換えるようにしました。未解決の外部参照はdangling ownerを出力せず省略します。Pivot cacheや外部取得は未対応です。
+- worksheetのdrawing／legacyDrawing ownerについて、r:idからrels、相対target、出力partまでの接続を保存時に検査し、欠落・重複時はdangling ownerを復元しないようにしました。Chart／imageの推移的検証は未完です。
+- Drawing等の内部partに付随する`.rels`も推移的に検査し、Chart／imageへの欠落targetを検出するようにしました。Pivot cacheの接続検証は未完です。
 
 ## [1.0.3] - 2026-09-06
 

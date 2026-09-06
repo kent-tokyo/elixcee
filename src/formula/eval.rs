@@ -36,19 +36,11 @@ fn lookup_binding(name: &str) -> Option<Variant> {
 }
 
 /// Does `expr` contain a sheet-qualified reference (`Sheet2!A1`) anywhere in
-/// its tree? `cells` (every evaluation site's cell lookup) is always a single
-/// sheet's map with no sheet dimension in its key -- there is no way to
-/// evaluate a qualified reference without either silently reading the wrong
-/// (active/current) sheet's cell, or threading a whole extra workbook
-/// parameter through every eval helper. Neither is done; `evaluate` checks
-/// this ONCE, over the whole tree, before doing anything else, so no helper
-/// below it (`func_sum`'s range fast path, `collect_values`, `func_filter`,
-/// etc., which read `cells` directly rather than recursing through
-/// `evaluate`) ever gets a chance to run on a qualified reference. 0.14.0-A2
-/// added parsing (and reference-rewrite support) for these references without
-/// adding cross-sheet formula *evaluation* -- that's a separate, larger,
-/// still-unbuilt project (a real workbook-cell-graph engine, not a single
-/// `HashMap<(u32,u32), CellContent>`).
+/// its tree? `cells` is intentionally a single-sheet map. The fast evaluator
+/// rejects a qualified reference before any range helper can accidentally read
+/// the host sheet. Workbook callers use `formula::workbook`, which builds an
+/// explicit dependency order and remaps each referenced sheet before calling
+/// this evaluator.
 pub(crate) fn references_another_sheet(expr: &FormulaExpr) -> bool {
     match expr {
         FormulaExpr::Number(_) | FormulaExpr::Str(_) | FormulaExpr::Bool(_) => false,
@@ -67,7 +59,7 @@ pub fn evaluate(
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
     if references_another_sheet(expr) {
-        return Err("cross-sheet formula evaluation is not supported yet".into());
+        return Err("cross-sheet formula evaluation requires a workbook context".into());
     }
     match expr {
         FormulaExpr::Number(n) => Ok(as_integer_if_whole(*n)),
@@ -262,6 +254,65 @@ fn collect_values(
             for row in *rmin..=*rmax {
                 for col in *cmin..=*cmax {
                     vals.push(cell_val(cells, row, col));
+                }
+            }
+            Ok(vals)
+        }
+        FormulaExpr::FuncCall { name, args }
+            if name.eq_ignore_ascii_case("OFFSET") && args.len() >= 3 =>
+        {
+            let (base_row, base_col) = match &args[0] {
+                FormulaExpr::CellRef { row, col, .. } => (*row, *col),
+                FormulaExpr::Range { r1, c1, .. } => (*r1, *c1),
+                _ => return Ok(vec![evaluate(expr, cells)?]),
+            };
+            let row_offset = to_float(&evaluate(&args[1], cells)?)? as i64;
+            let col_offset = to_float(&evaluate(&args[2], cells)?)? as i64;
+            let height = args
+                .get(3)
+                .map(|arg| {
+                    evaluate(arg, cells).and_then(|value| to_float(&value).map(|v| v as i64))
+                })
+                .transpose()?
+                .unwrap_or(1);
+            let width = args
+                .get(4)
+                .map(|arg| {
+                    evaluate(arg, cells).and_then(|value| to_float(&value).map(|v| v as i64))
+                })
+                .transpose()?
+                .unwrap_or(1);
+            if height <= 0 || width <= 0 {
+                return Err("OFFSET: height and width must be positive".to_string());
+            }
+            let row = (base_row as i64)
+                .checked_add(row_offset)
+                .ok_or_else(|| "OFFSET: row overflow".to_string())?;
+            let col = (base_col as i64)
+                .checked_add(col_offset)
+                .ok_or_else(|| "OFFSET: column overflow".to_string())?;
+            if row < 1 || col < 1 {
+                return Err("OFFSET: reference is outside the worksheet".to_string());
+            }
+            let total = (height as u64)
+                .checked_mul(width as u64)
+                .ok_or_else(|| "OFFSET: range is too large".to_string())?;
+            if total > 1_000_000 {
+                return Err("OFFSET: range too large (maximum is 1,000,000 cells)".to_string());
+            }
+            let mut vals = Vec::with_capacity(total as usize);
+            for row_offset in 0..height {
+                for col_offset in 0..width {
+                    let target_row = row
+                        .checked_add(row_offset)
+                        .ok_or_else(|| "OFFSET: row overflow".to_string())?;
+                    let target_col = col
+                        .checked_add(col_offset)
+                        .ok_or_else(|| "OFFSET: column overflow".to_string())?;
+                    if target_row > u32::MAX as i64 || target_col > u32::MAX as i64 {
+                        return Err("OFFSET: reference is outside the worksheet".to_string());
+                    }
+                    vals.push(cell_val(cells, target_row as u32, target_col as u32));
                 }
             }
             Ok(vals)
@@ -651,7 +702,11 @@ fn func_if(
     if args.len() < 2 || args.len() > 3 {
         return Err("IF requires 2 or 3 arguments".into());
     }
-    if is_truthy(&evaluate(&args[0], cells)?) {
+    let condition = evaluate(&args[0], cells)?;
+    if let Variant::Error(error) = condition {
+        return Ok(Variant::Error(error));
+    }
+    if is_truthy(&condition) {
         evaluate(&args[1], cells)
     } else if args.len() == 3 {
         evaluate(&args[2], cells)
@@ -664,24 +719,40 @@ fn func_and(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
+    let mut first_error = None;
+    let mut result = true;
     for a in args {
-        if !is_truthy(&evaluate(a, cells)?) {
-            return Ok(Variant::Boolean(false));
-        }
+        match evaluate(a, cells)? {
+            Variant::Error(error) => {
+                first_error.get_or_insert(error);
+            }
+            value => result &= is_truthy(&value),
+        };
     }
-    Ok(Variant::Boolean(true))
+    if let Some(error) = first_error {
+        return Ok(Variant::Error(error));
+    }
+    Ok(Variant::Boolean(result))
 }
 
 fn func_or(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
+    let mut first_error = None;
+    let mut result = false;
     for a in args {
-        if is_truthy(&evaluate(a, cells)?) {
-            return Ok(Variant::Boolean(true));
+        match evaluate(a, cells)? {
+            Variant::Error(error) => {
+                first_error.get_or_insert(error);
+            }
+            value => result |= is_truthy(&value),
         }
     }
-    Ok(Variant::Boolean(false))
+    if let Some(error) = first_error {
+        return Ok(Variant::Error(error));
+    }
+    Ok(Variant::Boolean(result))
 }
 
 fn func_not(
@@ -691,7 +762,11 @@ fn func_not(
     if args.len() != 1 {
         return Err("NOT requires 1 argument".into());
     }
-    Ok(Variant::Boolean(!is_truthy(&evaluate(&args[0], cells)?)))
+    let value = evaluate(&args[0], cells)?;
+    if let Variant::Error(error) = value {
+        return Ok(Variant::Error(error));
+    }
+    Ok(Variant::Boolean(!is_truthy(&value)))
 }
 
 fn func_iferror(
@@ -3168,13 +3243,20 @@ fn func_xor(
     if args.is_empty() {
         return Err("XOR requires at least 1 argument".into());
     }
-    let count = args
-        .iter()
-        .map(|a| evaluate(a, cells).map(|v| is_truthy(&v)))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .filter(|&b| b)
-        .count();
+    let mut count = 0;
+    let mut first_error = None;
+    for arg in args {
+        match evaluate(arg, cells)? {
+            Variant::Error(error) => {
+                first_error.get_or_insert(error);
+            }
+            value if is_truthy(&value) => count += 1,
+            _ => {}
+        }
+    }
+    if let Some(error) = first_error {
+        return Ok(Variant::Error(error));
+    }
     Ok(Variant::Boolean(count % 2 == 1))
 }
 
@@ -6164,6 +6246,10 @@ mod tests {
             calc("=IF(A1>10,\"yes\",\"no\")", &c),
             Variant::Str("no".into())
         );
+        assert_eq!(
+            calc("=IF(1/0,\"yes\",\"no\")", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
     }
 
     #[test]
@@ -6173,6 +6259,19 @@ mod tests {
         assert_eq!(calc("=AND(TRUE,FALSE)", &c), Variant::Boolean(false));
         assert_eq!(calc("=OR(FALSE,TRUE)", &c), Variant::Boolean(true));
         assert_eq!(calc("=NOT(TRUE)", &c), Variant::Boolean(false));
+        assert_eq!(calc("=NOT(1/0)", &c), Variant::Error(ExcelError::DivZero));
+        assert_eq!(
+            calc("=AND(FALSE,1/0)", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
+        assert_eq!(
+            calc("=OR(TRUE,1/0)", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
+        assert_eq!(
+            calc("=IFERROR(AND(FALSE,1/0),99)", &c),
+            Variant::Integer(99)
+        );
     }
 
     #[test]
@@ -6922,6 +7021,10 @@ mod tests {
         assert_eq!(calc("=XOR(TRUE,FALSE)", &c), Variant::Boolean(true));
         assert_eq!(calc("=XOR(TRUE,TRUE)", &c), Variant::Boolean(false));
         assert_eq!(calc("=XOR(TRUE,TRUE,TRUE)", &c), Variant::Boolean(true));
+        assert_eq!(
+            calc("=XOR(TRUE,1/0)", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
     }
 
     #[test]

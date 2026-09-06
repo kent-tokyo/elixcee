@@ -1,6 +1,6 @@
 # elixcee Roadmap
 
-更新日: 2026-09-06。対象versionは **1.0.3** です。
+更新日: 2026-09-07。対象versionは **1.0.4** です。
 完了項目は記載した実装・測定の範囲に限ります。公開先の状態はリリースごとに別途確認します。
 版ごとの変更は [CHANGELOG](CHANGELOG.md)、実装範囲は
 [FUNCTIONS](FUNCTIONS.md)、保証範囲は [v1契約](docs/v1-support-contract.md) を参照してください。
@@ -24,10 +24,11 @@ JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公�
 3. **G3–G4 数式**: シート横断の評価基盤を整え、既存関数の意味論校正と不足機能追加を小さな組に分ける。
 4. **G5 メモリ**: 通常保存のpassthrough遅延処理と、追記専用Writerの行数非依存メモリを別々に実装・測定する。
 5. **G6 判定**: quiet-host再測定、Excel oracle、3 OS、配布・安全性ゲート。以下の性能バックログも継続する。
+6. **LogiSheets対抗 L0–L6**: workbook数式・共有runtime・操作履歴を、既存の安全性と互換性ゲートを維持したまま段階導入する。
 
 ## 互換性・数式・省メモリ強化（G0–G6）
 
-1.0.3公開後の開発計画です。次の変更はUnreleasedに記録します。
+1.0.4公開後の開発計画です。次の変更はUnreleasedに記録します。
 各PhaseはBUILDを小さく実装し、MEASUREが未完なら未検証として残します。
 EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけでの優劣は達成条件にしません。
 
@@ -51,14 +52,26 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 
 ### G2 — OOXMLの接続を保つ（X2 / X4）
 
-- [ ] G2a: `pivotCaches`／`externalReferences`のowner要素と再採番後r:idの対応を保存。cacheId・外部参照の順序・content types・namespaceも検査する。
-- [ ] G2b: worksheet → Drawing → Chart / image、およびPivotTable → cache definition → recordsの到達性と未編集payloadを検証。missing target・重複ID・共有partの削除もfixture化する。
+- [x] G2a 部分 BUILD: `externalReferences` owner要素を再出力し、source relationshipのType/Targetを基準に再採番後の`r:id`へ書き換える経路と、未解決relationship時にownerを省略する安全策を追加した。Pivot cache、cacheId／外部参照順序、content types／namespaceのfixture検査は未完。
+- [x] G2b 部分 BUILD: worksheetのdrawing／legacyDrawing ownerについて、r:id・worksheet .rels・相対target・出力に残るpartを一組で照合し、missing target／重複relationship ID時はownerを再出力しない経路を追加した。さらにDrawing等の内部partに付随する.relsを推移的に辿り、Chart／image targetの欠落も検出する。PivotTableからcache definition／recordsまでの検証とfixture化は未完。
+- [x] G2a/G2b 追加 BUILD: pivotCaches ownerを再生成workbookへ戻し、workbook relationshipの再採番とcache definition／recordsへの内部relationship到達性検査を適用した。Pivotの再集計・編集、cacheIdの意味更新、fixtureによるExcel再open検証は未完。
 - [ ] G2c: sheet rename／行列挿入削除に伴うchart参照・anchor・pivot sourceを更新する。更新できない編集は明示診断／拒否し、古い参照を黙って保存しない。
 - [ ] G2d: Charts / Drawingsの作成・編集API、Pivotのsource/cache更新を一機能ずつ追加。描画再現・Pivot再集計は保持とは別の未完項目として扱う。
+- [x] G2c safety BUILD: sheet rename、row/column insert/delete、sheet move/deleteを構造編集として追跡し、未更新のDrawing／Pivot ownerを保存時に復元しない安全境界を追加した。参照の実更新と明示的な編集APIは未完。
 - [ ] External Linksは既定で非取得・非実行。保持するURLを辿らない。削除／拒否policyと外部参照数式の非評価を明示する。
 - [ ] MEASURE: 自作最小packageとExcel由来fixtureで、part／rels／owner／cacheを比較し、実Excelの修復警告と編集後の再利用を確認する。
 
 ### G3 — Workbook単位の数式評価（X3）
+
+- [x] G3 部分 BUILD: workbook数式評価へsheet-local named rangeを追加し、host sheetのlocal nameをglobal nameより優先する解決規則を固定した。ロード時は単純A1／範囲definedNameと、既存の`OFFSET`で表現できるdynamic definedNameをglobal／local scope付きで取り込む。tableの単純列参照、連続複数列、静的specifier、同一tableデータ行内の`[@Column]`／`[#This Row]`をqualified rangeへ評価時正規化する。qualified target、行／列insert・delete、sheet renameにも追従する。table外・別sheetの行コンテキスト、複雑なstructured／external reference、sheet位置変更や追加を含む完全な参照更新は未完。
+- [x] G3 診断 BUILD: parsed formula graphの循環有無を検出し、WASM `diagnoseWorkbook`へ`hasFormulaCycle`を追加した。再計算のbest-effort挙動は維持し、循環の解消・Excel oracle照合・structured／named rangeを含む完全診断は未完。
+- [x] G3 安全境界 BUILD: structured referenceの評価時正規化で文字列リテラルと識別子境界を考慮し、unsupported式の部分一致による誤変換を防止した。
+- [x] G3 型意味論 BUILD: `IF`の条件式に含まれるExcel Error値を伝播する回帰を追加し、未選択分岐の遅延評価を維持した。Empty／Error全関数の独立oracle校正、日付系・丸めは未完。
+- [x] G3 型意味論 BUILD: `NOT`のError引数もErrorとして伝播させる回帰を追加した。AND／ORを含む全関数のError優先順位とExcel oracle照合は未完。
+- [x] G3 型意味論 BUILD: `AND`／`OR`で全引数のErrorを保持・伝播し、真偽値による途中短絡でErrorを隠さない回帰を追加した。全関数のError優先順位とExcel oracle照合は未完。
+- [x] G3 型意味論 BUILD: `XOR`でも全引数のErrorを保持・伝播する回帰を追加した。全関数のError優先順位とExcel oracle照合は未完。
+- [x] G3 決定性 BUILD: workbook formula graphのready nodeと循環残りを安定ソートし、HashMap列挙順に依存しない再計算・診断順を固定した。
+- [x] G3 循環診断 BUILD: qualifiedなcross-sheet cell referenceを含む循環を診断グラフで検出する回帰を追加した。named／structured rangeを含む完全診断とExcel oracle照合は未完。
 
 - [ ] 安定sheet ID付き参照解決、workbook/sheet-local name、構造化参照を段階導入。現在の単一sheet lookupと誤って混在させない。
 - [ ] シート横断dirty graph、循環検出、manual→automatic、削除／rename、cached valueの扱いを統合。既存の総work・深さ・参照budgetを維持する。
@@ -157,6 +170,26 @@ temp directoryの1M行観測はappend 3回で14.24 MiB、normal-fresh単発で12
 - [ ] G2の接続graphとExcel再open、G3–G4の独立oracle、G5の行数別RSSを根拠として、対応matrixと既知の損失を更新する。
 - [ ] Linux/macOS/Windows、失敗時の元出力保護、fuzz・依存監査・Python/Rust API回帰を実施する。
 - [ ] 大規模速度は同じ入力・編集・耐久性・反復条件で再測定。互換性やRSSの悪化を速度向上で相殺しない。
+
+### LogiSheets 対抗トラック（L0–L6）
+
+LogiSheetsの公開metadataは実装・測定・運用実績の証拠ではないため、
+「公開API」「実行可能なfixture」「3 runtime」「速度・依存更新・履歴」の軸を分けて比較する。
+既存のX/Gゲートを置き換えず、数式とWASMの共有を優先する。
+
+- [x] L0 現状固定: Rust/WASM/Node/ブラウザのread経路は共有済み。数式はsingle-sheet fast pathとworkbook qualified-reference slow path、undo/redoとJS write/recalculateは未完として固定した。
+- [x] L1 workbook formula BUILD: sheet-qualified cell/range referenceを明示的なsheet bandへremapし、全sheetのformula nodeを依存順に評価するslow pathを追加。case-insensitive sheet名、mixed host/qualified参照、formula chain、cycleのbest-effortを単体テストで固定した。dirty graphの増分化とstructured referenceは未完。
+- [x] L2a named range BUILD: runtime named rangeと、ロード時に取り込んだ単純A1／qualified／`OFFSET` definedNameをformula ASTへ展開し、qualified referenceと混在する`SUM(MyRange)`をworkbook再計算で評価する。table column、連続複数列、静的specifier、同一tableデータ行のthis-row structured referenceを同じ依存グラフへ接続し、行／列構造変更とrenameの単純参照更新にも対応する。table外の行コンテキスト依存・複雑なstructured referenceは未完。
+- [x] L2b interval-style dependency BUILD: 大きなrangeを全セルの依存キーへ展開せず、sheet・行・列の区間として保持し、sheet-local formula-node indexとの包含判定で依存辺を構築する。完全な更新用interval treeとincremental workbook dirty propagationは未完。
+- [x] L2 dependency graph BUILD（部分完了）: range依存の過剰展開を避けるsheet-local interval-style index、値セルを起点にした直接・range・formula-chainのdirty closure、manual/automatic再計算をworkbook単位で統合した。full interval tree、sheet rename/delete、sheet-scoped/dynamic/structured named range、循環診断、完全な構造変更追跡は未完。
+- [x] L3 shared runtime BUILD（部分完了）: 同一Rust coreのworkbook計算を`calculateWorkbook(bytes)`としてWASMへ公開し、`diagnoseWorkbook(bytes)`でsheet/formula/qualified formula/parse errorのJSON summaryを提供、Node/browser同梱runtimeを再生成した。cross-sheet formulaのNode実行、`@elixcee/xlsx/runtime`のNode/browser条件、CJS/ESM bundle、意図的に固定したWASM payload baselineに対する10%成長gateを確認した。incremental JS API、sync/async loading、browser worker境界は未完。
+- [x] L4 editing history BUILD（部分完了）: 明示的なセル/範囲値書き込みとセル数式設定を対象に、最大128操作のbounded undo/redoとtransaction abortをRust VM・Python APIへ追加し、formula cache・dirty状態・tile cacheの復元、prior history保持、nested transaction拒否をテストした。WASMにはstateful `WorkbookEditor`（`setNumber`、`recalculate`、`undo`/`redo`、transaction）を追加し、互換rootを汚さない`@elixcee/xlsx/runtime`サブパスからNode/browserへ公開した。sheet操作、OOXML dirty partsと外部効果の一体復元は未完。
+- [ ] L5 structured data/plugin/AI boundary: table/validationをtyped data APIへ写像し、pluginはcapability allowlistとresource budget内で実行する。AI操作は提案・dry-run・差分承認を既定にし、任意コード実行や外部取得を許可しない。
+- [ ] L6 MEASURE/GATE: LogiSheetsを固定commit/versionで比較し、formula correctness、dependency update、WASM/Node/browser parity、undo/redo、startup/throughput/RSS/bundle sizeを同じfixtureで測る。WASM payload baselineと10%成長gate、runtime subpathのNode/browser条件、CJS/ESM bundle smokeは先行実装した。LogiSheets固定版比較、同一fixtureの速度/RSS/値parity、Excel oracleは未完。stars/commitsや機能数は補助情報に留め、未測定の優位性は主張しない。
+
+直近の実装成果（2026-09-06）: L1のworkbook再計算、L2aのnamed range展開、L2bの区間依存辺構築、L2のdirty closure（値セルからの逆引き、formula chain、range）と`set_cell_formula`のqualified-reference初期値処理、L3の`calculateWorkbook(bytes)`／`diagnoseWorkbook(bytes)`共有WASM入口、L4のbounded undo/redo／transaction abort／WASM `WorkbookEditor`と`@elixcee/xlsx/runtime`公開サブパスを実装。
+`cargo test --workspace --all-targets --offline`、`cargo clippy -p elixcee --all-targets --offline -- -D warnings`、`packages/xlsx`の`npm run wasm:smoke`を確認した。
+これはBUILDとconsumer smokeの証拠であり、LogiSheetsとの速度比較、WASM/Node/browserの完全な値parity、Excel oracle一致を示すものではない。
 
 比較仕様の参照先（実測証拠ではありません）:
 [EPPlus公式対応表](https://github.com/EPPlusSoftware/EPPlus/wiki/Supported-Functions)、

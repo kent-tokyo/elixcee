@@ -2,11 +2,13 @@
 
 [English](README.md) | [日本語](README_ja.md) | **中文**
 
-elixcee 是一个使用 Rust 编写的无头运行时，可在不安装 Microsoft Excel 的情况下运行、测试和诊断面向数据处理的 Excel VBA 子集。项目提供 PyO3 Python API、独立 CLI，以及实验性的 `@elixcee/xlsx` JavaScript/WASM 包。
+elixcee 是一个使用 Rust 编写的无头工作簿运行时，可在不安装 Microsoft Excel 的情况下运行、测试和诊断面向数据处理的 Excel VBA 子集。除了执行 VBA 外，还可以计算公式、编辑单元格/范围和工作簿元数据，并保存为 XLSX/XLSM/ODS。项目提供 PyO3 Python API、独立 CLI，以及实验性的 `@elixcee/xlsx` JavaScript/WASM 包。
 
-它不是 Excel 桌面应用的完整替代品。屏幕更新、图表和对话框等 UI 功能会被跳过、简化建模或报告错误。
+elixcee 不只是 VBA 执行器，而是无头 Excel 工作簿自动化运行时：可以直接编辑数据、重新计算受支持的公式，也可以在同一个工作簿模型上执行、诊断和测试受支持的 VBA。它适合没有安装 Excel 的 CI 和服务器环境中的 `.xlsx`/`.xlsm` 读写。
 
-版本：**1.0.3**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+它不是 Excel 桌面应用的完整替代品。屏幕更新、图表和对话框等 UI 功能会被跳过、简化建模或报告错误。需要完整 Excel 对象模型或完整 OOXML 兼容性时，请先检查支持边界。
+
+版本：**1.0.4**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 JavaScript 包仍为 private，尚未发布。
 
 ## 安装
@@ -51,6 +53,15 @@ Sub DoubleIt()
 End Sub
 """, "DoubleIt")
 print(vm.get_cell(1, 2))       # 20
+
+vm = elixcee.load_workbook("input.xlsx")
+vm.set_cell(1, 1, 10)                    # 编辑单元格
+vm.set_cell_formula(1, 2, "=A1*2")      # 设置公式
+vm.recalculate()                        # 重新计算公式
+vm.save_workbook("output.xlsx")
+
+vm.set_cell(1, 1, 20)
+vm.undo()                                # 撤销编辑
 ```
 
 Python API 还支持公式、范围、工作表、VBA `Collection` 与类模块子集、样式、表格、数据验证、AutoFilter、

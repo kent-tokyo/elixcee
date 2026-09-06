@@ -1030,6 +1030,29 @@ struct FormulaPlan {
     range_dependents: Vec<((u32, u32, u32, u32), usize)>,
 }
 
+const MAX_EDIT_HISTORY: usize = 128;
+
+#[derive(Clone)]
+struct EditHistoryState {
+    sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
+    active_sheet: String,
+    next_append_rows: HashMap<String, u32>,
+    formula_ast_cache: FormulaAstCache,
+    formula_plan: HashMap<String, FormulaPlan>,
+    formula_dirty_cells: HashMap<String, HashSet<(u32, u32)>>,
+    workbook_formula_dirty: HashMap<String, HashSet<(u32, u32)>>,
+    workbook_formula_tracking_valid: bool,
+    workbook_formula_structure_dirty: bool,
+    ooxml_structural_edit_dirty: bool,
+}
+
+#[derive(Clone)]
+struct EditTransaction {
+    state: EditHistoryState,
+    undo_len: usize,
+    redo: Vec<EditHistoryState>,
+}
+
 #[derive(Clone)]
 pub struct Vm {
     /// Per-sheet cell storage. Key is sheet name (lowercase for lookup).
@@ -1098,6 +1121,11 @@ pub struct Vm {
     current_class_instances: Vec<u64>,
     /// Workbook-level named ranges: lowercase name → address string (e.g. "A1:B5").
     pub named_ranges: HashMap<String, String>,
+    /// Simple workbook-defined names loaded from `xl/workbook.xml`. Kept
+    /// separate from `named_ranges`, which is the VBA runtime table.
+    loaded_named_ranges: HashMap<String, String>,
+    /// Sheet-local named ranges: lowercase sheet key -> lowercase name -> A1 range.
+    pub(crate) scoped_named_ranges: HashMap<String, HashMap<String, String>>,
     /// User-defined types: lowercase type name → vec of (field_name, vba_type).
     type_defs: HashMap<String, Vec<(String, String)>>,
     /// Lazy index for Cells.End queries: col → sorted set of non-empty rows.
@@ -1126,6 +1154,21 @@ pub struct Vm {
     formula_plan: HashMap<String, FormulaPlan>,
     /// Formula cells whose cached values are invalidated by ordinary cell writes.
     formula_dirty_cells: HashMap<String, HashSet<(u32, u32)>>,
+    /// Cross-sheet formula inputs changed since the last workbook recalculation.
+    workbook_formula_dirty: HashMap<String, HashSet<(u32, u32)>>,
+    /// Direct `cells_mut()` callers can bypass change tracking; force a safe
+    /// workbook rebuild after that escape hatch is used.
+    workbook_formula_tracking_valid: bool,
+    workbook_formula_structure_dirty: bool,
+    /// True after a sheet/name/row/column structural edit whose chart/pivot
+    /// references are not yet rewritten by the OOXML writer.
+    pub(crate) ooxml_structural_edit_dirty: bool,
+    /// Bounded snapshots for explicit cell/formula edits. Other VM state is
+    /// deliberately not included: these commands only mutate worksheet data
+    /// and formula caches, while VBA execution state is never rewound.
+    edit_undo: Vec<EditHistoryState>,
+    edit_redo: Vec<EditHistoryState>,
+    edit_transaction: Option<EditTransaction>,
     /// Set to true by `move_sheet` only; once true, `save_xlsx_impl` drops any
     /// `<definedNames>` passthrough even if no sheet was deleted. A
     /// `<definedName localSheetId="N">` is positional, so reordering
@@ -1521,6 +1564,8 @@ impl Vm {
             class_defs: HashMap::new(),
             current_class_instances: Vec::new(),
             named_ranges: HashMap::new(),
+            loaded_named_ranges: HashMap::new(),
+            scoped_named_ranges: HashMap::new(),
             type_defs: HashMap::new(),
             col_rows: HashMap::new(),
             row_cols: HashMap::new(),
@@ -1531,6 +1576,13 @@ impl Vm {
             formula_ast_cache: HashMap::new(),
             formula_plan: HashMap::new(),
             formula_dirty_cells: HashMap::new(),
+            workbook_formula_dirty: HashMap::new(),
+            workbook_formula_tracking_valid: false,
+            workbook_formula_structure_dirty: true,
+            ooxml_structural_edit_dirty: false,
+            edit_undo: Vec::new(),
+            edit_redo: Vec::new(),
+            edit_transaction: None,
             defined_names_may_be_stale: false,
             sheet_renames_since_load: HashMap::new(),
             deadline: None,
@@ -1791,6 +1843,7 @@ impl Vm {
 
     pub fn cells_mut(&mut self) -> &mut HashMap<(u32, u32), CellContent> {
         self.cell_index_dirty = true;
+        self.workbook_formula_tracking_valid = false;
         self.cell_tile_cache
             .lock()
             .expect("cell tile cache mutex poisoned")
@@ -1869,6 +1922,40 @@ impl Vm {
         self.rewrite_formulas_workbook_wide(|host_key, f| {
             formula::shift_references(f, host_key, &edited_key, axis, edit)
         });
+    }
+
+    /// Keep the address-only subset of loaded defined names aligned with row
+    /// and column edits. Workbook-scoped names are shifted only when their
+    /// target is explicit (`Sheet!A1`); an unqualified workbook name has
+    /// context-dependent Excel semantics and is left untouched. Sheet-local
+    /// names have an unambiguous host sheet, so both qualified and
+    /// unqualified references are shifted there. Unsupported definitions are
+    /// never present in these maps and remain opaque in the source XML.
+    fn rewrite_loaded_named_ranges_for_structural_edit(
+        &mut self,
+        edited_key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        for address in self.loaded_named_ranges.values_mut() {
+            if !address.contains('!') {
+                continue;
+            }
+            if let Ok(Some(rewritten)) =
+                formula::shift_references(address, edited_key, edited_key, axis, edit)
+            {
+                *address = rewritten;
+            }
+        }
+        for (host_key, names) in &mut self.scoped_named_ranges {
+            for address in names.values_mut() {
+                if let Ok(Some(rewritten)) =
+                    formula::shift_references(address, host_key, edited_key, axis, edit)
+                {
+                    *address = rewritten;
+                }
+            }
+        }
     }
 
     /// Shifts every merge on `key` for a row/col structural edit -- `shift_merge_rect`,
@@ -2053,6 +2140,7 @@ impl Vm {
                 return Err(format!("Column '{col_name}' not found on table '{name}'"));
             }
         }
+        self.workbook_formula_structure_dirty = true;
 
         // Column removals shift cell data -- collected here (needs the table's CURRENT
         // ref/column-position state, computed one removal at a time since each shifts
@@ -2684,6 +2772,216 @@ impl Vm {
         });
     }
 
+    fn rewrite_loaded_named_ranges_for_rename(&mut self, old_key: &str, new_name: &str) {
+        for address in self.loaded_named_ranges.values_mut() {
+            if let Ok(Some(rewritten)) =
+                formula::rename_sheet_references(address, old_key, new_name)
+            {
+                *address = rewritten;
+            }
+        }
+        if let Some(mut names) = self.scoped_named_ranges.remove(old_key) {
+            for address in names.values_mut() {
+                if let Ok(Some(rewritten)) =
+                    formula::rename_sheet_references(address, old_key, new_name)
+                {
+                    *address = rewritten;
+                }
+            }
+            self.scoped_named_ranges
+                .insert(new_name.to_lowercase(), names);
+        }
+    }
+
+    fn structured_formula_ranges(&self) -> (HashMap<String, String>, HashMap<String, String>) {
+        let mut ranges = HashMap::new();
+        let mut named_ranges = HashMap::new();
+        let mut register = |pattern: String, token: String, address: String| {
+            ranges.insert(pattern.to_ascii_lowercase(), token.clone());
+            named_ranges.insert(token, address);
+        };
+        for (sheet, tables) in &self.tables {
+            for table in tables {
+                let table_start = table.ref_range.0.0;
+                let table_end = table.ref_range.1.0;
+                let table_left = table.ref_range.0.1;
+                let table_right = table.ref_range.1.1;
+                let data_start = table_start + table.header_row_count;
+                let data_end = table_end.saturating_sub(table.totals_row_count);
+                let col_address = |start: u32, end: u32, col: u32| {
+                    let col_letter = crate::formula::eval::col_to_letter(col);
+                    format!("{}!{}{}:{}{}", sheet, col_letter, start, col_letter, end)
+                };
+                let rect_address = |start: u32, end: u32| {
+                    format!(
+                        "{}!{}{}:{}{}",
+                        sheet,
+                        crate::formula::eval::col_to_letter(table_left),
+                        start,
+                        crate::formula::eval::col_to_letter(table_right),
+                        end
+                    )
+                };
+                let rect_columns_address = |start: u32, end: u32, left: u32, right: u32| {
+                    format!(
+                        "{}!{}{}:{}{}",
+                        sheet,
+                        crate::formula::eval::col_to_letter(left),
+                        start,
+                        crate::formula::eval::col_to_letter(right),
+                        end
+                    )
+                };
+                let table_names = [&table.name, &table.display_name];
+                for table_name in table_names {
+                    let base_token = format!("ElixceeTable{}", table_name)
+                        .chars()
+                        .filter(|ch| ch.is_ascii_alphabetic())
+                        .collect::<String>();
+                    register(
+                        format!("{}[#Headers]", table_name),
+                        format!("{}Headers", base_token).to_ascii_lowercase(),
+                        rect_address(table_start, table_start + table.header_row_count - 1),
+                    );
+                    register(
+                        format!("{}[#All]", table_name),
+                        format!("{}All", base_token).to_ascii_lowercase(),
+                        rect_address(table_start, table_end),
+                    );
+                    if table.totals_row_count > 0 {
+                        register(
+                            format!("{}[#Totals]", table_name),
+                            format!("{}Totals", base_token).to_ascii_lowercase(),
+                            rect_address(table_end - table.totals_row_count + 1, table_end),
+                        );
+                    }
+                    if data_start <= data_end {
+                        register(
+                            format!("{}[#Data]", table_name),
+                            format!("{}Data", base_token).to_ascii_lowercase(),
+                            rect_address(data_start, data_end),
+                        );
+                    }
+                    for (index, column) in table.columns.iter().enumerate() {
+                        let col = table.ref_range.0.1 + index as u32;
+                        let col_letter = crate::formula::eval::col_to_letter(col);
+                        let token_base = format!("{}{}", base_token, column.name)
+                            .chars()
+                            .filter(|ch| ch.is_ascii_alphabetic())
+                            .collect::<String>();
+                        register(
+                            format!("{}[{}]", table_name, column.name),
+                            token_base.clone().to_ascii_lowercase(),
+                            col_address(data_start, data_end, col),
+                        );
+                        register(
+                            format!("{}[@{}]", table_name, column.name),
+                            format!(
+                                "@sheet:{};rows:{}-{}|{}!{}{{row}}",
+                                sheet, data_start, data_end, sheet, col_letter
+                            ),
+                            col_address(data_start, data_end, col),
+                        );
+                        register(
+                            format!("{}[[#This Row],[{}]]", table_name, column.name),
+                            format!(
+                                "@sheet:{};rows:{}-{}|{}!{}{{row}}",
+                                sheet, data_start, data_end, sheet, col_letter
+                            ),
+                            col_address(data_start, data_end, col),
+                        );
+                        register(
+                            format!("{}[[#Headers],[{}]]", table_name, column.name),
+                            format!("{}Headers", token_base).to_ascii_lowercase(),
+                            col_address(table_start, table_start + table.header_row_count - 1, col),
+                        );
+                        register(
+                            format!("{}[[#All],[{}]]", table_name, column.name),
+                            format!("{}All", token_base).to_ascii_lowercase(),
+                            col_address(table_start, table_end, col),
+                        );
+                        if data_start <= data_end {
+                            register(
+                                format!("{}[[#Data],[{}]]", table_name, column.name),
+                                format!("{}Data", token_base).to_ascii_lowercase(),
+                                col_address(data_start, data_end, col),
+                            );
+                        }
+                        if table.totals_row_count > 0 {
+                            register(
+                                format!("{}[[#Totals],[{}]]", table_name, column.name),
+                                format!("{}Totals", token_base).to_ascii_lowercase(),
+                                col_address(table_end - table.totals_row_count + 1, table_end, col),
+                            );
+                        }
+                        let _ = col_letter;
+                    }
+                    for left_index in 0..table.columns.len() {
+                        for right_index in (left_index + 1)..table.columns.len() {
+                            let left_col = table.ref_range.0.1 + left_index as u32;
+                            let right_col = table.ref_range.0.1 + right_index as u32;
+                            let left_name = &table.columns[left_index].name;
+                            let right_name = &table.columns[right_index].name;
+                            let token_base = format!("{}{}{}", base_token, left_name, right_name)
+                                .chars()
+                                .filter(|ch| ch.is_ascii_alphanumeric())
+                                .collect::<String>();
+                            register(
+                                format!("{}[[{}]:[{}]]", table_name, left_name, right_name),
+                                format!("{}Range", token_base).to_ascii_lowercase(),
+                                rect_columns_address(data_start, data_end, left_col, right_col),
+                            );
+                            register(
+                                format!(
+                                    "{}[[#Headers],[{}]:[{}]]",
+                                    table_name, left_name, right_name
+                                ),
+                                format!("{}HeadersRange", token_base).to_ascii_lowercase(),
+                                rect_columns_address(
+                                    table_start,
+                                    table_start + table.header_row_count - 1,
+                                    left_col,
+                                    right_col,
+                                ),
+                            );
+                            register(
+                                format!("{}[[#All],[{}]:[{}]]", table_name, left_name, right_name),
+                                format!("{}AllRange", token_base).to_ascii_lowercase(),
+                                rect_columns_address(table_start, table_end, left_col, right_col),
+                            );
+                            if data_start <= data_end {
+                                register(
+                                    format!(
+                                        "{}[[#Data],[{}]:[{}]]",
+                                        table_name, left_name, right_name
+                                    ),
+                                    format!("{}DataRange", token_base).to_ascii_lowercase(),
+                                    rect_columns_address(data_start, data_end, left_col, right_col),
+                                );
+                            }
+                            if table.totals_row_count > 0 {
+                                register(
+                                    format!(
+                                        "{}[[#Totals],[{}]:[{}]]",
+                                        table_name, left_name, right_name
+                                    ),
+                                    format!("{}TotalsRange", token_base).to_ascii_lowercase(),
+                                    rect_columns_address(
+                                        table_end - table.totals_row_count + 1,
+                                        table_end,
+                                        left_col,
+                                        right_col,
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (ranges, named_ranges)
+    }
+
     /// Moves the rectangular range `(r1,c1)..(r2,c2)` on `key` so its
     /// top-left corner lands at `(dest_r1, dest_c1)` -- 0.14.0-A4 Stage 3
     /// (cell-move API), same-sheet only. See
@@ -2869,7 +3167,9 @@ impl Vm {
     /// left stale, same as any other edit -- callers that need fresh values already call
     /// `recalculate_all()` themselves.
     pub fn insert_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.ooxml_structural_edit_dirty = true;
         let edit = formula::StructuralEdit::Insert { at: first, count };
+        self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
@@ -2917,7 +3217,9 @@ impl Vm {
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`);
     /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.ooxml_structural_edit_dirty = true;
         let edit = formula::StructuralEdit::Delete { at: first, count };
+        self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
@@ -2962,7 +3264,9 @@ impl Vm {
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`);
     /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.ooxml_structural_edit_dirty = true;
         let edit = formula::StructuralEdit::Delete { at: first, count };
+        self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
@@ -3000,7 +3304,9 @@ impl Vm {
     /// `insert_rows_on_sheet`'s column-axis mirror. Shifts same-sheet formula
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`).
     pub fn insert_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.ooxml_structural_edit_dirty = true;
         let edit = formula::StructuralEdit::Insert { at: first, count };
+        self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
@@ -3358,6 +3664,7 @@ impl Vm {
     pub fn write_rect(&mut self, key: &str, top_left: (u32, u32), values: &[Vec<Variant>]) {
         let (r1, c1) = top_left;
         let sheet_key = key.to_lowercase();
+        self.record_edit_history();
         let changed = values
             .iter()
             .enumerate()
@@ -3367,11 +3674,18 @@ impl Vm {
                     .map(move |(col_offset, _)| (r1 + row_offset as u32, c1 + col_offset as u32))
             })
             .collect::<Vec<_>>();
-        let formula_structure_changed = self.formula_plan.get(&sheet_key).is_some_and(|plan| {
-            changed
-                .iter()
-                .any(|cell| plan.cells.iter().any(|(row, col, _)| (*row, *col) == *cell))
-        });
+        let formula_structure_changed =
+            self.sheets.get(&sheet_key).is_some_and(|cells| {
+                changed.iter().any(|position| {
+                    cells
+                        .get(position)
+                        .is_some_and(|content| content.formula.is_some())
+                })
+            }) || self.formula_plan.get(&sheet_key).is_some_and(|plan| {
+                changed
+                    .iter()
+                    .any(|cell| plan.cells.iter().any(|(row, col, _)| (*row, *col) == *cell))
+            });
         self.cell_index_dirty = true;
         self.next_append_rows.remove(&sheet_key);
         {
@@ -3392,6 +3706,12 @@ impl Vm {
                 }
             }
         }
+        self.workbook_formula_dirty
+            .entry(sheet_key.clone())
+            .or_default()
+            .extend(changed.iter().copied());
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty |= formula_structure_changed;
         self.update_cached_tiles_for_rect(&sheet_key, (r1, c1), values);
         if formula_structure_changed {
             self.formula_plan.remove(&sheet_key);
@@ -6466,6 +6786,7 @@ impl Vm {
     fn remove_sheet(&mut self, key: &str, display: &str) -> Result<(), String> {
         self.check_sheet_not_protected(key, display)?;
         if key != self.active_sheet {
+            self.ooxml_structural_edit_dirty = true;
             self.cell_tile_cache
                 .lock()
                 .expect("cell tile cache mutex poisoned")
@@ -6588,6 +6909,7 @@ impl Vm {
         if new_key != old_key && self.sheets.contains_key(&new_key) {
             return Err(format!("Sheet '{}' already exists", new_name));
         }
+        self.ooxml_structural_edit_dirty = true;
 
         let mut tile_cache = self
             .cell_tile_cache
@@ -6599,6 +6921,7 @@ impl Vm {
         drop(tile_cache);
 
         self.rewrite_qualifiers_for_rename(&old_key, new_name);
+        self.rewrite_loaded_named_ranges_for_rename(&old_key, new_name);
 
         // 1. `sheets` -- the cell map itself.
         if let Some(cells) = self.sheets.remove(&old_key) {
@@ -6899,6 +7222,7 @@ impl Vm {
         if !self.sheets.contains_key(&key) {
             return Err(format!("Sheet '{}' not found", name));
         }
+        self.ooxml_structural_edit_dirty = true;
         self.sheet_order.retain(|k| k != &key);
         let idx = new_index.min(self.sheet_order.len());
         self.sheet_order.insert(idx, key);
@@ -7977,7 +8301,60 @@ impl Vm {
         if sheets.is_empty() {
             return Err("workbook has no sheets".to_string());
         }
-        Ok(self.populate_from_sheets(sheets))
+        let names = self.populate_from_sheets(sheets);
+        self.load_simple_defined_names(path)?;
+        Ok(names)
+    }
+
+    /// Import the deliberately small, address-only subset of OOXML defined
+    /// names that the workbook formula engine can evaluate today. Qualified,
+    /// dynamic, table, and external references remain available through
+    /// `defined_names()` but are not silently converted into a wrong address.
+    pub(crate) fn load_simple_defined_names(&mut self, path: &str) -> Result<(), String> {
+        self.loaded_named_ranges.clear();
+        self.scoped_named_ranges.clear();
+        let raw_entries = reader::read_raw_zip_entries(path)
+            .map_err(|e| format!("cannot read '{}': {}", path, e))?;
+        let Some(xml) = raw_entries
+            .get("xl/workbook.xml")
+            .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+        else {
+            return Ok(());
+        };
+        for decl in reader::xlsx_defined_name_decls(&xml)? {
+            let address = decl.raw_text.trim().trim_start_matches('=').trim();
+            let valid_address =
+                if address.contains('!') || crate::types::parse_range_addr(address).is_none() {
+                    formula::parse(address)
+                        .is_ok_and(|expr| !matches!(expr, crate::formula::ast::FormulaExpr::Str(_)))
+                } else {
+                    true
+                };
+            if address.is_empty()
+                || address.contains('(')
+                || address.contains(')')
+                || address.contains('#')
+                || !valid_address
+            {
+                continue;
+            }
+            let name = decl.name.to_ascii_lowercase();
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(local_sheet_id) = decl.local_sheet_id {
+                let Some(sheet) = self.sheet_order.get(local_sheet_id) else {
+                    continue;
+                };
+                self.scoped_named_ranges
+                    .entry(sheet.clone())
+                    .or_default()
+                    .insert(name, address.to_string());
+            } else {
+                self.loaded_named_ranges.insert(name, address.to_string());
+            }
+        }
+        Ok(())
     }
 
     /// Every `<definedName name="...">TEXT</definedName>` in the loaded
@@ -8053,6 +8430,8 @@ impl Vm {
         self.sheet_order.clear();
         self.next_append_rows.clear();
         self.formula_ast_cache.clear();
+        self.loaded_named_ranges.clear();
+        self.scoped_named_ranges.clear();
         let mut names = Vec::with_capacity(sheets.len());
         for mut sheet_data in sheets {
             self.ensure_sheet(&sheet_data.name);
@@ -11265,8 +11644,15 @@ impl Vm {
 
     pub fn set_cell_formula(&mut self, row: u32, col: u32, formula: &str) -> Result<(), String> {
         let expr = formula::parse(formula)?;
-        let value = formula::evaluate(&expr, self.cells())?;
+        let value = if formula::references_another_sheet(&expr) {
+            // Workbook-wide evaluation runs on the next explicit recalculate;
+            // do not read the active sheet as a misleading initial value.
+            Variant::Empty
+        } else {
+            formula::evaluate(&expr, self.cells())?
+        };
         self.check_variant_budget(&value)?;
+        self.record_edit_history();
         let active = self.active_sheet.clone();
         self.formula_plan.remove(&active);
         self.formula_dirty_cells.remove(&active);
@@ -11282,12 +11668,162 @@ impl Vm {
             .entry(active)
             .or_default()
             .insert((row, col), (source, Some(expr)));
+        self.workbook_formula_dirty
+            .entry(self.active_sheet.clone())
+            .or_default()
+            .insert((row, col));
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty = true;
         Ok(())
+    }
+
+    /// Register a simple A1 range scoped to one worksheet for workbook formula evaluation.
+    /// Dynamic names and structured references remain outside this bounded API.
+    pub fn set_sheet_named_range(
+        &mut self,
+        sheet: &str,
+        name: &str,
+        address: &str,
+    ) -> Result<(), String> {
+        let sheet_key = sheet.to_ascii_lowercase();
+        if !self.sheets.contains_key(&sheet_key) {
+            return Err(format!("Sheet '{}' not found", sheet));
+        }
+        if name.trim().is_empty() {
+            return Err("named range name must not be empty".to_string());
+        }
+        if parse_range_addr(address).is_none() {
+            return Err(format!("invalid named range address: {address}"));
+        }
+        self.scoped_named_ranges
+            .entry(sheet_key)
+            .or_default()
+            .insert(name.to_ascii_lowercase(), address.to_string());
+        self.workbook_formula_structure_dirty = true;
+        Ok(())
+    }
+
+    /// Undo the most recent explicit cell/value or cell/formula edit.
+    /// Returns false when the bounded history is empty.
+    pub fn undo_edit(&mut self) -> bool {
+        let Some(previous) = self.edit_undo.pop() else {
+            return false;
+        };
+        self.edit_redo.push(self.capture_edit_history());
+        self.restore_edit_history(previous);
+        true
+    }
+
+    /// Redo the most recently undone explicit cell edit.
+    /// Returns false when there is no redo entry.
+    pub fn redo_edit(&mut self) -> bool {
+        let Some(next) = self.edit_redo.pop() else {
+            return false;
+        };
+        self.edit_undo.push(self.capture_edit_history());
+        self.restore_edit_history(next);
+        true
+    }
+
+    pub fn can_undo_edit(&self) -> bool {
+        !self.edit_undo.is_empty()
+    }
+
+    pub fn can_redo_edit(&self) -> bool {
+        !self.edit_redo.is_empty()
+    }
+
+    /// Start a transaction for explicit cell/formula edits.
+    pub fn begin_edit_transaction(&mut self) -> Result<(), String> {
+        if self.edit_transaction.is_some() {
+            return Err("an edit transaction is already active".to_string());
+        }
+        self.edit_transaction = Some(EditTransaction {
+            state: self.capture_edit_history(),
+            undo_len: self.edit_undo.len(),
+            redo: self.edit_redo.clone(),
+        });
+        Ok(())
+    }
+
+    /// Commit the current transaction. Individual edits remain undoable.
+    pub fn commit_edit_transaction(&mut self) -> bool {
+        self.edit_transaction.take().is_some()
+    }
+
+    /// Abort the current transaction and restore its pre-edit state.
+    pub fn abort_edit_transaction(&mut self) -> bool {
+        let Some(transaction) = self.edit_transaction.take() else {
+            return false;
+        };
+        self.restore_edit_history(transaction.state);
+        self.edit_undo.truncate(transaction.undo_len);
+        self.edit_redo = transaction.redo;
+        true
+    }
+
+    fn capture_edit_history(&self) -> EditHistoryState {
+        EditHistoryState {
+            sheets: self.sheets.clone(),
+            active_sheet: self.active_sheet.clone(),
+            next_append_rows: self.next_append_rows.clone(),
+            formula_ast_cache: self.formula_ast_cache.clone(),
+            formula_plan: self.formula_plan.clone(),
+            formula_dirty_cells: self.formula_dirty_cells.clone(),
+            workbook_formula_dirty: self.workbook_formula_dirty.clone(),
+            workbook_formula_tracking_valid: self.workbook_formula_tracking_valid,
+            workbook_formula_structure_dirty: self.workbook_formula_structure_dirty,
+            ooxml_structural_edit_dirty: self.ooxml_structural_edit_dirty,
+        }
+    }
+
+    fn record_edit_history(&mut self) {
+        self.edit_undo.push(self.capture_edit_history());
+        self.edit_undo.truncate(MAX_EDIT_HISTORY);
+        self.edit_redo.clear();
+    }
+
+    fn restore_edit_history(&mut self, state: EditHistoryState) {
+        self.sheets = state.sheets;
+        self.active_sheet = state.active_sheet;
+        self.next_append_rows = state.next_append_rows;
+        self.formula_ast_cache = state.formula_ast_cache;
+        self.formula_plan = state.formula_plan;
+        self.formula_dirty_cells = state.formula_dirty_cells;
+        self.workbook_formula_dirty = state.workbook_formula_dirty;
+        self.workbook_formula_tracking_valid = state.workbook_formula_tracking_valid;
+        self.workbook_formula_structure_dirty = state.workbook_formula_structure_dirty;
+        self.ooxml_structural_edit_dirty = state.ooxml_structural_edit_dirty;
+        self.cell_index_dirty = true;
+        self.cell_tile_cache = Arc::new(Mutex::new(HashMap::new()));
+        self.cell_tile_cache_clock = Arc::new(AtomicU64::new(0));
     }
 
     pub fn recalculate_all(&mut self) -> Result<(), String> {
         let active = self.active_sheet.clone();
         self.next_append_rows.remove(&active);
+        let mut effective_named_ranges = self.loaded_named_ranges.clone();
+        effective_named_ranges.extend(self.named_ranges.clone());
+        let (structured_ranges, structured_named_ranges) = self.structured_formula_ranges();
+        effective_named_ranges.extend(structured_named_ranges);
+        let force_workbook_rebuild =
+            !self.workbook_formula_tracking_valid || self.workbook_formula_structure_dirty;
+        if formula::recalculate_workbook(
+            &mut self.sheets,
+            &effective_named_ranges,
+            &self.scoped_named_ranges,
+            &structured_ranges,
+            Some(&self.workbook_formula_dirty),
+            force_workbook_rebuild,
+        )? {
+            self.formula_plan.clear();
+            self.formula_dirty_cells.clear();
+            self.workbook_formula_dirty.clear();
+            self.workbook_formula_tracking_valid = true;
+            self.workbook_formula_structure_dirty = false;
+            self.cell_index_dirty = true;
+            return Ok(());
+        }
         // `cells_mut()` intentionally exposes the public cell map for
         // low-level integrations. Such callers can edit a formula source
         // without going through `set_cell_formula`, so a warm dependency
@@ -17929,25 +18465,97 @@ mod tests {
     }
 
     #[test]
-    fn recalculate_all_skips_a_cross_sheet_formula_instead_of_erroring_the_whole_recalc() {
-        // Regression: a formula containing a sheet-qualified reference now
-        // PARSES successfully (0.14.0-A2), so it enters recalculate_all's
-        // formula-cell collection where it didn't before. evaluate() refuses
-        // to evaluate it (cross-sheet evaluation isn't supported), and
-        // recalculate_all must not let that failure abort the whole
-        // workbook's recalculation -- every other formula must still update.
+    fn recalculate_all_evaluates_cross_sheet_formulas_without_aborting_other_work() {
         let mut vm = Vm::new();
         vm.ensure_sheet("Other");
+        vm.set_active_sheet("Other").unwrap();
         vm.cells_mut().insert(
             (1, 1),
             CellContent {
-                formula: Some("=Other!A1".to_string()), // cross-sheet, left un-evaluated
+                formula: None,
+                value: Variant::Integer(5),
+            },
+        );
+        vm.set_active_sheet("sheet1").unwrap();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=Other!A1".to_string()),
                 value: Variant::Empty,
             },
         );
-        vm.set_cell_formula(2, 1, "=1+1").unwrap(); // ordinary, must still recalculate
+        vm.set_cell_formula(2, 1, "=1+1").unwrap();
         assert!(vm.recalculate_all().is_ok());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(5));
         assert_eq!(vm.get_cell(2, 1), Variant::Integer(2));
+
+        vm.write_rect("Other", (1, 1), &[vec![Variant::Integer(8)]]);
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(8));
+    }
+
+    #[test]
+    fn edit_history_undoes_and_redoes_values_and_formulas_with_cache_state() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(2)]]);
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        vm.recalculate_all().unwrap();
+
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(9)]]);
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(10));
+        assert!(vm.can_undo_edit());
+
+        assert!(vm.undo_edit());
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(3));
+        assert!(vm.can_redo_edit());
+
+        assert!(vm.redo_edit());
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(9));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(10));
+    }
+
+    #[test]
+    fn a_new_edit_clears_redo_history() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(2)]]);
+        assert!(vm.undo_edit());
+        assert!(vm.can_redo_edit());
+        vm.write_rect("sheet1", (1, 2), &[vec![Variant::Integer(3)]]);
+        assert!(!vm.can_redo_edit());
+    }
+
+    #[test]
+    fn edit_transaction_abort_restores_multiple_edits_and_prior_history() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        assert!(vm.can_undo_edit());
+        vm.begin_edit_transaction().unwrap();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(7)]]);
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        assert!(vm.commit_edit_transaction());
+        vm.begin_edit_transaction().unwrap();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(9)]]);
+        vm.set_cell_formula(1, 3, "=A1+2").unwrap();
+        assert!(vm.abort_edit_transaction());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+        assert_eq!(vm.get_cell(1, 3), Variant::Empty);
+        assert!(vm.can_undo_edit());
+        assert!(!vm.can_redo_edit());
+    }
+
+    #[test]
+    fn nested_edit_transactions_are_rejected_without_changing_state() {
+        let mut vm = Vm::new();
+        vm.begin_edit_transaction().unwrap();
+        assert!(vm.begin_edit_transaction().is_err());
+        assert!(vm.abort_edit_transaction());
+        assert!(!vm.abort_edit_transaction());
     }
 
     #[test]
@@ -22801,6 +23409,55 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, TableEditOp::Resize(((1, 1), (4, 4)))))
         );
+    }
+
+    #[test]
+    fn structured_formula_follows_a_table_column_after_column_removal() {
+        let mut vm = Vm::new();
+        vm.tables.insert(
+            "sheet1".to_string(),
+            vec![table_with_columns(&["A", "B", "C"], ((1, 1), (3, 3)))],
+        );
+        {
+            let cells = vm.sheet_cells_mut("sheet1").unwrap();
+            cells.insert(
+                (2, 3),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(7),
+                },
+            );
+            cells.insert(
+                (3, 3),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(8),
+                },
+            );
+            cells.insert(
+                (1, 5),
+                CellContent {
+                    formula: Some("=SUM(Table1[C])".to_string()),
+                    value: Variant::Empty,
+                },
+            );
+        }
+        vm.workbook_formula_structure_dirty = true;
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(15));
+        vm.edit_table_on_sheet(
+            "sheet1",
+            "Table1",
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &["B".to_string()],
+        )
+        .unwrap();
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(15));
     }
 
     fn table_with_columns(names: &[&str], ref_range: MergeRect) -> TableDef {

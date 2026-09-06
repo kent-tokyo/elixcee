@@ -1,6 +1,6 @@
 # elixcee CLI Agent Contract
 
-Schema version: `1`, elixcee version **1.0.3**. See
+Schema version: `1`, elixcee version **1.0.4**. See
 [CHANGELOG](../CHANGELOG.md) for released versus Unreleased changes.
 VBA/API coverage belongs in [FUNCTIONS](../FUNCTIONS.md), not this wire-format reference.
 

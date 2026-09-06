@@ -912,11 +912,58 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Register a simple sheet-local A1 named range for formula evaluation.
+    fn set_sheet_named_range(&mut self, sheet: &str, name: &str, address: &str) -> PyResult<()> {
+        self.inner
+            .set_sheet_named_range(sheet, name, address)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Re-evaluate all cells that have a stored formula.
     fn recalculate(&mut self) -> PyResult<()> {
         self.inner
             .recalculate_all()
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
+    }
+
+    /// Undo the most recent explicit cell/range value or formula edit.
+    /// Returns ``True`` when an edit was restored, otherwise ``False``.
+    fn undo(&mut self) -> bool {
+        self.inner.undo_edit()
+    }
+
+    /// Redo the most recently undone explicit cell/range value or formula edit.
+    /// Returns ``True`` when an edit was restored, otherwise ``False``.
+    fn redo(&mut self) -> bool {
+        self.inner.redo_edit()
+    }
+
+    #[getter]
+    fn can_undo(&self) -> bool {
+        self.inner.can_undo_edit()
+    }
+
+    #[getter]
+    fn can_redo(&self) -> bool {
+        self.inner.can_redo_edit()
+    }
+
+    /// Start a transaction for cell/range value and formula edits.
+    fn begin_transaction(&mut self) -> PyResult<()> {
+        self.inner
+            .begin_edit_transaction()
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
+    }
+
+    /// Commit the active edit transaction. Returns ``False`` when none exists.
+    fn commit_transaction(&mut self) -> bool {
+        self.inner.commit_edit_transaction()
+    }
+
+    /// Abort the active edit transaction and restore all edited cells/formulas.
+    /// Returns ``False`` when none exists.
+    fn abort_transaction(&mut self) -> bool {
+        self.inner.abort_edit_transaction()
     }
 
     /// Set multiple cell formulas at once.
@@ -1058,8 +1105,7 @@ impl PyVm {
     /// ``{"MyRange": "Sheet1!$A$1:$A$3"}``).
     ///
     /// *raw_text* is the exact formula-text content, **not** resolved into a
-    /// sheet+address — elixcee's formula engine has no cross-sheet reference
-    /// syntax (``=Sheet2!A1``) to resolve it against. Sheet-scoped and
+    /// sheet+address. Sheet-scoped and
     /// workbook-scoped names are not distinguished; on a name collision
     /// across scopes, whichever the reader encounters last wins.
     ///
@@ -1442,12 +1488,9 @@ impl PyVm {
     /// - a reference that lands inside a *deleted* band becomes ``#REF!`` on
     ///   :meth:`delete_rows` (the sheet qualifier, if any, is preserved —
     ///   only the coordinate becomes ``#REF!``)
-    /// - **cross-sheet formula evaluation is a separate, still-unsupported
-    ///   concern** — a qualified reference now parses and its coordinate
-    ///   rewrites correctly, but the formula's cached VALUE is never
-    ///   recomputed against another sheet's cells; :meth:`set_cell_formula`
-    ///   still raises for any formula containing one, since it requires
-    ///   evaluating immediately
+    /// - cross-sheet formula evaluation is handled by workbook-wide
+    ///   :meth:`recalculate`; :meth:`set_cell_formula` stores a qualified
+    ///   formula with an Empty cached value until that recalculation runs
     /// - a formula that couldn't be parsed at all (external workbook
     ///   references like ``[Book2.xlsx]Sheet1!A1``, 3D references like
     ///   ``Sheet1:Sheet3!A1``, and anything else outside same-workbook `A1`
@@ -1460,10 +1503,9 @@ impl PyVm {
     /// the row itself, not to the moved cell content. Does not recompute any
     /// cached formula value — call :meth:`recalculate` afterwards if you need
     /// fresh values
-    /// (note it recalculates the *active* sheet, so switch sheets first if
-    /// the sheet you need refreshed isn't already active; a cross-sheet
-    /// formula is skipped by recalculation entirely, same as one that fails
-    /// to parse). See docs/openpyxl-gap-audit.md and ROADMAP.md's known gaps.
+    /// (the workbook-wide qualified-reference path recalculates all sheets;
+    /// the fast path for unqualified formulas remains active-sheet scoped).
+    /// See docs/openpyxl-gap-audit.md and ROADMAP.md's known gaps.
     ///
     /// Parameters
     /// ----------
@@ -3283,6 +3325,8 @@ fn load_workbook(
     vm.error_on_msgbox = on_msgbox == "error";
     vm.populate_from_sheets(sheets);
     vm.loaded_workbook_path = Some(path.to_string());
+    vm.load_simple_defined_names(path)
+        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
 
     if let Some(s) = sheet {
         vm.set_active_sheet(&s.to_lowercase())
@@ -3866,6 +3910,129 @@ fn carry_over_rels(
         .collect()
 }
 
+/// Rewrites relationship ids inside the raw workbook-level external-reference owner.
+/// The writer assigns fresh ids after its own worksheet/sharedStrings/styles/vba entries;
+/// preserving the source r:id could therefore create a dangling or misbound reference.
+/// Returning None for an unresolved source id deliberately omits the unsupported owner.
+fn rewrite_external_references_xml(
+    raw_owner: &str,
+    source_rels_xml: &str,
+    carried_rels: &[(String, String)],
+    first_carried_id: usize,
+) -> Option<String> {
+    let source = reader::workbook_rels_decls_with_ids(source_rels_xml);
+    let mut replacements = std::collections::HashMap::new();
+    let mut generated_ids = std::collections::HashSet::new();
+    for (index, (ty, target)) in carried_rels.iter().enumerate() {
+        let generated_id = format!("rId{}", first_carried_id + index);
+        generated_ids.insert(generated_id.clone());
+        replacements.insert((ty.as_str(), target.as_str()), generated_id);
+    }
+    let mut out = raw_owner.to_string();
+    for (source_id, ty, target) in source {
+        let Some(new_id) = replacements.get(&(ty.as_str(), target.as_str())) else {
+            if raw_owner.contains(&format!(":id=\"{source_id}\"")) {
+                return None;
+            }
+            continue;
+        };
+        for prefix in ["r:id=\"", "rel:id=\""] {
+            let old = format!("{prefix}{source_id}\"");
+            let new = format!("{prefix}{new_id}\"");
+            out = out.replace(&old, &new);
+        }
+    }
+    // Every relationship id referenced by the owner must now be a generated id.
+    let mut remainder = out.as_str();
+    while let Some(start) = remainder.find(":id=\"") {
+        let value_start = start + ":id=\"".len();
+        let end = remainder[value_start..].find('"')?;
+        let id = &remainder[value_start..value_start + end];
+        if !generated_ids.contains(id) {
+            return None;
+        }
+        remainder = &remainder[value_start + end + 1..];
+    }
+    Some(out)
+}
+
+/// Confirms that every relationship id in an owner element resolves to an internal
+/// target that will still be present in the output package. This is intentionally a
+/// structural check only; it does not fetch or interpret external targets.
+fn relationship_owner_graph_is_connected(
+    owner_xml: &str,
+    root_rels_xml: &str,
+    rels_name: &str,
+    relationship_parts: &std::collections::HashMap<String, String>,
+    surviving_parts: &std::collections::HashSet<String>,
+) -> bool {
+    let mut pending = vec![];
+    let mut visited_rels = std::collections::HashSet::new();
+    let visit = |current_rels_name: &str,
+                 rels_xml: &str,
+                 owner: Option<&str>,
+                 pending: &mut Vec<String>,
+                 visited_rels: &mut std::collections::HashSet<String>| {
+        if !visited_rels.insert(current_rels_name.to_string()) {
+            return true;
+        }
+        let declarations = reader::workbook_rels_decls_with_ids(rels_xml);
+        let mut by_id = std::collections::HashMap::new();
+        for (id, _ty, target) in declarations {
+            if by_id.insert(id, target).is_some() {
+                return false;
+            }
+        }
+        let mut ids = vec![];
+        if let Some(owner_xml) = owner {
+            let mut remainder = owner_xml;
+            while let Some(start) = remainder.find(":id=\"") {
+                let value_start = start + ":id=\"".len();
+                let Some(end) = remainder[value_start..].find('"') else {
+                    return false;
+                };
+                ids.push(remainder[value_start..value_start + end].to_string());
+                remainder = &remainder[value_start + end + 1..];
+            }
+        } else {
+            ids.extend(by_id.keys().cloned());
+        }
+        for id in ids {
+            let Some(target) = by_id.get(&id) else {
+                return false;
+            };
+            if target.starts_with("http://") || target.starts_with("https://") {
+                continue;
+            }
+            let resolved =
+                normalize_part_path(&format!("{}{}", rels_target_dir(current_rels_name), target));
+            if !surviving_parts.contains(&resolved) {
+                return false;
+            }
+            pending.push(resolved);
+        }
+        true
+    };
+    if !visit(
+        rels_name,
+        root_rels_xml,
+        Some(owner_xml),
+        &mut pending,
+        &mut visited_rels,
+    ) {
+        return false;
+    }
+    while let Some(part) = pending.pop() {
+        let rels_path = part_rels_name(&part);
+        if let Some(rels_xml) = relationship_parts.get(&rels_path)
+            && !visit(&rels_path, rels_xml, None, &mut pending, &mut visited_rels)
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// Rewrites `container_xml` (the raw `<definedNames>...</definedNames>` blob already
 /// cleared to pass through -- see the deletion/move gate right above this function's only
 /// call site) for every sheet rename in `renames`, splicing each `<definedName>` element's
@@ -3983,6 +4150,12 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     // one). (Type, Target) pairs; Target is re-relativized against "xl/" by
     // build_xlsx_workbook_rels, matching how workbook.xml.rels' own Target values work.
     let mut carried_rels: Vec<(String, String)> = Vec::new();
+    let mut source_workbook_rels_xml: Option<String> = None;
+    let mut source_worksheet_rels: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut source_relationship_parts: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut surviving_source_parts = std::collections::HashSet::new();
     // Same idea as `carried_rels`, but for the root `_rels/.rels` file (docProps/core.xml,
     // docProps/app.xml, ...) -- see `carried_rels`'s own comment below for why this is
     // needed at all.
@@ -4026,6 +4199,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
 
     if let Some(source_path) = passthrough_source {
         let mut raw_entries = reader::read_raw_zip_entries(source_path)?;
+        source_workbook_rels_xml = raw_entries
+            .get("xl/_rels/workbook.xml.rels")
+            .and_then(|bytes| String::from_utf8(bytes.clone()).ok());
         has_vba = is_xlsm_output && raw_entries.keys().any(|n| n.starts_with("xl/vbaProject"));
         // These parts are writer-owned or parsed into dedicated structures. Move
         // them out of the raw map instead of cloning them while retaining the map.
@@ -4097,6 +4273,29 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             .filter(|name| !prunable_parts.contains(*name))
             .cloned()
             .collect();
+        surviving_source_parts.extend(passthrough_names.iter().cloned());
+        for name in passthrough_names
+            .iter()
+            .filter(|name| name.starts_with("xl/worksheets/_rels/") && name.ends_with(".rels"))
+        {
+            if let Some(xml) = raw_entries
+                .get(name)
+                .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+            {
+                source_worksheet_rels.insert(name.clone(), xml);
+            }
+        }
+        for name in passthrough_names
+            .iter()
+            .filter(|name| name.ends_with(".rels"))
+        {
+            if let Some(xml) = raw_entries
+                .get(name)
+                .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+            {
+                source_relationship_parts.insert(name.clone(), xml);
+            }
+        }
 
         // Carry relationship metadata before consuming `raw_entries`; the byte payloads
         // themselves are moved into `passthrough` below, avoiding a second in-memory copy.
@@ -4378,6 +4577,34 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let calc_pr = workbook_source_xml
         .as_deref()
         .and_then(|xml| reader::extract_raw_element(xml, "calcPr"));
+    let external_references = workbook_source_xml
+        .as_deref()
+        .and_then(|xml| reader::extract_raw_element(xml, "externalReferences"))
+        .and_then(|owner| {
+            let rels = source_workbook_rels_xml.as_deref()?;
+            let first_carried_id = worksheet_plans.len() + 3 + usize::from(has_vba);
+            rewrite_external_references_xml(&owner, rels, &carried_rels, first_carried_id)
+        });
+    let pivot_caches = workbook_source_xml
+        .as_deref()
+        .and_then(|xml| reader::extract_raw_element(xml, "pivotCaches"))
+        .and_then(|owner| {
+            if vm.ooxml_structural_edit_dirty {
+                return None;
+            }
+            let rels = source_workbook_rels_xml.as_deref()?;
+            let first_carried_id = worksheet_plans.len() + 3 + usize::from(has_vba);
+            if !relationship_owner_graph_is_connected(
+                &owner,
+                rels,
+                "xl/_rels/workbook.xml.rels",
+                &source_relationship_parts,
+                &surviving_source_parts,
+            ) {
+                return None;
+            }
+            rewrite_external_references_xml(&owner, rels, &carried_rels, first_carried_id)
+        });
     let ext_lst = workbook_source_xml
         .as_deref()
         .and_then(|xml| reader::extract_raw_element(xml, "extLst"));
@@ -4417,6 +4644,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
         root_attrs: workbook_root_attrs.as_deref(),
         workbook_pr: workbook_pr.as_deref(),
         book_views: book_views.as_deref(),
+        pivot_caches: pivot_caches.as_deref(),
+        external_references: external_references.as_deref(),
         defined_names: defined_names.as_deref(),
         calc_pr: calc_pr.as_deref(),
         ext_lst: ext_lst.as_deref(),
@@ -4567,6 +4796,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
         // a dangling `r:id`, a real Excel repair warning.
         let rels_survived =
             plan.is_existing && originally_survived_rels.contains(&plan.output_rels_name);
+        let relationship_owners_safe = rels_survived && !vm.ooxml_structural_edit_dirty;
+        let rels_xml = source_worksheet_rels.get(&plan.output_rels_name);
         // Location-only hyperlinks are always kept; r:id-bearing ones only when
         // rels_survived (see extract_hyperlinks' own doc comment).
         let hyperlinks = source_xml
@@ -4575,8 +4806,36 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
         let (existing_table_parts, drawing, legacy_drawing) = if rels_survived {
             (
                 source_xml.and_then(|xml| reader::extract_raw_element(xml, "tableParts")),
-                source_xml.and_then(|xml| reader::extract_raw_element(xml, "drawing")),
-                source_xml.and_then(|xml| reader::extract_raw_element(xml, "legacyDrawing")),
+                source_xml
+                    .and_then(|xml| reader::extract_raw_element(xml, "drawing"))
+                    .filter(|owner| {
+                        relationship_owners_safe && {
+                            rels_xml.is_some_and(|rels| {
+                                relationship_owner_graph_is_connected(
+                                    owner,
+                                    rels,
+                                    &plan.output_rels_name,
+                                    &source_relationship_parts,
+                                    &surviving_source_parts,
+                                )
+                            })
+                        }
+                    }),
+                source_xml
+                    .and_then(|xml| reader::extract_raw_element(xml, "legacyDrawing"))
+                    .filter(|owner| {
+                        relationship_owners_safe && {
+                            rels_xml.is_some_and(|rels| {
+                                relationship_owner_graph_is_connected(
+                                    owner,
+                                    rels,
+                                    &plan.output_rels_name,
+                                    &source_relationship_parts,
+                                    &surviving_source_parts,
+                                )
+                            })
+                        }
+                    }),
             )
         } else {
             (None, None, None)
@@ -5441,6 +5700,8 @@ struct OpaqueWorkbookFragments<'a> {
     root_attrs: Option<&'a str>,
     workbook_pr: Option<&'a str>,
     book_views: Option<&'a str>,
+    pivot_caches: Option<&'a str>,
+    external_references: Option<&'a str>,
     defined_names: Option<&'a str>,
     calc_pr: Option<&'a str>,
     ext_lst: Option<&'a str>,
@@ -5484,6 +5745,8 @@ fn build_xlsx_workbook(
     // CT_Workbook order (§8): ... sheets, functionGroups, externalReferences,
     // definedNames, calcPr, ...
     for fragment in [
+        fragments.pivot_caches,
+        fragments.external_references,
         fragments.defined_names,
         fragments.calc_pr,
         fragments.ext_lst,
@@ -8650,6 +8913,56 @@ mod tests {
             xml.contains("<sheet name=\"b\" sheetId=\"2\" r:id=\"rId2\"/>"),
             "{xml}"
         );
+    }
+
+    #[test]
+    fn external_references_rewrite_to_fresh_carried_relationship_ids() {
+        let owner = r#"<externalReferences xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><externalReference r:id="rId9"/></externalReferences>"#;
+        let rels = r#"<Relationships><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="externalLinks/externalLink1.xml"/></Relationships>"#;
+        let carried = vec![(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
+                .to_string(),
+            "externalLinks/externalLink1.xml".to_string(),
+        )];
+        let rewritten =
+            rewrite_external_references_xml(owner, rels, &carried, 8).expect("owner should map");
+        assert!(rewritten.contains(r#"r:id="rId8""#), "{rewritten}");
+        assert!(!rewritten.contains(r#"r:id="rId9""#), "{rewritten}");
+    }
+
+    #[test]
+    fn external_references_are_dropped_when_their_relationship_is_not_carried() {
+        let owner = r#"<externalReferences xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><externalReference r:id="rId9"/></externalReferences>"#;
+        let rels = r#"<Relationships><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.invalid/book.xlsx"/></Relationships>"#;
+        assert!(rewrite_external_references_xml(owner, rels, &[], 8).is_none());
+    }
+
+    #[test]
+    fn relationship_owner_requires_a_surviving_internal_target() {
+        let owner = r#"<drawing xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId4"/>"#;
+        let rels = r#"<Relationships><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+        let mut surviving = std::collections::HashSet::new();
+        surviving.insert("xl/drawings/drawing1.xml".to_string());
+        let mut relationship_parts = std::collections::HashMap::new();
+        relationship_parts.insert(
+            "xl/drawings/_rels/drawing1.xml.rels".to_string(),
+            "<Relationships/>".to_string(),
+        );
+        assert!(relationship_owner_graph_is_connected(
+            owner,
+            rels,
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            &relationship_parts,
+            &surviving
+        ));
+        surviving.clear();
+        assert!(!relationship_owner_graph_is_connected(
+            owner,
+            rels,
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            &relationship_parts,
+            &surviving
+        ));
     }
 
     #[test]

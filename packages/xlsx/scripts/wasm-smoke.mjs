@@ -4,7 +4,7 @@
 // build itself, and its two `wasm-pack build --target nodejs`/`--target web` invocations
 // succeeding, is this script's own precondition, not something it re-does).
 //
-// Five checks, each printed as its own step so a CI failure points at exactly which one
+// Seven checks, each printed as its own step so a CI failure points at exactly which one
 // broke:
 //   1. Node sync read() — require()'s the Node/CJS entry directly and reads a real .xlsx
 //      fixture, confirming the freshly-built elixcee_wasm.node.cjs actually works
@@ -17,7 +17,10 @@
 //      entry's WASM actually runs, not just that resolution succeeds. NOTE: this is Node
 //      simulating the browser CONDITION, not a browser. Actual-browser coverage is a
 //      separate script (scripts/browser-smoke.mjs), which launches a real Chrome process.
-//   3./4. Minimal esbuild bundle + in-bundle read(), CJS output AND ESM output, run as two
+//   3. Public runtime subpath — self-imports @elixcee/xlsx/runtime under Node and the
+//      browser condition, confirming the shared WorkbookEditor/diagnostics surface is
+//      packaged in both conditions without changing the root SheetJS-compatible exports.
+//   4./5. Minimal esbuild bundle + in-bundle read(), CJS output AND ESM output, run as two
 //      distinct steps. Both used to be impossible: the Node/CJS WASM loader (wasm-pack's
 //      own generated output) located its .wasm file via a `__dirname`-relative path, which
 //      is bundle-OUTPUT-relative once bundled, so CJS output only worked if the consumer
@@ -27,16 +30,12 @@
 //      base64 into the loader exactly as build-browser-inline.mjs already did for the
 //      browser build. Neither step below copies any file next to the bundle — that step
 //      being GONE is what these two checks now assert.
-//   5. WASM artifact size — recorded and diffed against crates/elixcee-wasm/
-//      wasm-size-baseline.json, but never gated: asserting a pass/fail threshold with no
-//      basis for the number would be exactly the kind of unjustified gate this project
-//      avoids elsewhere (see compat/vba-semantics/'s own anti-laundering discipline). The
-//      baseline is updated by hand, deliberately, when a size change is intentional — not
-//      auto-written by this script. Measured by decoding the base64 payload out of the
-//      vendored loader, since the raw .wasm file is no longer vendored (it would
-//      double-ship the same bytes; see build.sh). Also written to $GITHUB_STEP_SUMMARY
-//      (when set) so the number is visible on the CI run without opening logs.
-//   6. write()'s Node-builtin bundling posture — a DIFFERENT concern from 1-5 above.
+//   6. WASM artifact size — decoded from the vendored loader, compared with the
+//      deliberately maintained baseline, and rejected when growth exceeds the fixed
+//      10% gate (override with ELIXCEE_WASM_SIZE_GATE_PCT for an explicitly reviewed
+//      measurement). The baseline is never auto-written. Also written to
+//      $GITHUB_STEP_SUMMARY when set.
+//   7. write()'s Node-builtin bundling posture — a DIFFERENT concern from 1-6 above.
 //      write()/readFile()/readFileSync() reach a lazy `require('zlib')`/`require('fs')`
 //      at call time (see src/internal/zip-writer.cjs's doc comment), which is fine for
 //      Node and for an esbuild CJS bundle, but an esbuild ESM bundle can never
@@ -109,6 +108,25 @@ step('2. browser export condition resolves and runs', () => {
   });
 });
 
+step('3. public runtime subpath resolves in Node and browser conditions', () => {
+  const script = `
+    import('@elixcee/xlsx/runtime').then(m => {
+      for (const name of ['WorkbookEditor', 'calculateWorkbook', 'diagnoseWorkbook']) {
+        if (typeof m[name] !== 'function') throw new Error('runtime export is not callable: ' + name);
+      }
+      console.log('  runtime exports: WorkbookEditor, calculateWorkbook, diagnoseWorkbook');
+    }).catch(e => { console.error(e.stack); process.exit(1); });
+  `;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: PKG_DIR,
+    stdio: 'inherit',
+  });
+  execFileSync(process.execPath, ['--conditions=browser', '--input-type=module', '-e', script], {
+    cwd: PKG_DIR,
+    stdio: 'inherit',
+  });
+});
+
 // Bundles a tiny consumer of the Node/CJS entry and RUNS the resulting bundle from a
 // throwaway directory containing nothing but that one file — deliberately no .wasm copied
 // next to it, and (since esbuild inlines the whole dependency graph) no node_modules to
@@ -150,11 +168,11 @@ function bundleAndRun(format, ext) {
   execFileSync(process.execPath, [bundlePath], { stdio: 'inherit' });
 }
 
-step('3. esbuild CJS bundle + in-bundle read(), no .wasm copied next to it', () => bundleAndRun('cjs', 'cjs'));
+step('4. esbuild CJS bundle + in-bundle read(), no .wasm copied next to it', () => bundleAndRun('cjs', 'cjs'));
 
-step('4. esbuild ESM bundle + in-bundle read(), no .wasm copied next to it', () => bundleAndRun('esm', 'mjs'));
+step('5. esbuild ESM bundle + in-bundle read(), no .wasm copied next to it', () => bundleAndRun('esm', 'mjs'));
 
-step('5. WASM artifact size (recorded + diffed against baseline, not gated)', () => {
+step('6. WASM artifact size (recorded + gated against baseline)', () => {
   // Decoded from the vendored loader's own base64 constant: the raw .wasm file is no
   // longer vendored (build.sh stopped copying it once both loaders inlined their bytes),
   // so this measures the exact same payload from where it now actually lives.
@@ -162,6 +180,7 @@ step('5. WASM artifact size (recorded + diffed against baseline, not gated)', ()
   const baseline = fs.existsSync(BASELINE_PATH) ? JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')).wasmBytes : null;
   const summaryLines = ['| file | on-disk bytes | wasm bytes | vs. baseline |', '| --- | --- | --- | --- |'];
   let wasmSize;
+  let maxGrowthPct = 0;
   for (const f of ['elixcee_wasm.node.cjs', 'elixcee_wasm.browser.mjs']) {
     const src = fs.readFileSync(path.join(WASM_DIR, f), 'utf8');
     const m = src.match(/ELIXCEE_WASM_BASE64 = '([A-Za-z0-9+/=]+)'/);
@@ -172,6 +191,7 @@ step('5. WASM artifact size (recorded + diffed against baseline, not gated)', ()
     if (baseline != null) {
       const diff = wasmSize - baseline;
       const pct = ((diff / baseline) * 100).toFixed(2);
+      maxGrowthPct = Math.max(maxGrowthPct, (diff / baseline) * 100);
       diffStr = `${diff >= 0 ? '+' : ''}${diff} bytes (${diff >= 0 ? '+' : ''}${pct}%)`;
     }
     console.log(
@@ -179,6 +199,19 @@ step('5. WASM artifact size (recorded + diffed against baseline, not gated)', ()
         `(${(wasmSize / 1024).toFixed(1)} KiB) as ${m[1].length} base64 chars -- ${diffStr}`,
     );
     summaryLines.push(`| ${f} | ${fileSize} | ${wasmSize} | ${diffStr} |`);
+  }
+  if (baseline != null) {
+    const gatePct = Number(process.env.ELIXCEE_WASM_SIZE_GATE_PCT ?? '10');
+    if (!Number.isFinite(gatePct) || gatePct < 0) {
+      throw new Error('ELIXCEE_WASM_SIZE_GATE_PCT must be a non-negative number');
+    }
+    if (maxGrowthPct > gatePct) {
+      throw new Error(
+        `WASM payload grew ${maxGrowthPct.toFixed(2)}%, exceeding the ${gatePct}% gate; ` +
+          'update wasm-size-baseline.json only with an intentional, reviewed change',
+      );
+    }
+    console.log(`  size gate: ${maxGrowthPct.toFixed(2)}% <= ${gatePct}%`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### WASM artifact size\n\n${summaryLines.join('\n')}\n`);
@@ -253,7 +286,7 @@ function runWriteBundle(bundlePath, format, external) {
       'inlined ESM bundle calling write() unexpectedly SUCCEEDED — the known esbuild ' +
         '"Dynamic require" limitation may have been fixed upstream, or this package\'s ' +
         'require()-of-Node-builtins pattern changed; re-check README.md\'s Bundling ' +
-        'section and this script\'s doc comment for step 6.',
+        'section and this script\'s doc comment for step 7.',
     );
   }
   if (format === 'cjs' && threw) {
@@ -262,15 +295,15 @@ function runWriteBundle(bundlePath, format, external) {
   console.log(`  ${format} inlined bundle behaved as expected (${threw ? 'threw' : 'ran'})`);
 }
 
-step('6a. inlined ESM bundle + write() — must still throw (known esbuild limitation)', () =>
+step('7a. inlined ESM bundle + write() — must still throw (known esbuild limitation)', () =>
   bundleAndRunWrite('esm', 'mjs', false),
 );
-step('6b. inlined CJS bundle + write() — must run (CJS `require` works normally)', () =>
+step('7b. inlined CJS bundle + write() — must run (CJS `require` works normally)', () =>
   bundleAndRunWrite('cjs', 'cjs', false),
 );
-step('6c. externalized ESM bundle + write() — must run (the documented consumer pattern)', () =>
+step('7c. externalized ESM bundle + write() — must run (the documented consumer pattern)', () =>
   bundleAndRunWrite('esm', 'mjs', true),
 );
-step('6d. externalized CJS bundle + write() — must run', () => bundleAndRunWrite('cjs', 'cjs', true));
+step('7d. externalized CJS bundle + write() — must run', () => bundleAndRunWrite('cjs', 'cjs', true));
 
 console.log('\n[wasm-smoke] all checks passed.');

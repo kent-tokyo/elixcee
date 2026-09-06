@@ -3,14 +3,21 @@
 [English](README.md) | **日本語** | [中文](README_zh.md)
 
 Microsoft Excelなしで、データ処理向けのExcel VBAのサブセットを実行・
-テスト・診断するRust製ランタイムです。PyO3によるPython API、単体CLI、
-実験的な`@elixcee/xlsx` JavaScript/WASMパッケージを提供します。
+テスト・診断するRust製のヘッドレスworkbookランタイムです。VBA実行だけでなく、
+数式の計算、セル・範囲やworkbook metadataの編集、結果のXLSX/XLSM/ODS保存にも対応します。
+PyO3によるPython API、単体CLI、実験的な`@elixcee/xlsx` JavaScript/WASMパッケージを提供します。
 
-バージョンは **1.0.3** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+バージョンは **1.0.4** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 JavaScriptパッケージはprivate・未公開です。
+
+elixceeはVBA専用の実行ツールではありません。ヘッドレスなExcel workbook
+自動化基盤として、直接のデータ編集と数式再計算、VBAの実行・診断・テストを
+同じworkbookモデル上で行えます。ExcelをインストールできないCIやサーバーでの
+`.xlsx`/`.xlsm`の読み書きにも利用できます。
 
 Excelデスクトップアプリの完全な代替ではありません。画面更新、グラフ、
 ダイアログなどのUI機能は、スキップ・簡易モデル化・エラー化されます。
+完全なExcelオブジェクトモデルやOOXML互換性が必要な場合は、対応範囲を確認してください。
 
 ## インストール
 
@@ -55,6 +62,15 @@ Sub DoubleIt()
 End Sub
 """, "DoubleIt")
 print(vm.get_cell(1, 2))       # 20
+
+vm = elixcee.load_workbook("input.xlsx")
+vm.set_cell(1, 1, 10)                    # セルを編集
+vm.set_cell_formula(1, 2, "=A1*2")      # 数式を設定
+vm.recalculate()                        # 数式を再計算
+vm.save_workbook("output.xlsx")
+
+vm.set_cell(1, 1, 20)
+vm.undo()                                # 編集を取り消し
 ```
 
 数式評価、範囲、シート、VBA `Collection`／class moduleサブセット、スタイル、テーブル、データ検証、AutoFilter、

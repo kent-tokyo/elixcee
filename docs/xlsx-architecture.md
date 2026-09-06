@@ -32,6 +32,12 @@ parts. It currently models cell values, formulas, styles, merges, hidden
 rows/columns, workbook metadata, and selected worksheet objects such as tables,
 filters, and validations. A passthrough part is not enough by itself: its
 relationship must also remain connected to the regenerated owner part.
+For worksheet drawing and legacy-drawing owners, save now checks the owner
+relationship id, the worksheet rels declaration, its normalized internal target,
+and target-part survival before restoring the opaque owner fragment. The check
+also walks surviving internal part relationships, so Drawing-to-Chart/image
+targets are covered without fetching external URLs. Pivot cache validation
+remains future work.
 
 Macro-enabled workbooks preserve `xl/vbaProject.bin` and the macro-enabled
 content type on supported save paths. Unmodeled worksheet objects can still be
@@ -51,6 +57,21 @@ without a payload-sized intermediate buffer.
 Python's
 append-only writer already writes each accepted row to ZIP, but materializes one
 row and its XML; its cumulative byte counter is not retained-memory telemetry.
+
+Workbook formula evaluation now has two explicit paths: the existing fast
+single-sheet evaluator for unqualified references, and a workbook slow path for
+qualified references. The latter builds a cross-sheet formula order and maps
+each sheet into a separate internal coordinate band before invoking the same
+range/function evaluator. Its full-recalculation entry point is also exported
+as `calculateWorkbook(bytes)` from the shared WASM bridge for Node/browser
+consumers. `diagnoseWorkbook(bytes)` provides a deterministic preflight JSON
+summary (sheet/formula counts, qualified formulas, and parse errors). Incremental
+JS calculation and worker/async loading contracts remain future work.
+The optional `@elixcee/xlsx/runtime` subpath exposes the same shared calculation
+functions plus stateful `WorkbookEditor` in Node and browser package conditions.
+The vendored WASM payload has an intentional baseline and a 10% growth gate in
+`scripts/wasm-smoke.mjs`; a baseline update requires a reviewed implementation
+change.
 G1 tightens admission checks; deferred G5 addresses lazy passthrough, including
 unchanged table parts, row/work
 budget separation, failure cleanup, and independently measured memory scaling.

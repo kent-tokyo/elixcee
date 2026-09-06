@@ -21,7 +21,7 @@ G1 checks the row-count limit before opening the iterable, then checks column an
 byte limits while consuming each item. Detecting excess width consumes at most
 one extra item, without converting that item. The estimate includes a `Variant`
 slot per cell plus UTF-8 payload; empty strings no longer have zero cost. This
-is stricter than released 1.0.3 string accounting. Rejected rows do not change
+is stricter than the prior 1.0.3 string accounting. Rejected rows do not change
 the accepted counters or write partial row XML; valid rows may then be appended.
 
 This does **not** bound caller-owned Python memory, execution time of arbitrary
