@@ -60,6 +60,8 @@ Unedited table parts follow the same deferred path; only a table with a pending
 structural edit is read back for patching.
 Relationship XML used by worksheet and workbook owner checks shares one analysis
 index, avoiding a second string copy for worksheet `.rels` entries.
+After analysis, relationship parts are also copied directly from the source ZIP;
+only a worksheet `.rels` requiring a new-table patch is materialized for output.
 Python's
 append-only writer already writes each accepted row to ZIP, but materializes one
 row and its XML; its cumulative byte counter is not retained-memory telemetry.

@@ -4346,9 +4346,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             // Analysis/structural XML remains in memory. Other parts are copied
             // on demand from the source ZIP at the final output stage, avoiding
             // a second resident payload.
-            let needed_for_save = (name.ends_with(".rels")
-                && !(name.starts_with("xl/worksheets/_rels/") && !has_new_table))
-                || name == "[Content_Types].xml"
+            let needed_for_save = name == "[Content_Types].xml"
                 || name == "xl/workbook.xml"
                 || name == "xl/styles.xml"
                 || name.starts_with("xl/worksheets/")
@@ -4468,8 +4466,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             let existing_rels_idx = passthrough
                 .iter()
                 .position(|(name, _)| name == &plan.output_rels_name);
-            let existing_rels_xml =
-                existing_rels_idx.map(|i| String::from_utf8_lossy(&passthrough[i].1).into_owned());
+            let existing_rels_xml = existing_rels_idx
+                .map(|i| String::from_utf8_lossy(&passthrough[i].1).into_owned())
+                .or_else(|| {
+                    source_relationship_parts
+                        .get(&plan.output_rels_name)
+                        .cloned()
+                });
             let next_rid = existing_rels_xml
                 .as_deref()
                 .map(reader::relationship_ids)
@@ -4498,7 +4501,10 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             };
             match existing_rels_idx {
                 Some(i) => passthrough[i].1 = new_rels_bytes,
-                None => passthrough.push((plan.output_rels_name.clone(), new_rels_bytes)),
+                None => {
+                    passthrough_source_names.retain(|name| name != &plan.output_rels_name);
+                    passthrough.push((plan.output_rels_name.clone(), new_rels_bytes));
+                }
             }
 
             new_table_parts_by_sheet

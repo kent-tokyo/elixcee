@@ -9,6 +9,7 @@
 - G5aの内部経路として、defined namesの読込・報告で`xl/workbook.xml`だけを検証付き取得し、worksheet/table等の兄弟payloadを再読込・保持しないようにしました。保存時の全part遅延化やconstant-memory達成を意味しません。
 - G5aの内部経路として、未編集table XMLを保存時のraw mapへ保持せず、編集対象だけを元ZIPから再取得してpatchするようにしました。全passthrough遅延化やconstant-memory達成を意味しません。
 - G5bの内部経路として、worksheet relationship XMLの解析用索引を統合し、同一`.rels` payloadの解析用二重保持を削減しました。passthrough bytesの遅延化やconstant-memory達成を意味しません。
+- G5bの内部経路として、relationship XMLのraw bytesを保存時mapへ保持せず、元ZIPから遅延copyするようにしました。新規tableのworksheet `.rels`だけはpatchして出力します。全payload遅延化やconstant-memory達成を意味しません。
 
 ## [1.0.4] - 2026-09-07
 
