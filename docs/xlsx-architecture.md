@@ -56,6 +56,8 @@ passthrough payloads directly from the source ZIP one at a time during output,
 without a payload-sized intermediate buffer.
 Read-only defined-name loading is narrower still: it validates the source ZIP and
 reads only `xl/workbook.xml`, without indexing sibling worksheet or table payloads.
+Unedited table parts follow the same deferred path; only a table with a pending
+structural edit is read back for patching.
 Python's
 append-only writer already writes each accepted row to ZIP, but materializes one
 row and its XML; its cumulative byte counter is not retained-memory telemetry.

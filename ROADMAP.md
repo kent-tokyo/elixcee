@@ -92,6 +92,7 @@ G5全体は未完了であり、constant-memoryを主張しない。
 
 - [x] G5a 部分 BUILD: 画像・VBAと、関係解析対象外のXML payloadをraw mapへ保持せず、元ZIPから一件ずつdestinationへ直接copyする経路へ変更した。未編集table XMLと、新規table追加が無い場合のworksheet `.rels` XMLも遅延copyへ移し、編集対象tableや新規table用relsだけを保持してpatchする。worksheet source XMLは保存ループで1シートずつ所有権移動して処理済みpayloadを解放し、workbook XMLもowned fragment抽出後に元全文を解放する。copy前のZIP再検証とentry期待サイズ一致を確認し、reader回帰テストで1 MiBの画像payloadが索引上空のまま保持されることも固定した。workbook rels等の完全遅延化、元file全体の同一性測定、CRC／3 OS検証は未完了のため、G5a全体は未完了。
 - [x] G5a 部分 BUILD: defined namesの読込・報告は`xl/workbook.xml`だけを検証付きで直接取得する経路へ分離し、worksheet/table等の兄弟XMLを再読込・保持しない回帰を追加した。これは保存時の全part遅延化や3 OS RSS測定を完了扱いにしない。
+- [x] G5a 部分 BUILD: 未編集のtable XMLを保存時のraw mapへ保持せず、table編集がある場合だけ対象partを元ZIPから再取得してpatchする経路へ変更した。全passthrough partの遅延化、保存RSS測定、3 OS検証は未完了。
 - [x] G5b 部分 BUILD: shared-string本文を`Vec<String>`へ二重保持せず、所有するindexから参照を座標順に並べて直接出力する経路へ変更した。未編集styles XMLはstyle解決後に解放し、元ZIPから直接copyする。passthrough XMLも出力時に一件ずつdrainして処理済みpayloadを解放する。styles/workbook/[Content_Types]/worksheetのwriter-owned cloneも所有権移動し、cell/row/column style編集時は対象sheetだけをoverlay cloneするようにした。font/fill/borderを使わないstyle編集ではcellXfsだけを展開する。その他の補助索引とdisk spoolは未完了のため、G5b全体は未完了。
 - [x] G5c BUILD: 追記専用APIに`create_stream_bounded`を追加し、「1行上限」と「総work量」を分けた。既存`max_pending_bytes`の累積制限は維持し、stub・README・limitsへ移行例を追加した。
 - [x] G5d BUILD: bounded追記Writerは固定worksheet構造・列上限・row buffer・64 KiB codec bufferを使い、inline stringsでunique stringsを蓄積しない。通常VMの全セル保持は対象外。

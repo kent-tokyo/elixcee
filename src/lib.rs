@@ -4256,6 +4256,14 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             .filter(|t| !t.pending_edits.is_empty() && !t.source_part.is_empty())
             .map(|t| (t.source_part.as_str(), t.pending_edits.as_slice()))
             .collect();
+        let mut table_source_archive = if table_edits.is_empty() {
+            None
+        } else {
+            let source_file = std::fs::File::open(source_path).map_err(|e| e.to_string())?;
+            let mut archive = zip::ZipArchive::new(source_file).map_err(|e| e.to_string())?;
+            reader::validate_raw_zip_archive(&mut archive)?;
+            Some(archive)
+        };
         // Existing worksheet rels are copied byte-for-byte unless a fresh table
         // needs to append a new relationship to one of them below. In the common
         // no-new-table path, defer their payload just like images and unchanged
@@ -4333,7 +4341,17 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             }
             let bytes = match table_edits.get(name.as_str()) {
                 Some(edits) => {
-                    let xml = String::from_utf8_lossy(&bytes);
+                    let source_bytes = if bytes.is_empty() {
+                        let archive = table_source_archive
+                            .as_mut()
+                            .expect("table edits have a source archive");
+                        let mut source_bytes = Vec::new();
+                        reader::copy_raw_zip_entry(archive, &name, &mut source_bytes)?;
+                        source_bytes
+                    } else {
+                        bytes
+                    };
+                    let xml = String::from_utf8_lossy(&source_bytes);
                     reader::apply_table_edits(&xml, edits).into_bytes()
                 }
                 None => bytes,

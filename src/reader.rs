@@ -1971,8 +1971,7 @@ pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>
             || name == "[Content_Types].xml"
             || name == "xl/workbook.xml"
             || name == "xl/styles.xml"
-            || name.starts_with("xl/worksheets/")
-            || name.starts_with("xl/tables/");
+            || name.starts_with("xl/worksheets/");
         if needed_for_save {
             entry
                 .by_ref()
