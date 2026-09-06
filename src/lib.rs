@@ -4151,8 +4151,6 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     // build_xlsx_workbook_rels, matching how workbook.xml.rels' own Target values work.
     let mut carried_rels: Vec<(String, String)> = Vec::new();
     let mut source_workbook_rels_xml: Option<String> = None;
-    let mut source_worksheet_rels: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
     let mut source_relationship_parts: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut surviving_source_parts = std::collections::HashSet::new();
@@ -4282,17 +4280,6 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             .cloned()
             .collect();
         surviving_source_parts.extend(passthrough_names.iter().cloned());
-        for name in passthrough_names
-            .iter()
-            .filter(|name| name.starts_with("xl/worksheets/_rels/") && name.ends_with(".rels"))
-        {
-            if let Some(xml) = raw_entries
-                .get(name)
-                .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
-            {
-                source_worksheet_rels.insert(name.clone(), xml);
-            }
-        }
         for name in passthrough_names
             .iter()
             .filter(|name| name.ends_with(".rels"))
@@ -4815,7 +4802,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
         let rels_survived =
             plan.is_existing && originally_survived_rels.contains(&plan.output_rels_name);
         let relationship_owners_safe = rels_survived && !vm.ooxml_structural_edit_dirty;
-        let rels_xml = source_worksheet_rels.get(&plan.output_rels_name);
+        let rels_xml = source_relationship_parts.get(&plan.output_rels_name);
         // Location-only hyperlinks are always kept; r:id-bearing ones only when
         // rels_survived (see extract_hyperlinks' own doc comment).
         let hyperlinks = source_xml

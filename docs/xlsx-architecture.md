@@ -58,6 +58,8 @@ Read-only defined-name loading is narrower still: it validates the source ZIP an
 reads only `xl/workbook.xml`, without indexing sibling worksheet or table payloads.
 Unedited table parts follow the same deferred path; only a table with a pending
 structural edit is read back for patching.
+Relationship XML used by worksheet and workbook owner checks shares one analysis
+index, avoiding a second string copy for worksheet `.rels` entries.
 Python's
 append-only writer already writes each accepted row to ZIP, but materializes one
 row and its XML; its cumulative byte counter is not retained-memory telemetry.
