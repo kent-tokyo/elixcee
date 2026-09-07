@@ -12025,7 +12025,7 @@ impl Vm {
         };
 
         // Sort by dependency order so that A2=A1+1 evaluates after A1
-        let order = topo_sort_formulas(&formula_cells)?;
+        let order = topo_sort_formulas(&formula_cells, self.spill_rects.get(&active))?;
 
         let mut reverse: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
         let mut range_dependents = Vec::new();
@@ -12839,12 +12839,20 @@ fn collect_formula_dependencies(
     expr: &formula::FormulaExpr,
     positions: &HashMap<(u32, u32), usize>,
     positions_by_row: &BTreeMap<u32, BTreeMap<u32, usize>>,
+    spill_rects: Option<&HashMap<(u32, u32), SpillRect>>,
     out: &mut HashSet<usize>,
 ) {
     use formula::FormulaExpr::*;
     match expr {
         CellRef { col, row, .. } => {
-            if let Some(&index) = positions.get(&(*row, *col)) {
+            let position = spill_rects
+                .and_then(|rects| {
+                    rects
+                        .iter()
+                        .find_map(|(anchor, rect)| rect.contains((*row, *col)).then_some(*anchor))
+                })
+                .unwrap_or((*row, *col));
+            if let Some(&index) = positions.get(&position) {
                 out.insert(index);
             }
         }
@@ -12856,15 +12864,26 @@ fn collect_formula_dependencies(
                     out.insert(index);
                 }
             }
+            if let Some(rects) = spill_rects {
+                for (anchor, rect) in rects {
+                    if spill_rect_overlaps_range(rect, *rmin, *cmin, *rmax, *cmax) {
+                        if let Some(&index) = positions.get(anchor) {
+                            out.insert(index);
+                        }
+                    }
+                }
+            }
         }
         BinOp { lhs, rhs, .. } => {
-            collect_formula_dependencies(lhs, positions, positions_by_row, out);
-            collect_formula_dependencies(rhs, positions, positions_by_row, out);
+            collect_formula_dependencies(lhs, positions, positions_by_row, spill_rects, out);
+            collect_formula_dependencies(rhs, positions, positions_by_row, spill_rects, out);
         }
-        UnaryMinus(inner) => collect_formula_dependencies(inner, positions, positions_by_row, out),
+        UnaryMinus(inner) => {
+            collect_formula_dependencies(inner, positions, positions_by_row, spill_rects, out)
+        }
         FuncCall { args, .. } => {
             for arg in args {
-                collect_formula_dependencies(arg, positions, positions_by_row, out);
+                collect_formula_dependencies(arg, positions, positions_by_row, spill_rects, out);
             }
         }
         Number(_) | Str(_) | Bool(_) => {}
@@ -12875,7 +12894,10 @@ fn collect_formula_dependencies(
 /// Returns indices into `cells` in safe evaluation order.
 /// Cells with no inter-formula dependencies appear first.
 /// Returns `Err` if a circular reference is detected.
-fn topo_sort_formulas(cells: &[(u32, u32, formula::FormulaExpr)]) -> Result<Vec<usize>, String> {
+fn topo_sort_formulas(
+    cells: &[(u32, u32, formula::FormulaExpr)],
+    spill_rects: Option<&HashMap<(u32, u32), SpillRect>>,
+) -> Result<Vec<usize>, String> {
     let n = cells.len();
     // map (row, col) → index in cells slice
     let pos: HashMap<(u32, u32), usize> = cells
@@ -12895,7 +12917,13 @@ fn topo_sort_formulas(cells: &[(u32, u32, formula::FormulaExpr)]) -> Result<Vec<
 
     for (i, (_, _, expr)) in cells.iter().enumerate() {
         let mut dependencies = HashSet::new();
-        collect_formula_dependencies(expr, &pos, &positions_by_row, &mut dependencies);
+        collect_formula_dependencies(
+            expr,
+            &pos,
+            &positions_by_row,
+            spill_rects,
+            &mut dependencies,
+        );
         for j in dependencies {
             if j != i {
                 // skip self-reference
@@ -12929,6 +12957,18 @@ fn topo_sort_formulas(cells: &[(u32, u32, formula::FormulaExpr)]) -> Result<Vec<
         // Return Ok with best-effort order rather than hard-erroring; circular refs will show stale values
     }
     Ok(order)
+}
+
+fn spill_rect_overlaps_range(rect: &SpillRect, r1: u32, c1: u32, r2: u32, c2: u32) -> bool {
+    if rect.shape.is_empty() {
+        return false;
+    }
+    let rect_r2 = rect.origin_row as u64 + rect.shape.rows as u64 - 1;
+    let rect_c2 = rect.origin_col as u64 + rect.shape.cols as u64 - 1;
+    rect.origin_row as u64 <= r2 as u64
+        && r1 as u64 <= rect_r2
+        && rect.origin_col as u64 <= c2 as u64
+        && c1 as u64 <= rect_c2
 }
 
 /// `ReDim Preserve arr(...)` on an array of the same rank as `new_bounds`.
@@ -19030,7 +19070,7 @@ mod tests {
             (1, 2, formula::parse("=SUM(A1:A100000)").unwrap()),
             (1, 3, formula::parse("=3+3").unwrap()),
         ];
-        let order = topo_sort_formulas(&cells).unwrap();
+        let order = topo_sort_formulas(&cells, None).unwrap();
         let a1 = order.iter().position(|&index| index == 0).unwrap();
         let b1 = order.iter().position(|&index| index == 1).unwrap();
         assert!(a1 < b1);
@@ -19051,12 +19091,32 @@ mod tests {
         .into_iter()
         .collect();
         let mut first = HashSet::new();
-        collect_formula_dependencies(&cells[0].2, &positions, &positions_by_row, &mut first);
+        collect_formula_dependencies(&cells[0].2, &positions, &positions_by_row, None, &mut first);
         let mut second = HashSet::new();
-        collect_formula_dependencies(&cells[1].2, &positions, &positions_by_row, &mut second);
+        collect_formula_dependencies(
+            &cells[1].2,
+            &positions,
+            &positions_by_row,
+            None,
+            &mut second,
+        );
         assert_eq!(first, [1].into_iter().collect());
         assert_eq!(second, [0].into_iter().collect());
-        assert_eq!(topo_sort_formulas(&cells).unwrap().len(), 2);
+        assert_eq!(topo_sort_formulas(&cells, None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn spill_cell_dependencies_are_ordered_after_their_anchor_formula() {
+        let cells = vec![
+            (1, 3, formula::parse("=B1+1").unwrap()),
+            (1, 1, formula::parse("=1+1").unwrap()),
+        ];
+        let spill = SpillRect::new(1, 1, ArrayShape::new(1, 2)).unwrap();
+        let spill_rects = [((1, 1), spill)].into_iter().collect();
+        let order = topo_sort_formulas(&cells, Some(&spill_rects)).unwrap();
+        let dependent = order.iter().position(|&index| index == 0).unwrap();
+        let anchor = order.iter().position(|&index| index == 1).unwrap();
+        assert!(anchor < dependent);
     }
 
     #[test]

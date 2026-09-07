@@ -91,6 +91,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 spill適用API: VMに`apply_spill_for_value()`を追加し、計画成功後にのみanchorとspillセルを一括反映し、anchorのformulaを保持するようにした。自動再計算への接続、旧spill領域の追跡／解放、二次元shapeは未完。
 - [x] G4 spill所有権: anchorごとのspill矩形をVMとedit historyで追跡し、同一anchorの再適用時だけ旧spillセルを再利用、範囲外の旧セルを解放、undo/redoで所有情報を復元するようにした。自動再計算接続、複数行shape、spill表示のExcel oracle校正は未完。
 - [x] G4 spill stale lifecycle: 旧spill範囲内の手動編集とanchor formulaの差し替えで、該当anchorの所有矩形とspillセルを先に解放するようにした。別anchorとの依存判定、自動再計算接続、複数行shapeは未完。
+- [x] G4 spill依存順序: formula graphのcell／range依存でspill先を同じanchor formulaへの依存へ解決し、spill参照formulaがanchorより後に評価されるtopological orderを追加した。実際の自動spill再計算、複数行shape、別sheet依存は未完。
 - [ ] 第1組は参照／条件集計／検索、次に日付／統計／金融。既存SUMIFS・XLOOKUP等を再実装せず、未対応modeと意味論差分から埋める。
 - [x] G4 第1組の意味論補完: `IFNA`を追加し、`#N/A`だけをfallback対象として、それ以外のErrorは伝播する遅延評価を回帰テストで固定した。Excel oracleとの一致確認と、他関数の未対応mode棚卸しは未完。
 - [x] G4 検索modeの安全境界: `XLOOKUP`のwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加した。wildcardとbinaryの組み合わせや未知modeは明示エラーにし、順序を満たさない入力を推測処理しない。Excel oracleとbinary modeの網羅的校正は未完。

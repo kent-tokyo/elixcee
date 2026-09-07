@@ -12,6 +12,7 @@
 - G4のspill適用APIとして、`apply_spill_for_value()`を追加しました。衝突検査後にanchorとspillセルを一括反映し、anchorのformulaを保持します。自動再計算への接続と旧spill領域の追跡は未実装です。
 - G4のspill所有権管理として、anchorごとの矩形をVMとedit historyで追跡するようにしました。同じanchorの再適用では範囲外の旧spillセルを解放し、undo/redoで所有情報も復元します。自動再計算接続と複数行shapeは未実装です。
 - G4のspill stale対策として、旧spillセルへの手動編集やanchor formulaの差し替え時に、該当anchorの旧spill所有権と派生セルを解放するようにしました。
+- G4のspill依存順序として、spill先セルを参照するformulaをanchor formulaへの依存としてtopological sortへ反映しました。自動spill再計算と別sheet依存は未実装です。
 - G5aの内部経路として、defined namesの読込・報告で`xl/workbook.xml`だけを検証付き取得し、worksheet/table等の兄弟payloadを再読込・保持しないようにしました。保存時の全part遅延化やconstant-memory達成を意味しません。
 - G5aの内部経路として、未編集table XMLを保存時のraw mapへ保持せず、編集対象だけを元ZIPから再取得してpatchするようにしました。全passthrough遅延化やconstant-memory達成を意味しません。
 - G5bの内部経路として、worksheet relationship XMLの解析用索引を統合し、同一`.rels` payloadの解析用二重保持を削減しました。passthrough bytesの遅延化やconstant-memory達成を意味しません。
