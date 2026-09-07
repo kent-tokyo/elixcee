@@ -4986,18 +4986,39 @@ fn func_sortby(
         1
     };
     let (rows, cols) = array_shape_for_expr(&args[0], cells, data.len());
-    let (by_rows, by_cols) = array_shape_for_expr(&args[1], cells, by_vals.len());
     if rows > 1 && cols > 1 {
-        if by_rows != rows || by_cols != 1 {
-            return Err(
-                "SORTBY: 2D data requires a one-column sort-by array with equal rows".into(),
-            );
+        let mut sort_keys = Vec::new();
+        let mut key_arg = 1;
+        while key_arg < args.len() {
+            let key_values = flatten_array_vals(collect_values(&args[key_arg], cells)?);
+            let (key_rows, key_cols) =
+                array_shape_for_expr(&args[key_arg], cells, key_values.len());
+            if key_rows != rows || key_cols != 1 {
+                return Err(
+                    "SORTBY: 2D data requires one-column sort-by arrays with equal rows".into(),
+                );
+            }
+            let key_order = args
+                .get(key_arg + 1)
+                .map(|arg| evaluate(arg, cells))
+                .transpose()?
+                .map(|value| to_float(&value))
+                .transpose()?
+                .unwrap_or(1.0) as i64;
+            sort_keys.push((key_values, key_order));
+            key_arg += 2;
         }
         let mut indices: Vec<usize> = (0..rows).collect();
         indices.sort_by(|&left, &right| {
-            let cmp = variant_cmp(&by_vals[left], &by_vals[right])
-                .unwrap_or_else(|_| to_str(&by_vals[left]).cmp(&to_str(&by_vals[right])));
-            if order < 0 { cmp.reverse() } else { cmp }
+            for (key_values, key_order) in &sort_keys {
+                let cmp = variant_cmp(&key_values[left], &key_values[right])
+                    .unwrap_or_else(|_| to_str(&key_values[left]).cmp(&to_str(&key_values[right])));
+                let cmp = if *key_order < 0 { cmp.reverse() } else { cmp };
+                if cmp != Ordering::Equal {
+                    return cmp;
+                }
+            }
+            Ordering::Equal
         });
         let mut result = Vec::with_capacity(data.len());
         for row in indices {
@@ -9572,6 +9593,38 @@ mod tests {
                 for (row, value) in [(1, 5), (2, 9), (3, 7)] {
                     sorted_cells.insert(
                         (row, 3),
+                        CellContent {
+                            formula: None,
+                            value: Variant::Integer(value),
+                        },
+                    );
+                }
+                sorted_cells
+            }),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(10),
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Integer(2),
+                Variant::Integer(20),
+            ])
+        );
+        assert_eq!(
+            calc("=SORTBY(A1:B3,C1:C3,-1,D1:D3,1)", &{
+                let mut sorted_cells = cells.clone();
+                for (row, value) in [(1, 2), (2, 2), (3, 1)] {
+                    sorted_cells.insert(
+                        (row, 3),
+                        CellContent {
+                            formula: None,
+                            value: Variant::Integer(value),
+                        },
+                    );
+                }
+                for (row, value) in [(1, 30), (2, 10), (3, 20)] {
+                    sorted_cells.insert(
+                        (row, 4),
                         CellContent {
                             formula: None,
                             value: Variant::Integer(value),
