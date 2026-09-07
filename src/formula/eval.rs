@@ -1197,14 +1197,24 @@ fn func_index(
     if args.len() < 2 || args.len() > 3 {
         return Err("INDEX requires 2 or 3 arguments".into());
     }
-    let (c1, r1, _c2, _r2) = require_range(&args[0], "INDEX")?;
-    let row_off = to_float(&evaluate(&args[1], cells)?)? as u32;
+    let (c1, r1, c2, r2) = require_range(&args[0], "INDEX")?;
+    let row_off = to_float(&evaluate(&args[1], cells)?)? as i64;
     let col_off = if args.len() == 3 {
-        to_float(&evaluate(&args[2], cells)?)? as u32
+        to_float(&evaluate(&args[2], cells)?)? as i64
     } else {
-        1
+        1i64
     };
-    Ok(cell_val(cells, r1 + row_off - 1, c1 + col_off - 1))
+    if row_off <= 0 || col_off <= 0 {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    if row_off > i64::from(r2 - r1 + 1) || col_off > i64::from(c2 - c1 + 1) {
+        return Ok(Variant::Error(ExcelError::Ref));
+    }
+    Ok(cell_val(
+        cells,
+        r1 + row_off as u32 - 1,
+        c1 + col_off as u32 - 1,
+    ))
 }
 
 fn func_match_fn(
@@ -6470,6 +6480,18 @@ mod tests {
         ]);
         // INDEX(A1:B2, 2, 1) = row 2 col 1 of range = A2 = 30
         assert_eq!(calc("=INDEX(A1:B2,2,1)", &c), Variant::Integer(30));
+        assert_eq!(
+            calc("=INDEX(A1:B2,0,1)", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=INDEX(A1:B2,3,1)", &c),
+            Variant::Error(ExcelError::Ref)
+        );
+        assert_eq!(
+            calc("=INDEX(A1:B2,1,3)", &c),
+            Variant::Error(ExcelError::Ref)
+        );
     }
 
     #[test]

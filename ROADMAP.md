@@ -86,6 +86,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 検索modeの安全境界: `XLOOKUP`のwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加した。wildcardとbinaryの組み合わせや未知modeは明示エラーにし、順序を満たさない入力を推測処理しない。Excel oracleとbinary modeの網羅的校正は未完。
 - [x] G4 検索関数の整合: `XMATCH`にもwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加し、未知modeの黙った通常検索を廃止した。Excel oracleと検索関数全体のmode網羅性は未完。
 - [x] G4 lookup境界: `HLOOKUP`の行番号0を`#VALUE!`、範囲外を`#REF!`として`VLOOKUP`と同じ明示的な境界に揃えた。Excel oracleによる追加の型変換校正は未完。
+- [x] G4 lookup境界: `INDEX`の行列番号0を`#VALUE!`、範囲外を`#REF!`として明示的に検出し、整数アンダーフローによる誤セル参照を防いだ。配列形式・Excel oracle校正は未完。
 - [ ] 動的配列のspill衝突・shape・依存更新を整えてから、既存FILTER／LET／LAMBDA等の配列経路を拡張する。
 - [ ] MEASURE: Excel／EPPlus／Aspose.Cellsはversion・計算設定・license利用条件を固定して比較。実行していない公式対応表と、実測一致率を分ける。
 
