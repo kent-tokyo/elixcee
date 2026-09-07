@@ -3669,7 +3669,7 @@ impl Vm {
         let (r1, c1) = top_left;
         let sheet_key = key.to_lowercase();
         self.record_edit_history();
-        let changed = values
+        let mut changed = values
             .iter()
             .enumerate()
             .flat_map(|(row_offset, row)| {
@@ -3678,6 +3678,7 @@ impl Vm {
                     .map(move |(col_offset, _)| (r1 + row_offset as u32, c1 + col_offset as u32))
             })
             .collect::<Vec<_>>();
+        self.clear_spills_overlapping_changes(&sheet_key, &mut changed);
         let formula_structure_changed =
             self.sheets.get(&sheet_key).is_some_and(|cells| {
                 changed.iter().any(|position| {
@@ -3723,6 +3724,54 @@ impl Vm {
         } else {
             self.mark_formula_dependents(&sheet_key, &changed);
         }
+    }
+
+    fn clear_spills_overlapping_changes(&mut self, sheet_key: &str, changed: &mut Vec<(u32, u32)>) {
+        let anchors = self
+            .spill_rects
+            .get(sheet_key)
+            .map(|rects| {
+                rects
+                    .iter()
+                    .filter(|(_, rect)| changed.iter().any(|position| rect.contains(*position)))
+                    .map(|(anchor, _)| *anchor)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for anchor in anchors {
+            self.clear_spill_for_anchor(sheet_key, anchor, changed);
+        }
+    }
+
+    fn clear_spill_for_anchor(
+        &mut self,
+        sheet_key: &str,
+        anchor: (u32, u32),
+        changed: &mut Vec<(u32, u32)>,
+    ) {
+        let Some(rect) = self
+            .spill_rects
+            .get_mut(sheet_key)
+            .and_then(|rects| rects.remove(&anchor))
+        else {
+            return;
+        };
+        if let Some(cells) = self.sheets.get_mut(sheet_key) {
+            for row_offset in 0..rect.shape.rows {
+                for col_offset in 0..rect.shape.cols {
+                    let Some(position) = rect.cell_at(row_offset, col_offset) else {
+                        continue;
+                    };
+                    if position != anchor && cells.remove(&position).is_some() {
+                        changed.push(position);
+                    }
+                }
+            }
+        }
+        self.cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned")
+            .remove(sheet_key);
     }
 
     fn mark_formula_dependents(&mut self, sheet_key: &str, changed: &[(u32, u32)]) {
@@ -11679,6 +11728,8 @@ impl Vm {
         self.check_variant_budget(&value)?;
         self.record_edit_history();
         let active = self.active_sheet.clone();
+        let mut spill_changed = Vec::new();
+        self.clear_spill_for_anchor(&active, (row, col), &mut spill_changed);
         self.formula_plan.remove(&active);
         self.formula_dirty_cells.remove(&active);
         let source = formula.to_string();
@@ -11693,6 +11744,10 @@ impl Vm {
             .entry(active)
             .or_default()
             .insert((row, col), (source, Some(expr)));
+        self.workbook_formula_dirty
+            .entry(self.active_sheet.clone())
+            .or_default()
+            .extend(spill_changed.iter().copied());
         self.workbook_formula_dirty
             .entry(self.active_sheet.clone())
             .or_default()
@@ -12085,29 +12140,12 @@ impl Vm {
             _ => unreachable!("plan_spill_for_value rejects scalar values"),
         };
         let active = self.active_sheet.clone();
-        let old_rect = self
-            .spill_rects
-            .get(&active)
-            .and_then(|anchors| anchors.get(&(origin_row, origin_col)))
-            .copied();
         self.record_edit_history();
         let mut changed = Vec::with_capacity(shape.cell_count().max(1));
+        self.clear_spill_for_anchor(&active, (origin_row, origin_col), &mut changed);
         let Some(cells) = self.sheets.get_mut(&active) else {
             return Err(format!("unknown active sheet '{}'", active));
         };
-        if let Some(old_rect) = old_rect {
-            for row_offset in 0..old_rect.shape.rows {
-                for col_offset in 0..old_rect.shape.cols {
-                    let position = old_rect
-                        .cell_at(row_offset, col_offset)
-                        .expect("validated previous spill rectangle cell");
-                    if position != (origin_row, origin_col) && !rect.contains(position) {
-                        cells.remove(&position);
-                        changed.push(position);
-                    }
-                }
-            }
-        }
         if shape.is_empty() {
             let formula = cells
                 .get(&(origin_row, origin_col))
@@ -18761,6 +18799,44 @@ mod tests {
         vm.apply_spill_for_value(2, 3, &Variant::Array(vec![Variant::Integer(40)]))
             .unwrap();
         assert_eq!(vm.get_cell(2, 4), Variant::Empty);
+    }
+
+    #[test]
+    fn editing_an_old_spill_cell_clears_the_entire_spill_ownership() {
+        let mut vm = Vm::new();
+        vm.apply_spill_for_value(
+            2,
+            3,
+            &Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]),
+        )
+        .unwrap();
+        vm.write_rect("sheet1", (2, 4), &[vec![Variant::Integer(99)]]);
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(10));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(99));
+        assert!(
+            vm.plan_spill_for_value(
+                2,
+                3,
+                &Variant::Array(vec![Variant::Integer(1), Variant::Integer(2)])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn replacing_an_anchor_formula_reclaims_its_old_spill_cells() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 3, "=SEQUENCE(1,2)").unwrap();
+        vm.apply_spill_for_value(
+            2,
+            3,
+            &Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]),
+        )
+        .unwrap();
+        vm.set_cell_formula(2, 3, "=1").unwrap();
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 4), Variant::Empty);
+        assert!(!vm.cells().contains_key(&(2, 4)));
     }
 
     #[test]
