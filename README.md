@@ -81,6 +81,12 @@ vm.save_workbook("output.xlsx")
 vm.set_cell(1, 1, 20)
 vm.undo()
 
+# Group a large edit into one undoable operation.
+vm.begin_transaction()
+vm.set_range("A1:C1000", [[row, row * 2, row * 3] for row in range(1, 1001)])
+vm.commit_transaction()
+vm.undo()  # restores the state before the whole transaction
+
 # Optional reader resource controls (the cancellation check is cooperative).
 cancel = elixcee.ReadCancellation()
 vm = elixcee.load_workbook(

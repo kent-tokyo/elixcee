@@ -164,6 +164,26 @@ class Vm:
         """Return a detached workbook snapshot including hidden rows/columns; optionally include ``formulas``."""
         ...
 
+    @property
+    def can_undo(self) -> bool: ...
+    @property
+    def can_redo(self) -> bool: ...
+    def undo(self) -> bool:
+        """Restore the most recent bounded cell/formula edit."""
+        ...
+    def redo(self) -> bool:
+        """Restore the most recently undone cell/formula edit."""
+        ...
+    def begin_transaction(self) -> None:
+        """Start an atomic edit transaction; nested transactions are rejected."""
+        ...
+    def commit_transaction(self) -> bool:
+        """Commit all edits as one undoable operation."""
+        ...
+    def abort_transaction(self) -> bool:
+        """Discard the transaction and restore its pre-edit state."""
+        ...
+
     # ── Formula support ────────────────────────────────────────────────────────
 
     def set_cell_formula(self, row: int, col: int, formula: str) -> None:
