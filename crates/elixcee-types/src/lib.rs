@@ -174,6 +174,17 @@ impl SpillRect {
         ))
     }
 
+    pub fn contains(&self, position: (u32, u32)) -> bool {
+        if self.shape.is_empty() {
+            return false;
+        }
+        let (row, col) = position;
+        row >= self.origin_row
+            && col >= self.origin_col
+            && (row - self.origin_row) < self.shape.rows as u32
+            && (col - self.origin_col) < self.shape.cols as u32
+    }
+
     pub fn intersects(&self, other: &Self) -> bool {
         if self.shape.is_empty() || other.shape.is_empty() {
             return false;

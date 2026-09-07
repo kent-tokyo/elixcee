@@ -1044,6 +1044,7 @@ struct EditHistoryState {
     workbook_formula_tracking_valid: bool,
     workbook_formula_structure_dirty: bool,
     ooxml_structural_edit_dirty: bool,
+    spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
 }
 
 #[derive(Clone)]
@@ -1162,6 +1163,9 @@ pub struct Vm {
     /// True after a sheet/name/row/column structural edit whose chart/pivot
     /// references are not yet rewritten by the OOXML writer.
     pub(crate) ooxml_structural_edit_dirty: bool,
+    /// Dynamic-array spill rectangles keyed by sheet and anchor coordinate.
+    /// Included in edit history so undo cannot leave stale spill ownership.
+    spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
     /// Bounded snapshots for explicit cell/formula edits. Other VM state is
     /// deliberately not included: these commands only mutate worksheet data
     /// and formula caches, while VBA execution state is never rewound.
@@ -1579,6 +1583,7 @@ impl Vm {
             workbook_formula_tracking_valid: false,
             workbook_formula_structure_dirty: true,
             ooxml_structural_edit_dirty: false,
+            spill_rects: HashMap::new(),
             edit_undo: Vec::new(),
             edit_redo: Vec::new(),
             edit_transaction: None,
@@ -11798,6 +11803,7 @@ impl Vm {
             workbook_formula_tracking_valid: self.workbook_formula_tracking_valid,
             workbook_formula_structure_dirty: self.workbook_formula_structure_dirty,
             ooxml_structural_edit_dirty: self.ooxml_structural_edit_dirty,
+            spill_rects: self.spill_rects.clone(),
         }
     }
 
@@ -11825,6 +11831,7 @@ impl Vm {
         self.workbook_formula_tracking_valid = state.workbook_formula_tracking_valid;
         self.workbook_formula_structure_dirty = state.workbook_formula_structure_dirty;
         self.ooxml_structural_edit_dirty = state.ooxml_structural_edit_dirty;
+        self.spill_rects = state.spill_rects;
         self.cell_index_dirty = true;
         self.cell_tile_cache = Arc::new(Mutex::new(HashMap::new()));
         self.cell_tile_cache_clock = Arc::new(AtomicU64::new(0));
@@ -12039,9 +12046,16 @@ impl Vm {
                 if position == (origin_row, origin_col) {
                     continue;
                 }
-                if cells.get(&position).is_some_and(|cell| {
-                    cell.formula.is_some() || !matches!(cell.value, Variant::Empty)
-                }) {
+                let owned_by_same_anchor = self
+                    .spill_rects
+                    .get(&self.active_sheet)
+                    .and_then(|anchors| anchors.get(&(origin_row, origin_col)))
+                    .is_some_and(|old_rect| old_rect.contains(position));
+                if !owned_by_same_anchor
+                    && cells.get(&position).is_some_and(|cell| {
+                        cell.formula.is_some() || !matches!(cell.value, Variant::Empty)
+                    })
+                {
                     return Err(format!(
                         "#SPILL!: target cell {}:{} is occupied",
                         position.0, position.1
@@ -12071,11 +12085,29 @@ impl Vm {
             _ => unreachable!("plan_spill_for_value rejects scalar values"),
         };
         let active = self.active_sheet.clone();
+        let old_rect = self
+            .spill_rects
+            .get(&active)
+            .and_then(|anchors| anchors.get(&(origin_row, origin_col)))
+            .copied();
         self.record_edit_history();
         let mut changed = Vec::with_capacity(shape.cell_count().max(1));
         let Some(cells) = self.sheets.get_mut(&active) else {
             return Err(format!("unknown active sheet '{}'", active));
         };
+        if let Some(old_rect) = old_rect {
+            for row_offset in 0..old_rect.shape.rows {
+                for col_offset in 0..old_rect.shape.cols {
+                    let position = old_rect
+                        .cell_at(row_offset, col_offset)
+                        .expect("validated previous spill rectangle cell");
+                    if position != (origin_row, origin_col) && !rect.contains(position) {
+                        cells.remove(&position);
+                        changed.push(position);
+                    }
+                }
+            }
+        }
         if shape.is_empty() {
             let formula = cells
                 .get(&(origin_row, origin_col))
@@ -12119,7 +12151,20 @@ impl Vm {
             .extend(changed.iter().copied());
         self.workbook_formula_tracking_valid = true;
         self.mark_formula_dependents(&active, &changed);
-        self.update_cached_tiles_for_rect(&active, (origin_row, origin_col), &[values.to_vec()]);
+        self.cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned")
+            .remove(&active);
+        if shape.is_empty() {
+            if let Some(anchors) = self.spill_rects.get_mut(&active) {
+                anchors.remove(&(origin_row, origin_col));
+            }
+        } else {
+            self.spill_rects
+                .entry(active)
+                .or_default()
+                .insert((origin_row, origin_col), rect);
+        }
         Ok(rect)
     }
 
@@ -18683,8 +18728,39 @@ mod tests {
 
         vm.write_rect("sheet1", (2, 5), &[vec![Variant::Integer(99)]]);
         let before = vm.read_rect("sheet1", 2, 3, 2, 5);
-        assert!(vm.apply_spill_for_value(2, 3, &value).is_err());
+        let larger = Variant::Array(vec![
+            Variant::Integer(10),
+            Variant::Integer(20),
+            Variant::Integer(30),
+        ]);
+        assert!(vm.apply_spill_for_value(2, 3, &larger).is_err());
         assert_eq!(vm.read_rect("sheet1", 2, 3, 2, 5), before);
+    }
+
+    #[test]
+    fn applying_a_new_spill_reclaims_only_the_previous_spill_cells() {
+        let mut vm = Vm::new();
+        let first = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        vm.apply_spill_for_value(2, 3, &first).unwrap();
+        let second = Variant::Array(vec![Variant::Integer(30)]);
+        vm.apply_spill_for_value(2, 3, &second).unwrap();
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(30));
+        assert_eq!(vm.get_cell(2, 4), Variant::Empty);
+        assert!(!vm.cells().contains_key(&(2, 4)));
+    }
+
+    #[test]
+    fn spill_ownership_is_restored_by_edit_undo() {
+        let mut vm = Vm::new();
+        let first = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        vm.apply_spill_for_value(2, 3, &first).unwrap();
+        vm.apply_spill_for_value(2, 3, &Variant::Array(vec![Variant::Integer(30)]))
+            .unwrap();
+        assert!(vm.undo_edit());
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(20));
+        vm.apply_spill_for_value(2, 3, &Variant::Array(vec![Variant::Integer(40)]))
+            .unwrap();
+        assert_eq!(vm.get_cell(2, 4), Variant::Empty);
     }
 
     #[test]
