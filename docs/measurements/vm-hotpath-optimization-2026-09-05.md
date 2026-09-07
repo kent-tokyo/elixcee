@@ -191,3 +191,14 @@ measured 94.98 ms median. This is an approximately 11.1% local reduction for
 this microbenchmark. The date, build, and Criterion settings differ from the
 earlier follow-up above, so these values are a current baseline rather than a
 replacement for the earlier result or evidence of the roadmap's 1.2x target.
+
+## Current dirty-propagation baseline
+
+The same release-mode Criterion configuration was rerun on 2026-09-07 for the
+1,000-formula controlled matrix. Median times were 1.2825 ms for a single-input
+dirty chain, 1.2363 ms for a warm no-op, 1.3090 ms for the structure-rebuild
+comparison, and 1.1570 ms when all 1,000 independent inputs changed. The
+single-input case was not materially faster than the rebuild case in this run,
+so no speedup claim is made; closure bookkeeping remains a P0 optimization
+candidate when the affected set is large. These are local microbenchmarks and
+do not establish end-to-end workbook performance.
