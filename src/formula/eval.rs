@@ -4712,7 +4712,10 @@ fn eval_as_bool_array(
                 Ok(vec![is_truthy(&evaluate(expr, cells)?)])
             }
         }
-        _ => Ok(vec![is_truthy(&evaluate(expr, cells)?)]),
+        _ => match evaluate(expr, cells)? {
+            Variant::Array(values) => Ok(values.iter().map(is_truthy).collect()),
+            value => Ok(vec![is_truthy(&value)]),
+        },
     }
 }
 
@@ -4737,19 +4740,32 @@ fn func_filter(
 
     let data_values = flatten_array_vals(collect_values(&args[0], cells)?);
     let (data_rows, data_cols) = array_shape_for_expr(&args[0], cells, data_values.len());
+    let (include_rows, include_cols) = array_shape_for_expr(&args[1], cells, include.len());
+    let row_include = include_rows == data_rows && include_cols == 1;
+    let column_include = include_rows == 1 && include_cols == data_cols;
     if !matches!(args[0], FormulaExpr::Range { .. })
         && data_rows > 1
         && data_cols > 1
-        && include.len() == data_rows
+        && (row_include || column_include)
     {
         let mut result = Vec::new();
-        for (row, keep) in include.iter().copied().enumerate() {
-            if keep {
-                result.extend(
-                    data_values[row * data_cols..(row + 1) * data_cols]
-                        .iter()
-                        .cloned(),
-                );
+        if row_include {
+            for (row, keep) in include.iter().copied().enumerate() {
+                if keep {
+                    result.extend(
+                        data_values[row * data_cols..(row + 1) * data_cols]
+                            .iter()
+                            .cloned(),
+                    );
+                }
+            }
+        } else {
+            for row in 0..data_rows {
+                for (col, keep) in include.iter().copied().enumerate() {
+                    if keep {
+                        result.push(data_values[row * data_cols + col].clone());
+                    }
+                }
             }
         }
         if result.is_empty() {
@@ -9580,6 +9596,17 @@ mod tests {
         assert_eq!(
             calc("=FILTER(A1:B3,C1:C3)", &filter_cells),
             Variant::Array(vec![Variant::Integer(1), Variant::Integer(10)])
+        );
+        assert_eq!(
+            calc("=FILTER(SEQUENCE(2,3),SEQUENCE(1,3))", &cells),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(3),
+                Variant::Integer(4),
+                Variant::Integer(5),
+                Variant::Integer(6),
+            ])
         );
     }
 }

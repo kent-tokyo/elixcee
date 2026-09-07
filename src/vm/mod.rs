@@ -13162,12 +13162,35 @@ fn formula_spill_shape(
             let source_value = formula::evaluate(source, cells).ok()?;
             let source_shape = formula_spill_shape(source, cells, &source_value)
                 .or_else(|| source_value.array_shape())?;
-            (source_shape.cols > 0 && value_len(value) % source_shape.cols == 0)
-                .then_some(ArrayShape::new(
-                    value_len(value) / source_shape.cols,
-                    source_shape.cols,
-                ))
-                .or(Some(fallback))
+            let include = args
+                .get(1)
+                .and_then(|arg| formula::evaluate(arg, cells).ok());
+            let include_len = include.as_ref().map(value_len).unwrap_or(0);
+            let (include_rows, include_cols) =
+                if let (Some(include_expr), Some(include)) = (args.get(1), include.as_ref()) {
+                    let shape = formula_spill_shape(include_expr, cells, include)
+                        .unwrap_or_else(|| ArrayShape::new(1, include_len));
+                    (shape.rows, shape.cols)
+                } else {
+                    (1, include_len)
+                };
+            let column_include = include_rows == 1 && include_cols == source_shape.cols;
+            let shape = if column_include {
+                let count = match include {
+                    Some(Variant::Array(values)) => values
+                        .iter()
+                        .filter(|value| matches!(value, Variant::Boolean(true)))
+                        .count(),
+                    Some(Variant::Boolean(true)) => 1,
+                    _ => 0,
+                };
+                ArrayShape::new(source_shape.rows, count)
+            } else if source_shape.cols > 0 && value_len(value) % source_shape.cols == 0 {
+                ArrayShape::new(value_len(value) / source_shape.cols, source_shape.cols)
+            } else {
+                fallback
+            };
+            exact(shape.rows, shape.cols).or(Some(fallback))
         }
         "INDEX" => {
             let FormulaExpr::Range { c1, r1, c2, r2, .. } = args.first()? else {
