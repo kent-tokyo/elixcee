@@ -6091,10 +6091,27 @@ fn choose_elements(
     let vals = flatten_array_vals(collect_values(&args[0], cells)?);
     let value_len = vals.len();
     let (rows, cols) = array_shape_for_expr(&args[0], cells, value_len);
+    let integer_index = |arg: &FormulaExpr| -> Result<i64, String> {
+        match evaluate(arg, cells)? {
+            Variant::Integer(value) => Ok(value),
+            Variant::Float(value)
+                if value.is_finite()
+                    && value.fract() == 0.0
+                    && value >= i64::MIN as f64
+                    && value <= i64::MAX as f64 =>
+            {
+                Ok(value as i64)
+            }
+            _ => Err(format!("{} index must be an integer", fname)),
+        }
+    };
     if rows > 1 && cols > 1 {
         let mut indices = Vec::with_capacity(args.len() - 1);
         for arg in &args[1..] {
-            let n = to_float(&evaluate(arg, cells)?)? as i64;
+            let n = match integer_index(arg) {
+                Ok(value) => value,
+                Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+            };
             let size = if fname == "CHOOSECOLS" { cols } else { rows };
             let idx = if n > 0 { n - 1 } else { size as i64 + n };
             if idx < 0 || idx >= size as i64 {
@@ -6119,7 +6136,10 @@ fn choose_elements(
     let len = vals.len() as i64;
     let mut result = vec![];
     for arg in &args[1..] {
-        let n = to_float(&evaluate(arg, cells)?)? as i64;
+        let n = match integer_index(arg) {
+            Ok(value) => value,
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+        };
         let idx = if n > 0 { n - 1 } else { len + n };
         if idx < 0 || idx >= len {
             result.push(Variant::Error(ExcelError::Value));
@@ -8697,6 +8717,14 @@ mod tests {
                 Variant::Integer(5),
                 Variant::Integer(6),
             ])
+        );
+        assert_eq!(
+            calc("=CHOOSECOLS(SEQUENCE(2,3),1.5)", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=CHOOSEROWS(SEQUENCE(3),1.5)", &c),
+            Variant::Error(ExcelError::Value)
         );
     }
 
