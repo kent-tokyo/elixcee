@@ -203,6 +203,13 @@ so no speedup claim is made; closure bookkeeping remains a P0 optimization
 candidate when the affected set is large. These are local microbenchmarks and
 do not establish end-to-end workbook performance.
 
+The remaining two cases were rerun with the same configuration after the
+queue-index change: warm no-op was 1.2012 ms median and all 1,000 independent
+inputs were 1.1502 ms median. Criterion reported no statistically significant
+change for either case. The queue-index effect is therefore limited to the
+single-input chain observation above; broader dirty-propagation acceleration
+remains open.
+
 ## Dirty-closure queue-index trial
 
 On 2026-09-07, the dirty closure queue was changed to carry formula-plan

@@ -21,6 +21,7 @@
 - 現行1.0.4のappend-cache Criterionベースラインを更新し、5,000行でreference 106.88 ms、cached 94.98 msを記録しました。これは局所microbenchmarkの観測であり、1.2倍やend-to-end速度の主張ではありません。
 - formula dirty propagationのcontrolled matrixを再測定し、single-input chain 1.2825 ms、warm noop 1.2363 ms、structure rebuild 1.3090 ms、独立1,000入力 1.1570 msを記録しました。dirty経路の一般的な速度優位は主張せず、negative resultとして扱います。
 - dirty closure queueがformula plan indexを直接運ぶ局所最適化を追加し、single-input chainを1.2538 ms（直前比約2.2%改善）で測定しました。rebuildは1.3223 msで変化なしのため、一般的な速度優位は主張していません。
+- queue index化後のwarm noop 1.2012 ms、独立1,000入力1.1502 msを再測定しましたが、いずれも有意差はありませんでした。効果はsingle-input chainに限定して扱います。
 
 ## [1.0.4] - 2026-09-07
 
