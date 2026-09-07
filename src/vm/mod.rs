@@ -13151,15 +13151,24 @@ fn formula_spill_shape(
                 .map(|shape| ArrayShape::new(shape.cols, shape.rows))
                 .or(Some(fallback)),
         },
-        "FILTER" => match args.first()? {
-            FormulaExpr::Range { c1, c2, .. } => {
+        "FILTER" => {
+            let source = args.first()?;
+            if let FormulaExpr::Range { c1, c2, .. } = source {
                 let cols = (c2.max(c1) - c2.min(c1) + 1) as usize;
-                (cols > 0 && value_len(value) % cols == 0)
+                return (cols > 0 && value_len(value) % cols == 0)
                     .then_some(ArrayShape::new(value_len(value) / cols, cols))
-                    .or(Some(fallback))
+                    .or(Some(fallback));
             }
-            _ => Some(fallback),
-        },
+            let source_value = formula::evaluate(source, cells).ok()?;
+            let source_shape = formula_spill_shape(source, cells, &source_value)
+                .or_else(|| source_value.array_shape())?;
+            (source_shape.cols > 0 && value_len(value) % source_shape.cols == 0)
+                .then_some(ArrayShape::new(
+                    value_len(value) / source_shape.cols,
+                    source_shape.cols,
+                ))
+                .or(Some(fallback))
+        }
         "INDEX" => {
             let FormulaExpr::Range { c1, r1, c2, r2, .. } = args.first()? else {
                 return Some(fallback);

@@ -4735,6 +4735,33 @@ fn func_filter(
     }
     let include = eval_as_bool_array(&args[1], cells)?;
 
+    let data_values = flatten_array_vals(collect_values(&args[0], cells)?);
+    let (data_rows, data_cols) = array_shape_for_expr(&args[0], cells, data_values.len());
+    if !matches!(args[0], FormulaExpr::Range { .. })
+        && data_rows > 1
+        && data_cols > 1
+        && include.len() == data_rows
+    {
+        let mut result = Vec::new();
+        for (row, keep) in include.iter().copied().enumerate() {
+            if keep {
+                result.extend(
+                    data_values[row * data_cols..(row + 1) * data_cols]
+                        .iter()
+                        .cloned(),
+                );
+            }
+        }
+        if result.is_empty() {
+            return if args.len() >= 3 {
+                evaluate(&args[2], cells)
+            } else {
+                Ok(Variant::Error(ExcelError::NA))
+            };
+        }
+        return Ok(wrap_array(result));
+    }
+
     match &args[0] {
         FormulaExpr::Range { c1, r1, c2, r2, .. } => {
             let data_rows = (*r2 - *r1 + 1) as usize;
@@ -9539,6 +9566,20 @@ mod tests {
                 Variant::Integer(2),
                 Variant::Integer(20),
             ])
+        );
+        let mut filter_cells = cells.clone();
+        for (row, value) in [(1, false), (2, true), (3, false)] {
+            filter_cells.insert(
+                (row, 3),
+                CellContent {
+                    formula: None,
+                    value: Variant::Boolean(value),
+                },
+            );
+        }
+        assert_eq!(
+            calc("=FILTER(A1:B3,C1:C3)", &filter_cells),
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(10)])
         );
     }
 }
