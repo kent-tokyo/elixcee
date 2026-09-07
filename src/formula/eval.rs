@@ -4929,13 +4929,33 @@ fn func_sortby(
     if args.len() < 2 {
         return Err("SORTBY requires at least 2 arguments".into());
     }
-    let data = collect_values(&args[0], cells)?;
-    let by_vals = collect_values(&args[1], cells)?;
+    let data = flatten_array_vals(collect_values(&args[0], cells)?);
+    let by_vals = flatten_array_vals(collect_values(&args[1], cells)?);
     let order: i64 = if args.len() >= 3 {
         to_float(&evaluate(&args[2], cells)?)? as i64
     } else {
         1
     };
+    let (rows, cols) = array_shape_for_expr(&args[0], cells, data.len());
+    let (by_rows, by_cols) = array_shape_for_expr(&args[1], cells, by_vals.len());
+    if rows > 1 && cols > 1 {
+        if by_rows != rows || by_cols != 1 {
+            return Err(
+                "SORTBY: 2D data requires a one-column sort-by array with equal rows".into(),
+            );
+        }
+        let mut indices: Vec<usize> = (0..rows).collect();
+        indices.sort_by(|&left, &right| {
+            let cmp = variant_cmp(&by_vals[left], &by_vals[right])
+                .unwrap_or_else(|_| to_str(&by_vals[left]).cmp(&to_str(&by_vals[right])));
+            if order < 0 { cmp.reverse() } else { cmp }
+        });
+        let mut result = Vec::with_capacity(data.len());
+        for row in indices {
+            result.extend(data[row * cols..(row + 1) * cols].iter().cloned());
+        }
+        return Ok(wrap_array(result));
+    }
     if data.len() != by_vals.len() {
         return Err("SORTBY: data and sort-by arrays must have equal length".into());
     }
@@ -9495,6 +9515,29 @@ mod tests {
                 Variant::Integer(20),
                 Variant::Integer(1),
                 Variant::Integer(10),
+            ])
+        );
+        assert_eq!(
+            calc("=SORTBY(A1:B3,C1:C3,-1)", &{
+                let mut sorted_cells = cells.clone();
+                for (row, value) in [(1, 5), (2, 9), (3, 7)] {
+                    sorted_cells.insert(
+                        (row, 3),
+                        CellContent {
+                            formula: None,
+                            value: Variant::Integer(value),
+                        },
+                    );
+                }
+                sorted_cells
+            }),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(10),
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Integer(2),
+                Variant::Integer(20),
             ])
         );
     }

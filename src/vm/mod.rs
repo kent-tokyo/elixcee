@@ -13217,11 +13217,18 @@ fn formula_spill_shape(
             };
             exact(shape.rows, shape.cols).or(Some(fallback))
         }
-        "UNIQUE" | "SORT" => {
+        "UNIQUE" | "SORT" | "SORTBY" => {
             let source = args.first()?;
             let source_value = formula::evaluate(source, cells).ok()?;
             let source_shape = formula_spill_shape(source, cells, &source_value)
                 .or_else(|| source_value.array_shape())?;
+            if name == "SORTBY" {
+                return if source_shape.rows > 1 && source_shape.cols > 1 {
+                    exact(source_shape.rows, source_shape.cols).or(Some(fallback))
+                } else {
+                    Some(fallback)
+                };
+            }
             if source_shape.rows <= 1 || source_shape.cols <= 1 {
                 return if source_shape.cols == 1 {
                     exact(value_len(value), 1).or(Some(fallback))
