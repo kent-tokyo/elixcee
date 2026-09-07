@@ -5708,9 +5708,26 @@ fn func_vstack(
     if args.is_empty() {
         return Err("VSTACK requires at least 1 argument".into());
     }
-    let mut result = vec![];
-    for arg in args {
-        result.extend(flatten_array_vals(collect_values(arg, cells)?));
+    let parts: Vec<(Vec<Variant>, usize, usize)> = args
+        .iter()
+        .map(|arg| {
+            let values = flatten_array_vals(collect_values(arg, cells)?);
+            let (rows, cols) = array_shape_for_expr(arg, cells, values.len());
+            Ok((values, rows, cols))
+        })
+        .collect::<Result<_, String>>()?;
+    let width = parts.iter().map(|(_, _, cols)| *cols).max().unwrap_or(0);
+    let mut result = Vec::new();
+    for (values, rows, cols) in parts {
+        for row in 0..rows {
+            for col in 0..width {
+                result.push(if col < cols {
+                    values[row * cols + col].clone()
+                } else {
+                    Variant::Error(ExcelError::NA)
+                });
+            }
+        }
     }
     Ok(wrap_array(result))
 }
@@ -5777,13 +5794,17 @@ fn func_hstack(
             Ok((values, rows, cols))
         })
         .collect::<Result<_, String>>()?;
-    let two_dimensional = parts.iter().any(|(_, rows, _)| *rows > 1)
-        && parts.iter().all(|(_, rows, _)| *rows == parts[0].1);
+    let two_dimensional = parts.iter().any(|(_, rows, _)| *rows > 1);
     let mut result = vec![];
     if two_dimensional {
-        for row in 0..parts[0].1 {
+        let height = parts.iter().map(|(_, rows, _)| *rows).max().unwrap_or(0);
+        for row in 0..height {
             for (values, _, cols) in &parts {
-                result.extend(values[row * cols..(row + 1) * cols].iter().cloned());
+                if row < values.len() / (*cols).max(1) {
+                    result.extend(values[row * cols..(row + 1) * cols].iter().cloned());
+                } else {
+                    result.extend(std::iter::repeat_n(Variant::Error(ExcelError::NA), *cols));
+                }
             }
         }
     } else {
@@ -8318,6 +8339,28 @@ mod tests {
                 Variant::Integer(1),
                 Variant::Integer(2),
                 Variant::Integer(2),
+            ])
+        );
+        assert_eq!(
+            calc("=HSTACK(SEQUENCE(2),SEQUENCE(3))", &c),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(2),
+                Variant::Error(ExcelError::NA),
+                Variant::Integer(3),
+            ])
+        );
+        assert_eq!(
+            calc("=VSTACK(SEQUENCE(1,2),SEQUENCE(2,1))", &c),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(1),
+                Variant::Error(ExcelError::NA),
+                Variant::Integer(2),
+                Variant::Error(ExcelError::NA),
             ])
         );
     }
