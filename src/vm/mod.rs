@@ -12106,14 +12106,18 @@ impl Vm {
                 cell.formula
                     .as_ref()
                     .filter(|_| matches!(cell.value, Variant::Array(_)))
-                    .map(|_| ((row, col), cell.value.clone()))
+                    .map(|formula| ((row, col), formula::parse(formula).ok(), cell.value.clone()))
             })
             .collect::<Vec<_>>();
         let mut planned = Vec::with_capacity(pending.len());
-        for &((row, col), ref value) in &pending {
-            let rect = self
-                .plan_spill_for_value(row, col, value)?
+        for &((row, col), ref parsed, ref value) in &pending {
+            let shape = parsed
+                .as_ref()
+                .and_then(|expr| formula_spill_shape(expr, self.cells(), value))
+                .or_else(|| value.array_shape())
                 .expect("array formula values always have a spill plan");
+            let rect = SpillRect::new(row, col, shape)?;
+            self.plan_spill_rect(rect)?;
             planned.push(((row, col), rect));
         }
         for (index, &((row, col), rect)) in planned.iter().enumerate() {
@@ -12126,10 +12130,29 @@ impl Vm {
                 }
             }
         }
-        for ((row, col), value) in pending {
-            self.apply_spill_for_value_untracked(row, col, &value)?;
+        for ((row, col), parsed, value) in pending {
+            self.apply_spill_for_formula_untracked(row, col, parsed.as_ref(), &value)?;
         }
         Ok(())
+    }
+
+    fn apply_spill_for_formula_untracked(
+        &mut self,
+        origin_row: u32,
+        origin_col: u32,
+        formula: Option<&formula::FormulaExpr>,
+        value: &Variant,
+    ) -> Result<SpillRect, String> {
+        let shape = formula
+            .and_then(|expr| formula_spill_shape(expr, self.cells(), value))
+            .or_else(|| value.array_shape())
+            .ok_or_else(|| "cannot apply a scalar value as a spill".to_string())?;
+        let rect = SpillRect::new(origin_row, origin_col, shape)?;
+        self.plan_spill_rect(rect)?;
+        let Variant::Array(values) = value else {
+            return Err("formula spill value must be a flat array".to_string());
+        };
+        self.apply_spill_rect_values(rect, values)
     }
 
     /// Plans the worksheet footprint for a dynamic-array value without
@@ -13081,6 +13104,68 @@ fn spill_rect_overlaps_range(rect: &SpillRect, r1: u32, c1: u32, r2: u32, c2: u3
         && r1 as u64 <= rect_r2
         && rect.origin_col as u64 <= c2 as u64
         && c1 as u64 <= rect_c2
+}
+
+/// Recover the worksheet shape of formula-engine arrays whose legacy value
+/// representation is intentionally flat. The evaluator already emits values
+/// in row-major order; this helper supplies the missing footprint metadata at
+/// the VM boundary without changing VBA `Variant::Array` semantics.
+fn formula_spill_shape(
+    expr: &formula::FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+    value: &Variant,
+) -> Option<ArrayShape> {
+    use formula::FormulaExpr;
+
+    let fallback = value.array_shape()?;
+    let FormulaExpr::FuncCall { name, args } = expr else {
+        return Some(fallback);
+    };
+    let name = name.to_ascii_uppercase();
+    let dimension = |arg: Option<&FormulaExpr>, default: usize| -> Option<usize> {
+        let Some(arg) = arg else { return Some(default) };
+        match formula::evaluate(arg, cells).ok()? {
+            Variant::Integer(v) if v >= 0 => Some(v as usize),
+            Variant::Float(v) if v.is_finite() && v >= 0.0 => Some(v as usize),
+            _ => None,
+        }
+    };
+    let exact = |rows: usize, cols: usize| {
+        let shape = ArrayShape::new(rows, cols);
+        (shape.cell_count() == value_len(value)).then_some(shape)
+    };
+
+    match name.as_str() {
+        "SEQUENCE" | "RANDARRAY" => {
+            let rows = dimension(args.first(), 1)?.max(1);
+            let cols = dimension(args.get(1), 1)?.max(1);
+            exact(rows, cols).or(Some(fallback))
+        }
+        "TRANSPOSE" => match args.first()? {
+            FormulaExpr::Range { c1, r1, c2, r2, .. } => {
+                exact((*c2 - *c1 + 1) as usize, (*r2 - *r1 + 1) as usize).or(Some(fallback))
+            }
+            inner => formula_spill_shape(inner, cells, value)
+                .map(|shape| ArrayShape::new(shape.cols, shape.rows))
+                .or(Some(fallback)),
+        },
+        "WRAPCOLS" => {
+            let rows = dimension(args.get(1), 0)?.max(1);
+            exact(rows, value_len(value).div_ceil(rows)).or(Some(fallback))
+        }
+        "WRAPROWS" => {
+            let cols = dimension(args.get(1), 0)?.max(1);
+            exact(value_len(value).div_ceil(cols), cols).or(Some(fallback))
+        }
+        _ => Some(fallback),
+    }
+}
+
+fn value_len(value: &Variant) -> usize {
+    match value {
+        Variant::Array(values) => values.len(),
+        _ => 1,
+    }
 }
 
 /// `ReDim Preserve arr(...)` on an array of the same rank as `new_bounds`.
@@ -19240,6 +19325,54 @@ mod tests {
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
         assert_eq!(vm.get_cell(1, 3), Variant::Integer(3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_formula_shape_for_two_dimensional_arrays() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 2, "=SEQUENCE(2,3)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(3));
+        assert_eq!(vm.get_cell(3, 2), Variant::Integer(4));
+        assert_eq!(vm.get_cell(3, 4), Variant::Integer(6));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(2, 2)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_transpose_shape_for_range_arrays() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(10),
+            },
+        );
+        vm.cells_mut().insert(
+            (1, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(20),
+            },
+        );
+        vm.set_cell_formula(2, 2, "=TRANSPOSE(A1:B1)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(10));
+        assert_eq!(vm.get_cell(3, 2), Variant::Integer(20));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(2, 2)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 1));
     }
 
     #[test]
