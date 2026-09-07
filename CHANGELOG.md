@@ -12,6 +12,7 @@
 - G5bの内部経路として、relationship XMLのraw bytesを保存時mapへ保持せず、元ZIPから遅延copyするようにしました。新規tableのworksheet `.rels`だけはpatchして出力します。全payload遅延化やconstant-memory達成を意味しません。
 - G5bの内部経路として、relationship接続・pruning解析後に`raw_entries`側の`.rels` bytesを解放し、解析用索引とentry名だけを残すようにしました。全payload遅延化やconstant-memory達成を意味しません。
 - G5の測定記録を更新し、現行1.0.4 release wheelのappend 100,000／250,000行を別processで再測定しました。normal-VMの長時間化ケースは未測定として明示しています。
+- G5の通常VM測定ハーネスを4,096行単位の`set_range`バッチへ変更し、100,000／250,000行のnormal-fresh保存・RSS結果を記録しました。250,000行RSSは2回間で大きく変動したため、constant-memoryや3 OS対応の根拠にはしていません。
 
 ## [1.0.4] - 2026-09-07
 

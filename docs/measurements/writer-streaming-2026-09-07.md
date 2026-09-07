@@ -10,7 +10,25 @@ every completed case.
 | append | 100,000 | 19.39 / 19.83 MiB | 353 / 367 ms | 1.36 MiB |
 | append | 250,000 | 19.38 / 19.46 MiB | 717 / 756 ms | 3.51 MiB |
 
-The normal-VM 100,000-row case was stopped after more than two minutes at
-100% child CPU and is intentionally recorded as unmeasured, not as a failure
-or a constant-memory result. The append data is one macOS run and does not
-establish three-OS support or constant memory for the normal VM.
+The corrected normal-VM run uses 4,096-row `set_range` batches to avoid
+measuring one undo snapshot per input row. It is a storage/save observation,
+not an append API throughput comparison:
+
+| mode | rows | RSS p50 / p95 | wall p50 / p95 | output |
+|---|---:|---:|---:|---:|
+| normal-fresh | 100,000 | 612.58 / 623.22 MiB | 340 / 393 ms | 1.24 MiB |
+| normal-fresh | 250,000 | 924.62 / 1,920.73 MiB | 1,068 / 1,178 ms | 3.11 MiB |
+
+Both repetitions for both row counts passed ZIP, worksheet-shape, final-row,
+and output validation. The 250,000-row RSS samples were 924.62 MiB and
+1,920.73 MiB, so the high p95 is retained rather than normalized away. This
+run does not support a constant-memory claim; 1,000,000 rows, three-OS
+coverage, and Excel-oracle comparison remain open.
+
+The initial normal-VM 100,000-row case, using one `append_row` call per row,
+was stopped after more than two minutes at 100% child CPU. It is intentionally
+recorded as unmeasured, not as a failure. The append data is one macOS run and
+does not establish three-OS support or constant memory for the normal VM.
+The harness now uses 4,096-row `set_range` batches for a separate normal-VM
+storage/save measurement; its results must not be compared directly with
+append API timings.

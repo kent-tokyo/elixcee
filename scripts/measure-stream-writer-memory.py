@@ -95,8 +95,18 @@ elif mode == "normal":
     source.unlink()
 else:
     workbook = elixcee.Vm()
-    for row_number in range(rows):
-        workbook.append_row((row_number, text_value, row_number % 7)[:columns])
+    # Bulk the normal-VM input so the measurement covers workbook storage and
+    # save, not one full undo snapshot per appended row. This is deliberately
+    # distinct from the append API measurement above.
+    chunk_size = 4096
+    for start in range(0, rows, chunk_size):
+        end = min(rows, start + chunk_size)
+        grid = [
+            (row_number, text_value, row_number % 7)[:columns]
+            for row_number in range(start, end)
+        ]
+        last_column = "A" if columns == 1 else "B" if columns == 2 else "C"
+        workbook.set_range(f"A{start + 1}:{last_column}{end}", grid)
     workbook.save_workbook(str(path))
 print(json.dumps({
     "rows": rows,
