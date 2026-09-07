@@ -4914,19 +4914,34 @@ fn func_sort(
     }
     let mut vals = flatten_array_vals(collect_values(&args[0], cells)?);
     let (rows, cols) = array_shape_for_expr(&args[0], cells, vals.len());
-    let order: i64 = if args.len() >= 3 {
-        to_float(&evaluate(&args[2], cells)?)? as i64
-    } else {
-        1
-    };
     if rows > 1 && cols > 1 {
         let sort_index = if args.len() >= 2 {
-            to_float(&evaluate(&args[1], cells)?)? as i64
+            match evaluate(&args[1], cells)? {
+                Variant::Integer(value) => value,
+                Variant::Float(value)
+                    if value.is_finite()
+                        && value.fract() == 0.0
+                        && value >= i64::MIN as f64
+                        && value <= i64::MAX as f64 =>
+                {
+                    value as i64
+                }
+                _ => return Ok(Variant::Error(ExcelError::Value)),
+            }
+        } else {
+            1
+        };
+        let order = if args.len() >= 3 {
+            match evaluate(&args[2], cells)? {
+                Variant::Integer(value) if value == 1 || value == -1 => value,
+                Variant::Float(value) if value == 1.0 || value == -1.0 => value as i64,
+                _ => return Ok(Variant::Error(ExcelError::Value)),
+            }
         } else {
             1
         };
         let by_col = if args.len() >= 4 {
-            matches!(evaluate(&args[3], cells)?, Variant::Boolean(true))
+            is_truthy(&evaluate(&args[3], cells)?)
         } else {
             false
         };
@@ -4960,6 +4975,11 @@ fn func_sort(
         }
         return Ok(wrap_array(result));
     }
+    let order: i64 = if args.len() >= 3 {
+        to_float(&evaluate(&args[2], cells)?)? as i64
+    } else {
+        1
+    };
     vals.sort_by(|a, b| {
         let af = to_float(a).unwrap_or(f64::INFINITY);
         let bf = to_float(b).unwrap_or(f64::INFINITY);
@@ -9589,6 +9609,25 @@ mod tests {
                 Variant::Integer(20),
                 Variant::Integer(1),
                 Variant::Integer(10),
+            ])
+        );
+        assert_eq!(
+            calc("=SORT(A1:B3,1.5,1)", &cells),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=SORT(A1:B3,1,2)", &cells),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=SORT(A1:B3,1,-1,1)", &cells),
+            Variant::Array(vec![
+                Variant::Integer(20),
+                Variant::Integer(2),
+                Variant::Integer(10),
+                Variant::Integer(1),
+                Variant::Integer(20),
+                Variant::Integer(2),
             ])
         );
         assert_eq!(
