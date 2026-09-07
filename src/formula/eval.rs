@@ -1877,7 +1877,12 @@ fn func_xlookup(
 
     let iter: Box<dyn Iterator<Item = usize>> = match search_mode {
         -1 => Box::new((0..lookup.len()).rev()),
-        _ => Box::new(0..lookup.len()),
+        1 => Box::new(0..lookup.len()),
+        // Do not approximate binary modes with a linear scan: that would
+        // silently accept an ordering contract this evaluator has not
+        // validated.
+        2 | -2 => return Err(format!("XLOOKUP: unsupported search_mode {}", search_mode)),
+        mode => return Err(format!("XLOOKUP: unsupported search_mode {}", mode)),
     };
 
     match match_mode {
@@ -1918,6 +1923,14 @@ fn func_xlookup(
             }
             if let Some((i, _)) = best {
                 return Ok(return_arr.get(i).cloned().unwrap_or(Variant::Empty));
+            }
+        }
+        2 => {
+            let pattern = to_str(&key);
+            for i in iter {
+                if wildcard_match(&to_str(&lookup[i]), &pattern) {
+                    return Ok(return_arr.get(i).cloned().unwrap_or(Variant::Empty));
+                }
             }
         }
         m => return Err(format!("XLOOKUP: unsupported match_mode {}", m)),
@@ -6597,6 +6610,26 @@ mod tests {
             calc("=XLOOKUP(99,A1:A3,B1:B3,\"N/A\")", &c),
             Variant::Str("N/A".into())
         );
+    }
+
+    #[test]
+    fn test_xlookup_wildcard_and_rejects_unimplemented_search_modes() {
+        let c = cells_from(&[
+            ((1, 1), Variant::Str("alpha".into())),
+            ((1, 2), Variant::Str("A".into())),
+            ((2, 1), Variant::Str("beta".into())),
+            ((2, 2), Variant::Str("B".into())),
+        ]);
+        assert_eq!(
+            calc("=XLOOKUP(\"a*\",A1:A2,B1:B2,\"missing\",2)", &c),
+            Variant::Str("A".into())
+        );
+        let binary_mode = evaluate(
+            &fparse("=XLOOKUP(\"alpha\",A1:A2,B1:B2,\"missing\",0,2)").unwrap(),
+            &c,
+        )
+        .unwrap_err();
+        assert_eq!(binary_mode, "XLOOKUP: unsupported search_mode 2");
     }
 
     #[test]
