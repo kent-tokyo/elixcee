@@ -18,6 +18,7 @@
 - transaction経路を1,000,000行まで測定し、appendはRSS p95 19.44 MiB、normal-freshは753.20 MiBでした。ZIP・worksheet形状・最終行・出力検証は成功しましたが、Linux/Windowsやnormal VMのconstant-memoryを示すものではありません。
 - Python type stubとREADMEに、transaction・undo/redo APIと「transaction全体を1つのundo単位として扱う」動作を追記しました。
 - transaction開始時に既存redo履歴を複製しないようにし、abort時は既存redo履歴を保持する回帰を追加しました。
+- 現行1.0.4のappend-cache Criterionベースラインを更新し、5,000行でreference 106.88 ms、cached 94.98 msを記録しました。これは局所microbenchmarkの観測であり、1.2倍やend-to-end速度の主張ではありません。
 
 ## [1.0.4] - 2026-09-07
 

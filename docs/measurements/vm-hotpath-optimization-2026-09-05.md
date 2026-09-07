@@ -181,3 +181,13 @@ while targeted invalidation is competitive or better at the larger shapes,
 but the 1,024-cell case does not support a universal threshold change. The
 512-cell cutoff therefore remains fixed; this is calibration evidence, not a
 general performance claim.
+
+## Current append-cache baseline
+
+The existing append benchmark was rerun on 2026-09-07 with Criterion's
+10-sample, two-second configuration on the current 1.0.4 tree. The reference
+rescan path measured 106.88 ms median for 5,000 rows, while the cached path
+measured 94.98 ms median. This is an approximately 11.1% local reduction for
+this microbenchmark. The date, build, and Criterion settings differ from the
+earlier follow-up above, so these values are a current baseline rather than a
+replacement for the earlier result or evidence of the roadmap's 1.2x target.

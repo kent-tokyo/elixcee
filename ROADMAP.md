@@ -213,6 +213,8 @@ LogiSheetsの公開metadataは実装・測定・運用実績の証拠ではな�
 | P0 | 小規模ファイルの1.2倍目標 | 17セルの固定保存費用を改善し、標準sync・atomic renameを維持。quiet-hostでp95も確認 |
 | P0 | 大規模全条件で追加1.2倍 | 10万・40万・100万セルの中央値比で判定。style／数式密度・RSS・単一sheetの上限も校正 |
 | P0 | formula dirty propagationの完全校正 | 大規模controlled matrix、full再走査との値一致、p50/p95、CPU/RSS、循環・manual/automatic |
+
+P0速度の現行ベースライン（2026-09-07、Criterion 10 samples／2 seconds、現行1.0.4）では、5,000行appendのreference rescanが106.88 ms、cached pathが94.98 msだった。これは当該microbenchmarkで約11.1%短縮した観測であり、1.2倍目標やend-to-end優位性の根拠にはしない。詳細は[VMホットパス測定記録](docs/measurements/vm-hotpath-optimization-2026-09-05.md)。
 | P1 | VBA bytecode／symbol intern | AST経路との一致、演算主体・セルI/O主体の両方を測定 |
 | P1 | canonical packed/tiled cell storage | 公開HashMap APIを保つoverlay。Range・formula・style・save・fork・GCの回帰 |
 | P1 | Writerのstyle／shared-string overlay | 全map／文字列cloneを削減し、密度別RSS・CPU・出力同値を確認 |
