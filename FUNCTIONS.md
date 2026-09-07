@@ -358,7 +358,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `LOOKUP` | Sorted vector lookup | Classic |
 | `TRANSPOSE` | Transpose rows and columns | Classic |
 | `XLOOKUP` | Flexible lookup (exact, wildcard, next-larger, next-smaller; binary search on sorted numeric ranges) | 365/2021 |
-| `XMATCH` | Extended MATCH with mode/search options | 365/2021 |
+| `XMATCH` | Extended MATCH with exact, wildcard, and binary search modes | 365/2021 |
 
 ### Information
 

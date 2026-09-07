@@ -3429,9 +3429,20 @@ fn func_xmatch(
         1
     };
 
+    if matches!(search_mode, 2 | -2) {
+        if match_mode == 2 {
+            return Err("XMATCH: wildcard match_mode is incompatible with binary search".into());
+        }
+        let index = xlookup_binary_index(&lookup, &key, search_mode == 2, match_mode)?;
+        return Ok(index
+            .map(|i| Variant::Integer((i + 1) as i64))
+            .unwrap_or(Variant::Error(ExcelError::NA)));
+    }
+
     let iter: Box<dyn Iterator<Item = usize>> = match search_mode {
         -1 => Box::new((0..lookup.len()).rev()),
-        _ => Box::new(0..lookup.len()),
+        1 => Box::new(0..lookup.len()),
+        mode => return Err(format!("XMATCH: unsupported search_mode {}", mode)),
     };
 
     match match_mode {
@@ -3470,6 +3481,14 @@ fn func_xmatch(
             }
             if let Some((i, _)) = best {
                 return Ok(Variant::Integer((i + 1) as i64));
+            }
+        }
+        2 => {
+            let pattern = to_str(&key);
+            for i in iter {
+                if wildcard_match(&to_str(&lookup[i]), &pattern) {
+                    return Ok(Variant::Integer((i + 1) as i64));
+                }
             }
         }
         m => return Err(format!("XMATCH: unsupported match_mode {}", m)),
@@ -7203,6 +7222,9 @@ mod tests {
         );
         assert_eq!(calc("=XMATCH(2,A1:A3,0)", &c), Variant::Integer(2));
         assert_eq!(calc("=XMATCH(2,A1:A3)", &c), Variant::Integer(2));
+        assert_eq!(calc("=XMATCH(\"t*\",B1:B3,2)", &c), Variant::Integer(2));
+        assert_eq!(calc("=XMATCH(2,A1:A3,0,2)", &c), Variant::Integer(2));
+        assert_eq!(calc("=XMATCH(4,A1:A3,-1,2)", &c), Variant::Integer(3));
     }
 
     #[test]
