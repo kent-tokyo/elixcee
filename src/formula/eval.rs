@@ -5867,6 +5867,33 @@ fn choose_elements(
         return Err(format!("{} requires at least 2 arguments", fname));
     }
     let vals = flatten_array_vals(collect_values(&args[0], cells)?);
+    let value_len = vals.len();
+    let (rows, cols) = array_shape_for_expr(&args[0], cells, value_len);
+    if rows > 1 && cols > 1 {
+        let mut indices = Vec::with_capacity(args.len() - 1);
+        for arg in &args[1..] {
+            let n = to_float(&evaluate(arg, cells)?)? as i64;
+            let size = if fname == "CHOOSECOLS" { cols } else { rows };
+            let idx = if n > 0 { n - 1 } else { size as i64 + n };
+            if idx < 0 || idx >= size as i64 {
+                return Ok(Variant::Error(ExcelError::Value));
+            }
+            indices.push(idx as usize);
+        }
+        let mut result = Vec::new();
+        if fname == "CHOOSECOLS" {
+            for row in 0..rows {
+                for &col in &indices {
+                    result.push(vals[row * cols + col].clone());
+                }
+            }
+        } else {
+            for &row in &indices {
+                result.extend(vals[row * cols..(row + 1) * cols].iter().cloned());
+            }
+        }
+        return Ok(wrap_array(result));
+    }
     let len = vals.len() as i64;
     let mut result = vec![];
     for arg in &args[1..] {
@@ -8429,6 +8456,23 @@ mod tests {
         assert_eq!(
             calc("=CHOOSECOLS(SEQUENCE(3),5)", &c),
             Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=CHOOSECOLS(SEQUENCE(2,3),3,1)", &c),
+            Variant::Array(vec![
+                Variant::Integer(3),
+                Variant::Integer(1),
+                Variant::Integer(6),
+                Variant::Integer(4),
+            ])
+        );
+        assert_eq!(
+            calc("=CHOOSEROWS(SEQUENCE(2,3),2)", &c),
+            Variant::Array(vec![
+                Variant::Integer(4),
+                Variant::Integer(5),
+                Variant::Integer(6),
+            ])
         );
     }
 

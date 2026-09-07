@@ -21,6 +21,7 @@
 - G4のshape伝播を拡張し、元配列shapeに基づく行・列単位の`TAKE` / `DROP`と任意列数引数を既定spill再計算へ接続しました。異常引数とExcel oracle照合は未完です。
 - G4のshape伝播を拡張し、1列sourceの`UNIQUE` / `SORT`と`TOCOL` / `TOROW`の出力軸を既定spill再計算へ接続しました。2D source全体の意味論とExcel oracle照合は未完です。
 - G4のshape伝播を拡張し、`INDEX(range,0,0)`の全範囲・行配列・列配列を元rangeのshapeで既定spill再計算へ接続しました。2D切出し全体とExcel oracle照合は未完です。
+- G4の2D配列対応を拡張し、`CHOOSECOLS` / `CHOOSEROWS`を行列単位で選択して、選択後のshapeを既定spill再計算へ接続しました。異常引数とExcel oracle照合は未完です。
 - G5aの内部経路として、defined namesの読込・報告で`xl/workbook.xml`だけを検証付き取得し、worksheet/table等の兄弟payloadを再読込・保持しないようにしました。保存時の全part遅延化やconstant-memory達成を意味しません。
 - G5aの内部経路として、未編集table XMLを保存時のraw mapへ保持せず、編集対象だけを元ZIPから再取得してpatchするようにしました。全passthrough遅延化やconstant-memory達成を意味しません。
 - G5bの内部経路として、worksheet relationship XMLの解析用索引を統合し、同一`.rels` payloadの解析用二重保持を削減しました。passthrough bytesの遅延化やconstant-memory達成を意味しません。

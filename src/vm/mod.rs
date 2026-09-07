@@ -13226,6 +13226,39 @@ fn formula_spill_shape(
                 .then_some(ArrayShape::new(value_len(value), 1))
                 .or(Some(fallback))
         }
+        "CHOOSECOLS" | "CHOOSEROWS" => {
+            let source = args.first()?;
+            let source_value = formula::evaluate(source, cells).ok()?;
+            let source_shape = formula_spill_shape(source, cells, &source_value)
+                .or_else(|| source_value.array_shape())?;
+            if source_shape.rows <= 1 || source_shape.cols <= 1 {
+                return Some(fallback);
+            }
+            let mut count = 0usize;
+            for arg in &args[1..] {
+                let n = match formula::evaluate(arg, cells).ok()? {
+                    Variant::Integer(value) => value,
+                    Variant::Float(value) if value.is_finite() => value as i64,
+                    _ => return Some(fallback),
+                };
+                let size = if name == "CHOOSECOLS" {
+                    source_shape.cols
+                } else {
+                    source_shape.rows
+                };
+                let index = if n > 0 { n - 1 } else { size as i64 + n };
+                if index < 0 || index >= size as i64 {
+                    return Some(fallback);
+                }
+                count += 1;
+            }
+            let shape = if name == "CHOOSECOLS" {
+                ArrayShape::new(source_shape.rows, count)
+            } else {
+                ArrayShape::new(count, source_shape.cols)
+            };
+            exact(shape.rows, shape.cols).or(Some(fallback))
+        }
         "TOCOL" => Some(ArrayShape::new(value_len(value), 1)),
         "TOROW" => Some(ArrayShape::new(1, value_len(value))),
         "WRAPCOLS" => {
@@ -19642,6 +19675,40 @@ mod tests {
                 .unwrap()
                 .shape,
             ArrayShape::new(2, 2)
+        );
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_restores_choose_axes_for_two_dimensional_arrays() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=CHOOSECOLS(SEQUENCE(2,3),3,1)")
+            .unwrap();
+        vm.set_cell_formula(1, 5, "=CHOOSEROWS(SEQUENCE(2,3),2)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(6));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 7), Variant::Integer(6));
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 1)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(2, 2)
+        );
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 5)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(1, 3)
         );
     }
 

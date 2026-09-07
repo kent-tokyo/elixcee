@@ -100,6 +100,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 TAKE/DROP shape接続: 元配列shapeに基づく行・列単位のTAKE/DROPと任意列数引数を追加し、2D結果を既定spill再計算へ接続した。異常引数、全shape伝播、Excel oracle校正は未完。
 - [x] G4 axis shape伝播: 1列sourceの`UNIQUE` / `SORT`と、`TOCOL` / `TOROW`の出力軸を既定spill再計算へ接続した。2D sourceの全意味論、全shape伝播、Excel oracle校正は未完。
 - [x] G4 INDEX array shape接続: `INDEX(range,0,0)`の全範囲、行配列、列配列について元rangeと引数からshapeを復元し、既定spill再計算へ接続した。2D切出し全体、Excel oracle校正は未完。
+- [x] G4 choose axis接続: 2D入力の`CHOOSECOLS` / `CHOOSEROWS`を行列単位で選択し、選択後shapeを既定spill再計算へ接続した。異常引数、1D legacy経路、Excel oracle校正は未完。
 - [ ] 第1組は参照／条件集計／検索、次に日付／統計／金融。既存SUMIFS・XLOOKUP等を再実装せず、未対応modeと意味論差分から埋める。
 - [x] G4 第1組の意味論補完: `IFNA`を追加し、`#N/A`だけをfallback対象として、それ以外のErrorは伝播する遅延評価を回帰テストで固定した。Excel oracleとの一致確認と、他関数の未対応mode棚卸しは未完。
 - [x] G4 検索modeの安全境界: `XLOOKUP`のwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加した。wildcardとbinaryの組み合わせや未知modeは明示エラーにし、順序を満たさない入力を推測処理しない。Excel oracleとbinary modeの網羅的校正は未完。
