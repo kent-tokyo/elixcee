@@ -19,6 +19,7 @@
 - G4のshape伝播を拡張し、`VSTACK` / `HSTACK`の同幅・同高2D結果を既定spill再計算で正しい矩形へ配置できるようにしました。異幅入力のpadding意味論とExcel oracle照合は未完です。
 - G4のshape伝播を拡張し、2D rangeを元にした`FILTER`の出力幅を保持して既定spill再計算へ接続しました。include形状の全組合せ、異幅入力とExcel oracle照合は未完です。
 - G4のshape伝播を拡張し、1列sourceの`TAKE` / `DROP`結果を縦方向のspillとして既定再計算へ接続しました。2D sourceの行単位切出しとExcel oracle照合は未完です。
+- G4のshape伝播を拡張し、1列sourceの`UNIQUE` / `SORT`と`TOCOL` / `TOROW`の出力軸を既定spill再計算へ接続しました。2D source全体の意味論とExcel oracle照合は未完です。
 - G5aの内部経路として、defined namesの読込・報告で`xl/workbook.xml`だけを検証付き取得し、worksheet/table等の兄弟payloadを再読込・保持しないようにしました。保存時の全part遅延化やconstant-memory達成を意味しません。
 - G5aの内部経路として、未編集table XMLを保存時のraw mapへ保持せず、編集対象だけを元ZIPから再取得してpatchするようにしました。全passthrough遅延化やconstant-memory達成を意味しません。
 - G5bの内部経路として、worksheet relationship XMLの解析用索引を統合し、同一`.rels` payloadの解析用二重保持を削減しました。passthrough bytesの遅延化やconstant-memory達成を意味しません。

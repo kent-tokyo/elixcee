@@ -13169,6 +13169,17 @@ fn formula_spill_shape(
                 .then_some(ArrayShape::new(value_len(value), 1))
                 .or(Some(fallback))
         }
+        "UNIQUE" | "SORT" => {
+            let source = args.first()?;
+            let source_value = formula::evaluate(source, cells).ok()?;
+            let source_shape = formula_spill_shape(source, cells, &source_value)
+                .or_else(|| source_value.array_shape())?;
+            (source_shape.cols == 1)
+                .then_some(ArrayShape::new(value_len(value), 1))
+                .or(Some(fallback))
+        }
+        "TOCOL" => Some(ArrayShape::new(value_len(value), 1)),
+        "TOROW" => Some(ArrayShape::new(1, value_len(value))),
         "WRAPCOLS" => {
             let rows = dimension(args.get(1), 0)?.max(1);
             exact(rows, value_len(value).div_ceil(rows)).or(Some(fallback))
@@ -19513,6 +19524,38 @@ mod tests {
                 .unwrap()
                 .shape,
             ArrayShape::new(3, 1)
+        );
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_restores_unique_sort_and_flatten_axes() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=UNIQUE(SEQUENCE(3))").unwrap();
+        vm.set_cell_formula(1, 3, "=SORT(SEQUENCE(3))").unwrap();
+        vm.set_cell_formula(1, 5, "=TOCOL(SEQUENCE(2,2))").unwrap();
+        vm.set_cell_formula(1, 7, "=TOROW(SEQUENCE(2,2))").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(3, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(3));
+        assert_eq!(vm.get_cell(4, 5), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 10), Variant::Integer(4));
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 1)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(3, 1)
+        );
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 7)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(1, 4)
         );
     }
 
