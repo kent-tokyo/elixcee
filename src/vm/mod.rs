@@ -13149,6 +13149,15 @@ fn formula_spill_shape(
                 .map(|shape| ArrayShape::new(shape.cols, shape.rows))
                 .or(Some(fallback)),
         },
+        "FILTER" => match args.first()? {
+            FormulaExpr::Range { c1, c2, .. } => {
+                let cols = (*c2 - *c1 + 1) as usize;
+                (cols > 0 && value_len(value) % cols == 0)
+                    .then_some(ArrayShape::new(value_len(value) / cols, cols))
+                    .or(Some(fallback))
+            }
+            _ => Some(fallback),
+        },
         "WRAPCOLS" => {
             let rows = dimension(args.get(1), 0)?.max(1);
             exact(rows, value_len(value).div_ceil(rows)).or(Some(fallback))
@@ -19427,6 +19436,40 @@ mod tests {
             .spill_rects
             .get("sheet1")
             .and_then(|anchors| anchors.get(&(1, 1)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 2));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_filter_source_width() {
+        let mut vm = Vm::new();
+        for (position, value) in [
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Str("a".into())),
+            ((2, 1), Variant::Integer(2)),
+            ((2, 2), Variant::Str("b".into())),
+            ((3, 1), Variant::Integer(3)),
+            ((3, 2), Variant::Str("c".into())),
+        ] {
+            vm.cells_mut().insert(
+                position,
+                CellContent {
+                    formula: None,
+                    value,
+                },
+            );
+        }
+        vm.set_cell_formula(1, 4, "=FILTER(A1:B3,A1:A3>1)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 4), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 5), Variant::Str("b".into()));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(3));
+        assert_eq!(vm.get_cell(2, 5), Variant::Str("c".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 4)))
             .copied()
             .unwrap();
         assert_eq!(rect.shape, ArrayShape::new(2, 2));
