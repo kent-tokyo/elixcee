@@ -13142,16 +13142,18 @@ fn formula_spill_shape(
             exact(rows, cols).or(Some(fallback))
         }
         "TRANSPOSE" => match args.first()? {
-            FormulaExpr::Range { c1, r1, c2, r2, .. } => {
-                exact((*c2 - *c1 + 1) as usize, (*r2 - *r1 + 1) as usize).or(Some(fallback))
-            }
+            FormulaExpr::Range { c1, r1, c2, r2, .. } => exact(
+                (c2.max(c1) - c2.min(c1) + 1) as usize,
+                (r2.max(r1) - r2.min(r1) + 1) as usize,
+            )
+            .or(Some(fallback)),
             inner => formula_spill_shape(inner, cells, value)
                 .map(|shape| ArrayShape::new(shape.cols, shape.rows))
                 .or(Some(fallback)),
         },
         "FILTER" => match args.first()? {
             FormulaExpr::Range { c1, c2, .. } => {
-                let cols = (*c2 - *c1 + 1) as usize;
+                let cols = (c2.max(c1) - c2.min(c1) + 1) as usize;
                 (cols > 0 && value_len(value) % cols == 0)
                     .then_some(ArrayShape::new(value_len(value) / cols, cols))
                     .or(Some(fallback))
