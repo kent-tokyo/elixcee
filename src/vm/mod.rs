@@ -11862,27 +11862,28 @@ impl Vm {
         // source text no longer match the live sheet. Otherwise the empty
         // dirty set below incorrectly turns the recalculation into a no-op
         // and leaves the cached value from the previous formula behind.
-        let plan_stale = self.formula_plan.get(&active).is_some_and(|plan| {
-            let live: HashMap<(u32, u32), &str> = self
-                .cells()
-                .iter()
-                .filter_map(|(position, cell)| {
-                    cell.formula.as_deref().map(|source| (*position, source))
+        let plan_stale = !self.workbook_formula_tracking_valid
+            && self.formula_plan.get(&active).is_some_and(|plan| {
+                let live: HashMap<(u32, u32), &str> = self
+                    .cells()
+                    .iter()
+                    .filter_map(|(position, cell)| {
+                        cell.formula.as_deref().map(|source| (*position, source))
+                    })
+                    .collect();
+                if live.len() != plan.cells.len() {
+                    return true;
+                }
+                plan.cells.iter().any(|(row, col, expr)| {
+                    let Some(source) = live.get(&(*row, *col)) else {
+                        return true;
+                    };
+                    let Ok(parsed) = formula::parse(source) else {
+                        return true;
+                    };
+                    parsed != *expr
                 })
-                .collect();
-            if live.len() != plan.cells.len() {
-                return true;
-            }
-            plan.cells.iter().any(|(row, col, expr)| {
-                let Some(source) = live.get(&(*row, *col)) else {
-                    return true;
-                };
-                let Ok(parsed) = formula::parse(source) else {
-                    return true;
-                };
-                parsed != *expr
-            })
-        });
+            });
         if plan_stale {
             self.formula_plan.remove(&active);
             self.formula_dirty_cells.remove(&active);
