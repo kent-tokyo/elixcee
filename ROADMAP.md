@@ -95,6 +95,7 @@ G5全体は未完了であり、constant-memoryを主張しない。
 - [x] G5a 部分 BUILD: 未編集のtable XMLを保存時のraw mapへ保持せず、table編集がある場合だけ対象partを元ZIPから再取得してpatchする経路へ変更した。全passthrough partの遅延化、保存RSS測定、3 OS検証は未完了。
 - [x] G5b 部分 BUILD: worksheet relationship XMLの解析用文字列索引を専用mapから統合relationship mapへまとめ、同一`.rels` payloadの解析用二重保持を削減した。passthrough bytes自体の遅延化とRSS測定は未完了。
 - [x] G5b 部分 BUILD: relationship XMLのraw bytesを保存時のpassthrough mapへ保持せず、接続解析後は元ZIPから遅延copyするようにした。新規tableのworksheet `.rels`だけは解析済みXMLをpatchして出力し、重複entryを防止する。全payload遅延化とRSS測定は未完了。
+- [x] G5b 部分 BUILD: relationship接続・pruning解析後に`raw_entries`側の`.rels` bytesを解放し、解析用文字列索引とentry名だけを保持するようにした。最終出力は元ZIPから再取得するため、全payload遅延化とRSS測定は未完了。
 - [x] G5b 部分 BUILD: shared-string本文を`Vec<String>`へ二重保持せず、所有するindexから参照を座標順に並べて直接出力する経路へ変更した。未編集styles XMLはstyle解決後に解放し、元ZIPから直接copyする。passthrough XMLも出力時に一件ずつdrainして処理済みpayloadを解放する。styles/workbook/[Content_Types]/worksheetのwriter-owned cloneも所有権移動し、cell/row/column style編集時は対象sheetだけをoverlay cloneするようにした。font/fill/borderを使わないstyle編集ではcellXfsだけを展開する。その他の補助索引とdisk spoolは未完了のため、G5b全体は未完了。
 - [x] G5c BUILD: 追記専用APIに`create_stream_bounded`を追加し、「1行上限」と「総work量」を分けた。既存`max_pending_bytes`の累積制限は維持し、stub・README・limitsへ移行例を追加した。
 - [x] G5d BUILD: bounded追記Writerは固定worksheet構造・列上限・row buffer・64 KiB codec bufferを使い、inline stringsでunique stringsを蓄積しない。通常VMの全セル保持は対象外。

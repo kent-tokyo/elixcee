@@ -4262,16 +4262,6 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             reader::validate_raw_zip_archive(&mut archive)?;
             Some(archive)
         };
-        // Existing worksheet rels are copied byte-for-byte unless a fresh table
-        // needs to append a new relationship to one of them below. In the common
-        // no-new-table path, defer their payload just like images and unchanged
-        // table parts; the relationship graph has already consumed the source bytes.
-        let has_new_table = vm
-            .tables
-            .values()
-            .flatten()
-            .any(|table| table.source_part.is_empty());
-
         let passthrough_names: Vec<String> = raw_entries
             .keys()
             .filter(|name| !is_writer_owned_part(name))
@@ -4314,6 +4304,18 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             &["http://schemas.openxmlformats.org/package/2006/relationships/officeDocument"],
         ));
 
+        // Relationship connectivity and pruning have consumed the source bytes by this
+        // point. Keep only the parsed string index above plus the entry names below; the
+        // final writer reopens the source ZIP for every unchanged relationship part.
+        for name in passthrough_names
+            .iter()
+            .filter(|name| name.ends_with(".rels"))
+        {
+            if let Some(bytes) = raw_entries.get_mut(name) {
+                bytes.clear();
+            }
+        }
+
         for (name, bytes) in raw_entries {
             if is_writer_owned_part(&name) {
                 continue;
@@ -4349,13 +4351,10 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             let needed_for_save = name == "[Content_Types].xml"
                 || name == "xl/workbook.xml"
                 || name == "xl/styles.xml"
-                || name.starts_with("xl/worksheets/")
+                || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
                 // An untouched table can be copied directly from the source ZIP;
                 // retain its XML only when a surgical TableEditOp needs to patch it.
-                || (name.starts_with("xl/tables/") && table_edits.contains_key(name.as_str()))
-                || (has_new_table
-                    && name.starts_with("xl/worksheets/_rels/")
-                    && name.ends_with(".rels"));
+                || (name.starts_with("xl/tables/") && table_edits.contains_key(name.as_str()));
             if needed_for_save {
                 passthrough.push((name.clone(), bytes));
             } else {

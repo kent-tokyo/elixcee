@@ -10,6 +10,7 @@
 - G5aの内部経路として、未編集table XMLを保存時のraw mapへ保持せず、編集対象だけを元ZIPから再取得してpatchするようにしました。全passthrough遅延化やconstant-memory達成を意味しません。
 - G5bの内部経路として、worksheet relationship XMLの解析用索引を統合し、同一`.rels` payloadの解析用二重保持を削減しました。passthrough bytesの遅延化やconstant-memory達成を意味しません。
 - G5bの内部経路として、relationship XMLのraw bytesを保存時mapへ保持せず、元ZIPから遅延copyするようにしました。新規tableのworksheet `.rels`だけはpatchして出力します。全payload遅延化やconstant-memory達成を意味しません。
+- G5bの内部経路として、relationship接続・pruning解析後に`raw_entries`側の`.rels` bytesを解放し、解析用索引とentry名だけを残すようにしました。全payload遅延化やconstant-memory達成を意味しません。
 
 ## [1.0.4] - 2026-09-07
 
