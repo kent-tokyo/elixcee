@@ -5020,8 +5020,12 @@ fn func_sort(
         }
         return Ok(wrap_array(result));
     }
-    let order: i64 = if args.len() >= 3 {
-        to_float(&evaluate(&args[2], cells)?)? as i64
+    let order = if args.len() >= 3 {
+        match evaluate(&args[2], cells)? {
+            Variant::Integer(value) if value == 1 || value == -1 => value,
+            Variant::Float(value) if value == 1.0 || value == -1.0 => value as i64,
+            _ => return Ok(Variant::Error(ExcelError::Value)),
+        }
     } else {
         1
     };
@@ -5045,8 +5049,12 @@ fn func_sortby(
     }
     let data = flatten_array_vals(collect_values(&args[0], cells)?);
     let by_vals = flatten_array_vals(collect_values(&args[1], cells)?);
-    let order: i64 = if args.len() >= 3 {
-        to_float(&evaluate(&args[2], cells)?)? as i64
+    let order = if args.len() >= 3 {
+        match evaluate(&args[2], cells)? {
+            Variant::Integer(value) if value == 1 || value == -1 => value,
+            Variant::Float(value) if value == 1.0 || value == -1.0 => value as i64,
+            _ => return Ok(Variant::Error(ExcelError::Value)),
+        }
     } else {
         1
     };
@@ -9759,6 +9767,14 @@ mod tests {
         );
         assert_eq!(
             calc("=SORT(A1:B3,1,2)", &cells),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=SORT(SEQUENCE(3),1,2)", &cells),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=SORTBY(SEQUENCE(3),SEQUENCE(3),2)", &cells),
             Variant::Error(ExcelError::Value)
         );
         assert_eq!(
