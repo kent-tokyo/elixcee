@@ -164,3 +164,4 @@
 - G4の2D配列対応を拡張し、`UNIQUE`の行／列単位重複排除と`SORT`の行列ソートを追加して、結果shapeを既定spill再計算へ接続しました。exactly_once、型変換、Excel oracle照合は未完です。
 - G4の2D配列対応を拡張し、`SORTBY`で2Dデータを複数の1列sort-by配列と各昇降順に従って行単位に並べ替え、結果shapeを既定spill再計算へ接続しました。型変換とExcel oracle照合は未完です。
 - G4の2D配列対応を拡張し、生成された2D配列に対する`FILTER`の行／列includeと結果shape接続を追加しました。行／列ベクトル以外のincludeは明示エラーにし、既存Range経路を維持しています。複合includeとExcel oracle照合は未完です。
+- G4の2D `UNIQUE`で`exactly_once`／`by_col`を既存のtruthy型変換に揃え、Boolean以外の数値フラグも扱えるようにしました。型意味論全体とExcel oracle照合は未完です。

@@ -13271,11 +13271,11 @@ fn formula_spill_shape(
                 let by_col = args
                     .get(2)
                     .and_then(|arg| formula::evaluate(arg, cells).ok())
-                    .is_some_and(|value| matches!(value, Variant::Boolean(true)));
+                    .is_some_and(|value| is_truthy(&value));
                 let exactly_once = args
                     .get(1)
                     .and_then(|arg| formula::evaluate(arg, cells).ok())
-                    .is_some_and(|value| matches!(value, Variant::Boolean(true)));
+                    .is_some_and(|value| is_truthy(&value));
                 let outer = if by_col {
                     source_shape.cols
                 } else {

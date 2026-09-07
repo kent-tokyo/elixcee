@@ -4832,12 +4832,12 @@ fn func_unique(
             .get(1)
             .map(|arg| evaluate(arg, cells))
             .transpose()?
-            .is_some_and(|value| matches!(value, Variant::Boolean(true)));
+            .is_some_and(|value| is_truthy(&value));
         let by_col = args
             .get(2)
             .map(|arg| evaluate(arg, cells))
             .transpose()?
-            .is_some_and(|value| matches!(value, Variant::Boolean(true)));
+            .is_some_and(|value| is_truthy(&value));
         let outer = if by_col { cols } else { rows };
         let inner = if by_col { rows } else { cols };
         let mut groups: Vec<Vec<Variant>> = Vec::new();
@@ -9575,6 +9575,10 @@ mod tests {
                 Variant::Integer(1),
                 Variant::Integer(10),
             ])
+        );
+        assert_eq!(
+            calc("=UNIQUE(A1:B3,1)", &cells),
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(10)])
         );
         assert_eq!(
             calc("=SORT(A1:B3,1,-1)", &cells),
