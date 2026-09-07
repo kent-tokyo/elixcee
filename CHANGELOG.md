@@ -15,6 +15,7 @@
 - G5の通常VM測定ハーネスを4,096行単位の`set_range`バッチへ変更し、100,000／250,000行のnormal-fresh保存・RSS結果を記録しました。250,000行RSSは2回間で大きく変動したため、constant-memoryや3 OS対応の根拠にはしていません。
 - 大規模な範囲編集でtransaction内の各操作が全VM undo snapshotを追加しないようにし、commit時にtransaction全体を1つのundo単位として記録するようにしました。通常VMの測定ハーネスもこのatomic bulk-edit経路を使用します。
 - 同じ条件のnormal-fresh再測定で、100,000行のRSS p95を623.22 MiBから118.30 MiB、250,000行を1,920.73 MiBから203.61 MiBへ削減しました。これはundo履歴の削減効果であり、constant-memoryの証拠ではありません。
+- transaction経路を1,000,000行まで測定し、appendはRSS p95 19.44 MiB、normal-freshは753.20 MiBでした。ZIP・worksheet形状・最終行・出力検証は成功しましたが、Linux/Windowsやnormal VMのconstant-memoryを示すものではありません。
 
 ## [1.0.4] - 2026-09-07
 

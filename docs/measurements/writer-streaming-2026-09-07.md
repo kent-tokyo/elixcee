@@ -38,6 +38,19 @@ All four samples passed the same output checks. This is a large-workbook
 undo-history improvement, not proof that the normal VM is constant-memory;
 the full 1,000,000-row and three-OS matrix remains open.
 
+The transaction-enabled harness was then extended to 1,000,000 rows under the
+same conditions. Both repetitions passed ZIP, worksheet-shape, final-row, and
+output validation:
+
+| mode | rows | RSS p50 / p95 | wall p50 / p95 | temp / output |
+|---|---:|---:|---:|---:|
+| append | 1,000,000 | 19.38 / 19.44 MiB | 2,750 / 2,789 ms | 14.24 / 14.24 MiB |
+| normal-fresh, one transaction | 1,000,000 | 751.56 / 753.20 MiB | 2,185 / 3,829 ms | 12.43 / 12.43 MiB |
+
+The normal-fresh p95 is the slower of the two samples; both RSS samples were
+close. This confirms the current bounded-transaction path at 1M rows but does
+not make the normal VM constant-memory or establish Linux/Windows behavior.
+
 The initial normal-VM 100,000-row case, using one `append_row` call per row,
 was stopped after more than two minutes at 100% child CPU. It is intentionally
 recorded as unmeasured, not as a failure. The append data is one macOS run and
