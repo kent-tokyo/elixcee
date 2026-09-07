@@ -161,3 +161,4 @@
 ## Older releases
 
 [0.xの変更履歴](docs/history/CHANGELOG-0.x.md)へ移動しました。過去の記録は保持しています。
+- G4の2D配列対応を拡張し、`UNIQUE`の行／列単位重複排除と`SORT`の行列ソートを追加して、結果shapeを既定spill再計算へ接続しました。exactly_once、型変換、Excel oracle照合は未完です。

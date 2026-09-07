@@ -13222,9 +13222,72 @@ fn formula_spill_shape(
             let source_value = formula::evaluate(source, cells).ok()?;
             let source_shape = formula_spill_shape(source, cells, &source_value)
                 .or_else(|| source_value.array_shape())?;
-            (source_shape.cols == 1)
-                .then_some(ArrayShape::new(value_len(value), 1))
-                .or(Some(fallback))
+            if source_shape.rows <= 1 || source_shape.cols <= 1 {
+                return if source_shape.cols == 1 {
+                    exact(value_len(value), 1).or(Some(fallback))
+                } else {
+                    Some(fallback)
+                };
+            }
+            if name == "UNIQUE" {
+                let by_col = args
+                    .get(2)
+                    .and_then(|arg| formula::evaluate(arg, cells).ok())
+                    .is_some_and(|value| matches!(value, Variant::Boolean(true)));
+                let exactly_once = args
+                    .get(1)
+                    .and_then(|arg| formula::evaluate(arg, cells).ok())
+                    .is_some_and(|value| matches!(value, Variant::Boolean(true)));
+                let outer = if by_col {
+                    source_shape.cols
+                } else {
+                    source_shape.rows
+                };
+                let inner = if by_col {
+                    source_shape.rows
+                } else {
+                    source_shape.cols
+                };
+                let source_values = match source_value {
+                    Variant::Array(values) => values,
+                    _ => return Some(fallback),
+                };
+                let mut groups: Vec<Vec<Variant>> = Vec::new();
+                let mut counts: Vec<usize> = Vec::new();
+                for index in 0..outer {
+                    let group: Vec<Variant> = if by_col {
+                        (0..inner)
+                            .map(|offset| source_values[offset * source_shape.cols + index].clone())
+                            .collect()
+                    } else {
+                        source_values[index * source_shape.cols..(index + 1) * source_shape.cols]
+                            .to_vec()
+                    };
+                    if let Some(existing) = groups.iter().position(|candidate| {
+                        candidate
+                            .iter()
+                            .zip(&group)
+                            .all(|(left, right)| left == right)
+                    }) {
+                        counts[existing] += 1;
+                    } else {
+                        groups.push(group);
+                        counts.push(1);
+                    }
+                }
+                let count = groups
+                    .iter()
+                    .zip(&counts)
+                    .filter(|(_, count)| !exactly_once || **count == 1)
+                    .count();
+                if by_col {
+                    exact(source_shape.rows, count).or(Some(fallback))
+                } else {
+                    exact(count, source_shape.cols).or(Some(fallback))
+                }
+            } else {
+                exact(source_shape.rows, source_shape.cols).or(Some(fallback))
+            }
         }
         "CHOOSECOLS" | "CHOOSEROWS" => {
             let source = args.first()?;

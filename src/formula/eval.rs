@@ -4776,8 +4776,66 @@ fn func_unique(
     if args.is_empty() {
         return Err("UNIQUE requires 1 argument".into());
     }
+    let values = flatten_array_vals(collect_values(&args[0], cells)?);
+    let (rows, cols) = array_shape_for_expr(&args[0], cells, values.len());
+    if rows > 1 && cols > 1 {
+        let exactly_once = args
+            .get(1)
+            .map(|arg| evaluate(arg, cells))
+            .transpose()?
+            .is_some_and(|value| matches!(value, Variant::Boolean(true)));
+        let by_col = args
+            .get(2)
+            .map(|arg| evaluate(arg, cells))
+            .transpose()?
+            .is_some_and(|value| matches!(value, Variant::Boolean(true)));
+        let outer = if by_col { cols } else { rows };
+        let inner = if by_col { rows } else { cols };
+        let mut groups: Vec<Vec<Variant>> = Vec::new();
+        let mut counts: Vec<usize> = Vec::new();
+        for index in 0..outer {
+            let group: Vec<Variant> = if by_col {
+                (0..inner)
+                    .map(|offset| values[offset * cols + index].clone())
+                    .collect()
+            } else {
+                values[index * cols..(index + 1) * cols].to_vec()
+            };
+            if let Some(existing) = groups.iter().position(|candidate| {
+                candidate.len() == group.len()
+                    && candidate
+                        .iter()
+                        .zip(&group)
+                        .all(|(left, right)| variant_eq(left, right))
+            }) {
+                counts[existing] += 1;
+            } else {
+                groups.push(group);
+                counts.push(1);
+            }
+        }
+        let selected: Vec<Vec<Variant>> = groups
+            .into_iter()
+            .zip(counts)
+            .filter(|(_, count)| !exactly_once || *count == 1)
+            .map(|(group, _)| group)
+            .collect();
+        let mut result = Vec::new();
+        if by_col {
+            for row in 0..selected.first().map_or(0, Vec::len) {
+                for group in &selected {
+                    result.push(group[row].clone());
+                }
+            }
+        } else {
+            for group in selected {
+                result.extend(group);
+            }
+        }
+        return Ok(wrap_array(result));
+    }
     // Collect non-empty values with their original positions
-    let mut indexed: Vec<(Variant, usize)> = collect_values(&args[0], cells)?
+    let mut indexed: Vec<(Variant, usize)> = values
         .into_iter()
         .enumerate()
         .filter(|(_, v)| !matches!(v, Variant::Empty))
@@ -4805,12 +4863,54 @@ fn func_sort(
     if args.is_empty() {
         return Err("SORT requires 1 argument".into());
     }
-    let mut vals = collect_values(&args[0], cells)?;
+    let mut vals = flatten_array_vals(collect_values(&args[0], cells)?);
+    let (rows, cols) = array_shape_for_expr(&args[0], cells, vals.len());
     let order: i64 = if args.len() >= 3 {
         to_float(&evaluate(&args[2], cells)?)? as i64
     } else {
         1
     };
+    if rows > 1 && cols > 1 {
+        let sort_index = if args.len() >= 2 {
+            to_float(&evaluate(&args[1], cells)?)? as i64
+        } else {
+            1
+        };
+        let by_col = if args.len() >= 4 {
+            matches!(evaluate(&args[3], cells)?, Variant::Boolean(true))
+        } else {
+            false
+        };
+        let limit = if by_col { rows } else { cols };
+        if sort_index < 1 || sort_index > limit as i64 {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        let key = (sort_index - 1) as usize;
+        let mut indices: Vec<usize> = (0..if by_col { cols } else { rows }).collect();
+        indices.sort_by(|&left, &right| {
+            let (left_index, right_index) = if by_col {
+                (key * cols + left, key * cols + right)
+            } else {
+                (left * cols + key, right * cols + key)
+            };
+            let cmp = variant_cmp(&vals[left_index], &vals[right_index])
+                .unwrap_or_else(|_| to_str(&vals[left_index]).cmp(&to_str(&vals[right_index])));
+            if order < 0 { cmp.reverse() } else { cmp }
+        });
+        let mut result = Vec::with_capacity(vals.len());
+        if by_col {
+            for row in 0..rows {
+                for &col in &indices {
+                    result.push(vals[row * cols + col].clone());
+                }
+            }
+        } else {
+            for &row in &indices {
+                result.extend(vals[row * cols..(row + 1) * cols].iter().cloned());
+            }
+        }
+        return Ok(wrap_array(result));
+    }
     vals.sort_by(|a, b| {
         let af = to_float(a).unwrap_or(f64::INFINITY);
         let bf = to_float(b).unwrap_or(f64::INFINITY);
@@ -9359,6 +9459,42 @@ mod tests {
                 Variant::Integer(2),
                 Variant::Integer(4),
                 Variant::Integer(0),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_unique_and_sort_two_dimensional_arrays() {
+        let mut cells = HashMap::new();
+        for (row, values) in [(1, [2, 20]), (2, [1, 10]), (3, [2, 20])] {
+            for (col, value) in values.into_iter().enumerate() {
+                cells.insert(
+                    (row, (col + 1) as u32),
+                    CellContent {
+                        formula: None,
+                        value: Variant::Integer(value),
+                    },
+                );
+            }
+        }
+        assert_eq!(
+            calc("=UNIQUE(A1:B3)", &cells),
+            Variant::Array(vec![
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Integer(1),
+                Variant::Integer(10),
+            ])
+        );
+        assert_eq!(
+            calc("=SORT(A1:B3,1,-1)", &cells),
+            Variant::Array(vec![
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Integer(1),
+                Variant::Integer(10),
             ])
         );
     }
