@@ -4701,12 +4701,27 @@ fn eval_as_bool_array(
             Ok(collect_values(expr, cells)?.iter().map(is_truthy).collect())
         }
         FormulaExpr::BinOp { op, lhs, rhs } => {
-            let lhs_vals = collect_values(lhs, cells)?;
-            if lhs_vals.len() > 1 {
-                let rhs_val = evaluate(rhs, cells)?;
-                Ok(lhs_vals
-                    .iter()
-                    .map(|l| compare_element(op, l, &rhs_val))
+            let lhs_vals = flatten_array_vals(collect_values(lhs, cells)?);
+            let rhs_vals = flatten_array_vals(collect_values(rhs, cells)?);
+            if lhs_vals.len() > 1 || rhs_vals.len() > 1 {
+                if lhs_vals.len() != 1 && rhs_vals.len() != 1 && lhs_vals.len() != rhs_vals.len() {
+                    return Err("array comparison operands must have equal length".into());
+                }
+                let len = lhs_vals.len().max(rhs_vals.len());
+                Ok((0..len)
+                    .map(|index| {
+                        let left = if lhs_vals.len() == 1 {
+                            &lhs_vals[0]
+                        } else {
+                            &lhs_vals[index]
+                        };
+                        let right = if rhs_vals.len() == 1 {
+                            &rhs_vals[0]
+                        } else {
+                            &rhs_vals[index]
+                        };
+                        compare_element(op, left, right)
+                    })
                     .collect())
             } else {
                 Ok(vec![is_truthy(&evaluate(expr, cells)?)])
@@ -6037,6 +6052,15 @@ fn array_shape_for_expr(
                 }),
             );
             (cols, rows)
+        }
+        FormulaExpr::BinOp { lhs, rhs, .. } => {
+            let operand_shape = |operand: &FormulaExpr| {
+                let values = flatten_array_vals(collect_values(operand, cells).ok()?);
+                (values.len() > 1).then(|| array_shape_for_expr(operand, cells, values.len()))
+            };
+            operand_shape(lhs)
+                .or_else(|| operand_shape(rhs))
+                .unwrap_or((1, value_len))
         }
         _ => (1, value_len),
     }
@@ -9766,6 +9790,23 @@ mod tests {
                 Variant::Integer(4),
                 Variant::Integer(5),
                 Variant::Integer(6),
+            ])
+        );
+        assert_eq!(
+            calc("=FILTER(SEQUENCE(2,3),SEQUENCE(1,3)>1)", &cells),
+            Variant::Array(vec![
+                Variant::Integer(2),
+                Variant::Integer(3),
+                Variant::Integer(5),
+                Variant::Integer(6),
+            ])
+        );
+        assert_eq!(
+            calc("=FILTER(SEQUENCE(2,3),SEQUENCE(2,1)>1)", &cells),
+            Variant::Array(vec![
+                Variant::Integer(4),
+                Variant::Integer(5),
+                Variant::Integer(6)
             ])
         );
         assert!(
