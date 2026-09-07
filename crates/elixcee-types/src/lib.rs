@@ -107,6 +107,40 @@ pub enum Variant {
     Record(std::collections::HashMap<String, Variant>), // UDT instance (p.x, p.y, …)
 }
 
+/// The worksheet footprint of a formula array result.
+///
+/// `Variant::Array` remains a flat compatibility representation. Until the
+/// evaluator produces explicit two-dimensional metadata, non-empty flat
+/// arrays are treated as one row. An empty result has no spill footprint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArrayShape {
+    pub rows: usize,
+    pub cols: usize,
+}
+
+impl ArrayShape {
+    pub const fn new(rows: usize, cols: usize) -> Self {
+        Self { rows, cols }
+    }
+
+    pub const fn cell_count(self) -> usize {
+        self.rows.saturating_mul(self.cols)
+    }
+}
+
+impl Variant {
+    /// Returns the current formula-array spill shape without changing the
+    /// legacy flat `Array` storage. VBA-declared arrays intentionally return
+    /// `None`; they are not worksheet spill results.
+    pub fn array_shape(&self) -> Option<ArrayShape> {
+        match self {
+            Variant::Array(values) if values.is_empty() => Some(ArrayShape::new(0, 0)),
+            Variant::Array(values) => Some(ArrayShape::new(1, values.len())),
+            _ => None,
+        }
+    }
+}
+
 /// The bounds of one dimension of a VBA-declared array: an explicit `lo To
 /// hi`, or the implicit `Option Base .. To <upper>` form collapsed to the
 /// same shape. `upper < lower` is legal VBA (as when `Option Base 1` meets a
@@ -446,6 +480,26 @@ mod tests {
     fn variant_display_formats_a_date_via_serial_to_display() {
         assert_eq!(Variant::Date(45000).to_string(), serial_to_display(45000));
         assert_eq!(Variant::Date(1).to_string(), "1900-01-01");
+    }
+
+    #[test]
+    fn flat_formula_arrays_expose_a_row_shape_and_empty_arrays_have_no_footprint() {
+        assert_eq!(
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(2)]).array_shape(),
+            Some(ArrayShape::new(1, 2))
+        );
+        assert_eq!(
+            Variant::Array(Vec::new()).array_shape(),
+            Some(ArrayShape::new(0, 0))
+        );
+        assert_eq!(ArrayShape::new(2, 3).cell_count(), 6);
+    }
+
+    #[test]
+    fn non_formula_values_and_vba_arrays_do_not_claim_a_spill_shape() {
+        assert_eq!(Variant::Integer(1).array_shape(), None);
+        let vba = VbaArray::from_vec(vec![Variant::Integer(1)]);
+        assert_eq!(Variant::VbaArray(vba).array_shape(), None);
     }
 
     #[test]
