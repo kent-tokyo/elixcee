@@ -5916,7 +5916,18 @@ fn slice_array(
     take: bool,
 ) -> Result<Variant, String> {
     let count = |arg: &FormulaExpr, size: usize| -> Result<(usize, usize), String> {
-        let n = to_float(&evaluate(arg, cells)?)? as i64;
+        let n = match evaluate(arg, cells)? {
+            Variant::Integer(value) => value,
+            Variant::Float(value)
+                if value.is_finite()
+                    && value.fract() == 0.0
+                    && value >= i64::MIN as f64
+                    && value <= i64::MAX as f64 =>
+            {
+                value as i64
+            }
+            _ => return Err("TAKE/DROP row or column count must be an integer".into()),
+        };
         if n == 0 {
             return Err("TAKE/DROP row or column count cannot be zero".into());
         }
@@ -8594,6 +8605,8 @@ mod tests {
                 Variant::Integer(3)
             ])
         );
+        assert!(evaluate(&fparse("=TAKE(SEQUENCE(3),1.5)").unwrap(), &c).is_err());
+        assert!(evaluate(&fparse("=DROP(SEQUENCE(3),0)").unwrap(), &c).is_err());
     }
 
     #[test]

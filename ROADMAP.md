@@ -97,7 +97,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 formula shape接続: `recalculate_all_with_spills()`で`SEQUENCE` / `RANDARRAY` / `TRANSPOSE` / `WRAPCOLS` / `WRAPROWS`のflat配列結果からshapeを復元し、既定spill経路でも2D矩形として依存セルへ反映するようにした。関数全体のshape伝播、Excel oracle校正は未完。
 - [x] G4 stack shape伝播: `VSTACK` / `HSTACK`の引数formula shapeを復元し、同幅・同高の2D結果を既定spill再計算へ接続した。異幅・異高入力は不足領域を`#N/A`でpaddingする。全配列関数のshape伝播は未完。
 - [x] G4 FILTER shape伝播: 元の2D range幅と出力要素数から`FILTER`の行列shapeを復元し、2D抽出結果を既定spill再計算へ接続した。include形状の全組合せ、異幅入力、Excel oracle校正は未完。
-- [x] G4 TAKE/DROP shape接続: 元配列shapeに基づく行・列単位のTAKE/DROPと任意列数引数を追加し、2D結果を既定spill再計算へ接続した。異常引数、全shape伝播、Excel oracle校正は未完。
+- [x] G4 TAKE/DROP shape接続: 元配列shapeに基づく行・列単位のTAKE/DROPと任意列数引数を追加し、2D結果を既定spill再計算へ接続した。行／列件数は整数かつ非zeroであることを検証する。全shape伝播、Excel oracle校正は未完。
 - [x] G4 axis shape伝播: 1列sourceの`UNIQUE` / `SORT`と、`TOCOL` / `TOROW`の出力軸を既定spill再計算へ接続した。2D sourceの全意味論、全shape伝播、Excel oracle校正は未完。
 - [x] G4 INDEX array shape接続: `INDEX(range,0,0)`の全範囲、行配列、列配列について元rangeと引数からshapeを復元し、既定spill再計算へ接続した。2D切出し全体、Excel oracle校正は未完。
 - [x] G4 choose axis接続: 2D入力の`CHOOSECOLS` / `CHOOSEROWS`を行列単位で選択し、選択後shapeを既定spill再計算へ接続した。異常引数、1D legacy経路、Excel oracle校正は未完。
