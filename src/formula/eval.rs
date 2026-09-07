@@ -363,6 +363,7 @@ fn eval_func(
         "OR" => func_or(args, cells),
         "NOT" => func_not(args, cells),
         "IFERROR" => func_iferror(args, cells),
+        "IFNA" => func_ifna(args, cells),
         "LEFT" => func_left(args, cells),
         "RIGHT" => func_right(args, cells),
         "MID" => func_mid(args, cells),
@@ -779,6 +780,25 @@ fn func_iferror(
     match evaluate(&args[0], cells) {
         Ok(Variant::Error(_)) | Err(_) => evaluate(&args[1], cells),
         Ok(v) => Ok(v),
+    }
+}
+
+/// Return the fallback only for Excel's `#N/A` error.
+///
+/// Unlike IFERROR, IFNA must preserve other worksheet errors such as
+/// `#DIV/0!` and `#VALUE!`. The fallback remains lazy so lookup formulas do
+/// not evaluate an unused branch.
+fn func_ifna(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("IFNA requires 2 arguments".into());
+    }
+    match evaluate(&args[0], cells) {
+        Ok(Variant::Error(ExcelError::NA)) => evaluate(&args[1], cells),
+        Ok(value) => Ok(value),
+        Err(error) => Err(error),
     }
 }
 
@@ -6279,6 +6299,17 @@ mod tests {
         let c = HashMap::new();
         assert_eq!(calc("=IFERROR(1/0,99)", &c), Variant::Integer(99));
         assert_eq!(calc("=IFERROR(10,99)", &c), Variant::Integer(10));
+    }
+
+    #[test]
+    fn test_ifna_only_handles_na_and_keeps_other_errors() {
+        let c = HashMap::new();
+        assert_eq!(calc("=IFNA(NA(),99)", &c), Variant::Integer(99));
+        assert_eq!(
+            calc("=IFNA(1/0,99)", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
+        assert_eq!(calc("=IFNA(10,99)", &c), Variant::Integer(10));
     }
 
     #[test]

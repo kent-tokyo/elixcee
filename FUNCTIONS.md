@@ -281,7 +281,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 |---|---|---|
 | `IF` | Conditional value | Classic |
 | `AND` / `OR` / `NOT` | Logical operators | Classic |
-| `IFERROR` | Fallback on error | 2007 |
+| `IFERROR` | Fallback on any error | 2007 |
+| `IFNA` | Fallback on `#N/A` only | 2013 |
 | `XOR` | Exclusive OR | 2013 |
 | `IFS` | Multi-condition branch | 2019 |
 | `SWITCH` | Switch/case | 2019 |
