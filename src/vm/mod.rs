@@ -13158,6 +13158,15 @@ fn formula_spill_shape(
             }
             _ => Some(fallback),
         },
+        "TAKE" | "DROP" => {
+            let source = args.first()?;
+            let source_value = formula::evaluate(source, cells).ok()?;
+            let source_shape = formula_spill_shape(source, cells, &source_value)
+                .or_else(|| source_value.array_shape())?;
+            (source_shape.cols == 1)
+                .then_some(ArrayShape::new(value_len(value), 1))
+                .or(Some(fallback))
+        }
         "WRAPCOLS" => {
             let rows = dimension(args.get(1), 0)?.max(1);
             exact(rows, value_len(value).div_ceil(rows)).or(Some(fallback))
@@ -19473,6 +19482,36 @@ mod tests {
             .copied()
             .unwrap();
         assert_eq!(rect.shape, ArrayShape::new(2, 2));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_keeps_one_column_take_and_drop_vertical() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=TAKE(SEQUENCE(5),3)").unwrap();
+        vm.set_cell_formula(1, 3, "=DROP(SEQUENCE(5),2)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(3, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(3));
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(5));
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 1)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(3, 1)
+        );
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 3)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(3, 1)
+        );
     }
 
     #[test]

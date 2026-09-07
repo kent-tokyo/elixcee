@@ -97,6 +97,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 formula shape接続: `recalculate_all_with_spills()`で`SEQUENCE` / `RANDARRAY` / `TRANSPOSE` / `WRAPCOLS` / `WRAPROWS`のflat配列結果からshapeを復元し、既定spill経路でも2D矩形として依存セルへ反映するようにした。関数全体のshape伝播、Excel oracle校正は未完。
 - [x] G4 stack shape伝播: `VSTACK` / `HSTACK`の引数formula shapeを復元し、同幅・同高の2D結果を既定spill再計算へ接続した。異幅入力のExcel padding意味論、全配列関数のshape伝播は未完。
 - [x] G4 FILTER shape伝播: 元の2D range幅と出力要素数から`FILTER`の行列shapeを復元し、2D抽出結果を既定spill再計算へ接続した。include形状の全組合せ、異幅入力、Excel oracle校正は未完。
+- [x] G4 TAKE/DROP shape境界: 1列source（`SEQUENCE(n)`等）のTAKE/DROP結果を縦shapeとして既定spill再計算へ接続した。2D sourceの行単位切出し、全shape伝播、Excel oracle校正は未完。
 - [ ] 第1組は参照／条件集計／検索、次に日付／統計／金融。既存SUMIFS・XLOOKUP等を再実装せず、未対応modeと意味論差分から埋める。
 - [x] G4 第1組の意味論補完: `IFNA`を追加し、`#N/A`だけをfallback対象として、それ以外のErrorは伝播する遅延評価を回帰テストで固定した。Excel oracleとの一致確認と、他関数の未対応mode棚卸しは未完。
 - [x] G4 検索modeの安全境界: `XLOOKUP`のwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加した。wildcardとbinaryの組み合わせや未知modeは明示エラーにし、順序を満たさない入力を推測処理しない。Excel oracleとbinary modeの網羅的校正は未完。
