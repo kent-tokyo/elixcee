@@ -202,3 +202,15 @@ single-input case was not materially faster than the rebuild case in this run,
 so no speedup claim is made; closure bookkeeping remains a P0 optimization
 candidate when the affected set is large. These are local microbenchmarks and
 do not establish end-to-end workbook performance.
+
+## Dirty-closure queue-index trial
+
+On 2026-09-07, the dirty closure queue was changed to carry formula-plan
+indices for discovered formula nodes, avoiding a coordinate-to-index lookup on
+each visit. The same 10-sample, two-second Criterion run measured a median of
+1.2538 ms for the single-input chain and 1.3223 ms for the structure-rebuild
+comparison. Against the immediately preceding 1.2825 ms / 1.3090 ms baseline,
+this is an approximately 2.2% local improvement for the chain, while the
+rebuild case is unchanged within measurement noise. Range/cycle regression
+tests passed. The independent-input case was not rerun in this slice, and no
+end-to-end or universal 1.2x claim is made.

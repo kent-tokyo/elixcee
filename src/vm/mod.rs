@@ -3728,17 +3728,38 @@ impl Vm {
             .formula_dirty_cells
             .remove(sheet_key)
             .unwrap_or_default();
-        let mut queue = changed.to_vec();
-        let mut seen = HashSet::new();
-        while let Some(cell) = queue.pop() {
-            if !seen.insert(cell) {
-                continue;
-            }
+        enum DirtyWork {
+            Input((u32, u32)),
+            Formula(usize),
+        }
+        let mut queue = changed
+            .iter()
+            .copied()
+            .map(DirtyWork::Input)
+            .collect::<Vec<_>>();
+        let mut seen_inputs = HashSet::with_capacity(changed.len());
+        let mut seen_formula = vec![false; plan.cells.len()];
+        while let Some(work) = queue.pop() {
+            let cell = match work {
+                DirtyWork::Input(cell) => {
+                    if !seen_inputs.insert(cell) {
+                        continue;
+                    }
+                    cell
+                }
+                DirtyWork::Formula(index) => {
+                    if seen_formula[index] {
+                        continue;
+                    }
+                    seen_formula[index] = true;
+                    (plan.cells[index].0, plan.cells[index].1)
+                }
+            };
             if let Some(indices) = plan.reverse.get(&cell) {
                 for &index in indices {
                     let position = (plan.cells[index].0, plan.cells[index].1);
                     if dirty.insert(position) {
-                        queue.push(position);
+                        queue.push(DirtyWork::Formula(index));
                     }
                 }
             }
@@ -3749,7 +3770,7 @@ impl Vm {
                 if r1 <= cell.0 && cell.0 <= r2 && c1 <= cell.1 && cell.1 <= c2 {
                     let position = (plan.cells[index].0, plan.cells[index].1);
                     if dirty.insert(position) {
-                        queue.push(position);
+                        queue.push(DirtyWork::Formula(index));
                     }
                 }
             }

@@ -216,6 +216,7 @@ LogiSheetsの公開metadataは実装・測定・運用実績の証拠ではな�
 
 P0速度の現行ベースライン（2026-09-07、Criterion 10 samples／2 seconds、現行1.0.4）では、5,000行appendのreference rescanが106.88 ms、cached pathが94.98 msだった。これは当該microbenchmarkで約11.1%短縮した観測であり、1.2倍目標やend-to-end優位性の根拠にはしない。詳細は[VMホットパス測定記録](docs/measurements/vm-hotpath-optimization-2026-09-05.md)。
 formula dirty propagationの同日controlled matrixでは、single-input chain 1.2825 ms、warm noop 1.2363 ms、structure rebuild 1.3090 ms、独立1,000入力 1.1570 ms（各median）だった。single-inputがrebuildを上回る短縮は確認できなかったため、closure bookkeepingが支配的になる条件のnegative resultとして記録し、P0最適化候補を維持する。
+その後、依存先を座標ではなくformula plan indexでqueueへ渡す局所変更を実装し、single-input chain 1.2538 ms、structure rebuild 1.3223 msを再測定した。直前chain比で約2.2%の改善だが、rebuildは不変であり、独立入力・end-to-end・1.2倍目標の根拠にはしない。range/cycle回帰は成功し、独立入力は未再測定。
 | P1 | VBA bytecode／symbol intern | AST経路との一致、演算主体・セルI/O主体の両方を測定 |
 | P1 | canonical packed/tiled cell storage | 公開HashMap APIを保つoverlay。Range・formula・style・save・fork・GCの回帰 |
 | P1 | Writerのstyle／shared-string overlay | 全map／文字列cloneを削減し、密度別RSS・CPU・出力同値を確認 |
