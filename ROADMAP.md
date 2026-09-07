@@ -220,6 +220,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 残るwarm noopは1.2012 ms、独立1,000入力は1.1502 msで、いずれもCriterion上の有意差なしだった。queue index化はsingle-input chainに限る局所改善として確定し、一般的なdirty propagation高速化とは扱わない。
 
 2026-09-07のcandidate健全性確認では、`cargo test --workspace --all-targets --offline`を実行し、Rust unit 1,549件、blackbox、CLI、property、XLSX round-trip 52件、bench smoke、WASM crateを含む全targetが成功した。これはlocal regression evidenceであり、3 OS、Excel oracle、公開artifactの証拠ではない。
+同日の`cargo clippy --workspace --all-targets --offline -- -D warnings`も成功し、workspace全targetで警告は検出されなかった。これは静的検査の証拠であり、3 OS・Excel oracle・公開artifactの証拠ではない。
 追跡済みformula planでは整合性scanを省略し、`cells_mut()`等でtrackingが無効化された場合だけlive formula再検査へfallbackする変更を実装した。dirty formula、cycle、manual→automaticを含む関連テストとworkspace全target回帰は成功した。
 同一Criterion条件の再測定ではsingle-input chain 1.0217 ms、warm noop 0.96091 ms、独立1,000入力 0.89674 msとなり、直前baseline比で約18.5%・20.0%・22.0%改善した。structure rebuildは1.3737 msで約3.9%増のため、tracked-edit fast pathの局所改善として扱い、一般的な再計算高速化とは主張しない。
 | P1 | VBA bytecode／symbol intern | AST経路との一致、演算主体・セルI/O主体の両方を測定 |
