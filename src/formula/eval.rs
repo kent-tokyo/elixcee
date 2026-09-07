@@ -1085,6 +1085,18 @@ fn require_range(expr: &FormulaExpr, fname: &str) -> Result<(u32, u32, u32, u32)
     }
 }
 
+fn lookup_mode(value: &Variant) -> Result<i32, String> {
+    let number = to_float(value)?;
+    if !number.is_finite()
+        || number.fract() != 0.0
+        || number < i32::MIN as f64
+        || number > i32::MAX as f64
+    {
+        return Err("lookup mode must be an integer".into());
+    }
+    Ok(number as i32)
+}
+
 fn func_vlookup(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -1985,12 +1997,18 @@ fn func_xlookup(
         None
     };
     let match_mode = if args.len() >= 5 {
-        to_float(&evaluate(&args[4], cells)?)? as i32
+        match lookup_mode(&evaluate(&args[4], cells)?) {
+            Ok(mode) => mode,
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+        }
     } else {
         0
     };
     let search_mode = if args.len() >= 6 {
-        to_float(&evaluate(&args[5], cells)?)? as i32
+        match lookup_mode(&evaluate(&args[5], cells)?) {
+            Ok(mode) => mode,
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+        }
     } else {
         1
     };
@@ -3486,12 +3504,18 @@ fn func_xmatch(
     let key = evaluate(&args[0], cells)?;
     let lookup = collect_values(&args[1], cells)?;
     let match_mode = if args.len() >= 3 {
-        to_float(&evaluate(&args[2], cells)?)? as i32
+        match lookup_mode(&evaluate(&args[2], cells)?) {
+            Ok(mode) => mode,
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+        }
     } else {
         0
     };
     let search_mode = if args.len() >= 4 {
-        to_float(&evaluate(&args[3], cells)?)? as i32
+        match lookup_mode(&evaluate(&args[3], cells)?) {
+            Ok(mode) => mode,
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+        }
     } else {
         1
     };
@@ -6839,6 +6863,10 @@ mod tests {
             calc("=XLOOKUP(4,A1:A3,B1:B3,\"missing\",-1,-2)", &descending),
             Variant::Str("three".into())
         );
+        assert_eq!(
+            calc("=XLOOKUP(2,A1:A3,B1:B3,\"missing\",0.5)", &ascending),
+            Variant::Error(ExcelError::Value)
+        );
     }
 
     #[test]
@@ -7330,6 +7358,10 @@ mod tests {
         assert_eq!(calc("=XMATCH(\"t*\",B1:B3,2)", &c), Variant::Integer(2));
         assert_eq!(calc("=XMATCH(2,A1:A3,0,2)", &c), Variant::Integer(2));
         assert_eq!(calc("=XMATCH(4,A1:A3,-1,2)", &c), Variant::Integer(3));
+        assert_eq!(
+            calc("=XMATCH(2,A1:A3,0.5)", &c),
+            Variant::Error(ExcelError::Value)
+        );
     }
 
     #[test]

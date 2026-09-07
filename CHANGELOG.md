@@ -37,6 +37,7 @@
 - `MATCH`のwildcard検索でExcel式のエスケープ`~*`、`~?`、`~~`をリテラルとして扱うようにしました。エスケープを含む場合もbounded DPで評価します。
 - G4のdispatcher棚卸し基盤として、実際のformula dispatch tableからcanonical名・alias・重複名を抽出する`check-formula-dispatch.py`を追加しました。関数数の未測定な水増しを防ぐためのlocal gateであり、Excel oracle一致率は未測定です。
 - dispatcher棚卸しに`--check-docs`を追加し、`FUNCTIONS.md`のworksheet関数表と実dispatchの218名（canonical 207 / alias 11）を照合できるようにしました。引数形・未対応mode・Excel oracle一致率は未測定です。
+- `XLOOKUP` / `XMATCH`のmatch/search modeで非整数・非有限・範囲外の値を切り捨てず、`#VALUE!`として返すようにしました。
 
 ## [1.0.4] - 2026-09-07
 
