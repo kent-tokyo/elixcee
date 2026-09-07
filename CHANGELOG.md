@@ -31,6 +31,7 @@
 - G4の数式互換性補完として`IFNA`を追加しました。`#N/A`だけをfallbackし、`#DIV/0!`など他のErrorは伝播する遅延評価を回帰テストで固定しています。Excel oracle照合や関数全体の未対応mode棚卸しは未完です。
 - G4の検索互換性補完として`XLOOKUP`のwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加しました。wildcardとbinaryの組み合わせや未知modeは明示的にエラーとし、Excel oracle照合と網羅的なbinary mode校正は未完です。
 - G4の検索関数整合性として`XMATCH`にもwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加しました。未知modeは通常検索へ置換せず明示的にエラーとします。Excel oracle照合は未完です。
+- G4のlookup境界を補完し、`HLOOKUP`の行番号0を`#VALUE!`、範囲外を`#REF!`として返すようにしました。`VLOOKUP`と同じ明示的な境界を回帰テストで固定しています。
 
 ## [1.0.4] - 2026-09-07
 

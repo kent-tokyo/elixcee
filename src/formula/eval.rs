@@ -1145,14 +1145,21 @@ fn func_hlookup(
         return Err("HLOOKUP requires 3 or 4 arguments".into());
     }
     let key = evaluate(&args[0], cells)?;
-    let (c1, r1, c2, _r2) = require_range(&args[1], "HLOOKUP")?;
-    let row_n = to_float(&evaluate(&args[2], cells)?)? as u32;
+    let (c1, r1, c2, r2) = require_range(&args[1], "HLOOKUP")?;
+    let row_n = to_float(&evaluate(&args[2], cells)?)? as i64;
+    if row_n <= 0 {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let height = i64::from(r2 - r1 + 1);
+    if row_n > height {
+        return Ok(Variant::Error(ExcelError::Ref));
+    }
     let exact = if args.len() == 4 {
         !is_truthy(&evaluate(&args[3], cells)?)
     } else {
         false
     };
-    let ret_row = r1 + row_n - 1;
+    let ret_row = r1 + row_n as u32 - 1;
 
     if exact {
         for col in c1..=c2 {
@@ -7829,6 +7836,28 @@ mod tests {
         );
         // col_index within range → normal
         assert_eq!(calc("=VLOOKUP(1,A1:C1,2,TRUE)", &c), Variant::Integer(2));
+    }
+
+    #[test]
+    fn test_hlookup_row_index_bounds() {
+        let c = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Integer(2)),
+            ((2, 1), Variant::Str("one".into())),
+            ((2, 2), Variant::Str("two".into())),
+        ]);
+        assert_eq!(
+            calc("=HLOOKUP(2,A1:B2,2,FALSE)", &c),
+            Variant::Str("two".into())
+        );
+        assert_eq!(
+            calc("=HLOOKUP(1,A1:B2,0,FALSE)", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=HLOOKUP(1,A1:B2,3,FALSE)", &c),
+            Variant::Error(ExcelError::Ref)
+        );
     }
 
     #[test]
