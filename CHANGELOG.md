@@ -16,7 +16,7 @@
 - G4のspill再計算APIとして、`recalculate_all_with_spills()`を拡張しました。各sheetの配列anchorを処理し、呼出し元のactive sheetを復元してから依存formulaを再計算します。既存`recalculate_all()`の既定動作は維持しています。
 - G4の2D spill準備として、`apply_spill_matrix()`を追加しました。矩形matrixの行幅を検証し、`ArrayShape(rows, cols)`を保持したままanchor formulaを維持して適用できます。
 - G4の2D spill接続として、`SEQUENCE` / `RANDARRAY` / `TRANSPOSE` / `WRAPCOLS` / `WRAPROWS`のformula shapeを既定の`recalculate_all_with_spills()`で復元し、2D矩形のspillと依存再計算へ接続しました。全配列関数のshape伝播とExcel oracle照合は未完です。
-- G4のshape伝播を拡張し、`VSTACK` / `HSTACK`の同幅・同高2D結果を既定spill再計算で正しい矩形へ配置できるようにしました。異幅入力のpadding意味論とExcel oracle照合は未完です。
+- G4のshape伝播を拡張し、`VSTACK` / `HSTACK`の2D結果を既定spill再計算で正しい矩形へ配置できるようにしました。異幅・異高入力は不足領域を`#N/A`でpaddingします。Excel oracle照合は未完です。
 - G4のshape伝播を拡張し、2D rangeを元にした`FILTER`の出力幅を保持して既定spill再計算へ接続しました。include形状の全組合せ、異幅入力とExcel oracle照合は未完です。
 - G4のshape伝播を拡張し、1列sourceの`TAKE` / `DROP`結果を縦方向のspillとして既定再計算へ接続しました。2D sourceの行単位切出しとExcel oracle照合は未完です。
 - G4のshape伝播を拡張し、1列sourceの`UNIQUE` / `SORT`と`TOCOL` / `TOROW`の出力軸を既定spill再計算へ接続しました。2D source全体の意味論とExcel oracle照合は未完です。

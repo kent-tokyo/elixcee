@@ -95,7 +95,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 spill再計算API: `recalculate_all_with_spills()`で各sheetのformula再計算、配列anchorの事前衝突検査／一括spill適用、依存先の再計算を接続し、呼出し元のactive sheetを復元するようにした。既存`recalculate_all()`は互換性のため変更せず、複数行shape・Excel oracle校正は未完。
 - [x] G4 2D spill適用: `apply_spill_matrix()`で矩形matrixの行幅検証と`ArrayShape(rows, cols)`を反映し、2行1列などflat表現では失われる方向情報を保持できるようにした。formula evaluatorの2D metadata生成、既定再計算接続、Excel oracle校正は未完。
 - [x] G4 formula shape接続: `recalculate_all_with_spills()`で`SEQUENCE` / `RANDARRAY` / `TRANSPOSE` / `WRAPCOLS` / `WRAPROWS`のflat配列結果からshapeを復元し、既定spill経路でも2D矩形として依存セルへ反映するようにした。関数全体のshape伝播、Excel oracle校正は未完。
-- [x] G4 stack shape伝播: `VSTACK` / `HSTACK`の引数formula shapeを復元し、同幅・同高の2D結果を既定spill再計算へ接続した。異幅入力のExcel padding意味論、全配列関数のshape伝播は未完。
+- [x] G4 stack shape伝播: `VSTACK` / `HSTACK`の引数formula shapeを復元し、同幅・同高の2D結果を既定spill再計算へ接続した。異幅・異高入力は不足領域を`#N/A`でpaddingする。全配列関数のshape伝播は未完。
 - [x] G4 FILTER shape伝播: 元の2D range幅と出力要素数から`FILTER`の行列shapeを復元し、2D抽出結果を既定spill再計算へ接続した。include形状の全組合せ、異幅入力、Excel oracle校正は未完。
 - [x] G4 TAKE/DROP shape境界: 1列source（`SEQUENCE(n)`等）のTAKE/DROP結果を縦shapeとして既定spill再計算へ接続した。2D sourceの行単位切出し、全shape伝播、Excel oracle校正は未完。
 - [x] G4 axis shape伝播: 1列sourceの`UNIQUE` / `SORT`と、`TOCOL` / `TOROW`の出力軸を既定spill再計算へ接続した。2D sourceの全意味論、全shape伝播、Excel oracle校正は未完。
