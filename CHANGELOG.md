@@ -29,7 +29,7 @@
 - 追跡済みformula planでは毎回の全formula整合性scanを省略し、`cells_mut()`等でtrackingが無効化された場合だけfallback検査するようにしました。dirty formula、cycle、manual→automaticの関連回帰を確認しています。
 - 同じCriterion条件で再測定し、single-input chain 1.0217 ms、warm noop 0.96091 ms、独立1,000入力0.89674 msを記録しました。改善はtracked-edit fast pathに限定し、structure rebuild 1.3737 msの増加を含めて記録しています。
 - G4の数式互換性補完として`IFNA`を追加しました。`#N/A`だけをfallbackし、`#DIV/0!`など他のErrorは伝播する遅延評価を回帰テストで固定しています。Excel oracle照合や関数全体の未対応mode棚卸しは未完です。
-- G4の検索互換性補完として`XLOOKUP`のwildcard `match_mode=2`を追加しました。未実装のbinary `search_mode=2/-2`や未知modeは通常検索へ置換せず、明示的にunsupported errorを返します。Excel oracle照合とbinary searchは未完です。
+- G4の検索互換性補完として`XLOOKUP`のwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加しました。wildcardとbinaryの組み合わせや未知modeは明示的にエラーとし、Excel oracle照合と網羅的なbinary mode校正は未完です。
 
 ## [1.0.4] - 2026-09-07
 

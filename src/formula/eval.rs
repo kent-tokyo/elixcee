@@ -1849,6 +1849,59 @@ fn func_row(
 
 // ── XLOOKUP ───────────────────────────────────────────────────────────────────
 
+fn xlookup_binary_index(
+    lookup: &[Variant],
+    key: &Variant,
+    ascending: bool,
+    match_mode: i32,
+) -> Result<Option<usize>, String> {
+    if lookup.is_empty() {
+        return Ok(None);
+    }
+    let ordering = |value: &Variant| -> Result<Ordering, String> {
+        let cmp = variant_cmp(value, key)?;
+        Ok(if ascending { cmp } else { cmp.reverse() })
+    };
+
+    // Lower bound in the requested sort order: the first value >= key.
+    let (mut lo, mut hi) = (0usize, lookup.len());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if matches!(ordering(&lookup[mid])?, Ordering::Less) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let lower = lo;
+    let is_exact = lower < lookup.len() && variant_eq(&lookup[lower], key);
+    let index = match match_mode {
+        0 => is_exact.then_some(lower),
+        -1 => {
+            if is_exact {
+                Some(lower)
+            } else if ascending {
+                lower.checked_sub(1)
+            } else {
+                // In descending order, the first value at the lower bound
+                // is the next smaller numeric value.
+                Some(lower).filter(|&i| i < lookup.len())
+            }
+        }
+        1 => {
+            if is_exact {
+                Some(lower)
+            } else if ascending {
+                Some(lower).filter(|&i| i < lookup.len())
+            } else {
+                lower.checked_sub(1)
+            }
+        }
+        mode => return Err(format!("XLOOKUP: unsupported match_mode {}", mode)),
+    };
+    Ok(index)
+}
+
 fn func_xlookup(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -1875,13 +1928,19 @@ fn func_xlookup(
         1
     };
 
+    if matches!(search_mode, 2 | -2) {
+        if match_mode == 2 {
+            return Err("XLOOKUP: wildcard match_mode is incompatible with binary search".into());
+        }
+        let index = xlookup_binary_index(&lookup, &key, search_mode == 2, match_mode)?;
+        return Ok(index
+            .and_then(|i| return_arr.get(i).cloned())
+            .unwrap_or_else(|| not_found.unwrap_or(Variant::Error(ExcelError::NA))));
+    }
+
     let iter: Box<dyn Iterator<Item = usize>> = match search_mode {
         -1 => Box::new((0..lookup.len()).rev()),
         1 => Box::new(0..lookup.len()),
-        // Do not approximate binary modes with a linear scan: that would
-        // silently accept an ordering contract this evaluator has not
-        // validated.
-        2 | -2 => return Err(format!("XLOOKUP: unsupported search_mode {}", search_mode)),
         mode => return Err(format!("XLOOKUP: unsupported search_mode {}", mode)),
     };
 
@@ -6613,7 +6672,7 @@ mod tests {
     }
 
     #[test]
-    fn test_xlookup_wildcard_and_rejects_unimplemented_search_modes() {
+    fn test_xlookup_wildcard_and_binary_search_modes() {
         let c = cells_from(&[
             ((1, 1), Variant::Str("alpha".into())),
             ((1, 2), Variant::Str("A".into())),
@@ -6624,12 +6683,38 @@ mod tests {
             calc("=XLOOKUP(\"a*\",A1:A2,B1:B2,\"missing\",2)", &c),
             Variant::Str("A".into())
         );
-        let binary_mode = evaluate(
-            &fparse("=XLOOKUP(\"alpha\",A1:A2,B1:B2,\"missing\",0,2)").unwrap(),
-            &c,
-        )
-        .unwrap_err();
-        assert_eq!(binary_mode, "XLOOKUP: unsupported search_mode 2");
+        let ascending = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Str("one".into())),
+            ((2, 1), Variant::Integer(2)),
+            ((2, 2), Variant::Str("two".into())),
+            ((3, 1), Variant::Integer(3)),
+            ((3, 2), Variant::Str("three".into())),
+        ]);
+        assert_eq!(
+            calc("=XLOOKUP(2,A1:A3,B1:B3,\"missing\",0,2)", &ascending),
+            Variant::Str("two".into())
+        );
+        assert_eq!(
+            calc("=XLOOKUP(0,A1:A3,B1:B3,\"missing\",1,2)", &ascending),
+            Variant::Str("one".into())
+        );
+        let descending = cells_from(&[
+            ((1, 1), Variant::Integer(3)),
+            ((1, 2), Variant::Str("three".into())),
+            ((2, 1), Variant::Integer(2)),
+            ((2, 2), Variant::Str("two".into())),
+            ((3, 1), Variant::Integer(1)),
+            ((3, 2), Variant::Str("one".into())),
+        ]);
+        assert_eq!(
+            calc("=XLOOKUP(2,A1:A3,B1:B3,\"missing\",0,-2)", &descending),
+            Variant::Str("two".into())
+        );
+        assert_eq!(
+            calc("=XLOOKUP(4,A1:A3,B1:B3,\"missing\",-1,-2)", &descending),
+            Variant::Str("three".into())
+        );
     }
 
     #[test]
