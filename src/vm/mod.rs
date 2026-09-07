@@ -12075,13 +12075,30 @@ impl Vm {
         Ok(())
     }
 
-    /// Recalculates formulas on the active sheet, applies its array results as
+    /// Recalculates formulas on every worksheet, applies array results as
     /// spills, then recalculates once more so formulas depending on spill cells
     /// observe the newly written values. The existing `recalculate_all()`
-    /// contract is unchanged; this opt-in path currently scopes spill
-    /// materialization to the active sheet and does not add edit history.
+    /// contract is unchanged and this opt-in path does not add edit history.
     pub fn recalculate_all_with_spills(&mut self) -> Result<(), String> {
-        self.recalculate_all()?;
+        let original_active = self.active_sheet.clone();
+        let sheets = self.sheet_order.clone();
+        let result = (|| {
+            for sheet in sheets {
+                if !self.sheets.contains_key(&sheet) {
+                    continue;
+                }
+                self.active_sheet = sheet;
+                self.recalculate_all()?;
+                self.materialize_active_sheet_spills()?;
+            }
+            Ok::<(), String>(())
+        })();
+        self.active_sheet = original_active;
+        result?;
+        self.recalculate_all()
+    }
+
+    fn materialize_active_sheet_spills(&mut self) -> Result<(), String> {
         let pending = self
             .cells()
             .iter()
@@ -12112,7 +12129,7 @@ impl Vm {
         for ((row, col), value) in pending {
             self.apply_spill_for_value_untracked(row, col, &value)?;
         }
-        self.recalculate_all()
+        Ok(())
     }
 
     /// Plans the worksheet footprint for a dynamic-array value without
@@ -19190,6 +19207,27 @@ mod tests {
         let error = vm.recalculate_all_with_spills().unwrap_err();
         assert!(error.contains("#SPILL!"));
         assert_eq!(vm.cells().len(), before);
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_materializes_each_sheet_and_restores_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.set_active_sheet("other").unwrap();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.set_active_sheet("sheet1").unwrap();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 2))
+                .map(|cell| &cell.value),
+            Some(&Variant::Integer(2))
+        );
     }
 
     #[test]
