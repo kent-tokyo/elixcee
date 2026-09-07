@@ -4777,6 +4777,12 @@ fn func_filter(
         }
         return Ok(wrap_array(result));
     }
+    if !matches!(args[0], FormulaExpr::Range { .. }) && data_rows > 1 && data_cols > 1 {
+        return Err(format!(
+            "FILTER: 2D data requires a {}-row or {}-column include vector",
+            data_rows, data_cols
+        ));
+    }
 
     match &args[0] {
         FormulaExpr::Range { c1, r1, c2, r2, .. } => {
@@ -9607,6 +9613,13 @@ mod tests {
                 Variant::Integer(5),
                 Variant::Integer(6),
             ])
+        );
+        assert!(
+            evaluate(
+                &fparse("=FILTER(SEQUENCE(2,3),SEQUENCE(2,3))").unwrap(),
+                &cells
+            )
+            .is_err()
         );
     }
 }
