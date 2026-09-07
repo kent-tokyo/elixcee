@@ -33,6 +33,7 @@
 - G4の検索関数整合性として`XMATCH`にもwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加しました。未知modeは通常検索へ置換せず明示的にエラーとします。Excel oracle照合は未完です。
 - G4のlookup境界を補完し、`HLOOKUP`の行番号0を`#VALUE!`、範囲外を`#REF!`として返すようにしました。`VLOOKUP`と同じ明示的な境界を回帰テストで固定しています。
 - G4のlookup境界を補完し、`INDEX`の行列番号0を`#VALUE!`、範囲外を`#REF!`として返すようにしました。整数アンダーフローによる誤セル参照を防止しています。
+- G4の`MATCH` exact検索で文字列wildcard `*` / `?`を大文字小文字非依存で扱うようにし、未定義match typeを`#VALUE!`として返すようにしました。
 
 ## [1.0.4] - 2026-09-07
 

@@ -1235,7 +1235,14 @@ fn func_match_fn(
     match mtype {
         0 => Ok(vals
             .iter()
-            .position(|v| variant_eq(v, &key))
+            .position(|v| match (&key, v) {
+                (Variant::Str(pattern), Variant::Str(text))
+                    if pattern.contains('*') || pattern.contains('?') =>
+                {
+                    wildcard_match(&text.to_uppercase(), &pattern.to_uppercase())
+                }
+                _ => variant_eq(v, &key),
+            })
             .map(|i| Variant::Integer((i + 1) as i64))
             .unwrap_or(Variant::Error(ExcelError::NA))),
         1 => {
@@ -1266,7 +1273,7 @@ fn func_match_fn(
                 .map(|i| Variant::Integer((i + 1) as i64))
                 .unwrap_or(Variant::Error(ExcelError::NA)))
         }
-        t => Err(format!("MATCH: invalid match_type {}", t)),
+        _t => Ok(Variant::Error(ExcelError::Value)),
     }
 }
 
@@ -6502,6 +6509,15 @@ mod tests {
             ((3, 1), Variant::Integer(30)),
         ]);
         assert_eq!(calc("=MATCH(20,A1:A3,0)", &c), Variant::Integer(2));
+        let text = cells_from(&[
+            ((1, 1), Variant::Str("Alpha".into())),
+            ((2, 1), Variant::Str("Beta".into())),
+        ]);
+        assert_eq!(calc("=MATCH(\"a*\",A1:A2,0)", &text), Variant::Integer(1));
+        assert_eq!(
+            calc("=MATCH(\"Alpha\",A1:A2,9)", &text),
+            Variant::Error(ExcelError::Value)
+        );
     }
 
     #[test]
