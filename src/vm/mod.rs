@@ -13177,11 +13177,10 @@ fn formula_spill_shape(
             let column_include = include_rows == 1 && include_cols == source_shape.cols;
             let shape = if column_include {
                 let count = match include {
-                    Some(Variant::Array(values)) => values
-                        .iter()
-                        .filter(|value| matches!(value, Variant::Boolean(true)))
-                        .count(),
-                    Some(Variant::Boolean(true)) => 1,
+                    Some(Variant::Array(values)) => {
+                        values.iter().filter(|value| is_truthy(value)).count()
+                    }
+                    Some(value) if is_truthy(&value) => 1,
                     _ => 0,
                 };
                 ArrayShape::new(source_shape.rows, count)
@@ -19678,6 +19677,25 @@ mod tests {
             .copied()
             .unwrap();
         assert_eq!(rect.shape, ArrayShape::new(2, 2));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_restores_generated_filter_column_shape() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=FILTER(SEQUENCE(2,3),SEQUENCE(1,3))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(3));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(4));
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(6));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 1)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 3));
     }
 
     #[test]
