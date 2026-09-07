@@ -12039,10 +12039,9 @@ impl Vm {
                 if position == (origin_row, origin_col) {
                     continue;
                 }
-                if cells
-                    .get(&position)
-                    .is_some_and(|cell| !matches!(cell.value, Variant::Empty))
-                {
+                if cells.get(&position).is_some_and(|cell| {
+                    cell.formula.is_some() || !matches!(cell.value, Variant::Empty)
+                }) {
                     return Err(format!(
                         "#SPILL!: target cell {}:{} is occupied",
                         position.0, position.1
@@ -12051,6 +12050,77 @@ impl Vm {
             }
         }
         Ok(Some(rect))
+    }
+
+    /// Applies a dynamic-array value to the active worksheet. The anchor's
+    /// existing formula is preserved; newly occupied cells receive values
+    /// without formulas. Planning is completed before mutation, so a
+    /// collision cannot leave a partial spill behind.
+    pub fn apply_spill_for_value(
+        &mut self,
+        origin_row: u32,
+        origin_col: u32,
+        value: &Variant,
+    ) -> Result<SpillRect, String> {
+        let Some(rect) = self.plan_spill_for_value(origin_row, origin_col, value)? else {
+            return Err("cannot apply a scalar value as a spill".to_string());
+        };
+        let shape = rect.shape;
+        let values = match value {
+            Variant::Array(values) => values,
+            _ => unreachable!("plan_spill_for_value rejects scalar values"),
+        };
+        let active = self.active_sheet.clone();
+        self.record_edit_history();
+        let mut changed = Vec::with_capacity(shape.cell_count().max(1));
+        let Some(cells) = self.sheets.get_mut(&active) else {
+            return Err(format!("unknown active sheet '{}'", active));
+        };
+        if shape.is_empty() {
+            let formula = cells
+                .get(&(origin_row, origin_col))
+                .and_then(|cell| cell.formula.clone());
+            cells.insert(
+                (origin_row, origin_col),
+                CellContent {
+                    formula,
+                    value: Variant::Empty,
+                },
+            );
+            changed.push((origin_row, origin_col));
+        } else {
+            for row_offset in 0..shape.rows {
+                for col_offset in 0..shape.cols {
+                    let position = rect
+                        .cell_at(row_offset, col_offset)
+                        .expect("validated spill rectangle cell");
+                    let flat_index = row_offset * shape.cols + col_offset;
+                    let formula = if position == (origin_row, origin_col) {
+                        cells.get(&position).and_then(|cell| cell.formula.clone())
+                    } else {
+                        None
+                    };
+                    cells.insert(
+                        position,
+                        CellContent {
+                            formula,
+                            value: values[flat_index].clone(),
+                        },
+                    );
+                    changed.push(position);
+                }
+            }
+        }
+        self.cell_index_dirty = true;
+        self.next_append_rows.remove(&active);
+        self.workbook_formula_dirty
+            .entry(active.clone())
+            .or_default()
+            .extend(changed.iter().copied());
+        self.workbook_formula_tracking_valid = true;
+        self.mark_formula_dependents(&active, &changed);
+        self.update_cached_tiles_for_rect(&active, (origin_row, origin_col), &[values.to_vec()]);
+        Ok(rect)
     }
 
     pub fn set_calc_mode(&mut self, mode: CalculationMode) -> Result<(), String> {
@@ -18593,6 +18663,28 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn apply_spill_for_value_is_atomic_and_preserves_the_anchor_formula() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 3, "=SEQUENCE(1,2)").unwrap();
+        let value = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        let rect = vm.apply_spill_for_value(2, 3, &value).unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(1, 2));
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(10));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(20));
+        assert_eq!(
+            vm.cells()
+                .get(&(2, 3))
+                .and_then(|cell| cell.formula.as_deref()),
+            Some("=SEQUENCE(1,2)")
+        );
+
+        vm.write_rect("sheet1", (2, 5), &[vec![Variant::Integer(99)]]);
+        let before = vm.read_rect("sheet1", 2, 3, 2, 5);
+        assert!(vm.apply_spill_for_value(2, 3, &value).is_err());
+        assert_eq!(vm.read_rect("sheet1", 2, 3, 2, 5), before);
     }
 
     #[test]
