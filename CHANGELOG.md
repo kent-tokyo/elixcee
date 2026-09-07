@@ -35,6 +35,7 @@
 - G4のlookup境界を補完し、`INDEX`の行列番号0を`#VALUE!`、範囲外を`#REF!`として返すようにしました。整数アンダーフローによる誤セル参照を防止しています。
 - G4の`MATCH` exact検索で文字列wildcard `*` / `?`を大文字小文字非依存で扱うようにし、未定義match typeを`#VALUE!`として返すようにしました。
 - `MATCH`のwildcard検索でExcel式のエスケープ`~*`、`~?`、`~~`をリテラルとして扱うようにしました。エスケープを含む場合もbounded DPで評価します。
+- G4のdispatcher棚卸し基盤として、実際のformula dispatch tableからcanonical名・alias・重複名を抽出する`check-formula-dispatch.py`を追加しました。関数数の未測定な水増しを防ぐためのlocal gateであり、Excel oracle一致率は未測定です。
 
 ## [1.0.4] - 2026-09-07
 
