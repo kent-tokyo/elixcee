@@ -103,7 +103,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 choose axis接続: 2D入力の`CHOOSECOLS` / `CHOOSEROWS`を行列単位で選択し、選択後shapeを既定spill再計算へ接続した。行／列indexは整数値として検証し、非整数値を`#VALUE!`として拒否する。1D legacy経路、Excel oracle校正は未完。
 - [x] G4 2D unique/sort接続: 2D入力の`UNIQUE`を行／列単位の重複排除、`SORT`を行列のsort_index・sort_order・by_colに接続し、結果shapeを既定spill再計算へ接続した。`UNIQUE`のexactly_once／by_colと`SORT`のby_colはtruthy型変換に揃え、2D `SORT`のsort_index／sort_orderは不正値を`#VALUE!`として拒否する。型意味論全体とExcel oracle校正は未完。
 - [x] G4 2D SORTBY接続: 2Dデータを同じ行のsort-by列で並べ替え、複数sort-by配列の行数・1列制約と各昇降順を検証して結果shapeを既定spill再計算へ接続した。各sort orderは`1/-1`以外を`#VALUE!`として拒否する。型変換、Excel oracle校正は未完。
-- [x] G4 2D FILTER接続: Range既存経路を維持しつつ、生成された2D配列を行／列includeで抽出し、元配列幅と選択列数から結果shapeを既定spill再計算へ接続した。生成配列の比較条件もoperand shapeを継承し、異常shapeのincludeは明示エラーにする。複合include、Excel oracle校正は未完。
+- [x] G4 2D FILTER接続: Range既存経路を維持しつつ、生成された2D配列を行／列includeで抽出し、元配列幅と選択列数から結果shapeを既定spill再計算へ接続した。生成配列の比較条件もoperand shapeを継承し、`*`／`+`による複合includeを要素単位のAND／ORとして評価し、異常shapeは明示エラーにする。Excel oracle校正は未完。
 - [ ] 第1組は参照／条件集計／検索、次に日付／統計／金融。既存SUMIFS・XLOOKUP等を再実装せず、未対応modeと意味論差分から埋める。
 - [x] G4 第1組の意味論補完: `IFNA`を追加し、`#N/A`だけをfallback対象として、それ以外のErrorは伝播する遅延評価を回帰テストで固定した。Excel oracleとの一致確認と、他関数の未対応mode棚卸しは未完。
 - [x] G4 検索modeの安全境界: `XLOOKUP`のwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加した。wildcardとbinaryの組み合わせや未知modeは明示エラーにし、順序を満たさない入力を推測処理しない。Excel oracleとbinary modeの網羅的校正は未完。

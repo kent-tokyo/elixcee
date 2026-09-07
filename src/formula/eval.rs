@@ -4701,6 +4701,36 @@ fn eval_as_bool_array(
             Ok(collect_values(expr, cells)?.iter().map(is_truthy).collect())
         }
         FormulaExpr::BinOp { op, lhs, rhs } => {
+            if matches!(op, BinOpKind::Add | BinOpKind::Mul) {
+                let lhs_flags = eval_as_bool_array(lhs, cells)?;
+                let rhs_flags = eval_as_bool_array(rhs, cells)?;
+                if lhs_flags.len() != 1
+                    && rhs_flags.len() != 1
+                    && lhs_flags.len() != rhs_flags.len()
+                {
+                    return Err("composite FILTER conditions must have equal length".into());
+                }
+                let len = lhs_flags.len().max(rhs_flags.len());
+                return Ok((0..len)
+                    .map(|index| {
+                        let left = if lhs_flags.len() == 1 {
+                            lhs_flags[0]
+                        } else {
+                            lhs_flags[index]
+                        };
+                        let right = if rhs_flags.len() == 1 {
+                            rhs_flags[0]
+                        } else {
+                            rhs_flags[index]
+                        };
+                        if matches!(op, BinOpKind::Mul) {
+                            left && right
+                        } else {
+                            left || right
+                        }
+                    })
+                    .collect());
+            }
             let lhs_vals = flatten_array_vals(collect_values(lhs, cells)?);
             let rhs_vals = flatten_array_vals(collect_values(rhs, cells)?);
             if lhs_vals.len() > 1 || rhs_vals.len() > 1 {
@@ -8177,6 +8207,14 @@ mod tests {
         assert_eq!(
             calc("=FILTER(A1:A4, A1:A4>15)", &c),
             Variant::Array(vec![Variant::Integer(20), Variant::Integer(30)])
+        );
+        assert_eq!(
+            calc("=FILTER(A1:A4, (A1:A4>15)*(A1:A4<30))", &c),
+            Variant::Integer(20)
+        );
+        assert_eq!(
+            calc("=FILTER(A1:A4, (A1:A4<10)+(A1:A4>25))", &c),
+            Variant::Array(vec![Variant::Integer(30), Variant::Integer(5)])
         );
     }
 
