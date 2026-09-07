@@ -100,7 +100,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 FILTER shape伝播: 元の2D range幅と出力要素数から`FILTER`の行列shapeを復元し、2D抽出結果を既定spill再計算へ接続した。include形状の全組合せ、異幅入力、Excel oracle校正は未完。
 - [x] G4 TAKE/DROP shape接続: 元配列shapeに基づく行・列単位のTAKE/DROPと任意列数引数を追加し、2D結果を既定spill再計算へ接続した。行／列件数は整数かつ非zeroであることを検証する。全shape伝播、Excel oracle校正は未完。
 - [x] G4 axis shape伝播: 1列sourceの`UNIQUE` / `SORT`と、`TOCOL` / `TOROW`の出力軸を既定spill再計算へ接続した。2D sourceの全意味論、全shape伝播、Excel oracle校正は未完。
-- [x] G4 INDEX array shape接続: `INDEX(range,0,0)`の全範囲、行配列、列配列について元rangeと引数からshapeを復元し、既定spill再計算へ接続した。2D切出し全体、Excel oracle校正は未完。
+- [x] G4 INDEX array shape接続: `INDEX(range,0,0)`の全範囲、行配列、列配列について元rangeと引数からshapeを復元し、既定spill再計算へ接続した。行／列番号は整数値として検証し、非整数値を`#VALUE!`として拒否する。2D切出し全体、Excel oracle校正は未完。
 - [x] G4 choose axis接続: 2D入力の`CHOOSECOLS` / `CHOOSEROWS`を行列単位で選択し、選択後shapeを既定spill再計算へ接続した。行／列indexは整数値として検証し、非整数値を`#VALUE!`として拒否する。1D legacy経路、Excel oracle校正は未完。
 - [x] G4 2D unique/sort接続: 2D入力の`UNIQUE`を行／列単位の重複排除、`SORT`を行列のsort_index・sort_order・by_colに接続し、結果shapeを既定spill再計算へ接続した。`UNIQUE`のexactly_once／by_colと`SORT`のby_colはtruthy型変換に揃え、1D／2D `SORT`のsort_index／sort_orderは不正値を`#VALUE!`として拒否する。型意味論全体とExcel oracle校正は未完。
 - [x] G4 2D SORTBY接続: 2Dデータを同じ行のsort-by列で並べ替え、複数sort-by配列の行数・1列制約と各昇降順を検証して結果shapeを既定spill再計算へ接続した。1D／2Dの各sort orderは`1/-1`以外を`#VALUE!`として拒否する。型変換、Excel oracle校正は未完。

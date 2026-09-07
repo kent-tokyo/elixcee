@@ -1210,9 +1210,29 @@ fn func_index(
         return Err("INDEX requires 2 or 3 arguments".into());
     }
     let (c1, r1, c2, r2) = require_range(&args[0], "INDEX")?;
-    let row_off = to_float(&evaluate(&args[1], cells)?)? as i64;
+    let integer_index = |arg: &FormulaExpr| -> Result<i64, String> {
+        match evaluate(arg, cells)? {
+            Variant::Integer(value) => Ok(value),
+            Variant::Float(value)
+                if value.is_finite()
+                    && value.fract() == 0.0
+                    && value >= i64::MIN as f64
+                    && value <= i64::MAX as f64 =>
+            {
+                Ok(value as i64)
+            }
+            _ => Err("INDEX row and column numbers must be integers".into()),
+        }
+    };
+    let row_off = match integer_index(&args[1]) {
+        Ok(value) => value,
+        Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+    };
     let col_off = if args.len() == 3 {
-        to_float(&evaluate(&args[2], cells)?)? as i64
+        match integer_index(&args[2]) {
+            Ok(value) => value,
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+        }
     } else {
         1i64
     };
@@ -7092,6 +7112,14 @@ mod tests {
                 Variant::Integer(30),
                 Variant::Integer(40),
             ])
+        );
+        assert_eq!(
+            calc("=INDEX(A1:B2,1.5,1)", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=INDEX(A1:B2,1,1.5)", &c),
+            Variant::Error(ExcelError::Value)
         );
     }
 
