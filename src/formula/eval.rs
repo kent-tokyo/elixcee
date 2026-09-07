@@ -1216,11 +1216,29 @@ fn func_index(
     } else {
         1i64
     };
-    if row_off <= 0 || col_off <= 0 {
+    if row_off < 0 || col_off < 0 {
         return Ok(Variant::Error(ExcelError::Value));
     }
-    if row_off > i64::from(r2 - r1 + 1) || col_off > i64::from(c2 - c1 + 1) {
+    let height = i64::from(r2 - r1 + 1);
+    let width = i64::from(c2 - c1 + 1);
+    if row_off > height || col_off > width {
         return Ok(Variant::Error(ExcelError::Ref));
+    }
+    if row_off == 0 || col_off == 0 {
+        let rows = if row_off == 0 {
+            r1..=r2
+        } else {
+            r1 + row_off as u32 - 1..=r1 + row_off as u32 - 1
+        };
+        let cols = if col_off == 0 {
+            c1..=c2
+        } else {
+            c1 + col_off as u32 - 1..=c1 + col_off as u32 - 1
+        };
+        let values = rows
+            .flat_map(|row| cols.clone().map(move |col| cell_val(cells, row, col)))
+            .collect();
+        return Ok(Variant::Array(values));
     }
     Ok(cell_val(
         cells,
@@ -6555,7 +6573,7 @@ mod tests {
         // INDEX(A1:B2, 2, 1) = row 2 col 1 of range = A2 = 30
         assert_eq!(calc("=INDEX(A1:B2,2,1)", &c), Variant::Integer(30));
         assert_eq!(
-            calc("=INDEX(A1:B2,0,1)", &c),
+            calc("=INDEX(A1:B2,-1,1)", &c),
             Variant::Error(ExcelError::Value)
         );
         assert_eq!(
@@ -6565,6 +6583,23 @@ mod tests {
         assert_eq!(
             calc("=INDEX(A1:B2,1,3)", &c),
             Variant::Error(ExcelError::Ref)
+        );
+        assert_eq!(
+            calc("=INDEX(A1:B2,0,2)", &c),
+            Variant::Array(vec![Variant::Integer(20), Variant::Integer(40)])
+        );
+        assert_eq!(
+            calc("=INDEX(A1:B2,2,0)", &c),
+            Variant::Array(vec![Variant::Integer(30), Variant::Integer(40)])
+        );
+        assert_eq!(
+            calc("=INDEX(A1:B2,0,0)", &c),
+            Variant::Array(vec![
+                Variant::Integer(10),
+                Variant::Integer(20),
+                Variant::Integer(30),
+                Variant::Integer(40),
+            ])
         );
     }
 

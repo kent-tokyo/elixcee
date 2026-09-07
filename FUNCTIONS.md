@@ -347,7 +347,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | Function | Description | Excel |
 |---|---|---|
 | `VLOOKUP` / `HLOOKUP` | Vertical / horizontal lookup | Classic |
-| `INDEX` | Value at row/column offset | Classic |
+| `INDEX` | Value or row/column array at an offset | Classic |
 | `MATCH` | Position of a value (including exact-match wildcards) | Classic |
 | `CHOOSE` | Choose from list by index | Classic |
 | `INDIRECT` | Evaluate a cell reference from a string | Classic |
