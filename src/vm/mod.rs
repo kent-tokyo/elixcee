@@ -13160,6 +13160,33 @@ fn formula_spill_shape(
             }
             _ => Some(fallback),
         },
+        "INDEX" => {
+            let FormulaExpr::Range { c1, r1, c2, r2, .. } = args.first()? else {
+                return Some(fallback);
+            };
+            let number = |arg: Option<&FormulaExpr>| -> Option<i64> {
+                match formula::evaluate(arg?, cells).ok()? {
+                    Variant::Integer(value) => Some(value),
+                    Variant::Float(value) if value.is_finite() => Some(value as i64),
+                    _ => None,
+                }
+            };
+            let row = number(args.get(1))?;
+            let col = if args.len() >= 3 {
+                number(args.get(2))?
+            } else {
+                1
+            };
+            let rows = (r2.max(r1) - r2.min(r1) + 1) as usize;
+            let cols = (c2.max(c1) - c2.min(c1) + 1) as usize;
+            let shape = match (row, col) {
+                (0, 0) => ArrayShape::new(rows, cols),
+                (0, _) => ArrayShape::new(rows, 1),
+                (_, 0) => ArrayShape::new(1, cols),
+                _ => return Some(fallback),
+            };
+            exact(shape.rows, shape.cols).or(Some(fallback))
+        }
         "TAKE" | "DROP" => {
             let source = args.first()?;
             let source_value = formula::evaluate(source, cells).ok()?;
@@ -19556,6 +19583,44 @@ mod tests {
                 .unwrap()
                 .shape,
             ArrayShape::new(1, 4)
+        );
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_restores_index_array_shapes() {
+        let mut vm = Vm::new();
+        for (position, value) in [
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Integer(2)),
+            ((2, 1), Variant::Integer(3)),
+            ((2, 2), Variant::Integer(4)),
+        ] {
+            vm.cells_mut().insert(
+                position,
+                CellContent {
+                    formula: None,
+                    value,
+                },
+            );
+        }
+        vm.set_cell_formula(1, 4, "=INDEX(A1:B2,0,0)").unwrap();
+        vm.set_cell_formula(1, 7, "=INDEX(A1:B2,0,2)").unwrap();
+        vm.set_cell_formula(1, 9, "=INDEX(A1:B2,2,0)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(3));
+        assert_eq!(vm.get_cell(2, 5), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 7), Variant::Integer(2));
+        assert_eq!(vm.get_cell(2, 7), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 9), Variant::Integer(3));
+        assert_eq!(vm.get_cell(1, 10), Variant::Integer(4));
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 4)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(2, 2)
         );
     }
 
