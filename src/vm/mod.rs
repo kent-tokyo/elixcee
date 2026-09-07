@@ -12013,6 +12013,46 @@ impl Vm {
         Ok(())
     }
 
+    /// Plans the worksheet footprint for a dynamic-array value without
+    /// mutating the sheet. `None` means the value is scalar. An error names
+    /// the first occupied cell that would collide with the spill rectangle;
+    /// callers can convert that result to Excel's `#SPILL!` behavior when
+    /// wiring the actual spill writer.
+    pub fn plan_spill_for_value(
+        &self,
+        origin_row: u32,
+        origin_col: u32,
+        value: &Variant,
+    ) -> Result<Option<SpillRect>, String> {
+        let Some(shape) = value.array_shape() else {
+            return Ok(None);
+        };
+        let rect = SpillRect::new(origin_row, origin_col, shape)?;
+        let Some(cells) = self.sheets.get(&self.active_sheet) else {
+            return Ok(Some(rect));
+        };
+        for row_offset in 0..shape.rows {
+            for col_offset in 0..shape.cols {
+                let Some(position) = rect.cell_at(row_offset, col_offset) else {
+                    continue;
+                };
+                if position == (origin_row, origin_col) {
+                    continue;
+                }
+                if cells
+                    .get(&position)
+                    .is_some_and(|cell| !matches!(cell.value, Variant::Empty))
+                {
+                    return Err(format!(
+                        "#SPILL!: target cell {}:{} is occupied",
+                        position.0, position.1
+                    ));
+                }
+            }
+        }
+        Ok(Some(rect))
+    }
+
     pub fn set_calc_mode(&mut self, mode: CalculationMode) -> Result<(), String> {
         let was_manual = self.calc_mode == CalculationMode::Manual;
         self.calc_mode = mode;
@@ -18524,6 +18564,35 @@ mod tests {
         vm.write_rect("Other", (1, 1), &[vec![Variant::Integer(8)]]);
         vm.recalculate_all().unwrap();
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(8));
+    }
+
+    #[test]
+    fn plan_spill_for_value_reports_footprint_without_mutating_the_sheet() {
+        let vm = Vm::new();
+        let before = vm.cells().len();
+        let value = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        let plan = vm.plan_spill_for_value(2, 3, &value).unwrap().unwrap();
+        assert_eq!(plan.shape, ArrayShape::new(1, 2));
+        assert_eq!(plan.cell_at(0, 1), Some((2, 4)));
+        assert_eq!(vm.cells().len(), before);
+    }
+
+    #[test]
+    fn plan_spill_for_value_rejects_nonempty_targets_but_allows_empty_cells() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (2, 4), &[vec![Variant::Integer(99)]]);
+        let value = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        let error = vm.plan_spill_for_value(2, 3, &value).unwrap_err();
+        assert!(error.contains("#SPILL!"));
+        assert!(error.contains("2:4"));
+
+        vm.write_rect("sheet1", (2, 4), &[vec![Variant::Empty]]);
+        assert!(vm.plan_spill_for_value(2, 3, &value).is_ok());
+        assert!(
+            vm.plan_spill_for_value(2, 3, &Variant::Integer(1))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

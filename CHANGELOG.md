@@ -8,6 +8,7 @@
 
 - G4の動的配列基盤として、既存のflat `Variant::Array`を変更せずに`ArrayShape`と`Variant::array_shape()`を追加しました。非空配列は1行、空配列は占有領域なしとして扱います。二次元shape生成、worksheetへのspill配置、衝突処理は未実装です。
 - G4のspill準備として、1-based worksheet座標の`SpillRect`を追加しました。座標境界、セル位置、空配列、矩形衝突を共通判定できますが、実際のworksheet書込みと`#SPILL!`生成は未実装です。
+- G4のspill計画APIとして、VMの`plan_spill_for_value()`で配列結果の占有範囲と既存の非Emptyセル衝突を事前検査できるようにしました。worksheetへの実際のspill配置と依存更新は未実装です。
 - G5aの内部経路として、defined namesの読込・報告で`xl/workbook.xml`だけを検証付き取得し、worksheet/table等の兄弟payloadを再読込・保持しないようにしました。保存時の全part遅延化やconstant-memory達成を意味しません。
 - G5aの内部経路として、未編集table XMLを保存時のraw mapへ保持せず、編集対象だけを元ZIPから再取得してpatchするようにしました。全passthrough遅延化やconstant-memory達成を意味しません。
 - G5bの内部経路として、worksheet relationship XMLの解析用索引を統合し、同一`.rels` payloadの解析用二重保持を削減しました。passthrough bytesの遅延化やconstant-memory達成を意味しません。
