@@ -24,6 +24,7 @@
 - queue index化後のwarm noop 1.2012 ms、独立1,000入力1.1502 msを再測定しましたが、いずれも有意差はありませんでした。効果はsingle-input chainに限定して扱います。
 - 現行1.0.4 candidateのworkspace全target回帰を実行し、Rust unit 1,549件、blackbox、CLI、property、XLSX round-trip 52件、bench smoke、WASM crateの成功を確認しました。これはlocal regression evidenceであり、3 OSやExcel oracleの証拠ではありません。
 - 追跡済みformula planでは毎回の全formula整合性scanを省略し、`cells_mut()`等でtrackingが無効化された場合だけfallback検査するようにしました。dirty formula、cycle、manual→automaticの関連回帰を確認しています。
+- 同じCriterion条件で再測定し、single-input chain 1.0217 ms、warm noop 0.96091 ms、独立1,000入力0.89674 msを記録しました。改善はtracked-edit fast pathに限定し、structure rebuild 1.3737 msの増加を含めて記録しています。
 
 ## [1.0.4] - 2026-09-07
 

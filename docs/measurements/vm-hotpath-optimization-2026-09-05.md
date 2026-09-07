@@ -210,6 +210,19 @@ change for either case. The queue-index effect is therefore limited to the
 single-input chain observation above; broader dirty-propagation acceleration
 remains open.
 
+## Formula-plan scan elimination rerun
+
+After the tracked-plan path stopped reparsing every formula on each
+recalculation, the same Criterion matrix was rerun on 2026-09-07. Median times
+were 1.0217 ms for the single-input chain, 0.96091 ms for warm no-op, 1.3737
+ms for structure rebuild, and 0.89674 ms when all 1,000 independent inputs
+changed. Compared with the immediately preceding queue-index baseline, these
+are approximately 18.5%, 20.0%, and 22.0% lower for chain, no-op, and
+independent-input cases respectively. The rebuild case was approximately 3.9%
+higher, so the change is a tracked-edit fast-path optimization rather than a
+universal recalculation speedup. Formula, range, cycle, and manual-mode tests
+passed; end-to-end workbook and cross-platform measurements remain open.
+
 ## Dirty-closure queue-index trial
 
 On 2026-09-07, the dirty closure queue was changed to carry formula-plan
