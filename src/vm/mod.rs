@@ -12075,6 +12075,46 @@ impl Vm {
         Ok(())
     }
 
+    /// Recalculates formulas on the active sheet, applies its array results as
+    /// spills, then recalculates once more so formulas depending on spill cells
+    /// observe the newly written values. The existing `recalculate_all()`
+    /// contract is unchanged; this opt-in path currently scopes spill
+    /// materialization to the active sheet and does not add edit history.
+    pub fn recalculate_all_with_spills(&mut self) -> Result<(), String> {
+        self.recalculate_all()?;
+        let pending = self
+            .cells()
+            .iter()
+            .filter_map(|(&(row, col), cell)| {
+                cell.formula
+                    .as_ref()
+                    .filter(|_| matches!(cell.value, Variant::Array(_)))
+                    .map(|_| ((row, col), cell.value.clone()))
+            })
+            .collect::<Vec<_>>();
+        let mut planned = Vec::with_capacity(pending.len());
+        for &((row, col), ref value) in &pending {
+            let rect = self
+                .plan_spill_for_value(row, col, value)?
+                .expect("array formula values always have a spill plan");
+            planned.push(((row, col), rect));
+        }
+        for (index, &((row, col), rect)) in planned.iter().enumerate() {
+            for &((other_row, other_col), other_rect) in planned.iter().skip(index + 1) {
+                if (row, col) != (other_row, other_col) && rect.intersects(&other_rect) {
+                    return Err(format!(
+                        "#SPILL!: array anchors {}:{} and {}:{} overlap",
+                        row, col, other_row, other_col
+                    ));
+                }
+            }
+        }
+        for ((row, col), value) in pending {
+            self.apply_spill_for_value_untracked(row, col, &value)?;
+        }
+        self.recalculate_all()
+    }
+
     /// Plans the worksheet footprint for a dynamic-array value without
     /// mutating the sheet. `None` means the value is scalar. An error names
     /// the first occupied cell that would collide with the spill rectangle;
@@ -12131,6 +12171,18 @@ impl Vm {
         origin_col: u32,
         value: &Variant,
     ) -> Result<SpillRect, String> {
+        self.plan_spill_for_value(origin_row, origin_col, value)?
+            .ok_or_else(|| "cannot apply a scalar value as a spill".to_string())?;
+        self.record_edit_history();
+        self.apply_spill_for_value_untracked(origin_row, origin_col, value)
+    }
+
+    fn apply_spill_for_value_untracked(
+        &mut self,
+        origin_row: u32,
+        origin_col: u32,
+        value: &Variant,
+    ) -> Result<SpillRect, String> {
         let Some(rect) = self.plan_spill_for_value(origin_row, origin_col, value)? else {
             return Err("cannot apply a scalar value as a spill".to_string());
         };
@@ -12140,7 +12192,6 @@ impl Vm {
             _ => unreachable!("plan_spill_for_value rejects scalar values"),
         };
         let active = self.active_sheet.clone();
-        self.record_edit_history();
         let mut changed = Vec::with_capacity(shape.cell_count().max(1));
         self.clear_spill_for_anchor(&active, (origin_row, origin_col), &mut changed);
         let Some(cells) = self.sheets.get_mut(&active) else {
@@ -19117,6 +19168,28 @@ mod tests {
         let dependent = order.iter().position(|&index| index == 0).unwrap();
         let anchor = order.iter().position(|&index| index == 1).unwrap();
         assert!(anchor < dependent);
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_materializes_array_values_for_dependents() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.set_cell_formula(1, 3, "=B1+1").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_rejects_overlapping_array_anchors_before_writing() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.set_cell_formula(1, 2, "=SEQUENCE(1,2)").unwrap();
+        let before = vm.cells().len();
+        let error = vm.recalculate_all_with_spills().unwrap_err();
+        assert!(error.contains("#SPILL!"));
+        assert_eq!(vm.cells().len(), before);
     }
 
     #[test]
