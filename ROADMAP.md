@@ -102,6 +102,8 @@ G5全体は未完了であり、constant-memoryを主張しない。
 - [x] 共通 BUILD: I/O失敗・context例外時のabort、temp削除、close失敗後の状態、Windowsのclose-before-rename、標準syncの経路を実装した。Windows実機検証は未完。
 - [ ] MEASURE: 通常保存と追記を別processで測り、10万→100万行のRSS増分・p95・temp disk・出力同値を記録。通常VMの全セル保持までconstant-memoryと呼ばない。
 
+追加測定（2026-09-07、macOS arm64、CPython 3.13、現行1.0.4 release wheel）では、appendの100,000／250,000行を各2回完了し、RSS p50/p95は19.39/19.83 MiB、19.38/19.46 MiB、出力検証は全件成功した。normal-VMの100,000行は2分超・子CPU 100%で停止したため未測定として扱う。3 OS・100万行・通常保存の完了根拠にはしない。詳細は[測定記録](docs/measurements/writer-streaming-2026-09-07.md)。
+
 測定入口: `python3 scripts/measure-stream-writer-memory.py --mode append --rows 100000 250000 1000000`。
 入力形状は`--value-profile plain|escape|giant`で切り替え、XML escape膨張と1 MiB単一文字列を
 行数スケール測定と分離して校正する。
