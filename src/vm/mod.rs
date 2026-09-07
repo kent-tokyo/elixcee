@@ -13192,9 +13192,30 @@ fn formula_spill_shape(
             let source_value = formula::evaluate(source, cells).ok()?;
             let source_shape = formula_spill_shape(source, cells, &source_value)
                 .or_else(|| source_value.array_shape())?;
-            (source_shape.cols == 1)
-                .then_some(ArrayShape::new(value_len(value), 1))
-                .or(Some(fallback))
+            let count = |arg: Option<&formula::FormulaExpr>, size: usize| -> Option<usize> {
+                let value = match formula::evaluate(arg?, cells).ok()? {
+                    Variant::Integer(value) => value,
+                    Variant::Float(value) if value.is_finite() => value as i64,
+                    _ => return None,
+                };
+                (value != 0).then_some((value.unsigned_abs() as usize).min(size))
+            };
+            let rows = count(args.get(1), source_shape.rows)?;
+            let cols = args
+                .get(2)
+                .map(|arg| count(Some(arg), source_shape.cols))
+                .flatten();
+            let shape = if name == "TAKE" {
+                ArrayShape::new(rows, cols.unwrap_or(source_shape.cols))
+            } else {
+                ArrayShape::new(
+                    source_shape.rows.saturating_sub(rows),
+                    cols.map_or(source_shape.cols, |cols| {
+                        source_shape.cols.saturating_sub(cols)
+                    }),
+                )
+            };
+            exact(shape.rows, shape.cols).or(Some(fallback))
         }
         "UNIQUE" | "SORT" => {
             let source = args.first()?;

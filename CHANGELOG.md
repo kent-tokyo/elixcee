@@ -18,7 +18,7 @@
 - G4の2D spill接続として、`SEQUENCE` / `RANDARRAY` / `TRANSPOSE` / `WRAPCOLS` / `WRAPROWS`のformula shapeを既定の`recalculate_all_with_spills()`で復元し、2D矩形のspillと依存再計算へ接続しました。全配列関数のshape伝播とExcel oracle照合は未完です。
 - G4のshape伝播を拡張し、`VSTACK` / `HSTACK`の2D結果を既定spill再計算で正しい矩形へ配置できるようにしました。異幅・異高入力は不足領域を`#N/A`でpaddingします。Excel oracle照合は未完です。
 - G4のshape伝播を拡張し、2D rangeを元にした`FILTER`の出力幅を保持して既定spill再計算へ接続しました。include形状の全組合せ、異幅入力とExcel oracle照合は未完です。
-- G4のshape伝播を拡張し、1列sourceの`TAKE` / `DROP`結果を縦方向のspillとして既定再計算へ接続しました。2D sourceの行単位切出しとExcel oracle照合は未完です。
+- G4のshape伝播を拡張し、元配列shapeに基づく行・列単位の`TAKE` / `DROP`と任意列数引数を既定spill再計算へ接続しました。異常引数とExcel oracle照合は未完です。
 - G4のshape伝播を拡張し、1列sourceの`UNIQUE` / `SORT`と`TOCOL` / `TOROW`の出力軸を既定spill再計算へ接続しました。2D source全体の意味論とExcel oracle照合は未完です。
 - G4のshape伝播を拡張し、`INDEX(range,0,0)`の全範囲・行配列・列配列を元rangeのshapeで既定spill再計算へ接続しました。2D切出し全体とExcel oracle照合は未完です。
 - G5aの内部経路として、defined namesの読込・報告で`xl/workbook.xml`だけを検証付き取得し、worksheet/table等の兄弟payloadを再読込・保持しないようにしました。保存時の全part遅延化やconstant-memory達成を意味しません。

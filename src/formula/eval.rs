@@ -5665,37 +5665,78 @@ fn func_take(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.len() < 2 {
-        return Err("TAKE requires at least 2 arguments".into());
+    if args.len() < 2 || args.len() > 3 {
+        return Err("TAKE requires 2 or 3 arguments".into());
     }
     let vals = flatten_array_vals(collect_values(&args[0], cells)?);
-    let n = to_float(&evaluate(&args[1], cells)?)? as i64;
-    let n_abs = n.unsigned_abs() as usize;
-    let result: Vec<Variant> = if n >= 0 {
-        vals.into_iter().take(n_abs).collect()
-    } else {
-        let skip = vals.len().saturating_sub(n_abs);
-        vals.into_iter().skip(skip).collect()
-    };
-    Ok(wrap_array(result))
+    let value_len = vals.len();
+    slice_array(
+        vals,
+        array_shape_for_expr(&args[0], cells, value_len),
+        args,
+        cells,
+        true,
+    )
 }
 
 fn func_drop(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.len() < 2 {
-        return Err("DROP requires at least 2 arguments".into());
+    if args.len() < 2 || args.len() > 3 {
+        return Err("DROP requires 2 or 3 arguments".into());
     }
     let vals = flatten_array_vals(collect_values(&args[0], cells)?);
-    let n = to_float(&evaluate(&args[1], cells)?)? as i64;
-    let n_abs = n.unsigned_abs() as usize;
-    let result: Vec<Variant> = if n >= 0 {
-        vals.into_iter().skip(n_abs).collect()
-    } else {
-        let keep = vals.len().saturating_sub(n_abs);
-        vals.into_iter().take(keep).collect()
+    let value_len = vals.len();
+    slice_array(
+        vals,
+        array_shape_for_expr(&args[0], cells, value_len),
+        args,
+        cells,
+        false,
+    )
+}
+
+fn slice_array(
+    values: Vec<Variant>,
+    (rows, cols): (usize, usize),
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    take: bool,
+) -> Result<Variant, String> {
+    let count = |arg: &FormulaExpr, size: usize| -> Result<(usize, usize), String> {
+        let n = to_float(&evaluate(arg, cells)?)? as i64;
+        if n == 0 {
+            return Err("TAKE/DROP row or column count cannot be zero".into());
+        }
+        let amount = n.unsigned_abs() as usize;
+        let amount = amount.min(size);
+        if take {
+            Ok(if n > 0 {
+                (0, amount)
+            } else {
+                (size.saturating_sub(amount), size)
+            })
+        } else {
+            Ok(if n > 0 {
+                (amount, size)
+            } else {
+                (0, size.saturating_sub(amount))
+            })
+        }
     };
+    let (row_start, row_end) = count(&args[1], rows)?;
+    let (col_start, col_end) = if let Some(arg) = args.get(2) {
+        count(arg, cols)?
+    } else {
+        (0, cols)
+    };
+    let mut result = Vec::with_capacity((row_end - row_start) * (col_end - col_start));
+    for row in row_start..row_end {
+        for col in col_start..col_end {
+            result.push(values[row * cols + col].clone());
+        }
+    }
     Ok(wrap_array(result))
 }
 
