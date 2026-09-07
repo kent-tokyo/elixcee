@@ -1237,7 +1237,7 @@ fn func_match_fn(
             .iter()
             .position(|v| match (&key, v) {
                 (Variant::Str(pattern), Variant::Str(text))
-                    if pattern.contains('*') || pattern.contains('?') =>
+                    if pattern.contains('*') || pattern.contains('?') || pattern.contains('~') =>
                 {
                     wildcard_match(&text.to_uppercase(), &pattern.to_uppercase())
                 }
@@ -1331,6 +1331,9 @@ fn matches_criteria(val: &Variant, criteria: &Variant) -> bool {
 }
 
 fn wildcard_match(text: &str, pattern: &str) -> bool {
+    if pattern.contains('~') {
+        return wildcard_match_escaped(text, pattern);
+    }
     // Fast path: patterns without '?' cover ~90% of real-world Excel wildcards.
     // Split on '*' and match segments without any Vec allocation.
     if !pattern.contains('?') {
@@ -1388,6 +1391,46 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
                 '*' => dp[i - 1][j] || dp[i][j - 1],
                 '?' => dp[i - 1][j - 1],
                 c => dp[i - 1][j - 1] && t[i - 1] == c,
+            };
+        }
+    }
+    dp[n][m]
+}
+
+/// Excel wildcard matching with `~` escapes (`~*`, `~?`, and `~~`).
+/// Patterns containing an escape use this bounded DP path; the common
+/// unescaped path above keeps its allocation-light fast path.
+fn wildcard_match_escaped(text: &str, pattern: &str) -> bool {
+    let tokens: Vec<(char, bool)> = {
+        let mut tokens = Vec::new();
+        let mut chars = pattern.chars();
+        while let Some(c) = chars.next() {
+            if c == '~' {
+                tokens.push((chars.next().unwrap_or('~'), true));
+            } else {
+                tokens.push((c, false));
+            }
+        }
+        tokens
+    };
+    let text: Vec<char> = text.chars().collect();
+    let (n, m) = (text.len(), tokens.len());
+    let mut dp = vec![vec![false; m + 1]; n + 1];
+    dp[0][0] = true;
+    for j in 1..=m {
+        if tokens[j - 1] == ('*', false) {
+            dp[0][j] = dp[0][j - 1];
+        }
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let (token, escaped) = tokens[j - 1];
+            dp[i][j] = if !escaped && token == '*' {
+                dp[i - 1][j] || dp[i][j - 1]
+            } else if !escaped && token == '?' {
+                dp[i - 1][j - 1]
+            } else {
+                dp[i - 1][j - 1] && text[i - 1] == token
             };
         }
     }
@@ -6514,6 +6557,23 @@ mod tests {
             ((2, 1), Variant::Str("Beta".into())),
         ]);
         assert_eq!(calc("=MATCH(\"a*\",A1:A2,0)", &text), Variant::Integer(1));
+        let literal = cells_from(&[
+            ((1, 1), Variant::Str("rate*".into())),
+            ((2, 1), Variant::Str("rate?".into())),
+            ((3, 1), Variant::Str("rate~".into())),
+        ]);
+        assert_eq!(
+            calc("=MATCH(\"rate~*\",A1:A3,0)", &literal),
+            Variant::Integer(1)
+        );
+        assert_eq!(
+            calc("=MATCH(\"rate~?\",A1:A3,0)", &literal),
+            Variant::Integer(2)
+        );
+        assert_eq!(
+            calc("=MATCH(\"rate~~\",A1:A3,0)", &literal),
+            Variant::Integer(3)
+        );
         assert_eq!(
             calc("=MATCH(\"Alpha\",A1:A2,9)", &text),
             Variant::Error(ExcelError::Value)

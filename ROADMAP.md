@@ -88,6 +88,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 lookup境界: `HLOOKUP`の行番号0を`#VALUE!`、範囲外を`#REF!`として`VLOOKUP`と同じ明示的な境界に揃えた。Excel oracleによる追加の型変換校正は未完。
 - [x] G4 lookup境界: `INDEX`の行列番号0を`#VALUE!`、範囲外を`#REF!`として明示的に検出し、整数アンダーフローによる誤セル参照を防いだ。配列形式・Excel oracle校正は未完。
 - [x] G4 MATCH exact互換性: `match_type=0`で文字列wildcard `*` / `?`を大文字小文字非依存で評価し、未定義match typeは`#VALUE!`として返すようにした。Excel oracleと近似matchの並び順校正は未完。
+- [x] G4 MATCH wildcard補完: `~*` / `~?` / `~~`をリテラルwildcardとして扱うbounded DP経路を追加した。criteria系を含む全wildcard仕様のExcel oracle校正は未完。
 - [ ] 動的配列のspill衝突・shape・依存更新を整えてから、既存FILTER／LET／LAMBDA等の配列経路を拡張する。
 - [ ] MEASURE: Excel／EPPlus／Aspose.Cellsはversion・計算設定・license利用条件を固定して比較。実行していない公式対応表と、実測一致率を分ける。
 
