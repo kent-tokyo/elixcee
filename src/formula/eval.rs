@@ -5115,11 +5115,26 @@ fn func_sequence(
     if args.is_empty() {
         return Err("SEQUENCE requires at least 1 argument".into());
     }
-    let rows = to_float(&evaluate(&args[0], cells)?)? as i64;
+    let dimension = |arg: &FormulaExpr| -> Result<usize, String> {
+        match evaluate(arg, cells)? {
+            Variant::Integer(value) if value > 0 => {
+                usize::try_from(value).map_err(|_| "SEQUENCE dimension is too large".to_string())
+            }
+            Variant::Float(value) if value.is_finite() && value.fract() == 0.0 && value > 0.0 => {
+                if value > usize::MAX as f64 {
+                    Err("SEQUENCE dimension is too large".into())
+                } else {
+                    Ok(value as usize)
+                }
+            }
+            _ => Err("SEQUENCE dimensions must be positive integers".into()),
+        }
+    };
+    let rows = dimension(&args[0])?;
     let cols = if args.len() >= 2 {
-        to_float(&evaluate(&args[1], cells)?)? as i64
+        dimension(&args[1])?
     } else {
-        1
+        1usize
     };
     let start = if args.len() >= 3 {
         to_float(&evaluate(&args[2], cells)?)?
@@ -5131,7 +5146,9 @@ fn func_sequence(
     } else {
         1.0
     };
-    let count = (rows * cols).max(0) as usize;
+    let count = rows
+        .checked_mul(cols)
+        .ok_or_else(|| "SEQUENCE dimensions are too large".to_string())?;
     let result: Vec<Variant> = (0..count)
         .map(|i| as_integer_if_whole(start + i as f64 * step))
         .collect();
@@ -5203,13 +5220,28 @@ fn func_randarray(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
+    let dimension = |arg: &FormulaExpr| -> Result<usize, String> {
+        match evaluate(arg, cells)? {
+            Variant::Integer(value) if value > 0 => {
+                usize::try_from(value).map_err(|_| "RANDARRAY dimension is too large".to_string())
+            }
+            Variant::Float(value) if value.is_finite() && value.fract() == 0.0 && value > 0.0 => {
+                if value > usize::MAX as f64 {
+                    Err("RANDARRAY dimension is too large".into())
+                } else {
+                    Ok(value as usize)
+                }
+            }
+            _ => Err("RANDARRAY dimensions must be positive integers".into()),
+        }
+    };
     let rows = if !args.is_empty() {
-        to_float(&evaluate(&args[0], cells)?)? as usize
+        dimension(&args[0])?
     } else {
         1
     };
     let cols = if args.len() >= 2 {
-        to_float(&evaluate(&args[1], cells)?)? as usize
+        dimension(&args[1])?
     } else {
         1
     };
@@ -5231,7 +5263,9 @@ fn func_randarray(
     if max < min {
         return Err("RANDARRAY: max must be >= min".into());
     }
-    let n = rows.max(1) * cols.max(1);
+    let n = rows
+        .checked_mul(cols)
+        .ok_or_else(|| "RANDARRAY dimensions are too large".to_string())?;
     let result: Vec<Variant> = (0..n)
         .map(|_| {
             let v = min + next_rand_f64() * (max - min);
@@ -8104,6 +8138,8 @@ mod tests {
                 Variant::Integer(9)
             ])
         );
+        assert!(evaluate(&fparse("=SEQUENCE(2.5)").unwrap(), &c).is_err());
+        assert!(evaluate(&fparse("=SEQUENCE(0)").unwrap(), &c).is_err());
     }
 
     #[test]
@@ -9552,6 +9588,8 @@ mod tests {
         } else {
             panic!("expected Array");
         }
+        assert!(evaluate(&fparse("=RANDARRAY(2.5)").unwrap(), &c).is_err());
+        assert!(evaluate(&fparse("=RANDARRAY(0,2)").unwrap(), &c).is_err());
     }
 
     #[test]

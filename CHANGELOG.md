@@ -12,6 +12,7 @@
 - G4の`CHOOSECOLS`／`CHOOSEROWS`で行・列indexの非整数値と非有限値を`#VALUE!`として拒否し、浮動小数の暗黙切り捨てを防ぎました。Excel oracle照合は未完です。
 - G4の2D `FILTER`で`SEQUENCE`など生成配列の比較条件を要素単位に評価し、比較元の行列shapeをincludeへ伝播するようにしました。行／列条件の両方を既定spill経路へ接続しています。複合includeとExcel oracle照合は未完です。
 - G4の`FILTER`で`(条件1)*(条件2)`をAND、`(条件1)+(条件2)`をORとして配列要素単位に合成できるようにしました。条件長のbroadcastと不一致拒否を含む回帰テストを追加しています。Excel oracle照合は未完です。
+- G4の`SEQUENCE`／`RANDARRAY`で行・列サイズを正の整数として検証し、浮動小数の暗黙切り捨てとサイズ計算のoverflowを防止しました。Excel oracle照合は未完です。
 - G4の動的配列基盤として、既存のflat `Variant::Array`を変更せずに`ArrayShape`と`Variant::array_shape()`を追加しました。非空配列は1行、空配列は占有領域なしとして扱います。二次元shape生成、worksheetへのspill配置、衝突処理は未実装です。
 - G4のspill準備として、1-based worksheet座標の`SpillRect`を追加しました。座標境界、セル位置、空配列、矩形衝突を共通判定できますが、実際のworksheet書込みと`#SPILL!`生成は未実装です。
 - G4のspill計画APIとして、VMの`plan_spill_for_value()`で配列結果の占有範囲と既存の非Emptyセル衝突を事前検査できるようにしました。worksheetへの実際のspill配置と依存更新は未実装です。
