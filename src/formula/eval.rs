@@ -1277,7 +1277,15 @@ fn func_match_fn(
     let key = evaluate(&args[0], cells)?;
     let vals = collect_values(&args[1], cells)?;
     let mtype = if args.len() == 3 {
-        to_float(&evaluate(&args[2], cells)?)? as i32
+        match evaluate(&args[2], cells)? {
+            Variant::Integer(value) if matches!(value, -1..=1) => value as i32,
+            Variant::Float(value)
+                if value.is_finite() && value.fract() == 0.0 && matches!(value as i64, -1..=1) =>
+            {
+                value as i32
+            }
+            _ => return Ok(Variant::Error(ExcelError::Value)),
+        }
     } else {
         1
     };
@@ -7155,6 +7163,10 @@ mod tests {
         );
         assert_eq!(
             calc("=MATCH(\"Alpha\",A1:A2,9)", &text),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=MATCH(\"Alpha\",A1:A2,0.5)", &text),
             Variant::Error(ExcelError::Value)
         );
     }
