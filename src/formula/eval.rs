@@ -1106,8 +1106,11 @@ fn func_vlookup(
     }
     let key = evaluate(&args[0], cells)?;
     let (c1, r1, c2, r2) = require_range(&args[1], "VLOOKUP")?;
-    let col_n = to_float(&evaluate(&args[2], cells)?)? as u32;
-    if col_n == 0 {
+    let col_n = match lookup_mode(&evaluate(&args[2], cells)?) {
+        Ok(value) => i64::from(value),
+        Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+    };
+    if col_n <= 0 {
         return Ok(Variant::Error(ExcelError::Value));
     }
     let exact = if args.len() == 4 {
@@ -1115,15 +1118,15 @@ fn func_vlookup(
     } else {
         false
     };
-    let ret_col = c1 + col_n - 1;
-    if ret_col > c2 {
+    let ret_col = i64::from(c1) + col_n - 1;
+    if ret_col > i64::from(c2) {
         return Ok(Variant::Error(ExcelError::Ref));
     }
 
     if exact {
         for row in r1..=r2 {
             if variant_eq(&cell_val(cells, row, c1), &key) {
-                return Ok(cell_val(cells, row, ret_col));
+                return Ok(cell_val(cells, row, ret_col as u32));
             }
         }
         Ok(Variant::Error(ExcelError::NA))
@@ -1144,7 +1147,7 @@ fn func_vlookup(
             }
         }
         Ok(best
-            .map(|row| cell_val(cells, row, ret_col))
+            .map(|row| cell_val(cells, row, ret_col as u32))
             .unwrap_or(Variant::Error(ExcelError::NA)))
     }
 }
@@ -1158,7 +1161,10 @@ fn func_hlookup(
     }
     let key = evaluate(&args[0], cells)?;
     let (c1, r1, c2, r2) = require_range(&args[1], "HLOOKUP")?;
-    let row_n = to_float(&evaluate(&args[2], cells)?)? as i64;
+    let row_n = match lookup_mode(&evaluate(&args[2], cells)?) {
+        Ok(value) => i64::from(value),
+        Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+    };
     if row_n <= 0 {
         return Ok(Variant::Error(ExcelError::Value));
     }
@@ -8543,6 +8549,10 @@ mod tests {
         );
         // col_index within range → normal
         assert_eq!(calc("=VLOOKUP(1,A1:C1,2,TRUE)", &c), Variant::Integer(2));
+        assert_eq!(
+            calc("=VLOOKUP(1,A1:C1,1.5,TRUE)", &c),
+            Variant::Error(ExcelError::Value)
+        );
     }
 
     #[test]
@@ -8564,6 +8574,10 @@ mod tests {
         assert_eq!(
             calc("=HLOOKUP(1,A1:B2,3,FALSE)", &c),
             Variant::Error(ExcelError::Ref)
+        );
+        assert_eq!(
+            calc("=HLOOKUP(1,A1:B2,1.5,FALSE)", &c),
+            Variant::Error(ExcelError::Value)
         );
     }
 

@@ -16,6 +16,7 @@
 - G4の1D `SORT`／`SORTBY`でもsort orderを`1/-1`に限定し、2D経路と異なる暗黙丸めを廃止しました。Excel oracle照合は未完です。
 - G4の`INDEX`で行・列番号の非整数値と非有限値を`#VALUE!`として拒否し、配列形式の0指定・範囲外エラーとの境界を統一しました。Excel oracle照合は未完です。
 - G4の`MATCH`で`match_type`を`-1/0/1`の整数に限定し、`0.5`などの暗黙切り捨てを`#VALUE!`として拒否するようにしました。Excel oracle照合は未完です。
+- G4の`VLOOKUP`／`HLOOKUP`で戻り列・行番号の非整数値と負数を`#VALUE!`として拒否し、範囲外は従来どおり`#REF!`とする境界を維持しました。Excel oracle照合は未完です。
 - G4の動的配列基盤として、既存のflat `Variant::Array`を変更せずに`ArrayShape`と`Variant::array_shape()`を追加しました。非空配列は1行、空配列は占有領域なしとして扱います。二次元shape生成、worksheetへのspill配置、衝突処理は未実装です。
 - G4のspill準備として、1-based worksheet座標の`SpillRect`を追加しました。座標境界、セル位置、空配列、矩形衝突を共通判定できますが、実際のworksheet書込みと`#SPILL!`生成は未実装です。
 - G4のspill計画APIとして、VMの`plan_spill_for_value()`で配列結果の占有範囲と既存の非Emptyセル衝突を事前検査できるようにしました。worksheetへの実際のspill配置と依存更新は未実装です。
