@@ -5018,13 +5018,14 @@ fn func_sortby(
                     "SORTBY: 2D data requires one-column sort-by arrays with equal rows".into(),
                 );
             }
-            let key_order = args
-                .get(key_arg + 1)
-                .map(|arg| evaluate(arg, cells))
-                .transpose()?
-                .map(|value| to_float(&value))
-                .transpose()?
-                .unwrap_or(1.0) as i64;
+            let key_order = match args.get(key_arg + 1) {
+                Some(arg) => match evaluate(arg, cells)? {
+                    Variant::Integer(value) if value == 1 || value == -1 => value,
+                    Variant::Float(value) if value == 1.0 || value == -1.0 => value as i64,
+                    _ => return Ok(Variant::Error(ExcelError::Value)),
+                },
+                None => 1,
+            };
             sort_keys.push((key_values, key_order));
             key_arg += 2;
         }
@@ -9684,6 +9685,22 @@ mod tests {
                 Variant::Integer(2),
                 Variant::Integer(20),
             ])
+        );
+        assert_eq!(
+            calc("=SORTBY(A1:B3,C1:C3,2)", &{
+                let mut invalid_order_cells = cells.clone();
+                for (row, value) in [(1, 5), (2, 9), (3, 7)] {
+                    invalid_order_cells.insert(
+                        (row, 3),
+                        CellContent {
+                            formula: None,
+                            value: Variant::Integer(value),
+                        },
+                    );
+                }
+                invalid_order_cells
+            }),
+            Variant::Error(ExcelError::Value)
         );
         let mut filter_cells = cells.clone();
         for (row, value) in [(1, false), (2, true), (3, false)] {
