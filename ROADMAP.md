@@ -102,7 +102,7 @@ G5全体は未完了であり、constant-memoryを主張しない。
 - [x] 共通 BUILD: I/O失敗・context例外時のabort、temp削除、close失敗後の状態、Windowsのclose-before-rename、標準syncの経路を実装した。Windows実機検証は未完。
 - [ ] MEASURE: 通常保存と追記を別processで測り、10万→100万行のRSS増分・p95・temp disk・出力同値を記録。通常VMの全セル保持までconstant-memoryと呼ばない。
 
-追加測定（2026-09-07、macOS arm64、CPython 3.13、現行1.0.4 release wheel）では、appendの100,000／250,000行を各2回完了し、RSS p50/p95は19.39/19.83 MiB、19.38/19.46 MiB、出力検証は全件成功した。normal-VMは1行ごとのundo snapshotによる入力オーバーヘッドと保存メモリを分離するため4,096行単位の`set_range`へ変更して再測定し、100,000行はRSS 612.58/623.22 MiB・wall 340/393 ms、250,000行はRSS 924.62/1,920.73 MiB・wall 1,068/1,178 ms（各p50/p95）だった。全件のZIP・worksheet形状・最終行・出力検証は成功したが、250,000行RSSは2回間の変動が大きく、constant-memoryの根拠にはしない。append APIの結果と直接比較せず、3 OS・100万行・Excel oracle・通常保存の完全matrixは未完了とする。詳細は[測定記録](docs/measurements/writer-streaming-2026-09-07.md)。
+追加測定（2026-09-07、macOS arm64、CPython 3.13、現行1.0.4 release wheel）では、appendの100,000／250,000行を各2回完了し、RSS p50/p95は19.39/19.83 MiB、19.38/19.46 MiB、出力検証は全件成功した。normal-VMは1行ごとのundo snapshotによる入力オーバーヘッドと保存メモリを分離するため4,096行単位の`set_range`へ変更し、さらに全batchを1 transactionへまとめて再測定した。100,000行はRSS 116.92/118.30 MiB・wall 173/202 ms、250,000行はRSS 203.56/203.61 MiB・wall 418/420 ms（各p50/p95）だった。全件のZIP・worksheet形状・最終行・出力検証は成功した。これはundo履歴の全体clone回数を抑えた効果であり、normal VMのconstant-memoryの根拠にはしない。append APIの結果と直接比較せず、3 OS・100万行・Excel oracle・通常保存の完全matrixは未完了とする。詳細は[測定記録](docs/measurements/writer-streaming-2026-09-07.md)。
 
 測定入口: `python3 scripts/measure-stream-writer-memory.py --mode append --rows 100000 250000 1000000`。
 入力形状は`--value-profile plain|escape|giant`で切り替え、XML escape膨張と1 MiB単一文字列を

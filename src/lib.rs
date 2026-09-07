@@ -955,7 +955,8 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
-    /// Commit the active edit transaction. Returns ``False`` when none exists.
+    /// Commit the active edit transaction as one undoable edit. Returns
+    /// ``False`` when none exists.
     fn commit_transaction(&mut self) -> bool {
         self.inner.commit_edit_transaction()
     }

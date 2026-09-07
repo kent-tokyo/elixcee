@@ -11746,9 +11746,15 @@ impl Vm {
         Ok(())
     }
 
-    /// Commit the current transaction. Individual edits remain undoable.
+    /// Commit the current transaction as one undoable edit.
     pub fn commit_edit_transaction(&mut self) -> bool {
-        self.edit_transaction.take().is_some()
+        let Some(transaction) = self.edit_transaction.take() else {
+            return false;
+        };
+        self.edit_undo.push(transaction.state);
+        self.edit_undo.truncate(MAX_EDIT_HISTORY);
+        self.edit_redo.clear();
+        true
     }
 
     /// Abort the current transaction and restore its pre-edit state.
@@ -11778,6 +11784,13 @@ impl Vm {
     }
 
     fn record_edit_history(&mut self) {
+        // A transaction already owns its pre-edit snapshot. Recording another
+        // full VM clone for every range/cell inside it defeats the bounded
+        // transaction contract on large workbooks; commit records the single
+        // pre-transaction state as one undo entry.
+        if self.edit_transaction.is_some() {
+            return;
+        }
         self.edit_undo.push(self.capture_edit_history());
         self.edit_undo.truncate(MAX_EDIT_HISTORY);
         self.edit_redo.clear();
@@ -18547,6 +18560,25 @@ mod tests {
         assert_eq!(vm.get_cell(1, 3), Variant::Empty);
         assert!(vm.can_undo_edit());
         assert!(!vm.can_redo_edit());
+    }
+
+    #[test]
+    fn committed_edit_transaction_is_one_undoable_unit() {
+        let mut vm = Vm::new();
+        vm.begin_edit_transaction().unwrap();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(7)]]);
+        vm.write_rect("sheet1", (1, 2), &[vec![Variant::Integer(8)]]);
+        assert!(vm.commit_edit_transaction());
+
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+        assert!(vm.undo_edit());
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 2), Variant::Empty);
+        assert!(!vm.can_undo_edit());
+        assert!(vm.redo_edit());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
     }
 
     #[test]

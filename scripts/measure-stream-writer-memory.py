@@ -99,6 +99,7 @@ else:
     # save, not one full undo snapshot per appended row. This is deliberately
     # distinct from the append API measurement above.
     chunk_size = 4096
+    workbook.begin_transaction()
     for start in range(0, rows, chunk_size):
         end = min(rows, start + chunk_size)
         grid = [
@@ -107,6 +108,7 @@ else:
         ]
         last_column = "A" if columns == 1 else "B" if columns == 2 else "C"
         workbook.set_range(f"A{start + 1}:{last_column}{end}", grid)
+    workbook.commit_transaction()
     workbook.save_workbook(str(path))
 print(json.dumps({
     "rows": rows,
