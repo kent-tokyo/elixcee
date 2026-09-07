@@ -22,6 +22,7 @@
 - formula dirty propagationのcontrolled matrixを再測定し、single-input chain 1.2825 ms、warm noop 1.2363 ms、structure rebuild 1.3090 ms、独立1,000入力 1.1570 msを記録しました。dirty経路の一般的な速度優位は主張せず、negative resultとして扱います。
 - dirty closure queueがformula plan indexを直接運ぶ局所最適化を追加し、single-input chainを1.2538 ms（直前比約2.2%改善）で測定しました。rebuildは1.3223 msで変化なしのため、一般的な速度優位は主張していません。
 - queue index化後のwarm noop 1.2012 ms、独立1,000入力1.1502 msを再測定しましたが、いずれも有意差はありませんでした。効果はsingle-input chainに限定して扱います。
+- 現行1.0.4 candidateのworkspace全target回帰を実行し、Rust unit 1,549件、blackbox、CLI、property、XLSX round-trip 52件、bench smoke、WASM crateの成功を確認しました。これはlocal regression evidenceであり、3 OSやExcel oracleの証拠ではありません。
 
 ## [1.0.4] - 2026-09-07
 
