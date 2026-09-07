@@ -13157,7 +13157,7 @@ fn formula_spill_shape(
             let cols = dimension(args.get(1), 0)?.max(1);
             exact(value_len(value).div_ceil(cols), cols).or(Some(fallback))
         }
-        "VSTACK" => {
+        "VSTACK" | "HSTACK" => {
             let mut shapes = Vec::with_capacity(args.len());
             for arg in args {
                 let arg_value = formula::evaluate(arg, cells).ok()?;
@@ -13166,10 +13166,17 @@ fn formula_spill_shape(
                     .unwrap_or(ArrayShape::new(1, 1));
                 shapes.push(shape);
             }
-            let shape = ArrayShape::new(
-                shapes.iter().map(|shape| shape.rows).sum(),
-                shapes.iter().map(|shape| shape.cols).max().unwrap_or(0),
-            );
+            let shape = if name == "VSTACK" {
+                ArrayShape::new(
+                    shapes.iter().map(|shape| shape.rows).sum(),
+                    shapes.iter().map(|shape| shape.cols).max().unwrap_or(0),
+                )
+            } else {
+                ArrayShape::new(
+                    shapes.iter().map(|shape| shape.rows).max().unwrap_or(0),
+                    shapes.iter().map(|shape| shape.cols).sum(),
+                )
+            };
             exact(shape.rows, shape.cols).or(Some(fallback))
         }
         _ => Some(fallback),
@@ -19407,6 +19414,22 @@ mod tests {
             .copied()
             .unwrap();
         assert_eq!(rect.shape, ArrayShape::new(4, 2));
+
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=HSTACK(SEQUENCE(2,1),SEQUENCE(2,1))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(2));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 1)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 2));
     }
 
     #[test]

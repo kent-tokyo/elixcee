@@ -5715,6 +5715,53 @@ fn func_vstack(
     Ok(wrap_array(result))
 }
 
+/// Returns the worksheet shape for the array forms whose legacy value is a
+/// flat row-major vector. Unknown expressions intentionally fall back to one
+/// row, preserving the historical evaluator contract.
+fn array_shape_for_expr(
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+    value_len: usize,
+) -> (usize, usize) {
+    match expr {
+        FormulaExpr::Range { c1, r1, c2, r2, .. } => (
+            (r1.max(r2) - r1.min(r2) + 1) as usize,
+            (c1.max(c2) - c1.min(c2) + 1) as usize,
+        ),
+        FormulaExpr::FuncCall { name, args }
+            if name.eq_ignore_ascii_case("SEQUENCE") || name.eq_ignore_ascii_case("RANDARRAY") =>
+        {
+            let dimension = |arg: Option<&FormulaExpr>| {
+                arg.and_then(|arg| evaluate(arg, cells).ok())
+                    .and_then(|value| match value {
+                        Variant::Integer(n) if n >= 0 => Some(n as usize),
+                        Variant::Float(n) if n.is_finite() && n >= 0.0 => Some(n as usize),
+                        _ => None,
+                    })
+                    .unwrap_or(1)
+                    .max(1)
+            };
+            (dimension(args.first()), dimension(args.get(1)))
+        }
+        FormulaExpr::FuncCall { name, args } if name.eq_ignore_ascii_case("TRANSPOSE") => {
+            let Some(arg) = args.first() else {
+                return (1, value_len);
+            };
+            let value = evaluate(arg, cells).ok();
+            let (rows, cols) = array_shape_for_expr(
+                arg,
+                cells,
+                value.as_ref().map_or(1, |v| match v {
+                    Variant::Array(values) => values.len(),
+                    _ => 1,
+                }),
+            );
+            (cols, rows)
+        }
+        _ => (1, value_len),
+    }
+}
+
 fn func_hstack(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -5722,9 +5769,27 @@ fn func_hstack(
     if args.is_empty() {
         return Err("HSTACK requires at least 1 argument".into());
     }
+    let parts: Vec<(Vec<Variant>, usize, usize)> = args
+        .iter()
+        .map(|arg| {
+            let values = flatten_array_vals(collect_values(arg, cells)?);
+            let (rows, cols) = array_shape_for_expr(arg, cells, values.len());
+            Ok((values, rows, cols))
+        })
+        .collect::<Result<_, String>>()?;
+    let two_dimensional = parts.iter().any(|(_, rows, _)| *rows > 1)
+        && parts.iter().all(|(_, rows, _)| *rows == parts[0].1);
     let mut result = vec![];
-    for arg in args {
-        result.extend(flatten_array_vals(collect_values(arg, cells)?));
+    if two_dimensional {
+        for row in 0..parts[0].1 {
+            for (values, _, cols) in &parts {
+                result.extend(values[row * cols..(row + 1) * cols].iter().cloned());
+            }
+        }
+    } else {
+        for (values, _, _) in parts {
+            result.extend(values);
+        }
     }
     Ok(wrap_array(result))
 }
@@ -8245,13 +8310,13 @@ mod tests {
                 Variant::Integer(2),
             ])
         );
-        // HSTACK same in 1D model
+        // HSTACK preserves the row shape of its 2-row inputs.
         assert_eq!(
             calc("=HSTACK(SEQUENCE(2),SEQUENCE(2))", &c),
             Variant::Array(vec![
                 Variant::Integer(1),
-                Variant::Integer(2),
                 Variant::Integer(1),
+                Variant::Integer(2),
                 Variant::Integer(2),
             ])
         );

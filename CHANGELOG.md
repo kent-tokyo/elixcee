@@ -16,7 +16,7 @@
 - G4のspill再計算APIとして、`recalculate_all_with_spills()`を拡張しました。各sheetの配列anchorを処理し、呼出し元のactive sheetを復元してから依存formulaを再計算します。既存`recalculate_all()`の既定動作は維持しています。
 - G4の2D spill準備として、`apply_spill_matrix()`を追加しました。矩形matrixの行幅を検証し、`ArrayShape(rows, cols)`を保持したままanchor formulaを維持して適用できます。
 - G4の2D spill接続として、`SEQUENCE` / `RANDARRAY` / `TRANSPOSE` / `WRAPCOLS` / `WRAPROWS`のformula shapeを既定の`recalculate_all_with_spills()`で復元し、2D矩形のspillと依存再計算へ接続しました。全配列関数のshape伝播とExcel oracle照合は未完です。
-- G4のshape伝播を拡張し、`VSTACK`の同幅2D結果を既定spill再計算で正しい矩形へ配置できるようにしました。HSTACKの行方向再配置、異幅入力のpadding意味論とExcel oracle照合は未完です。
+- G4のshape伝播を拡張し、`VSTACK` / `HSTACK`の同幅・同高2D結果を既定spill再計算で正しい矩形へ配置できるようにしました。異幅入力のpadding意味論とExcel oracle照合は未完です。
 - G5aの内部経路として、defined namesの読込・報告で`xl/workbook.xml`だけを検証付き取得し、worksheet/table等の兄弟payloadを再読込・保持しないようにしました。保存時の全part遅延化やconstant-memory達成を意味しません。
 - G5aの内部経路として、未編集table XMLを保存時のraw mapへ保持せず、編集対象だけを元ZIPから再取得してpatchするようにしました。全passthrough遅延化やconstant-memory達成を意味しません。
 - G5bの内部経路として、worksheet relationship XMLの解析用索引を統合し、同一`.rels` payloadの解析用二重保持を削減しました。passthrough bytesの遅延化やconstant-memory達成を意味しません。
