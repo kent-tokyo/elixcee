@@ -12147,21 +12147,27 @@ impl Vm {
             return Ok(None);
         };
         let rect = SpillRect::new(origin_row, origin_col, shape)?;
+        self.plan_spill_rect(rect)?;
+        Ok(Some(rect))
+    }
+
+    fn plan_spill_rect(&self, rect: SpillRect) -> Result<(), String> {
+        let shape = rect.shape;
         let Some(cells) = self.sheets.get(&self.active_sheet) else {
-            return Ok(Some(rect));
+            return Ok(());
         };
         for row_offset in 0..shape.rows {
             for col_offset in 0..shape.cols {
                 let Some(position) = rect.cell_at(row_offset, col_offset) else {
                     continue;
                 };
-                if position == (origin_row, origin_col) {
+                if position == (rect.origin_row, rect.origin_col) {
                     continue;
                 }
                 let owned_by_same_anchor = self
                     .spill_rects
                     .get(&self.active_sheet)
-                    .and_then(|anchors| anchors.get(&(origin_row, origin_col)))
+                    .and_then(|anchors| anchors.get(&(rect.origin_row, rect.origin_col)))
                     .is_some_and(|old_rect| old_rect.contains(position));
                 if !owned_by_same_anchor
                     && cells.get(&position).is_some_and(|cell| {
@@ -12175,7 +12181,7 @@ impl Vm {
                 }
             }
         }
-        Ok(Some(rect))
+        Ok(())
     }
 
     /// Applies a dynamic-array value to the active worksheet. The anchor's
@@ -12203,11 +12209,24 @@ impl Vm {
         let Some(rect) = self.plan_spill_for_value(origin_row, origin_col, value)? else {
             return Err("cannot apply a scalar value as a spill".to_string());
         };
-        let shape = rect.shape;
         let values = match value {
             Variant::Array(values) => values,
             _ => unreachable!("plan_spill_for_value rejects scalar values"),
         };
+        self.apply_spill_rect_values(rect, values)
+    }
+
+    fn apply_spill_rect_values(
+        &mut self,
+        rect: SpillRect,
+        values: &[Variant],
+    ) -> Result<SpillRect, String> {
+        if rect.shape.cell_count() != values.len() {
+            return Err("spill value count does not match its shape".to_string());
+        }
+        let shape = rect.shape;
+        let origin_row = rect.origin_row;
+        let origin_col = rect.origin_col;
         let active = self.active_sheet.clone();
         let mut changed = Vec::with_capacity(shape.cell_count().max(1));
         self.clear_spill_for_anchor(&active, (origin_row, origin_col), &mut changed);
@@ -12272,6 +12291,31 @@ impl Vm {
                 .insert((origin_row, origin_col), rect);
         }
         Ok(rect)
+    }
+
+    /// Applies a rectangular two-dimensional array to the active worksheet.
+    /// Ragged rows are rejected before any mutation. This is the shape-aware
+    /// entry point for functions such as `TRANSPOSE`; the legacy flat
+    /// `Variant::Array` path remains one row for compatibility.
+    pub fn apply_spill_matrix(
+        &mut self,
+        origin_row: u32,
+        origin_col: u32,
+        matrix: &[Vec<Variant>],
+    ) -> Result<SpillRect, String> {
+        let rows = matrix.len();
+        let cols = matrix.first().map_or(0, Vec::len);
+        if matrix.iter().any(|row| row.len() != cols) {
+            return Err("spill matrix rows must have equal widths".to_string());
+        }
+        let rect = SpillRect::new(origin_row, origin_col, ArrayShape::new(rows, cols))?;
+        self.plan_spill_rect(rect)?;
+        let values = matrix
+            .iter()
+            .flat_map(|row| row.iter().cloned())
+            .collect::<Vec<_>>();
+        self.record_edit_history();
+        self.apply_spill_rect_values(rect, &values)
     }
 
     pub fn set_calc_mode(&mut self, mode: CalculationMode) -> Result<(), String> {
@@ -19228,6 +19272,35 @@ mod tests {
                 .map(|cell| &cell.value),
             Some(&Variant::Integer(2))
         );
+    }
+
+    #[test]
+    fn apply_spill_matrix_preserves_two_dimensional_shape_and_anchor_formula() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 2, "=TRANSPOSE(A1:B1)").unwrap();
+        let matrix = vec![vec![Variant::Integer(10)], vec![Variant::Integer(20)]];
+        let rect = vm.apply_spill_matrix(2, 2, &matrix).unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 1));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(10));
+        assert_eq!(vm.get_cell(3, 2), Variant::Integer(20));
+        assert_eq!(
+            vm.cells()
+                .get(&(2, 2))
+                .and_then(|cell| cell.formula.as_deref()),
+            Some("=TRANSPOSE(A1:B1)")
+        );
+    }
+
+    #[test]
+    fn apply_spill_matrix_rejects_ragged_input_before_mutation() {
+        let mut vm = Vm::new();
+        let before = vm.cells().len();
+        let matrix = vec![
+            vec![Variant::Integer(1)],
+            vec![Variant::Integer(2), Variant::Integer(3)],
+        ];
+        assert!(vm.apply_spill_matrix(1, 1, &matrix).is_err());
+        assert_eq!(vm.cells().len(), before);
     }
 
     #[test]
