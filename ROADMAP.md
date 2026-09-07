@@ -86,6 +86,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 lookup引数形: `XLOOKUP` / `XMATCH`のmatch/search modeを整数値だけ受け付け、非整数・非有限・i32範囲外を`#VALUE!`にした。全関数の引数形検査は未完。
 - [x] G4 INDEX配列形式: `INDEX`で行番号0・列番号0をそれぞれ列配列・行配列として扱い、両方0では全範囲配列を返す経路を追加した。worksheetへのspill配置・shape metadata・Excel oracle校正は未完。
 - [x] G4 動的配列shape基盤: `elixcee-types`に`ArrayShape`と`Variant::array_shape()`を追加し、既存のflat `Variant::Array`を維持したまま、非空配列は1行、空配列は占有領域なしとするspill footprint契約を固定した。二次元shape生成・spill配置・衝突／依存更新は未完。
+- [x] G4 spill矩形基盤: 1-based worksheet座標の`SpillRect`、境界検証、セル位置計算、空配列の無占有、矩形衝突判定を共有型へ追加した。実際のworksheet書込み・既存セルとの`#SPILL!`判定・依存更新は未完。
 - [ ] 第1組は参照／条件集計／検索、次に日付／統計／金融。既存SUMIFS・XLOOKUP等を再実装せず、未対応modeと意味論差分から埋める。
 - [x] G4 第1組の意味論補完: `IFNA`を追加し、`#N/A`だけをfallback対象として、それ以外のErrorは伝播する遅延評価を回帰テストで固定した。Excel oracleとの一致確認と、他関数の未対応mode棚卸しは未完。
 - [x] G4 検索modeの安全境界: `XLOOKUP`のwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加した。wildcardとbinaryの組み合わせや未知modeは明示エラーにし、順序を満たさない入力を推測処理しない。Excel oracleとbinary modeの網羅的校正は未完。

@@ -126,6 +126,67 @@ impl ArrayShape {
     pub const fn cell_count(self) -> usize {
         self.rows.saturating_mul(self.cols)
     }
+
+    pub const fn is_empty(self) -> bool {
+        self.rows == 0 || self.cols == 0
+    }
+}
+
+/// A 1-based worksheet rectangle occupied by a dynamic-array result.
+///
+/// The rectangle is deliberately independent from cell storage so collision
+/// checks can happen before a future spill writer mutates the worksheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpillRect {
+    pub origin_row: u32,
+    pub origin_col: u32,
+    pub shape: ArrayShape,
+}
+
+impl SpillRect {
+    /// Builds a rectangle using Excel's 1-based worksheet coordinates.
+    /// Rejects zero coordinates and rectangles whose end would overflow the
+    /// coordinate type. Empty shapes are valid and occupy no cells.
+    pub fn new(origin_row: u32, origin_col: u32, shape: ArrayShape) -> Result<Self, String> {
+        if origin_row == 0 || origin_col == 0 {
+            return Err("worksheet coordinates are 1-based".to_string());
+        }
+        if !shape.is_empty()
+            && (origin_row as u64 + shape.rows as u64 - 1 > u32::MAX as u64
+                || origin_col as u64 + shape.cols as u64 - 1 > u32::MAX as u64)
+        {
+            return Err("spill rectangle exceeds worksheet coordinate bounds".to_string());
+        }
+        Ok(Self {
+            origin_row,
+            origin_col,
+            shape,
+        })
+    }
+
+    pub fn cell_at(&self, row_offset: usize, col_offset: usize) -> Option<(u32, u32)> {
+        if self.shape.is_empty() || row_offset >= self.shape.rows || col_offset >= self.shape.cols {
+            return None;
+        }
+        Some((
+            self.origin_row + row_offset as u32,
+            self.origin_col + col_offset as u32,
+        ))
+    }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        if self.shape.is_empty() || other.shape.is_empty() {
+            return false;
+        }
+        let self_end_row = self.origin_row as u64 + self.shape.rows as u64 - 1;
+        let self_end_col = self.origin_col as u64 + self.shape.cols as u64 - 1;
+        let other_end_row = other.origin_row as u64 + other.shape.rows as u64 - 1;
+        let other_end_col = other.origin_col as u64 + other.shape.cols as u64 - 1;
+        self.origin_row as u64 <= other_end_row
+            && other.origin_row as u64 <= self_end_row
+            && self.origin_col as u64 <= other_end_col
+            && other.origin_col as u64 <= self_end_col
+    }
 }
 
 impl Variant {
@@ -493,6 +554,29 @@ mod tests {
             Some(ArrayShape::new(0, 0))
         );
         assert_eq!(ArrayShape::new(2, 3).cell_count(), 6);
+        assert!(!ArrayShape::new(2, 3).is_empty());
+        assert!(ArrayShape::new(0, 3).is_empty());
+    }
+
+    #[test]
+    fn spill_rect_uses_one_based_coordinates_and_checks_collisions() {
+        let left = SpillRect::new(2, 3, ArrayShape::new(2, 3)).unwrap();
+        let right = SpillRect::new(3, 5, ArrayShape::new(2, 2)).unwrap();
+        let separate = SpillRect::new(4, 7, ArrayShape::new(1, 1)).unwrap();
+        assert_eq!(left.cell_at(0, 0), Some((2, 3)));
+        assert_eq!(left.cell_at(1, 2), Some((3, 5)));
+        assert_eq!(left.cell_at(2, 0), None);
+        assert!(left.intersects(&right));
+        assert!(!left.intersects(&separate));
+    }
+
+    #[test]
+    fn spill_rect_rejects_zero_and_overflowing_coordinates_but_allows_empty_shapes() {
+        assert!(SpillRect::new(0, 1, ArrayShape::new(1, 1)).is_err());
+        assert!(SpillRect::new(u32::MAX, 1, ArrayShape::new(2, 1)).is_err());
+        let empty = SpillRect::new(u32::MAX, u32::MAX, ArrayShape::new(0, 0)).unwrap();
+        assert_eq!(empty.cell_at(0, 0), None);
+        assert!(!empty.intersects(&empty));
     }
 
     #[test]

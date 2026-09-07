@@ -49,8 +49,8 @@ fn is_blocked_external_effect(reason: &str) -> bool {
 /// 2A) — re-exported here so every existing `vm::X` / `crate::vm::X`
 /// reference across the codebase keeps resolving unchanged.
 pub use crate::types::{
-    ArrayBound, CellContent, ExcelError, MAX_ARRAY_ELEMENTS, Variant, VbaArray, parse_cell_addr,
-    parse_range_addr, serial_to_display,
+    ArrayBound, ArrayShape, CellContent, ExcelError, MAX_ARRAY_ELEMENTS, SpillRect, Variant,
+    VbaArray, parse_cell_addr, parse_range_addr, serial_to_display,
 };
 
 /// A procedure's own `On Error` state — real VBA scopes this per Sub/
