@@ -64,5 +64,8 @@ jobs:
           echo "::error::elixcee-types $VERSION never appeared in the crates.io index after 5 minutes"
           exit 1
 
+      - name: pin the published elixcee-types patch release
+        run: cargo update -p elixcee-types --precise "${{ steps.types.outputs.version }}"
+
       - name: cargo publish -p elixcee
         run: cargo publish -p elixcee

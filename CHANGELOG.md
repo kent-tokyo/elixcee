@@ -6,6 +6,8 @@
 
 次の変更はここに記録します。
 
+- crates.ioの公開検証で検出したworkspace依存crateのsource driftを解消するため、`elixcee-types`の公開patch版をroot crateの検証前に明示pinするようにしました。
+
 ## [1.0.5] - 2026-09-09
 
 - G3として、loaded XLSX/XLSMのraw `sheetId`をlowercase lookup key・タブ位置から分離し、rename／reorder後もPython `Vm.sheet_id()`／`Vm.sheet_name_for_id()`で解決できるようにしました。新規／ODS sheetへの推測ID付与、削除後履歴、raw IDをformula node keyにする設計は未完です。
