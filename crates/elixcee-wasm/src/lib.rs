@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 const MAX_EDITOR_HISTORY: usize = 128;
+const MAX_WORKSHEET_ROW: u32 = 1_048_576;
+const MAX_WORKSHEET_COLUMN: u32 = 16_384;
 
 #[derive(Clone)]
 struct EditorState {
@@ -41,6 +43,7 @@ pub struct WorkbookEditor {
     undo: Vec<EditorState>,
     redo: Vec<EditorState>,
     transaction: Option<EditorTransaction>,
+    transaction_dirty: bool,
 }
 
 #[wasm_bindgen]
@@ -56,6 +59,7 @@ impl WorkbookEditor {
             undo: Vec::new(),
             redo: Vec::new(),
             transaction: None,
+            transaction_dirty: false,
         })
     }
 
@@ -67,12 +71,12 @@ impl WorkbookEditor {
         col: u32,
         value: f64,
     ) -> Result<(), JsValue> {
-        let key = sheet.to_ascii_lowercase();
-        if !self.sheets.contains_key(&key) {
-            return Err(JsValue::from_str("unknown worksheet"));
+        let key = self.validate_cell_target(sheet, row, col)?;
+        if !value.is_finite() {
+            return Err(JsValue::from_str("cell value must be finite"));
         }
         self.record_edit();
-        let value = if value.is_finite() && value.fract() == 0.0 {
+        let value = if value.fract() == 0.0 {
             Variant::Integer(value as i64)
         } else {
             Variant::Float(value)
@@ -82,6 +86,46 @@ impl WorkbookEditor {
             CellContent {
                 formula: None,
                 value,
+            },
+        );
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setString)]
+    pub fn set_string(
+        &mut self,
+        sheet: &str,
+        row: u32,
+        col: u32,
+        value: &str,
+    ) -> Result<(), JsValue> {
+        let key = self.validate_cell_target(sheet, row, col)?;
+        self.record_edit();
+        self.sheets.get_mut(&key).expect("checked above").insert(
+            (row, col),
+            CellContent {
+                formula: None,
+                value: Variant::Str(value.to_string()),
+            },
+        );
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setBoolean)]
+    pub fn set_boolean(
+        &mut self,
+        sheet: &str,
+        row: u32,
+        col: u32,
+        value: bool,
+    ) -> Result<(), JsValue> {
+        let key = self.validate_cell_target(sheet, row, col)?;
+        self.record_edit();
+        self.sheets.get_mut(&key).expect("checked above").insert(
+            (row, col),
+            CellContent {
+                formula: None,
+                value: Variant::Boolean(value),
             },
         );
         Ok(())
@@ -125,12 +169,22 @@ impl WorkbookEditor {
             undo_len: self.undo.len(),
             redo: self.redo.clone(),
         });
+        self.transaction_dirty = false;
         Ok(())
     }
 
     #[wasm_bindgen(js_name = commitTransaction)]
     pub fn commit_transaction(&mut self) -> bool {
-        self.transaction.take().is_some()
+        let Some(transaction) = self.transaction.take() else {
+            return false;
+        };
+        if self.transaction_dirty {
+            self.undo.push(transaction.state);
+            self.undo.truncate(MAX_EDITOR_HISTORY);
+            self.redo.clear();
+        }
+        self.transaction_dirty = false;
+        true
     }
 
     #[wasm_bindgen(js_name = abortTransaction)]
@@ -141,6 +195,7 @@ impl WorkbookEditor {
         self.sheets = transaction.state.sheets;
         self.undo.truncate(transaction.undo_len);
         self.redo = transaction.redo;
+        self.transaction_dirty = false;
         true
     }
 
@@ -159,7 +214,24 @@ impl WorkbookEditor {
         }
     }
 
+    fn validate_cell_target(&self, sheet: &str, row: u32, col: u32) -> Result<String, JsValue> {
+        let key = sheet.to_ascii_lowercase();
+        if !self.sheets.contains_key(&key) {
+            return Err(JsValue::from_str("unknown worksheet"));
+        }
+        if row == 0 || row > MAX_WORKSHEET_ROW || col == 0 || col > MAX_WORKSHEET_COLUMN {
+            return Err(JsValue::from_str(
+                "cell coordinates are outside the worksheet bounds",
+            ));
+        }
+        Ok(key)
+    }
+
     fn record_edit(&mut self) {
+        if self.transaction.is_some() {
+            self.transaction_dirty = true;
+            return;
+        }
         self.undo.push(self.capture_state());
         self.undo.truncate(MAX_EDITOR_HISTORY);
         self.redo.clear();
@@ -181,7 +253,7 @@ impl WorkbookEditor {
 /// `elixcee::diagnostics::json_string`'s existing hand-rolled escaper (src/diagnostics.rs)
 /// rather than duplicating a JSON writer or adding a dependency.
 ///
-/// `!hiddenRows`/`!hiddenCols`/per-cell `fmtId`/`!numFmts`/`!date1904` are NOT the oracle's
+/// `!hiddenRows`/`!hiddenCols`/per-cell `fmtId`/`!numFmts`/`!date1904`/`!dataValidations` are NOT the oracle's
 /// own `read()` shapes — they're `reader.rs`'s raw parsed data (1-based `[start,end]`
 /// intervals; a numFmtId integer; the workbook's custom numFmt table; a bool), passed
 /// through as-is. The JS layer resolves all of this into the oracle's real shapes —
@@ -499,6 +571,26 @@ fn worksheet_json(bs: &BufferSheet) -> String {
     write_hidden_intervals(&mut out, "!hiddenRows", &sheet.hidden_rows);
     write_hidden_intervals(&mut out, "!hiddenCols", &sheet.hidden_columns);
 
+    if !sheet.data_validations.is_empty() {
+        out.push_str(",\"!dataValidations\":[");
+        for (index, validation) in sheet.data_validations.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"type\":");
+            out.push_str(&json_string(&validation.validation_type));
+            out.push_str(",\"sqref\":[");
+            for (range_index, range) in validation.sqref.iter().enumerate() {
+                if range_index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&json_string(&format_rect(range)));
+            }
+            out.push_str("]}");
+        }
+        out.push(']');
+    }
+
     out.push('}');
     out
 }
@@ -579,6 +671,16 @@ fn col_letters(mut col: u32) -> String {
 
 fn cell_ref(row: u32, col: u32) -> String {
     format!("{}{}", col_letters(col), row)
+}
+
+fn format_rect(rect: &((u32, u32), (u32, u32))) -> String {
+    let ((r1, c1), (r2, c2)) = *rect;
+    let start = format!("{}{}", col_letters(c1), r1);
+    if r1 == r2 && c1 == c2 {
+        start
+    } else {
+        format!("{}:{}{}", start, col_letters(c2), r2)
+    }
 }
 
 #[cfg(test)]
@@ -761,6 +863,32 @@ mod tests {
         assert!(!json.contains("!hiddenCols"));
     }
 
+    #[test]
+    fn worksheet_json_projects_data_validation_type_and_ranges() {
+        let mut s = sheet("Sheet1", vec![]);
+        s.sheet
+            .data_validations
+            .push(elixcee::reader::DataValidationRule {
+                validation_type: "list".to_string(),
+                operator: None,
+                formula1: Some("Yes,No".to_string()),
+                formula2: None,
+                allow_blank: true,
+                show_input_message: false,
+                prompt_title: None,
+                prompt: None,
+                show_error_message: true,
+                error_style: None,
+                error_title: None,
+                error: None,
+                sqref: vec![((1, 5), (1, 5)), ((2, 5), (4, 5))],
+                dirty: false,
+                raw_span: String::new(),
+            });
+        let json = workbook_json(&wb1(s));
+        assert!(json.contains(r#""!dataValidations":[{"type":"list","sqref":["E1","E2:E4"]}]"#));
+    }
+
     // ── read() item 6: per-cell fmtId, workbook !numFmts/!date1904 ──────────
 
     #[test]
@@ -802,5 +930,34 @@ mod tests {
         wb.date1904 = true;
         let json = workbook_json(&wb);
         assert!(json.contains(r#""!date1904":true"#));
+    }
+
+    #[test]
+    fn editor_transaction_coalesces_multiple_typed_writes_into_one_undo() {
+        let workbook = wb1(sheet("Sheet1", vec![]));
+        let sheets = calculation_sheets(&workbook);
+        let mut editor = WorkbookEditor {
+            workbook,
+            sheets,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            transaction: None,
+            transaction_dirty: false,
+        };
+
+        editor.begin_transaction().unwrap();
+        editor.set_string("Sheet1", 1, 1, "planned").unwrap();
+        editor.set_boolean("Sheet1", 1, 2, true).unwrap();
+        assert!(editor.commit_transaction());
+        assert!(editor.can_undo());
+        assert!(editor.undo());
+        let snapshot = editor.snapshot();
+        assert!(!snapshot.contains("planned"));
+        assert!(!snapshot.contains("\"B1\""));
+        assert!(!editor.can_undo());
+        assert!(editor.redo());
+        let snapshot = editor.snapshot();
+        assert!(snapshot.contains("planned"));
+        assert!(snapshot.contains("\"B1\""));
     }
 }

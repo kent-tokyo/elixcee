@@ -1102,6 +1102,22 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Return the source XLSX ``sheetId`` for a sheet, or ``None`` for a newly
+    /// created/ODS sheet. This is a stable document identity, not tab position.
+    fn sheet_id(&self, name: &str) -> PyResult<Option<String>> {
+        self.inner
+            .sheet_id(name)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Resolve a source XLSX ``sheetId`` to its current lowercase sheet key.
+    /// The result remains valid after a sheet rename or tab reorder.
+    fn sheet_name_for_id(&self, sheet_id: &str) -> PyResult<String> {
+        self.inner
+            .sheet_name_for_id(sheet_id)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Every workbook-level defined name as ``{name: raw_text}`` (e.g.
     /// ``{"MyRange": "Sheet1!$A$1:$A$3"}``).
     ///
@@ -3293,9 +3309,12 @@ fn run_macro(
 ///     Maximum workbook-read time in milliseconds.
 /// cancellation : ReadCancellation, optional
 ///     Cooperative cancellation handle shared with another thread.
+/// external_links : str, optional
+///     ``"preserve"`` (default) keeps external-link parts for round-trip only;
+///     ``"reject"`` fails closed; ``"drop"`` removes external-link parts on save.
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (path, sheet = None, on_msgbox = "skip", max_work_units = None, timeout_ms = None, cancellation = None))]
+#[pyo3(signature = (path, sheet = None, on_msgbox = "skip", max_work_units = None, timeout_ms = None, cancellation = None, external_links = "preserve"))]
 #[allow(clippy::too_many_arguments)]
 fn load_workbook(
     path: &str,
@@ -3304,11 +3323,23 @@ fn load_workbook(
     max_work_units: Option<u64>,
     timeout_ms: Option<u64>,
     cancellation: Option<PyRef<'_, PyReadCancellation>>,
+    external_links: &str,
 ) -> PyResult<PyVm> {
+    let external_links = match external_links.to_ascii_lowercase().as_str() {
+        "preserve" => reader::ExternalLinksPolicy::Preserve,
+        "reject" => reader::ExternalLinksPolicy::Reject,
+        "drop" => reader::ExternalLinksPolicy::Drop,
+        _ => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "external_links must be 'preserve', 'reject', or 'drop'",
+            ));
+        }
+    };
     let options = reader::ReadOptions {
         max_work_units: max_work_units.or(Some(reader::DEFAULT_READ_MAX_WORK_UNITS)),
         timeout_ms,
         cancellation: cancellation.map(|value| value.flag.clone()),
+        external_links,
     };
     options
         .validate()
@@ -3877,6 +3908,118 @@ fn is_writer_owned_part(name: &str) -> bool {
         && !name["xl/worksheets/".len()..].contains('/'))
 }
 
+/// Returns whether a source package contains relationship-backed chart/drawing or
+/// pivot content whose references this writer cannot yet rewrite after a structural
+/// edit. Failing before the temporary output is created is intentionally conservative:
+/// silently dropping an owner element would leave the user's edit looking successful
+/// while changing the workbook's visible objects.
+fn has_unrewritable_structural_ooxml_refs(
+    raw_entries: &std::collections::HashMap<String, Vec<u8>>,
+    allow_sheet_rename: bool,
+) -> bool {
+    let has_drawing_owner = raw_entries.iter().any(|(name, bytes)| {
+        name.starts_with("xl/worksheets/")
+            && name.ends_with(".xml")
+            && (bytes.windows(b"<drawing".len()).any(|w| w == b"<drawing")
+                || bytes
+                    .windows(b"<legacyDrawing".len())
+                    .any(|w| w == b"<legacyDrawing"))
+    });
+    let has_pivot_owner = raw_entries.get("xl/workbook.xml").is_some_and(|bytes| {
+        bytes
+            .windows(b"<pivotCaches".len())
+            .any(|w| w == b"<pivotCaches")
+    });
+    let has_chart_or_pivot_relationship = raw_entries.iter().any(|(name, bytes)| {
+        name.ends_with(".rels")
+            && (bytes.windows(b"/chart".len()).any(|w| w == b"/chart")
+                || bytes.windows(b"/pivot".len()).any(|w| w == b"/pivot"))
+    });
+    (has_pivot_owner && !allow_sheet_rename)
+        || (has_drawing_owner && has_chart_or_pivot_relationship && !allow_sheet_rename)
+}
+
+/// Rewrites sheet-qualified references in chart `<c:f>` formula elements while
+/// leaving every other chart XML byte untouched. An unparseable formula is
+/// rejected rather than text-spliced heuristically.
+fn rewrite_chart_sheet_refs(
+    xml: &str,
+    renames: &std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    if renames.is_empty() {
+        return Ok(xml.to_string());
+    }
+    let mut out = String::with_capacity(xml.len());
+    let mut cursor = 0;
+    while let Some(open_rel) = xml[cursor..].find("<c:f>") {
+        let open = cursor + open_rel;
+        out.push_str(&xml[cursor..open + "<c:f>".len()]);
+        let content_start = open + "<c:f>".len();
+        let close_rel = xml[content_start..]
+            .find("</c:f>")
+            .ok_or_else(|| "chart formula element is unterminated".to_string())?;
+        let close = content_start + close_rel;
+        let mut formula = xml[content_start..close].to_string();
+        for (old_key, new_name) in renames {
+            if let Some(rewritten) =
+                crate::formula::rename_sheet_references(&format!("={formula}"), old_key, new_name)?
+            {
+                formula = rewritten;
+            }
+        }
+        out.push_str(&formula);
+        out.push_str("</c:f>");
+        cursor = close + "</c:f>".len();
+    }
+    out.push_str(&xml[cursor..]);
+    Ok(out)
+}
+
+/// Rewrites only the worksheet source sheet attribute in pivot cache definitions.
+/// Pivot cache contents and table-based sources are left byte-for-byte unchanged.
+fn rewrite_pivot_cache_sheet_refs(
+    xml: &str,
+    renames: &std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    if renames.is_empty() {
+        return Ok(xml.to_string());
+    }
+    let mut out = String::with_capacity(xml.len());
+    let mut cursor = 0;
+    while let Some(open_rel) = xml[cursor..].find("<worksheetSource") {
+        let open = cursor + open_rel;
+        out.push_str(&xml[cursor..open]);
+        let end_rel = xml[open..]
+            .find('>')
+            .ok_or_else(|| "pivot worksheetSource element is unterminated".to_string())?;
+        let end = open + end_rel + 1;
+        let mut tag = xml[open..end].to_string();
+        if let Some(attr_rel) = tag.find("sheet=") {
+            let value_start = attr_rel + "sheet=".len();
+            let quote = tag.as_bytes().get(value_start).copied().ok_or_else(|| {
+                "pivot worksheetSource sheet attribute is unterminated".to_string()
+            })?;
+            if quote != b'"' && quote != b'\'' {
+                return Err("pivot worksheetSource sheet attribute is malformed".to_string());
+            }
+            let value_end = tag[value_start + 1..]
+                .find(quote as char)
+                .map(|rel| value_start + 1 + rel)
+                .ok_or_else(|| {
+                    "pivot worksheetSource sheet attribute is unterminated".to_string()
+                })?;
+            let old_name = reader::xml_unescape(&tag[value_start + 1..value_end]);
+            if let Some(new_name) = renames.get(&old_name.to_lowercase()) {
+                tag.replace_range(value_start + 1..value_end, &xml_escape(new_name));
+            }
+        }
+        out.push_str(&tag);
+        cursor = end;
+    }
+    out.push_str(&xml[cursor..]);
+    Ok(out)
+}
+
 /// Parses `rels_part` out of `raw_entries` (a source's raw zip contents) and returns
 /// every `(Type, Target)` relationship whose target both (a) survived into `passthrough`
 /// and (b) isn't already one of `skip_types` -- the types this writer emits its own
@@ -4195,9 +4338,17 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     // Same policy as `reserved_sheet_part_numbers`, for `xl/tables/tableN.xml`
     // (0.16.0-A3's `create_table`) -- empty for a from-scratch `Vm` (nothing to reserve).
     let mut reserved_table_part_numbers: Vec<u32> = Vec::new();
+    let allow_sheet_rename = vm.ooxml_structural_edit_dirty && vm.sheet_rename_only;
 
     if let Some(source_path) = passthrough_source {
         let mut raw_entries = reader::read_raw_zip_entries(source_path)?;
+        if vm.ooxml_structural_edit_dirty
+            && has_unrewritable_structural_ooxml_refs(&raw_entries, allow_sheet_rename)
+        {
+            return Err(
+                "OOXML structural edit rejected: chart/drawing or pivot references cannot yet be rewritten safely; save without the structural edit or use a workbook without these objects".to_string(),
+            );
+        }
         source_workbook_rels_xml = raw_entries
             .get("xl/_rels/workbook.xml.rels")
             .and_then(|bytes| String::from_utf8(bytes.clone()).ok());
@@ -4263,11 +4414,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             reader::validate_raw_zip_archive(&mut archive)?;
             Some(archive)
         };
+        let drop_external_links = vm.external_links_policy == reader::ExternalLinksPolicy::Drop;
         let passthrough_names: Vec<String> = raw_entries
             .keys()
             .filter(|name| !is_writer_owned_part(name))
             .filter(|name| is_xlsm_output || !name.starts_with("xl/vbaProject"))
             .filter(|name| !prunable_parts.contains(*name))
+            .filter(|name| !(drop_external_links && name.starts_with("xl/externalLinks/")))
             .cloned()
             .collect();
         surviving_source_parts.extend(passthrough_names.iter().cloned());
@@ -4297,6 +4450,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
             ],
         ));
+        if drop_external_links {
+            carried_rels.retain(|(ty, _)| !ty.ends_with("/externalLink"));
+        }
         carried_root_rels.extend(carry_over_rels(
             &raw_entries,
             "_rels/.rels",
@@ -4329,6 +4485,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if prunable_parts.contains(&name) {
                 continue;
             }
+            if drop_external_links && name.starts_with("xl/externalLinks/") {
+                continue;
+            }
             let bytes = match table_edits.get(name.as_str()) {
                 Some(edits) => {
                     let source_bytes = if bytes.is_empty() {
@@ -4346,12 +4505,49 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 }
                 None => bytes,
             };
+            let bytes = if allow_sheet_rename && name.starts_with("xl/charts/") {
+                let bytes = if bytes.is_empty() {
+                    reader::read_raw_zip_entry_if_present(source_path, &name)?
+                        .ok_or_else(|| format!("chart part disappeared from source ZIP: {name}"))?
+                } else {
+                    bytes
+                };
+                rewrite_chart_sheet_refs(
+                    &String::from_utf8(bytes).map_err(|_| {
+                        format!("chart part is not UTF-8 and cannot be safely rewritten: {name}")
+                    })?,
+                    &vm.sheet_renames_since_load,
+                )?
+                .into_bytes()
+            } else if allow_sheet_rename && name.starts_with("xl/pivotCache/") {
+                let bytes = if bytes.is_empty() {
+                    reader::read_raw_zip_entry_if_present(source_path, &name)?.ok_or_else(|| {
+                        format!("pivot cache part disappeared from source ZIP: {name}")
+                    })?
+                } else {
+                    bytes
+                };
+                rewrite_pivot_cache_sheet_refs(
+                    &String::from_utf8(bytes).map_err(|_| {
+                        format!(
+                            "pivot cache part is not UTF-8 and cannot be safely rewritten: {name}"
+                        )
+                    })?,
+                    &vm.sheet_renames_since_load,
+                )?
+                .into_bytes()
+            } else {
+                bytes
+            };
             // Analysis/structural XML remains in memory. Other parts are copied
             // on demand from the source ZIP at the final output stage, avoiding
             // a second resident payload.
             let needed_for_save = name == "[Content_Types].xml"
                 || name == "xl/workbook.xml"
                 || name == "xl/styles.xml"
+                || (allow_sheet_rename
+                    && ((name.starts_with("xl/charts/") && name.ends_with(".xml"))
+                        || (name.starts_with("xl/pivotCache/") && name.ends_with(".xml"))))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
                 // An untouched table can be copied directly from the source ZIP;
                 // retain its XML only when a surgical TableEditOp needs to patch it.
@@ -4588,19 +4784,23 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let calc_pr = workbook_source_xml
         .as_deref()
         .and_then(|xml| reader::extract_raw_element(xml, "calcPr"));
-    let external_references = workbook_source_xml
-        .as_deref()
-        .and_then(|xml| reader::extract_raw_element(xml, "externalReferences"))
-        .and_then(|owner| {
-            let rels = source_workbook_rels_xml.as_deref()?;
-            let first_carried_id = worksheet_plans.len() + 3 + usize::from(has_vba);
-            rewrite_external_references_xml(&owner, rels, &carried_rels, first_carried_id)
-        });
+    let external_references = if vm.external_links_policy == reader::ExternalLinksPolicy::Drop {
+        None
+    } else {
+        workbook_source_xml
+            .as_deref()
+            .and_then(|xml| reader::extract_raw_element(xml, "externalReferences"))
+            .and_then(|owner| {
+                let rels = source_workbook_rels_xml.as_deref()?;
+                let first_carried_id = worksheet_plans.len() + 3 + usize::from(has_vba);
+                rewrite_external_references_xml(&owner, rels, &carried_rels, first_carried_id)
+            })
+    };
     let pivot_caches = workbook_source_xml
         .as_deref()
         .and_then(|xml| reader::extract_raw_element(xml, "pivotCaches"))
         .and_then(|owner| {
-            if vm.ooxml_structural_edit_dirty {
+            if vm.ooxml_structural_edit_dirty && !allow_sheet_rename {
                 return None;
             }
             let rels = source_workbook_rels_xml.as_deref()?;
@@ -4807,7 +5007,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
         // a dangling `r:id`, a real Excel repair warning.
         let rels_survived =
             plan.is_existing && originally_survived_rels.contains(&plan.output_rels_name);
-        let relationship_owners_safe = rels_survived && !vm.ooxml_structural_edit_dirty;
+        let relationship_owners_safe =
+            rels_survived && (!vm.ooxml_structural_edit_dirty || allow_sheet_rename);
         let rels_xml = source_relationship_parts.get(&plan.output_rels_name);
         // Location-only hyperlinks are always kept; r:id-bearing ones only when
         // rels_survived (see extract_hyperlinks' own doc comment).
@@ -7143,6 +7344,59 @@ mod elixcee {
 mod tests {
     use super::*;
     use calamine::{Reader, Xlsx, open_workbook};
+
+    #[test]
+    fn structural_ooxml_reference_gate_detects_chart_and_pivot_packages() {
+        let mut chart = std::collections::HashMap::new();
+        chart.insert(
+            "xl/worksheets/sheet1.xml".to_string(),
+            b"<worksheet><drawing r:id=\"rId1\"/></worksheet>".to_vec(),
+        );
+        chart.insert(
+            "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+            b"<Relationship Type=\".../chart\"/>".to_vec(),
+        );
+        assert!(has_unrewritable_structural_ooxml_refs(&chart, false));
+
+        let mut pivot = std::collections::HashMap::new();
+        pivot.insert(
+            "xl/workbook.xml".to_string(),
+            b"<workbook><pivotCaches/></workbook>".to_vec(),
+        );
+        assert!(has_unrewritable_structural_ooxml_refs(&pivot, false));
+        assert!(!has_unrewritable_structural_ooxml_refs(&pivot, true));
+
+        let mut plain = std::collections::HashMap::new();
+        plain.insert(
+            "xl/worksheets/sheet1.xml".to_string(),
+            b"<worksheet><sheetData/></worksheet>".to_vec(),
+        );
+        assert!(!has_unrewritable_structural_ooxml_refs(&plain, false));
+    }
+
+    #[test]
+    fn chart_formula_rewriter_changes_only_qualified_sheet_references() {
+        let mut renames = std::collections::HashMap::new();
+        renames.insert("sheet1".to_string(), "Data 2026".to_string());
+        let source = r#"<c:chart><c:f>Sheet1!$A$1:$B$2</c:f><c:v>cached</c:v><c:f>Other!$C$1</c:f></c:chart>"#;
+        let actual = rewrite_chart_sheet_refs(source, &renames).unwrap();
+        assert_eq!(
+            actual,
+            r#"<c:chart><c:f>'Data 2026'!$A$1:$B$2</c:f><c:v>cached</c:v><c:f>Other!$C$1</c:f></c:chart>"#
+        );
+    }
+
+    #[test]
+    fn pivot_cache_rewriter_changes_only_worksheet_source_sheet() {
+        let mut renames = std::collections::HashMap::new();
+        renames.insert("sheet1".to_string(), "Data & 2026".to_string());
+        let source = r#"<pivotCacheDefinition><cacheSource><worksheetSource ref="A1:B2" sheet="Sheet1"/></cacheSource><extLst><x:note sheet="Sheet1"/></extLst></pivotCacheDefinition>"#;
+        let actual = rewrite_pivot_cache_sheet_refs(source, &renames).unwrap();
+        assert_eq!(
+            actual,
+            r#"<pivotCacheDefinition><cacheSource><worksheetSource ref="A1:B2" sheet="Data &amp; 2026"/></cacheSource><extLst><x:note sheet="Sheet1"/></extLst></pivotCacheDefinition>"#
+        );
+    }
 
     #[cfg(feature = "python")]
     #[test]

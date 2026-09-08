@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "elixcee_version": "1.0.5",
+  "scope": "native Rust/Python workbook paths",
+  "statuses": ["supported", "preserved", "warned", "rejected", "unverified"],
+  "features": [
+    {
+      "id": "charts",
+      "read": "preserved",
+      "preserve": "preserved",
+      "edit": "supported",
+      "recalculate": "warned",
+      "excel_reopen": "unverified",
+      "fixture": "compat/oracle-excel-com/fixtures/pristine/fixture5_chart_image_freeze_print.xlsm",
+      "notes": "Drawing/chart parts and relationships are retained when connectivity checks pass. A loaded workbook may rename a sheet and update qualified chart <c:f> references; chart creation and general editing are not supported."
+    },
+    {
+      "id": "pivot_tables",
+      "read": "preserved",
+      "preserve": "preserved",
+      "edit": "supported",
+      "recalculate": "warned",
+      "excel_reopen": "unverified",
+      "fixture": null,
+      "notes": "Pivot cache owner and reachable parts are preserved when validated. A loaded workbook may rename a sheet and update worksheetSource@sheet; general source/cache edits and pivot recalculation are not implemented."
+    },
+    {
+      "id": "drawings",
+      "read": "preserved",
+      "preserve": "preserved",
+      "edit": "warned",
+      "recalculate": "warned",
+      "excel_reopen": "unverified",
+      "fixture": "compat/oracle-excel-com/fixtures/pristine/fixture5_chart_image_freeze_print.xlsm",
+      "notes": "Worksheet drawing and legacy-drawing owners are restored only when their relationships and reachable targets survive."
+    },
+    {
+      "id": "external_links",
+      "read": "warned",
+      "preserve": "preserved",
+      "edit": "rejected",
+      "recalculate": "rejected",
+      "excel_reopen": "unverified",
+      "fixture": null,
+      "notes": "External URLs are never fetched or executed. External-reference owner XML may be preserved when its relationship is valid; external-reference formulas are not evaluated."
+    }
+  ]
+}

@@ -1,9 +1,10 @@
 # elixcee v1 support contract
 
-This document defines the v1 support policy for a headless workbook automation
-runtime, not a promise to emulate the Excel desktop application. The runtime
-supports direct workbook edits and formula calculation as well as the
-documented VBA subset. Current coverage is documented for **1.0.4**.
+This document defines the v1 support policy for a headless Excel workbook
+automation runtime, not a promise to emulate the Excel desktop application.
+The runtime has three related surfaces on its workbook model: direct workbook
+editing, supported formula recalculation, and execution/diagnosis of the
+documented data-processing VBA subset. Current coverage is documented for **1.0.5**.
 Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
 
 ## Supported contract
@@ -22,8 +23,18 @@ Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
 - Default safety behavior rejects blocked external effects, malformed or
   over-budget input, unsafe paths, and unsafe output conditions with an error.
   A rejected input does not produce a partially trusted workbook.
+- Workbook external links are never fetched or executed. The Python loader
+  accepts `external_links="preserve"` (default, round-trip only),
+  `external_links="reject"` to fail closed, or `external_links="drop"` to
+  remove external-link parts on save. The CLI exposes the same choice as
+  `--external-links preserve|reject|drop` for `run` and `snapshot`.
 - `.xlsm` VBA project bytes are preserved by supported round-trip paths;
   preservation does not mean every macro is executable by the VM.
+- Structural edits on a workbook containing chart/drawing or pivot owners are
+  rejected when their references cannot be rewritten safely. Loaded-workbook sheet
+  rename is the narrow exception: qualified chart formulas and Pivot
+  `worksheetSource@sheet` are updated. The writer does not silently save stale
+  chart anchors or pivot sources.
 
 ## Explicit non-goals
 

@@ -11,8 +11,9 @@ use crate::parser::ast::{
 };
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{
-    self, AutoFilterDef, DataValidationRule, DataValidationSpec, DateGroupItem, FilterColumn,
-    FilterCriteria, SheetCell, TableColumn, TableDef, TableEditOp, WorkbookSheet,
+    self, AutoFilterDef, DataValidationRule, DataValidationSpec, DateGroupItem,
+    ExternalLinksPolicy, FilterColumn, FilterCriteria, SheetCell, TableColumn, TableDef,
+    TableEditOp, WorkbookSheet,
 };
 
 /// Default deterministic budget for one VBA entrypoint run. Rust callers can
@@ -1163,6 +1164,8 @@ pub struct Vm {
     /// True after a sheet/name/row/column structural edit whose chart/pivot
     /// references are not yet rewritten by the OOXML writer.
     pub(crate) ooxml_structural_edit_dirty: bool,
+    /// True only while structural edits are limited to sheet renames.
+    pub(crate) sheet_rename_only: bool,
     /// Dynamic-array spill rectangles keyed by sheet and anchor coordinate.
     /// Included in edit history so undo cannot leave stale spill ownership.
     spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
@@ -1257,6 +1260,8 @@ pub struct Vm {
     /// original ZIP for unknown-part passthrough at save time — internal
     /// plumbing between `vm` and `lib.rs`, not a public API.
     pub(crate) loaded_workbook_path: Option<String>,
+    /// External-link handling selected at workbook load. No policy fetches a URL.
+    pub(crate) external_links_policy: ExternalLinksPolicy,
     /// The clipboard populated by `.Copy` and consumed by
     /// `.Paste`/`.PasteSpecial` (Milestone B6b). `None` initially, and
     /// whenever `Application.CutCopyMode` is set to `False`.
@@ -1583,6 +1588,7 @@ impl Vm {
             workbook_formula_tracking_valid: false,
             workbook_formula_structure_dirty: true,
             ooxml_structural_edit_dirty: false,
+            sheet_rename_only: false,
             spill_rects: HashMap::new(),
             edit_undo: Vec::new(),
             edit_redo: Vec::new(),
@@ -1602,6 +1608,7 @@ impl Vm {
             last_resolution_failure: None,
             loaded_workbook_name: None,
             loaded_workbook_path: None,
+            external_links_policy: ExternalLinksPolicy::Preserve,
             clipboard: None,
             protected_sheets: HashSet::new(),
             merged_ranges: HashMap::new(),
@@ -3172,6 +3179,7 @@ impl Vm {
     /// `recalculate_all()` themselves.
     pub fn insert_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         let edit = formula::StructuralEdit::Insert { at: first, count };
         self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
@@ -3222,6 +3230,7 @@ impl Vm {
     /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         let edit = formula::StructuralEdit::Delete { at: first, count };
         self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
@@ -3269,6 +3278,7 @@ impl Vm {
     /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         let edit = formula::StructuralEdit::Delete { at: first, count };
         self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
@@ -3309,6 +3319,7 @@ impl Vm {
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`).
     pub fn insert_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
         self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         let edit = formula::StructuralEdit::Insert { at: first, count };
         self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
@@ -6861,6 +6872,7 @@ impl Vm {
         self.check_sheet_not_protected(key, display)?;
         if key != self.active_sheet {
             self.ooxml_structural_edit_dirty = true;
+            self.sheet_rename_only = false;
             self.cell_tile_cache
                 .lock()
                 .expect("cell tile cache mutex poisoned")
@@ -6984,6 +6996,7 @@ impl Vm {
             return Err(format!("Sheet '{}' already exists", new_name));
         }
         self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = true;
 
         let mut tile_cache = self
             .cell_tile_cache
@@ -7297,6 +7310,7 @@ impl Vm {
             return Err(format!("Sheet '{}' not found", name));
         }
         self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         self.sheet_order.retain(|k| k != &key);
         let idx = new_index.min(self.sheet_order.len());
         self.sheet_order.insert(idx, key);
@@ -7324,6 +7338,44 @@ impl Vm {
             return Err(format!("Sheet '{}' not found", name));
         }
         Ok(self.sheet_states.get(&key).copied().unwrap_or_default())
+    }
+
+    /// Return the source XLSX `sheetId` for `name`, if this sheet came from an
+    /// XLSX/XLSM workbook. This identity is separate from the lowercase VM
+    /// lookup key and from tab position; new and ODS sheets return `None`.
+    pub fn sheet_id(&self, name: &str) -> Result<Option<String>, String> {
+        let key = name.to_lowercase();
+        if !self.sheets.contains_key(&key) {
+            return Err(format!("Sheet '{name}' not found"));
+        }
+        Ok(self
+            .worksheet_origins
+            .get(&key)
+            .and_then(|origin| origin.original_sheet_id.clone()))
+    }
+
+    /// Resolve an XLSX `sheetId` to the current sheet lookup key. The mapping
+    /// follows a sheet through rename and tab reordering, while rejecting
+    /// missing or duplicate identities instead of falling back to position.
+    pub fn sheet_name_for_id(&self, sheet_id: &str) -> Result<String, String> {
+        if sheet_id.trim().is_empty() {
+            return Err("sheetId must not be empty".to_string());
+        }
+        let mut matches = self
+            .worksheet_origins
+            .iter()
+            .filter(|(key, origin)| {
+                self.sheets.contains_key(*key)
+                    && origin.original_sheet_id.as_deref() == Some(sheet_id)
+            })
+            .map(|(key, _)| key.clone());
+        let Some(key) = matches.next() else {
+            return Err(format!("sheetId '{sheet_id}' not found"));
+        };
+        if matches.next().is_some() {
+            return Err(format!("sheetId '{sheet_id}' is duplicated"));
+        }
+        Ok(key)
     }
 
     /// Evaluates an `ObjectExpr` to the `ObjectRef` it names (Milestone
@@ -8365,6 +8417,7 @@ impl Vm {
             .file_name()
             .map(|n| n.to_string_lossy().to_string());
         self.loaded_workbook_path = Some(path.to_string());
+        self.external_links_policy = options.external_links;
         let sheets = reader::read_workbook_with_options(path, options).map_err(|error| {
             if error == "unsupported input extension; use .xlsx, .xlsm, or .ods" {
                 error
@@ -12081,6 +12134,7 @@ impl Vm {
     /// contract is unchanged and this opt-in path does not add edit history.
     pub fn recalculate_all_with_spills(&mut self) -> Result<(), String> {
         let original_active = self.active_sheet.clone();
+        let before = self.capture_edit_history();
         let sheets = self.sheet_order.clone();
         let result = (|| {
             for sheet in sheets {
@@ -12091,11 +12145,14 @@ impl Vm {
                 self.recalculate_all()?;
                 self.materialize_active_sheet_spills()?;
             }
-            Ok::<(), String>(())
+            self.recalculate_all()
         })();
         self.active_sheet = original_active;
-        result?;
-        self.recalculate_all()
+        if let Err(error) = result {
+            self.restore_edit_history(before);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn materialize_active_sheet_spills(&mut self) -> Result<(), String> {
@@ -13001,10 +13058,10 @@ fn collect_formula_dependencies(
             }
             if let Some(rects) = spill_rects {
                 for (anchor, rect) in rects {
-                    if spill_rect_overlaps_range(rect, *rmin, *cmin, *rmax, *cmax) {
-                        if let Some(&index) = positions.get(anchor) {
-                            out.insert(index);
-                        }
+                    if spill_rect_overlaps_range(rect, *rmin, *cmin, *rmax, *cmax)
+                        && let Some(&index) = positions.get(anchor)
+                    {
+                        out.insert(index);
                     }
                 }
             }
@@ -13155,7 +13212,7 @@ fn formula_spill_shape(
             let source = args.first()?;
             if let FormulaExpr::Range { c1, c2, .. } = source {
                 let cols = (c2.max(c1) - c2.min(c1) + 1) as usize;
-                return (cols > 0 && value_len(value) % cols == 0)
+                return (cols > 0 && value_len(value).is_multiple_of(cols))
                     .then_some(ArrayShape::new(value_len(value) / cols, cols))
                     .or(Some(fallback));
             }
@@ -13184,7 +13241,7 @@ fn formula_spill_shape(
                     _ => 0,
                 };
                 ArrayShape::new(source_shape.rows, count)
-            } else if source_shape.cols > 0 && value_len(value) % source_shape.cols == 0 {
+            } else if source_shape.cols > 0 && value_len(value).is_multiple_of(source_shape.cols) {
                 ArrayShape::new(value_len(value) / source_shape.cols, source_shape.cols)
             } else {
                 fallback
@@ -13234,8 +13291,7 @@ fn formula_spill_shape(
             let rows = count(args.get(1), source_shape.rows)?;
             let cols = args
                 .get(2)
-                .map(|arg| count(Some(arg), source_shape.cols))
-                .flatten();
+                .and_then(|arg| count(Some(arg), source_shape.cols));
             let shape = if name == "TAKE" {
                 ArrayShape::new(rows, cols.unwrap_or(source_shape.cols))
             } else {
@@ -17475,6 +17531,51 @@ mod tests {
     }
 
     #[test]
+    fn sheet_id_lookup_survives_rename_and_reorder() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("First");
+        vm.ensure_sheet("Second");
+        vm.worksheet_origins
+            .get_mut("first")
+            .unwrap()
+            .original_sheet_id = Some("7".to_string());
+
+        assert_eq!(vm.sheet_id("FIRST").unwrap(), Some("7".to_string()));
+        assert_eq!(vm.sheet_name_for_id("7").unwrap(), "first");
+
+        vm.rename_sheet("First", "Renamed").unwrap();
+        vm.move_sheet("Renamed", 2).unwrap();
+
+        assert_eq!(vm.sheet_id("Renamed").unwrap(), Some("7".to_string()));
+        assert_eq!(vm.sheet_name_for_id("7").unwrap(), "renamed");
+        assert_eq!(vm.sheet_id("Second").unwrap(), None);
+        assert!(
+            vm.sheet_name_for_id("missing")
+                .unwrap_err()
+                .contains("not found")
+        );
+    }
+
+    #[test]
+    fn sheet_name_for_id_rejects_duplicate_source_ids() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Second");
+        vm.worksheet_origins
+            .get_mut("second")
+            .unwrap()
+            .original_sheet_id = Some("7".to_string());
+
+        vm.ensure_sheet("First");
+        vm.worksheet_origins
+            .get_mut("first")
+            .unwrap()
+            .original_sheet_id = Some("7".to_string());
+
+        let err = vm.sheet_name_for_id("7").unwrap_err();
+        assert!(err.contains("duplicated"), "{err}");
+    }
+
+    #[test]
     fn sheet_state_from_attr_maps_the_two_real_values() {
         assert_eq!(SheetState::from_attr(Some("hidden")), SheetState::Hidden);
         assert_eq!(
@@ -19841,6 +19942,36 @@ mod tests {
         let error = vm.recalculate_all_with_spills().unwrap_err();
         assert!(error.contains("#SPILL!"));
         assert_eq!(vm.cells().len(), before);
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_rolls_back_prior_sheets_on_later_collision() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.ensure_sheet("Other");
+        vm.set_active_sheet("Other").unwrap();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.write_rect("Other", (1, 2), &[vec![Variant::Integer(99)]]);
+        vm.set_active_sheet("sheet1").unwrap();
+
+        let error = vm.recalculate_all_with_spills().unwrap_err();
+        assert!(error.contains("#SPILL!"));
+        assert_eq!(vm.active_sheet, "sheet1");
+        // The formula's cached array value exists before materialization; the
+        // rollback contract is that only the derived spill cells disappear.
+        assert_eq!(
+            vm.get_cell(1, 1),
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(2)])
+        );
+        assert_eq!(vm.get_cell(1, 2), Variant::Empty);
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 2))
+                .map(|cell| &cell.value),
+            Some(&Variant::Integer(99))
+        );
+        assert!(vm.spill_rects.values().all(HashMap::is_empty));
     }
 
     #[test]

@@ -96,6 +96,7 @@ fn usage() -> ! {
          Options:\n\
            --file <path>    Load cell data from spreadsheet (.xlsx / .xlsm / .ods)\n\
            --sheet <name>   Active sheet name (default: first sheet in --file)\n\
+           --external-links <preserve|reject>  External-link policy (default: preserve; never fetches URLs)\n\
            --output <path>  Save result cells to spreadsheet (.xlsx / .xlsm / .ods)\n\
            --json           Emit a single JSON object (result or error) instead of plain text\n\
            --version, -V    Print the version number and exit\n\
@@ -105,7 +106,7 @@ fn usage() -> ! {
          \x20   Static analysis — parse + optional entrypoint check + interactive-call\n\
          \x20   detection, without executing the macro. All positional arguments\n\
          \x20   are files; the entrypoint (if any) is always given via --entry.\n\
-           elixcee snapshot <file> [--json] [--max-work-units <N>] [--timeout-ms <N>]\n\
+           elixcee snapshot <file> [--json] [--external-links <preserve|reject>] [--max-work-units <N>] [--timeout-ms <N>]\n\
          \x20   [--cancel-file <path>]\n\
          \x20   Reads a .xlsx/.ods file directly (no VBA execution) and prints every\n\
          \x20   sheet's non-empty cells — Markdown by default, JSON with --json.\n\
@@ -415,6 +416,7 @@ fn run_snapshot_command(args: &[String]) -> ! {
     let mut max_work_units = None;
     let mut timeout_ms = None;
     let mut cancel_file = None;
+    let mut external_links = reader::ExternalLinksPolicy::Preserve;
 
     let mut index = 0;
     while index < args.len() {
@@ -450,6 +452,13 @@ fn run_snapshot_command(args: &[String]) -> ! {
                         .clone(),
                 );
             }
+            "--external-links" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .unwrap_or_else(|| die("--external-links requires preserve or reject"));
+                external_links = parse_external_links_policy(value);
+            }
             a if a.starts_with('-') => die(&format!("unknown option: {}", a)),
             _ if path.is_none() => path = Some(args[index].clone()),
             _ => die("snapshot takes exactly one file"),
@@ -469,6 +478,7 @@ fn run_snapshot_command(args: &[String]) -> ! {
         max_work_units: max_work_units.or(Some(reader::DEFAULT_READ_MAX_WORK_UNITS)),
         timeout_ms,
         cancellation: Some(Arc::clone(&cancellation)),
+        external_links,
     };
     let read_result = reader::read_workbook_with_options(&path, &options);
     watcher_stop.store(true, Ordering::Relaxed);
@@ -858,6 +868,15 @@ fn die(msg: &str) -> ! {
     process::exit(1);
 }
 
+fn parse_external_links_policy(value: &str) -> reader::ExternalLinksPolicy {
+    match value.to_ascii_lowercase().as_str() {
+        "preserve" => reader::ExternalLinksPolicy::Preserve,
+        "reject" => reader::ExternalLinksPolicy::Reject,
+        "drop" => reader::ExternalLinksPolicy::Drop,
+        _ => die("--external-links must be preserve, reject, or drop"),
+    }
+}
+
 /// Print the `--json` error object to stdout and exit(1). Kept separate from
 /// `die()` (which writes to stderr) so a `--json` run always emits exactly
 /// one JSON object on stdout, success or failure. `messages` should be
@@ -973,6 +992,7 @@ fn main() {
     let mut sheet_name: Option<String> = None;
     let mut output: Option<String> = None;
     let mut json = false;
+    let mut external_links = reader::ExternalLinksPolicy::Preserve;
 
     let mut i = 1;
     while i < args.len() {
@@ -997,6 +1017,13 @@ fn main() {
                     .get(i)
                     .cloned()
                     .or_else(|| die("--output requires a path"));
+            }
+            "--external-links" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .unwrap_or_else(|| die("--external-links requires preserve or reject"));
+                external_links = parse_external_links_policy(value);
             }
             "--json" => {
                 json = true;
@@ -1034,6 +1061,7 @@ fn main() {
         max_work_units: Some(reader::DEFAULT_READ_MAX_WORK_UNITS),
         timeout_ms: None,
         cancellation: Some(cancellation),
+        external_links,
     };
 
     // Load spreadsheet data if provided

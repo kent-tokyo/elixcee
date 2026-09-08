@@ -1,6 +1,8 @@
 # @elixcee/xlsx
 
-Experimental, private JavaScript package (`0.0.0-development`); **not published to npm**.
+Experimental, private JavaScript workbook package (`0.0.0-development`); **not published to npm**.
+It is one package surface of elixcee's broader headless workbook automation
+project, not the native Rust/Python VBA runtime and not a complete Excel clone.
 Targets the documented subset of `xlsx@0.18.5` behavior, not a complete drop-in replacement.
 Reads use the Rust/WASM bridge; writes use a separate JavaScript OOXML/ZIP writer.
 The parent Rust/Python version does not describe this package's publication status.
@@ -19,6 +21,9 @@ The parent Rust/Python version does not describe this package's publication stat
 
 Read coverage includes SheetNames, !ref, merges, hidden rows/columns, and cell
 `t/v/f/w/z`, including the documented cellDates/cellStyles paths.
+The Rust/WASM read bridge also exposes a read-only `!dataValidations` projection
+with validation `type` and 1-based `sqref` ranges. It is structural metadata;
+it does not evaluate formulas or validate cell values.
 Write coverage includes scalar values, dates, formulas, multiple sheets, merges,
 visibility, hidden rows/columns, and basic number formats.
 It is not the native writer's arbitrary-part/VBA preservation path.
@@ -26,6 +31,25 @@ It is not the native writer's arbitrary-part/VBA preservation path.
 Browser file APIs are present but throw `ELIXCEE_UNSUPPORTED_IN_BROWSER`.
 Use FileReader/fetch to supply bytes, and download the result of `write` yourself.
 Unsupported output book types throw `ELIXCEE_UNSUPPORTED_BOOK_TYPE`.
+
+The private `@elixcee/xlsx/runtime` entry also exposes `executeOperationPlan` and
+`executeOperationPlanOnEditor`.
+This is a data-only automation boundary: plans support `setNumber`, `setString`,
+and `setBoolean` cell writes with 1-based coordinates, matching
+`cell.write.number`, `cell.write.string`, or `cell.write.boolean` capabilities,
+operation/JSON-size budgets, and dry-run by default. It never evaluates
+caller-supplied code or performs external I/O; pass `apply: true` to apply an
+already validated plan.
+`executeOperationPlanOnEditor` applies the same plan to the WASM `WorkbookEditor`
+inside one transaction; it remains a dry-run unless `apply: true` is explicit.
+
+`createOperationPluginRegistry()` provides the corresponding restricted plugin
+boundary. A plugin is only a named, immutable operation plan: it may contain
+typed cell writes, declared capabilities, and finite operation/JSON budgets.
+Registration rejects executable callbacks and unknown schema fields, execution
+requires the declared capabilities, and dry-run remains the default. This is
+deliberately not an arbitrary JavaScript plugin system and performs no external
+I/O.
 
 ## Boundaries
 

@@ -23,7 +23,14 @@ export interface CellObject {
   [key: string]: unknown;
 }
 
-export type WorkSheet = { [address: string]: CellObject | unknown } & { '!ref'?: string };
+export interface DataValidationProjection {
+  type: string;
+  sqref: string[];
+}
+export type WorkSheet = { [address: string]: CellObject | unknown } & {
+  '!ref'?: string;
+  '!dataValidations'?: DataValidationProjection[];
+};
 
 export interface WorkBook {
   SheetNames: string[];

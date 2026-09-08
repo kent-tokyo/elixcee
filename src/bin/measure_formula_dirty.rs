@@ -130,6 +130,65 @@ fn measure_manual_transition(iterations: usize, template: &Vm) -> Vec<f64> {
     samples
 }
 
+fn cross_sheet_template(formula_count: u32) -> Vm {
+    let mut vm = Vm::new();
+    vm.ensure_sheet_at("Data", None);
+    vm.ensure_sheet_at("Calc", None);
+    vm.write_rect("data", (1, 1), &[vec![Variant::Integer(1)]]);
+    vm.set_active_sheet("Calc").expect("calc sheet");
+    for col in 1..=formula_count {
+        vm.set_cell_formula(1, col, "=Data!A1+1")
+            .expect("cross-sheet fan-out formula");
+    }
+    vm.recalculate_all().expect("warm cross-sheet formula plan");
+    vm
+}
+
+fn measure_cross_sheet(
+    iterations: usize,
+    formula_count: u32,
+    template: &Vm,
+) -> (Vec<f64>, Vec<f64>) {
+    let mut dirty_samples = Vec::with_capacity(iterations);
+    let mut full_samples = Vec::with_capacity(iterations);
+    for iteration in 0..iterations {
+        let mut dirty = template.clone();
+        dirty.write_rect(
+            "data",
+            (1, 1),
+            &[vec![Variant::Integer(10 + iteration as i64)]],
+        );
+        let started = Instant::now();
+        dirty
+            .recalculate_all()
+            .expect("cross-sheet dirty recalculation");
+        dirty_samples.push(black_box(started.elapsed().as_secs_f64() * 1000.0));
+
+        let mut full = template.clone();
+        full.write_rect(
+            "data",
+            (1, 1),
+            &[vec![Variant::Integer(10 + iteration as i64)]],
+        );
+        full.set_active_sheet("Calc").expect("calc sheet");
+        full.set_cell_formula(1, formula_count, "=Data!A1+1")
+            .expect("cross-sheet full-plan invalidation");
+        let started = Instant::now();
+        full.recalculate_all()
+            .expect("cross-sheet full recalculation");
+        full_samples.push(black_box(started.elapsed().as_secs_f64() * 1000.0));
+
+        for col in [1, formula_count] {
+            assert_eq!(
+                dirty.get_sheet_cells("calc").unwrap()[&(1, col)].value,
+                full.get_sheet_cells("calc").unwrap()[&(1, col)].value,
+                "cross-sheet dirty/full mismatch at column {col}"
+            );
+        }
+    }
+    (dirty_samples, full_samples)
+}
+
 fn measure_cycle(iterations: usize) -> Vec<f64> {
     let mut samples = Vec::with_capacity(iterations);
     for _ in 0..iterations {
@@ -176,11 +235,20 @@ fn main() {
     }
     let manual = measure_manual_transition(iterations, large_template.as_ref().unwrap());
     let cycle = measure_cycle(iterations);
+    let cross_sheet_formula_count = 1_000;
+    let cross_sheet_template = cross_sheet_template(cross_sheet_formula_count);
+    let (cross_sheet_dirty, cross_sheet_full) =
+        measure_cross_sheet(iterations, cross_sheet_formula_count, &cross_sheet_template);
     let (peak_rss_bytes, user_cpu_us, system_cpu_us) = resource_stats();
     println!(
-        "{{\"iterations\":{},\"cases\":[{}],\"manual_to_automatic_p50_ms\":{:.6},\"manual_to_automatic_p95_ms\":{:.6},\"cycle_p50_ms\":{:.6},\"cycle_p95_ms\":{:.6},\"peak_rss_bytes\":{},\"user_cpu_us\":{},\"system_cpu_us\":{},\"resource_stats_supported\":{},\"wall_ms\":{:.3}}}",
+        "{{\"iterations\":{},\"cases\":[{}],\"cross_sheet_fanout\":{{\"formula_count\":{},\"dirty_p50_ms\":{:.6},\"dirty_p95_ms\":{:.6},\"full_p50_ms\":{:.6},\"full_p95_ms\":{:.6}}},\"manual_to_automatic_p50_ms\":{:.6},\"manual_to_automatic_p95_ms\":{:.6},\"cycle_p50_ms\":{:.6},\"cycle_p95_ms\":{:.6},\"peak_rss_bytes\":{},\"user_cpu_us\":{},\"system_cpu_us\":{},\"resource_stats_supported\":{},\"wall_ms\":{:.3}}}",
         iterations,
         cases.join(","),
+        cross_sheet_formula_count,
+        percentile(&cross_sheet_dirty, 50),
+        percentile(&cross_sheet_dirty, 95),
+        percentile(&cross_sheet_full, 50),
+        percentile(&cross_sheet_full, 95),
         percentile(&manual, 50),
         percentile(&manual, 95),
         percentile(&cycle, 50),

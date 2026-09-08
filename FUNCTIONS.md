@@ -1,8 +1,14 @@
 # elixcee — Function & VBA Coverage Reference
 
-Coverage reference for **elixcee 1.0.4**. See [CHANGELOG](CHANGELOG.md) for versioned changes.
+Coverage reference for **elixcee 1.0.5**. See [CHANGELOG](CHANGELOG.md) for versioned changes.
 “Done”/“Active” describes the documented subset, not complete Excel equivalence or release status.
 Each worksheet function shows the minimum Excel version in which it was introduced as a built-in.
+
+The mode-rich subset has an executable engine contract in
+[`compat/formula-contracts.json`](compat/formula-contracts.json). It records accepted
+argument shapes, supported and rejected modes, and regression-test anchors. Its
+`oracle_status` is deliberately `unverified`: this is an implementation contract,
+not a claim of Excel-equivalent results.
 
 ---
 
@@ -84,7 +90,7 @@ Collection graphs are reclaimed by VM reachability.
 
 ### In-memory Dictionary
 
-`Scripting.Dictionary` is active in the **1.0.4 VM-local adapter**, not a COM object.
+`Scripting.Dictionary` is active in the **1.0.5 VM-local adapter**, not a COM object.
 
 | Operation | Supported subset |
 |---|---|

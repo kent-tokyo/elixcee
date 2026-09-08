@@ -1,8 +1,13 @@
 # Documentation map
 
-Documentation version: **1.0.4**. API/coverage pages describe this version;
+Documentation version: **1.0.5**. API/coverage pages describe this version;
 dated benchmark records retain their original baseline and source hashes.
 The JavaScript package remains private at 0.0.0-development.
+
+elixcee is a headless Excel workbook automation runtime. Its native contract
+covers workbook editing, supported formula recalculation, and data-processing
+VBA execution/diagnosis; it is not a VBA-only runner or a complete Excel desktop
+replacement.
 
 ## Find the right document
 
@@ -11,12 +16,15 @@ The JavaScript package remains private at 0.0.0-development.
 | Install and first example | [English](../README.md), [日本語](../README_ja.md), [中文](../README_zh.md) |
 | Current priorities and remaining gates | [Roadmap](../ROADMAP.md) |
 | VBA and formula coverage | [FUNCTIONS](../FUNCTIONS.md) |
+| Formula argument/mode contracts | [formula-contracts.json](../compat/formula-contracts.json); validate with `python3 -B scripts/check-formula-dispatch.py --check-docs --check-contracts` |
 | Python signatures | [elixcee.pyi](../elixcee.pyi) |
 | CLI commands and JSON schema | [Agent contract](agent-contract.md) |
 | Support guarantees and non-goals | [v1 support contract](v1-support-contract.md) |
+| Migration examples and boundaries | [Migration guide](migration.md) |
 | Resource ceilings and sizing evidence | [Limits](limits.md) |
 | Input/output threat model | [Security](xlsx-security-model.md) |
 | Reader/VM/writer and JS boundaries | [Architecture](xlsx-architecture.md) |
+| OOXML feature status matrix | [Feature matrix](../compat/ooxml-feature-matrix.json) |
 | JS runtime / types / known differences | [Package](../packages/xlsx/README.md), [types](typescript-compatibility.md), [differences](compatibility-known-defects.md) |
 | JS compatibility target | [Compatibility goal](xlsx-compatibility-goal.md) |
 | Dependency licensing | [Licensing](licensing.md), [notices](../THIRD_PARTY_NOTICES.md) |

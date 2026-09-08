@@ -24,6 +24,10 @@ The VM uses 1-based row and column coordinates at its public boundaries, as
 Excel/VBA does. Cell values and formulas are stored separately so formulas can
 be recalculated when calculation mode permits. Sheet keys are resolved
 case-insensitively for VBA behavior.
+Loaded XLSX/XLSM worksheet origins retain the raw source `sheetId` separately
+from the lowercase lookup key and tab position. `Vm.sheet_id()` and
+`Vm.sheet_name_for_id()` use that identity after rename/reorder; new and ODS
+sheets deliberately have no synthetic identity.
 
 ## Preservation policy
 
@@ -36,8 +40,9 @@ For worksheet drawing and legacy-drawing owners, save now checks the owner
 relationship id, the worksheet rels declaration, its normalized internal target,
 and target-part survival before restoring the opaque owner fragment. The check
 also walks surviving internal part relationships, so Drawing-to-Chart/image
-targets are covered without fetching external URLs. Pivot cache validation
-remains future work.
+targets are covered without fetching external URLs. Pivot cache owner and
+reachable-part validation is also applied; the narrow sheet-rename path updates
+only `worksheetSource@sheet` and does not recalculate the cache.
 
 Macro-enabled workbooks preserve `xl/vbaProject.bin` and the macro-enabled
 content type on supported save paths. Unmodeled worksheet objects can still be
@@ -47,8 +52,12 @@ over any assumption of lossless editing.
 The [G0–G6 strengthening plan](../ROADMAP.md) separates connected OOXML
 preservation from object editing/recalculation, workbook-wide formula evaluation,
 and memory-bounded output. In particular, passing through a Pivot cache or external
-link part currently does not restore the omitted `pivotCaches` or
-`externalReferences` owner elements in regenerated workbook XML.
+link part is not evidence that the object can be edited or recalculated. The
+current implementation restores validated Pivot and external-reference owners,
+while unsupported structural edits remain fail-closed.
+The current per-feature evidence vocabulary is maintained in the
+[OOXML feature matrix](../compat/ooxml-feature-matrix.json); a preserved part is
+not automatically an editable or recalculable object.
 
 The native VM writer now retains worksheet/workbook/styles/rels XML and only
 edited table XML for relationship and structural analysis, while copying other XML and non-XML
@@ -79,6 +88,9 @@ summary (sheet/formula counts, qualified formulas, and parse errors). Incrementa
 JS calculation and worker/async loading contracts remain future work.
 The optional `@elixcee/xlsx/runtime` subpath exposes the same shared calculation
 functions plus stateful `WorkbookEditor` in Node and browser package conditions.
+`WorkbookEditor` exposes bounded typed cell writes (`setNumber`, `setString`, and
+`setBoolean`) with worksheet coordinate validation; OOXML writing remains the
+responsibility of the JavaScript writer.
 The vendored WASM payload has an intentional baseline and a 10% growth gate in
 `scripts/wasm-smoke.mjs`; a baseline update requires a reviewed implementation
 change.
@@ -119,3 +131,8 @@ Rust unit/integration/property tests, compatibility fixtures, and JavaScript
 differential tests run in CI. Real Excel-authored fixtures cover selected
 round-trip paths. They do not establish complete Excel VBA semantic
 compatibility or guarantee that every unmodeled OOXML feature survives a save.
+Chart and Pivot XML are not generally edited. As narrow G2d operations, a loaded
+workbook may rename a sheet and rewrite qualified references in chart `<c:f>`
+formula elements plus `worksheetSource@sheet` in Pivot cache definitions. Row or
+column structural edits, general object editing, Pivot recalculation, and
+unparseable object XML remain fail-closed.

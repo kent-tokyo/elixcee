@@ -26,11 +26,29 @@ use zip::ZipArchive;
 /// flipped from another thread while a read is in progress.
 pub const DEFAULT_READ_MAX_WORK_UNITS: u64 = 2 * 1024 * 1024 * 1024;
 
+/// Policy for workbook-level OOXML external-link relationships.
+///
+/// The reader never follows external URLs. `Preserve` keeps the relationship
+/// available for a round-trip save; `Reject` fails closed before workbook
+/// model construction when an external-link relationship is present.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExternalLinksPolicy {
+    #[default]
+    Preserve,
+    Reject,
+    Drop,
+}
+
 #[derive(Clone)]
 pub struct ReadOptions {
     pub max_work_units: Option<u64>,
     pub timeout_ms: Option<u64>,
     pub cancellation: Option<Arc<AtomicBool>>,
+    pub external_links: ExternalLinksPolicy,
+}
+
+fn workbook_has_external_link_relationship(xml: &str) -> bool {
+    !xlsx_rels(xml, "/externalLink").is_empty()
 }
 
 impl Default for ReadOptions {
@@ -39,6 +57,7 @@ impl Default for ReadOptions {
             max_work_units: Some(DEFAULT_READ_MAX_WORK_UNITS),
             timeout_ms: None,
             cancellation: None,
+            external_links: ExternalLinksPolicy::Preserve,
         }
     }
 }
@@ -3343,6 +3362,13 @@ fn read_workbook_from_archive<R: Read + Seek>(
 
     let rels_xml = zip_read_text_with_budget(&mut archive, "xl/_rels/workbook.xml.rels", &budget)?;
     budget.check()?;
+    if options.external_links == ExternalLinksPolicy::Reject
+        && workbook_has_external_link_relationship(&rels_xml)
+    {
+        return Err(
+            "external workbook links are present and external_links policy is reject".to_string(),
+        );
+    }
     let rels = xlsx_worksheet_rels(&rels_xml)?;
 
     let shared: Vec<String> = if archive
@@ -3380,7 +3406,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
             return Err(format!("worksheet part is missing: {zip_path}"));
         };
         let sheet_data =
-            xlsx_sheet_cells_validated(&zip_path, &sheet_xml, &shared, &styles.cell_xfs)?;
+            xlsx_sheet_cells_validated(&zip_path, &sheet_xml, &shared, &styles.cell_xfs, &budget)?;
         validate_sheet_model(
             &name,
             sheet_data.cells.len(),
@@ -4573,7 +4599,7 @@ pub(crate) struct XlsxSheetData {
 
 #[cfg(any(test, feature = "python"))]
 fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> XlsxSheetData {
-    xlsx_sheet_cells_impl(xml, shared, cell_xfs, None)
+    xlsx_sheet_cells_impl(xml, shared, cell_xfs, None, None)
         .expect("worksheet parsing without validation cannot fail")
 }
 
@@ -4582,8 +4608,9 @@ fn xlsx_sheet_cells_validated(
     xml: &str,
     shared: &[String],
     cell_xfs: &[Option<u32>],
+    budget: &ReadBudget,
 ) -> Result<XlsxSheetData, String> {
-    xlsx_sheet_cells_impl(xml, shared, cell_xfs, Some(name))
+    xlsx_sheet_cells_impl(xml, shared, cell_xfs, Some(name), Some(budget))
 }
 
 fn xlsx_sheet_cells_impl(
@@ -4591,6 +4618,7 @@ fn xlsx_sheet_cells_impl(
     shared: &[String],
     cell_xfs: &[Option<u32>],
     validation_name: Option<&str>,
+    validation_budget: Option<&ReadBudget>,
 ) -> Result<XlsxSheetData, String> {
     let mut iter = XmlIter::new(xml);
     let mut validator = validation_name
@@ -4630,6 +4658,13 @@ fn xlsx_sheet_cells_impl(
     let mut is_text = String::new();
 
     while let Some(ev) = iter.next_ev() {
+        if let Some(budget) = validation_budget {
+            // Check cancellation/deadline before XML-budget errors so an interrupt
+            // remains deterministic even when the input is also close to a structural
+            // XML limit. The byte read was already budgeted; this covers the CPU-bound
+            // event validation loop itself.
+            budget.check()?;
+        }
         if let Some(validator) = validator.as_mut() {
             validator.observe(&ev)?;
         }
@@ -6865,6 +6900,14 @@ mod from_bytes_tests {
     #[test]
     fn read_workbook_from_bytes_rejects_a_non_zip_buffer() {
         assert!(read_workbook_from_bytes(b"not a zip file").is_err());
+    }
+
+    #[test]
+    fn external_link_policy_detects_only_workbook_external_link_relationships() {
+        let external = r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="externalLinks/externalLink1.xml"/></Relationships>"#;
+        let worksheet = r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        assert!(workbook_has_external_link_relationship(external));
+        assert!(!workbook_has_external_link_relationship(worksheet));
     }
 
     #[test]

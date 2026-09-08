@@ -43,3 +43,18 @@ process totals/peaks for the matrix, not per-case allocations.
 
 This is controlled local evidence for the current implementation only; it does
 not establish Excel compatibility or cross-platform performance.
+
+## 100-iteration release follow-up — 2026-09-09
+
+The same macOS arm64 release-profile binary was run for 100 iterations. Every
+iteration compared representative input, near-root, middle-chain, and final
+values between dirty recalculation and forced full-plan recalculation.
+
+```json
+{"iterations":100,"cases":[{"formula_count":100,"dirty_p50_ms":0.054666,"dirty_p95_ms":0.057125,"full_p50_ms":0.084542,"full_p95_ms":0.087750},{"formula_count":1000,"dirty_p50_ms":0.549667,"dirty_p95_ms":0.561375,"full_p50_ms":0.862083,"full_p95_ms":0.887125}],"cross_sheet_fanout":{"formula_count":1000,"dirty_p50_ms":2.105417,"dirty_p95_ms":2.141250,"full_p50_ms":2.053459,"full_p95_ms":2.094666},"manual_to_automatic_p50_ms":0.547292,"manual_to_automatic_p95_ms":0.554000,"cycle_p50_ms":0.001958,"cycle_p95_ms":0.002125,"peak_rss_bytes":30670848,"user_cpu_us":1575009,"system_cpu_us":20205,"resource_stats_supported":true,"wall_ms":1543.973}
+```
+
+This strengthens the local repeatability evidence for the current graph
+implementation and adds a 1,000-formula cross-sheet fan-out case. It remains
+a microbenchmark: larger workbook topologies, independent formula oracles, and
+non-macOS behavior remain open.

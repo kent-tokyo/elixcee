@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "description": "Engine-level argument and mode contracts. oracle_status is intentionally unverified until Excel fixtures are calibrated.",
+  "functions": [
+    {"name":"XLOOKUP","argument_shape":"lookup_value, lookup_array, return_array [, if_not_found [, match_mode [, search_mode]]]","supported_modes":{"match_mode":[0,-1,1,2],"search_mode":[1,-1,2,-2]},"unsupported_modes":["wildcard match combined with binary search"],"oracle_status":"unverified","tests":["test_xlookup_wildcard_and_binary_search_modes"]},
+    {"name":"XMATCH","argument_shape":"lookup_value, lookup_array [, match_mode [, search_mode]]","supported_modes":{"match_mode":[0,-1,1,2],"search_mode":[1,-1,2,-2]},"unsupported_modes":["wildcard match combined with binary search"],"oracle_status":"unverified","tests":["test_lookup_xmatch"]},
+    {"name":"INDEX","argument_shape":"array, row_num [, column_num]","supported_modes":{"row_num":[0],"column_num":[0]},"unsupported_modes":["reference-form and area_num overloads"],"oracle_status":"unverified","tests":["test_index"]},
+    {"name":"MATCH","argument_shape":"lookup_value, lookup_array [, match_type]","supported_modes":{"match_type":[-1,0,1]},"unsupported_modes":["non-sorted approximate lookup inputs are not normalized"],"oracle_status":"unverified","tests":["test_match_exact"]},
+    {"name":"SORT","argument_shape":"array [, sort_index [, sort_order [, by_col]]]","supported_modes":{"sort_order":[1,-1],"by_col":[0,1]},"unsupported_modes":["Excel locale-specific collation parity"],"oracle_status":"unverified","tests":["test_spill_sort"]},
+    {"name":"SORTBY","argument_shape":"array, by_array1, sort_order1 [, by_array2, sort_order2, ...]","supported_modes":{"sort_order":[1,-1]},"unsupported_modes":["incompatible multi-key shapes"],"oracle_status":"unverified","tests":["test_spill_sort"]},
+    {"name":"TAKE","argument_shape":"array, rows [, columns]","supported_modes":{"rows":["nonzero integer"],"columns":["nonzero integer"]},"unsupported_modes":["zero rows or columns"],"oracle_status":"unverified","tests":["test_take_drop"]},
+    {"name":"DROP","argument_shape":"array, rows [, columns]","supported_modes":{"rows":["nonzero integer"],"columns":["nonzero integer"]},"unsupported_modes":["zero rows or columns"],"oracle_status":"unverified","tests":["test_take_drop"]}
+  ]
+}

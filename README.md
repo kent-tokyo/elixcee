@@ -1,20 +1,28 @@
 # elixcee
 
-Run and test a practical subset of Excel VBA without Microsoft Excel. The core is
-Rust, with a Python API (PyO3), a standalone CLI, and an experimental
-`@elixcee/xlsx` JavaScript/WASM package. It is a headless workbook runtime: in
-addition to VBA execution, it can calculate formulas, edit workbook data and
-metadata, and save the result as XLSX/XLSM/ODS.
+Headless Excel workbook automation in Rust and Python: edit workbooks, recalculate
+supported formulas, and run data-processing VBA without Microsoft Excel. The core
+is Rust, with a Python API (PyO3), a standalone CLI, and an experimental
+`@elixcee/xlsx` JavaScript/WASM package.
 
-Version: **1.0.4**. See the [changelog](CHANGELOG.md) for versioned changes.
+Version: **1.0.5**. See the [changelog](CHANGELOG.md) for versioned changes.
 The experimental JS package remains private and is not published. [English](README.md) | [日本語](README_ja.md) | [中文](README_zh.md)
 
-elixcee is not only a macro runner. It is intended for headless Excel
-workbook automation: use it for direct data edits and formula recalculation,
-or execute data-processing VBA against the same workbook model. It is not a
+elixcee is a workbook automation runtime, not a VBA-only execution tool. Use the
+same workbook model for direct data edits, supported formula recalculation, and
+execution, diagnosis, or testing of supported data-processing VBA. It is not a
 replacement for the Excel desktop application: UI features such as charts,
 dialogs, and screen updates are skipped, modeled, or reported according to the
 operation.
+
+### Choose by workflow
+
+| Need | Fit |
+|---|---|
+| Direct cell edits only | A general workbook library may be sufficient. |
+| Edit a workbook and recalculate supported formulas headlessly | elixcee |
+| Run or diagnose data-processing VBA in Linux, macOS, or CI | elixcee |
+| Full Excel desktop object model, UI, or complete OOXML compatibility | Check Excel or a specialized library and the elixcee support boundaries. |
 
 Choose elixcee when the workflow needs one or more of these without a desktop
 Excel installation: read/edit/save `.xlsx` or `.xlsm`, calculate supported
@@ -99,6 +107,11 @@ bounded undo/redo, formula evaluation, ranges, sorting, merges,
 hidden rows/columns, sheet management, styles, tables, data validation,
 AutoFilter, defined-name inspection, pandas export, and `.xlsx`/`.xlsm`/`.ods`
 workbook I/O. See [elixcee.pyi](elixcee.pyi) for signatures and behavior.
+`Vm.tables()` and `Vm.data_validations()` return typed structural metadata
+projections; they do not evaluate calculated-column or validation formulas.
+For loaded XLSX/XLSM sheets, `Vm.sheet_id(name)` and
+`Vm.sheet_name_for_id(sheet_id)` expose stable source identities independently
+of tab order and rename operations; new or ODS sheets have no inferred ID.
 
 For large XLSX/XLSM files, `open_stream(path, sheet=None)` yields rows without
 materializing the whole workbook. Set `include_row_numbers=True` to receive

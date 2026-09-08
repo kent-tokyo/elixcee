@@ -111,10 +111,21 @@ step('2. browser export condition resolves and runs', () => {
 step('3. public runtime subpath resolves in Node and browser conditions', () => {
   const script = `
     import('@elixcee/xlsx/runtime').then(m => {
-      for (const name of ['WorkbookEditor', 'calculateWorkbook', 'diagnoseWorkbook']) {
+      for (const name of ['WorkbookEditor', 'calculateWorkbook', 'diagnoseWorkbook', 'validateOperationPlugin', 'createOperationPluginRegistry']) {
         if (typeof m[name] !== 'function') throw new Error('runtime export is not callable: ' + name);
       }
-      console.log('  runtime exports: WorkbookEditor, calculateWorkbook, diagnoseWorkbook');
+      const registry = m.createOperationPluginRegistry({ maxPlugins: 1 });
+      registry.register({
+        name: 'browser-write',
+        capabilities: ['cell.write.string'],
+        operations: [{ kind: 'setString', sheet: 'Sheet1', row: 1, col: 1, value: 'browser' }],
+      });
+      const workbook = { Sheets: { Sheet1: {} } };
+      const dryRun = registry.execute('browser-write', workbook, { capabilities: ['cell.write.string'] });
+      if (!dryRun.dryRun || workbook.Sheets.Sheet1.A1 !== undefined) throw new Error('browser plugin dry-run mutated workbook');
+      registry.execute('browser-write', workbook, { capabilities: ['cell.write.string'], apply: true });
+      if (workbook.Sheets.Sheet1.A1?.v !== 'browser') throw new Error('browser plugin apply failed');
+      console.log('  runtime exports: WorkbookEditor, calculateWorkbook, diagnoseWorkbook, validateOperationPlugin, createOperationPluginRegistry');
     }).catch(e => { console.error(e.stack); process.exit(1); });
   `;
   execFileSync(process.execPath, ['--input-type=module', '-e', script], {
@@ -122,6 +133,75 @@ step('3. public runtime subpath resolves in Node and browser conditions', () => 
     stdio: 'inherit',
   });
   execFileSync(process.execPath, ['--conditions=browser', '--input-type=module', '-e', script], {
+    cwd: PKG_DIR,
+    stdio: 'inherit',
+  });
+});
+
+step('3b. WorkbookEditor exposes bounded typed cell writes', () => {
+  const script = `
+    import('@elixcee/xlsx/runtime').then(async m => {
+      const fs = await import('node:fs');
+      const editor = new m.WorkbookEditor(new Uint8Array(fs.readFileSync(${JSON.stringify(FIXTURE)})));
+      for (const name of ['setNumber', 'setString', 'setBoolean']) {
+        if (typeof editor[name] !== 'function') throw new Error('editor method is not callable: ' + name);
+      }
+      editor.setString('source', 1, 1, 'typed');
+      editor.setBoolean('source', 1, 2, true);
+      editor.setNumber('source', 1, 3, 7);
+      const snapshot = JSON.parse(editor.snapshot());
+      if (snapshot.Sheets.source.A1.v !== 'typed' || snapshot.Sheets.source.B1.v !== true || snapshot.Sheets.source.C1.v !== 7) {
+        throw new Error('typed editor writes were not reflected in the snapshot');
+      }
+      console.log('  editor typed writes: setString, setBoolean, setNumber');
+    }).catch(e => { console.error(e.stack); process.exit(1); });
+  `;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: PKG_DIR,
+    stdio: 'inherit',
+  });
+});
+
+step('3c. data-only operation plan applies atomically to WorkbookEditor', () => {
+  const script = `
+    import('@elixcee/xlsx/runtime').then(async m => {
+      const fs = await import('node:fs');
+      const editor = new m.WorkbookEditor(new Uint8Array(fs.readFileSync(${JSON.stringify(FIXTURE)})));
+      const plan = { operations: [
+        { kind: 'setString', sheet: 'source', row: 1, col: 1, value: 'planned' },
+        { kind: 'setBoolean', sheet: 'source', row: 1, col: 2, value: true },
+      ]};
+      const capabilities = ['cell.write.string', 'cell.write.boolean'];
+      const dryRun = m.executeOperationPlanOnEditor(editor, plan, { capabilities });
+      if (!dryRun.dryRun || dryRun.applied || JSON.parse(editor.snapshot()).Sheets.source.A1.v !== 'Name') {
+        throw new Error('operation plan dry-run mutated the editor');
+      }
+      const applied = m.executeOperationPlanOnEditor(editor, plan, { capabilities, apply: true });
+      const snapshot = JSON.parse(editor.snapshot());
+      if (!applied.applied || snapshot.Sheets.source.A1.v !== 'planned' || snapshot.Sheets.source.B1.v !== true) {
+        throw new Error('operation plan was not applied to the editor');
+      }
+      if (!editor.undo() || JSON.parse(editor.snapshot()).Sheets.source.A1.v !== 'Name') {
+        throw new Error('operation plan was not recorded as one undo unit');
+      }
+      const registry = m.createOperationPluginRegistry({ maxPlugins: 1 });
+      registry.register({
+        name: 'wasm-plugin',
+        capabilities: ['cell.write.string'],
+        operations: [{ kind: 'setString', sheet: 'source', row: 1, col: 1, value: 'plugin' }],
+      });
+      const pluginDryRun = registry.execute('wasm-plugin', editor, { capabilities: ['cell.write.string'] });
+      if (!pluginDryRun.dryRun || JSON.parse(editor.snapshot()).Sheets.source.A1.v !== 'Name') {
+        throw new Error('WASM plugin dry-run mutated the editor');
+      }
+      registry.execute('wasm-plugin', editor, { capabilities: ['cell.write.string'], apply: true });
+      if (JSON.parse(editor.snapshot()).Sheets.source.A1.v !== 'plugin' || !editor.undo()) {
+        throw new Error('WASM plugin apply or undo failed');
+      }
+      console.log('  operation plan/plugin: dry-run, atomic apply, undo');
+    }).catch(e => { console.error(e.stack); process.exit(1); });
+  `;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script], {
     cwd: PKG_DIR,
     stdio: 'inherit',
   });

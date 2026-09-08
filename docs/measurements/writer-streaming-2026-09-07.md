@@ -58,3 +58,16 @@ does not establish three-OS support or constant memory for the normal VM.
 The harness now uses 4,096-row `set_range` batches for a separate normal-VM
 storage/save measurement; its results must not be compared directly with
 append API timings.
+
+The measurement harness now also compares every emitted cell against the
+generated input using a streaming semantic digest. The comparison ignores ZIP
+layout, shared-string choice, styles, and workbook metadata; it is an output
+value check, not an Excel compatibility check.
+
+As a follow-up on 2026-09-09, the same macOS arm64 release-wheel harness ran
+the one-million-row point once per mode with this digest enabled. `append`
+reported 19.64 MiB peak RSS, 2,822 ms wall time, and a 14.24 MiB output;
+`normal-fresh` reported 751.61 MiB peak RSS, 1,961 ms wall time, and a 12.43
+MiB output. Both samples passed ZIP, worksheet-shape, final-row, and
+`semantic_equal: true` validation. The single repetition is a confirmation
+sample, not a p95 estimate.

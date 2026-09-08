@@ -10,6 +10,7 @@ contains ``create_stream_bounded`` after building it.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -20,6 +21,7 @@ import threading
 import time
 import zipfile
 import math
+import xml.etree.ElementTree as ET
 
 
 CHILD = r'''
@@ -120,6 +122,73 @@ print(json.dumps({
 '''
 
 
+def verify_semantic_output(
+    path: pathlib.Path, rows: int, columns: int, mode: str, value_profile: str
+) -> bool:
+    """Compare streamed worksheet values with the generated input rows.
+
+    The comparison intentionally ignores ZIP/XML layout, shared-string choice,
+    styles, and workbook metadata. It therefore checks semantic cell output
+    without loading the whole worksheet tree into memory.
+    """
+    namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    digest = hashlib.sha256()
+    seen = 0
+    with zipfile.ZipFile(path) as archive:
+        shared_strings = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            with archive.open("xl/sharedStrings.xml") as source:
+                for event, element in ET.iterparse(source, events=("end",)):
+                    if element.tag == f"{namespace}si":
+                        shared_strings.append(
+                            "".join(
+                                text.text or ""
+                                for text in element.iter(f"{namespace}t")
+                            )
+                        )
+                        element.clear()
+        with archive.open("xl/worksheets/sheet1.xml") as source:
+            for event, element in ET.iterparse(source, events=("end",)):
+                if element.tag != f"{namespace}c":
+                    continue
+                reference = element.attrib.get("r", "")
+                letters = "".join(character for character in reference if character.isalpha())
+                row_text = "".join(character for character in reference if character.isdigit())
+                if not letters or not row_text:
+                    element.clear()
+                    continue
+                column = 0
+                for character in letters.upper():
+                    column = column * 26 + ord(character) - ord("A") + 1
+                row = int(row_text)
+                value = element.find(f"{namespace}v")
+                raw = value.text if value is not None and value.text is not None else ""
+                if element.attrib.get("t") == "s":
+                    raw = shared_strings[int(raw)]
+                elif element.attrib.get("t") == "inlineStr":
+                    inline = element.find(f"{namespace}is")
+                    raw = (
+                        "".join(text.text or "" for text in inline.iter(f"{namespace}t"))
+                        if inline is not None
+                        else ""
+                    )
+                digest.update(f"{row},{column}\0{raw}\n".encode("utf-8"))
+                seen += 1
+                element.clear()
+    expected = hashlib.sha256()
+    text_value = "value" if value_profile == "plain" else (
+        "<&>\"'" * 4096 if value_profile == "escape" else "x" * (1024 * 1024)
+    )
+    for row_number in range(rows):
+        for column, raw in enumerate(
+            (row_number, text_value, row_number % 7)[:columns], start=1
+        ):
+            if mode == "normal" and row_number == 0 and column == 1:
+                raw = -1
+            expected.update(f"{row_number + 1},{column}\0{raw}\n".encode("utf-8"))
+    return seen == rows * columns and digest.digest() == expected.digest()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rows", nargs="+", type=int, default=[100_000, 250_000])
@@ -195,7 +264,11 @@ def main() -> int:
                     worksheet = archive.read("xl/worksheets/sheet1.xml")
                     assert worksheet.startswith(b"<?xml")
                     assert f'<row r="{rows}">'.encode() in worksheet
+                semantic_equal = verify_semantic_output(
+                    output, rows, args.columns, args.mode, args.value_profile
+                )
                 sample["output_valid"] = True
+                sample["semantic_equal"] = semantic_equal
                 sample["mode"] = args.mode
                 sample["value_profile"] = args.value_profile
                 sample["peak_temp_bytes"] = peak_temp_bytes[0]
@@ -219,6 +292,7 @@ def main() -> int:
                 "peak_temp_bytes_p95": percentile("peak_temp_bytes", 0.95),
                 "output_bytes": samples[0]["output_bytes"],
                 "output_valid": all(sample["output_valid"] for sample in samples),
+                "semantic_equal": all(sample["semantic_equal"] for sample in samples),
                 "samples": samples,
             })
     report = json.dumps({"schema_version": 1, "cases": results}, indent=2)

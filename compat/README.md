@@ -4,6 +4,11 @@ These suites answer different questions. A passing synthetic fixture, JS referen
 case, workbook round-trip, and real Excel execution are not interchangeable evidence.
 The Node project is private and uses the fixed `xlsx@0.18.5` development oracle.
 
+The native OOXML feature boundary is tracked in the machine-readable
+[feature matrix](ooxml-feature-matrix.json). It separates read, preservation,
+editing, recalculation, and Excel-reopen evidence; `preserved` does not mean
+editable, and `unverified` is not counted as a compatibility success.
+
 From this directory, install dependencies with `npm ci`.
 Native VBA suites also require `cargo build --release --bin elixcee` at the repository root.
 

@@ -23,6 +23,7 @@ REQUIRED_CASE_FIELDS = {
     "peak_temp_bytes_p95",
     "output_bytes",
     "output_valid",
+    "semantic_equal",
     "samples",
 }
 
@@ -51,8 +52,12 @@ def validate(path: pathlib.Path) -> None:
                 raise ValueError(f"{path}: {metric} p95 is below p50")
         if case["output_bytes"] <= 0 or not case["output_valid"]:
             raise ValueError(f"{path}: output was not validated")
+        if not case["semantic_equal"]:
+            raise ValueError(f"{path}: semantic output did not match generated input")
         if any(not sample.get("output_valid") for sample in case["samples"]):
             raise ValueError(f"{path}: an individual sample was not validated")
+        if any(not sample.get("semantic_equal") for sample in case["samples"]):
+            raise ValueError(f"{path}: an individual semantic output did not match")
 
 
 def self_test() -> None:
@@ -70,7 +75,8 @@ def self_test() -> None:
         "peak_temp_bytes_p95": 1,
         "output_bytes": 1,
         "output_valid": True,
-        "samples": [{"output_valid": True}],
+        "semantic_equal": True,
+        "samples": [{"output_valid": True, "semantic_equal": True}],
     }
     with tempfile.TemporaryDirectory(prefix="elixcee-stream-validator-") as directory:
         path = pathlib.Path(directory) / "valid.json"
@@ -80,6 +86,8 @@ def self_test() -> None:
             {"schema_version": 2},
             {"cases": [{**case, "wall_ms_p95": 0.5}]},
             {"cases": [{**case, "samples": [{"output_valid": False}]}]},
+            {"cases": [{**case, "semantic_equal": False}]},
+            {"cases": [{**case, "samples": [{"output_valid": True, "semantic_equal": False}]}]},
         ):
             path.write_text(json.dumps({"schema_version": 1, **mutation}), encoding="utf-8")
             try:

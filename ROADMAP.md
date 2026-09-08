@@ -1,13 +1,13 @@
 # elixcee Roadmap
 
-更新日: 2026-09-07。対象versionは **1.0.4** です。
+更新日: 2026-09-09。対象versionは **1.0.5** です。
 完了項目は記載した実装・測定の範囲に限ります。公開先の状態はリリースごとに別途確認します。
 版ごとの変更は [CHANGELOG](CHANGELOG.md)、実装範囲は
 [FUNCTIONS](FUNCTIONS.md)、保証範囲は [v1契約](docs/v1-support-contract.md) を参照してください。
 
 ## 方針と完了の定義
 
-Excel不要の、Rust/Pythonによる安全なファイル入出力・数式計算・VBAデータ処理を中心に開発します。
+Excel不要の、Rust/Pythonによる安全なワークブック編集・数式計算・VBAデータ処理を一体化した自動化ランタイムを中心に開発します。
 GUI、任意のCOM、完全なExcel/VBA互換、無条件のlossless保存は保証しません。
 JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公開です。
 
@@ -28,7 +28,7 @@ JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公�
 
 ## 互換性・数式・省メモリ強化（G0–G6）
 
-1.0.4公開後の開発計画です。次の変更はUnreleasedに記録します。
+1.0.5公開後の開発計画です。次の変更はUnreleasedに記録します。
 各PhaseはBUILDを小さく実装し、MEASUREが未完なら未検証として残します。
 EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけでの優劣は達成条件にしません。
 
@@ -37,14 +37,14 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] ソース棚卸し: drawing/legacyDrawingの選択的保持はあるが、workbookの`pivotCaches`／`externalReferences`は再出力していない。partの存在だけでは接続を保証できない。
 - [x] 数式はA1/RC・シート修飾参照のparse/rewriteと評価を分離しており、シート修飾参照の評価は現在拒否する。
 - [x] 通常Writerは元ZIP全展開・セルmap・文字列索引を保持。Python追記WriterはZIPへ逐次出力するが、行の収集とXML生成があり、`pending_bytes`は保持RSSではなく累積受け入れ量。
-- [ ] 機械可読matrix: Charts / Pivot / Drawings / External Linksごとにread・preserve・edit・recalculate・Excel再openを別状態にし、fixtureと結ぶ。
+- [x] 機械可読matrix: [OOXML feature matrix](compat/ooxml-feature-matrix.json)でCharts / Pivot / Drawings / External Linksごとにread・preserve・edit・recalculate・Excel再openを別状態にし、既存fixtureまたは未作成状態と結び付けた。`preserved`は編集可能を意味せず、`unverified`は互換性成功に数えない。
 
 ### G1 — Writerの受け入れ上限（S1 / X5、最初のBUILD）
 
 - [x] 行数はiterator開始前、列数と累積推定byte数はセル取り込み中に検査。空文字列でもセル本体の費用を計上する。
 - [x] 不正型・iterator例外・予算超過で、拒否行のXML／行数／byteカウンタを更新しない。正常行を追加して再開できる回帰を追加する。
 - [x] インストールしたwheelのPythonテストをCI設定へ追加。上限直前／一致／超過と、保存前の既存出力保護をローカル検証（この変更のGitHub CI実行は未確認）。
-- [ ] MEASURE: 巨大な単一文字列、XML escape拡大、allocator／Python入力側のメモリも含めRSSを校正する。ここだけではconstant-memory達成にしない。
+- [x] 部分 MEASURE: 現行1.0.4 release wheelを別processで実行し、XML escape-heavy 1,000行と1 MiB単一文字列10行を各3回測定した。peak RSSはPython入力・Rust allocator・XML／ZIP生成を含むprocess値として記録し、ZIP／worksheet形状／最終行を全件検証した。allocator内訳、Linux／Windows、通常VMのconstant-memoryは未完であり、この測定だけでconstant-memoryを主張しない。詳細は[入力校正](docs/measurements/writer-input-calibration-2026-09-09.md)。
 
 2026-09-06 macOSローカル: [Python回帰10件](tests/python/test_stream_writer_limits.py)は
 公開1.0.3で5件の問題を検出し、修正版wheelでは10/10成功。Rust全workspace／全target
@@ -55,10 +55,13 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G2a 部分 BUILD: `externalReferences` owner要素を再出力し、source relationshipのType/Targetを基準に再採番後の`r:id`へ書き換える経路と、未解決relationship時にownerを省略する安全策を追加した。Pivot cache、cacheId／外部参照順序、content types／namespaceのfixture検査は未完。
 - [x] G2b 部分 BUILD: worksheetのdrawing／legacyDrawing ownerについて、r:id・worksheet .rels・相対target・出力に残るpartを一組で照合し、missing target／重複relationship ID時はownerを再出力しない経路を追加した。さらにDrawing等の内部partに付随する.relsを推移的に辿り、Chart／image targetの欠落も検出する。PivotTableからcache definition／recordsまでの検証とfixture化は未完。
 - [x] G2a/G2b 追加 BUILD: pivotCaches ownerを再生成workbookへ戻し、workbook relationshipの再採番とcache definition／recordsへの内部relationship到達性検査を適用した。Pivotの再集計・編集、cacheIdの意味更新、fixtureによるExcel再open検証は未完。
-- [ ] G2c: sheet rename／行列挿入削除に伴うchart参照・anchor・pivot sourceを更新する。更新できない編集は明示診断／拒否し、古い参照を黙って保存しない。
+- [x] G2c safety BUILD: Chart/DrawingまたはPivotを含む入力に対するsheet rename／行列挿入削除などの構造編集を、参照更新経路がない場合は保存前に明示拒否するようにした。古い参照を黙って保存しない。実際のchart参照・anchor・pivot source更新はG2d以降の未完項目。
 - [ ] G2d: Charts / Drawingsの作成・編集API、Pivotのsource/cache更新を一機能ずつ追加。描画再現・Pivot再集計は保持とは別の未完項目として扱う。
+- [x] G2d 部分 BUILD: sheet renameに限定したChart `<c:f>`とPivot `worksheetSource@sheet`の安全な参照更新、およびDrawing／relationship chain保持を実装・回帰検証した。Chart/Drawing作成・一般編集、row/column編集に伴うanchor更新、Pivot source/cache編集・再集計は未完。
+- [x] G2d Chart rename BUILD: 単純なsheet renameに限り、Chart XMLの`<c:f>`に含まれるqualified sheet referenceを既存formula parserで安全に書き換え、Drawing owner／relationshipを保持して保存する経路を実fixtureで検証した。chart creation、一般のChart/Drawing編集、Pivot更新、Excel再openは未完。
+- [x] G2d Pivot rename BUILD: 単純なsheet renameに限り、Pivot cache definitionの`worksheetSource@sheet`をXML escape付きで更新し、cache本体・cacheId・table source・再集計には触れずに保存する経路と回帰を追加した。Pivot source/cacheの一般編集、再集計、Excel再openは未完。
 - [x] G2c safety BUILD: sheet rename、row/column insert/delete、sheet move/deleteを構造編集として追跡し、未更新のDrawing／Pivot ownerを保存時に復元しない安全境界を追加した。参照の実更新と明示的な編集APIは未完。
-- [ ] External Linksは既定で非取得・非実行。保持するURLを辿らない。削除／拒否policyと外部参照数式の非評価を明示する。
+- [x] G2 External Links安全policy: 既定の`preserve`は外部URLを取得・実行せずrelationshipをラウンドトリップ用に保持し、`reject`ではモデル構築前に拒否、`drop`ではowner／relationship／`xl/externalLinks/` partsを保存時に除去する。外部参照数式のExcel oracle校正は未完。
 - [ ] MEASURE: 自作最小packageとExcel由来fixtureで、part／rels／owner／cacheを比較し、実Excelの修復警告と編集後の再利用を確認する。
 
 ### G3 — Workbook単位の数式評価（X3）
@@ -73,14 +76,17 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G3 決定性 BUILD: workbook formula graphのready nodeと循環残りを安定ソートし、HashMap列挙順に依存しない再計算・診断順を固定した。
 - [x] G3 循環診断 BUILD: qualifiedなcross-sheet cell referenceを含む循環を診断グラフで検出する回帰を追加した。named／structured rangeを含む完全診断とExcel oracle照合は未完。
 
-- [ ] 安定sheet ID付き参照解決、workbook/sheet-local name、構造化参照を段階導入。現在の単一sheet lookupと誤って混在させない。
-- [ ] シート横断dirty graph、循環検出、manual→automatic、削除／rename、cached valueの扱いを統合。既存の総work・深さ・参照budgetを維持する。
-- [ ] 型変換、Empty／Error、1900/1904日付、丸め、IF/IFERRORの遅延評価を独立期待値で校正する。
-- [ ] MEASURE: 複数sheetの鎖／fan-out／循環でfull再走査との一致、p50/p95・CPU・RSSを測定する。
+- [x] G3 stable identity lookup BUILD: loaded XLSX/XLSMのraw `sheetId`をtab位置・lowercase lookup keyから分離し、Python `Vm.sheet_id()`／`sheet_name_for_id()`でrename／reorder後も解決できるようにした。formula node keyは従来のlowercase sheet keyを維持し、ODS／新規sheetにはIDを推測付与しない。sheet delete後の履歴解決とraw IDをformula node keyにする設計は未完。
+- [x] G3 stable identity boundary BUILD: formula nodeはrename時に一括re-keyするlowercase sheet keyで安定して扱い、loaded XLSXのraw `sheetId`は保存／snapshot metadataとして保持する。raw `sheetId`自体をformula node keyに使う設計、sheet delete／位置変更を含む完全なidentity解決は未完。
+- [x] G3 local BUILD: workbook／sheet-local nameと単純structured referenceをqualified formula評価へ接続し、sheet rename・row/column shiftの単純参照更新を回帰固定した。stable sheet IDそのものをformula node keyに使う設計は未完。
+- [x] 部分 BUILD: シート横断dirty graph、循環検出、manual→automatic、rename、cached valueの扱いを統合し、既存の総work・深さ・参照budgetを維持する。sheet delete／完全な構造変更と全budget組合せは未完。
+- [x] G3 local BUILD: cross-sheet dirty closure、循環診断、Manual→Automatic、rename、cached value rollbackを実装・単体検証した。sheet delete／構造変更全体と全budget組合せは未完。
+- [x] 部分 BUILD: Empty／Error伝播、IF/IFERRORの遅延評価、1900系DATE／日付関数、ROUND系の境界をローカル回帰で固定した。1904 date-systemのVM計算接続、全型変換・丸め規則、独立期待値／Excel oracle校正は未完。
+- [x] 部分 MEASURE: 100／1,000 formulaのchainに加え、Data!A1からCalcシート1,000式へのcross-sheet fan-outを構成し、dirty／forced full再走査の代表セル一致、Manual→Automatic、cycleをrelease profile・macOS arm64で100反復測定した。p50/p95・CPU・RSSを記録し、dirtyが常に高速とは主張しない。大規模topology、独立oracle、Linux／Windowsは未完。詳細は[formula dirty calibration](docs/measurements/formula-dirty-calibration-2026-09-05.md)。
 
 ### G4 — 関数・配列互換性の拡張（X3）
 
-- [ ] dispatcherからcanonical関数名とaliasを棚卸しし、FUNCTIONS・引数形・未対応mode・oracle fixtureとの対応を検査する。aliasを水増し計上しない。
+- [x] G4 dispatcher契約監査: `compat/formula-contracts.json`と`check-formula-dispatch.py --check-contracts`で、mode-rich関数の引数形・対応／未対応mode・回帰テスト参照・oracle未検証状態を機械検査する。Excel oracle fixtureの一致校正は未完。
 - [x] G4 dispatcher棚卸し基盤: `scripts/check-formula-dispatch.py`で実際の`eval_func`からcanonical名・alias・重複名を抽出する検査を追加した。FUNCTIONS・引数形・未対応mode・oracle fixtureとの対応検査は未完。
 - [x] G4 dispatcher文書対応: `--check-docs`でworksheet関数表と実dispatchの218名（canonical 207 / alias 11）を照合し、未記載・stale記載をエラーにするlocal gateを追加した。引数形・未対応mode・oracle fixtureの対応検査は未完。
 - [x] G4 lookup引数形: `XLOOKUP` / `XMATCH`のmatch/search modeを整数値だけ受け付け、非整数・非有限・i32範囲外を`#VALUE!`にした。全関数の引数形検査は未完。
@@ -105,7 +111,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 2D unique/sort接続: 2D入力の`UNIQUE`を行／列単位の重複排除、`SORT`を行列のsort_index・sort_order・by_colに接続し、結果shapeを既定spill再計算へ接続した。`UNIQUE`のexactly_once／by_colと`SORT`のby_colはtruthy型変換に揃え、1D／2D `SORT`のsort_index／sort_orderは不正値を`#VALUE!`として拒否する。型意味論全体とExcel oracle校正は未完。
 - [x] G4 2D SORTBY接続: 2Dデータを同じ行のsort-by列で並べ替え、複数sort-by配列の行数・1列制約と各昇降順を検証して結果shapeを既定spill再計算へ接続した。1D／2Dの各sort orderは`1/-1`以外を`#VALUE!`として拒否する。型変換、Excel oracle校正は未完。
 - [x] G4 2D FILTER接続: Range既存経路を維持しつつ、生成された2D配列を行／列includeで抽出し、元配列幅と選択列数から結果shapeを既定spill再計算へ接続した。生成配列の比較条件もoperand shapeを継承し、`*`／`+`による複合includeを要素単位のAND／ORとして評価し、異常shapeは明示エラーにする。Excel oracle校正は未完。
-- [ ] 第1組は参照／条件集計／検索、次に日付／統計／金融。既存SUMIFS・XLOOKUP等を再実装せず、未対応modeと意味論差分から埋める。
+- [x] 部分 BUILD: 第1組の参照／条件集計／検索について、IFNA、XLOOKUP／XMATCHのwildcard・binary mode、VLOOKUP／HLOOKUP／INDEX／MATCHの境界とwildcardを追加した。日付／統計／金融、未対応mode全体、Excel oracle校正は未完。
 - [x] G4 第1組の意味論補完: `IFNA`を追加し、`#N/A`だけをfallback対象として、それ以外のErrorは伝播する遅延評価を回帰テストで固定した。Excel oracleとの一致確認と、他関数の未対応mode棚卸しは未完。
 - [x] G4 検索modeの安全境界: `XLOOKUP`のwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加した。wildcardとbinaryの組み合わせや未知modeは明示エラーにし、順序を満たさない入力を推測処理しない。Excel oracleとbinary modeの網羅的校正は未完。
 - [x] G4 検索関数の整合: `XMATCH`にもwildcard `match_mode=2`と、ソート済み数値範囲向けbinary `search_mode=2/-2`を追加し、未知modeの黙った通常検索を廃止した。Excel oracleと検索関数全体のmode網羅性は未完。
@@ -113,12 +119,14 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 lookup境界: `INDEX`の行列番号0を`#VALUE!`、範囲外を`#REF!`として明示的に検出し、整数アンダーフローによる誤セル参照を防いだ。配列形式・Excel oracle校正は未完。
 - [x] G4 MATCH exact互換性: `match_type=0`で文字列wildcard `*` / `?`を大文字小文字非依存で評価し、`-1/0/1`以外と非整数のmatch typeは`#VALUE!`として返すようにした。Excel oracleと近似matchの並び順校正は未完。
 - [x] G4 MATCH wildcard補完: `~*` / `~?` / `~~`をリテラルwildcardとして扱うbounded DP経路を追加した。criteria系を含む全wildcard仕様のExcel oracle校正は未完。
-- [ ] 動的配列のspill衝突・shape・依存更新を整えてから、既存FILTER／LET／LAMBDA等の配列経路を拡張する。
+- [x] 部分 BUILD: 動的配列のspill衝突・shape・所有権・stale解放・依存更新を主要2D配列関数へ接続し、FILTER等の既存経路も拡張した。LET／LAMBDAを含む全配列関数のshape伝播とExcel oracle校正は未完。
+- [x] G4 local BUILD: spill矩形の衝突検出、anchor所有権、stale解放、undo/redo復元、主要2D配列関数のshape接続とatomic rollbackを実装・回帰検証した。全配列関数のshape伝播とExcel oracleは未完。
 - [ ] MEASURE: Excel／EPPlus／Aspose.Cellsはversion・計算設定・license利用条件を固定して比較。実行していない公式対応表と、実測一致率を分ける。
 
 ### G5 — 保存メモリの段階削減（X4 / X5）
 
-進行中。G5c/G5dと共通のabort実装は完了。G5a/G5bとRSS測定が残っているため、
+進行中。G5c/G5dと共通のabort実装、およびmacOSでの部分RSS測定は完了。
+G5a/G5bの全passthrough遅延化、3 OS・出力同値の完全測定が残っているため、
 G5全体は未完了であり、constant-memoryを主張しない。
 
 - [x] G5a 部分 BUILD: 画像・VBAと、関係解析対象外のXML payloadをraw mapへ保持せず、元ZIPから一件ずつdestinationへ直接copyする経路へ変更した。未編集table XMLと、新規table追加が無い場合のworksheet `.rels` XMLも遅延copyへ移し、編集対象tableや新規table用relsだけを保持してpatchする。worksheet source XMLは保存ループで1シートずつ所有権移動して処理済みpayloadを解放し、workbook XMLもowned fragment抽出後に元全文を解放する。copy前のZIP再検証とentry期待サイズ一致を確認し、reader回帰テストで1 MiBの画像payloadが索引上空のまま保持されることも固定した。workbook rels等の完全遅延化、元file全体の同一性測定、CRC／3 OS検証は未完了のため、G5a全体は未完了。
@@ -132,7 +140,7 @@ G5全体は未完了であり、constant-memoryを主張しない。
 - [x] G5d BUILD: bounded追記Writerは固定worksheet構造・列上限・row buffer・64 KiB codec bufferを使い、inline stringsでunique stringsを蓄積しない。通常VMの全セル保持は対象外。
 - [x] 共通 BUILD: I/O失敗・context例外時のabort、temp削除、close失敗後の状態、Windowsのclose-before-rename、標準syncの経路を実装した。Windows実機検証は未完。
 - [x] 部分 MEASURE: macOS arm64／CPython 3.13の別processで、appendとtransaction付きnormal-freshを100,000・250,000・1,000,000行まで測定し、RSS・wall・temp/output・ZIP／worksheet／最終行検証を記録した。Linux/Windows、Excel oracle、full matrixは未完了。
-- [ ] MEASURE: 通常保存と追記を別processで測り、10万→100万行のRSS増分・p95・temp disk・出力同値を記録。通常VMの全セル保持までconstant-memoryと呼ばない。
+- [x] 部分 MEASURE: 通常保存と追記を別processで測り、10万→100万行のRSS・p95・temp diskを記録し、ZIP／worksheet形状／最終行に加えて生成入力とのstreaming semantic digest一致を検証するハーネスを追加した。macOSの1M行でも両経路の`semantic_equal: true`を確認済み。Linux／Windows、Excel oracle、通常VMの全セル保持までconstant-memoryと呼ばない。
 
 追加測定（2026-09-07、macOS arm64、CPython 3.13、現行1.0.4 release wheel）では、appendの100,000／250,000行を各2回完了し、RSS p50/p95は19.39/19.83 MiB、19.38/19.46 MiB、出力検証は全件成功した。normal-VMは1行ごとのundo snapshotによる入力オーバーヘッドと保存メモリを分離するため4,096行単位の`set_range`へ変更し、さらに全batchを1 transactionへまとめて再測定した。100,000行はRSS 116.92/118.30 MiB・wall 173/202 ms、250,000行はRSS 203.56/203.61 MiB・wall 418/420 ms（各p50/p95）だった。全件のZIP・worksheet形状・最終行・出力検証は成功した。これはundo履歴の全体clone回数を抑えた効果であり、normal VMのconstant-memoryの根拠にはしない。append APIの結果と直接比較せず、3 OS・100万行・Excel oracle・通常保存の完全matrixは未完了とする。詳細は[測定記録](docs/measurements/writer-streaming-2026-09-07.md)。
 追加測定（同条件、1,000,000行、各2回）も完了し、appendはRSS 19.38/19.44 MiB・wall 2,750/2,789 ms、normal-fresh（一つのtransaction）はRSS 751.56/753.20 MiB・wall 2,185/3,829 ms（各p50/p95）だった。temp/outputはappend 14.24/14.24 MiB、normal-fresh 12.43/12.43 MiBで、ZIP・worksheet形状・最終行・出力検証は全件成功した。1M行でtransaction経路を確認できたが、normal VMのconstant-memoryや3 OS対応の根拠にはしない。append APIの結果と直接比較せず、Linux/Windows・Excel oracle・通常保存の完全matrixは未完了とする。詳細は[測定記録](docs/measurements/writer-streaming-2026-09-07.md)。
@@ -208,7 +216,7 @@ temp directoryの1M行観測はappend 3回で14.24 MiB、normal-fresh単発で12
 ### G6 — 互換性・資源・公開判定
 
 - [ ] G2の接続graphとExcel再open、G3–G4の独立oracle、G5の行数別RSSを根拠として、対応matrixと既知の損失を更新する。
-- [ ] Linux/macOS/Windows、失敗時の元出力保護、fuzz・依存監査・Python/Rust API回帰を実施する。
+- [x] 部分 G6 local BUILD/GATE: macOSで失敗時の元出力保護、4 targetの短時間fuzz、`cargo audit --no-fetch --stale`、Python/Rust API回帰を実施した。Linux／Windows、長時間fuzz／soak、3 OS資源校正は未完。
 - [ ] 大規模速度は同じ入力・編集・耐久性・反復条件で再測定。互換性やRSSの悪化を速度向上で相殺しない。
 
 ### LogiSheets 対抗トラック（L0–L6）
@@ -222,12 +230,18 @@ LogiSheetsの公開metadataは実装・測定・運用実績の証拠ではな�
 - [x] L2a named range BUILD: runtime named rangeと、ロード時に取り込んだ単純A1／qualified／`OFFSET` definedNameをformula ASTへ展開し、qualified referenceと混在する`SUM(MyRange)`をworkbook再計算で評価する。table column、連続複数列、静的specifier、同一tableデータ行のthis-row structured referenceを同じ依存グラフへ接続し、行／列構造変更とrenameの単純参照更新にも対応する。table外の行コンテキスト依存・複雑なstructured referenceは未完。
 - [x] L2b interval-style dependency BUILD: 大きなrangeを全セルの依存キーへ展開せず、sheet・行・列の区間として保持し、sheet-local formula-node indexとの包含判定で依存辺を構築する。完全な更新用interval treeとincremental workbook dirty propagationは未完。
 - [x] L2 dependency graph BUILD（部分完了）: range依存の過剰展開を避けるsheet-local interval-style index、値セルを起点にした直接・range・formula-chainのdirty closure、manual/automatic再計算をworkbook単位で統合した。full interval tree、sheet rename/delete、sheet-scoped/dynamic/structured named range、循環診断、完全な構造変更追跡は未完。
-- [x] L3 shared runtime BUILD（部分完了）: 同一Rust coreのworkbook計算を`calculateWorkbook(bytes)`としてWASMへ公開し、`diagnoseWorkbook(bytes)`でsheet/formula/qualified formula/parse errorのJSON summaryを提供、Node/browser同梱runtimeを再生成した。cross-sheet formulaのNode実行、`@elixcee/xlsx/runtime`のNode/browser条件、CJS/ESM bundle、意図的に固定したWASM payload baselineに対する10%成長gateを確認した。incremental JS API、sync/async loading、browser worker境界は未完。
-- [x] L4 editing history BUILD（部分完了）: 明示的なセル/範囲値書き込みとセル数式設定を対象に、最大128操作のbounded undo/redoとtransaction abortをRust VM・Python APIへ追加し、transaction commitは全編集を1つのundo単位として記録することで大規模範囲編集の全体snapshot増殖を抑えた。transaction開始時も既存redo履歴を複製せず、abortでは履歴を保持する。formula cache・dirty状態・tile cacheの復元、prior history保持、nested transaction拒否をテストした。WASMにはstateful `WorkbookEditor`（`setNumber`、`recalculate`、`undo`/`redo`、transaction）を追加し、互換rootを汚さない`@elixcee/xlsx/runtime`サブパスからNode/browserへ公開した。sheet操作、OOXML dirty partsと外部効果の一体復元は未完。
-- [ ] L5 structured data/plugin/AI boundary: table/validationをtyped data APIへ写像し、pluginはcapability allowlistとresource budget内で実行する。AI操作は提案・dry-run・差分承認を既定にし、任意コード実行や外部取得を許可しない。
+- [x] L3 shared runtime BUILD（部分完了）: 同一Rust coreのworkbook計算を`calculateWorkbook(bytes)`としてWASMへ公開し、`diagnoseWorkbook(bytes)`でsheet/formula/qualified formula/parse errorのJSON summaryを提供、Node/browser同梱runtimeを再生成した。cross-sheet formulaのNode実行、stateful `WorkbookEditor`、transaction付きdata-only operation planのdry-run／apply／undo、`@elixcee/xlsx/runtime`のNode/browser条件、CJS/ESM bundle、意図的に固定したWASM payload baselineに対する10%成長gateを確認した。sync/async loading、browser worker境界、複雑なJS incremental APIは未完。
+- [x] L4 editing history BUILD（部分完了）: 明示的なセル/範囲値書き込みとセル数式設定を対象に、最大128操作のbounded undo/redoとtransaction abortをRust VM・Python APIへ追加し、transaction commitは全編集を1つのundo単位として記録することで大規模範囲編集の全体snapshot増殖を抑えた。transaction開始時も既存redo履歴を複製せず、abortでは履歴を保持する。formula cache・dirty状態・tile cacheの復元、prior history保持、nested transaction拒否をテストした。WASMにはstateful `WorkbookEditor`（`setNumber`／`setString`／`setBoolean`、recalculate、undo/redo、transaction）を追加し、座標境界・有限数値を検証した上で、互換rootを汚さない`@elixcee/xlsx/runtime`サブパスからNode/browserへ公開した。sheet操作、OOXML dirty partsと外部効果の一体復元は未完。
+- [x] 部分 BUILD: table／validationをtyped data APIへ写像し、data-only操作計画をcapability allowlist・resource budget内でdry-run既定／明示applyに制限した。一般plugin登録・実行、AI差分承認UI、任意コード実行・外部取得は未完または未実装。
+- [x] L5 local BUILD: Pythonのtable／validation TypedDict、WASMのread-only validation projection、data-only operation plan、capability allowlist、operation/JSON budget、dry-run既定、明示apply、WASM `WorkbookEditor`へのtransaction一括適用を実装・検証した。
+- [x] L5 declarative plugin BUILD: private JS runtimeに、任意callback／module／外部I/Oを許さない名前付きimmutable operation-plan registryを追加し、plugin単位のcapability grant、maxPlugins／operation／JSON budget、dry-run既定、Workbook／WASM editorへのatomic applyと回帰を固定した。任意コードplugin、外部取得、AI承認UIは対象外。
+- [ ] L5 general plugin execution: plugin登録・実行の追加は、任意コード実行や外部I/Oを許可しない capability/resource sandbox仕様が固まるまで未実装とする。
+- [x] L5 safety boundary 部分 BUILD: private runtimeにdata-onlyの`setNumber`／`setString`／`setBoolean`操作計画を追加し、1-based座標・型付き値・capability allowlist・操作数／JSON bytes budgetを検証する。dry-runを既定とし、`apply: true`の明示時だけ差分を反映する。table／validationのtyped projection、一般plugin実行、外部取得は未完。
+- [x] L5 typed projection 部分 BUILD: 既存Python APIの`tables()`／`data_validations()`を`elixcee.pyi`の`TypedDict`へ反映し、table column・範囲・validation ruleを型付き構造metadataとして利用できるようにした。構造情報の参照に限定し、calculated formulaの評価、cell値検証、JS/WASM projection、一般plugin実行は未完。
+- [x] L5 WASM projection 部分 BUILD: `readWorkbook`の各worksheetへ`!dataValidations`（validation typeと1-based `sqref`）をread-only構造metadataとして投影し、TypeScript型宣言・WASM回帰・Node/browser payload gateを固定した。table詳細、formula評価、cell値検証、一般plugin実行は未完。
 - [ ] L6 MEASURE/GATE: LogiSheetsを固定commit/versionで比較し、formula correctness、dependency update、WASM/Node/browser parity、undo/redo、startup/throughput/RSS/bundle sizeを同じfixtureで測る。WASM payload baselineと10%成長gate、runtime subpathのNode/browser条件、CJS/ESM bundle smokeは先行実装した。LogiSheets固定版比較、同一fixtureの速度/RSS/値parity、Excel oracleは未完。stars/commitsや機能数は補助情報に留め、未測定の優位性は主張しない。
 
-直近の実装成果（2026-09-06）: L1のworkbook再計算、L2aのnamed range展開、L2bの区間依存辺構築、L2のdirty closure（値セルからの逆引き、formula chain、range）と`set_cell_formula`のqualified-reference初期値処理、L3の`calculateWorkbook(bytes)`／`diagnoseWorkbook(bytes)`共有WASM入口、L4のbounded undo/redo／transaction abort／WASM `WorkbookEditor`と`@elixcee/xlsx/runtime`公開サブパスを実装。
+直近の実装成果（2026-09-09）: G3のcross-sheet dirty fan-out測定、G5のstreaming semantic digest検証、L1のworkbook再計算、L2aのnamed range展開、L2bの区間依存辺構築、L2のdirty closure（値セルからの逆引き、formula chain、range）と`set_cell_formula`のqualified-reference初期値処理、L3の`calculateWorkbook(bytes)`／`diagnoseWorkbook(bytes)`共有WASM入口、L4のbounded undo/redo／transaction abort／WASM `WorkbookEditor`、L5のtyped validation projectionとdata-only operation planを実装。
 `cargo test --workspace --all-targets --offline`、`cargo clippy -p elixcee --all-targets --offline -- -D warnings`、`packages/xlsx`の`npm run wasm:smoke`を確認した。
 これはBUILDとconsumer smokeの証拠であり、LogiSheetsとの速度比較、WASM/Node/browserの完全な値parity、Excel oracle一致を示すものではない。
 
@@ -334,6 +348,9 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 
 - [x] ZIP/XML構文・entry／part／全体・work budget、協調中断のローカルfixture。
 - [x] reader資源回収・read/mutate/write、semantic validatorと拒否self-test、Cargo測定境界の検査。
+- [x] reader cancellation BUILD: worksheetのCPU-bound XML event validation中もdeadline／cancelを確認し、SIGINT時は構造XML budget超過より`READER_CANCELED`を優先する回帰を固定した。
+- [x] 部分 FUZZ SMOKE: nightlyの4 target（`fuzz_formula_parser`／`fuzz_formula_eval`／`fuzz_vba_parser`／`fuzz_xlsx_reader`）を各5秒・RSS上限1 GiB・既存corpusで実行し、順に274,746／175,983／237,870／19,933 runs、panicなしを確認した。全targetの長時間fuzz、Linux／Windows、soak、隔離検証は未完。
+- [x] local gate BUILD: `scripts/check-local-gates.sh`に、version／measurement／formula／OOXML契約、Rust test／clippy／doc、offline audit、4 fuzz smoke、JS type／WASM／pack consumer／browser smokeを統合した。外部oracle、他OS、比較測定、公開操作は意図的に含めない。
 - [ ] Linux／Windowsを含む資源校正と、長時間fuzz／CPU／RSS・隔離環境検証を完了する。
 
 既存のmacOS測定と安全策は [測定記録](docs/measurements/README.md)、
@@ -350,9 +367,9 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 以下は継続的な配布・サポート要件であり、上記のローカル検証だけでは完了しません。
 
 - [ ] Python wheel／sdist、Rust crate、CLIのclean-installと最小利用例を各対象OSで確認。
-- [ ] JS packageはutils／read／write／browser／Node／型定義を別々に検証。公開する場合は独立した判断を行う。
-- [ ] license／notice／package内容／依存監査／回帰・互換性matrixを確認。
-- [ ] サポート外・既知の損失・セキュリティ境界・移行例を公開文書へ反映。
+- [x] 部分 G6 local BUILD/GATE: JS packageのutils／read／write／browser／Node／型定義を、WASM smoke・実Chrome・real tarball consumer・CJS/ESM parityで検証した。公開可否と他OSのclean-installは未完。
+- [x] 部分 G6 local BUILD/GATE: license／notice、real npm package内容、ローカルCargo依存監査、回帰・OOXML compatibility matrixを確認した。fresh advisory DB、他OS配布検証、外部oracleは未完。
+- [x] G6 local BUILD: サポート範囲・既知の損失・セキュリティ境界・移行例を [migration guide](docs/migration.md)、v1 support contract、OOXML feature matrixへ集約した。Excel再open、他OS、第三者比較の未検証状態は明記し、公開Release判定とは分離する。
 - [ ] tag、registry、workflow、正式Release、worktree状態を別々に確認。
 
 このゲートは将来のリリース判定です。文書の更新だけで完了にしません。

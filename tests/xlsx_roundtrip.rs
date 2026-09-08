@@ -1235,12 +1235,10 @@ fn rename_sheet_rewrites_defined_names_that_reference_the_old_name() {
     let _ = std::fs::remove_file(&output_path);
 }
 
-/// Rename-preservation against fixture5's real, real-Excel-verified
-/// `_xlnm.Print_Area` (see `internal_docs/xlsx-worksheet-preservation-0.10.0-design.md`'s
-/// 0.10.0-C section) -- confirms the fix covers the builtin print-area name, not just a
-/// plain user-defined one, on genuine Excel-authored bytes rather than a synthetic fixture.
+/// A sheet rename on fixture5 rewrites the chart's qualified formula references
+/// while preserving the drawing/chart relationship chain.
 #[test]
-fn rename_sheet_rewrites_a_real_print_area_defined_name() {
+fn rename_sheet_rewrites_chart_references_on_a_real_fixture() {
     let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
     let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
     let fixture_entries = read_all_zip_entries(&fixture_bytes);
@@ -1255,21 +1253,95 @@ fn rename_sheet_rewrites_a_real_print_area_defined_name() {
     vm.load_workbook_file(&source_path)
         .expect("real fixture should load");
     vm.rename_sheet("Sheet1", "Renamed").unwrap();
-    save_workbook(&vm, &output_path).expect("save-as should succeed");
-
-    let output_bytes = std::fs::read(&output_path).unwrap();
-    let output_entries = read_all_zip_entries(&output_bytes);
-    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    save_workbook(&vm, &output_path).expect("chart reference rewrite should succeed");
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(chart.contains("Renamed!$A$6:$B$6"), "chart output: {chart}");
+    assert!(chart.contains("Renamed!$C$1:$C$5"));
+    assert!(output_entries.contains_key("xl/drawings/drawing1.xml"));
     assert!(
-        out_wb.contains("_xlnm.Print_Area") && out_wb.contains("Renamed!$E$3"),
-        "Print_Area must survive the rename with its sheet-qualifier rewritten: {out_wb}"
+        String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone())
+            .unwrap()
+            .contains("<drawing r:id=\"rId1\"/>")
     );
-    assert!(
-        !out_wb.contains("Sheet1!$E$3"),
-        "the OLD sheet name must not survive the rewrite: {out_wb}"
-    );
+}
 
-    let _ = std::fs::remove_file(&output_path);
+/// A minimal Pivot cache package exercises the complete loaded-workbook rename
+/// path without requiring a binary Excel fixture. The cache itself is opaque;
+/// only its worksheet source sheet name may change.
+#[test]
+fn rename_sheet_rewrites_pivot_worksheet_source_and_keeps_cache_owner() {
+    let source_path = tmp_path("rename_sheet_pivot_source.xlsx");
+    let output_path = tmp_path("rename_sheet_pivot_output.xlsx");
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+            "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
+            "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>",
+            "<Default Extension=\"xml\" ContentType=\"application/xml\"/>",
+            "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>",
+            "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>",
+            "<Override PartName=\"/xl/pivotCache/pivotCacheDefinition1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml\"/>",
+            "</Types>"
+        )
+        .as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/workbook.xml",
+        concat!(
+            "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">",
+            "<sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets>",
+            "<pivotCaches><pivotCache cacheId=\"7\" r:id=\"rId2\"/></pivotCaches></workbook>"
+        )
+        .as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        concat!(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>",
+            "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition\" Target=\"pivotCache/pivotCacheDefinition1.xml\"/>",
+            "</Relationships>"
+        )
+        .as_bytes(),
+    );
+    zip_add(&mut zip, "xl/worksheets/sheet1.xml", sheet_xml().as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/pivotCache/pivotCacheDefinition1.xml",
+        concat!(
+            "<pivotCacheDefinition xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" cacheId=\"7\">",
+            "<cacheSource><worksheetSource ref=\"A1:B2\" sheet=\"Sheet1\"/></cacheSource>",
+            "</pivotCacheDefinition>"
+        )
+        .as_bytes(),
+    );
+    std::fs::write(&source_path, zip.finish().unwrap().into_inner()).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path).unwrap();
+    vm.rename_sheet("Sheet1", "Data & 2026").unwrap();
+    save_workbook(&vm, &output_path).expect("pivot sheet rename should save");
+
+    let entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let workbook = String::from_utf8(entries["xl/workbook.xml"].clone()).unwrap();
+    let cache =
+        String::from_utf8(entries["xl/pivotCache/pivotCacheDefinition1.xml"].clone()).unwrap();
+    assert!(workbook.contains("<pivotCaches>"));
+    assert!(workbook.contains("cacheId=\"7\""));
+    assert!(cache.contains("sheet=\"Data &amp; 2026\""));
+    assert!(cache.contains("ref=\"A1:B2\""));
+
+    let _ = std::fs::remove_file(source_path);
+    let _ = std::fs::remove_file(output_path);
 }
 
 /// P2: `defined_names` exercised against the one real fixture with genuine

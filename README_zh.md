@@ -2,13 +2,13 @@
 
 [English](README.md) | [日本語](README_ja.md) | **中文**
 
-elixcee 是一个使用 Rust 编写的无头工作簿运行时，可在不安装 Microsoft Excel 的情况下运行、测试和诊断面向数据处理的 Excel VBA 子集。除了执行 VBA 外，还可以计算公式、编辑单元格/范围和工作簿元数据，并保存为 XLSX/XLSM/ODS。项目提供 PyO3 Python API、独立 CLI，以及实验性的 `@elixcee/xlsx` JavaScript/WASM 包。
+elixcee 是一个使用 Rust/Python 编写的无头 Excel 工作簿自动化运行时，可在不安装 Microsoft Excel 的情况下编辑工作簿、重新计算受支持的公式，并运行、测试和诊断面向数据处理的 VBA 子集。项目提供 PyO3 Python API、独立 CLI，以及实验性的 `@elixcee/xlsx` JavaScript/WASM 包。
 
-elixcee 不只是 VBA 执行器，而是无头 Excel 工作簿自动化运行时：可以直接编辑数据、重新计算受支持的公式，也可以在同一个工作簿模型上执行、诊断和测试受支持的 VBA。它适合没有安装 Excel 的 CI 和服务器环境中的 `.xlsx`/`.xlsm` 读写。
+elixcee 不是 VBA 专用执行器，而是工作簿自动化运行时：可以在同一个工作簿模型上直接编辑数据、重新计算受支持的公式，以及执行、诊断和测试受支持的 VBA。它适合没有安装 Excel 的 CI 和服务器环境中的 `.xlsx`/`.xlsm` 读写。
 
 它不是 Excel 桌面应用的完整替代品。屏幕更新、图表和对话框等 UI 功能会被跳过、简化建模或报告错误。需要完整 Excel 对象模型或完整 OOXML 兼容性时，请先检查支持边界。
 
-版本：**1.0.4**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+版本：**1.0.5**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 JavaScript 包仍为 private，尚未发布。
 
 ## 安装
@@ -67,6 +67,8 @@ vm.undo()                                # 撤销编辑
 Python API 还支持公式、范围、工作表、VBA `Collection` 与类模块子集、样式、表格、数据验证、AutoFilter、
 名称定义、pandas，以及 `.xlsx`/`.xlsm`/`.ods` 文件。接口签名见 [elixcee.pyi](elixcee.pyi)，
 VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
+`Vm.tables()` 和 `Vm.data_validations()` 返回表格列、范围及验证规则的结构化类型元数据；不会执行计算列公式或验证公式。
+对于已加载的 XLSX/XLSM 工作表，`Vm.sheet_id(name)` 和 `Vm.sheet_name_for_id(sheet_id)` 可在标签顺序或重命名变化后解析原始 sheet ID；新建或 ODS 工作表不会推测 ID。
 
 对于大型 XLSX/XLSM 文件，可使用 `open_stream(path, sheet=None)` 逐行读取；设置
 `include_row_numbers=True` 后返回 `(行号, 值)` 元组，也可用 `max_rows=N` 限制读取行数，

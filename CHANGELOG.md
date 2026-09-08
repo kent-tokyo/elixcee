@@ -6,6 +6,23 @@
 
 次の変更はここに記録します。
 
+## [1.0.5] - 2026-09-09
+
+- G3として、loaded XLSX/XLSMのraw `sheetId`をlowercase lookup key・タブ位置から分離し、rename／reorder後もPython `Vm.sheet_id()`／`Vm.sheet_name_for_id()`で解決できるようにしました。新規／ODS sheetへの推測ID付与、削除後履歴、raw IDをformula node keyにする設計は未完です。
+- L5の宣言型plugin schemaをallowlist化し、`module`／`code`など未定義の実行主体フィールドも登録時に拒否するようにしました。
+- LogiSheets対抗L5として、private JavaScript runtimeに宣言型plugin registryを追加しました。pluginはimmutableなdata-only operation planに限定し、登録callback／module、任意コード、外部I/Oを拒否します。pluginごとのcapability grantとmaxPlugins／operation／JSON budget、dry-run既定、Workbook／WASM editorへのatomic applyを回帰検証しています。
+- G6の移行・境界ガイドを追加し、native Python／CLI／private JavaScriptの使い分け、外部リンクpolicy、OOXML／VBA／constant-memoryの既知の境界、ローカル検証とExcel／他OS／競合比較の証拠分離を短く整理しました。
+- LogiSheets対抗L5の安全境界として、private runtimeにdata-onlyの操作計画APIを追加しました。有限数値・文字列・真偽値のcell writeを対応するcapability・件数・JSON bytes budget付きで検証し、dry-runを既定、`apply: true`を明示した場合だけ適用します。任意コード実行、外部I/O、table／validationのtyped projectionは未完です。
+- L4 shared runtimeのWASM `WorkbookEditor`に`setString`／`setBoolean`を追加し、`setNumber`を含むtyped cell writesの座標境界・有限数値検証をNode/browser配布アーティファクトへ反映しました。
+- WASM buildで`wasm-opt -Oz`を明示し、typed editor追加後のpayloadを961,710 bytes（baseline比+9.72%）へ抑え、既存の10%成長ゲートを基準値変更なしで通過させました。
+- Pythonの既存`tables()`／`data_validations()` metadata APIを`elixcee.pyi`のTypedDictへ追加し、table/validationの構造projectionを静的利用側にも公開しました。数式評価やcell値検証は行いません。
+- G2dとして、単純なsheet renameに限りChart XMLの`<c:f>`参照を既存formula parserで検証しながら書き換え、Drawing owner／relationshipを保持して保存する経路を実fixtureで検証しました。chart creation、一般のChart/Drawing編集、Pivot更新、Excel再open検証は未完です。
+- G2dとして、単純なsheet renameに限りPivot cache definitionの`worksheetSource@sheet`を更新する経路を追加しました。cache本体・cacheId・table source・Pivot再集計は変更せず、一般のPivot source/cache編集とExcel再open検証は未完です。
+- G2のExternal Links安全policyを追加しました。既定の`preserve`は外部URLを取得・実行せず、`reject`では読込前に拒否し、`drop`では保存時にowner／relationship／partsを除去します。外部参照数式のExcel oracle校正は未完です。
+- G4のdispatcher契約監査を追加し、mode-rich関数の引数形、対応／未対応mode、回帰テスト参照、Excel oracle未検証状態を`compat/formula-contracts.json`で宣言してlocal gateで検査できるようにしました。これはExcel一致率を示すものではありません。
+- G2c safety BUILDとして、Chart/DrawingまたはPivotを含むworkbookに対するsheet rename／行列構造変更を、参照更新できない場合は保存前に明示拒否するようにしました。古いchart anchorやpivot sourceを成功扱いで保存しません。実際の参照更新APIは未完です。
+- G0のOOXML互換性matrixを追加し、Charts／Pivot／Drawings／External Linksについてread・preserve・edit・recalculate・Excel再openを独立した状態で記録・検査できるようにしました。`preserved`と`unverified`を互換性成功として混同しない境界を固定しています。
+- README、v1 support contract、docs索引、内部方針の製品説明を、VBA専用ツールではなく、ワークブック編集・対応数式の再計算・データ処理VBAの実行／診断を同じモデルで扱うヘッドレスExcelワークブック自動化ランタイムとして統一しました。対応範囲とExcel完全互換でない境界は維持しています。
 - G4の2D `SORT`引数境界を補完し、`sort_index`の非整数値と`sort_order`の`1/-1`以外を`#VALUE!`として拒否するようにしました。`by_col`は既存のtruthy変換に揃え、暗黙の整数丸めやBoolean限定による誤動作を防ぎます。Excel oracle照合は未完です。
 - G4の2D `SORTBY`でも各sort orderを`1/-1`に限定し、複数キーの途中にある不正な順序指定を`#VALUE!`として明示的に拒否するようにしました。Excel oracle照合は未完です。
 - G4の`TAKE`／`DROP`で行・列件数の非整数値、非有限値、zeroを黙って処理せず明示エラーにしました。正負方向と利用可能範囲を超えた件数の既存挙動は維持しています。Excel oracle照合は未完です。
