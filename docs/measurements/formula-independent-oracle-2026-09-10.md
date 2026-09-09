@@ -30,6 +30,14 @@ dedicated writable temporary directory (`TMPDIR=/private/tmp/elixcee-formula-ora
 because the default temporary directories were full or unavailable. It again
 reported 39/39 comparable matches, 3 explicit skips, and zero mismatches.
 
+The same generated workbook was then recalculated by the installed elixcee
+wheel with `--with-elixcee`. After the documented date-serial normalization,
+elixcee matched all 39 comparable probes (39/39); the same three probes were
+skipped because the LibreOffice oracle did not produce comparable values.
+The binding-specific Error object was normalized to its displayed error code
+for JSON output, while ordinary numeric and string values were compared without
+coercion.
+
 The expanded run also covered logical operators, conditional aggregation,
 rounding boundaries, INDEX/MATCH lookup, criteria aggregation, an unhandled
 division error, error recovery, error inspection, and numeric/text mixed
@@ -57,6 +65,15 @@ When the default temporary directory is unavailable, use:
 TMPDIR=/private/tmp/elixcee-formula-oracle-run \
   python3 compat/oracle/run-libreoffice-formulas.py \
   --soffice /opt/homebrew/bin/soffice
+```
+
+With the isolated elixcee wheel available on `PYTHONPATH`:
+
+```sh
+PYTHONPATH=/private/tmp/elixcee-test-venv-20260910/lib/python3.13/site-packages \
+TMPDIR=/private/tmp/elixcee-formula-oracle-run \
+  python3 compat/oracle/run-libreoffice-formulas.py \
+  --soffice /opt/homebrew/bin/soffice --with-elixcee
 ```
 
 The script writes its temporary workbook and LibreOffice profile below a

@@ -75,7 +75,27 @@ def serial_or_value(value):
     return value
 
 
-def run(soffice: str) -> dict:
+def json_safe_value(value):
+    """Keep scalar results unchanged and expose binding-specific errors as text."""
+    try:
+        json.dumps(value)
+    except TypeError:
+        return str(value)
+    return value
+
+
+def normalize_binding_value(value, expected):
+    """Normalize elixcee's date display value to the fixture's serial convention."""
+    value = json_safe_value(value)
+    if isinstance(value, str) and isinstance(expected, (int, float)):
+        try:
+            return to_excel(datetime.date.fromisoformat(value))
+        except ValueError:
+            pass
+    return value
+
+
+def run(soffice: str, with_elixcee: bool = False) -> dict:
     with tempfile.TemporaryDirectory(prefix="elixcee-formula-oracle-") as raw:
         root = Path(raw)
         source = root / "formula-oracle.xlsx"
@@ -133,27 +153,56 @@ def run(soffice: str) -> dict:
                     "match": actual == expected,
                 }
             )
-        return {
+        payload = {
             "oracle": "libreoffice",
             "comparable_cases": len(records),
             "matches": sum(item["match"] for item in records),
             "skipped": skipped,
             "records": records,
         }
+        if with_elixcee:
+            import elixcee
+
+            vm = elixcee.load_workbook(str(source), sheet="Oracle")
+            vm.recalculate()
+            elixcee_records = []
+            for row, (name, (_, expected)) in enumerate(CASES.items(), start=5):
+                if name in ORACLE_UNSUPPORTED:
+                    continue
+                actual = normalize_binding_value(vm.get_cell(row, 2), expected)
+                elixcee_records.append(
+                    {
+                        "case": name,
+                        "expected": expected,
+                        "actual": actual,
+                        "match": actual == expected,
+                    }
+                )
+            payload["elixcee_comparable_cases"] = len(elixcee_records)
+            payload["elixcee_matches"] = sum(item["match"] for item in elixcee_records)
+            payload["elixcee_records"] = elixcee_records
+        return payload
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--soffice", default="soffice")
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--with-elixcee",
+        action="store_true",
+        help="also recalculate the same fixture with the installed elixcee binding",
+    )
     args = parser.parse_args()
-    payload = run(args.soffice)
+    payload = run(args.soffice, with_elixcee=args.with_elixcee)
     encoded = json.dumps(payload, indent=2) + "\n"
     if args.output:
         args.output.write_text(encoded, encoding="utf-8")
     print(encoded, end="")
     if payload["matches"] != payload["comparable_cases"]:
         raise SystemExit("formula oracle mismatch")
+    if payload.get("elixcee_matches") != payload.get("elixcee_comparable_cases"):
+        raise SystemExit("elixcee formula mismatch")
 
 
 if __name__ == "__main__":
