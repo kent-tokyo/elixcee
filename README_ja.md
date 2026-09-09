@@ -17,9 +17,9 @@ ExcelをインストールできないCIやサーバーでの
 
 Excelデスクトップアプリの完全な代替ではありません。画面更新、グラフ、
 ダイアログなどのUI機能は、スキップ・簡易モデル化・エラー化されます。
-既存Chartの系列formula・title、two-cell Drawing anchor、worksheet-backed Pivot
-sourceには限定編集APIがありますが、Chart作成、一般のDrawing shape編集、Pivot
-再集計は対象外です。
+既存Chartの系列formula・cache・marker・smooth・負値表示・可視性・title、two-cell
+Drawing anchor、worksheet-backed Pivot sourceには限定編集APIがありますが、Chart
+作成、一般のDrawing shape編集、Pivot再集計は対象外です。
 完全なExcelオブジェクトモデルやOOXML互換性が必要な場合は、対応範囲を確認してください。
 
 ### 用途別の選択
@@ -88,14 +88,14 @@ vm.undo()                                # 編集を取り消し
 数式評価、範囲、シート、VBA `Collection`／class moduleサブセット、スタイル、テーブル、データ検証、AutoFilter、
 名前定義、pandas連携、`.xlsx`/`.xlsm`/`.ods`入出力にも対応しています。
 明示的なzero-argumentのWorkbook／Worksheetイベントは`vm.run_event(...)`で呼び出せます。
-`EnableEvents`は反映されますが、通常のセル編集でイベントは自動発火せず、
-セル編集からの`Worksheet_Change`自動発火は未実装です。明示的なA1 targetを
+`EnableEvents`、VBAセル／数式書き込み後の一意な`Worksheet_Change`自動発火、
+boundedなイベント連鎖が反映されます。明示的なA1 targetを
 `Worksheet_Change(Target As Range)`へ渡す場合は`vm.run_worksheet_change(...)`、
 `Workbook_Open`を先に実行する場合はopt-inの`vm.run_with_events(...)`を使用します。
 APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 `Vm.tables()` と `Vm.data_validations()` は、テーブル列・範囲・検証規則を構造化された型付きmetadataとして返します。計算列数式や検証数式の評価は行いません。
 読込済みXLSX/XLSMでは、`Vm.sheet_id(name)` と `Vm.sheet_name_for_id(sheet_id)` により、タブ順やrenameから独立した元ファイルのsheet IDを参照できます。新規sheetやODS sheetには推測したIDを付けません。
-読込済みworkbookでは、既存Chartの系列formulaと最初のtitle text runにも限定編集APIがあります。Chart作成や一般のobject編集は現在の契約対象外です。
+読込済みworkbookでは、既存Chartの系列formula・cache・限定属性と最初のtitle text runにも限定編集APIがあります。Chart作成や一般のobject編集は現在の契約対象外です。
 
 大きなXLSX/XLSMには、全体を展開しない`open_stream(path, sheet=None)`を使えます。
 `include_row_numbers=True`では`(行番号, 値)`を返し、`max_rows=N`で読み取り行数を
