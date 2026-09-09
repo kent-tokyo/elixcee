@@ -1232,6 +1232,17 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to the first chart data-labels show-category flag.
+    fn set_chart_data_labels_show_category(
+        &mut self,
+        chart_part: &str,
+        show_category: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_data_labels_show_category(chart_part, show_category)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -4717,9 +4728,13 @@ fn rewrite_chart_legend_overlay(xml: &str, overlay: bool) -> Result<String, Stri
     Ok(out)
 }
 
-/// Rewrites the first chart data-labels `showVal` attribute. Data-label
-/// creation and other label options remain outside this bounded operation.
-fn rewrite_chart_data_labels_show_value(xml: &str, show_value: bool) -> Result<String, String> {
+/// Rewrites the first chart data-labels boolean attribute. Data-label creation
+/// and other label options remain outside this bounded operation.
+fn rewrite_chart_data_labels_flag(
+    xml: &str,
+    attribute: &str,
+    enabled: bool,
+) -> Result<String, String> {
     let open = xml.find("<c:dLbls").filter(|&position| {
         xml.as_bytes()
             .get(position + b"<c:dLbls".len())
@@ -4733,10 +4748,11 @@ fn rewrite_chart_data_labels_show_value(xml: &str, show_value: bool) -> Result<S
         .map(|offset| open + offset + 1)
         .ok_or_else(|| "chart data-labels element is unterminated".to_string())?;
     let tag = &xml[open..end];
-    let value = if show_value { "1" } else { "0" };
+    let value = if enabled { "1" } else { "0" };
     let mut replacement = tag.to_string();
-    if let Some(attr) = tag.find("showVal=") {
-        let value_start = attr + "showVal=".len();
+    let attribute_with_equals = format!("{attribute}=");
+    if let Some(attr) = tag.find(&attribute_with_equals) {
+        let value_start = attr + attribute_with_equals.len();
         let quote = tag.as_bytes()[value_start];
         if quote != b'"' && quote != b'\'' {
             return Err("chart data-labels showVal attribute is malformed".to_string());
@@ -4744,18 +4760,22 @@ fn rewrite_chart_data_labels_show_value(xml: &str, show_value: bool) -> Result<S
         let value_end = tag[value_start + 1..]
             .find(quote as char)
             .map(|offset| value_start + 1 + offset)
-            .ok_or_else(|| "chart data-labels showVal attribute is unterminated".to_string())?;
+            .ok_or_else(|| format!("chart data-labels {attribute} attribute is unterminated"))?;
         replacement.replace_range(value_start + 1..value_end, value);
     } else {
         let insert_at = tag
             .rfind("/>")
             .or_else(|| tag.rfind('>'))
             .ok_or_else(|| "chart data-labels element is malformed".to_string())?;
-        replacement.insert_str(insert_at, &format!(" showVal=\"{value}\""));
+        replacement.insert_str(insert_at, &format!(" {attribute}=\"{value}\""));
     }
     let mut out = xml.to_string();
     out.replace_range(open..end, &replacement);
     Ok(out)
+}
+
+fn rewrite_chart_data_labels_show_value(xml: &str, show_value: bool) -> Result<String, String> {
+    rewrite_chart_data_labels_flag(xml, "showVal", show_value)
 }
 
 /// Rewrites or adds the chart-space style number while preserving all other
@@ -5908,7 +5928,12 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     chart = rewrite_chart_legend_overlay(&chart, edit.overlay)?;
                 }
                 if let Some(edit) = vm.chart_data_labels_edits.get(&name) {
-                    chart = rewrite_chart_data_labels_show_value(&chart, edit.show_value)?;
+                    if let Some(show_value) = edit.show_value {
+                        chart = rewrite_chart_data_labels_show_value(&chart, show_value)?;
+                    }
+                    if let Some(show_category) = edit.show_category {
+                        chart = rewrite_chart_data_labels_flag(&chart, "showCat", show_category)?;
+                    }
                 }
                 chart.into_bytes()
             } else if (allow_sheet_rename || has_pivot_source_edits)
@@ -9161,6 +9186,15 @@ mod tests {
         assert!(
             actual.contains("<c:dLbls showVal=\"1\">") && actual.contains("<c:showVal val=\"0\"/>")
         );
+    }
+
+    #[test]
+    fn chart_data_labels_rewriter_updates_show_category_and_preserves_value() {
+        let source = r#"<c:chart><c:dLbls showVal="1" showCat="0"><c:txPr/></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_flag(source, "showCat", true).unwrap();
+        assert!(actual.contains("showVal=\"1\" showCat=\"1\"") && actual.contains("<c:txPr/>"));
+        let actual = rewrite_chart_data_labels_show_value(&actual, false).unwrap();
+        assert!(actual.contains("showVal=\"0\" showCat=\"1\""));
     }
 
     #[test]

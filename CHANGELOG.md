@@ -8,6 +8,7 @@
 
 - G2dの限定Chart編集として、凡例の`c:overlay@val`を`Vm.set_chart_legend_overlay`（Python binding／型stub含む）から追加／更新できるようにしました。凡例の他の子要素・系列・title・relationshipは保持し、凡例欠損、Chart作成、Excel再openは未完です。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls@showVal`を`Vm.set_chart_data_labels_show_value`（Python binding／型stub含む）から追加／更新できるようにしました。既存のラベル子要素・系列・軸・relationshipは保持し、data-label要素の新規作成とExcel再openは未完です。
+- G2dの限定Chart編集として、既存Chartの最初の`c:dLbls@showCat`を`Vm.set_chart_data_labels_show_category`（Python binding／型stub含む）から追加／更新できるようにしました。showValとの併用、既存ラベル子要素・系列・軸・relationshipを保持し、data-label要素の新規作成とExcel再openは未完です。
 - G2dの限定Chart編集として、軸タイトルを`Vm.set_chart_axis_title`（Python binding／型stub含む）からdocument orderの0-based indexで更新／追加できるようにしました。軸内の最初のtitle text runだけを変更し、系列・Chart title・relationshipは保持します。Chart作成、Excel再openは未完です。
 - G2dの限定Drawing編集として、既存anchorの`cNvPr@hidden`を`Vm.set_drawing_shape_hidden`（Python binding／型stub含む）から追加／更新できるようにしました。geometry・shape content・relationshipは保持し、Drawing作成とExcel再openは未完です。
 - G4/VBA互換性の部分BUILDとして、`WorksheetFunction.TextJoin`、`WorksheetFunction.XLookup`、`WorksheetFunction.XMatch`をVMへ接続しました。TEXTJOINは範囲flattenと空文字除外、XLOOKUP／XMATCHはexact／wildcard matchおよびsearch mode 1/-1/2/-2を実装し、旧compat corpusの「未実装」期待値を削除しました。完全な型変換とExcel oracle照合は未完です。

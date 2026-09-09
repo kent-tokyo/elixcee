@@ -342,6 +342,12 @@ class Vm:
         """Update the first existing chart data-labels showVal flag."""
         ...
 
+    def set_chart_data_labels_show_category(
+        self, chart_part: str, show_category: bool
+    ) -> None:
+        """Update the first existing chart data-labels showCat flag."""
+        ...
+
     def set_chart_series_name_formula(
         self, chart_part: str, series_index: int, name_formula: str
     ) -> None:
