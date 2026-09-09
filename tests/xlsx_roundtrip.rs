@@ -1266,6 +1266,32 @@ fn rename_sheet_rewrites_chart_references_on_a_real_fixture() {
     );
 }
 
+/// G2d: an explicit chart-series edit rewrites only the selected category and
+/// value references while leaving the drawing relationship chain intact.
+#[test]
+fn edit_chart_series_rewrites_selected_references_on_a_real_fixture() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let output_path = tmp_path("edit_chart_series_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.set_chart_series_formulas(
+        "xl/charts/chart1.xml",
+        0,
+        Some("Sheet1!$A$1:$A$5"),
+        Some("Sheet1!$B$1:$B$5"),
+    )
+    .expect("chart series edit should be accepted");
+    save_workbook(&vm, &output_path).expect("chart series edit should save");
+
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(chart.contains("<c:cat><c:strRef><c:f>Sheet1!$A$1:$A$5</c:f>"));
+    assert!(chart.contains("<c:val><c:numRef><c:f>Sheet1!$B$1:$B$5</c:f>"));
+    assert!(output_entries.contains_key("xl/drawings/drawing1.xml"));
+    assert!(output_entries.contains_key("xl/drawings/_rels/drawing1.xml.rels"));
+}
+
 /// A minimal Pivot cache package exercises the complete loaded-workbook rename
 /// path without requiring a binary Excel fixture. The cache itself is opaque;
 /// only its worksheet source sheet name may change.
@@ -1329,6 +1355,12 @@ fn rename_sheet_rewrites_pivot_worksheet_source_and_keeps_cache_owner() {
     let mut vm = Vm::new();
     vm.load_workbook_file(&source_path).unwrap();
     vm.rename_sheet("Sheet1", "Data & 2026").unwrap();
+    vm.set_pivot_worksheet_source(
+        "xl/pivotCache/pivotCacheDefinition1.xml",
+        None,
+        Some("A1:C3"),
+    )
+    .expect("pivot source edit should be accepted");
     save_workbook(&vm, &output_path).expect("pivot sheet rename should save");
 
     let entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
@@ -1338,7 +1370,7 @@ fn rename_sheet_rewrites_pivot_worksheet_source_and_keeps_cache_owner() {
     assert!(workbook.contains("<pivotCaches>"));
     assert!(workbook.contains("cacheId=\"7\""));
     assert!(cache.contains("sheet=\"Data &amp; 2026\""));
-    assert!(cache.contains("ref=\"A1:B2\""));
+    assert!(cache.contains("ref=\"A1:C3\""));
 
     let _ = std::fs::remove_file(source_path);
     let _ = std::fs::remove_file(output_path);

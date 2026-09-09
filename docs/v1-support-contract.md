@@ -33,8 +33,10 @@ Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
 - Structural edits on a workbook containing chart/drawing or pivot owners are
   rejected when their references cannot be rewritten safely. Loaded-workbook sheet
   rename is the narrow exception: qualified chart formulas and Pivot
-  `worksheetSource@sheet` are updated. The writer does not silently save stale
-  chart anchors or pivot sources.
+  `worksheetSource@sheet` are updated. In addition, existing chart-series
+  category/value formulas and worksheet-backed Pivot `worksheetSource@sheet`／A1
+  `ref` can be explicitly edited through the bounded APIs. Chart creation, cache
+  regeneration/recalculation, and stale chart anchors remain outside the contract.
 
 ## Explicit non-goals
 

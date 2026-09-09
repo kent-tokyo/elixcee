@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "elixcee"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "elixcee-types",
  "libc",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "elixcee-types"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "equivalent"

@@ -36,6 +36,8 @@ fn is_blocked_external_effect(reason: &str) -> bool {
         "getobject",
         "wscript",
         "filesystemobject",
+        "save",
+        "close",
         "open ",
         "'open'",
         "kill ",
@@ -225,6 +227,48 @@ pub enum ResolutionFailureKind {
         source_areas: Vec<Rect>,
         destination_areas: Vec<Rect>,
     },
+}
+
+/// Stable category for a runtime failure produced while executing VBA. The
+/// plain `String` returned by `run_sub` remains the compatibility surface, but
+/// callers that need machine-readable diagnostics can consume this side
+/// channel without re-parsing presentation text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeFailureKind {
+    UndefinedVariable,
+    UndefinedSubOrFunction,
+    SheetNotFound,
+    MsgBoxBlocked,
+    ObjectVariableNotSet,
+    SecurityBlockedExternalEffect,
+    Generic,
+}
+
+impl RuntimeFailureKind {
+    fn from_message(message: &str) -> Self {
+        if message.starts_with("Undefined variable: '") {
+            return Self::UndefinedVariable;
+        }
+        if message.starts_with("Sub/Function '")
+            || message.starts_with("Unknown VBA function: '")
+            || (message.starts_with("Sub '") && message.ends_with("' not found"))
+        {
+            return Self::UndefinedSubOrFunction;
+        }
+        if message.starts_with("Sheet '") && message.ends_with("' not found") {
+            return Self::SheetNotFound;
+        }
+        if message.starts_with("MsgBox: ") {
+            return Self::MsgBoxBlocked;
+        }
+        if message == OBJECT_NOT_SET {
+            return Self::ObjectVariableNotSet;
+        }
+        if message.starts_with("SECURITY: blocked external VBA effect:") {
+            return Self::SecurityBlockedExternalEffect;
+        }
+        Self::Generic
+    }
 }
 
 /// The VM's clipboard state, populated by `.Copy` and consumed by
@@ -800,6 +844,28 @@ const COLLECTION_DUPLICATE_KEY: &str =
     "This key is already associated with an element of this collection";
 type FormulaAstCache = HashMap<String, HashMap<(u32, u32), (String, Option<formula::FormulaExpr>)>>;
 
+/// A bounded, explicit edit to one existing chart series. Formulas use the
+/// chart XML spelling (for example `Sheet1!$A$1:$A$3`, without a leading `=`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChartSeriesEdit {
+    pub name: Option<String>,
+    pub categories: Option<String>,
+    pub values: Option<String>,
+}
+
+/// A bounded edit to the textual title of one existing chart part.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChartTitleEdit {
+    pub text: String,
+}
+
+/// A bounded edit to one existing worksheet-backed Pivot cache source.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PivotWorksheetSourceEdit {
+    pub sheet: Option<String>,
+    pub reference: Option<String>,
+}
+
 const CELL_TILE_SIZE: u32 = 32;
 const MAX_CELL_TILES_PER_SHEET: usize = 256;
 const DENSE_TILE_CELL_THRESHOLD: usize = 128;
@@ -1084,6 +1150,10 @@ pub struct Vm {
     pub active_sheet: String,
     pub variables: HashMap<String, Variant>,
     pub calc_mode: CalculationMode,
+    /// Whether explicit event dispatch is enabled. This mirrors
+    /// `Application.EnableEvents`; events are never inferred from ordinary
+    /// cell writes, so callers must opt into `run_event` explicitly.
+    pub enable_events: bool,
     pub error_on_msgbox: bool,
     pub print_msgbox: bool,
     /// Every MsgBox message shown during the current `run_sub` call, in
@@ -1099,6 +1169,13 @@ pub struct Vm {
     /// `None` until the first statement actually starts executing (e.g. a
     /// "Sub not found" failure happens before this is ever set).
     current_span: Option<SourceSpan>,
+    /// Structured category for the most recent uncaught execution failure.
+    /// The string returned by `run_sub` remains the human-facing contract;
+    /// machine-readable consumers can use this side channel instead.
+    last_runtime_failure: Option<RuntimeFailureKind>,
+    /// Non-zero while an explicit event is being dispatched. A nested event
+    /// is suppressed rather than recursively re-entering VBA.
+    event_dispatch_depth: usize,
     pub exit_flag: Option<ExitKind>,
     /// Pending unconditional jump target (`GoTo <label>`).
     pending_goto: Option<String>,
@@ -1166,6 +1243,12 @@ pub struct Vm {
     pub(crate) ooxml_structural_edit_dirty: bool,
     /// True only while structural edits are limited to sheet renames.
     pub(crate) sheet_rename_only: bool,
+    /// Explicit chart series edits keyed by chart part and zero-based series index.
+    pub(crate) chart_series_edits: HashMap<String, HashMap<usize, ChartSeriesEdit>>,
+    /// Explicit chart title edits keyed by chart part.
+    pub(crate) chart_title_edits: HashMap<String, ChartTitleEdit>,
+    /// Explicit Pivot worksheet source edits keyed by cache definition part.
+    pub(crate) pivot_source_edits: HashMap<String, PivotWorksheetSourceEdit>,
     /// Dynamic-array spill rectangles keyed by sheet and anchor coordinate.
     /// Included in edit history so undo cannot leave stale spill ownership.
     spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
@@ -1560,10 +1643,13 @@ impl Vm {
             active_sheet: "sheet1".into(),
             variables: HashMap::new(),
             calc_mode: CalculationMode::Automatic,
+            enable_events: true,
             error_on_msgbox: false,
             print_msgbox: false,
             msgbox_log: Vec::new(),
             current_span: None,
+            last_runtime_failure: None,
+            event_dispatch_depth: 0,
             exit_flag: None,
             pending_goto: None,
             call_stack: Vec::new(),
@@ -1589,6 +1675,9 @@ impl Vm {
             workbook_formula_structure_dirty: true,
             ooxml_structural_edit_dirty: false,
             sheet_rename_only: false,
+            chart_series_edits: HashMap::new(),
+            chart_title_edits: HashMap::new(),
+            pivot_source_edits: HashMap::new(),
             spill_rects: HashMap::new(),
             edit_undo: Vec::new(),
             edit_redo: Vec::new(),
@@ -7160,6 +7249,156 @@ impl Vm {
         Ok(())
     }
 
+    /// Queue a bounded edit to an existing chart series. This changes only
+    /// the category/value formula elements in the named chart part; chart
+    /// drawing geometry, caches, and relationships remain untouched.
+    pub fn set_chart_series_formulas(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        categories: Option<&str>,
+        values: Option<&str>,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if categories.is_none() && values.is_none() {
+            return Err("at least one chart series formula is required".to_string());
+        }
+        for (kind, formula) in [("categories", categories), ("values", values)] {
+            if let Some(formula) = formula {
+                if formula.is_empty() || formula.len() > 16 * 1024 {
+                    return Err(format!("chart {kind} formula must be 1..=16384 bytes"));
+                }
+                if formula.chars().any(|c| c.is_control()) {
+                    return Err(format!("chart {kind} formula contains a control character"));
+                }
+            }
+        }
+        self.chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .insert(
+                series_index,
+                ChartSeriesEdit {
+                    name: None,
+                    categories: categories.map(ToOwned::to_owned),
+                    values: values.map(ToOwned::to_owned),
+                },
+            );
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series name formula.
+    pub fn set_chart_series_name_formula(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        name_formula: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if name_formula.is_empty() || name_formula.len() > 16 * 1024 {
+            return Err("chart series name formula must be 1..=16384 bytes".to_string());
+        }
+        if name_formula.chars().any(|c| c.is_control()) {
+            return Err("chart series name formula contains a control character".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+            });
+        edit.name = Some(name_formula.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first text run in an existing chart title.
+    /// The chart XML outside that title text, including drawing geometry and
+    /// relationships, remains opaque and is preserved.
+    pub fn set_chart_title(&mut self, chart_part: &str, text: &str) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart title edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if text.len() > 16 * 1024 {
+            return Err("chart title must be at most 16384 bytes".to_string());
+        }
+        if text.chars().any(|c| c.is_control()) {
+            return Err("chart title contains a control character".to_string());
+        }
+        self.chart_title_edits.insert(
+            chart_part.to_string(),
+            ChartTitleEdit {
+                text: text.to_string(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing worksheet-backed Pivot cache source.
+    /// The cache records and PivotTable layout are intentionally left opaque.
+    pub fn set_pivot_worksheet_source(
+        &mut self,
+        cache_part: &str,
+        sheet: Option<&str>,
+        reference: Option<&str>,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("Pivot source edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(cache_part.starts_with("xl/pivotCache/") && cache_part.ends_with(".xml")) {
+            return Err("cache_part must be an xl/pivotCache/*.xml path".to_string());
+        }
+        if sheet.is_none() && reference.is_none() {
+            return Err("at least one Pivot worksheet source field is required".to_string());
+        }
+        if let Some(sheet) = sheet {
+            if sheet.trim().is_empty() || sheet.len() > 31 {
+                return Err("Pivot worksheet source sheet must be 1..=31 bytes".to_string());
+            }
+            if sheet.chars().any(|c| c.is_control()) {
+                return Err("Pivot worksheet source sheet contains a control character".to_string());
+            }
+            if !self.sheets.contains_key(&sheet.to_lowercase()) {
+                return Err(format!(
+                    "Pivot worksheet source sheet '{}' not found",
+                    sheet
+                ));
+            }
+        }
+        if let Some(reference) = reference
+            && (reference.is_empty()
+                || reference.len() > 16 * 1024
+                || reference.chars().any(|c| c.is_control())
+                || parse_range_addr(reference).is_none())
+        {
+            return Err("Pivot worksheet source ref must be a valid A1 range".to_string());
+        }
+        self.pivot_source_edits.insert(
+            cache_part.to_string(),
+            PivotWorksheetSourceEdit {
+                sheet: sheet.map(ToOwned::to_owned),
+                reference: reference.map(ToOwned::to_owned),
+            },
+        );
+        Ok(())
+    }
+
     /// Duplicates `source_name`'s cells, merges, hidden-row/col state, cell
     /// styles, cell number formats, whole-tab visibility state, and row
     /// heights/column widths into a brand-new sheet named `new_name`, appended
@@ -8721,6 +8960,208 @@ impl Vm {
         self.current_span
     }
 
+    /// Drain the structured category for the most recent uncaught execution
+    /// failure. The plain `String` returned by `run_sub` remains unchanged.
+    pub fn take_runtime_failure(&mut self) -> Option<RuntimeFailureKind> {
+        self.last_runtime_failure.take()
+    }
+
+    /// Set the VBA-compatible event switch. Event handlers are opt-in in the
+    /// headless runtime and are not inferred from cell mutations.
+    pub fn set_enable_events(&mut self, enabled: bool) {
+        self.enable_events = enabled;
+    }
+
+    /// Return the current VBA-compatible event switch.
+    pub fn enable_events(&self) -> bool {
+        self.enable_events
+    }
+
+    /// Dispatch one explicitly requested, zero-argument event procedure.
+    ///
+    /// Returns `true` when the handler ran and `false` when events are
+    /// disabled or a handler is already running (re-entry suppression). The
+    /// handler name is resolved case-insensitively by `run_sub`; automatic
+    /// Workbook/Worksheet event discovery and `Target` argument binding are
+    /// intentionally outside this first bounded event slice.
+    pub fn run_event(&mut self, program: &Program, event_name: &str) -> Result<bool, String> {
+        if !self.enable_events || self.event_dispatch_depth != 0 {
+            return Ok(false);
+        }
+        let name = event_name.trim();
+        if name.is_empty() {
+            return Err("event name cannot be empty".to_string());
+        }
+        let normalized = name.to_lowercase();
+        if !matches!(
+            normalized.as_str(),
+            "workbook_open"
+                | "workbook_beforeclose"
+                | "worksheet_change"
+                | "worksheet_calculate"
+                | "worksheet_selectionchange"
+        ) {
+            return Err(format!(
+                "unsupported event '{}': explicit event dispatch supports Workbook_Open, Workbook_BeforeClose, Worksheet_Change, Worksheet_Calculate, and Worksheet_SelectionChange",
+                event_name
+            ));
+        }
+        let matching: Vec<_> = program
+            .subs
+            .iter()
+            .filter(|sub| sub.name.eq_ignore_ascii_case(&normalized))
+            .collect();
+        if matching.len() > 1 {
+            return Err(format!(
+                "duplicate event '{}' in one module — dispatch order is ambiguous",
+                event_name
+            ));
+        }
+        let sub = matching
+            .first()
+            .ok_or_else(|| format!("event '{}' not found", event_name))?;
+        if !sub.params.is_empty() {
+            return Err(format!(
+                "event '{}' requires arguments; Target binding is not implemented",
+                event_name
+            ));
+        }
+        self.event_dispatch_depth = 1;
+        let result = self.run_sub(program, &normalized);
+        self.event_dispatch_depth = 0;
+        result.map(|()| true)
+    }
+
+    /// Dispatch `Worksheet_Change(Target)` with an explicitly supplied A1
+    /// target range on the active sheet. The handler must have exactly one
+    /// `As Range` parameter; the binding is temporary and restored afterward.
+    /// This is explicit only: ordinary cell writes do not trigger it.
+    pub fn run_worksheet_change(
+        &mut self,
+        program: &Program,
+        target_address: &str,
+    ) -> Result<bool, String> {
+        if !self.enable_events || self.event_dispatch_depth != 0 {
+            return Ok(false);
+        }
+        let matching: Vec<_> = program
+            .subs
+            .iter()
+            .filter(|sub| sub.name.eq_ignore_ascii_case("worksheet_change"))
+            .collect();
+        if matching.len() > 1 {
+            return Err(
+                "duplicate event 'Worksheet_Change' in one module — dispatch order is ambiguous"
+                    .to_string(),
+            );
+        }
+        let sub = matching
+            .first()
+            .ok_or_else(|| "event 'Worksheet_Change' not found".to_string())?;
+        if sub.params.len() != 1
+            || sub.param_types.first().and_then(Option::as_deref) != Some("range")
+        {
+            return Err(
+                "event 'Worksheet_Change' requires exactly one parameter declared As Range"
+                    .to_string(),
+            );
+        }
+        let ((start_row, start_col), (end_row, end_col)) = self
+            .resolve_range_addr(target_address)
+            .filter(|&((start_row, start_col), (end_row, end_col))| {
+                start_row > 0 && start_col > 0 && end_row >= start_row && end_col >= start_col
+            })
+            .ok_or_else(|| format!("Worksheet_Change: invalid target range '{target_address}'"))?;
+        let target_name = sub.params[0].clone();
+        let old_target = self.object_variables.insert(
+            target_name.clone(),
+            ObjectRef::Range(RangeRef::single(
+                self.active_sheet.clone(),
+                Rect {
+                    start_row,
+                    start_col,
+                    end_row,
+                    end_col,
+                },
+            )),
+        );
+        let old_type = self
+            .object_variable_types
+            .insert(target_name.clone(), "range".to_string());
+        self.event_dispatch_depth = 1;
+        let result = self.run_sub(program, "Worksheet_Change");
+        self.event_dispatch_depth = 0;
+        match old_target {
+            Some(value) => {
+                self.object_variables.insert(target_name.clone(), value);
+            }
+            None => {
+                self.object_variables.remove(&target_name);
+            }
+        }
+        match old_type {
+            Some(value) => {
+                self.object_variable_types.insert(target_name, value);
+            }
+            None => {
+                self.object_variable_types.remove(&target_name);
+            }
+        }
+        result.map(|()| true)
+    }
+
+    /// Run an entrypoint with an opt-in `Workbook_Open` dispatch first.
+    ///
+    /// The ordinary `run_sub` contract remains event-free for compatibility.
+    /// If the program contains `Workbook_Open`, this method runs it only when
+    /// events are enabled, then runs `sub_name`; an event failure prevents the
+    /// main entrypoint from running.
+    pub fn run_sub_with_events(&mut self, program: &Program, sub_name: &str) -> Result<(), String> {
+        if program
+            .subs
+            .iter()
+            .any(|sub| sub.name.eq_ignore_ascii_case("workbook_open"))
+        {
+            self.run_event(program, "Workbook_Open")?;
+        }
+        self.run_sub(program, sub_name)
+    }
+
+    /// Run a multi-module entrypoint with an opt-in, uniquely resolved
+    /// `Workbook_Open` dispatch first. Class modules are not workbook event
+    /// owners here. Multiple standard-module handlers are rejected rather
+    /// than resolved by source traversal order.
+    pub fn run_sub_multi_with_events(
+        &mut self,
+        modules: &[(String, Program)],
+        entrypoint: &str,
+    ) -> Result<(), String> {
+        let open_handlers: Vec<_> = modules
+            .iter()
+            .filter(|(_, program)| !program.is_class_module)
+            .filter(|(_, program)| {
+                program
+                    .subs
+                    .iter()
+                    .any(|sub| sub.name.eq_ignore_ascii_case("workbook_open"))
+            })
+            .collect();
+        if open_handlers.len() > 1 {
+            return Err(format!(
+                "duplicate Workbook_Open across modules '{}' — event dispatch order is ambiguous",
+                open_handlers
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("', '")
+            ));
+        }
+        if let Some((_, program)) = open_handlers.first() {
+            self.run_event(program, "Workbook_Open")?;
+        }
+        self.run_sub_multi(modules, entrypoint)
+    }
+
     pub fn run_sub(&mut self, program: &Program, sub_name: &str) -> Result<(), String> {
         self.next_append_rows.clear();
         // Each run starts with a clean message log — otherwise a Vm reused
@@ -8728,6 +9169,7 @@ impl Vm {
         // would leak the previous run's MsgBox text into this run's result.
         self.msgbox_log.clear();
         self.last_resolution_failure = None;
+        self.last_runtime_failure = None;
         self.err_number = 0;
         self.err_description.clear();
         self.err_source.clear();
@@ -8820,6 +9262,7 @@ impl Vm {
             .ok_or_else(|| format!("Sub '{}' not found", sub_name))?
             .clone();
         let result = self.call_sub_def(&sub, &[]);
+        self.capture_runtime_failure(&result);
         self.reclaim_unreachable_collections();
         result
     }
@@ -8838,6 +9281,7 @@ impl Vm {
         entrypoint: &str,
     ) -> Result<(), String> {
         self.next_append_rows.clear();
+        self.last_runtime_failure = None;
         let sub_collisions = parser::find_cross_module_sub_collisions(modules);
         if let Some((name, mods)) = sub_collisions.first() {
             return Err(format!(
@@ -8952,8 +9396,18 @@ impl Vm {
             }
         };
         let result = self.call_sub_def(&sub, &[]);
+        self.capture_runtime_failure(&result);
         self.reclaim_unreachable_collections();
         result
+    }
+
+    fn capture_runtime_failure(&mut self, result: &Result<(), String>) {
+        if result.is_err() && self.last_runtime_failure.is_none() {
+            self.last_runtime_failure = result
+                .as_ref()
+                .err()
+                .map(|message| RuntimeFailureKind::from_message(message));
+        }
     }
 
     fn call_sub_def(&mut self, sub: &SubDef, args: &[Variant]) -> Result<(), String> {
@@ -9562,12 +10016,12 @@ impl Vm {
                 }
             }
             Stmt::SetAppProp { prop, value } => {
-                let v = self.eval_expr(value);
-                if prop == "cutcopymode"
-                    && let Ok(v) = &v
-                    && !is_truthy(v)
-                {
+                let v = self.eval_expr(value)?;
+                if prop == "cutcopymode" && !is_truthy(&v) {
                     self.clipboard = None;
+                }
+                if prop == "enableevents" {
+                    self.enable_events = is_truthy(&v);
                 }
             }
             Stmt::RangeName { addr, name } => {
@@ -10259,6 +10713,8 @@ impl Vm {
             }
             Stmt::Unsupported { reason } => {
                 if self.reject_blocked_external_effects && is_blocked_external_effect(reason) {
+                    self.last_runtime_failure =
+                        Some(RuntimeFailureKind::SecurityBlockedExternalEffect);
                     return Err(format!("SECURITY: blocked external VBA effect: {}", reason));
                 }
             }
@@ -10397,6 +10853,7 @@ impl Vm {
                 // ones that are then treated as a blocking error.
                 self.msgbox_log.push(msg.to_string());
                 if self.error_on_msgbox {
+                    self.last_runtime_failure = Some(RuntimeFailureKind::MsgBoxBlocked);
                     return Err(format!("MsgBox: {}", msg));
                 }
                 if self.print_msgbox {
@@ -16178,6 +16635,86 @@ mod tests {
     }
 
     #[test]
+    fn explicit_event_dispatch_honors_enable_events_and_reentry_guard() {
+        let program =
+            parser::parse("Sub Workbook_Open()\n    Cells(1,1).Value = 7\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        assert!(vm.enable_events());
+        assert!(vm.run_event(&program, "workbook_open").unwrap());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+
+        vm.set_enable_events(false);
+        assert!(!vm.run_event(&program, "Workbook_Open").unwrap());
+        vm.set_enable_events(true);
+        vm.event_dispatch_depth = 1;
+        assert!(!vm.run_event(&program, "Workbook_Open").unwrap());
+    }
+
+    #[test]
+    fn explicit_event_dispatch_rejects_target_bound_handlers() {
+        let program = parser::parse(
+            "Sub Worksheet_Change(Target As Range)\n    Cells(1,1).Value = 7\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_event(&program, "Worksheet_Change").unwrap_err();
+        assert!(err.contains("Target binding is not implemented"), "{err:?}");
+    }
+
+    #[test]
+    fn explicit_event_dispatch_rejects_duplicate_handlers_in_one_program() {
+        let program =
+            parser::parse("Sub Workbook_Open()\nEnd Sub\nSub Workbook_Open()\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_event(&program, "Workbook_Open").unwrap_err();
+        assert!(err.contains("dispatch order is ambiguous"), "{err:?}");
+    }
+
+    #[test]
+    fn worksheet_change_binds_explicit_target_range() {
+        let program = parser::parse(
+            "Sub Worksheet_Change(Target As Range)\n    Target.Value = 11\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        assert!(vm.run_worksheet_change(&program, "B2").unwrap());
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(11));
+    }
+
+    #[test]
+    fn worksheet_change_rejects_invalid_explicit_target_range() {
+        let program = parser::parse("Sub Worksheet_Change(Target As Range)\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_worksheet_change(&program, "B0").unwrap_err();
+        assert!(err.contains("invalid target range"), "{err:?}");
+    }
+
+    #[test]
+    fn opt_in_workbook_open_runs_before_main_entrypoint() {
+        let program = parser::parse(
+            "Sub Workbook_Open()\n    Cells(1,1).Value = 7\nEnd Sub\n\
+             Sub Main()\n    Cells(1,2).Value = Cells(1,1).Value + 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+    }
+
+    #[test]
+    fn opt_in_workbook_open_failure_stops_main_entrypoint() {
+        let program = parser::parse(
+            "Sub Workbook_Open()\n    Err.Raise 5\nEnd Sub\n\
+             Sub Main()\n    Cells(1,1).Value = 99\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        assert!(vm.run_sub_with_events(&program, "Main").is_err());
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+    }
+
+    #[test]
     fn test_xl_constants() {
         let vm = run(
             "Sub MySub()\n    a = xlUp\n    b = xlDown\n    c = xlCalculationManual\nEnd Sub\n",
@@ -20812,6 +21349,10 @@ mod tests {
         // Spec: messages reflects every MsgBox the macro attempted to show,
         // even ones that are then treated as a blocking error.
         assert_eq!(vm.take_messages(), vec!["blocked".to_string()]);
+        assert_eq!(
+            vm.take_runtime_failure(),
+            Some(RuntimeFailureKind::MsgBoxBlocked)
+        );
     }
 
     #[test]
@@ -20927,6 +21468,38 @@ mod tests {
         let mut vm = Vm::new();
         vm.run_sub_multi(&modules, "Main").unwrap();
         assert_eq!(vm.variables["x"], Variant::Integer(42));
+    }
+
+    #[test]
+    fn run_sub_multi_with_events_dispatches_unique_workbook_open_first() {
+        let modules = vec![
+            module(
+                "thisworkbook",
+                "Sub Workbook_Open()\n    Cells(1,1).Value = 3\nEnd Sub\n",
+            ),
+            module(
+                "module1",
+                "Sub Main()\n    Cells(1,2).Value = Cells(1,1).Value + 4\nEnd Sub\n",
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi_with_events(&modules, "module1.Main")
+            .unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
+    }
+
+    #[test]
+    fn run_sub_multi_with_events_rejects_duplicate_workbook_open() {
+        let modules = vec![
+            module("thisworkbook", "Sub Workbook_Open()\nEnd Sub\n"),
+            module("module1", "Sub Workbook_Open()\nEnd Sub\n"),
+        ];
+        let mut vm = Vm::new();
+        let err = vm
+            .run_sub_multi_with_events(&modules, "module1.Workbook_Open")
+            .unwrap_err();
+        assert!(err.contains("duplicate Workbook_Open"), "{err:?}");
     }
 
     #[test]
@@ -21346,7 +21919,28 @@ mod tests {
             err.starts_with("SECURITY: blocked external VBA effect"),
             "{err:?}"
         );
+        assert_eq!(
+            vm.take_runtime_failure(),
+            Some(RuntimeFailureKind::SecurityBlockedExternalEffect)
+        );
         assert!(!vm.variables.contains_key("done"));
+    }
+
+    #[test]
+    fn workbook_save_and_close_are_blocked_as_external_effects() {
+        let mut vm = Vm::new();
+        let prog =
+            parser::parse("Sub MySub()\n    ThisWorkbook.Save\n    ThisWorkbook.Close\nEnd Sub\n")
+                .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(
+            err.starts_with("SECURITY: blocked external VBA effect"),
+            "{err:?}"
+        );
+        assert_eq!(
+            vm.take_runtime_failure(),
+            Some(RuntimeFailureKind::SecurityBlockedExternalEffect)
+        );
     }
 
     #[test]

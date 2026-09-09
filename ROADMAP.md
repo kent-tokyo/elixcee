@@ -60,6 +60,10 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G2d 部分 BUILD: sheet renameに限定したChart `<c:f>`とPivot `worksheetSource@sheet`の安全な参照更新、およびDrawing／relationship chain保持を実装・回帰検証した。Chart/Drawing作成・一般編集、row/column編集に伴うanchor更新、Pivot source/cache編集・再集計は未完。
 - [x] G2d Chart rename BUILD: 単純なsheet renameに限り、Chart XMLの`<c:f>`に含まれるqualified sheet referenceを既存formula parserで安全に書き換え、Drawing owner／relationshipを保持して保存する経路を実fixtureで検証した。chart creation、一般のChart/Drawing編集、Pivot更新、Excel再openは未完。
 - [x] G2d Pivot rename BUILD: 単純なsheet renameに限り、Pivot cache definitionの`worksheetSource@sheet`をXML escape付きで更新し、cache本体・cacheId・table source・再集計には触れずに保存する経路と回帰を追加した。Pivot source/cacheの一般編集、再集計、Excel再openは未完。
+- [x] G2d Chart series BUILD: 既存Chart XMLに対する`Vm.set_chart_series_formulas`（Python binding／型stub含む）を追加し、0-based series indexでcategory／valueの`<c:f>`だけを明示更新できるようにした。対象Chart・系列・参照の欠損は保存前に拒否し、Drawing／relationship chainは保持する。Chart作成、cache再生成・再計算、Drawing anchor編集、Excel再openは未完。
+- [x] G2d Chart series-name BUILD: 既存Chart XMLに対する`Vm.set_chart_series_name_formula`（Python binding／型stub含む）を追加し、0-based系列の`<c:tx>`内`<c:f>`だけを更新できるようにした。系列・name referenceの欠損は拒否し、category/value/cache/Drawing relationshipは変更しない。Chart作成、Excel再openは未完。
+- [x] G2d Chart title BUILD: 既存Chart XMLに対する`Vm.set_chart_title`（Python binding／型stub含む）を追加し、最初の`<c:title>`内の最初の`<a:t>`だけをXML escape付きで更新できるようにした。title／text欠損、制御文字、16KiB超は拒否し、Drawing／relationship chainは保持する。複数text runの完全編集、Chart作成、Excel再openは未完。
+- [x] G2d Pivot source BUILD: 既存のworksheet-backed Pivot cacheに対する`Vm.set_pivot_worksheet_source`（Python binding／型stub含む）を追加し、`worksheetSource`のsheet／A1 `ref`を限定更新できるようにした。cache records・PivotTable layout・再集計は変更せず、対象cache／source／属性欠損は拒否する。table-backed source、一般cache編集、Excel再openは未完。
 - [x] G2c safety BUILD: sheet rename、row/column insert/delete、sheet move/deleteを構造編集として追跡し、未更新のDrawing／Pivot ownerを保存時に復元しない安全境界を追加した。参照の実更新と明示的な編集APIは未完。
 - [x] G2 External Links安全policy: 既定の`preserve`は外部URLを取得・実行せずrelationshipをラウンドトリップ用に保持し、`reject`ではモデル構築前に拒否、`drop`ではowner／relationship／`xl/externalLinks/` partsを保存時に除去する。外部参照数式のExcel oracle校正は未完。
 - [ ] MEASURE: 自作最小packageとExcel由来fixtureで、part／rels／owner／cacheを比較し、実Excelの修復警告と編集後の再利用を確認する。
@@ -255,17 +259,27 @@ LogiSheetsの公開metadataは実装・測定・運用実績の証拠ではな�
 | 優先度 | 未完了の作業 | 完了条件 |
 |---|---|---|
 | P0 | 元ZIPのpassthrough entryを全量展開・保持しないWriter | 大規模partのclone削減、peak RSS・保存時間、全part／relationship同値 |
-| P0 | 小規模ファイルの1.2倍目標 | 17セルの固定保存費用を改善し、標準sync・atomic renameを維持。quiet-hostでp95も確認 |
-| P0 | 大規模全条件で追加1.2倍 | 10万・40万・100万セルの中央値比で判定。style／数式密度・RSS・単一sheetの上限も校正 |
+| P0 | 現行比1.1倍の速度目標 | 17セル・1,000×10・10,000×10の現行中央値を基準に、各ケースの処理時間を90.9%以下へ削減。標準sync・atomic rename・出力検証を維持 |
+| P0 | 大規模全条件で追加1.1倍 | 10万・40万・100万セルの中央値比で判定。style／数式密度・RSS・単一sheetの上限も校正し、1.2倍はストレッチ目標として別管理 |
 | P0 | formula dirty propagationの完全校正 | 大規模controlled matrix、full再走査との値一致、p50/p95、CPU/RSS、循環・manual/automatic |
 
-P0速度の現行ベースライン（2026-09-07、Criterion 10 samples／2 seconds、現行1.0.4）では、5,000行appendのreference rescanが106.88 ms、cached pathが94.98 msだった。これは当該microbenchmarkで約11.1%短縮した観測であり、1.2倍目標やend-to-end優位性の根拠にはしない。詳細は[VMホットパス測定記録](docs/measurements/vm-hotpath-optimization-2026-09-05.md)。
+P0速度の新しい目標は、現行同一条件の17セル・1,000×10・10,000×10ケースで処理時間を90.9%以下（速度1.1倍以上）にすることとする。ユーザー提示の暫定値はelixcee 5.02／35.6／317.6 ms、openpyxl 9.54／84.5／947.3 msであり、これは現行実装の比較基準候補である。固定fixture・耐久性・出力検証を再実行するまで、達成済みとは扱わない。従来の1.2倍はストレッチ目標として残す。
+2026-09-09の現行1.0.5同一条件再測定では、WriterのDeflate level 1候補により、現行ベースライン比のelixcee中央値は17セル4.9566→4.8646 ms（1.02倍、未達）、1,000×10 16.9883→14.5888 ms（1.16倍、達成）、10,000×10 160.5500→107.7993 ms（1.49倍、達成）だった。全セル値・数式のround-trip検証、F_FULLFSYNC相当の同期、atomic renameは維持した。小規模ケースは同期固定費が支配的であり、目標は未完了。level 2は出力サイズとのバランスは改善したが、大規模中央値153.3230 msでlevel 1を下回ったため採用しない。出力サイズは10,000×10で306,676→575,254 bytesとなるため、速度とサイズのトレードオフを次の評価項目とする。
+同期APIを`sync_data`へ弱める実験は17セル5.7711 ms、1,000×10 13.8165 ms、10,000×10 128.4340 msで、level 1の確定計測を改善しなかった。さらにメタデータ同期保証を弱めるため不採用とし、`sync_all`を維持する。
+未変更passthrough entryと未変更`styles.xml`を`raw_copy_file`で圧縮済みのまま移送する候補を追加した。変更前実装と同一実行内で交互測定した結果、17セルは4.9381→4.9618 ms（0.995倍、未達）、1,000×10は20.7003→15.9346 ms（1.30倍）、10,000×10は163.8505→126.4021 ms（1.30倍）だった。全セル・数式のround-trip、F_FULLFSYNC相当、atomic renameは成功した。workbook.xml/relsのraw copyは関係ID不整合を起こすため撤回し、Writer生成を維持する。
+さらにsource ZIPを解析時とraw copy時に二度open/validateしていた経路を、検証済みarchiveの保持・再利用へ統合した。同一実行内の再測定では、17セル4.8867→4.7842 ms（1.02倍、未達）、1,000×10 17.7606→13.8260 ms（1.28倍）、10,000×10 132.3231→104.5360 ms（1.27倍）だった。検証済みハンドルを保持するためTOCTOU条件を弱めず、全セル・数式round-tripも成功した。小規模はなお同期固定費が目標を阻んでいる。
+`[Content_Types].xml`とroot `_rels/.rels`のraw copyは試行したが、source側の追加Defaultやrelationship ID順をそのまま持ち込み、paired ZIP-part比較と一致しないため候補から撤回した。これらはwriter生成を維持し、静的partの差分を安全性ゲートで見逃さない。sharedStrings／stylesと一般passthroughのraw copyだけを候補として残す。
+削減後実装の安定測定（before/after各120サンプル、8ラウンド×15反復）では、17セル4.8847→4.6196 ms（1.06倍、未達）、1,000×10 17.6805→14.0657 ms（1.26倍）、10,000×10 133.3955→97.3674 ms（1.37倍）だった。17セルのp50でも同期固定費が支配的であり、単発runの1.1倍達成値は採用判定に使わない。
+未変更の`sharedStrings.xml`についても、現在の共有文字列テーブルとsource entryの内容・順序が一致し、構造編集がない場合に限り、生成・再圧縮せず検証済みsource ZIPからraw copyする経路を追加した。before/after各40サンプル（4ラウンド×10反復）の再測定では、17セル4.9971→4.8726 ms（1.03倍、未達）、1,000×10 16.6352→12.8169 ms（1.30倍）、10,000×10 123.4998→91.4622 ms（1.35倍）だった。全ケースでセル値・数式のround-trip検証、F_FULLFSYNC相当、atomic renameを維持した。文字列テーブルが変わる保存では従来の生成経路を使うため、共有文字列の安全性境界は変えていない。
+共有文字列の一致判定は、source tableと所有indexを位置ごとに直接照合する方式へ整理し、判定専用の一時`Vec<String>`を作らないようにした。順序・件数・内容の不一致を回帰テストで固定し、保存時の小規模な一時割り当てを削減した。
 formula dirty propagationの同日controlled matrixでは、single-input chain 1.2825 ms、warm noop 1.2363 ms、structure rebuild 1.3090 ms、独立1,000入力 1.1570 ms（各median）だった。single-inputがrebuildを上回る短縮は確認できなかったため、closure bookkeepingが支配的になる条件のnegative resultとして記録し、P0最適化候補を維持する。
 その後、依存先を座標ではなくformula plan indexでqueueへ渡す局所変更を実装し、single-input chain 1.2538 ms、structure rebuild 1.3223 msを再測定した。直前chain比で約2.2%の改善だが、rebuildは不変であり、独立入力・end-to-end・1.2倍目標の根拠にはしない。range/cycle回帰は成功し、独立入力は未再測定。
 残るwarm noopは1.2012 ms、独立1,000入力は1.1502 msで、いずれもCriterion上の有意差なしだった。queue index化はsingle-input chainに限る局所改善として確定し、一般的なdirty propagation高速化とは扱わない。
+2026-09-09の候補版大規模確認測定（macOS arm64、同一実行ファイルのbefore/after、20ペア、標準sync・atomic rename・独立openpyxl全セル検証）では、100k cellsがbefore 152.822→after 118.540 ms（p50比1.289倍）、400kが630.931→503.945 ms（1.252倍）、1m・4 sheetsが1,393.716→1,165.116 ms（1.196倍）だった。全ケースでZIP member比較と出力検証は成功した。100k／400kは追加1.2倍目標を満たすが、1mは1.196倍であり丸めて達成扱いにしない。paired median speedupは順に1.284／1.290／1.250倍だが、判定は固定したp50比を優先する。測定JSONは`/private/tmp/elixcee-large-speedup-candidate.json`に保存した（release artifactではない）。
 
 2026-09-07のcandidate健全性確認では、`cargo test --workspace --all-targets --offline`を実行し、Rust unit 1,549件、blackbox、CLI、property、XLSX round-trip 52件、bench smoke、WASM crateを含む全targetが成功した。これはlocal regression evidenceであり、3 OS、Excel oracle、公開artifactの証拠ではない。
 同日の`cargo clippy --workspace --all-targets --offline -- -D warnings`も成功し、workspace全targetで警告は検出されなかった。これは静的検査の証拠であり、3 OS・Excel oracle・公開artifactの証拠ではない。
+2026-09-09の自己完結ローカルゲートでは、version／measurement boundary／formula dispatch／OOXML matrix／stream measurement self-test、Rust 1,583 tests、strict clippy、Rustdoc、offline audit、fuzz smoke 4種、JS typecheck／operation plan／pack audit／WASM smoke／実tarball CJS・ESM consumer／実Chrome browser smokeを完了した。fuzzはformula parser 225,513、formula eval 162,516、VBA parser 203,945、XLSX reader 17,773 runsで、各終了コード0・RSS上限内だった。これはmacOS上のローカル証跡であり、Linux／Windows、Excel oracle、外部レビュー、registry公開の完了を意味しない。
 主要workflow（CI、publish、release、crates-publish）は`actionlint`でエラーなしだった。workflow定義の静的検査であり、GitHub Actionsの実行結果や3 OS測定完了を意味しない。
 測定境界検査（`scripts/check-measurement-boundary.sh`）とreader／stream writer validatorのself-testも成功した。これは未検証測定を公開artifactへ混入させないためのlocal gateであり、3 OS実測やExcel oracleを代替しない。
 追跡済みformula planでは整合性scanを省略し、`cells_mut()`等でtrackingが無効化された場合だけlive formula再検査へfallbackする変更を実装した。dirty formula、cycle、manual→automaticを含む関連テストとworkspace全target回帰は成功した。
@@ -293,7 +307,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 
 2026-09-06の直前実装に対する大規模20組の交互測定:
 
-| セル数 | before / afterの全体中央値比 | 厳密な1.2倍目標 |
+| セル数 | before / afterの全体中央値比 | 厳密な1.1倍目標 |
 |---|---:|---|
 | 100,000（1 sheet） | 1.180 | 未達 |
 | 400,000（1 sheet） | 1.318 | 達成 |
@@ -325,9 +339,11 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 - [x] Range相対参照、default Item/Value、Worksheet/Workbookの基本member、SpecialCells拡張。
 - [x] VM-local Collectionとexport済みclass moduleのobject連携、Property・interface dispatch。
 - [x] VM-local Dictionary adapter。キー正規化などの制限は [FUNCTIONS](FUNCTIONS.md#in-memory-dictionary) に明記。
-- [ ] Save／Close／外部リンクなど作用を持つmemberは、安全境界とoracle fixtureを先に定義して段階実装。
+- [x] 部分 BUILD: 未実装のVBA `ThisWorkbook.Save`／`ThisWorkbook.Close`（および同じmember判定に入るSave系呼出し）を既定のheadless実行で外部効果として拒否し、`SECURITY`／`E1011`へ構造化分類する回帰を追加した。実際の保存先指定、Close後state、イベント連携、外部リンクの実行、Excel oracleは未完。
 - [ ] Workbook_Open／Worksheet_Change等のイベントは、EnableEvents・再入抑止・決定的dispatch順・budget付きで設計。
-- [ ] runtime errorの文字列分類依存を減らし、型付き診断へ移行。
+- [x] 部分 BUILD: `Vm.run_event`／Python `Vm.run_event`で明示指定したzero-argumentのWorkbook／Worksheetイベントをdispatchし、`Application.EnableEvents`による無効化、再入抑止、既定execution budgetを適用した。さらに`run_worksheet_change`／Python bindingで、active sheet上の明示A1 targetを`As Range`引数へ一時束縛できるようにした。自動発火、複数handlerの決定的順序、イベント連鎖は未完。
+- [x] 部分 BUILD: `Vm.run_sub_multi_with_events`で複数moduleから`Workbook_Open`を一意に解決してentrypointより先にdispatchし、標準module間および同一Program内の重複handlerを拒否する決定性境界を追加した。Worksheetイベントの自動発火、イベント連鎖は未完。
+- [x] 部分 BUILD: VMが実行中に確定したruntime failure categoryをside channelで保持し、CLI JSON診断が文字列再分類なしに利用する経路を追加した。blocked external effectとMsgBox拒否は発生箇所で直接分類し、未移行経路だけがメッセージ再分類へfallbackする。blocked external effectには新しい`E1011`を割り当て、既存の`E1006`（duplicate module name）を壊さない。entrypoint／compile／事前エラーと全エラー生成箇所の完全な型付き移行、独立Excel oracleは未完。
 - [ ] 複数module間のUDT名衝突と診断位置など、解決規則の残差を明確化。
 - [ ] Excelとの型変換・丸め・日付・Empty／Error・配列境界・再計算の独立oracle比較を拡張。
 - [ ] 実運用macroの回帰と、数式の依存グラフ・循環・volatile／dynamic array等の対応境界を検証。
@@ -374,3 +390,16 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 
 このゲートは将来のリリース判定です。文書の更新だけで完了にしません。
 実装・測定は自律的なローカル作業として進め、version変更・push・公開は別の操作として扱います。
+
+## 残課題の依存分類
+
+未チェック項目は、未実装のローカル作業と、外部環境・外部成果物が必要な判定作業を混同しない。
+
+| 分類 | 対象 | 完了条件 |
+|---|---|---|
+| ローカル実装が残る | G2dのChart/Drawing作成・一般編集、Pivotのcache一般編集（worksheet-backed sourceの限定編集は実装済み）、VBAの実保存／Close後state・イベント・型付きruntime error・UDT解決 | API設計、実装、fixture回帰、Rust/Python/WASM境界の検証 |
+| ローカル測定が残る | 大規模1mの1.2倍、formula dirty propagation完全校正、実運用macro corpus、長時間fuzz／CPU／RSS | 固定入力・反復・資源上限・失敗条件を記録した再現可能な測定 |
+| 外部環境に依存 | Excel再open／修復警告、Excel oracle、Linux／Windows clean-install・資源校正、3 OS検証 | 対象環境の実行結果とversionを取得。macOSローカル結果では代替しない |
+| 外部サービス・将来公開に依存 | LogiSheets固定版の取得を伴う競合比較、外部レビュー、registry／GitHub Release／tag公開 | 取得元・固定version・公開状態を別途記録。未実施の推測は完了扱いにしない |
+
+現在の候補版では、自己完結ローカルゲートとmacOS測定を完了した項目だけを `[x]` とし、上表の外部依存項目は未完のまま維持する。

@@ -162,6 +162,27 @@ class Vm:
         """
         ...
 
+    def run_with_events(self, vba_code: str, macro_name: str, timeout_ms: int | None = None) -> None:
+        """Run ``Workbook_Open`` first when present, then execute *macro_name*."""
+        ...
+
+    def run_event(self, vba_code: str, event_name: str, timeout_ms: int | None = None) -> bool:
+        """Dispatch an explicit zero-argument event; returns ``False`` when disabled or re-entry is suppressed."""
+        ...
+
+    def run_worksheet_change(
+        self, vba_code: str, target_address: str, timeout_ms: int | None = None
+    ) -> bool:
+        """Dispatch ``Worksheet_Change(Target)`` with an explicit A1 target range."""
+        ...
+
+    def set_enable_events(self, enabled: bool) -> None:
+        """Enable or disable explicit headless event dispatch."""
+        ...
+
+    @property
+    def enable_events(self) -> bool: ...
+
     # ── Cell access ────────────────────────────────────────────────────────────
 
     def set_cell(self, row: int, col: int, value: Any) -> None:
@@ -275,6 +296,45 @@ class Vm:
         Raises ``ValueError`` if *old_name* doesn't exist, *new_name* is empty
         or whitespace-only, *new_name* (case-insensitively) already names a
         *different* existing sheet, or the sheet is protected.
+        """
+        ...
+
+    def set_chart_series_formulas(
+        self,
+        chart_part: str,
+        series_index: int,
+        categories: str | None = ...,
+        values: str | None = ...,
+    ) -> None:
+        """Queue a bounded edit to an existing chart series.
+
+        ``chart_part`` must be an ``xl/charts/chartN.xml`` path and
+        ``series_index`` is zero-based. Formulas use chart XML spelling, for
+        example ``Sheet1!$A$1:$A$3``.
+        """
+        ...
+
+    def set_chart_title(self, chart_part: str, text: str) -> None:
+        """Queue a bounded edit to the first text run in an existing chart title."""
+        ...
+
+    def set_chart_series_name_formula(
+        self, chart_part: str, series_index: int, name_formula: str
+    ) -> None:
+        """Queue a bounded edit to an existing chart series name formula."""
+        ...
+
+    def set_pivot_worksheet_source(
+        self,
+        cache_part: str,
+        sheet: str | None = ...,
+        reference: str | None = ...,
+    ) -> None:
+        """Queue a bounded edit to an existing worksheet-backed Pivot source.
+
+        ``cache_part`` must be an ``xl/pivotCache/*.xml`` path and
+        ``reference`` must be an A1 range such as ``A1:B100``. Cache records,
+        PivotTable layout, and recalculation remain out of scope.
         """
         ...
 

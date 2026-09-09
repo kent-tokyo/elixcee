@@ -107,11 +107,20 @@ bounded undo/redo, formula evaluation, ranges, sorting, merges,
 hidden rows/columns, sheet management, styles, tables, data validation,
 AutoFilter, defined-name inspection, pandas export, and `.xlsx`/`.xlsm`/`.ods`
 workbook I/O. See [elixcee.pyi](elixcee.pyi) for signatures and behavior.
+Explicit zero-argument workbook/worksheet handlers can be invoked with
+`vm.run_event(...)`; `EnableEvents` is honored, but ordinary cell writes do not
+implicitly fire events and automatic `Worksheet_Change` triggering is not yet
+implemented. `vm.run_worksheet_change(...)` can explicitly bind an A1 target
+range to `Worksheet_Change(Target As Range)`. Use `vm.run_with_events(...)` when an opt-in `Workbook_Open`
+dispatch should precede the selected macro.
 `Vm.tables()` and `Vm.data_validations()` return typed structural metadata
 projections; they do not evaluate calculated-column or validation formulas.
 For loaded XLSX/XLSM sheets, `Vm.sheet_id(name)` and
 `Vm.sheet_name_for_id(sheet_id)` expose stable source identities independently
 of tab order and rename operations; new or ODS sheets have no inferred ID.
+Loaded workbooks also support bounded edits to selected existing Chart-series
+formulas and the first Chart title text run; Chart creation and general object
+editing remain outside the current contract.
 
 For large XLSX/XLSM files, `open_stream(path, sheet=None)` yields rows without
 materializing the whole workbook. Set `include_row_numbers=True` to receive
@@ -156,9 +165,12 @@ intentional no-op behavior is documented there and in the diagnostic contract.
 The Rust reader/writer preserves supported cell data, formulas, styles, merges,
 hidden rows/columns, and many unknown OOXML parts. Macro projects in `.xlsm`
 files are preserved during supported round trips. Features not modeled by the
-writer can still be lost or disconnected; tables, drawings, comments,
-hyperlinks, and other OOXML objects should be treated as compatibility gaps
-unless covered by tests for the version in use.
+writer can still be lost or disconnected. Existing Drawing/relationship chains
+are preserved on tested paths, and bounded APIs can update selected Chart-series
+formulas and worksheet-backed Pivot source fields. Chart creation, general
+Drawing editing, Pivot cache recalculation, comments, hyperlinks, and other
+OOXML objects remain compatibility gaps unless covered by tests for the version
+in use.
 
 The project runs Rust tests, property tests, compatibility fixtures, and
 differential tests for the JavaScript package in CI. Compatibility with Excel's

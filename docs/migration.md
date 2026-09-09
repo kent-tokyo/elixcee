@@ -47,8 +47,9 @@ The exact available methods and VBA/formula coverage are defined by
 
 - A structural edit is refused when chart/drawing or pivot references cannot be
   rewritten safely. The narrow loaded-workbook sheet-rename path updates chart
-  qualified formulas and pivot worksheet sources; it does not create charts or
-  recalculate pivots.
+  qualified formulas and pivot worksheet sources. Existing chart-series formulas
+  and worksheet-backed Pivot source fields can also be edited explicitly; these
+  APIs do not create charts, regenerate caches, or recalculate pivots.
 - Supported formula and VBA subsets are finite. Unsupported expressions should
   remain an explicit diagnostic, not be treated as an Excel result.
 - GUI effects, Shell/COM/network/file side effects, UserForms, ActiveX, and

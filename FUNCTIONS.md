@@ -169,8 +169,11 @@ evaluation itself remains opaque.
 | `Worksheets.Count` / `Sheets.Count` / `wb.Worksheets.Count` | **Active** — current worksheet count |
 
 This is an in-memory object-model subset. Save/SaveAs/Close, external links,
-windows, charts, pivots, and other desktop or external-effect members are not
-part of the supported contract.
+windows, chart creation/general editing, Pivot cache recalculation, and other
+desktop or external-effect members are not part of the supported contract.
+Loaded-workbook OOXML editing additionally exposes bounded Python methods for
+selected existing Chart-series formulas, Chart title text, and worksheet-backed
+Pivot source fields; these are not VBA object-model members.
 
 ### Application Object
 
@@ -179,7 +182,7 @@ part of the supported contract.
 | `Application.Calculation = xlCalculationManual` | **Active** — disables auto-recalculation |
 | `Application.Calculation = xlCalculationAutomatic` | **Active** — re-evaluates all formula cells |
 | `Application.ScreenUpdating = False/True` | **No-op** (no screen) |
-| `Application.EnableEvents = False/True` | **No-op** (no events) |
+| `Application.EnableEvents = False/True` | **Active** — controls explicit `Vm.run_event` / Python `Vm.run_event` and `run_worksheet_change` dispatch; ordinary cell writes do not auto-fire events |
 | `Application.DisplayAlerts = False/True` | **No-op** (no dialogs) |
 | `Application.StatusBar = "..."` / `False` | **No-op** (no UI) |
 | `Application.Cursor = xlWait` / `xlDefault` | **No-op** (no UI) |

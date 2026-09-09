@@ -88,6 +88,7 @@ can locate the offending source. I/O/setup errors have null locations.
 | E1003 | sheet_not_found | Missing selected sheet |
 | E1004 | msgbox_blocked | Interactive call blocked |
 | E1007 | object_variable_not_set | Unset/Nothing object reference |
+| E1011 | security_blocked_external_effect | Blocked external VBA effect |
 | E1099 | runtime_error | Other runtime failure |
 | E2001 | parse_error | Invalid VBA source |
 | E3001 | io_error | Source/workbook read or output failure |

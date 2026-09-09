@@ -132,7 +132,8 @@ differential tests run in CI. Real Excel-authored fixtures cover selected
 round-trip paths. They do not establish complete Excel VBA semantic
 compatibility or guarantee that every unmodeled OOXML feature survives a save.
 Chart and Pivot XML are not generally edited. As narrow G2d operations, a loaded
-workbook may rename a sheet and rewrite qualified references in chart `<c:f>`
-formula elements plus `worksheetSource@sheet` in Pivot cache definitions. Row or
-column structural edits, general object editing, Pivot recalculation, and
+workbook may rename a sheet, update selected existing chart-series category/value
+`<c:f>` elements, and update an existing worksheet-backed Pivot source's
+`worksheetSource@sheet` or A1 `ref`. Row or column structural edits, chart
+creation, general object editing, cache regeneration/recalculation, and
 unparseable object XML remain fail-closed.

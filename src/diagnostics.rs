@@ -155,6 +155,24 @@ impl ElixceeError {
         }
     }
 
+    /// Build a runtime diagnostic from the VM's structured failure category.
+    /// The string classifier remains a fallback for failures raised before the
+    /// execution boundary or by older callers.
+    pub fn runtime_error_with_kind(
+        message: String,
+        failure: Option<crate::vm::RuntimeFailureKind>,
+    ) -> Self {
+        let (code, kind) = failure
+            .map(runtime_failure_fields)
+            .unwrap_or_else(|| classify_runtime_error(&message));
+        ElixceeError {
+            code,
+            kind,
+            message,
+            location: None,
+        }
+    }
+
     /// Attach a source location (or clear it — pass `None` if the caller
     /// couldn't resolve one, e.g. no statement had executed yet).
     pub fn with_location(mut self, location: Option<SourceLocation>) -> Self {
@@ -220,6 +238,22 @@ fn classify_runtime_error(msg: &str) -> (&'static str, &'static str) {
     ("E1099", "runtime_error")
 }
 
+fn runtime_failure_fields(failure: crate::vm::RuntimeFailureKind) -> (&'static str, &'static str) {
+    match failure {
+        crate::vm::RuntimeFailureKind::UndefinedVariable => ("E1001", "undefined_variable"),
+        crate::vm::RuntimeFailureKind::UndefinedSubOrFunction => {
+            ("E1002", "undefined_sub_or_function")
+        }
+        crate::vm::RuntimeFailureKind::SheetNotFound => ("E1003", "sheet_not_found"),
+        crate::vm::RuntimeFailureKind::MsgBoxBlocked => ("E1004", "msgbox_blocked"),
+        crate::vm::RuntimeFailureKind::ObjectVariableNotSet => ("E1007", "object_variable_not_set"),
+        crate::vm::RuntimeFailureKind::SecurityBlockedExternalEffect => {
+            ("E1011", "security_blocked_external_effect")
+        }
+        crate::vm::RuntimeFailureKind::Generic => ("E1099", "runtime_error"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,6 +291,16 @@ mod tests {
         let err = ElixceeError::runtime_error(msg);
         assert_eq!(err.code, "E1002");
         assert_eq!(err.kind, "undefined_sub_or_function");
+    }
+
+    #[test]
+    fn structured_runtime_kind_is_used_without_message_reclassification() {
+        let err = ElixceeError::runtime_error_with_kind(
+            "implementation-specific text".to_string(),
+            Some(crate::vm::RuntimeFailureKind::SecurityBlockedExternalEffect),
+        );
+        assert_eq!(err.code, "E1011");
+        assert_eq!(err.kind, "security_blocked_external_effect");
     }
 
     #[test]

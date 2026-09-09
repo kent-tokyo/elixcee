@@ -6,6 +6,30 @@
 
 次の変更はここに記録します。
 
+- イベントhandlerの決定性を強化し、同一Program内の重複`Workbook_Open`／`Worksheet_Change`を先頭選択せず拒否するようにしました。
+- `Worksheet_Change(Target As Range)`の部分BUILDとして、`run_worksheet_change`（Rust／Python）に明示A1 targetを渡せるようにしました。Target bindingは一時的なRange objectとして行い、不正範囲・型不一致・再入を拒否または抑止します。セル編集からの自動発火とイベント連鎖は未完です。
+- 複数module実行でも`Workbook_Open`をopt-in先行dispatchできる`Vm.run_sub_multi_with_events`を追加しました。標準module間の重複handlerはsource traversal順に依存せず拒否します。
+- G2dの限定Chart編集として、既存系列のname formulaを`Vm.set_chart_series_name_formula`（Python binding含む）から更新できるようにしました。系列index・`<c:tx>`・`<c:f>`の欠損、制御文字、16KiB超を拒否し、他の系列・cache・Drawing relationshipは保持します。Excel再openは未完です。
+- G2dの限定Chart編集として、既存Chartの最初のtitle text runを`Vm.set_chart_title`（Python binding含む）から更新できるようにしました。XML escape、欠損title／text、制御文字、16KiB上限を検証し、周辺のChart XML・Drawing relationshipは保持します。Chart作成、複数runの完全編集、Excel再openは未完です。
+- イベント処理を拡張し、`run_with_events`（Rust／Python）で`Workbook_Open`を明示的に先行dispatchできるようにしました。通常の`run`／`run_sub`は従来どおりイベントを自動実行せず、open handlerの失敗時は本体Macroを実行しません。
+- VBAイベントの部分BUILDとして、明示指定したzero-argumentの`Workbook_Open`／`Workbook_BeforeClose`／`Worksheet_Change`／`Worksheet_Calculate`／`Worksheet_SelectionChange`を`Vm.run_event`（Python binding含む）から実行できるようにしました。`Application.EnableEvents`の無効化と再入抑止、既存execution budgetを適用しています。自動発火、`Worksheet_Change(Target)` binding、複数handler順序、イベント連鎖は未完です。
+- VBAの安全境界を補強し、`ThisWorkbook.Save`／`ThisWorkbook.Close`を既定のheadless実行で暗黙の成功扱いにせず、外部効果として拒否するようにしました。`E1011`の構造化runtime failure分類と回帰テストで検証しています。実際の保存・Close後state・イベント連携・Excel oracleは未完です。
+- G2dのローカル実装として、既存Chartの系列ごとのcategory／value formulaを`Vm.set_chart_series_formulas`から更新できるようにしました。0-based系列指定、欠損Chart／系列／参照の拒否、Drawing／relationship chain保持を実fixtureで検証しています。Chart作成、cache再計算、Drawing anchor編集、Excel再openは未完です。
+- G2dのローカル実装として、既存のworksheet-backed Pivot cacheの`worksheetSource`を`Vm.set_pivot_worksheet_source`から限定更新できるようにしました。sheetまたはA1 `ref`を変更できますが、cache records／PivotTable layout／再集計は変更しません。合成fixtureでChart/Pivotの参照 chain保持と回帰を検証し、table sourceとExcel再openは未完です。
+- G2dのChart/Pivot限定編集の再現手順と検証結果を`docs/measurements/g2d-object-editing-2026-09-09.md`へ記録しました。ローカルBUILD証拠と、Excel再open・再集計・他OS・外部比較の未検証境界を分離しています。
+- VBA runtime error診断の部分BUILDとして、VMが実行中の失敗カテゴリを構造化side channelで保持し、CLI JSONがそれを優先利用するようにしました。blocked external effectには`E1011`を割り当て、既存の`E1006`（duplicate module name）を維持しています。事前／compile errorと全エラー生成箇所の完全移行は未完です。
+- runtime failure分類を発生箇所へ寄せ、blocked external effectと`error_on_msgbox`によるMsgBox拒否をVMが直接`RuntimeFailureKind`へ記録するようにしました。既存利用者向けの文字列エラーは維持し、未移行経路だけをfallback分類します。全エラー生成箇所の型付き移行とExcel oracleは未完です。
+- 次期高速化目標を、同一条件の17セル・1,000×10・10,000×10で現行比1.1倍（処理時間90.9%以下）に設定しました。openpyxl比の提示値は再現計測前の暫定基準として扱い、耐久性・出力検証を含む再測定後に達成判定します。
+- WriterのDeflate level 1候補を同一条件で測定し、1,000×10と10,000×10では現行比1.1倍を達成しました。17セルは1.02倍に留まり、同期固定費を含む全ケース目標は未完了です。出力サイズ増加も確認したため、公開採用前の評価項目として残します。
+- 未変更のpassthrough entryとstyles.xmlを圧縮済みのまま移送するWriter最適化を追加しました。大規模ケースでは変更前との同一実行内比較で約1.30倍を確認しましたが、17セルは未達です。workbook.xml/relsのraw copyは関係ID不整合のため採用していません。
+- source ZIPの解析・raw copyで同じ検証済みarchiveを再利用する経路へ整理しました。追加の同一条件測定で1,000×10は1.28倍、10,000×10は1.27倍でした。17セルは1.02倍で、同期固定費を含む目標は継続中です。
+- `[Content_Types].xml` と root `_rels/.rels` のraw copy候補は、source固有のDefaultやrelationship ID順がpaired ZIP-part契約と一致しないため撤回しました。writer生成を維持し、sharedStrings／stylesと一般passthroughの安全なraw copyだけを残しています。
+- 120サンプルの安定測定でも17セルは1.06倍に留まり、単発runの揺れを除外して未達と判定しました。大規模ケースは1.26〜1.37倍を維持しています。
+- 未変更で順序も一致する`sharedStrings.xml`を検証済みsource ZIPからraw copyする候補を追加しました。40サンプルの同一条件測定では17セル1.03倍、1,000×10 1.30倍、10,000×10 1.35倍でした。文字列テーブルが変わる場合は従来どおり生成し、全ケースでround-trip・同期・atomic renameを検証しています。17セルを含む1.1倍目標は未完了です。
+- `sharedStrings.xml` の一致判定をindexへの直接照合へ変更し、判定用の一時文字列テーブルを生成しないようにしました。順序・件数・内容の不一致を回帰テストで検証しています。
+- 自己完結ローカルゲートを再実行し、Rust 1,583 tests、strict clippy／Rustdoc／offline audit、4種のfuzz smoke、JS typecheck、実tarball consumer、WASM、実Chrome browser smokeを成功させました。これはmacOSローカル証跡であり、Linux／Windows、Excel oracle、外部レビュー、公開を完了扱いにしません。
+- 大規模20ペア測定を追加し、100k／400k cellsではp50 1.289／1.252倍、1m・4 sheetsでは1.196倍でした。全ケースでZIP member比較と独立openpyxl全セル検証に成功し、1mは1.2倍未達として記録しています。
+- ROADMAPに残課題の依存分類を追加し、ローカル実装・ローカル測定・Excel/他OS環境・外部サービス／将来公開を分離しました。未実施の外部成果をローカル証跡で代替しない方針を明記しています。
 - crates.ioの公開検証で検出したworkspace依存crateのsource driftを解消するため、`elixcee-types`の公開patch版をroot crateの検証前に明示pinするようにしました。
 
 ## [1.0.5] - 2026-09-09

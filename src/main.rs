@@ -1136,7 +1136,8 @@ fn main() {
                 None
             };
             fail_json(
-                ElixceeError::runtime_error(e).with_location(location),
+                ElixceeError::runtime_error_with_kind(e, vm.take_runtime_failure())
+                    .with_location(location),
                 &vm.take_messages(),
             )
         } else {
