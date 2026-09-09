@@ -9953,11 +9953,10 @@ impl Vm {
         result.map(|()| true)
     }
 
-    fn dispatch_worksheet_change_after_write(
+    fn dispatch_worksheet_change_after_range_write(
         &mut self,
         sheet: &str,
-        row: u32,
-        col: u32,
+        area: Rect,
     ) -> Result<(), String> {
         let has_handler = self.auto_event_program.as_ref().is_some_and(|program| {
             program
@@ -9977,7 +9976,13 @@ impl Vm {
             .as_ref()
             .expect("worksheet handler was checked above")
             .clone();
-        let target_address = format!("{}{}", column_letters(col), row);
+        let target_address = format!(
+            "{}{}:{}{}",
+            column_letters(area.start_col),
+            area.start_row,
+            column_letters(area.end_col),
+            area.end_row
+        );
         self.run_worksheet_change(&program, &target_address).map(|_| ())
     }
 
@@ -12633,11 +12638,19 @@ impl Vm {
                 // object-variable disambiguation as above.
                 self.require_live_object(var)?;
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
-                    return if fields.len() == 2 && fields[0] == "areas" && fields[1] == "count" {
-                        Ok(Variant::Integer(r.areas.len() as i64))
-                    } else {
-                        Ok(Variant::Empty)
-                    };
+                    if fields.len() == 2 && fields[1] == "count" {
+                        return match fields[0].as_str() {
+                            "areas" => Ok(Variant::Integer(r.areas.len() as i64)),
+                            "rows" => Ok(Variant::Integer(
+                                r.single_rect().map_or(0, Rect::rows) as i64,
+                            )),
+                            "columns" => Ok(Variant::Integer(
+                                r.single_rect().map_or(0, Rect::cols) as i64,
+                            )),
+                            _ => Ok(Variant::Empty),
+                        };
+                    }
+                    return Ok(Variant::Empty);
                 }
                 if (matches!(self.object_variables.get(var), Some(ObjectRef::Workbook))
                     || matches!(var.as_str(), "thisworkbook" | "activeworkbook"))
@@ -13174,7 +13187,15 @@ impl Vm {
             .insert((row, col));
         self.workbook_formula_tracking_valid = true;
         self.workbook_formula_structure_dirty = true;
-        self.dispatch_worksheet_change_after_write(sheet, row, col)
+        self.dispatch_worksheet_change_after_range_write(
+            sheet,
+            Rect {
+                start_row: row,
+                start_col: col,
+                end_row: row,
+                end_col: col,
+            },
+        )
     }
 
     fn set_scalar_range_on_sheet(
@@ -13224,7 +13245,7 @@ impl Vm {
         self.workbook_formula_tracking_valid = true;
         self.workbook_formula_structure_dirty = true;
         self.cell_index_dirty = true;
-        Ok(())
+        self.dispatch_worksheet_change_after_range_write(sheet, area)
     }
 
     fn clear_range_on_sheet(&mut self, sheet: &str, area: Rect) -> Result<(), String> {
@@ -13267,7 +13288,7 @@ impl Vm {
         self.workbook_formula_tracking_valid = true;
         self.workbook_formula_structure_dirty = true;
         self.cell_index_dirty = true;
-        Ok(())
+        self.dispatch_worksheet_change_after_range_write(sheet, area)
     }
 
     /// The active sheet's resolved number-format code for a cell (GitHub #4), e.g.
@@ -17884,6 +17905,20 @@ mod tests {
         vm.run_sub_with_events(&program, "Main").unwrap();
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
+    }
+
+    #[test]
+    fn run_sub_with_events_dispatches_the_full_range_for_range_writes() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1:B1\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    Cells(1,3).Value = Target.Columns.Count\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
     }
 
     #[test]
