@@ -11425,11 +11425,7 @@ impl Vm {
                 if !self.strict_resolution {
                     self.ensure_sheet(&key);
                 }
-                let previous_sheet = self.active_sheet.clone();
-                self.active_sheet = key;
-                let result = self.set_cell_value(r, c, v);
-                self.active_sheet = previous_sheet;
-                result?;
+                self.set_cell_value_on_sheet(&key, r, c, v)?;
             }
             Stmt::SheetRangeWrite {
                 sheet,
@@ -11464,19 +11460,12 @@ impl Vm {
                         }
                     }
                     self.active_sheet = prev;
-                } else if let Some(cells) = self.sheet_cells_mut(&key) {
+                } else {
                     for r in r1..=r2 {
                         for c in c1..=c2 {
-                            cells.insert(
-                                (r, c),
-                                CellContent {
-                                    formula: None,
-                                    value: v.clone(),
-                                },
-                            );
+                            self.set_cell_value_on_sheet(&key, r, c, v.clone())?;
                         }
                     }
-                    self.cell_index_dirty = true;
                 }
             }
             Stmt::SheetPropertySet {
@@ -13083,34 +13072,46 @@ impl Vm {
     /// Store a scalar cell value through the same edit, spill, and dependency
     /// invalidation path used by formula-aware VM edits.
     pub fn set_cell_value(&mut self, row: u32, col: u32, value: Variant) -> Result<(), String> {
+        let active = self.active_sheet.clone();
+        self.set_cell_value_on_sheet(&active, row, col, value)
+    }
+
+    fn set_cell_value_on_sheet(
+        &mut self,
+        sheet: &str,
+        row: u32,
+        col: u32,
+        value: Variant,
+    ) -> Result<(), String> {
         if row == 0 || col == 0 {
             return Err("cell coordinates are 1-based and must be positive".to_string());
         }
-        let active = self.active_sheet.clone();
-        self.check_sheet_not_protected(&active, &active)?;
+        self.check_sheet_not_protected(sheet, sheet)?;
         self.check_variant_budget(&value)?;
         self.record_edit_history();
         let mut spill_changed = Vec::new();
-        self.clear_spill_for_anchor(&active, (row, col), &mut spill_changed);
-        self.formula_plan.remove(&active);
-        self.formula_dirty_cells.remove(&active);
-        self.cells_mut().insert(
-            (row, col),
-            CellContent {
-                formula: None,
-                value,
-            },
-        );
+        self.clear_spill_for_anchor(sheet, (row, col), &mut spill_changed);
+        self.formula_plan.remove(sheet);
+        self.formula_dirty_cells.remove(sheet);
+        self.sheet_cells_mut(sheet)
+            .ok_or_else(|| format!("sheet '{}' not found", sheet))?
+            .insert(
+                (row, col),
+                CellContent {
+                    formula: None,
+                    value,
+                },
+            );
         self.formula_ast_cache
-            .entry(active.clone())
+            .entry(sheet.to_string())
             .or_default()
             .remove(&(row, col));
         self.workbook_formula_dirty
-            .entry(active.clone())
+            .entry(sheet.to_string())
             .or_default()
             .extend(spill_changed);
         self.workbook_formula_dirty
-            .entry(active)
+            .entry(sheet.to_string())
             .or_default()
             .insert((row, col));
         self.workbook_formula_tracking_valid = true;
