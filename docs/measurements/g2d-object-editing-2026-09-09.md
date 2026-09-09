@@ -21,6 +21,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   only an existing `cacheField@name` attribute.
 - `Vm.set_chart_title(chart_part, text)` rewrites only the first `<a:t>` inside
   the first `<c:title>` element.
+- `Vm.set_chart_legend_position(chart_part, position)` rewrites only the first
+  `<c:legendPos@val>` for the allowed values `b`, `tr`, `r`, `l`, or `t`.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`

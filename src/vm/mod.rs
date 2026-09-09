@@ -861,6 +861,13 @@ pub(crate) struct ChartTitleEdit {
     pub text: String,
 }
 
+/// A bounded edit to an existing chart legend position (`b`, `tr`, `r`, `l`,
+/// or `t`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChartLegendPositionEdit {
+    pub position: String,
+}
+
 /// A bounded edit to one existing worksheet-backed Pivot cache source.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PivotWorksheetSourceEdit {
@@ -1266,6 +1273,8 @@ pub struct Vm {
     pub(crate) chart_series_edits: HashMap<String, HashMap<usize, ChartSeriesEdit>>,
     /// Explicit chart title edits keyed by chart part.
     pub(crate) chart_title_edits: HashMap<String, ChartTitleEdit>,
+    /// Explicit chart legend-position edits keyed by chart part.
+    pub(crate) chart_legend_position_edits: HashMap<String, ChartLegendPositionEdit>,
     /// Explicit Pivot worksheet source edits keyed by cache definition part.
     pub(crate) pivot_source_edits: HashMap<String, PivotWorksheetSourceEdit>,
     /// Explicit drawing anchor edits keyed by drawing part and zero-based
@@ -1726,6 +1735,7 @@ impl Vm {
             sheet_rename_only: false,
             chart_series_edits: HashMap::new(),
             chart_title_edits: HashMap::new(),
+            chart_legend_position_edits: HashMap::new(),
             pivot_source_edits: HashMap::new(),
             drawing_anchor_edits: HashMap::new(),
             drawing_shape_name_edits: HashMap::new(),
@@ -7474,6 +7484,32 @@ impl Vm {
             chart_part.to_string(),
             ChartTitleEdit {
                 text: text.to_string(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing chart legend position.
+    pub fn set_chart_legend_position(
+        &mut self,
+        chart_part: &str,
+        position: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err(
+                "chart legend position edits require a loaded XLSX/XLSM workbook".to_string(),
+            );
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if !matches!(position, "b" | "tr" | "r" | "l" | "t") {
+            return Err("chart legend position must be one of b, tr, r, l, t".to_string());
+        }
+        self.chart_legend_position_edits.insert(
+            chart_part.to_string(),
+            ChartLegendPositionEdit {
+                position: position.to_string(),
             },
         );
         Ok(())

@@ -318,6 +318,10 @@ class Vm:
         """Queue a bounded edit to the first text run in an existing chart title."""
         ...
 
+    def set_chart_legend_position(self, chart_part: str, position: str) -> None:
+        """Queue a bounded legend position edit (b, tr, r, l, or t)."""
+        ...
+
     def set_chart_series_name_formula(
         self, chart_part: str, series_index: int, name_formula: str
     ) -> None:

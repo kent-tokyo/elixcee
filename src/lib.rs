@@ -1188,6 +1188,13 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to an existing chart legend position.
+    fn set_chart_legend_position(&mut self, chart_part: &str, position: &str) -> PyResult<()> {
+        self.inner
+            .set_chart_legend_position(chart_part, position)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -4531,6 +4538,44 @@ fn rewrite_chart_title(xml: &str, text: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// Rewrite the required `val` attribute of the first chart legend-position
+/// element, preserving the remainder of the chart XML.
+fn rewrite_chart_legend_position(xml: &str, position: &str) -> Result<String, String> {
+    let open = xml
+        .find("<c:legendPos")
+        .filter(|&position| {
+            xml.as_bytes()
+                .get(position + b"<c:legendPos".len())
+                .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+        })
+        .ok_or_else(|| "chart legend position element is missing".to_string())?;
+    let end = xml[open..]
+        .find('>')
+        .map(|offset| open + offset + 1)
+        .ok_or_else(|| "chart legend position element is unterminated".to_string())?;
+    let tag = &xml[open..end];
+    let val = "val=";
+    let attr = tag
+        .find(val)
+        .ok_or_else(|| "chart legend position is missing val attribute".to_string())?;
+    let value_start = attr + val.len();
+    let quote = tag.as_bytes()[value_start];
+    if quote != b'"' && quote != b'\'' {
+        return Err("chart legend position val attribute is malformed".to_string());
+    }
+    let value_end = tag[value_start + 1..]
+        .find(quote as char)
+        .map(|offset| value_start + 1 + offset)
+        .ok_or_else(|| "chart legend position val attribute is unterminated".to_string())?;
+    let mut replacement = tag.to_string();
+    replacement.replace_range(value_start + 1..value_end, position);
+    let mut out = String::with_capacity(xml.len());
+    out.push_str(&xml[..open]);
+    out.push_str(&replacement);
+    out.push_str(&xml[end..]);
+    Ok(out)
+}
+
 /// Rewrite selected two-cell drawing anchors while preserving shape XML,
 /// relationship IDs, and all extension content. Public VM coordinates have
 /// already been validated as 1-based; OOXML markers are zero-based.
@@ -5234,6 +5279,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let allow_sheet_rename = vm.ooxml_structural_edit_dirty && vm.sheet_rename_only;
     let has_chart_series_edits = !vm.chart_series_edits.is_empty();
     let has_chart_title_edits = !vm.chart_title_edits.is_empty();
+    let has_chart_legend_position_edits = !vm.chart_legend_position_edits.is_empty();
     let has_pivot_source_edits = !vm.pivot_source_edits.is_empty();
     let has_drawing_anchor_edits = !vm.drawing_anchor_edits.is_empty();
     let has_drawing_shape_name_edits = !vm.drawing_shape_name_edits.is_empty();
@@ -5262,6 +5308,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(chart_part) {
                 return Err(format!(
                     "chart title edit rejected: source workbook has no {chart_part}"
+                ));
+            }
+        }
+        for chart_part in vm.chart_legend_position_edits.keys() {
+            if !raw_entries.contains_key(chart_part) {
+                return Err(format!(
+                    "chart legend position edit rejected: source workbook has no {chart_part}"
                 ));
             }
         }
@@ -5472,7 +5525,10 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 }
                 None => bytes,
             };
-            let bytes = if (allow_sheet_rename || has_chart_series_edits || has_chart_title_edits)
+            let bytes = if (allow_sheet_rename
+                || has_chart_series_edits
+                || has_chart_title_edits
+                || has_chart_legend_position_edits)
                 && name.starts_with("xl/charts/")
             {
                 let bytes = if bytes.is_empty() {
@@ -5493,6 +5549,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 }
                 if let Some(edit) = vm.chart_title_edits.get(&name) {
                     chart = rewrite_chart_title(&chart, &edit.text)?;
+                }
+                if let Some(edit) = vm.chart_legend_position_edits.get(&name) {
+                    chart = rewrite_chart_legend_position(&chart, &edit.position)?;
                 }
                 chart.into_bytes()
             } else if (allow_sheet_rename || has_pivot_source_edits)
@@ -5577,7 +5636,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || (allow_sheet_rename
                     && ((name.starts_with("xl/charts/") && name.ends_with(".xml"))
                         || (name.starts_with("xl/pivotCache/") && name.ends_with(".xml"))))
-                || ((has_chart_series_edits || has_chart_title_edits)
+                || ((has_chart_series_edits
+                    || has_chart_title_edits
+                    || has_chart_legend_position_edits)
                     && name.starts_with("xl/charts/")
                     && name.ends_with(".xml"))
                 || (has_pivot_source_edits
@@ -8600,6 +8661,24 @@ mod tests {
     #[test]
     fn chart_title_rewriter_rejects_missing_text() {
         assert!(rewrite_chart_title("<c:chart><c:title/></c:chart>", "x").is_err());
+    }
+
+    #[test]
+    fn chart_legend_position_rewriter_changes_only_val() {
+        let source = concat!(
+            "<c:chart><c:legend><c:legendPos val=\"r\"/>",
+            "<c:layout/><c:overlay val=\"0\"/></c:legend>",
+            "<c:plotArea/></c:chart>"
+        );
+        let actual = rewrite_chart_legend_position(source, "b").unwrap();
+        assert!(actual.contains("<c:legendPos val=\"b\"/>"));
+        assert!(actual.contains("<c:layout/><c:overlay val=\"0\"/>"));
+        assert!(actual.contains("<c:plotArea/>"));
+    }
+
+    #[test]
+    fn chart_legend_position_rewriter_rejects_missing_element() {
+        assert!(rewrite_chart_legend_position("<c:chart/>", "b").is_err());
     }
 
     #[test]
