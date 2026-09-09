@@ -5932,7 +5932,10 @@ impl Vm {
             procedure_name: return_name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = property.module_name.clone();
         let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Function));
+        self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         self.current_class_instances.pop();
         let value = self
@@ -5994,7 +5997,10 @@ impl Vm {
             procedure_name: return_name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = property.module_name.clone();
         let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Function));
+        self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         self.current_class_instances.pop();
         let value = self
@@ -6064,7 +6070,10 @@ impl Vm {
             procedure_name: property.name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = property.module_name.clone();
         let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Sub));
+        self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         self.current_class_instances.pop();
         self.restore_runtime_args(saved);
@@ -6121,7 +6130,10 @@ impl Vm {
             procedure_name: property.name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = property.module_name.clone();
         let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Sub));
+        self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         self.current_class_instances.pop();
         self.restore_runtime_args(saved);

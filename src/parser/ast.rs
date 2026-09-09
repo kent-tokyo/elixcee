@@ -798,6 +798,8 @@ pub enum PropertyKind {
 #[derive(Debug, Clone)]
 pub struct PropertyDef {
     pub name: String,
+    /// Module scope used for resolving bare user-defined types.
+    pub module_name: Option<String>,
     pub kind: PropertyKind,
     pub params: Vec<String>,
     pub param_types: Vec<Option<String>>,

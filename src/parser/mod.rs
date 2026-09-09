@@ -792,6 +792,7 @@ impl Parser {
         self.skip_nl();
         Ok(PropertyDef {
             name,
+            module_name: None,
             kind,
             params,
             param_types,
@@ -3979,6 +3980,9 @@ pub fn parse_with_span(input: &str) -> Result<Program, ParseErrorWithSpan> {
     }
     for func in &mut program.funcs {
         func.module_name = module_name.clone();
+    }
+    for property in &mut program.properties {
+        property.module_name = module_name.clone();
     }
     Ok(program)
 }
