@@ -70,6 +70,8 @@ From the repository root, run:
 cargo test --test xlsx_roundtrip pivot_worksheet_source --offline -- --nocapture
 cargo test --test xlsx_roundtrip edit_chart_series --offline -- --nocapture
 cargo test chart_title_rewriter --offline -- --nocapture
+cargo test chart_legend_overlay --offline -- --nocapture
+cargo test chart_data_labels_rewriter --offline -- --nocapture
 cargo test chart_series_rewriter --offline -- --nocapture
 cargo test chart_series_cache --offline -- --nocapture
 cargo test pivot_refresh_on_load --offline -- --nocapture
@@ -84,9 +86,9 @@ bash scripts/check-local-gates.sh
 
 ## Result
 
-On the recorded macOS arm64 environment, the Chart title, series-name,
-  series-cache, Pivot refresh-policy/field-caption, Drawing anchor/shape-name,
-  and real-fixture targeted tests passed. The full Rust workspace passed 1,626 tests,
+On the recorded macOS arm64 environment, the Chart title, legend-overlay,
+data-label, series-name, series-cache, Pivot refresh-policy/field-caption,
+Drawing anchor/shape-name, and real-fixture targeted tests passed. The full Rust workspace passed 1,638 tests,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,
@@ -104,7 +106,9 @@ The same real fixture moved the selected two-cell anchor's from/to markers
 while preserving its offsets, shape content, and drawing relationship. Its
 non-visual shape name was XML-escaped and updated. Its
 existing string and numeric series caches were updated with escaped text and
-new point counts while their formulas and format code remained unchanged.
+new point counts while their formulas and format code remained unchanged. The
+data-label unit test changed `c:dLbls@showVal` from `0` to `1` and back, then
+added the missing attribute while preserving an unrelated label child.
 
 ## Not measured or claimed
 
