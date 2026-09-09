@@ -7,7 +7,7 @@ Microsoft Excelなしで、ワークブックの編集、対応する数式の�
 Excelワークブック自動化ランタイムです。
 PyO3によるPython API、単体CLI、実験的な`@elixcee/xlsx` JavaScript/WASMパッケージを提供します。
 
-バージョンは **1.0.5** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+バージョンは **1.0.6** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 JavaScriptパッケージはprivate・未公開です。
 
 elixceeはVBA専用の実行ツールではありません。同じworkbookモデル上で、直接の

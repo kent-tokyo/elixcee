@@ -5,7 +5,7 @@ supported formulas, and run data-processing VBA without Microsoft Excel. The cor
 is Rust, with a Python API (PyO3), a standalone CLI, and an experimental
 `@elixcee/xlsx` JavaScript/WASM package.
 
-Version: **1.0.5**. See the [changelog](CHANGELOG.md) for versioned changes.
+Version: **1.0.6**. See the [changelog](CHANGELOG.md) for versioned changes.
 The experimental JS package remains private and is not published. [English](README.md) | [日本語](README_ja.md) | [中文](README_zh.md)
 
 elixcee is a workbook automation runtime, not a VBA-only execution tool. Use the

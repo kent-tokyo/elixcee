@@ -1,6 +1,6 @@
 # elixcee Roadmap
 
-更新日: 2026-09-09。対象versionは **1.0.5** です。
+更新日: 2026-09-10。対象versionは **1.0.6** です。
 完了項目は記載した実装・測定の範囲に限ります。公開先の状態はリリースごとに別途確認します。
 版ごとの変更は [CHANGELOG](CHANGELOG.md)、実装範囲は
 [FUNCTIONS](FUNCTIONS.md)、保証範囲は [v1契約](docs/v1-support-contract.md) を参照してください。
@@ -28,7 +28,7 @@ JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公�
 
 ## 互換性・数式・省メモリ強化（G0–G6）
 
-1.0.5公開後の開発計画です。次の変更はUnreleasedに記録します。
+1.0.6公開後の開発計画です。次の変更はUnreleasedに記録します。
 各PhaseはBUILDを小さく実装し、MEASUREが未完なら未検証として残します。
 EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけでの優劣は達成条件にしません。
 

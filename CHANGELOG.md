@@ -6,15 +6,11 @@
 
 次の変更はここに記録します。
 
+## [1.0.6] - 2026-09-10
+
 - G2dの限定Chart系列編集を拡張し、既存要素のsmooth、負値反転表示、可視性（`delete`）をRust/Python APIと型stubから更新できるようにしました。系列・cache・Drawing relationshipを保持し、Chart作成、cache再計算、Excel再openは未完です。実Excel由来fixtureの一時copyによるload/save/ZIP再読込回帰を追加しました。
 
-- G4の独立formula oracleを72ケースへ拡張しました。LibreOfficeとelixceeの比較可能65ケースは65/65一致し、LibreOffice buildが評価しない6ケースは明示的にskipとして保存しています。結果JSONを`compat/corpus/results/formula-independent-20260910.json`へ固定しました。
-
-- G4のoracle runnerへ日時・営業日関数の6ケースを追加しました。LibreOffice buildが評価しない`ISOWEEKNUM`を明示skipへ分類し、現行ソースからビルドした1.0.5 wheelでLibreOffice 79/79・elixcee 79/79を確認してJSONを更新しました。Excel oracle／再openの証拠ではありません。
-
-- G4のoracle runnerへ`ISERR`／`ISNA`／`ISNONTEXT`／`TYPE`の型・Errorケースを追加しました。LibreOffice build固有の`TYPE(TRUE)`差をskipへ分類し、LibreOffice 85/85・elixcee 85/85のpaired結果を固定しました。Excel oracle／再openの証拠ではありません。
-
-- G4の配列境界校正として、数式関数の引数で`Array`／`VbaArray`結果を平坦化し、`SUM(TRANSPOSE(...))`をpaired検証しました。LibreOfficeが`SEQUENCE`を評価しないため`SUM(SEQUENCE(3))`はskipとし、94ケース中LibreOffice 85/85・elixcee 85/85を確認しました。
+- G4の独立formula oracleを94ケースへ拡張しました。LibreOfficeとelixceeの比較可能85ケースは85/85一致し、build固有の未評価9ケースは明示的にskipとして保存しています。配列引数のflattenと`ROWS`／`COLUMNS`の既知shapeも回帰検証しました。これはExcel oracleではありません。
 - G4の配列形状境界として、`ROWS`／`COLUMNS`が参照・`SEQUENCE`・`TRANSPOSE`の既知形状を返す経路を追加しました。形状不明のflat arrayは推測せず1×1扱いを維持し、Rust回帰126件を確認しました。
 - G2dのChart系列編集にsolid RGB line colorの限定更新APIを追加しました。theme／gradient／欠損style chainは推測生成せず拒否し、XML rewriter回帰とExcel由来fixture保存回帰を確認しました。
 - G2dのChart系列編集にsolid RGB fill colorの限定更新APIを追加しました。theme／gradient／欠損style chainは推測生成せず拒否し、XML rewriter回帰を追加しました。

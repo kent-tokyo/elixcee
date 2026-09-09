@@ -11,7 +11,7 @@ This describes implemented safeguards, not immunity to unknown vulnerabilities.
 Versioned changes and future Unreleased work are distinguished in
 [CHANGELOG](../CHANGELOG.md).
 
-## Existing limits (1.0.5)
+## Existing limits (1.0.6)
 
 The numeric inventory and calibration notes are maintained in **[Resource limits](limits.md)**.
 Do not duplicate thresholds here: ZIP, XML, workbook model, formula, VBA parser,
@@ -110,7 +110,7 @@ flushes and syncs it before rename; existing regular-file permissions are preser
 and read-only destinations rejected. Platform replacement fallback behavior is
 not a universal atomic-replacement guarantee.
 
-The 1.0.5 explicitly selected save_workbook_fast path omits the final sync
+The 1.0.6 explicitly selected save_workbook_fast path omits the final sync
 and has weaker crash durability. It must not be compared with durable competitors
 as if guarantees were identical. This native policy does not describe the separate
 JS writer. See [equal-durability measurements](benchmarks/workbook-equal-durable-2026-09-06.md).

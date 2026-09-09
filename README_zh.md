@@ -8,7 +8,7 @@ elixcee 不是 VBA 专用执行器，而是工作簿自动化运行时：可以�
 
 它不是 Excel 桌面应用的完整替代品。屏幕更新和对话框等 UI 功能会被跳过、简化建模或报告错误。现有图表系列公式、缓存和部分显示属性，以及基于工作表的 Pivot source 提供有限编辑 API，但不支持创建图表、一般 Drawing 编辑或 Pivot 重新计算。需要完整 Excel 对象模型或完整 OOXML 兼容性时，请先检查支持边界。
 
-版本：**1.0.5**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+版本：**1.0.6**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 JavaScript 包仍为 private，尚未发布。
 
 ## 安装

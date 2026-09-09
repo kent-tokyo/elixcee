@@ -9,7 +9,7 @@ publication readiness.
 ## Environment and command
 
 - Branch: `release/0.21.0`
-- Version check: `1.0.5`
+- Version check: `1.0.6`
 - Command: `bash scripts/check-local-gates.sh`
 - Cargo mode: offline
 - Fuzz mode: nightly, four targets, 5 seconds each, 1 GiB RSS limit
