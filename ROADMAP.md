@@ -117,6 +117,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G3 Worksheet_Change range target BUILD: 矩形のRange値書き込み・Clearでも変更後に一度だけ全矩形をTargetへ渡す自動dispatchへ拡張し、`Target.Columns.Count` の回帰を追加した。数式書き込み・複数module連鎖・worksheet単位のhandler選択・Excel oracleは未完。
 - [x] G3 Worksheet_Change formula-write BUILD: 単一セルのVBA `Formula` 書き込みも値書き込みと同じWorksheet_Change通知へ接続した。矩形Formula書き込みの一括Target化・複数module連鎖・worksheet単位のhandler選択・Excel oracleは未完。
 - [x] G3 Worksheet_Change formula-range BUILD: 矩形のVBA `Formula` 書き込みをセルごとに発火せず、書き込み完了後に一つの全矩形Targetへ通知するようにした。書式細分類・複数module連鎖・worksheet単位のhandler選択・Excel oracleは未完。
+- [x] G3 multi-module Worksheet_Change BUILD: `run_sub_multi_with_events` でも一意な標準moduleの `Worksheet_Change` を選択し、entrypointの値／数式書き込み後にTarget通知する経路を追加した。重複handlerは決定性のため拒否し、複数module連鎖・worksheet単位のhandler選択・Excel oracleは未完。
 - [x] G3 Range dimension member BUILD: Rangeオブジェクトの `Rows.Count`／`Columns.Count` を単一矩形で評価できるようにし、イベントTargetの矩形サイズ検証を実行可能にした。複数Areaの総数意味論とExcel oracleは未完。
 - [x] G3 Worksheet-to-Range object BUILD: `Set ws = Sheets(...); Set r = ws.Range(...)` と `ws.Cells(row, col)` のRangeオブジェクト生成を追加し、Worksheetから取得したRangeでも束縛シートの編集経路を利用する。複雑なWorksheet memberとExcel oracleは未完。
 - [x] 部分 BUILD: Empty／Error伝播、IF/IFERRORの遅延評価、1900系DATE／日付関数、ROUND系の境界をローカル回帰で固定した。1904 date-systemのVM計算接続、全型変換・丸め規則、独立期待値／Excel oracle校正は未完。

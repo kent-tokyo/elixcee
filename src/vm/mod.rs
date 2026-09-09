@@ -10045,10 +10045,38 @@ impl Vm {
                     .join("', '")
             ));
         }
-        if let Some((_, program)) = open_handlers.first() {
-            self.run_event(program, "Workbook_Open")?;
+        let change_handlers: Vec<_> = modules
+            .iter()
+            .filter(|(_, program)| !program.is_class_module)
+            .filter(|(_, program)| {
+                program
+                    .subs
+                    .iter()
+                    .any(|sub| sub.name.eq_ignore_ascii_case("worksheet_change"))
+            })
+            .collect();
+        if change_handlers.len() > 1 {
+            return Err(format!(
+                "duplicate Worksheet_Change across modules '{}' — event dispatch order is ambiguous",
+                change_handlers
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("', '")
+            ));
         }
-        self.run_sub_multi(modules, entrypoint)
+        let previous = self.auto_event_program.take();
+        if let Some((_, program)) = change_handlers.first() {
+            self.auto_event_program = Some((*program).clone());
+        }
+        let result = (|| {
+            if let Some((_, program)) = open_handlers.first() {
+                self.run_event(program, "Workbook_Open")?;
+            }
+            self.run_sub_multi(modules, entrypoint)
+        })();
+        self.auto_event_program = previous;
+        result
     }
 
     pub fn run_sub(&mut self, program: &Program, sub_name: &str) -> Result<(), String> {
@@ -22972,6 +23000,23 @@ mod tests {
             .run_sub_multi_with_events(&modules, "module1.Workbook_Open")
             .unwrap_err();
         assert!(err.contains("duplicate Workbook_Open"), "{err:?}");
+    }
+
+    #[test]
+    fn run_sub_multi_with_events_auto_dispatches_unique_change_handler() {
+        let modules = vec![
+            module(
+                "module1",
+                "Sub Main()\n    Range(\"A1:B1\").Value = 7\nEnd Sub\n",
+            ),
+            module(
+                "sheet1",
+                "Sub Worksheet_Change(Target As Range)\n    Cells(1,3).Value = Target.Columns.Count\nEnd Sub\n",
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi_with_events(&modules, "module1.Main").unwrap();
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
     }
 
     #[test]
