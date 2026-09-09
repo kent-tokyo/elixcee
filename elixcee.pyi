@@ -216,6 +216,15 @@ class Vm:
         """
         ...
 
+    @property
+    def workbook_date1904(self) -> bool:
+        """Whether the loaded workbook declares Excel's 1904 date system.
+
+        This reports the workbook metadata only; date-serial conversion remains
+        the caller's responsibility until the calculation contract is extended.
+        """
+        ...
+
     def cells(self) -> dict[tuple[int, int], Any]:
         """Return all non-empty cells of the active sheet as ``{(row, col): value}``."""
         ...

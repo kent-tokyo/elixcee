@@ -894,6 +894,13 @@ impl PyVm {
         self.inner.get_cell_number_format(row, col)
     }
 
+    /// Return whether the loaded workbook declares Excel's 1904 date system.
+    /// New VMs and 1900-system workbooks return ``False``.
+    #[getter]
+    fn workbook_date1904(&self) -> bool {
+        self.inner.workbook_date1904()
+    }
+
     /// Return all non-empty cells as a dict: ``{(row, col): value}``.
     fn cells(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);

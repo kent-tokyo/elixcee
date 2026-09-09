@@ -1455,6 +1455,10 @@ pub struct Vm {
     /// original ZIP for unknown-part passthrough at save time — internal
     /// plumbing between `vm` and `lib.rs`, not a public API.
     pub(crate) loaded_workbook_path: Option<String>,
+    /// Workbook-level Excel date system detected at load time. This is
+    /// exposed for callers and diagnostics; serial conversion remains an
+    /// explicit follow-up because it affects formula caches and save output.
+    workbook_date1904: bool,
     /// External-link handling selected at workbook load. No policy fetches a URL.
     pub(crate) external_links_policy: ExternalLinksPolicy,
     /// The clipboard populated by `.Copy` and consumed by
@@ -1849,6 +1853,7 @@ impl Vm {
             last_resolution_failure: None,
             loaded_workbook_name: None,
             loaded_workbook_path: None,
+            workbook_date1904: false,
             external_links_policy: ExternalLinksPolicy::Preserve,
             clipboard: None,
             protected_sheets: HashSet::new(),
@@ -9789,6 +9794,7 @@ impl Vm {
             .map(|n| n.to_string_lossy().to_string());
         self.loaded_workbook_path = Some(path.to_string());
         self.external_links_policy = options.external_links;
+        self.workbook_date1904 = reader::xlsx_date1904_for_path(path)?;
         let sheets = reader::read_workbook_with_options(path, options).map_err(|error| {
             if error == "unsupported input extension; use .xlsx, .xlsm, or .ods" {
                 error
@@ -9803,6 +9809,12 @@ impl Vm {
         self.load_sheet_code_names(path)?;
         self.load_simple_defined_names(path)?;
         Ok(names)
+    }
+
+    /// Whether the loaded workbook declares Excel's 1904 date system.
+    /// `false` is the default for new VMs and 1900-system workbooks.
+    pub fn workbook_date1904(&self) -> bool {
+        self.workbook_date1904
     }
 
     /// Import the deliberately small, address-only subset of OOXML defined

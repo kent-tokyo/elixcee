@@ -3536,6 +3536,18 @@ fn xlsx_workbook_date1904(xml: &str) -> bool {
     false
 }
 
+/// Read the workbook-level date system without exposing the internal XML
+/// parser to the VM. ODS and missing workbook parts use the 1900 default.
+pub(crate) fn xlsx_date1904_for_path(path: &str) -> Result<bool, String> {
+    let Some(bytes) = read_raw_zip_entry_if_present(path, "xl/workbook.xml")? else {
+        return Ok(false);
+    };
+    let Ok(xml) = String::from_utf8(bytes) else {
+        return Ok(false);
+    };
+    Ok(xlsx_workbook_date1904(&xml))
+}
+
 /// Returns `[(sheet_name, rId, sheetId, state)]` in document order. `state` is the
 /// `<sheet state="...">` attribute's raw value (`None` when absent, the default
 /// meaning visible) -- see `WorkbookSheet::sheet_state`'s doc comment for why this
