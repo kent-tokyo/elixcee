@@ -156,6 +156,9 @@ warnings-denied `cargo clippy --offline --lib --all-targets` (success). The
 wheel was installed into the isolated test environment and the binding was
 resolved as `Vm.set_drawing_shape_text`.
 
+The subsequent low-disk workspace all-target run passed 1,680 library tests
+and all integration/benchmark targets, including the new text-run regression.
+
 The title and series-name rewriter unit tests replaced XML-escaped text while
 retaining unrelated text runs, series references, and the surrounding plot
 area. The Pivot fixture changed
