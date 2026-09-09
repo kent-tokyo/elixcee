@@ -11301,7 +11301,7 @@ mod tests {
         add(
             &mut zip,
             "xl/drawings/drawing1.xml",
-            r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from><xdr:sp><xdr:spPr><a:ln><a:prstDash val="solid"/></a:ln></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>Old</a:t></a:r><a:r><a:rPr lang="en-US"/><a:t>Keep</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:to><xdr:col>1</xdr:col><xdr:row>1</xdr:row></xdr:to></xdr:twoCellAnchor></xdr:wsDr>"#,
+            r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from><xdr:sp><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln><a:prstDash val="solid"/></a:ln></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>Old</a:t></a:r><a:r><a:rPr lang="en-US"/><a:t>Keep</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:to><xdr:col>1</xdr:col><xdr:row>1</xdr:row></xdr:to></xdr:twoCellAnchor></xdr:wsDr>"#,
         );
         let directory = std::env::temp_dir().join(format!(
             "elixcee-line-dash-save-test-{}",
@@ -11315,6 +11315,8 @@ mod tests {
         let mut vm = Vm::new();
         vm.load_workbook_file(source.to_str().unwrap()).unwrap();
         vm.set_drawing_shape_line_dash("xl/drawings/drawing1.xml", 0, "lgDashDot")
+            .unwrap();
+        vm.set_drawing_shape_geometry("xl/drawings/drawing1.xml", 0, "roundRect")
             .unwrap();
         vm.set_drawing_shape_text("xl/drawings/drawing1.xml", 0, "Updated & text")
             .unwrap();
@@ -11331,6 +11333,7 @@ mod tests {
             .read_to_string(&mut drawing)
             .unwrap();
         assert!(drawing.contains(r#"<a:prstDash val="lgDashDot"/>"#));
+        assert!(drawing.contains(r#"<a:prstGeom prst="roundRect">"#));
         assert!(drawing.contains("<a:t>Updated &amp; text</a:t>"));
         assert!(drawing.contains("<a:t>Second &amp; text</a:t>"));
         let _ = std::fs::remove_dir_all(directory);
