@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
+Chart-series-cache/smooth, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, Drawing
 alternative-text edits, and existing DrawingML text-run editing.
 It is not evidence of
@@ -73,6 +73,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   `star`, `triangle`, and `x`; a missing marker is rejected.
 - `Vm.set_chart_series_marker_size(chart_part, series_index, size)` updates only
   an existing marker's `<c:size val>` with the bounded OOXML range 2..72.
+- `Vm.set_chart_series_smooth(chart_part, series_index, smooth)` updates only
+  an existing series `<c:smooth val>` flag (`0` or `1`); a missing flag is
+  rejected rather than synthesized.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`
   rewrites existing category/value cache points while preserving the cache
   kind, formula, format code, and surrounding Chart XML.
@@ -132,6 +135,7 @@ cargo test chart_legend_overlay --offline -- --nocapture
 cargo test chart_data_labels_rewriter --offline -- --nocapture
 cargo test chart_series_rewriter --offline -- --nocapture
 cargo test chart_series_marker --offline -- --nocapture
+cargo test chart_series_smooth --offline -- --nocapture
 cargo test chart_series_cache --offline -- --nocapture
 cargo test pivot_refresh_on_load --offline -- --nocapture
 cargo test pivot_cache_field_caption --offline -- --nocapture
@@ -196,6 +200,12 @@ existing string and numeric series caches were updated with escaped text and
 new point counts while their formulas and format code remained unchanged. The
 data-label unit test changed `c:dLbls@showVal` from `0` to `1` and back, then
 added the missing attribute while preserving an unrelated label child.
+
+The follow-up Chart-series smooth-flag addition passed its focused rewriter
+regression (1 test), warnings-denied library clippy, and the full workspace
+offline all-target gate (1,683 library tests, 54 XLSX round-trip tests, and all
+integration/benchmark targets). This remains BUILD evidence only and does not
+establish Excel reopen or chart rendering compatibility.
 
 ## Not measured or claimed
 

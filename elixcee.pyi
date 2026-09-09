@@ -436,6 +436,12 @@ class Vm:
         """Queue a bounded edit to an existing chart series marker size (2..=72)."""
         ...
 
+    def set_chart_series_smooth(
+        self, chart_part: str, series_index: int, smooth: bool
+    ) -> None:
+        """Queue a bounded edit to an existing chart series smooth flag."""
+        ...
+
     def set_chart_series_cache(
         self,
         chart_part: str,

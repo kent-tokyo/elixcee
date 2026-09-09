@@ -854,6 +854,7 @@ pub(crate) struct ChartSeriesEdit {
     pub values: Option<String>,
     pub marker_symbol: Option<String>,
     pub marker_size: Option<u32>,
+    pub smooth: Option<bool>,
     pub category_cache: Option<Vec<String>>,
     pub value_cache: Option<Vec<String>>,
 }
@@ -7509,6 +7510,7 @@ impl Vm {
                 values: None,
                 marker_symbol: None,
                 marker_size: None,
+                smooth: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7547,6 +7549,7 @@ impl Vm {
                 values: None,
                 marker_symbol: None,
                 marker_size: None,
+                smooth: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7596,6 +7599,7 @@ impl Vm {
                 values: None,
                 marker_symbol: None,
                 marker_size: None,
+                smooth: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7632,10 +7636,43 @@ impl Vm {
                 values: None,
                 marker_symbol: None,
                 marker_size: None,
+                smooth: None,
                 category_cache: None,
                 value_cache: None,
             });
         edit.marker_size = Some(size);
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series smooth flag.
+    pub fn set_chart_series_smooth(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        smooth: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.smooth = Some(smooth);
         Ok(())
     }
 
@@ -7692,6 +7729,7 @@ impl Vm {
                 values: None,
                 marker_symbol: None,
                 marker_size: None,
+                smooth: None,
                 category_cache: None,
                 value_cache: None,
             });
