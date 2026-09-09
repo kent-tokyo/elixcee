@@ -1214,6 +1214,13 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to the chart legend overlay flag.
+    fn set_chart_legend_overlay(&mut self, chart_part: &str, overlay: bool) -> PyResult<()> {
+        self.inner
+            .set_chart_legend_overlay(chart_part, overlay)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -4640,6 +4647,65 @@ fn rewrite_chart_legend_position(xml: &str, position: &str) -> Result<String, St
     Ok(out)
 }
 
+/// Rewrites or adds the first legend's `overlay` flag, preserving its other
+/// children and the rest of the chart XML.
+fn rewrite_chart_legend_overlay(xml: &str, overlay: bool) -> Result<String, String> {
+    let legend_open = xml.find("<c:legend").filter(|&position| {
+        xml.as_bytes()
+            .get(position + b"<c:legend".len())
+            .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+    });
+    let Some(legend_open) = legend_open else {
+        return Err("chart legend overlay requires an existing legend".to_string());
+    };
+    let legend_end = legend_open
+        + xml[legend_open..]
+            .find("</c:legend>")
+            .ok_or_else(|| "chart legend element is unterminated".to_string())?
+        + "</c:legend>".len();
+    let fragment = &xml[legend_open..legend_end];
+    let value = if overlay { "1" } else { "0" };
+    let rewritten = if let Some(open_rel) = fragment.find("<c:overlay") {
+        let open = open_rel;
+        let end = open
+            + fragment[open..]
+                .find('>')
+                .ok_or_else(|| "chart legend overlay element is unterminated".to_string())?
+            + 1;
+        let tag = &fragment[open..end];
+        let attr = tag
+            .find("val=")
+            .ok_or_else(|| "chart legend overlay is missing val attribute".to_string())?;
+        let value_start = attr + "val=".len();
+        let quote = tag.as_bytes()[value_start];
+        if quote != b'"' && quote != b'\'' {
+            return Err("chart legend overlay val attribute is malformed".to_string());
+        }
+        let value_end = tag[value_start + 1..]
+            .find(quote as char)
+            .map(|offset| value_start + 1 + offset)
+            .ok_or_else(|| "chart legend overlay val attribute is unterminated".to_string())?;
+        let mut replacement = tag.to_string();
+        replacement.replace_range(value_start + 1..value_end, value);
+        let mut out = fragment.to_string();
+        out.replace_range(open..end, &replacement);
+        out
+    } else {
+        let close = fragment
+            .rfind("</c:legend>")
+            .ok_or_else(|| "chart legend element is malformed".to_string())?;
+        let tag = format!("<c:overlay val=\"{value}\"/>");
+        let mut out = String::with_capacity(fragment.len() + tag.len());
+        out.push_str(&fragment[..close]);
+        out.push_str(&tag);
+        out.push_str(&fragment[close..]);
+        out
+    };
+    let mut out = xml.to_string();
+    out.replace_range(legend_open..legend_end, &rewritten);
+    Ok(out)
+}
+
 /// Rewrites or adds the chart-space style number while preserving all other
 /// chart XML, including series, titles, legends, and extension content.
 fn rewrite_chart_style(xml: &str, style: u32) -> Result<String, String> {
@@ -5465,6 +5531,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_chart_legend_position_edits = !vm.chart_legend_position_edits.is_empty();
     let has_chart_style_edits = !vm.chart_style_edits.is_empty();
     let has_chart_axis_title_edits = !vm.chart_axis_title_edits.is_empty();
+    let has_chart_legend_overlay_edits = !vm.chart_legend_overlay_edits.is_empty();
     let has_pivot_source_edits = !vm.pivot_source_edits.is_empty();
     let has_drawing_anchor_edits = !vm.drawing_anchor_edits.is_empty();
     let has_drawing_shape_name_edits = !vm.drawing_shape_name_edits.is_empty();
@@ -5515,6 +5582,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(chart_part) {
                 return Err(format!(
                     "chart axis title edit rejected: source workbook has no {chart_part}"
+                ));
+            }
+        }
+        for chart_part in vm.chart_legend_overlay_edits.keys() {
+            if !raw_entries.contains_key(chart_part) {
+                return Err(format!(
+                    "chart legend overlay edit rejected: source workbook has no {chart_part}"
                 ));
             }
         }
@@ -5737,7 +5811,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_chart_title_edits
                 || has_chart_legend_position_edits
                 || has_chart_style_edits
-                || has_chart_axis_title_edits)
+                || has_chart_axis_title_edits
+                || has_chart_legend_overlay_edits)
                 && name.starts_with("xl/charts/")
             {
                 let bytes = if bytes.is_empty() {
@@ -5767,6 +5842,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 }
                 if let Some(edits) = vm.chart_axis_title_edits.get(&name) {
                     chart = rewrite_chart_axis_titles(&chart, edits)?;
+                }
+                if let Some(edit) = vm.chart_legend_overlay_edits.get(&name) {
+                    chart = rewrite_chart_legend_overlay(&chart, edit.overlay)?;
                 }
                 chart.into_bytes()
             } else if (allow_sheet_rename || has_pivot_source_edits)
@@ -5869,7 +5947,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || has_chart_title_edits
                     || has_chart_legend_position_edits
                     || has_chart_style_edits
-                    || has_chart_axis_title_edits)
+                    || has_chart_axis_title_edits
+                    || has_chart_legend_overlay_edits)
                     && name.starts_with("xl/charts/")
                     && name.ends_with(".xml"))
                 || (has_pivot_source_edits
@@ -8984,6 +9063,23 @@ mod tests {
             actual.contains("</c:title><c:crossAx val=\"2\"/>")
                 && actual.contains("<c:axId val=\"1\"/>")
         );
+    }
+
+    #[test]
+    fn chart_legend_overlay_rewriter_updates_or_adds_flag() {
+        let source = r#"<c:chart><c:legend><c:legendPos val="r"/><c:layout/></c:legend><c:plotArea/></c:chart>"#;
+        let actual = rewrite_chart_legend_overlay(source, true).unwrap();
+        assert!(actual.contains("<c:layout/><c:overlay val=\"1\"/></c:legend>"));
+        let actual = rewrite_chart_legend_overlay(&actual, false).unwrap();
+        assert!(
+            actual.contains("<c:overlay val=\"0\"/>")
+                && actual.contains("<c:legendPos val=\"r\"/>")
+        );
+    }
+
+    #[test]
+    fn chart_legend_overlay_rewriter_rejects_missing_legend() {
+        assert!(rewrite_chart_legend_overlay("<c:chart><c:plotArea/></c:chart>", true).is_err());
     }
 
     #[test]

@@ -332,6 +332,10 @@ class Vm:
         """Update or add a chart axis title; axis_index is zero-based."""
         ...
 
+    def set_chart_legend_overlay(self, chart_part: str, overlay: bool) -> None:
+        """Update or add the existing chart legend's overlay flag."""
+        ...
+
     def set_chart_series_name_formula(
         self, chart_part: str, series_index: int, name_formula: str
     ) -> None:

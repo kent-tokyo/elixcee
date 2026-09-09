@@ -868,6 +868,12 @@ pub(crate) struct ChartLegendPositionEdit {
     pub position: String,
 }
 
+/// A bounded edit to an existing chart legend overlay flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChartLegendOverlayEdit {
+    pub overlay: bool,
+}
+
 /// A bounded edit to an existing chart style (`1..=48`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChartStyleEdit {
@@ -1283,6 +1289,8 @@ pub struct Vm {
     pub(crate) chart_legend_position_edits: HashMap<String, ChartLegendPositionEdit>,
     /// Explicit chart-style edits keyed by chart part.
     pub(crate) chart_style_edits: HashMap<String, ChartStyleEdit>,
+    /// Explicit chart legend-overlay edits keyed by chart part.
+    pub(crate) chart_legend_overlay_edits: HashMap<String, ChartLegendOverlayEdit>,
     /// Explicit chart-axis title edits keyed by chart part and axis index.
     pub(crate) chart_axis_title_edits: HashMap<String, HashMap<usize, String>>,
     /// Explicit Pivot worksheet source edits keyed by cache definition part.
@@ -1750,6 +1758,7 @@ impl Vm {
             chart_title_edits: HashMap::new(),
             chart_legend_position_edits: HashMap::new(),
             chart_style_edits: HashMap::new(),
+            chart_legend_overlay_edits: HashMap::new(),
             chart_axis_title_edits: HashMap::new(),
             pivot_source_edits: HashMap::new(),
             drawing_anchor_edits: HashMap::new(),
@@ -7572,6 +7581,25 @@ impl Vm {
             .entry(chart_part.to_string())
             .or_default()
             .insert(axis_index, text.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the chart legend overlay flag.
+    pub fn set_chart_legend_overlay(
+        &mut self,
+        chart_part: &str,
+        overlay: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err(
+                "chart legend overlay edits require a loaded XLSX/XLSM workbook".to_string(),
+            );
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_legend_overlay_edits
+            .insert(chart_part.to_string(), ChartLegendOverlayEdit { overlay });
         Ok(())
     }
 
