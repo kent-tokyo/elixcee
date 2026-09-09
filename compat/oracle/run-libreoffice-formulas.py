@@ -44,6 +44,12 @@ CASES = {
     "not": ("=NOT(A1=1)", False),
     "ifna": ('=IFNA(NA(),"missing")', "missing"),
     "iserror": ("=ISERROR(1/0)", True),
+    "iserr": ("=ISERR(1/0)", True),
+    "isna": ('=ISNA(VLOOKUP(9,A1:B3,2,FALSE))', True),
+    "isnontext": ("=ISNONTEXT(42)", True),
+    "type_number": ("=TYPE(1)", 1),
+    "type_text": ('=TYPE("text")', 2),
+    "type_boolean": ("=TYPE(TRUE)", 4),
     "error_value": ("=1/0", "#DIV/0!"),
     "error_type": ("=ERROR.TYPE(1/0)", 2),
     "round": ("=ROUND(1.235,2)", 1.24),
@@ -114,7 +120,8 @@ CASES = {
 # as #NAME? in this generated workbook. Keep them visible as probes, but
 # exclude them from the cross-engine count for the same reason as the other
 # build-specific gaps.
-# This LibreOffice build also leaves ISOWEEKNUM() as #NAME?.
+# This LibreOffice build also leaves ISOWEEKNUM() as #NAME? and reports
+# TYPE(TRUE) as 1 rather than Excel's logical-type code 4.
 ORACLE_UNSUPPORTED = {
     "days",
     "ifna",
@@ -123,6 +130,7 @@ ORACLE_UNSUPPORTED = {
     "xmatch",
     "textjoin",
     "isoweeknum",
+    "type_boolean",
 }
 
 

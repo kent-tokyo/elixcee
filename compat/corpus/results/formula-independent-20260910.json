@@ -1,7 +1,7 @@
 {
   "oracle": "libreoffice",
-  "comparable_cases": 79,
-  "matches": 79,
+  "comparable_cases": 84,
+  "matches": 84,
   "skipped": [
     {
       "case": "maxifs",
@@ -13,6 +13,10 @@
     },
     {
       "case": "ifna",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "type_boolean",
       "reason": "oracle_unsupported"
     },
     {
@@ -185,6 +189,41 @@
       "formula": "=ISERROR(1/0)",
       "expected": true,
       "actual": true,
+      "match": true
+    },
+    {
+      "case": "iserr",
+      "formula": "=ISERR(1/0)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isna",
+      "formula": "=ISNA(VLOOKUP(9,A1:B3,2,FALSE))",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isnontext",
+      "formula": "=ISNONTEXT(42)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "type_number",
+      "formula": "=TYPE(1)",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "type_text",
+      "formula": "=TYPE(\"text\")",
+      "expected": 2,
+      "actual": 2,
       "match": true
     },
     {
@@ -587,8 +626,8 @@
       "match": true
     }
   ],
-  "elixcee_comparable_cases": 79,
-  "elixcee_matches": 79,
+  "elixcee_comparable_cases": 84,
+  "elixcee_matches": 84,
   "elixcee_records": [
     {
       "case": "sum",
@@ -720,6 +759,36 @@
       "case": "iserror",
       "expected": true,
       "actual": true,
+      "match": true
+    },
+    {
+      "case": "iserr",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isna",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isnontext",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "type_number",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "type_text",
+      "expected": 2,
+      "actual": 2,
       "match": true
     },
     {

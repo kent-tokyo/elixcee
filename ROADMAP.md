@@ -183,6 +183,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] 部分 MEASURE: 現行環境のLibreOffice oracleを算術8ケースで再実行したが、8件すべてrunner timeout、比較可能な出力は0件だった。これはExcel oracleや数式一致率の証拠には数えず、Range/Cellsを含む既知のoracle実行境界として記録した。[local oracle記録](docs/measurements/formula-oracle-local-2026-09-10.md)
 - [x] 部分 MEASURE: Basic object modelを使わず数式入りXLSXを直接LibreOfficeで再計算する独立経路を追加し、基本集計・エラー値／回復・文字列・検索・criteria集計、数値、文字列正規化と混在型範囲、1904 workbook epochの日付を含む42ケースを比較した。比較可能39ケースは39/39一致し、同一fixtureをelixcee wheelでも再計算して日付serial／Error表示をfixture-level正規化後39/39一致した。LibreOfficeが処理できないIFNA／XMATCH／TEXTJOIN probe 3件はskippedとして記録した。LibreOfficeはExcel oracleではなく、1904シリアル変換・日付／型変換・動的配列全体の互換性は未完。[formula-only oracle記録](docs/measurements/formula-independent-oracle-2026-09-10.md)
 - [x] 部分 BUILD/MEASURE: oracle runnerへ型変換・配列境界・数学関数の9ケースと日時・営業日関数の6ケースを追加した。`ROWS`／`COLUMNS`の実装漏れを修正し、LibreOffice build固有の`ISOWEEKNUM`未評価をskipへ分類したうえで、現行ソースからビルドした1.0.5 wheelでLibreOffice 79/79・elixcee 79/79を確認してJSONを更新した。Excel oracle／再openの証拠ではない。[follow-up probe](docs/measurements/formula-independent-oracle-probe-2026-09-10.md)
+- [x] 部分 MEASURE: 型・Error分類として`ISERR`／`ISNA`／`ISNONTEXT`／`TYPE`を追加し、LibreOffice build固有の`TYPE(TRUE)`差をskipへ分類した。LibreOffice 85/85・elixcee 85/85のpaired結果を固定した。Excel oracle／再openの証拠ではない。[follow-up probe](docs/measurements/formula-independent-oracle-probe-2026-09-10.md)
 - [ ] MEASURE: Excel／EPPlus／Aspose.Cellsはversion・計算設定・license利用条件を固定して比較。実行していない公式対応表と、実測一致率を分ける。
 
 ### G5 — 保存メモリの段階削減（X4 / X5）
