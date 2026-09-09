@@ -866,6 +866,17 @@ pub(crate) struct PivotWorksheetSourceEdit {
     pub reference: Option<String>,
 }
 
+/// A bounded edit to one existing two-cell drawing anchor. Public API
+/// coordinates are 1-based worksheet cells; OOXML marker coordinates are
+/// written as zero-based offsets by the writer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DrawingAnchorEdit {
+    pub from_row: u32,
+    pub from_col: u32,
+    pub to_row: u32,
+    pub to_col: u32,
+}
+
 const CELL_TILE_SIZE: u32 = 32;
 const MAX_CELL_TILES_PER_SHEET: usize = 256;
 const DENSE_TILE_CELL_THRESHOLD: usize = 128;
@@ -1249,6 +1260,9 @@ pub struct Vm {
     pub(crate) chart_title_edits: HashMap<String, ChartTitleEdit>,
     /// Explicit Pivot worksheet source edits keyed by cache definition part.
     pub(crate) pivot_source_edits: HashMap<String, PivotWorksheetSourceEdit>,
+    /// Explicit drawing anchor edits keyed by drawing part and zero-based
+    /// twoCellAnchor index.
+    pub(crate) drawing_anchor_edits: HashMap<String, HashMap<usize, DrawingAnchorEdit>>,
     /// Dynamic-array spill rectangles keyed by sheet and anchor coordinate.
     /// Included in edit history so undo cannot leave stale spill ownership.
     spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
@@ -1678,6 +1692,7 @@ impl Vm {
             chart_series_edits: HashMap::new(),
             chart_title_edits: HashMap::new(),
             pivot_source_edits: HashMap::new(),
+            drawing_anchor_edits: HashMap::new(),
             spill_rects: HashMap::new(),
             edit_undo: Vec::new(),
             edit_redo: Vec::new(),
@@ -7396,6 +7411,48 @@ impl Vm {
                 reference: reference.map(ToOwned::to_owned),
             },
         );
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing two-cell drawing anchor. Cell
+    /// coordinates are 1-based, matching the rest of the public worksheet
+    /// API. One-cell anchors and unsupported drawing shapes are rejected at
+    /// save time rather than silently changing a different geometry model.
+    pub fn set_drawing_anchor(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        from_row: u32,
+        from_col: u32,
+        to_row: u32,
+        to_col: u32,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing anchor edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if from_row == 0 || from_col == 0 || to_row == 0 || to_col == 0 {
+            return Err("drawing anchor cells must be 1-based and non-zero".to_string());
+        }
+        if to_row < from_row || to_col < from_col {
+            return Err("drawing anchor end cell must not precede start cell".to_string());
+        }
+        self.drawing_anchor_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(
+                anchor_index,
+                DrawingAnchorEdit {
+                    from_row,
+                    from_col,
+                    to_row,
+                    to_col,
+                },
+            );
         Ok(())
     }
 

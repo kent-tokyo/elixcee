@@ -1282,6 +1282,8 @@ fn edit_chart_series_rewrites_selected_references_on_a_real_fixture() {
         Some("Sheet1!$B$1:$B$5"),
     )
     .expect("chart series edit should be accepted");
+    vm.set_drawing_anchor("xl/drawings/drawing1.xml", 0, 2, 3, 10, 12)
+        .expect("drawing anchor edit should be accepted");
     save_workbook(&vm, &output_path).expect("chart series edit should save");
 
     let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
@@ -1290,6 +1292,11 @@ fn edit_chart_series_rewrites_selected_references_on_a_real_fixture() {
     assert!(chart.contains("<c:val><c:numRef><c:f>Sheet1!$B$1:$B$5</c:f>"));
     assert!(output_entries.contains_key("xl/drawings/drawing1.xml"));
     assert!(output_entries.contains_key("xl/drawings/_rels/drawing1.xml.rels"));
+    let drawing = String::from_utf8(output_entries["xl/drawings/drawing1.xml"].clone()).unwrap();
+    assert!(drawing.contains("<xdr:from><xdr:col>2</xdr:col>"));
+    assert!(drawing.contains("<xdr:row>1</xdr:row>"));
+    assert!(drawing.contains("<xdr:to><xdr:col>11</xdr:col>"));
+    assert!(drawing.contains("<xdr:row>9</xdr:row>"));
 }
 
 /// A minimal Pivot cache package exercises the complete loaded-workbook rename

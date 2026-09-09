@@ -2,8 +2,9 @@
 
 Date: 2026-09-09 (Asia/Tokyo)
 
-This record covers only the bounded local BUILD for existing Chart-series and
-Chart-title, and worksheet-backed Pivot-source edits. It is not evidence of
+This record covers only the bounded local BUILD for existing Chart-series,
+Chart-title, two-cell Drawing-anchor, and worksheet-backed Pivot-source edits.
+It is not evidence of
 Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 
 ## Scope
@@ -16,11 +17,14 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   the first `<c:title>` element.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
+- `Vm.set_drawing_anchor(drawing_part, anchor_index, from_row, from_col,
+  to_row, to_col)` rewrites only the `<xdr:from>` and `<xdr:to>` cell markers
+  of the selected two-cell anchor. Public cell coordinates are 1-based.
 - Missing source parts, series, references, malformed attributes, control
   characters, and invalid A1 ranges are rejected before a successful save.
 - Explicit Pivot source edits also require the requested worksheet to exist in
   the loaded workbook.
-- Existing Drawing parts, relationship parts, Chart caches, Pivot cache
+- Existing Drawing shape content, relationship parts, Chart caches, Pivot cache
   records, and PivotTable layout are preserved or left opaque by this scope.
 
 ## Reproduction
@@ -32,6 +36,7 @@ cargo test --test xlsx_roundtrip pivot_worksheet_source --offline -- --nocapture
 cargo test --test xlsx_roundtrip edit_chart_series --offline -- --nocapture
 cargo test chart_title_rewriter --offline -- --nocapture
 cargo test chart_series_rewriter --offline -- --nocapture
+cargo test drawing_anchor --offline -- --nocapture
 cargo test --workspace --all-targets --offline --quiet
 cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo fmt --all -- --check
@@ -41,8 +46,8 @@ bash scripts/check-local-gates.sh
 
 ## Result
 
-On the recorded macOS arm64 environment, the Chart title, series-name, and
-real-fixture targeted tests passed. The full Rust workspace passed 1,598 tests,
+On the recorded macOS arm64 environment, the Chart title, series-name, Drawing
+anchor, and real-fixture targeted tests passed. The full Rust workspace passed 1,606 tests,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,
@@ -56,11 +61,14 @@ area. The Pivot fixture changed
 worksheet source became `sheet="Data &amp; 2026"`. The Chart fixture changed
 the selected series' name, category, and value formulas and retained
 `xl/drawings/drawing1.xml` and its relationship part.
+The same real fixture moved the selected two-cell anchor's from/to markers
+while preserving its offsets, shape content, and drawing relationship.
 
 ## Not measured or claimed
 
 - Excel reopen, repair-warning absence, or recalculated Chart/Pivot caches.
-- Chart or Drawing creation, general Drawing editing, multiple title-run
-  editing, anchor updates, or table-backed Pivot sources.
+- Chart or Drawing creation, general Drawing editing beyond two-cell anchor
+  markers, multiple title-run editing, cache regeneration, or table-backed
+  Pivot sources.
 - Linux/Windows clean-install, resource calibration, external review, or
   LogiSheets/EPPlus/Aspose.Cells comparison.

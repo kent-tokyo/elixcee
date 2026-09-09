@@ -1187,6 +1187,29 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to an existing two-cell drawing anchor. All cell
+    /// coordinates are 1-based; only two-cell anchors are supported.
+    fn set_drawing_anchor(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        from_row: u32,
+        from_col: u32,
+        to_row: u32,
+        to_col: u32,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_anchor(
+                drawing_part,
+                anchor_index,
+                from_row,
+                from_col,
+                to_row,
+                to_col,
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Move a sheet to an absolute 0-based position among the workbook's sheets.
     ///
     /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
@@ -4247,6 +4270,92 @@ fn rewrite_chart_title(xml: &str, text: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// Rewrite selected two-cell drawing anchors while preserving shape XML,
+/// relationship IDs, and all extension content. Public VM coordinates have
+/// already been validated as 1-based; OOXML markers are zero-based.
+fn rewrite_drawing_anchors(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, vm::DrawingAnchorEdit>,
+) -> Result<String, String> {
+    fn next_anchor_open(xml: &str, cursor: usize) -> Option<usize> {
+        let exact = xml[cursor..]
+            .find("<xdr:twoCellAnchor>")
+            .map(|offset| cursor + offset);
+        let attributed = xml[cursor..]
+            .find("<xdr:twoCellAnchor ")
+            .map(|offset| cursor + offset);
+        match (exact, attributed) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(position), None) | (None, Some(position)) => Some(position),
+            (None, None) => None,
+        }
+    }
+
+    fn replace_child_text(fragment: &str, element: &str, value: &str) -> Result<String, String> {
+        let open = fragment
+            .find(element)
+            .ok_or_else(|| format!("drawing anchor is missing {element}"))?;
+        let content_start = open + element.len();
+        let closing = element.replace('<', "</");
+        let close = content_start
+            + fragment[content_start..]
+                .find(&closing)
+                .ok_or_else(|| format!("drawing anchor {element} is unterminated"))?;
+        let mut out = String::with_capacity(fragment.len() + value.len());
+        out.push_str(&fragment[..content_start]);
+        out.push_str(value);
+        out.push_str(&fragment[close..]);
+        Ok(out)
+    }
+
+    fn replace_marker(anchor: &str, marker: &str, row: u32, col: u32) -> Result<String, String> {
+        let open = anchor
+            .find(marker)
+            .ok_or_else(|| format!("drawing anchor is missing {marker}"))?;
+        let content_start = open + marker.len();
+        let closing = marker.replace('<', "</");
+        let close = content_start
+            + anchor[content_start..]
+                .find(&closing)
+                .ok_or_else(|| format!("drawing anchor {marker} is unterminated"))?;
+        let marker_body = &anchor[content_start..close];
+        let marker_body = replace_child_text(marker_body, "<xdr:col>", &col.to_string())?;
+        let marker_body = replace_child_text(&marker_body, "<xdr:row>", &row.to_string())?;
+        let mut out = String::with_capacity(anchor.len());
+        out.push_str(&anchor[..content_start]);
+        out.push_str(&marker_body);
+        out.push_str(&anchor[close..]);
+        Ok(out)
+    }
+
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| **index);
+    let mut out = xml.to_string();
+    for (&anchor_index, edit) in ordered {
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=anchor_index {
+            let open = next_anchor_open(&out, cursor)
+                .ok_or_else(|| format!("drawing anchor index {anchor_index} is out of range"))?;
+            let close_rel = out[open..]
+                .find("</xdr:twoCellAnchor>")
+                .ok_or_else(|| "drawing twoCellAnchor is unterminated".to_string())?;
+            let close = open + close_rel + "</xdr:twoCellAnchor>".len();
+            if current == anchor_index {
+                selected = Some((open, close));
+                break;
+            }
+            cursor = close;
+        }
+        let (open, close) = selected.expect("anchor selection loop always selects its index");
+        let anchor = &out[open..close];
+        let anchor = replace_marker(anchor, "<xdr:from>", edit.from_row - 1, edit.from_col - 1)?;
+        let anchor = replace_marker(&anchor, "<xdr:to>", edit.to_row - 1, edit.to_col - 1)?;
+        out.replace_range(open..close, &anchor);
+    }
+    Ok(out)
+}
+
 /// Rewrites only the worksheet source sheet attribute in pivot cache definitions.
 /// Pivot cache contents and table-based sources are left byte-for-byte unchanged.
 fn rewrite_pivot_cache_sheet_refs(
@@ -4677,6 +4786,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_chart_series_edits = !vm.chart_series_edits.is_empty();
     let has_chart_title_edits = !vm.chart_title_edits.is_empty();
     let has_pivot_source_edits = !vm.pivot_source_edits.is_empty();
+    let has_drawing_anchor_edits = !vm.drawing_anchor_edits.is_empty();
     // Keep writer-owned static package parts regenerated. A source raw copy can
     // carry source-only defaults or relationship-id ordering that is valid in
     // isolation but diverges from the writer's carried relationship contract.
@@ -4707,6 +4817,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(cache_part) {
                 return Err(format!(
                     "Pivot source edit rejected: source workbook has no {cache_part}"
+                ));
+            }
+        }
+        for drawing_part in vm.drawing_anchor_edits.keys() {
+            if !raw_entries.contains_key(drawing_part) {
+                return Err(format!(
+                    "drawing anchor edit rejected: source workbook has no {drawing_part}"
                 ));
             }
         }
@@ -4924,6 +5041,29 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     pivot = rewrite_pivot_worksheet_source(&pivot, edit)?;
                 }
                 pivot.into_bytes()
+            } else if has_drawing_anchor_edits
+                && vm.drawing_anchor_edits.contains_key(&name)
+                && name.starts_with("xl/drawings/")
+                && name.ends_with(".xml")
+                && !name.contains("/_rels/")
+            {
+                let bytes = if bytes.is_empty() {
+                    reader::read_raw_zip_entry_if_present(source_path, &name)?.ok_or_else(|| {
+                        format!("drawing part disappeared from source ZIP: {name}")
+                    })?
+                } else {
+                    bytes
+                };
+                let drawing = String::from_utf8(bytes).map_err(|_| {
+                    format!("drawing part is not UTF-8 and cannot be safely rewritten: {name}")
+                })?;
+                rewrite_drawing_anchors(
+                    &drawing,
+                    vm.drawing_anchor_edits
+                        .get(&name)
+                        .expect("drawing edit map was checked by the branch"),
+                )?
+                .into_bytes()
             } else {
                 bytes
             };
@@ -4941,6 +5081,10 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     && name.ends_with(".xml"))
                 || (has_pivot_source_edits
                     && name.starts_with("xl/pivotCache/")
+                    && name.ends_with(".xml"))
+                || (has_drawing_anchor_edits
+                    && vm.drawing_anchor_edits.contains_key(&name)
+                    && name.starts_with("xl/drawings/")
                     && name.ends_with(".xml"))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
                 // An untouched table can be copied directly from the source ZIP;
@@ -7943,6 +8087,54 @@ mod tests {
     #[test]
     fn chart_title_rewriter_rejects_missing_text() {
         assert!(rewrite_chart_title("<c:chart><c:title/></c:chart>", "x").is_err());
+    }
+
+    #[test]
+    fn drawing_anchor_rewriter_changes_only_selected_cell_markers() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(
+            0,
+            vm::DrawingAnchorEdit {
+                from_row: 2,
+                from_col: 3,
+                to_row: 10,
+                to_col: 12,
+            },
+        );
+        let source = concat!(
+            "<xdr:wsDr>",
+            "<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>7</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>8</xdr:rowOff></xdr:from>",
+            "<xdr:pic>first</xdr:pic><xdr:to><xdr:col>1</xdr:col><xdr:colOff>9</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>10</xdr:rowOff></xdr:to></xdr:twoCellAnchor>",
+            "<xdr:twoCellAnchor editAs=\"oneCell\"><xdr:from><xdr:col>4</xdr:col><xdr:colOff>11</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>12</xdr:rowOff></xdr:from>",
+            "<xdr:pic>second</xdr:pic><xdr:to><xdr:col>6</xdr:col><xdr:colOff>13</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>14</xdr:rowOff></xdr:to></xdr:twoCellAnchor>",
+            "</xdr:wsDr>"
+        );
+        let actual = rewrite_drawing_anchors(source, &edits).unwrap();
+        assert!(actual.contains(
+            "<xdr:from><xdr:col>2</xdr:col><xdr:colOff>7</xdr:colOff><xdr:row>1</xdr:row>"
+        ));
+        assert!(actual.contains(
+            "<xdr:to><xdr:col>11</xdr:col><xdr:colOff>9</xdr:colOff><xdr:row>9</xdr:row>"
+        ));
+        assert!(actual.contains("<xdr:pic>first</xdr:pic>"));
+        assert!(actual.contains("<xdr:col>4</xdr:col><xdr:colOff>11</xdr:colOff>"));
+    }
+
+    #[test]
+    fn drawing_anchor_rewriter_rejects_one_cell_only_anchor() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(
+            0,
+            vm::DrawingAnchorEdit {
+                from_row: 1,
+                from_col: 1,
+                to_row: 2,
+                to_col: 2,
+            },
+        );
+        assert!(
+            rewrite_drawing_anchors("<xdr:wsDr><xdr:oneCellAnchor/></xdr:wsDr>", &edits).is_err()
+        );
     }
 
     #[test]

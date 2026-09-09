@@ -17,8 +17,9 @@ ExcelをインストールできないCIやサーバーでの
 
 Excelデスクトップアプリの完全な代替ではありません。画面更新、グラフ、
 ダイアログなどのUI機能は、スキップ・簡易モデル化・エラー化されます。
-既存Chartの系列formulaとworksheet-backed Pivot sourceには限定編集APIがありますが、
-Chart作成、一般のDrawing編集、Pivot再集計は対象外です。
+既存Chartの系列formula・title、two-cell Drawing anchor、worksheet-backed Pivot
+sourceには限定編集APIがありますが、Chart作成、一般のDrawing shape編集、Pivot
+再集計は対象外です。
 完全なExcelオブジェクトモデルやOOXML互換性が必要な場合は、対応範囲を確認してください。
 
 ### 用途別の選択

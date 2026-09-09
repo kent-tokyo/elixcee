@@ -11,10 +11,11 @@
 - 複数module実行でも`Workbook_Open`をopt-in先行dispatchできる`Vm.run_sub_multi_with_events`を追加しました。標準module間の重複handlerはsource traversal順に依存せず拒否します。
 - G2dの限定Chart編集として、既存系列のname formulaを`Vm.set_chart_series_name_formula`（Python binding含む）から更新できるようにしました。系列index・`<c:tx>`・`<c:f>`の欠損、制御文字、16KiB超を拒否し、他の系列・cache・Drawing relationshipは保持します。Excel再openは未完です。
 - G2dの限定Chart編集として、既存Chartの最初のtitle text runを`Vm.set_chart_title`（Python binding含む）から更新できるようにしました。XML escape、欠損title／text、制御文字、16KiB上限を検証し、周辺のChart XML・Drawing relationshipは保持します。Chart作成、複数runの完全編集、Excel再openは未完です。
+- G2dの限定Drawing編集として、既存two-cell anchorのfrom/toセルを`Vm.set_drawing_anchor`（Python binding含む）から1-based座標で更新できるようにしました。shape content、offset、relationshipを保持し、one-cell anchorや不正座標は拒否します。Drawing作成・一般shape編集・Excel再openは未完です。
 - イベント処理を拡張し、`run_with_events`（Rust／Python）で`Workbook_Open`を明示的に先行dispatchできるようにしました。通常の`run`／`run_sub`は従来どおりイベントを自動実行せず、open handlerの失敗時は本体Macroを実行しません。
 - VBAイベントの部分BUILDとして、明示指定したzero-argumentの`Workbook_Open`／`Workbook_BeforeClose`／`Worksheet_Change`／`Worksheet_Calculate`／`Worksheet_SelectionChange`を`Vm.run_event`（Python binding含む）から実行できるようにしました。`Application.EnableEvents`の無効化と再入抑止、既存execution budgetを適用しています。自動発火、`Worksheet_Change(Target)` binding、複数handler順序、イベント連鎖は未完です。
 - VBAの安全境界を補強し、`ThisWorkbook.Save`／`ThisWorkbook.Close`を既定のheadless実行で暗黙の成功扱いにせず、外部効果として拒否するようにしました。`E1011`の構造化runtime failure分類と回帰テストで検証しています。実際の保存・Close後state・イベント連携・Excel oracleは未完です。
-- G2dのローカル実装として、既存Chartの系列ごとのcategory／value formulaを`Vm.set_chart_series_formulas`から更新できるようにしました。0-based系列指定、欠損Chart／系列／参照の拒否、Drawing／relationship chain保持を実fixtureで検証しています。Chart作成、cache再計算、Drawing anchor編集、Excel再openは未完です。
+- G2dのローカル実装として、既存Chartの系列ごとのcategory／value formulaを`Vm.set_chart_series_formulas`から更新できるようにしました。0-based系列指定、欠損Chart／系列／参照の拒否、Drawing／relationship chain保持を実fixtureで検証しています。Chart作成、cache再計算、Drawingの一般shape編集、Excel再openは未完です。
 - G2dのローカル実装として、既存のworksheet-backed Pivot cacheの`worksheetSource`を`Vm.set_pivot_worksheet_source`から限定更新できるようにしました。sheetまたはA1 `ref`を変更できますが、cache records／PivotTable layout／再集計は変更しません。合成fixtureでChart/Pivotの参照 chain保持と回帰を検証し、table sourceとExcel再openは未完です。
 - G2dのChart/Pivot限定編集の再現手順と検証結果を`docs/measurements/g2d-object-editing-2026-09-09.md`へ記録しました。ローカルBUILD証拠と、Excel再open・再集計・他OS・外部比較の未検証境界を分離しています。
 - VBA runtime error診断の部分BUILDとして、VMが実行中の失敗カテゴリを構造化side channelで保持し、CLI JSONがそれを優先利用するようにしました。blocked external effectには`E1011`を割り当て、既存の`E1006`（duplicate module name）を維持しています。事前／compile errorと全エラー生成箇所の完全移行は未完です。

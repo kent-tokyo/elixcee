@@ -338,6 +338,22 @@ class Vm:
         """
         ...
 
+    def set_drawing_anchor(
+        self,
+        drawing_part: str,
+        anchor_index: int,
+        from_row: int,
+        from_col: int,
+        to_row: int,
+        to_col: int,
+    ) -> None:
+        """Queue a bounded edit to an existing two-cell drawing anchor.
+
+        Cell coordinates are 1-based and ``anchor_index`` is zero-based.
+        One-cell anchors are not supported.
+        """
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 

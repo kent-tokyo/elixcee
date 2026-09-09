@@ -172,8 +172,9 @@ This is an in-memory object-model subset. Save/SaveAs/Close, external links,
 windows, chart creation/general editing, Pivot cache recalculation, and other
 desktop or external-effect members are not part of the supported contract.
 Loaded-workbook OOXML editing additionally exposes bounded Python methods for
-selected existing Chart-series formulas, Chart title text, and worksheet-backed
-Pivot source fields; these are not VBA object-model members.
+selected existing Chart-series formulas, Chart title text, two-cell Drawing
+anchor markers, and worksheet-backed Pivot source fields; these are not VBA
+object-model members.
 
 ### Application Object
 

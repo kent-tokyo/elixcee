@@ -35,8 +35,10 @@ Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
   rename is the narrow exception: qualified chart formulas and Pivot
   `worksheetSource@sheet` are updated. In addition, existing chart-series
   category/value formulas and worksheet-backed Pivot `worksheetSource@sheet`／A1
-  `ref` can be explicitly edited through the bounded APIs. Chart creation, cache
-  regeneration/recalculation, and stale chart anchors remain outside the contract.
+`ref` can be explicitly edited through the bounded APIs. Existing Chart title
+text and two-cell Drawing anchor markers are also supported by bounded APIs.
+Chart creation, cache regeneration/recalculation, general shape editing, and
+stale-anchor updates after row/column changes remain outside the contract.
 
 ## Explicit non-goals
 
