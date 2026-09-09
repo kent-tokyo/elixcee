@@ -342,6 +342,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 ### 直近の性能実績
 
 - [x] Readerのborrow化・単一走査・VMへの所有権移動、read budget／deadline／協調キャンセル。
+- [x] 部分 G5 BUILD/MEASURE: 現行候補の同一bench binaryでcached appendとreference rescan、dirty closureとstructure rebuildを各10サンプル・2秒条件で再測定した。appendは約1.128倍、dirty closureは約1.323倍だったが、XLSX end-to-end、100k/400k/1Mセル、RSS・耐久保存を含む大規模総合判定は未完。[G5測定](docs/measurements/g5-large-hotpath-2026-09-10.md)
 - [x] worksheet XMLのZipWriterへの直接出力、passthrough payloadの二重clone除去。
   **raw ZIP全体の遅延展開は未完了**。
 - [x] formula dirty/full比較、100／1,000式matrix、manual→automatic・循環参照、CPU／RSS、30反復の校正。
