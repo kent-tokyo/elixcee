@@ -78,6 +78,18 @@ and real Chrome browser smoke. Nightly fuzz smoke was not rerun after the
 cache cleanup because rebuilding its targets would exceed the remaining disk
 budget; it remains an explicit open gate.
 
+The four fuzz targets were subsequently rerun sequentially with the same
+5-second / 1 GiB RSS limit and low-disk build settings. Results were:
+
+- `fuzz_formula_parser`: 213,931 runs, peak reported RSS 538 MiB
+- `fuzz_formula_eval`: 145,288 runs, peak reported RSS 538 MiB
+- `fuzz_vba_parser`: 209,211 runs, peak reported RSS 522 MiB
+- `fuzz_xlsx_reader`: 21,408 runs, peak reported RSS 300 MiB
+
+All four exited with status 0 and reported no crash artifact. This closes the
+local macOS fuzz-smoke rerun; long-duration fuzzing and other OS/resource
+profiles remain open.
+
 ## Boundaries
 
 This is local BUILD and consumer-smoke evidence only. It does not complete the
