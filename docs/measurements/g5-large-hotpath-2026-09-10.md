@@ -42,3 +42,19 @@ The run completed successfully. A prior `--list | head` attempt produced only
 a Criterion Broken pipe because `head` closed stdout; it was not used as a
 measurement. The broader G5 item remains open for fixed 100k/400k/1M workbook
 inputs, p50/p95 repetitions, RSS, durable save, and output verification.
+
+## Baseline reconstruction boundary
+
+The historical large-workbook comparison could not be rerun in this pass.
+The optimization baseline is the parent of `2a0940b` (`3e68207`, v1.0.1),
+but that checkout has no `bench_workbook` example, so
+`cargo build --example bench_workbook --release --offline` fails with
+`error: no example target named bench_workbook`. The saved
+`compat/benchmarks/large-speedup.patch` also does not reverse-apply to the
+current tree; it stops at `src/lib.rs:5926` because later changes have moved
+that context. The temporary baseline worktree was removed after the check.
+
+This is a reconstruction limitation, not a new performance result. The
+existing 100k/400k/1M reports remain historical scoped evidence, while a new
+same-input before/after comparison still requires reproducible baseline
+artifacts plus RSS, durable-save, and output-verification capture.
