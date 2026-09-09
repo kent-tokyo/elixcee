@@ -14,17 +14,17 @@ all cells/formulas with streaming openpyxl.
 - Before: `v1.0.5` tag, release `bench_workbook` binary
 - After: current checkout `release/0.21.0`, release `bench_workbook` binary
 - Build: offline release, `CARGO_INCREMENTAL=0`, debuginfo disabled
-- Pairs: 4 per fixture, alternating execution order, 3 warmups per binary
+- Pairs: 20 per fixture, alternating execution order, 3 warmups per binary
 - Target: at least 1.2x p50 total-time speedup
 - Fixture: numeric 10-column workbook; 1M cells are split across four sheets
 
 ## Result
 
-| Fixture | Cells | Before p50 total | After p50 total | Speedup | Target |
-|---|---:|---:|---:|---:|---|
-| 100k | 100,000 | 130.609 ms | 95.610 ms | 1.366x | met |
-| 400k | 400,000 | 511.608 ms | 382.410 ms | 1.338x | met |
-| 1m | 1,000,000 | 1,341.417 ms | 980.874 ms | 1.368x | met |
+| Fixture | Cells | Before p50 total | After p50 total | p50 speedup | p95 before → after | Target |
+|---|---:|---:|---:|---:|---:|---|
+| 100k | 100,000 | 131.417 ms | 99.543 ms | 1.320x | 148.100 → 111.209 ms | met |
+| 400k | 400,000 | 509.718 ms | 390.973 ms | 1.304x | 582.767 → 439.834 ms | met |
+| 1m | 1,000,000 | 1,327.555 ms | 1,018.183 ms | 1.304x | 1,611.941 → 1,173.627 ms | met |
 
 The 1.2x target was met for all three measured sizes. The paired harness
 reported successful ZIP equality and independent output validation on every
@@ -41,7 +41,5 @@ python3 compat/benchmarks/large_workbook_speed.py \
   --pairs 20 --cases 100k 400k 1m
 ```
 
-The recorded run used four pairs to fit the host's available disk budget.
-The repository's confirmation policy remains 20 pairs; this result is a
-successful local size-scaling measurement, not a confirmation-grade release
-benchmark. RSS and three-OS resource validation remain separate G5 gates.
+The recorded run used the repository's 20-pair confirmation policy. RSS and
+three-OS resource validation remain separate G5 gates.
