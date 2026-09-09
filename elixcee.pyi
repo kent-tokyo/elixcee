@@ -500,6 +500,12 @@ class Vm:
         """Update the first existing DrawingML text run in a shape."""
         ...
 
+    def set_drawing_shape_text_run(
+        self, drawing_part: str, anchor_index: int, run_index: int, text: str
+    ) -> None:
+        """Update an existing DrawingML text run by zero-based run index."""
+        ...
+
     def set_drawing_shape_hidden(
         self, drawing_part: str, anchor_index: int, hidden: bool
     ) -> None:

@@ -83,6 +83,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_drawing_shape_text(drawing_part, anchor_index, text)` replaces only
   the first existing `<a:t>` in the selected anchor. Missing text runs are
   rejected; other runs and shape/relationship content remain opaque.
+- `Vm.set_drawing_shape_text_run(drawing_part, anchor_index, run_index, text)`
+  replaces one existing `<a:t>` selected by its zero-based run index within
+  the anchor. Missing runs are rejected and unrelated runs remain opaque.
 - `Vm.set_drawing_shape_hidden(drawing_part, anchor_index, hidden)` adds or
   replaces only the `<xdr:cNvPr hidden>` flag.
 - `Vm.set_drawing_shape_rotation(drawing_part, anchor_index, degrees)` updates
@@ -128,6 +131,7 @@ cargo test pivot_cache_field_caption --offline -- --nocapture
 cargo test drawing_anchor --offline -- --nocapture
 cargo test drawing_shape_line_dash_edit_survives_xlsx_save --offline -- --nocapture
 cargo test drawing_shape_text_rewriter --offline -- --nocapture
+cargo test drawing_shape_text_run_rewriter --offline -- --nocapture
 cargo test --workspace --all-targets --offline --quiet
 cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo fmt --all -- --check
@@ -161,9 +165,10 @@ resolved as `Vm.set_drawing_shape_text`.
 The subsequent low-disk workspace all-target run passed 1,680 library tests
 and all integration/benchmark targets, including the new text-run regression.
 
-The minimal Drawing-backed XLSX save test passed with both line-dash and
-text-run edits. After reload from the saved ZIP, the selected first run was
-`Updated &amp; text`, while the unrelated second run remained `Keep`.
+The minimal Drawing-backed XLSX save test passed with line-dash, first-run,
+and indexed text-run edits. After reload from the saved ZIP, the selected runs
+were `Updated &amp; text` and `Second &amp; text`, confirming that an explicit
+run index can update a non-first run without reconstructing the text body.
 
 The title and series-name rewriter unit tests replaced XML-escaped text while
 retaining unrelated text runs, series references, and the surrounding plot
