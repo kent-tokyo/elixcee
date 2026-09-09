@@ -851,13 +851,9 @@ impl PyVm {
         } else {
             None
         };
-        self.inner.cells_mut().insert(
-            (row, col),
-            CellContent {
-                formula: None,
-                value: v,
-            },
-        );
+        self.inner
+            .set_cell_value(row, col, v)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         if let Some(program) = program {
             let target_address = format!("{}{}", xlsx_col_letters(col), row);
             self.inner.deadline = self

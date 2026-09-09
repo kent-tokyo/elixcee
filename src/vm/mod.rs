@@ -12912,6 +12912,43 @@ impl Vm {
             .unwrap_or(Variant::Empty)
     }
 
+    /// Store a scalar cell value through the same edit, spill, and dependency
+    /// invalidation path used by formula-aware VM edits.
+    pub fn set_cell_value(&mut self, row: u32, col: u32, value: Variant) -> Result<(), String> {
+        if row == 0 || col == 0 {
+            return Err("cell coordinates are 1-based and must be positive".to_string());
+        }
+        self.check_variant_budget(&value)?;
+        self.record_edit_history();
+        let active = self.active_sheet.clone();
+        let mut spill_changed = Vec::new();
+        self.clear_spill_for_anchor(&active, (row, col), &mut spill_changed);
+        self.formula_plan.remove(&active);
+        self.formula_dirty_cells.remove(&active);
+        self.cells_mut().insert(
+            (row, col),
+            CellContent {
+                formula: None,
+                value,
+            },
+        );
+        self.formula_ast_cache
+            .entry(active.clone())
+            .or_default()
+            .remove(&(row, col));
+        self.workbook_formula_dirty
+            .entry(active.clone())
+            .or_default()
+            .extend(spill_changed);
+        self.workbook_formula_dirty
+            .entry(active)
+            .or_default()
+            .insert((row, col));
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty = true;
+        Ok(())
+    }
+
     /// The active sheet's resolved number-format code for a cell (GitHub #4), e.g.
     /// `"m/d/yyyy"` for a date-formatted cell -- `None` for a cell with no format, the
     /// General format, or a sheet built purely in-VBA/loaded from `.ods`. Letting a
@@ -15568,6 +15605,25 @@ mod tests {
         let mut vm = Vm::new();
         vm.run_sub(&prog, "mysub").unwrap();
         vm
+    }
+
+    #[test]
+    fn set_cell_value_invalidates_formula_and_supports_undo() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=1+1").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        vm.set_cell_value(1, 1, Variant::Integer(7)).unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert!(vm.cells().get(&(1, 1)).unwrap().formula.is_none());
+        assert!(vm.undo_edit());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+    }
+
+    #[test]
+    fn set_cell_value_rejects_zero_based_coordinates() {
+        let mut vm = Vm::new();
+        assert!(vm.set_cell_value(0, 1, Variant::Integer(1)).is_err());
+        assert!(vm.set_cell_value(1, 0, Variant::Integer(1)).is_err());
     }
 
     #[test]
