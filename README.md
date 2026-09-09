@@ -172,9 +172,12 @@ files are preserved during supported round trips. Features not modeled by the
 writer can still be lost or disconnected. Existing Drawing/relationship chains
 are preserved on tested paths, and bounded APIs can update selected Chart-series
 formulas, Chart title text, two-cell Drawing anchors, and worksheet-backed Pivot
-source fields. Chart creation, general Drawing shape editing, Pivot cache recalculation, comments, hyperlinks, and other
-OOXML objects remain compatibility gaps unless covered by tests for the version
-in use.
+source fields. Drawing shape metadata and selected solid fill/line style
+attributes (rotation, flips, RGB/ARGB fill and line color, line width, and
+preset dash) are also available through bounded APIs. Chart creation, general
+Drawing shape editing, Pivot cache recalculation, comments, hyperlinks, and
+other OOXML objects remain compatibility gaps unless covered by tests for the
+version in use.
 
 The project runs Rust tests, property tests, compatibility fixtures, and
 differential tests for the JavaScript package in CI. Compatibility with Excel's

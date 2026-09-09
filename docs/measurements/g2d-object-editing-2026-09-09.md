@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, worksheet-backed
+Chart-series-cache, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, and Drawing
 alternative-text edits.
 It is not evidence of
@@ -82,6 +82,18 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   replaces only the optional `<xdr:cNvPr title>` attribute.
 - `Vm.set_drawing_shape_hidden(drawing_part, anchor_index, hidden)` adds or
   replaces only the `<xdr:cNvPr hidden>` flag.
+- `Vm.set_drawing_shape_rotation(drawing_part, anchor_index, degrees)` updates
+  only an existing shape transform's integer-degree rotation.
+- `Vm.set_drawing_shape_flip(drawing_part, anchor_index, flip_horizontal,
+  flip_vertical)` updates only the supplied existing transform flip flags.
+- `Vm.set_drawing_shape_fill(drawing_part, anchor_index, color)` updates or
+  adds a solid RGB/ARGB fill while preserving the shape property container.
+- `Vm.set_drawing_shape_line_color(drawing_part, anchor_index, color)` updates
+  only an existing line's solid RGB/ARGB color.
+- `Vm.set_drawing_shape_line_width(drawing_part, anchor_index, width_points)`
+  updates only an existing line width after points-to-EMU conversion.
+- `Vm.set_drawing_shape_line_dash(drawing_part, anchor_index, dash)` updates
+  only an existing `<a:prstDash>` using the DrawingML preset vocabulary.
 - `Vm.set_chart_series_cache(...)` updates an existing cache or creates the
   matching cache when the selected series has only a `strRef`/`numRef` formula.
 - Missing source parts, series, references, malformed attributes, control
