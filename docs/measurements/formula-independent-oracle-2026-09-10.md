@@ -12,14 +12,18 @@ independent oracle, not Microsoft Excel.
 
 - Host: macOS arm64
 - Backend: `/opt/homebrew/bin/soffice`
-- Cases: 15 (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNTA`, `IF`, `IFERROR`, `ROUND`, `DATE`, `LEFT`, `MID`, `LEN`, `CONCATENATE`, `MATCH`, `VLOOKUP`)
-- Comparable results: 15
-- Matches: 15
+- Cases: 19 (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, mixed `SUM`, `IF`, `IFERROR`, `ISERROR`, `#DIV/0!`, `ROUND`, `DATE`, `LEFT`, `MID`, `LEN`, `CONCATENATE`, `MATCH`, `VLOOKUP`)
+- Comparable results: 19
+- Matches: 19
 - Mismatches: 0
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
 
 The harness exits with status 1 if any comparable case mismatches; this run
 exited with status 0.
+
+The expanded run also covered an unhandled division error, error recovery,
+error inspection, and numeric/text mixed ranges. Error text is recorded as a
+cell result; it is not treated as a successful numeric coercion.
 
 The `DATE` result was normalized from Python `datetime` to Excel serial
 (`45351`) before comparison. This is a fixture-level type normalization, not a
