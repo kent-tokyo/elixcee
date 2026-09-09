@@ -8950,24 +8950,7 @@ impl Vm {
             self.cell_index_dirty = true;
             result
         } else {
-            if let Some(cells) = self.sheets.get_mut(&r.sheet) {
-                self.cell_tile_cache
-                    .lock()
-                    .expect("cell tile cache mutex poisoned")
-                    .remove(&r.sheet);
-                for row in area.start_row..=area.end_row {
-                    for col in area.start_col..=area.end_col {
-                        cells.insert(
-                            (row, col),
-                            CellContent {
-                                formula: None,
-                                value: v.clone(),
-                            },
-                        );
-                    }
-                }
-            }
-            self.cell_index_dirty = true;
+            self.set_scalar_range_on_sheet(&r.sheet, area, v)?;
             Ok(())
         }
     }
@@ -10908,26 +10891,17 @@ impl Vm {
                         }
                     }
                 } else {
-                    // Batch writes: access sheet directly to avoid N dirty-flag sets
                     let sheet = self.active_sheet.clone();
-                    if let Some(cells) = self.sheets.get_mut(&sheet) {
-                        self.cell_tile_cache
-                            .lock()
-                            .expect("cell tile cache mutex poisoned")
-                            .remove(&sheet);
-                        for r in r1..=r2 {
-                            for c in c1..=c2 {
-                                cells.insert(
-                                    (r, c),
-                                    CellContent {
-                                        formula: None,
-                                        value: v.clone(),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    self.cell_index_dirty = true;
+                    self.set_scalar_range_on_sheet(
+                        &sheet,
+                        Rect {
+                            start_row: r1,
+                            start_col: c1,
+                            end_row: r2,
+                            end_col: c2,
+                        },
+                        &v,
+                    )?;
                 }
             }
             Stmt::RangeClear { addr, .. } => {
@@ -13116,6 +13090,56 @@ impl Vm {
             .insert((row, col));
         self.workbook_formula_tracking_valid = true;
         self.workbook_formula_structure_dirty = true;
+        Ok(())
+    }
+
+    fn set_scalar_range_on_sheet(
+        &mut self,
+        sheet: &str,
+        area: Rect,
+        value: &Variant,
+    ) -> Result<(), String> {
+        self.check_sheet_not_protected(sheet, sheet)?;
+        self.check_variant_budget(value)?;
+        self.record_edit_history();
+        let mut spill_changed = Vec::new();
+        for row in area.start_row..=area.end_row {
+            for col in area.start_col..=area.end_col {
+                self.clear_spill_for_anchor(sheet, (row, col), &mut spill_changed);
+            }
+        }
+        self.formula_plan.remove(sheet);
+        self.formula_dirty_cells.remove(sheet);
+        self.sheet_cells_mut(sheet)
+            .ok_or_else(|| format!("sheet '{}' not found", sheet))?;
+        for row in area.start_row..=area.end_row {
+            for col in area.start_col..=area.end_col {
+                self.sheet_cells_mut(sheet)
+                    .expect("sheet existence checked above")
+                    .insert(
+                        (row, col),
+                        CellContent {
+                            formula: None,
+                            value: value.clone(),
+                        },
+                    );
+                self.formula_ast_cache
+                    .entry(sheet.to_string())
+                    .or_default()
+                    .remove(&(row, col));
+                self.workbook_formula_dirty
+                    .entry(sheet.to_string())
+                    .or_default()
+                    .insert((row, col));
+            }
+        }
+        self.workbook_formula_dirty
+            .entry(sheet.to_string())
+            .or_default()
+            .extend(spill_changed);
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty = true;
+        self.cell_index_dirty = true;
         Ok(())
     }
 
