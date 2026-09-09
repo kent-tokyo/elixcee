@@ -15,6 +15,7 @@ fixture, host, and scope limit its conclusions. Open work belongs in the
 - [Writer streaming follow-up, 2026-09-05](writer-streaming-follow-up-2026-09-05.md): worksheet sink and passthrough clone reduction; remaining whole-ZIP work.
 - [Writer streaming, 2026-09-07](writer-streaming-2026-09-07.md): release-wheel append and transaction-batched normal-VM RSS rerun through one million rows.
 - [Writer input calibration, 2026-09-09](writer-input-calibration-2026-09-09.md): XML escaping and one-MiB Python input RSS calibration.
+- [Python date1904 contract, 2026-09-10](python-date1904-2026-09-10.md): isolated local wheel verification of metadata load and save preservation.
 - [G2d object editing, 2026-09-09](g2d-object-editing-2026-09-09.md): bounded Chart-series and worksheet-backed Pivot-source edit verification.
 - [VBA runtime safety, 2026-09-09](vba-runtime-safety-2026-09-09.md): default rejection and structured diagnostics for Save/Close external effects.
 - [VBA event dispatch, 2026-09-09](vba-event-dispatch-2026-09-09.md): explicit event execution, EnableEvents, and re-entry suppression.

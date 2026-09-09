@@ -165,7 +165,7 @@ class StreamWriterLimits(unittest.TestCase):
         with zipfile.ZipFile(source) as archive:
             parts = {name: archive.read(name) for name in archive.namelist()}
         workbook = parts["xl/workbook.xml"].decode("utf-8")
-        marker = workbook.index(">") + 1
+        marker = workbook.index(">", workbook.index("<workbook")) + 1
         parts["xl/workbook.xml"] = (
             workbook[:marker] + '<workbookPr date1904="1"/>' + workbook[marker:]
         ).encode("utf-8")
