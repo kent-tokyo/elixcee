@@ -315,7 +315,7 @@ class Vm:
         ...
 
     def set_chart_title(self, chart_part: str, text: str) -> None:
-        """Queue a bounded edit to the first text run in an existing chart title."""
+        """Queue a bounded edit or add operation for a chart title."""
         ...
 
     def set_chart_legend_position(self, chart_part: str, position: str) -> None:

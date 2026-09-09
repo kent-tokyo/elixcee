@@ -4504,14 +4504,32 @@ fn rewrite_chart_series_caches(
 /// surrounding title formatting and all chart XML outside that text node are
 /// kept byte-for-byte unchanged.
 fn rewrite_chart_title(xml: &str, text: &str) -> Result<String, String> {
-    let title_start = xml
-        .find("<c:title")
-        .filter(|&position| {
-            xml.as_bytes()
-                .get(position + b"<c:title".len())
-                .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
-        })
-        .ok_or_else(|| "chart title element is missing".to_string())?;
+    let title_start = xml.find("<c:title").filter(|&position| {
+        xml.as_bytes()
+            .get(position + b"<c:title".len())
+            .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+    });
+    let Some(title_start) = title_start else {
+        let plot_area = xml
+            .find("<c:plotArea")
+            .filter(|&position| {
+                xml.as_bytes()
+                    .get(position + b"<c:plotArea".len())
+                    .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+            })
+            .ok_or_else(|| {
+                "chart title element is missing and plotArea is unavailable".to_string()
+            })?;
+        let title = format!(
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
+            xml_escape(text)
+        );
+        let mut out = String::with_capacity(xml.len() + title.len());
+        out.push_str(&xml[..plot_area]);
+        out.push_str(&title);
+        out.push_str(&xml[plot_area..]);
+        return Ok(out);
+    };
     let title_open_end = xml[title_start..]
         .find('>')
         .map(|offset| title_start + offset + 1)
@@ -8661,6 +8679,16 @@ mod tests {
     #[test]
     fn chart_title_rewriter_rejects_missing_text() {
         assert!(rewrite_chart_title("<c:chart><c:title/></c:chart>", "x").is_err());
+    }
+
+    #[test]
+    fn chart_title_rewriter_adds_title_before_plot_area_when_missing() {
+        let source = "<c:chart><c:plotArea><c:layout/></c:plotArea></c:chart>";
+        let actual = rewrite_chart_title(source, "New & title").unwrap();
+        assert!(actual.contains(
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>New &amp; title</a:t>"
+        ));
+        assert!(actual.contains("</c:title><c:plotArea><c:layout/></c:plotArea>"));
     }
 
     #[test]

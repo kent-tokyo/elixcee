@@ -20,7 +20,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_pivot_cache_field_caption(cache_part, field_index, caption)` rewrites
   only an existing `cacheField@name` attribute.
 - `Vm.set_chart_title(chart_part, text)` rewrites only the first `<a:t>` inside
-  the first `<c:title>` element.
+  the first `<c:title>`, or adds a minimal rich-text title before `plotArea`
+  when the chart has no title.
 - `Vm.set_chart_legend_position(chart_part, position)` rewrites only the first
   `<c:legendPos@val>` for the allowed values `b`, `tr`, `r`, `l`, or `t`.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
@@ -72,7 +73,7 @@ bash scripts/check-local-gates.sh
 
 On the recorded macOS arm64 environment, the Chart title, series-name,
   series-cache, Pivot refresh-policy/field-caption, Drawing anchor/shape-name,
-  and real-fixture targeted tests passed. The full Rust workspace passed 1,620 tests,
+  and real-fixture targeted tests passed. The full Rust workspace passed 1,624 tests,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,
