@@ -1,7 +1,7 @@
 {
   "oracle": "libreoffice",
-  "comparable_cases": 65,
-  "matches": 65,
+  "comparable_cases": 74,
+  "matches": 74,
   "skipped": [
     {
       "case": "maxifs",
@@ -237,6 +237,69 @@
       "formula": "=POWER(2,3)",
       "expected": 8,
       "actual": 8,
+      "match": true
+    },
+    {
+      "case": "int",
+      "formula": "=INT(3.9)",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "trunc",
+      "formula": "=TRUNC(-3.9)",
+      "expected": -3,
+      "actual": -3,
+      "match": true
+    },
+    {
+      "case": "sign",
+      "formula": "=SIGN(-3)",
+      "expected": -1,
+      "actual": -1,
+      "match": true
+    },
+    {
+      "case": "sqrt",
+      "formula": "=SQRT(9)",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "rows",
+      "formula": "=ROWS(A1:B3)",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "columns",
+      "formula": "=COLUMNS(A1:B3)",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "islogical",
+      "formula": "=ISLOGICAL(TRUE)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "n_boolean",
+      "formula": "=N(TRUE)",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "n_text",
+      "formula": "=N(\"elixcee\")",
+      "expected": 0,
+      "actual": 0,
       "match": true
     },
     {
@@ -485,8 +548,8 @@
       "match": true
     }
   ],
-  "elixcee_comparable_cases": 65,
-  "elixcee_matches": 65,
+  "elixcee_comparable_cases": 74,
+  "elixcee_matches": 74,
   "elixcee_records": [
     {
       "case": "sum",
@@ -666,6 +729,60 @@
       "case": "power",
       "expected": 8,
       "actual": 8,
+      "match": true
+    },
+    {
+      "case": "int",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "trunc",
+      "expected": -3,
+      "actual": -3,
+      "match": true
+    },
+    {
+      "case": "sign",
+      "expected": -1,
+      "actual": -1,
+      "match": true
+    },
+    {
+      "case": "sqrt",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "rows",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "columns",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "islogical",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "n_boolean",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "n_text",
+      "expected": 0,
+      "actual": 0,
       "match": true
     },
     {

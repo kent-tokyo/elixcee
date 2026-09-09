@@ -365,6 +365,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `ADDRESS` | Cell address as string (e.g. `"$A$1"`) | Classic |
 | `COUNTBLANK` | Count blank cells in a range | Classic |
 | `ROW` / `COLUMN` | Row / column number of reference | Classic |
+| `ROWS` / `COLUMNS` | Number of rows / columns in a reference | Classic |
 | `LOOKUP` | Sorted vector lookup | Classic |
 | `TRANSPOSE` | Transpose rows and columns | Classic |
 | `XLOOKUP` | Flexible lookup (exact, wildcard, next-larger, next-smaller; binary search on sorted numeric ranges) | 365/2021 |

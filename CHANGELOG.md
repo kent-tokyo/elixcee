@@ -10,7 +10,7 @@
 
 - G4の独立formula oracleを72ケースへ拡張しました。LibreOfficeとelixceeの比較可能65ケースは65/65一致し、LibreOffice buildが評価しない6ケースは明示的にskipとして保存しています。結果JSONを`compat/corpus/results/formula-independent-20260910.json`へ固定しました。
 
-- G4のoracle runnerへ`INT`／`TRUNC`／`SIGN`／`SQRT`／`ROWS`／`COLUMNS`／`ISLOGICAL`／`N` coercionの9ケースを追加し、LibreOffice-only probeで74/74一致を確認しました。現環境ではPython bindingが未導入のため追加分のelixcee比較は未完了で、既存の65/65 paired artifactとは別記録にしています。
+- G4のoracle runnerへ`INT`／`TRUNC`／`SIGN`／`SQRT`／`ROWS`／`COLUMNS`／`ISLOGICAL`／`N` coercionの9ケースを追加しました。初回paired実行で検出した`ROWS`／`COLUMNS`の`#NAME?`を実装で修正し、現行ソースからビルドした1.0.5 wheelでLibreOffice 74/74・elixcee 74/74を確認してJSONを更新しました。Excel oracle／再openの証拠ではありません。
 
 - G5bの保存前relationship carry-over判定で、保持対象partの存在確認を線形リスト探索からHashSet参照へ変更しました。出力形式・接続判定は維持し、`cargo check --lib --offline`（debuginfo無効の一時target）で型検証しました。速度／RSS効果は未測定です。
 

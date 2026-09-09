@@ -386,6 +386,7 @@ fn eval_func(
         "MODE.MULT" => func_mode_mult(args, cells),
         "PRODUCT" => func_product(args, cells),
         "ROW" => func_row(args, cells),
+        "ROWS" => func_rows(args, cells),
         "DATE" => func_date(args, cells),
         "TODAY" => func_today(args, cells),
         "NETWORKDAYS" => func_networkdays(args, cells),
@@ -460,6 +461,7 @@ fn eval_func(
         // -- Lookup --
         "CHOOSE" => func_choose(args, cells),
         "COLUMN" => func_column(args, cells),
+        "COLUMNS" => func_columns(args, cells),
         "LOOKUP" => func_lookup(args, cells),
         "XMATCH" => func_xmatch(args, cells),
         // -- Info --
@@ -1976,6 +1978,24 @@ fn func_row(
             Ok(Variant::Integer(1))
         }
     }
+}
+
+fn func_rows(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("ROWS requires 1 argument".into());
+    }
+    let rows = match &args[0] {
+        FormulaExpr::Range { r1, r2, .. } => r2.saturating_sub(*r1).saturating_add(1),
+        FormulaExpr::CellRef { .. } => 1,
+        other => {
+            evaluate(other, cells)?;
+            1
+        }
+    };
+    Ok(Variant::Integer(rows as i64))
 }
 
 // ── XLOOKUP ───────────────────────────────────────────────────────────────────
@@ -3518,6 +3538,24 @@ fn func_column(
             Ok(Variant::Integer(1))
         }
     }
+}
+
+fn func_columns(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("COLUMNS requires 1 argument".into());
+    }
+    let columns = match &args[0] {
+        FormulaExpr::Range { c1, c2, .. } => c2.saturating_sub(*c1).saturating_add(1),
+        FormulaExpr::CellRef { .. } => 1,
+        other => {
+            evaluate(other, cells)?;
+            1
+        }
+    };
+    Ok(Variant::Integer(columns as i64))
 }
 
 fn func_lookup(
@@ -7321,6 +7359,8 @@ mod tests {
         assert_eq!(calc("=ROW(A5)", &c), Variant::Integer(5));
         assert_eq!(calc("=ROW()", &c), Variant::Integer(1));
         assert_eq!(calc("=ROW(B3:C7)", &c), Variant::Integer(3));
+        assert_eq!(calc("=ROWS(B3:C7)", &c), Variant::Integer(5));
+        assert_eq!(calc("=ROWS(B3)", &c), Variant::Integer(1));
     }
 
     #[test]
@@ -7910,6 +7950,8 @@ mod tests {
         );
         assert_eq!(calc("=COLUMN(C1)", &c), Variant::Integer(3));
         assert_eq!(calc("=COLUMN()", &c), Variant::Integer(1));
+        assert_eq!(calc("=COLUMNS(B3:C7)", &c), Variant::Integer(2));
+        assert_eq!(calc("=COLUMNS(B3)", &c), Variant::Integer(1));
     }
 
     #[test]
