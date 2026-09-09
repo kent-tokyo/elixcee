@@ -28,8 +28,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   characters, and invalid A1 ranges are rejected before a successful save.
 - Explicit Pivot source edits also require the requested worksheet to exist in
   the loaded workbook.
-- Existing Drawing shape content, relationship parts, Chart caches, Pivot cache
-  records, and PivotTable layout are preserved or left opaque by this scope.
+- Existing Drawing shape content, relationship parts, unrelated Chart caches,
+  Pivot cache records, and PivotTable layout are preserved or left opaque by
+  this scope.
 
 ## Reproduction
 
