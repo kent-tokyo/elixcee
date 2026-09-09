@@ -71,6 +71,13 @@ Python-feature Rustdoc also passed. This is a valid low-disk Rust verification
 run; the canonical all-gates command remains incomplete because the original
 default-profile link step still exceeded the host's available disk space.
 
+The same follow-up also passed `cargo audit --no-fetch --stale` and all
+`packages/xlsx` checks: TypeScript (DOM and no-DOM), operation-plan tests,
+package audit, WASM smoke, the real packed-tarball CJS/ESM/browser consumer,
+and real Chrome browser smoke. Nightly fuzz smoke was not rerun after the
+cache cleanup because rebuilding its targets would exceed the remaining disk
+budget; it remains an explicit open gate.
+
 ## Boundaries
 
 This is local BUILD and consumer-smoke evidence only. It does not complete the
