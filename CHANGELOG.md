@@ -6,6 +6,8 @@
 
 次の変更はここに記録します。
 
+- 複数moduleの`Worksheet_Change`自動dispatchで、表示名に加えて既存worksheet XMLの`sheetPr@codeName`をmodule名解決に利用するようにしました。codeNameはOOXMLから読み取る範囲に限定し、VBAプロジェクトの完全なExcelイベント意味論とExcel実機oracleは未完です。
+
 - G2dの限定Chart編集として、凡例の`c:overlay@val`を`Vm.set_chart_legend_overlay`（Python binding／型stub含む）から追加／更新できるようにしました。凡例の他の子要素・系列・title・relationshipは保持し、凡例欠損、Chart作成、Excel再openは未完です。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls@showVal`を`Vm.set_chart_data_labels_show_value`（Python binding／型stub含む）から追加／更新できるようにしました。既存のラベル子要素・系列・軸・relationshipは保持し、data-label要素の新規作成とExcel再openは未完です。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls@showCat`を`Vm.set_chart_data_labels_show_category`（Python binding／型stub含む）から追加／更新できるようにしました。showValとの併用、既存ラベル子要素・系列・軸・relationshipを保持し、data-label要素の新規作成とExcel再openは未完です。

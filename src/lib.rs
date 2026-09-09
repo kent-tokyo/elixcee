@@ -3850,6 +3850,8 @@ fn load_workbook(
     vm.error_on_msgbox = on_msgbox == "error";
     vm.populate_from_sheets(sheets);
     vm.loaded_workbook_path = Some(path.to_string());
+    vm.load_sheet_code_names(path)
+        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
     vm.load_simple_defined_names(path)
         .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
 

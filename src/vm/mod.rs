@@ -1200,6 +1200,11 @@ pub struct Vm {
     pub(crate) sheet_order: Vec<String>,
     /// Currently active sheet name (lowercase).
     pub active_sheet: String,
+    /// Excel worksheet `sheetPr@codeName` values, keyed by the lowercase
+    /// display name. These names are VBA module identities and may differ
+    /// from the visible tab name; they are used only for deterministic
+    /// Worksheet_Change owner selection.
+    sheet_code_names: HashMap<String, String>,
     pub variables: HashMap<String, Variant>,
     /// Module scope of the currently executing standard/class procedure.
     /// Bare UDT names resolve against this module before the compatibility
@@ -1762,6 +1767,7 @@ impl Vm {
             sheets,
             sheet_order: vec!["sheet1".into()],
             active_sheet: "sheet1".into(),
+            sheet_code_names: HashMap::new(),
             variables: HashMap::new(),
             current_module_scope: None,
             calc_mode: CalculationMode::Automatic,
@@ -3657,6 +3663,45 @@ impl Vm {
         }
         self.active_sheet = key;
         self.cell_index_dirty = true;
+        Ok(())
+    }
+
+    /// Load worksheet code names from the source OOXML package. The reader's
+    /// cell model intentionally does not expose this VBA-facing metadata, so
+    /// keep it as a small VM-side projection and leave the source XML opaque
+    /// for round-trip preservation.
+    pub(crate) fn load_sheet_code_names(&mut self, path: &str) -> Result<(), String> {
+        self.sheet_code_names.clear();
+        let is_ooxml = std::path::Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| {
+                value.eq_ignore_ascii_case("xlsx") || value.eq_ignore_ascii_case("xlsm")
+            });
+        if !is_ooxml {
+            return Ok(());
+        }
+        for (sheet, origin) in &self.worksheet_origins {
+            let Some(part) = origin.original_part_name.as_deref() else {
+                continue;
+            };
+            let Some(bytes) = reader::read_raw_zip_entry_if_present(path, part)? else {
+                continue;
+            };
+            let Ok(xml) = std::str::from_utf8(&bytes) else {
+                continue;
+            };
+            let Some(sheet_pr) = reader::extract_raw_element(xml, "sheetPr") else {
+                continue;
+            };
+            let code_name = xml_attr_value(&sheet_pr, "codeName").or_else(|| {
+                reader::extract_raw_element(&sheet_pr, "codeName")
+                    .and_then(|element| xml_attr_value(&element, "val"))
+            });
+            if let Some(code_name) = code_name.filter(|value| !value.is_empty()) {
+                self.sheet_code_names.insert(sheet.clone(), code_name);
+            }
+        }
         Ok(())
     }
 
@@ -7139,6 +7184,7 @@ impl Vm {
             self.row_styles.remove(key);
             self.column_styles.remove(key);
             self.tables.remove(key);
+            self.sheet_code_names.remove(key);
             self.data_validations.remove(key);
             self.conditional_format_ranges.remove(key);
             self.comment_cells.remove(key);
@@ -7271,6 +7317,9 @@ impl Vm {
         // 3. `active_sheet`.
         if self.active_sheet == old_key {
             self.active_sheet = new_key.clone();
+        }
+        if let Some(code_name) = self.sheet_code_names.remove(&old_key) {
+            self.sheet_code_names.insert(new_key.clone(), code_name);
         }
         // Worksheet and Range objects retain worksheet identity across a tab
         // rename. Their compact representation uses the normalized sheet key,
@@ -9704,6 +9753,7 @@ impl Vm {
             return Err("workbook has no sheets".to_string());
         }
         let names = self.populate_from_sheets(sheets);
+        self.load_sheet_code_names(path)?;
         self.load_simple_defined_names(path)?;
         Ok(names)
     }
@@ -10296,7 +10346,13 @@ impl Vm {
             _ => {
                 let worksheet_handlers: Vec<_> = change_handlers
                     .iter()
-                    .filter(|(name, _)| name.eq_ignore_ascii_case(&self.active_sheet))
+                    .filter(|(name, _)| {
+                        name.eq_ignore_ascii_case(&self.active_sheet)
+                            || self
+                                .sheet_code_names
+                                .get(&self.active_sheet)
+                                .is_some_and(|code_name| name.eq_ignore_ascii_case(code_name))
+                    })
                     .collect();
                 if worksheet_handlers.len() == 1 {
                     Some(*worksheet_handlers[0])
@@ -14387,6 +14443,42 @@ impl Default for Vm {
 // ── Range address helpers ─────────────────────────────────────────────────────
 // col_letters_to_num_vm/parse_cell_addr/parse_range_addr moved to
 // elixcee-types (Phase 2A); re-exported near the top of this file.
+
+/// Extract one XML attribute from a bounded element fragment. This is used for
+/// the tiny `sheetPr` metadata projection only; the source fragment itself is
+/// still preserved and written through the OOXML passthrough path.
+fn xml_attr_value(fragment: &str, wanted: &str) -> Option<String> {
+    let bytes = fragment.as_bytes();
+    let mut cursor = 0;
+    while let Some(relative) = fragment[cursor..].find(wanted) {
+        let start = cursor + relative;
+        let boundary = |value: Option<u8>| {
+            value.is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == b'_' || ch == b':'))
+        };
+        if boundary(start.checked_sub(1).and_then(|i| bytes.get(i)).copied())
+            && boundary(bytes.get(start + wanted.len()).copied())
+        {
+            let mut i = start + wanted.len();
+            while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+                i += 1;
+            }
+            if bytes.get(i) == Some(&b'=') {
+                i += 1;
+                while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+                    i += 1;
+                }
+                let quote = *bytes.get(i)?;
+                if quote == b'"' || quote == b'\'' {
+                    let value_start = i + 1;
+                    let end = fragment[value_start..].find(quote as char)? + value_start;
+                    return Some(fragment[value_start..end].to_string());
+                }
+            }
+        }
+        cursor = start + wanted.len();
+    }
+    None
+}
 
 /// Splits `addr` on top-level commas and parses each piece with
 /// `parse_range_addr` (Milestone B7a) — `"A1:A3,C1:C3"` becomes 2 `Rect`s;
@@ -23433,6 +23525,29 @@ End Sub
         vm.run_sub_multi_with_events(&modules, "module1.Main")
             .unwrap();
         assert_eq!(vm.get_cell(1, 3), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 4), Variant::Empty);
+    }
+
+    #[test]
+    fn run_sub_multi_with_events_selects_change_handler_by_sheet_code_name() {
+        let modules = vec![
+            module(
+                "SheetModule",
+                "Sub Worksheet_Change(Target As Range)\n    If Target.Address = \"$A$1\" Then Cells(1,3).Value = 9\nEnd Sub\n",
+            ),
+            module(
+                "OtherModule",
+                "Sub Main()\n    Cells(1,1).Value = 1\nEnd Sub\nSub Worksheet_Change(Target As Range)\n    Cells(1,4).Value = 8\nEnd Sub\n",
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Input");
+        vm.set_active_sheet("Input").unwrap();
+        vm.sheet_code_names
+            .insert("input".to_string(), "SheetModule".to_string());
+        vm.run_sub_multi_with_events(&modules, "OtherModule.Main")
+            .unwrap();
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(9));
         assert_eq!(vm.get_cell(1, 4), Variant::Empty);
     }
 
