@@ -12,7 +12,8 @@ These items can be advanced with repository code, local fixtures, and local
 tooling, but are not complete yet:
 
 - G2d general Chart/Drawing creation and editing, and general Pivot source/cache
-  editing.
+  editing. The bounded Drawing surface now includes indexed existing text-run
+  edits; creation, broad object editing, and Pivot recalculation remain open.
 - G4 independent oracle expansion and runtime-macro regression coverage. The
   local formula-only oracle now has 31 comparable matches out of 34 probes,
   and the 581-scenario VBA corpus has 0 MISMATCH/UNEXPLAINED outcomes; Excel
@@ -21,6 +22,11 @@ tooling, but are not complete yet:
   paired run now covers 100k/400k/1M cells with 20 pairs, durable save, and
   output verification; historical-baseline reconstruction and RSS/resource
   gates remain open.
+
+The indexed Drawing text-run follow-up passed the low-disk offline workspace
+gate at 1,681 library tests plus all integration/benchmark targets. This is
+local regression evidence only and does not close the external Excel reopen
+requirement.
 
 ## Requires an external engine, host, or service
 
