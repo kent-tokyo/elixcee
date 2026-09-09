@@ -6854,18 +6854,6 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             .cloned()
             .collect();
         surviving_source_parts.extend(passthrough_names.iter().cloned());
-        for name in passthrough_names
-            .iter()
-            .filter(|name| name.ends_with(".rels"))
-        {
-            if let Some(xml) = raw_entries
-                .get(name)
-                .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
-            {
-                source_relationship_parts.insert(name.clone(), xml);
-            }
-        }
-
         // Carry relationship metadata before consuming `raw_entries`; the byte payloads
         // themselves are moved into `passthrough` below, avoiding a second in-memory copy.
         carried_rels.extend(carry_over_rels(
@@ -6892,14 +6880,18 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
         ));
 
         // Relationship connectivity and pruning have consumed the source bytes by this
-        // point. Keep only the parsed string index above plus the entry names below; the
-        // final writer reopens the source ZIP for every unchanged relationship part.
+        // point. Move each relationship XML into its dedicated map instead of cloning it;
+        // the raw map keeps only an empty marker so the final writer can reopen the source
+        // ZIP for every unchanged relationship part.
         for name in passthrough_names
             .iter()
             .filter(|name| name.ends_with(".rels"))
         {
             if let Some(bytes) = raw_entries.get_mut(name) {
-                bytes.clear();
+                let owned = std::mem::take(bytes);
+                if let Ok(xml) = String::from_utf8(owned) {
+                    source_relationship_parts.insert(name.clone(), xml);
+                }
             }
         }
 

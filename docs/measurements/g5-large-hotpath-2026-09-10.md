@@ -47,9 +47,10 @@ inputs, p50/p95 repetitions, RSS, durable save, and output verification.
 
 The relationship graph and carry-over paths now parse UTF-8 XML through borrowed
 views instead of cloning each relationship payload into a temporary `String`.
-The targeted offline relationship test passed after this change. This is a
-small allocation reduction only; no speed or RSS improvement is claimed without
-a fresh benchmark.
+The targeted offline relationship test and the 54-test `xlsx_roundtrip`
+integration suite passed after this change. This is a small allocation
+reduction only; no speed or RSS improvement is claimed without a fresh
+benchmark.
 
 ## Baseline reconstruction boundary
 
