@@ -410,11 +410,20 @@ fn eval_func(
         "MINIFS" => func_minifs(args, cells),
         "MOD" => func_mod(args, cells),
         "PERCENTILE" | "PERCENTILE.INC" => func_percentile(args, cells),
+        "PERCENTILE.EXC" => func_percentile_exc(args, cells),
         "PERCENTRANK" | "PERCENTRANK.INC" => func_percentrank(args, cells),
+        "PERCENTRANK.EXC" => func_percentrank_exc(args, cells),
+        "QUARTILE" | "QUARTILE.INC" => func_quartile(args, cells, false),
+        "QUARTILE.EXC" => func_quartile(args, cells, true),
         "RAND" => func_rand(args, cells),
         "RANDBETWEEN" => func_randbetween(args, cells),
         "SMALL" => func_small(args, cells),
         "SUMPRODUCT" => func_sumproduct(args, cells),
+        "SUMSQ" => func_sumsq(args, cells),
+        "GEOMEAN" => func_geomean(args, cells),
+        "HARMEAN" => func_harmean(args, cells),
+        "DEVSQ" => func_devsq(args, cells),
+        "AVEDEV" => func_avedev(args, cells),
         "TRUNC" => func_trunc(args, cells),
         // -- String --
         "ASC" => func_asc(args, cells),
@@ -2462,6 +2471,188 @@ fn func_percentrank(
     let rank = below as f64 / (nums.len() - 1) as f64;
     let mult = 10_f64.powi(sig as i32);
     Ok(Variant::Float((rank * mult).floor() / mult))
+}
+
+fn percentile_value(mut nums: Vec<f64>, k: f64, exclusive: bool) -> Result<Variant, String> {
+    if nums.is_empty() || !k.is_finite() {
+        return Err("PERCENTILE: no numeric values or invalid k".into());
+    }
+    nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let n = nums.len() as f64;
+    let pos = if exclusive {
+        k * (n + 1.0)
+    } else {
+        k * (n - 1.0) + 1.0
+    };
+    if pos < 1.0 || pos > n {
+        return Err("PERCENTILE: k is out of range".into());
+    }
+    let index = pos - 1.0;
+    let lo = index.floor() as usize;
+    let hi = index.ceil() as usize;
+    let value = if lo == hi {
+        nums[lo]
+    } else {
+        nums[lo] + (index - lo as f64) * (nums[hi] - nums[lo])
+    };
+    Ok(as_integer_if_whole(value))
+}
+
+fn func_percentile_exc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("PERCENTILE.EXC requires 2 arguments".into());
+    }
+    let nums = collect_values(&args[0], cells)?
+        .iter()
+        .filter_map(as_f64)
+        .collect();
+    let k = to_float(&evaluate(&args[1], cells)?)?;
+    percentile_value(nums, k, true)
+}
+
+fn func_percentrank_exc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("PERCENTRANK.EXC requires 2 or 3 arguments".into());
+    }
+    let mut nums: Vec<f64> = collect_values(&args[0], cells)?
+        .iter()
+        .filter_map(as_f64)
+        .collect();
+    let x = to_float(&evaluate(&args[1], cells)?)?;
+    let sig = if args.len() == 3 {
+        to_float(&evaluate(&args[2], cells)?)? as i32
+    } else {
+        3
+    };
+    if nums.is_empty() || !x.is_finite() || sig < 0 {
+        return Err("PERCENTRANK.EXC: invalid argument".into());
+    }
+    nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    if x < nums[0] || x > nums[nums.len() - 1] {
+        return Err("PERCENTRANK.EXC: x is out of range".into());
+    }
+    let upper = nums.partition_point(|v| *v <= x);
+    let rank = if upper == 0 {
+        1.0
+    } else if upper == nums.len() {
+        nums.len() as f64
+    } else {
+        let hi = nums[upper];
+        let lo = nums[upper - 1];
+        upper as f64 + if hi == lo { 0.0 } else { (x - lo) / (hi - lo) }
+    };
+    let value = rank / (nums.len() as f64 + 1.0);
+    let mult = 10_f64.powi(sig);
+    Ok(Variant::Float((value * mult).round() / mult))
+}
+
+fn func_quartile(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    exclusive: bool,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("QUARTILE requires 2 arguments".into());
+    }
+    let nums = collect_values(&args[0], cells)?
+        .iter()
+        .filter_map(as_f64)
+        .collect();
+    let quart = to_float(&evaluate(&args[1], cells)?)?;
+    if !quart.is_finite() || quart.fract() != 0.0 || !(0.0..=4.0).contains(&quart) {
+        return Err("QUARTILE: quart must be an integer from 0 to 4".into());
+    }
+    percentile_value(nums, quart / 4.0, exclusive)
+}
+
+fn numeric_args(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<Vec<f64>, String> {
+    let values = collect_all(args, cells)?;
+    let mut nums = Vec::with_capacity(values.len());
+    for value in values {
+        if let Variant::Error(_error) = value {
+            return Ok(vec![f64::NAN]);
+        }
+        if let Some(number) = as_f64(&value) {
+            nums.push(number);
+        }
+    }
+    if nums.iter().any(|v| v.is_nan()) {
+        return Err(format!("{name}: error argument"));
+    }
+    if nums.is_empty() {
+        return Err(format!("{name}: no numeric values"));
+    }
+    Ok(nums)
+}
+
+fn func_sumsq(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    Ok(as_integer_if_whole(
+        numeric_args(args, cells, "SUMSQ")?
+            .iter()
+            .map(|v| v * v)
+            .sum(),
+    ))
+}
+
+fn func_geomean(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let nums = numeric_args(args, cells, "GEOMEAN")?;
+    if nums.iter().any(|v| *v <= 0.0) {
+        return Err("GEOMEAN: values must be positive".into());
+    }
+    Ok(Variant::Float(
+        (nums.iter().map(|v| v.ln()).sum::<f64>() / nums.len() as f64).exp(),
+    ))
+}
+
+fn func_harmean(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let nums = numeric_args(args, cells, "HARMEAN")?;
+    if nums.iter().any(|v| *v <= 0.0) {
+        return Err("HARMEAN: values must be positive".into());
+    }
+    Ok(Variant::Float(
+        nums.len() as f64 / nums.iter().map(|v| 1.0 / v).sum::<f64>(),
+    ))
+}
+
+fn func_devsq(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let nums = numeric_args(args, cells, "DEVSQ")?;
+    let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+    Ok(as_integer_if_whole(
+        nums.iter().map(|v| (v - mean).powi(2)).sum(),
+    ))
+}
+
+fn func_avedev(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let nums = numeric_args(args, cells, "AVEDEV")?;
+    let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+    Ok(Variant::Float(
+        nums.iter().map(|v| (v - mean).abs()).sum::<f64>() / nums.len() as f64,
+    ))
 }
 
 fn pseudo_rand() -> f64 {
@@ -10067,5 +10258,34 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn test_extended_statistical_functions() {
+        let cells = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Integer(2)),
+            ((3, 1), Variant::Integer(4)),
+            ((4, 1), Variant::Integer(8)),
+        ]);
+        assert_eq!(calc("=SUMSQ(A1:A4)", &cells), Variant::Integer(85));
+        assert!(
+            matches!(calc("=GEOMEAN(A1:A4)", &cells), Variant::Float(v) if (v - 2.8284271247461903).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=HARMEAN(A1:A4)", &cells), Variant::Float(v) if (v - 2.1333333333333333).abs() < 1e-12)
+        );
+        assert_eq!(calc("=DEVSQ(A1:A4)", &cells), Variant::Float(28.75));
+        assert_eq!(calc("=AVEDEV(A1:A4)", &cells), Variant::Float(2.25));
+        assert_eq!(
+            calc("=PERCENTILE.EXC(A1:A4,0.5)", &cells),
+            Variant::Integer(3)
+        );
+        assert_eq!(calc("=QUARTILE.EXC(A1:A4,1)", &cells), Variant::Float(1.25));
+        assert_eq!(
+            calc("=PERCENTRANK.EXC(A1:A4,4)", &cells),
+            Variant::Float(0.6)
+        );
+        assert!(evaluate(&fparse("=GEOMEAN(A1:A4)").unwrap(), &HashMap::new()).is_err());
     }
 }

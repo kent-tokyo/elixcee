@@ -146,6 +146,8 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 
 ### G4 — 関数・配列互換性の拡張（X3）
 
+- [x] G4 統計関数拡張 BUILD: `SUMSQ`、`GEOMEAN`、`HARMEAN`、`DEVSQ`、`AVEDEV`、`PERCENTILE.EXC`、`PERCENTRANK.EXC`、`QUARTILE`／`QUARTILE.INC`／`QUARTILE.EXC`を追加した。exclusive percentile/quartileの境界、正値制約、空入力・範囲外引数を検証し、10ケースのRust回帰テストを追加した。Excel oracle校正と統計関数全体の完全一致は未完。
+
 - [x] G4 dispatcher契約監査: `compat/formula-contracts.json`と`check-formula-dispatch.py --check-contracts`で、mode-rich関数の引数形・対応／未対応mode・回帰テスト参照・oracle未検証状態を機械検査する。Excel oracle fixtureの一致校正は未完。
 - [x] G4 VBA WorksheetFunction BUILD: 数式側に既存実装のある`TEXTJOIN`／`XLOOKUP`／`XMATCH`をVBA `WorksheetFunction` dispatchへ接続し、範囲flatten、空値除外、exact／wildcard match、forward/reverse／binary searchの回帰を追加した。完全な型変換とExcel oracle校正は未完。
 - [x] G4 dispatcher棚卸し基盤: `scripts/check-formula-dispatch.py`で実際の`eval_func`からcanonical名・alias・重複名を抽出する検査を追加した。FUNCTIONS・引数形・未対応mode・oracle fixtureとの対応検査は未完。

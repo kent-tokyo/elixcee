@@ -225,9 +225,18 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `SUBTOTAL` | Aggregate with selectable function (1–6, 9, 101–106, 109) | Classic |
 | `AGGREGATE` | Extended subtotal (1–6, 9, 12–16) | 2010 |
 | `PERCENTILE` / `PERCENTILE.INC` | Percentile (inclusive) | Classic / 2010 |
+| `PERCENTILE.EXC` | Percentile (exclusive) | 2010 |
 | `PERCENTRANK` / `PERCENTRANK.INC` | Percent rank | Classic / 2010 |
+| `PERCENTRANK.EXC` | Percent rank (exclusive) | 2010 |
 | `MODE.MULT` | Most frequent value | 2010 |
 | `MINIFS` / `MAXIFS` | Conditional min / max | 2019 |
+| `SUMSQ` | Sum of squares | Classic |
+| `GEOMEAN` | Geometric mean | Classic |
+| `HARMEAN` | Harmonic mean | Classic |
+| `DEVSQ` | Sum of squared deviations | Classic |
+| `AVEDEV` | Average absolute deviation | Classic |
+| `QUARTILE` / `QUARTILE.INC` | Inclusive quartile | Classic / 2010 |
+| `QUARTILE.EXC` | Exclusive quartile | 2010 |
 
 ### Financial
 

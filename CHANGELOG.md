@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Formula coverage: add common statistical functions `SUMSQ`, `GEOMEAN`, `HARMEAN`, `DEVSQ`, `AVEDEV`, exclusive percentile/rank, and inclusive/exclusive quartiles with argument-boundary regression tests.
+
 次の変更はここに記録します。
 
 ## [1.0.6] - 2026-09-10
