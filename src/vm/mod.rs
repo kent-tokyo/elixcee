@@ -11425,13 +11425,11 @@ impl Vm {
                 if !self.strict_resolution {
                     self.ensure_sheet(&key);
                 }
-                self.sheet_cells_mut(&key).unwrap().insert(
-                    (r, c),
-                    CellContent {
-                        formula: None,
-                        value: v,
-                    },
-                );
+                let previous_sheet = self.active_sheet.clone();
+                self.active_sheet = key;
+                let result = self.set_cell_value(r, c, v);
+                self.active_sheet = previous_sheet;
+                result?;
             }
             Stmt::SheetRangeWrite {
                 sheet,
@@ -24648,6 +24646,26 @@ mod tests {
         assert_eq!(cell, Some(Variant::Integer(42)));
         // And Sheet1 (still the active sheet) is untouched.
         assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+    }
+
+    #[test]
+    fn qualified_cell_write_invalidates_formula_on_the_target_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Data");
+        vm.active_sheet = "data".to_string();
+        vm.set_cell_value(1, 1, Variant::Integer(1)).unwrap();
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+
+        let program =
+            parser::parse("Sub MySub()\n    Sheets(\"Data\").Cells(1, 1).Value = 7\nEnd Sub\n")
+                .unwrap();
+        vm.active_sheet = "sheet1".to_string();
+        vm.run_sub(&program, "MySub").unwrap();
+        vm.active_sheet = "data".to_string();
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+        assert_eq!(vm.active_sheet, "data");
     }
 
     #[test]
