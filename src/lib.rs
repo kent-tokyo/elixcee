@@ -1265,6 +1265,17 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to the first chart data-labels leader-lines flag.
+    fn set_chart_data_labels_show_leader_lines(
+        &mut self,
+        chart_part: &str,
+        show_leader_lines: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_data_labels_show_leader_lines(chart_part, show_leader_lines)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -5967,6 +5978,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                         chart =
                             rewrite_chart_data_labels_flag(&chart, "showPercent", show_percent)?;
                     }
+                    if let Some(show_leader_lines) = edit.show_leader_lines {
+                        chart = rewrite_chart_data_labels_flag(
+                            &chart,
+                            "showLeaderLines",
+                            show_leader_lines,
+                        )?;
+                    }
                 }
                 chart.into_bytes()
             } else if (allow_sheet_rename || has_pivot_source_edits)
@@ -9250,6 +9268,15 @@ mod tests {
             actual.contains("showCat=\"1\" showPercent=\"1\"")
                 && actual.contains("<c:showLeaderLines val=\"1\"/>")
         );
+    }
+
+    #[test]
+    fn chart_data_labels_rewriter_updates_show_leader_lines() {
+        let source =
+            r#"<c:chart><c:dLbls showVal="1"><c:showLeaderLines val="0"/></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_flag(source, "showLeaderLines", true).unwrap();
+        assert!(actual.contains("showLeaderLines=\"1\""));
+        assert!(actual.contains("<c:showLeaderLines val=\"0\"/>"));
     }
 
     #[test]
