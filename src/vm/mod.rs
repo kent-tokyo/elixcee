@@ -10937,15 +10937,15 @@ impl Vm {
                     .ok_or_else(|| format!("RangeOffsetWrite: invalid address '{}'", addr))?;
                 let ro = to_f64(&self.eval_expr(row_off)?)? as i64;
                 let co = to_f64(&self.eval_expr(col_off)?)? as i64;
-                let row = (base_r as i64 + ro) as u32;
-                let col = (base_c as i64 + co) as u32;
-                self.cells_mut().insert(
-                    (row, col),
-                    CellContent {
-                        formula: None,
-                        value: v,
-                    },
-                );
+                let row = base_r as i64 + ro;
+                let col = base_c as i64 + co;
+                if !(1..=u32::MAX as i64).contains(&row) || !(1..=u32::MAX as i64).contains(&col) {
+                    return Err(
+                        "RangeOffsetWrite: offset resolves outside worksheet coordinates"
+                            .to_string(),
+                    );
+                }
+                self.set_cell_value_on_sheet(&active, row as u32, col as u32, v)?;
             }
             Stmt::RangeDelete { addr, axis } => {
                 let active = self.active_sheet.clone();
@@ -18309,6 +18309,17 @@ mod tests {
     fn test_range_offset_write() {
         let vm = run("Sub MySub()\n    Range(\"A1\").Offset(2,0).Value = 99\nEnd Sub\n");
         assert_eq!(vm.get_cell(3, 1), Variant::Integer(99));
+    }
+
+    #[test]
+    fn range_offset_write_rejects_coordinates_before_row_one_or_column_one() {
+        let program =
+            parser::parse("Sub MySub()\n    Range(\"A1\").Offset(-1,0).Value = 99\nEnd Sub\n")
+                .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&program, "MySub").unwrap_err();
+        assert!(err.starts_with("RangeOffsetWrite: offset resolves outside worksheet coordinates"));
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
     }
 
     #[test]

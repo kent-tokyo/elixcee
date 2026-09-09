@@ -19,6 +19,7 @@
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls/c:separator@val`を`Vm.set_chart_data_labels_separator`（Python binding／型stub含む）から検証付きで追加／更新できるようにしました。既存data-label属性・子要素・系列・軸・relationshipを保持し、Chart作成とExcel再openは未完です。
 - VBAの`Cells(...).Value`書き込みを統一書き込み経路へ接続し、formula dirty invalidation・spill解放・undo履歴との整合を改善しました。
 - VBAの`Range(...).Value`およびqualified range書き込みも共通経路へ接続し、矩形編集を1 undo単位で扱いながら依存無効化とspill解放を適用しました。
+- VBAの`Range(...).Offset(...).Value`も共通書き込み経路へ接続し、1-based座標外へのwraparoundを拒否するようにしました。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls/c:numFmt@formatCode`を`Vm.set_chart_data_labels_number_format`（Python binding／型stub含む）から検証付きで追加／更新できるようにしました。`sourceLinked`と他のdata-label内容を保持し、Chart作成とExcel再openは未完です。
 - VBAイベントの部分BUILDとして、Python `Vm.set_cell(..., trigger_events=True)`から直前にparse済みVBAの`Worksheet_Change(Target)`を変更対象A1へ自動dispatchできるようにしました。既定動作は従来どおりイベントなしで、EnableEvents・再入抑止・timeoutを適用します。イベント連鎖・複数handler順序・Excel oracleは未完です。
 - VBAセル書込みの整合性を補強し、Python `Vm.set_cell`をVM共通の値書込み経路へ接続しました。1-based座標、variant budget、undo、spill解放、formula AST／dirty依存無効化を適用します。Excel oracleは未完です。
