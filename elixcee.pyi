@@ -394,6 +394,12 @@ class Vm:
         """Update or add the first chart data-label number format code."""
         ...
 
+    def set_chart_data_labels_number_format(
+        self, chart_part: str, number_format: str
+    ) -> None:
+        """Update or add the first chart data-label number format code."""
+        ...
+
     def set_chart_series_name_formula(
         self, chart_part: str, series_index: int, name_formula: str
     ) -> None:

@@ -59,6 +59,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_chart_data_labels_number_format(chart_part, number_format)` rewrites
   or adds the first existing `<c:numFmt formatCode>` under `c:dLbls`, with
   XML escaping and control-character/size validation.
+- `Vm.set_chart_data_labels_number_format(chart_part, number_format)` rewrites
+  or adds the first existing `<c:numFmt formatCode>` under `c:dLbls`, with
+  XML escaping and control-character/size validation.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`

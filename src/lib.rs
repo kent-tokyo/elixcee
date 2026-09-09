@@ -9569,6 +9569,8 @@ mod tests {
             actual.contains("<c:numFmt formatCode=\"0.0%\" sourceLinked=\"0\"/>")
                 && actual.contains("showPercent=\"1\"")
         );
+        assert!(rewrite_chart_data_labels_number_format(source, "").is_err());
+        assert!(rewrite_chart_data_labels_number_format(source, "bad\nformat").is_err());
     }
 
     #[test]
