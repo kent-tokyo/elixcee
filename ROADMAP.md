@@ -158,6 +158,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 Engineering関数拡張 BUILD: `BITAND`／`BITOR`／`BITXOR`、`BITLSHIFT`／`BITRSHIFT`、`DELTA`／`GESTEP`、`ERF`／`ERFC`（各PRECISE alias含む）を追加し、48-bit境界・シフトoverflow・誤差関数の代表値を回帰した。Excelの全型変換・locale・数値精度のoracle校正は未完。
 - [x] G4 三角・双曲線関数拡張 BUILD: `SINH`／`COSH`／`TANH`、逆双曲線関数、`SEC`／`CSC`／`COT`系を追加し、定義域外・ゼロ除算・代表値を回帰した。Excelの全域精度と型変換のoracle校正は未完。
 - [x] G4 組合せ・平方和関数拡張 BUILD: `COMBINA`、`FACTDOUBLE`、`MULTINOMIAL`、`SUMX2MY2`／`SUMX2PY2`／`SUMXMY2`を追加し、非負整数・overflow・ペア範囲長の検証を回帰した。Excelの全型変換・大規模値・oracle校正は未完。
+- [x] G4 丸め関数拡張 BUILD: `EVEN`／`ODD`、`CEILING.PRECISE`／`FLOOR.PRECISE`、`ISO.CEILING`／`ISO.FLOOR`を追加し、負数・significance・ゼロ境界を回帰した。Excelの全型変換・丸め精度・oracle校正は未完。
 
 - [x] G4 dispatcher契約監査: `compat/formula-contracts.json`と`check-formula-dispatch.py --check-contracts`で、mode-rich関数の引数形・対応／未対応mode・回帰テスト参照・oracle未検証状態を機械検査する。Excel oracle fixtureの一致校正は未完。
 - [x] G4 VBA WorksheetFunction BUILD: 数式側に既存実装のある`TEXTJOIN`／`XLOOKUP`／`XMATCH`をVBA `WorksheetFunction` dispatchへ接続し、範囲flatten、空値除外、exact／wildcard match、forward/reverse／binary searchの回帰を追加した。完全な型変換とExcel oracle校正は未完。

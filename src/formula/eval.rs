@@ -537,6 +537,10 @@ fn eval_func(
         // ── Rounding ─────────────────────────────────────────────────────────
         "FLOOR" | "FLOOR.MATH" => func_floor(args, cells),
         "CEILING" | "CEILING.MATH" => func_ceiling(args, cells),
+        "FLOOR.PRECISE" | "ISO.FLOOR" => func_precise_round(args, cells, false),
+        "CEILING.PRECISE" | "ISO.CEILING" => func_precise_round(args, cells, true),
+        "EVEN" => func_even_odd(args, cells, true),
+        "ODD" => func_even_odd(args, cells, false),
         "MROUND" => func_mround(args, cells),
         // ── Math ─────────────────────────────────────────────────────────────
         "ABS" => func_abs(args, cells),
@@ -5297,6 +5301,64 @@ fn func_mround(
     Ok(as_integer_if_whole((num / mult).round() * mult))
 }
 
+fn func_precise_round(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    ceiling: bool,
+) -> Result<Variant, String> {
+    let name = if ceiling {
+        "CEILING.PRECISE"
+    } else {
+        "FLOOR.PRECISE"
+    };
+    if args.is_empty() || args.len() > 2 {
+        return Err(format!("{name} requires 1 or 2 arguments"));
+    }
+    let num = to_float(&evaluate(&args[0], cells)?)?;
+    let significance = if args.len() == 2 {
+        to_float(&evaluate(&args[1], cells)?)?.abs()
+    } else {
+        1.0
+    };
+    if !num.is_finite() || !significance.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    if significance == 0.0 || num == 0.0 {
+        return Ok(Variant::Integer(0));
+    }
+    let quotient = num / significance;
+    let magnitude = if ceiling {
+        quotient.ceil() * significance
+    } else {
+        quotient.floor() * significance
+    };
+    Ok(as_integer_if_whole(magnitude))
+}
+
+fn func_even_odd(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    even: bool,
+) -> Result<Variant, String> {
+    let name = if even { "EVEN" } else { "ODD" };
+    if args.len() != 1 {
+        return Err(format!("{name} requires 1 argument"));
+    }
+    let num = to_float(&evaluate(&args[0], cells)?)?;
+    if !num.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let mut magnitude = num.abs().ceil();
+    if even {
+        if (magnitude as i64) % 2 != 0 {
+            magnitude += 1.0;
+        }
+    } else if (magnitude as i64) % 2 == 0 {
+        magnitude += 1.0;
+    }
+    Ok(as_integer_if_whole(num.signum() * magnitude))
+}
+
 // ── Math ──────────────────────────────────────────────────────────────────────
 
 fn func_abs(
@@ -8660,6 +8722,19 @@ mod tests {
         assert_eq!(calc("=SUMX2MY2(A1:A3,B1:B3)", &c), Variant::Integer(0));
         assert_eq!(calc("=SUMX2PY2(A1:A3,B1:B3)", &c), Variant::Integer(28));
         assert_eq!(calc("=SUMXMY2(A1:A3,B1:B3)", &c), Variant::Integer(8));
+    }
+
+    #[test]
+    fn test_rounding_family() {
+        let c = HashMap::new();
+        assert_eq!(calc("=EVEN(3.1)", &c), Variant::Integer(4));
+        assert_eq!(calc("=EVEN(-3.1)", &c), Variant::Integer(-4));
+        assert_eq!(calc("=ODD(2.1)", &c), Variant::Integer(3));
+        assert_eq!(calc("=ODD(-2.1)", &c), Variant::Integer(-3));
+        assert_eq!(calc("=CEILING.PRECISE(-4.3,2)", &c), Variant::Integer(-4));
+        assert_eq!(calc("=FLOOR.PRECISE(-4.3,2)", &c), Variant::Integer(-6));
+        assert_eq!(calc("=ISO.CEILING(4.1,2)", &c), Variant::Integer(6));
+        assert_eq!(calc("=ISO.FLOOR(4.1,2)", &c), Variant::Integer(4));
     }
 
     #[test]
