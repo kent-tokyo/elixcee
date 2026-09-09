@@ -99,3 +99,25 @@ following roadmap items:
 - Linux/Windows clean-install, resource, and long-running verification;
 - fixed-version comparisons with LogiSheets, EPPlus, or Aspose.Cells;
 - external review, registry publication, tag, or formal release.
+
+## Lightweight recheck after the G2d follow-up
+
+The current clean checkout was rechecked after the Chart series color and
+Drawing preset-geometry follow-ups. The following command completed with exit
+status 0:
+
+```sh
+python3 scripts/check-formula-dispatch.py --check-contracts --check-docs \
+  && python3 scripts/check-ooxml-feature-matrix.py \
+  && bash scripts/check-measurement-boundary.sh \
+  && cargo fmt --all -- --check \
+  && git diff --check
+```
+
+It reported formula contracts OK (8 functions), formula documentation OK (220
+names), OOXML feature matrix OK (4 features), and measurement boundary OK.
+This is a static/format/diff recheck only; it does not replace the Rust
+all-target test, Excel reopen, or other external gates. A subsequent broad
+`cargo test --lib --offline` attempt ran under the host's critically low disk
+budget, but its terminal exit status was not captured, so it is deliberately
+not recorded as a passing regression run.
