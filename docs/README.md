@@ -15,6 +15,7 @@ replacement.
 |---|---|
 | Install and first example | [English](../README.md), [日本語](../README_ja.md), [中文](../README_zh.md) |
 | Current priorities and remaining gates | [Roadmap](../ROADMAP.md) |
+| Roadmap dependency classification | [Dependency audit](roadmap-dependency-audit-2026-09-10.md) |
 | VBA and formula coverage | [FUNCTIONS](../FUNCTIONS.md) |
 | Formula argument/mode contracts | [formula-contracts.json](../compat/formula-contracts.json); validate with `python3 -B scripts/check-formula-dispatch.py --check-docs --check-contracts` |
 | Python signatures | [elixcee.pyi](../elixcee.pyi) |
