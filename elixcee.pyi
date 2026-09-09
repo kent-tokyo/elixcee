@@ -370,6 +370,12 @@ class Vm:
         """
         ...
 
+    def set_drawing_shape_name(
+        self, drawing_part: str, anchor_index: int, name: str
+    ) -> None:
+        """Update a two-cell anchor's non-visual shape name."""
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 

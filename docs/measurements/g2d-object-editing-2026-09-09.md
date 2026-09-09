@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache, Chart-title, two-cell Drawing-anchor, worksheet-backed
+Chart-series-cache, Chart-title, two-cell Drawing-anchor/shape-name, worksheet-backed
 Pivot-source, and Pivot refresh-policy edits.
 It is not evidence of
 Excel reopening, Pivot recalculation, or general OOXML object compatibility.
@@ -26,6 +26,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_drawing_anchor(drawing_part, anchor_index, from_row, from_col,
   to_row, to_col)` rewrites only the `<xdr:from>` and `<xdr:to>` cell markers
   of the selected two-cell anchor. Public cell coordinates are 1-based.
+- `Vm.set_drawing_shape_name(drawing_part, anchor_index, name)` rewrites only
+  the selected two-cell anchor's `<xdr:cNvPr name>` attribute.
 - Missing source parts, series, references, malformed attributes, control
   characters, and invalid A1 ranges are rejected before a successful save.
 - Explicit Pivot source edits also require the requested worksheet to exist in
@@ -56,8 +58,8 @@ bash scripts/check-local-gates.sh
 ## Result
 
 On the recorded macOS arm64 environment, the Chart title, series-name,
-  series-cache, Pivot refresh-policy, Drawing anchor, and real-fixture targeted
-  tests passed. The full Rust workspace passed 1,612 tests,
+  series-cache, Pivot refresh-policy, Drawing anchor/shape-name, and real-fixture
+  targeted tests passed. The full Rust workspace passed 1,613 tests,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,
@@ -73,6 +75,7 @@ the selected series' name, category, and value formulas and retained
 `xl/drawings/drawing1.xml` and its relationship part.
 The same real fixture moved the selected two-cell anchor's from/to markers
 while preserving its offsets, shape content, and drawing relationship. Its
+non-visual shape name was XML-escaped and updated. Its
 existing string and numeric series caches were updated with escaped text and
 new point counts while their formulas and format code remained unchanged.
 
@@ -81,7 +84,7 @@ new point counts while their formulas and format code remained unchanged.
 - Excel reopen, repair-warning absence, or recalculated Chart/Pivot caches.
 - Excel-side execution of `refreshOnLoad` and external source retrieval.
 - Chart or Drawing creation, general Drawing editing beyond two-cell anchor
-  markers, multiple title-run editing, cache creation/regeneration beyond
+  markers and shape names, multiple title-run editing, cache creation/regeneration beyond
   existing caches, or table-backed Pivot sources.
 - Linux/Windows clean-install, resource calibration, external review, or
   LogiSheets/EPPlus/Aspose.Cells comparison.

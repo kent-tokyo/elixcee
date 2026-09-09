@@ -1233,6 +1233,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to a two-cell anchor's non-visual shape name.
+    fn set_drawing_shape_name(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        name: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_shape_name(drawing_part, anchor_index, name)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Move a sheet to an absolute 0-based position among the workbook's sheets.
     ///
     /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
@@ -4500,6 +4512,63 @@ fn rewrite_drawing_anchors(
     Ok(out)
 }
 
+/// Rewrites only the selected two-cell anchor's non-visual shape name.
+fn rewrite_drawing_shape_names(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, String>,
+) -> Result<String, String> {
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| **index);
+    let mut out = xml.to_string();
+    for (&anchor_index, name) in ordered {
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=anchor_index {
+            let open = out[cursor..]
+                .find("<xdr:twoCellAnchor")
+                .map(|offset| cursor + offset)
+                .ok_or_else(|| format!("drawing anchor index {anchor_index} is out of range"))?;
+            let close_rel = out[open..]
+                .find("</xdr:twoCellAnchor>")
+                .ok_or_else(|| "drawing twoCellAnchor is unterminated".to_string())?;
+            let close = open + close_rel + "</xdr:twoCellAnchor>".len();
+            if current == anchor_index {
+                selected = Some((open, close));
+                break;
+            }
+            cursor = close;
+        }
+        let (open, close) = selected.expect("anchor selection loop always selects its index");
+        let anchor = &out[open..close];
+        let c_nv_pr = anchor
+            .find("<xdr:cNvPr")
+            .ok_or_else(|| "drawing anchor is missing <xdr:cNvPr>".to_string())?;
+        let tag_end = c_nv_pr
+            + anchor[c_nv_pr..]
+                .find('>')
+                .ok_or_else(|| "drawing cNvPr element is unterminated".to_string())?;
+        let mut tag = anchor[c_nv_pr..=tag_end].to_string();
+        let attr = "name=";
+        let attr_rel = tag
+            .find(attr)
+            .ok_or_else(|| "drawing cNvPr is missing name attribute".to_string())?;
+        let value_start = attr_rel + attr.len();
+        let quote = tag.as_bytes()[value_start];
+        if quote != b'"' && quote != b'\'' {
+            return Err("drawing cNvPr name attribute is malformed".to_string());
+        }
+        let value_end = tag[value_start + 1..]
+            .find(quote as char)
+            .map(|rel| value_start + 1 + rel)
+            .ok_or_else(|| "drawing cNvPr name attribute is unterminated".to_string())?;
+        tag.replace_range(value_start + 1..value_end, &xml_escape(name));
+        let mut replacement = anchor.to_string();
+        replacement.replace_range(c_nv_pr..=tag_end, &tag);
+        out.replace_range(open..close, &replacement);
+    }
+    Ok(out)
+}
+
 /// Rewrites only the worksheet source sheet attribute in pivot cache definitions.
 /// Pivot cache contents and table-based sources are left byte-for-byte unchanged.
 fn rewrite_pivot_cache_sheet_refs(
@@ -4971,6 +5040,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_chart_title_edits = !vm.chart_title_edits.is_empty();
     let has_pivot_source_edits = !vm.pivot_source_edits.is_empty();
     let has_drawing_anchor_edits = !vm.drawing_anchor_edits.is_empty();
+    let has_drawing_shape_name_edits = !vm.drawing_shape_name_edits.is_empty();
     // Keep writer-owned static package parts regenerated. A source raw copy can
     // carry source-only defaults or relationship-id ordering that is valid in
     // isolation but diverges from the writer's carried relationship contract.
@@ -5008,6 +5078,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(drawing_part) {
                 return Err(format!(
                     "drawing anchor edit rejected: source workbook has no {drawing_part}"
+                ));
+            }
+        }
+        for drawing_part in vm.drawing_shape_name_edits.keys() {
+            if !raw_entries.contains_key(drawing_part) {
+                return Err(format!(
+                    "drawing shape edit rejected: source workbook has no {drawing_part}"
                 ));
             }
         }
@@ -5231,8 +5308,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     }
                 }
                 pivot.into_bytes()
-            } else if has_drawing_anchor_edits
-                && vm.drawing_anchor_edits.contains_key(&name)
+            } else if (has_drawing_anchor_edits || has_drawing_shape_name_edits)
+                && (vm.drawing_anchor_edits.contains_key(&name)
+                    || vm.drawing_shape_name_edits.contains_key(&name))
                 && name.starts_with("xl/drawings/")
                 && name.ends_with(".xml")
                 && !name.contains("/_rels/")
@@ -5247,13 +5325,16 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 let drawing = String::from_utf8(bytes).map_err(|_| {
                     format!("drawing part is not UTF-8 and cannot be safely rewritten: {name}")
                 })?;
-                rewrite_drawing_anchors(
-                    &drawing,
-                    vm.drawing_anchor_edits
-                        .get(&name)
-                        .expect("drawing edit map was checked by the branch"),
-                )?
-                .into_bytes()
+                let drawing = if let Some(edits) = vm.drawing_anchor_edits.get(&name) {
+                    rewrite_drawing_anchors(&drawing, edits)?
+                } else {
+                    drawing
+                };
+                if let Some(edits) = vm.drawing_shape_name_edits.get(&name) {
+                    rewrite_drawing_shape_names(&drawing, edits)?.into_bytes()
+                } else {
+                    drawing.into_bytes()
+                }
             } else {
                 bytes
             };
@@ -5272,8 +5353,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || (has_pivot_source_edits
                     && name.starts_with("xl/pivotCache/")
                     && name.ends_with(".xml"))
-                || (has_drawing_anchor_edits
-                    && vm.drawing_anchor_edits.contains_key(&name)
+                || ((has_drawing_anchor_edits || has_drawing_shape_name_edits)
+                    && (vm.drawing_anchor_edits.contains_key(&name)
+                        || vm.drawing_shape_name_edits.contains_key(&name))
                     && name.starts_with("xl/drawings/")
                     && name.ends_with(".xml"))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
