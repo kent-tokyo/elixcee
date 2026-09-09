@@ -4,8 +4,8 @@ Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
 Chart-series-cache, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
-Pivot-source, Pivot refresh-policy, Pivot field-caption, and Drawing
-alternative-text edits.
+Pivot-source, Pivot refresh-policy, Pivot field-caption, Drawing
+alternative-text edits, and existing DrawingML text-run editing.
 It is not evidence of
 Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 
@@ -80,6 +80,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   adds or replaces only the optional `<xdr:cNvPr descr>` attribute.
 - `Vm.set_drawing_shape_title(drawing_part, anchor_index, title)` adds or
   replaces only the optional `<xdr:cNvPr title>` attribute.
+- `Vm.set_drawing_shape_text(drawing_part, anchor_index, text)` replaces only
+  the first existing `<a:t>` in the selected anchor. Missing text runs are
+  rejected; other runs and shape/relationship content remain opaque.
 - `Vm.set_drawing_shape_hidden(drawing_part, anchor_index, hidden)` adds or
   replaces only the `<xdr:cNvPr hidden>` flag.
 - `Vm.set_drawing_shape_rotation(drawing_part, anchor_index, degrees)` updates
@@ -122,6 +125,7 @@ cargo test pivot_refresh_on_load --offline -- --nocapture
 cargo test pivot_cache_field_caption --offline -- --nocapture
 cargo test drawing_anchor --offline -- --nocapture
 cargo test drawing_shape_line_dash_edit_survives_xlsx_save --offline -- --nocapture
+cargo test drawing_shape_text_rewriter --offline -- --nocapture
 cargo test --workspace --all-targets --offline --quiet
 cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo fmt --all -- --check
@@ -133,12 +137,18 @@ bash scripts/check-local-gates.sh
 
 On the recorded macOS arm64 environment, the Chart title, legend-overlay,
 data-label, series-name, series-cache, Pivot refresh-policy/field-caption,
-Drawing anchor/shape-name, line-dash persistence, and real-fixture targeted tests passed. The full Rust workspace passed the current workspace test set,
+Drawing anchor/shape-name/text-run, line-dash persistence, and real-fixture targeted tests passed. The full Rust workspace passed the current workspace test set,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,
 and a real Chrome browser smoke all passed through
 `scripts/check-local-gates.sh`.
+
+The new text-run rewriter test passed, and a fresh offline maturin build
+produced a CPython 3.13 arm64 wheel exposing
+`Vm.set_drawing_shape_text`. The normal `cargo test --features python` test
+binary is not used as Python binding evidence because it requires embedding
+Python symbols; the extension build is the supported boundary check.
 
 The title and series-name rewriter unit tests replaced XML-escaped text while
 retaining unrelated text runs, series references, and the surrounding plot
@@ -160,7 +170,8 @@ added the missing attribute while preserving an unrelated label child.
 - Excel reopen, repair-warning absence, or recalculated Chart/Pivot caches.
 - Excel-side execution of `refreshOnLoad` and external source retrieval.
 - Chart or Drawing creation, general Drawing editing beyond two-cell anchor
-  markers and shape names, multiple title-run editing, cache recalculation beyond
+  markers, shape metadata/style, and the bounded first text run, multiple
+  text-run editing, cache recalculation beyond
   writing cached points, or table-backed Pivot sources.
 - Linux/Windows clean-install, resource calibration, external review, or
   LogiSheets/EPPlus/Aspose.Cells comparison.

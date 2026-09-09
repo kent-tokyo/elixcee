@@ -1340,6 +1340,9 @@ pub struct Vm {
     /// Explicit drawing shape-title edits keyed by drawing part and
     /// document-order anchor index.
     pub(crate) drawing_shape_title_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit drawing shape text edits keyed by drawing part and
+    /// document-order anchor index.
+    pub(crate) drawing_shape_text_edits: HashMap<String, HashMap<usize, String>>,
     /// Explicit drawing shape hidden-state edits keyed by drawing part and
     /// document-order anchor index.
     pub(crate) drawing_shape_hidden_edits: HashMap<String, HashMap<usize, bool>>,
@@ -1827,6 +1830,7 @@ impl Vm {
             drawing_shape_name_edits: HashMap::new(),
             drawing_shape_description_edits: HashMap::new(),
             drawing_shape_title_edits: HashMap::new(),
+            drawing_shape_text_edits: HashMap::new(),
             drawing_shape_hidden_edits: HashMap::new(),
             drawing_shape_rotation_edits: HashMap::new(),
             drawing_shape_flip_edits: HashMap::new(),
@@ -8287,6 +8291,36 @@ impl Vm {
             .entry(drawing_part.to_string())
             .or_default()
             .insert(anchor_index, title.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first text run of an existing drawing
+    /// shape. The text body and its surrounding DrawingML are preserved; a
+    /// missing text run is rejected rather than guessed into existence.
+    pub fn set_drawing_shape_text(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        text: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if text.len() > 16 * 1024 || text.chars().any(|c| c.is_control()) {
+            return Err(
+                "drawing shape text must be at most 16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        self.drawing_shape_text_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, text.to_string());
         Ok(())
     }
 

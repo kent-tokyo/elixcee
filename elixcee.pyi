@@ -494,6 +494,12 @@ class Vm:
         """Add or update an existing drawing anchor's title metadata."""
         ...
 
+    def set_drawing_shape_text(
+        self, drawing_part: str, anchor_index: int, text: str
+    ) -> None:
+        """Update the first existing DrawingML text run in a shape."""
+        ...
+
     def set_drawing_shape_hidden(
         self, drawing_part: str, anchor_index: int, hidden: bool
     ) -> None:

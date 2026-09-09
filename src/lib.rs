@@ -1461,6 +1461,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to an existing drawing shape's first text run.
+    fn set_drawing_shape_text(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        text: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_shape_text(drawing_part, anchor_index, text)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded update to an existing drawing anchor's hidden state.
     fn set_drawing_shape_hidden(
         &mut self,
@@ -5465,6 +5477,64 @@ fn rewrite_drawing_shape_attribute(
     Ok(out)
 }
 
+/// Rewrites only the first DrawingML text run in the selected anchor. This is
+/// deliberately limited to existing `<a:t>` content so shape structure and
+/// additional rich-text runs remain opaque and unchanged.
+fn rewrite_drawing_shape_text(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, String>,
+) -> Result<String, String> {
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
+    let mut out = xml.to_string();
+    for (&anchor_index, text) in ordered {
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=anchor_index {
+            let candidates = [
+                ("<xdr:twoCellAnchor>", "</xdr:twoCellAnchor>"),
+                ("<xdr:twoCellAnchor ", "</xdr:twoCellAnchor>"),
+                ("<xdr:oneCellAnchor>", "</xdr:oneCellAnchor>"),
+                ("<xdr:oneCellAnchor ", "</xdr:oneCellAnchor>"),
+                ("<xdr:absoluteAnchor>", "</xdr:absoluteAnchor>"),
+                ("<xdr:absoluteAnchor ", "</xdr:absoluteAnchor>"),
+            ];
+            let (open, closing) = candidates
+                .iter()
+                .filter_map(|(opening, closing)| {
+                    out[cursor..]
+                        .find(opening)
+                        .map(|offset| (cursor + offset, *closing))
+                })
+                .min_by_key(|(position, _)| *position)
+                .ok_or_else(|| format!("drawing anchor index {anchor_index} is out of range"))?;
+            let close_rel = out[open..]
+                .find(closing)
+                .ok_or_else(|| "drawing anchor is unterminated".to_string())?;
+            let close = open + close_rel + closing.len();
+            if current == anchor_index {
+                selected = Some((open, close));
+                break;
+            }
+            cursor = close;
+        }
+        let (open, close) = selected.expect("anchor selection loop always selects its index");
+        let anchor = &out[open..close];
+        let text_open = anchor
+            .find("<a:t>")
+            .ok_or_else(|| "drawing shape is missing an existing <a:t> text run".to_string())?;
+        let content_start = text_open + "<a:t>".len();
+        let content_end = content_start
+            + anchor[content_start..]
+                .find("</a:t>")
+                .ok_or_else(|| "drawing shape text run is unterminated".to_string())?;
+        let mut replacement = anchor.to_string();
+        replacement.replace_range(content_start..content_end, &xml_escape(text));
+        out.replace_range(open..close, &replacement);
+    }
+    Ok(out)
+}
+
 /// Rewrites only an existing DrawingML transform rotation on the selected
 /// document-order drawing anchors. The transform is intentionally not created
 /// when absent because its geometry is required for a valid shape.
@@ -6491,6 +6561,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_drawing_shape_name_edits = !vm.drawing_shape_name_edits.is_empty();
     let has_drawing_shape_description_edits = !vm.drawing_shape_description_edits.is_empty();
     let has_drawing_shape_title_edits = !vm.drawing_shape_title_edits.is_empty();
+    let has_drawing_shape_text_edits = !vm.drawing_shape_text_edits.is_empty();
     let has_drawing_shape_hidden_edits = !vm.drawing_shape_hidden_edits.is_empty();
     let has_drawing_shape_rotation_edits = !vm.drawing_shape_rotation_edits.is_empty();
     let has_drawing_shape_flip_edits = !vm.drawing_shape_flip_edits.is_empty();
@@ -6591,6 +6662,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(drawing_part) {
                 return Err(format!(
                     "drawing shape edit rejected: source workbook has no {drawing_part}"
+                ));
+            }
+        }
+        for drawing_part in vm.drawing_shape_text_edits.keys() {
+            if !raw_entries.contains_key(drawing_part) {
+                return Err(format!(
+                    "drawing shape text edit rejected: source workbook has no {drawing_part}"
                 ));
             }
         }
@@ -6938,6 +7016,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_drawing_shape_name_edits
                 || has_drawing_shape_description_edits
                 || has_drawing_shape_title_edits
+                || has_drawing_shape_text_edits
                 || has_drawing_shape_hidden_edits
                 || has_drawing_shape_rotation_edits
                 || has_drawing_shape_flip_edits
@@ -6949,6 +7028,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || vm.drawing_shape_name_edits.contains_key(&name)
                     || vm.drawing_shape_description_edits.contains_key(&name)
                     || vm.drawing_shape_title_edits.contains_key(&name)
+                    || vm.drawing_shape_text_edits.contains_key(&name)
                     || vm.drawing_shape_hidden_edits.contains_key(&name)
                     || vm.drawing_shape_rotation_edits.contains_key(&name)
                     || vm.drawing_shape_flip_edits.contains_key(&name)
@@ -6987,6 +7067,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 };
                 let drawing = if let Some(edits) = vm.drawing_shape_title_edits.get(&name) {
                     rewrite_drawing_shape_attribute(&drawing, edits, "title")?
+                } else {
+                    drawing
+                };
+                let drawing = if let Some(edits) = vm.drawing_shape_text_edits.get(&name) {
+                    rewrite_drawing_shape_text(&drawing, edits)?
                 } else {
                     drawing
                 };
@@ -7059,7 +7144,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || ((has_drawing_anchor_edits
                     || has_drawing_shape_name_edits
                     || has_drawing_shape_description_edits
-                    || has_drawing_shape_title_edits
+                || has_drawing_shape_title_edits
+                || has_drawing_shape_text_edits
                     || has_drawing_shape_hidden_edits
                     || has_drawing_shape_rotation_edits
                     || has_drawing_shape_flip_edits
@@ -7071,6 +7157,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                         || vm.drawing_shape_name_edits.contains_key(&name)
                         || vm.drawing_shape_description_edits.contains_key(&name)
                         || vm.drawing_shape_title_edits.contains_key(&name)
+                        || vm.drawing_shape_text_edits.contains_key(&name)
                         || vm.drawing_shape_hidden_edits.contains_key(&name)
                         || vm.drawing_shape_rotation_edits.contains_key(&name)
                         || vm.drawing_shape_flip_edits.contains_key(&name)
@@ -10619,6 +10706,20 @@ mod tests {
             .unwrap();
         assert!(drawing.contains(r#"<a:prstDash val="lgDashDot"/>"#));
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn drawing_shape_text_rewriter_escapes_first_run_and_preserves_other_runs() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0, "Updated & text".to_string());
+        let source = concat!(
+            "<xdr:wsDr><xdr:twoCellAnchor><xdr:sp><xdr:txBody>",
+            "<a:p><a:r><a:t>Old</a:t></a:r><a:r><a:t>Keep</a:t></a:r></a:p>",
+            "</xdr:txBody></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"
+        );
+        let actual = rewrite_drawing_shape_text(source, &edits).unwrap();
+        assert!(actual.contains("<a:t>Updated &amp; text</a:t>"));
+        assert!(actual.contains("<a:t>Keep</a:t>"));
     }
 
     #[test]
