@@ -1429,6 +1429,17 @@ fn edit_chart_series_line_color_survives_real_fixture_save() {
         no_fill..no_fill + "<a:noFill/>".len(),
         "<a:solidFill><a:srgbClr val=\"112233\"/></a:solidFill>",
     );
+    let series_end_after_line = chart_with_line
+        .find("</c:ser>")
+        .expect("fixture should contain one chart series");
+    let scheme_color = chart_with_line[series_start..series_end_after_line]
+        .find("<a:schemeClr val=\"accent1\"/>")
+        .map(|offset| series_start + offset)
+        .expect("fixture series should contain a solid fill scheme color");
+    chart_with_line.replace_range(
+        scheme_color..scheme_color + "<a:schemeClr val=\"accent1\"/>".len(),
+        "<a:srgbClr val=\"223344\"/>",
+    );
     entries.insert(
         "xl/charts/chart1.xml".to_string(),
         chart_with_line.into_bytes(),
@@ -1440,11 +1451,14 @@ fn edit_chart_series_line_color_survives_real_fixture_save() {
         .expect("temporary fixture should load");
     vm.set_chart_series_line_color("xl/charts/chart1.xml", 0, "#aBc123")
         .expect("line color edit should be accepted");
-    save_workbook(&vm, &output_path).expect("line color edit should save");
+    vm.set_chart_series_fill_color("xl/charts/chart1.xml", 0, "#dEf456")
+        .expect("fill color edit should be accepted");
+    save_workbook(&vm, &output_path).expect("chart color edits should save");
 
     let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
     let output_chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
     assert!(output_chart.contains("<a:srgbClr val=\"ABC123\"/>"));
+    assert!(output_chart.contains("<a:srgbClr val=\"DEF456\"/>"));
     assert!(output_chart.contains("<c:f>Sheet1!$A$6:$B$6</c:f>"));
 }
 
