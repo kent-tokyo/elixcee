@@ -11,7 +11,7 @@
 - 複数module実行でも`Workbook_Open`をopt-in先行dispatchできる`Vm.run_sub_multi_with_events`を追加しました。標準module間の重複handlerはsource traversal順に依存せず拒否します。
 - G2dの限定Chart編集として、既存系列のname formulaを`Vm.set_chart_series_name_formula`（Python binding含む）から更新できるようにしました。系列index・`<c:tx>`・`<c:f>`の欠損、制御文字、16KiB超を拒否し、他の系列・cache・Drawing relationshipは保持します。Excel再openは未完です。
 - G2dの限定Chart編集として、`Vm.set_chart_title`（Python binding含む）で既存Chartの最初のtitle text runを更新し、title欠損時は最小rich-text titleを追加できるようにしました。XML escape、既存titleのtext欠損、制御文字、16KiB上限を検証し、周辺のChart XML・Drawing relationshipは保持します。Chart作成、複数runの完全編集、Excel再openは未完です。
-- G2dの限定Chart編集として、既存Chartの凡例位置を`Vm.set_chart_legend_position`（Python binding含む）から`b`／`tr`／`r`／`l`／`t`の範囲で更新できるようにしました。凡例以外のChart XML・Drawing／relationship chainは保持し、Chart作成・Excel再openは未完です。
+- G2dの限定Chart編集として、`Vm.set_chart_legend_position`（Python binding含む）から既存Chartの凡例位置を`b`／`tr`／`r`／`l`／`t`の範囲で更新し、凡例欠損時は最小凡例を追加できるようにしました。凡例以外のChart XML・Drawing／relationship chainは保持し、Chart作成・Excel再openは未完です。
 - G2dの限定Drawing編集として、既存two-cell anchorのfrom/toセルを`Vm.set_drawing_anchor`（Python binding含む）から1-based座標で更新できるようにしました。shape content、offset、relationshipを保持し、one-cell anchorや不正座標は拒否します。Drawing作成・一般shape編集・Excel再openは未完です。
 - G2dの限定Chart編集として、既存系列のcategory/value cacheを`Vm.set_chart_series_cache`（Python binding含む）から更新できるようにしました。既存`strCache`／`numCache`の点数・値だけを置換し、formula・formatCode・cache種別・周辺XMLを保持します。cache作成／再計算、Chart作成、Excel再openは未完です。
 - Chart系列にcacheが存在しない場合も、既存の`strRef`／`numRef`を変えずに`strCache`／`numCache`を生成してから点数・値を保存できるようにしました。

@@ -4559,14 +4559,29 @@ fn rewrite_chart_title(xml: &str, text: &str) -> Result<String, String> {
 /// Rewrite the required `val` attribute of the first chart legend-position
 /// element, preserving the remainder of the chart XML.
 fn rewrite_chart_legend_position(xml: &str, position: &str) -> Result<String, String> {
-    let open = xml
-        .find("<c:legendPos")
-        .filter(|&position| {
-            xml.as_bytes()
-                .get(position + b"<c:legendPos".len())
-                .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
-        })
-        .ok_or_else(|| "chart legend position element is missing".to_string())?;
+    let open = xml.find("<c:legendPos").filter(|&position| {
+        xml.as_bytes()
+            .get(position + b"<c:legendPos".len())
+            .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+    });
+    let Some(open) = open else {
+        let plot_area = xml
+            .find("<c:plotArea")
+            .filter(|&position| {
+                xml.as_bytes()
+                    .get(position + b"<c:plotArea".len())
+                    .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+            })
+            .ok_or_else(|| {
+                "chart legend position element is missing and plotArea is unavailable".to_string()
+            })?;
+        let legend = format!("<c:legend><c:legendPos val=\"{position}\"/><c:layout/></c:legend>");
+        let mut out = String::with_capacity(xml.len() + legend.len());
+        out.push_str(&xml[..plot_area]);
+        out.push_str(&legend);
+        out.push_str(&xml[plot_area..]);
+        return Ok(out);
+    };
     let end = xml[open..]
         .find('>')
         .map(|offset| open + offset + 1)
@@ -8705,8 +8720,15 @@ mod tests {
     }
 
     #[test]
-    fn chart_legend_position_rewriter_rejects_missing_element() {
-        assert!(rewrite_chart_legend_position("<c:chart/>", "b").is_err());
+    fn chart_legend_position_rewriter_adds_legend_before_plot_area_when_missing() {
+        let actual = rewrite_chart_legend_position(
+            "<c:chart><c:plotArea><c:layout/></c:plotArea></c:chart>",
+            "b",
+        )
+        .unwrap();
+        assert!(
+            actual.contains("<c:legend><c:legendPos val=\"b\"/><c:layout/></c:legend><c:plotArea>")
+        );
     }
 
     #[test]

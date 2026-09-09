@@ -319,7 +319,7 @@ class Vm:
         ...
 
     def set_chart_legend_position(self, chart_part: str, position: str) -> None:
-        """Queue a bounded legend position edit (b, tr, r, l, or t)."""
+        """Queue a bounded legend position edit or add operation (b, tr, r, l, or t)."""
         ...
 
     def set_chart_series_name_formula(

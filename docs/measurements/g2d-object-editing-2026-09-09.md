@@ -23,7 +23,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   the first `<c:title>`, or adds a minimal rich-text title before `plotArea`
   when the chart has no title.
 - `Vm.set_chart_legend_position(chart_part, position)` rewrites only the first
-  `<c:legendPos@val>` for the allowed values `b`, `tr`, `r`, `l`, or `t`.
+  `<c:legendPos@val>` for the allowed values `b`, `tr`, `r`, `l`, or `t`, or
+  adds a minimal legend before `plotArea` when the chart has no legend.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`
