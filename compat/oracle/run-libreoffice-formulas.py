@@ -48,12 +48,18 @@ CASES = {
     "trim": ('=TRIM("  elixcee  runtime ")', "elixcee runtime"),
     "find": ('=FIND("ix","elixcee")', 3),
     "replace": ('=REPLACE("elixcee",4,3,"X")', "eliXe"),
+    "substitute": ('=SUBSTITUTE("elixcee","e","E")', "ElixcEE"),
+    "search": ('=SEARCH("IX","elixcee")', 3),
+    "exact": ('=EXACT("elixcee","ELIXCEE")', False),
+    "proper": ('=PROPER("elixcee runtime")', "Elixcee Runtime"),
     "date": ("=DATE(2024,2,29)", 45351),
     "date1904": ("=DATE(2024,2,29)", 45351),
     "days": ("=DAYS(DATE(2024,3,1),DATE(2024,2,29))", 1),
     "year": ("=YEAR(DATE(2024,2,29))", 2024),
     "month": ("=MONTH(DATE(2024,2,29))", 2),
     "day": ("=DAY(DATE(2024,2,29))", 29),
+    "weekday": ("=WEEKDAY(DATE(2024,2,29))", 5),
+    "datevalue": ('=DATEVALUE("2024-02-29")', 45351),
     "edate": ("=EDATE(DATE(2024,1,31),1)", 45351),
     "eomonth": ("=EOMONTH(DATE(2024,2,1),0)", 45351),
     "floor": ("=FLOOR(5.7,2)", 4),
@@ -125,7 +131,7 @@ def run(soffice: str, with_elixcee: bool = False) -> dict:
             sheet.cell(row=row, column=1, value=name)
             sheet.cell(row=row, column=2, value=formula)
             sheet.cell(row=row, column=3, value=expected)
-            if name in {"date1904", "edate", "eomonth"}:
+            if name in {"date1904", "datevalue", "edate", "eomonth"}:
                 sheet.cell(row=row, column=2).number_format = "yyyy-mm-dd"
         input_book.calculation.fullCalcOnLoad = True
         input_book.calculation.forceFullCalc = True

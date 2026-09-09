@@ -15,7 +15,7 @@ tooling, but are not complete yet:
   editing. The bounded Drawing surface now includes indexed existing text-run
   edits; creation, broad object editing, and Pivot recalculation remain open.
 - G4 independent oracle expansion and runtime-macro regression coverage. The
-  local formula-only oracle now has 51 comparable matches out of 55 probes
+  local formula-only oracle now has 57 comparable matches out of 61 probes
   (four explicit LibreOffice-build skips), and the 581-scenario VBA corpus has
   0 MISMATCH/UNEXPLAINED outcomes; Excel semantic coverage and real production
   macro fixtures remain open.
