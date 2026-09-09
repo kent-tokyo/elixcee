@@ -12,9 +12,11 @@ independent oracle, not Microsoft Excel.
 
 - Host: macOS arm64
 - Backend: `/opt/homebrew/bin/soffice`
-- Cases: 34 (the original set plus logical, rounding, lookup, criteria, and text probes; `IFNA`, `XMATCH`, and `TEXTJOIN` are retained as oracle probes)
-- Comparable results: 31
-- Matches: 31
+- Cases: 42 (the original set plus logical, rounding, lookup, criteria, text,
+  numeric, and string-normalization probes; `IFNA`, `XMATCH`, and `TEXTJOIN`
+  are retained as oracle probes)
+- Comparable results: 39
+- Matches: 39
 - Skipped: 3 (`IFNA`, `XMATCH`, and `TEXTJOIN`, because this LibreOffice build does not evaluate these probes)
 - Mismatches: 0
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
@@ -23,10 +25,10 @@ The harness exits with status 1 if any comparable case mismatches. Oracle
 unsupported probes are reported in `skipped` and are not silently counted as
 matches; this run exited with status 0.
 
-The same 34-case command was rerun after the later local changes using a
+The expanded 42-case command was rerun after the later local changes using a
 dedicated writable temporary directory (`TMPDIR=/private/tmp/elixcee-formula-oracle-run`)
 because the default temporary directories were full or unavailable. It again
-reported 31/31 comparable matches, 3 explicit skips, and zero mismatches.
+reported 39/39 comparable matches, 3 explicit skips, and zero mismatches.
 
 The expanded run also covered logical operators, conditional aggregation,
 rounding boundaries, INDEX/MATCH lookup, criteria aggregation, an unhandled
