@@ -12,7 +12,7 @@
       "recalculate": "warned",
       "excel_reopen": "unverified",
       "fixture": "compat/oracle-excel-com/fixtures/pristine/fixture5_chart_image_freeze_print.xlsm",
-      "notes": "Drawing/chart parts and relationships are retained when connectivity checks pass. A loaded workbook may rename a sheet and update qualified chart <c:f> references; bounded edits cover selected series formulas, caches, marker attributes, smooth, negative-value display, and visibility flags, title, legend, axes, style, and data labels. Chart creation and general editing are not supported."
+      "notes": "Drawing/chart parts and relationships are retained when connectivity checks pass. A loaded workbook may rename a sheet and update qualified chart <c:f> references; bounded edits cover selected series formulas, caches, marker attributes, solid RGB line/fill colors, smooth, negative-value display, and visibility flags, title, legend, axes, style, and data labels. Chart creation and general editing are not supported."
     },
     {
       "id": "pivot_tables",
@@ -32,7 +32,7 @@
       "recalculate": "warned",
       "excel_reopen": "unverified",
       "fixture": "compat/oracle-excel-com/fixtures/pristine/fixture5_chart_image_freeze_print.xlsm",
-      "notes": "Worksheet drawing and legacy-drawing owners are restored only when their relationships and reachable targets survive."
+      "notes": "Worksheet drawing and legacy-drawing owners are restored only when their relationships and reachable targets survive. Bounded edits cover existing anchor markers, shape metadata/text, hidden/rotation/flip, preset geometry, and selected RGB fill/line properties; drawing creation and broad object editing are not supported."
     },
     {
       "id": "external_links",

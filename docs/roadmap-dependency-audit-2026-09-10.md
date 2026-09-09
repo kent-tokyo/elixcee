@@ -12,11 +12,12 @@ These items can be advanced with repository code, local fixtures, and local
 tooling, but are not complete yet:
 
 - G2d general Chart/Drawing creation and editing, and general Pivot source/cache
-  editing. The bounded Drawing surface now includes indexed existing text-run
-  edits; creation, broad object editing, and Pivot recalculation remain open.
+  editing. The bounded surface now includes existing Chart series color and
+  Drawing preset-geometry edits; creation, broad object editing, and Pivot
+  recalculation remain open.
 - G4 independent oracle expansion and runtime-macro regression coverage. The
-  local formula-only oracle now has 65 comparable matches out of 72 probes
-  (six explicit LibreOffice-build skips), and the 581-scenario VBA corpus has
+  local formula-only oracle now has 85/85 comparable matches out of 94 probes
+  (nine explicit LibreOffice-build skips), and the 581-scenario VBA corpus has
   0 MISMATCH/UNEXPLAINED outcomes; Excel semantic coverage and real production
   macro fixtures remain open.
 - G5 RSS and cross-platform resource scaling. The `v1.0.5`-tag versus current
