@@ -136,4 +136,5 @@ workbook may rename a sheet, update selected existing chart-series category/valu
 `<c:f>` elements, and update an existing worksheet-backed Pivot source's
 `worksheetSource@sheet` or A1 `ref`. Row or column structural edits, chart
 creation, general object editing, cache regeneration/recalculation, and
-unparseable object XML remain fail-closed.
+unparseable object XML remain fail-closed. Existing Drawing text runs are a
+bounded exception and may be updated by zero-based run index.

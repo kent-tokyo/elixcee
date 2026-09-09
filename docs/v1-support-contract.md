@@ -36,7 +36,7 @@ Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
   `worksheetSource@sheet` are updated. In addition, existing chart-series
   category/value formulas and worksheet-backed Pivot `worksheetSource@sheet`／A1
 `ref` can be explicitly edited through the bounded APIs. Existing Chart title
-text, first-run Drawing shape text, and two-cell Drawing anchor markers are
+text, indexed Drawing shape text runs, and two-cell Drawing anchor markers are
 also supported by bounded APIs. Chart creation, cache
 regeneration/recalculation, general shape editing, and
 stale-anchor updates after row/column changes remain outside the contract.
