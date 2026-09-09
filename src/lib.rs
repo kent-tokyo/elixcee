@@ -3867,6 +3867,11 @@ fn load_workbook(
 
     let mut vm = Vm::new();
     vm.error_on_msgbox = on_msgbox == "error";
+    vm.external_links_policy = external_links;
+    vm.set_workbook_date1904(
+        reader::xlsx_date1904_for_path(path)
+            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?,
+    );
     vm.populate_from_sheets(sheets);
     vm.loaded_workbook_path = Some(path.to_string());
     vm.load_sheet_code_names(path)

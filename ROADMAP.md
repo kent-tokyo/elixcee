@@ -131,7 +131,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G3 Clear semantics BUILD: `ClearContents` は追跡済みのセル数値書式・コメントを保持し、`Clear` は対象セルの同メタデータを除去する差分を追加した。OOXML全書式・validation・conditional formatting・Excel oracleは未完。
 - [x] G3 Range dimension member BUILD: Rangeオブジェクトの `Rows.Count`／`Columns.Count` を単一矩形で評価できるようにし、イベントTargetの矩形サイズ検証を実行可能にした。複数Areaの総数意味論とExcel oracleは未完。
 - [x] G3 Worksheet-to-Range object BUILD: `Set ws = Sheets(...); Set r = ws.Range(...)` と `ws.Cells(row, col)` のRangeオブジェクト生成を追加し、Worksheetから取得したRangeでも束縛シートの編集経路を利用する。複雑なWorksheet memberとExcel oracleは未完。
-- [x] 部分 BUILD: Empty／Error伝播、IF/IFERRORの遅延評価、1900系DATE／日付関数、ROUND系の境界をローカル回帰で固定した。VMはロード元の1904 date-system metadataを保持・公開するが、serial変換は数式キャッシュと保存の契約が未確定のため未接続。全型変換・丸め規則、独立期待値／Excel oracle校正は未完。
+- [x] 部分 BUILD: Empty／Error伝播、IF/IFERRORの遅延評価、1900系DATE／日付関数、ROUND系の境界をローカル回帰で固定した。VMはロード元の1904 date-system metadataを保持・公開し、Rust／Pythonのロード入口と保存ラウンドトリップで同じ値を維持する。serial変換は数式キャッシュと保存の契約が未確定のため未接続。全型変換・丸め規則、独立期待値／Excel oracle校正は未完。
 - [x] 部分 MEASURE: 100／1,000 formulaのchainに加え、Data!A1からCalcシート1,000式へのcross-sheet fan-outを構成し、dirty／forced full再走査の代表セル一致、Manual→Automatic、cycleをrelease profile・macOS arm64で100反復測定した。p50/p95・CPU・RSSを記録し、dirtyが常に高速とは主張しない。大規模topology、独立oracle、Linux／Windowsは未完。詳細は[formula dirty calibration](docs/measurements/formula-dirty-calibration-2026-09-05.md)。
 
 ### G4 — 関数・配列互換性の拡張（X3）

@@ -9818,6 +9818,10 @@ impl Vm {
         self.workbook_date1904
     }
 
+    pub(crate) fn set_workbook_date1904(&mut self, value: bool) {
+        self.workbook_date1904 = value;
+    }
+
     /// Import the deliberately small, address-only subset of OOXML defined
     /// names that the workbook formula engine can evaluate today. Qualified,
     /// dynamic, table, and external references remain available through
