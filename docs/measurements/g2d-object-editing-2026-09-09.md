@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache, Chart-title, two-cell Drawing-anchor/shape-name, worksheet-backed
+Chart-series-cache, Chart-title/style, two-cell Drawing-anchor/shape-name, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, and Drawing
 alternative-text edits.
 It is not evidence of
@@ -25,6 +25,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_chart_legend_position(chart_part, position)` rewrites only the first
   `<c:legendPos@val>` for the allowed values `b`, `tr`, `r`, `l`, or `t`, or
   adds a minimal legend before `plotArea` when the chart has no legend.
+- `Vm.set_chart_style(chart_part, style)` rewrites or adds only the chart-space
+  `<c:style val>` with an Excel style number from 1 through 48.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`
@@ -74,7 +76,7 @@ bash scripts/check-local-gates.sh
 
 On the recorded macOS arm64 environment, the Chart title, series-name,
   series-cache, Pivot refresh-policy/field-caption, Drawing anchor/shape-name,
-  and real-fixture targeted tests passed. The full Rust workspace passed 1,624 tests,
+  and real-fixture targeted tests passed. The full Rust workspace passed 1,626 tests,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,

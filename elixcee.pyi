@@ -322,6 +322,10 @@ class Vm:
         """Queue a bounded legend position edit or add operation (b, tr, r, l, or t)."""
         ...
 
+    def set_chart_style(self, chart_part: str, style: int) -> None:
+        """Set an existing chart style number (1 through 48)."""
+        ...
+
     def set_chart_series_name_formula(
         self, chart_part: str, series_index: int, name_formula: str
     ) -> None:

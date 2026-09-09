@@ -868,6 +868,12 @@ pub(crate) struct ChartLegendPositionEdit {
     pub position: String,
 }
 
+/// A bounded edit to an existing chart style (`1..=48`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChartStyleEdit {
+    pub style: u32,
+}
+
 /// A bounded edit to one existing worksheet-backed Pivot cache source.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PivotWorksheetSourceEdit {
@@ -1275,6 +1281,8 @@ pub struct Vm {
     pub(crate) chart_title_edits: HashMap<String, ChartTitleEdit>,
     /// Explicit chart legend-position edits keyed by chart part.
     pub(crate) chart_legend_position_edits: HashMap<String, ChartLegendPositionEdit>,
+    /// Explicit chart-style edits keyed by chart part.
+    pub(crate) chart_style_edits: HashMap<String, ChartStyleEdit>,
     /// Explicit Pivot worksheet source edits keyed by cache definition part.
     pub(crate) pivot_source_edits: HashMap<String, PivotWorksheetSourceEdit>,
     /// Explicit drawing anchor edits keyed by drawing part and zero-based
@@ -1736,6 +1744,7 @@ impl Vm {
             chart_series_edits: HashMap::new(),
             chart_title_edits: HashMap::new(),
             chart_legend_position_edits: HashMap::new(),
+            chart_style_edits: HashMap::new(),
             pivot_source_edits: HashMap::new(),
             drawing_anchor_edits: HashMap::new(),
             drawing_shape_name_edits: HashMap::new(),
@@ -7512,6 +7521,23 @@ impl Vm {
                 position: position.to_string(),
             },
         );
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart style. Excel chart styles are
+    /// numbered 1 through 48; this does not alter chart series or theme data.
+    pub fn set_chart_style(&mut self, chart_part: &str, style: u32) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart style edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if !(1..=48).contains(&style) {
+            return Err("chart style must be in the range 1..=48".to_string());
+        }
+        self.chart_style_edits
+            .insert(chart_part.to_string(), ChartStyleEdit { style });
         Ok(())
     }
 
