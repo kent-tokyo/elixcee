@@ -320,6 +320,11 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `FLOOR` / `CEILING` | Round down / up to nearest integer | Classic |
 | `FLOOR.MATH` / `CEILING.MATH` | Round down / up to nearest multiple | 2013 |
 | `MROUND` | Round to nearest multiple | Classic |
+| `SINH` / `COSH` / `TANH` | Hyperbolic sine / cosine / tangent | Classic |
+| `ASINH` / `ACOSH` / `ATANH` | Inverse hyperbolic functions | 2013 |
+| `SEC` / `SECH` / `CSC` / `CSCH` | Secant / hyperbolic secant / cosecant variants | 2013 |
+| `COT` / `COTH` | Cotangent / hyperbolic cotangent | 2013 |
+| `ACOT` / `ACOTH` | Inverse cotangent / inverse hyperbolic cotangent | 2013 |
 
 ### Engineering
 

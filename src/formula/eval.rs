@@ -567,6 +567,8 @@ fn eval_func(
         "ATAN2" => func_atan2(args, cells),
         "DEGREES" => func_trig1(args, cells, f64::to_degrees),
         "RADIANS" => func_trig1(args, cells, f64::to_radians),
+        "SINH" | "COSH" | "TANH" | "ASINH" | "ACOSH" | "ATANH" | "SEC" | "SECH" | "CSC"
+        | "CSCH" | "COT" | "COTH" | "ACOT" | "ACOTH" => func_extended_trig(args, cells, name),
         // ── Info ─────────────────────────────────────────────────────────────
         "COUNTBLANK" => func_countblank(args, cells),
         "ADDRESS" => func_address(args, cells),
@@ -5586,6 +5588,49 @@ fn func_atan2(
     Ok(Variant::Float(y.atan2(x)))
 }
 
+fn func_extended_trig(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err(format!("{name} requires 1 argument"));
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    if !value.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let result = match name {
+        "SINH" => value.sinh(),
+        "COSH" => value.cosh(),
+        "TANH" => value.tanh(),
+        "ASINH" => value.asinh(),
+        "ACOSH" if value >= 1.0 => value.acosh(),
+        "ACOSH" => return Ok(Variant::Error(ExcelError::Num)),
+        "ATANH" if value.abs() < 1.0 => value.atanh(),
+        "ATANH" => return Ok(Variant::Error(ExcelError::Num)),
+        "SEC" if value.cos() != 0.0 => 1.0 / value.cos(),
+        "SEC" => return Ok(Variant::Error(ExcelError::DivZero)),
+        "SECH" => 1.0 / value.cosh(),
+        "CSC" if value.sin() != 0.0 => 1.0 / value.sin(),
+        "CSC" => return Ok(Variant::Error(ExcelError::DivZero)),
+        "CSCH" if value != 0.0 => 1.0 / value.sinh(),
+        "CSCH" => return Ok(Variant::Error(ExcelError::DivZero)),
+        "COT" if value.tan() != 0.0 => 1.0 / value.tan(),
+        "COT" => return Ok(Variant::Error(ExcelError::DivZero)),
+        "COTH" if value != 0.0 => 1.0 / value.tanh(),
+        "COTH" => return Ok(Variant::Error(ExcelError::DivZero)),
+        "ACOT" => (std::f64::consts::FRAC_PI_2 - value.atan()).rem_euclid(std::f64::consts::PI),
+        "ACOTH" if value.abs() > 1.0 => 0.5 * ((value + 1.0) / (value - 1.0)).ln(),
+        "ACOTH" => return Ok(Variant::Error(ExcelError::Num)),
+        _ => unreachable!(),
+    };
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(as_integer_if_whole(result))
+}
+
 // ── Info ──────────────────────────────────────────────────────────────────────
 
 fn func_countblank(
@@ -8432,6 +8477,27 @@ mod tests {
             calc("=BITLSHIFT(281474976710655,1)", &c),
             Variant::Error(ExcelError::Num)
         );
+    }
+
+    #[test]
+    fn test_extended_trigonometry() {
+        let c = HashMap::new();
+        assert_eq!(calc("=SINH(0)", &c), Variant::Integer(0));
+        assert_eq!(calc("=COSH(0)", &c), Variant::Integer(1));
+        assert_eq!(calc("=TANH(0)", &c), Variant::Integer(0));
+        assert_eq!(calc("=SECH(0)", &c), Variant::Integer(1));
+        match calc("=ACOT(1)", &c) {
+            Variant::Float(value) => assert!((value - std::f64::consts::FRAC_PI_4).abs() < 1e-12),
+            other => panic!("ACOT: {:?}", other),
+        }
+        match calc("=ACOTH(2)", &c) {
+            Variant::Float(value) => assert!((value - 0.5493061443340549).abs() < 1e-12),
+            other => panic!("ACOTH: {:?}", other),
+        }
+        assert_eq!(calc("=ACOSH(0.5)", &c), Variant::Error(ExcelError::Num));
+        assert_eq!(calc("=ATANH(1)", &c), Variant::Error(ExcelError::Num));
+        assert_eq!(calc("=COT(0)", &c), Variant::Error(ExcelError::DivZero));
+        assert_eq!(calc("=COTH(0)", &c), Variant::Error(ExcelError::DivZero));
     }
 
     #[test]
