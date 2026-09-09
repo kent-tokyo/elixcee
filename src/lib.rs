@@ -1276,6 +1276,17 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to the first chart data-labels bubble-size flag.
+    fn set_chart_data_labels_show_bubble_size(
+        &mut self,
+        chart_part: &str,
+        show_bubble_size: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_data_labels_show_bubble_size(chart_part, show_bubble_size)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -5985,6 +5996,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                             show_leader_lines,
                         )?;
                     }
+                    if let Some(show_bubble_size) = edit.show_bubble_size {
+                        chart = rewrite_chart_data_labels_flag(
+                            &chart,
+                            "showBubbleSize",
+                            show_bubble_size,
+                        )?;
+                    }
                 }
                 chart.into_bytes()
             } else if (allow_sheet_rename || has_pivot_source_edits)
@@ -9277,6 +9295,17 @@ mod tests {
         let actual = rewrite_chart_data_labels_flag(source, "showLeaderLines", true).unwrap();
         assert!(actual.contains("showLeaderLines=\"1\""));
         assert!(actual.contains("<c:showLeaderLines val=\"0\"/>"));
+    }
+
+    #[test]
+    fn chart_data_labels_rewriter_updates_show_bubble_size() {
+        let source =
+            r#"<c:chart><c:dLbls showVal="1"><c:showBubbleSize val="0"/></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_flag(source, "showBubbleSize", true).unwrap();
+        assert!(
+            actual.contains("showBubbleSize=\"1\"")
+                && actual.contains("<c:showBubbleSize val=\"0\"/>")
+        );
     }
 
     #[test]
