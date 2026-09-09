@@ -62,7 +62,9 @@ The newly added probes cover `INT`, `TRUNC`, `SIGN`, `SQRT`, `ROWS`,
 and `TYPE`, plus array aggregation through `TRANSPOSE` and `SEQUENCE`.
 `ROWS` and `COLUMNS`
 initially exposed a real `#NAME?` gap in elixcee; their implementation and
-paired 74/74 result are included in the current artifact. LibreOffice's
+paired 85/85 result are included in the current artifact. Their shape path now
+preserves known dimensions for references, `SEQUENCE`, and `TRANSPOSE`, while
+shape-less arrays remain conservative. LibreOffice's
 `TYPE(TRUE)` is excluded because this build returns `1` where Excel returns
 logical type code `4`; `SUM(SEQUENCE(3))` is excluded because this build does
 not evaluate `SEQUENCE`. See the

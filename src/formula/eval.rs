@@ -1991,15 +1991,49 @@ fn func_rows(
     if args.len() != 1 {
         return Err("ROWS requires 1 argument".into());
     }
-    let rows = match &args[0] {
-        FormulaExpr::Range { r1, r2, .. } => r2.saturating_sub(*r1).saturating_add(1),
-        FormulaExpr::CellRef { .. } => 1,
-        other => {
-            evaluate(other, cells)?;
-            1
-        }
-    };
+    let rows = formula_array_dimensions(&args[0], cells)?.map_or(1, |(rows, _)| rows);
     Ok(Variant::Integer(rows as i64))
+}
+
+/// Return the known two-dimensional shape of a reference or a bounded array
+/// constructor. Flat `Variant::Array` values intentionally remain unknown:
+/// their producer may have lost shape metadata, so guessing would make
+/// ROWS/COLUMNS silently report a false dimension.
+fn formula_array_dimensions(
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Option<(u32, u32)>, String> {
+    match expr {
+        FormulaExpr::Range { r1, r2, c1, c2, .. } => Ok(Some((
+            r2.saturating_sub(*r1).saturating_add(1),
+            c2.saturating_sub(*c1).saturating_add(1),
+        ))),
+        FormulaExpr::CellRef { .. } => Ok(Some((1, 1))),
+        FormulaExpr::FuncCall { name, args } if name.eq_ignore_ascii_case("SEQUENCE") => {
+            if args.is_empty() || args.len() > 4 {
+                return Err("SEQUENCE requires 1 to 4 arguments".into());
+            }
+            let dimension = |arg: &FormulaExpr| -> Result<u32, String> {
+                let value = to_float(&evaluate(arg, cells)?)?;
+                if !value.is_finite() || value.fract() != 0.0 || value <= 0.0 {
+                    return Err("SEQUENCE dimensions must be positive integers".into());
+                }
+                if value > u32::MAX as f64 {
+                    return Err("SEQUENCE dimension is too large".into());
+                }
+                Ok(value as u32)
+            };
+            let rows = dimension(&args[0])?;
+            let columns = args.get(1).map(dimension).transpose()?.unwrap_or(1);
+            Ok(Some((rows, columns)))
+        }
+        FormulaExpr::FuncCall { name, args }
+            if name.eq_ignore_ascii_case("TRANSPOSE") && args.len() == 1 =>
+        {
+            Ok(formula_array_dimensions(&args[0], cells)?.map(|(rows, columns)| (columns, rows)))
+        }
+        _ => Ok(None),
+    }
 }
 
 // ── XLOOKUP ───────────────────────────────────────────────────────────────────
@@ -3551,14 +3585,7 @@ fn func_columns(
     if args.len() != 1 {
         return Err("COLUMNS requires 1 argument".into());
     }
-    let columns = match &args[0] {
-        FormulaExpr::Range { c1, c2, .. } => c2.saturating_sub(*c1).saturating_add(1),
-        FormulaExpr::CellRef { .. } => 1,
-        other => {
-            evaluate(other, cells)?;
-            1
-        }
-    };
+    let columns = formula_array_dimensions(&args[0], cells)?.map_or(1, |(_, columns)| columns);
     Ok(Variant::Integer(columns as i64))
 }
 
@@ -7365,6 +7392,8 @@ mod tests {
         assert_eq!(calc("=ROW(B3:C7)", &c), Variant::Integer(3));
         assert_eq!(calc("=ROWS(B3:C7)", &c), Variant::Integer(5));
         assert_eq!(calc("=ROWS(B3)", &c), Variant::Integer(1));
+        assert_eq!(calc("=ROWS(SEQUENCE(3))", &c), Variant::Integer(3));
+        assert_eq!(calc("=ROWS(TRANSPOSE(B3:C7))", &c), Variant::Integer(2));
     }
 
     #[test]
@@ -7956,6 +7985,8 @@ mod tests {
         assert_eq!(calc("=COLUMN()", &c), Variant::Integer(1));
         assert_eq!(calc("=COLUMNS(B3:C7)", &c), Variant::Integer(2));
         assert_eq!(calc("=COLUMNS(B3)", &c), Variant::Integer(1));
+        assert_eq!(calc("=COLUMNS(SEQUENCE(2,3))", &c), Variant::Integer(3));
+        assert_eq!(calc("=COLUMNS(TRANSPOSE(B3:C7))", &c), Variant::Integer(5));
     }
 
     #[test]

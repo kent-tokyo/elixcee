@@ -185,6 +185,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] 部分 BUILD/MEASURE: oracle runnerへ型変換・配列境界・数学関数の9ケースと日時・営業日関数の6ケースを追加した。`ROWS`／`COLUMNS`の実装漏れを修正し、LibreOffice build固有の`ISOWEEKNUM`未評価をskipへ分類したうえで、現行ソースからビルドした1.0.5 wheelでLibreOffice 79/79・elixcee 79/79を確認してJSONを更新した。Excel oracle／再openの証拠ではない。[follow-up probe](docs/measurements/formula-independent-oracle-probe-2026-09-10.md)
 - [x] 部分 MEASURE: 型・Error分類として`ISERR`／`ISNA`／`ISNONTEXT`／`TYPE`を追加し、LibreOffice build固有の`TYPE(TRUE)`差をskipへ分類した。LibreOffice 85/85・elixcee 85/85のpaired結果を固定した。Excel oracle／再openの証拠ではない。[follow-up probe](docs/measurements/formula-independent-oracle-probe-2026-09-10.md)
 - [x] 部分 BUILD/MEASURE: 数式関数の引数で`Array`／`VbaArray`結果を平坦化し、`SUM(TRANSPOSE(...))`をpaired検証した。LibreOfficeが`SEQUENCE`を評価しないため`SUM(SEQUENCE(3))`はskipとし、94ケース中LibreOffice 85/85・elixcee 85/85を確認した。spill形状全体、Excel oracle／再openは未完。[follow-up probe](docs/measurements/formula-independent-oracle-probe-2026-09-10.md)
+- [x] 部分 BUILD: `ROWS`／`COLUMNS`で参照・`SEQUENCE`・`TRANSPOSE`の既知形状を扱い、形状不明のflat arrayは推測しない境界を追加した。Rust回帰126件を確認した。spill形状全体、Excel oracle／再openは未完。
 - [ ] MEASURE: Excel／EPPlus／Aspose.Cellsはversion・計算設定・license利用条件を固定して比較。実行していない公式対応表と、実測一致率を分ける。
 
 ### G5 — 保存メモリの段階削減（X4 / X5）
