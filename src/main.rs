@@ -324,6 +324,12 @@ fn run_check_command(args: &[String]) -> ! {
 
     for module in &modules {
         for name in parser::find_type_collisions(&module.program) {
+            let location = module
+                .program
+                .type_defs
+                .iter()
+                .find(|type_def| type_def.name == name)
+                .map(|type_def| diagnostics::locate(&module.source, &module.path, type_def.span));
             diags.push(check::Diagnostic {
                 severity: "error",
                 code: "E1012",
@@ -332,7 +338,7 @@ fn run_check_command(args: &[String]) -> ! {
                     "duplicate Type '{}' in module '{}' — UDT declarations must be unique",
                     name, module.name
                 ),
-                location: None,
+                location,
             });
         }
     }
@@ -370,6 +376,21 @@ fn run_check_command(args: &[String]) -> ! {
             });
         }
         for (name, mods) in parser::find_cross_module_type_collisions(&project) {
+            let location = mods.first().and_then(|module_name| {
+                modules
+                    .iter()
+                    .find(|module| &module.name == module_name)
+                    .and_then(|module| {
+                        module
+                            .program
+                            .type_defs
+                            .iter()
+                            .find(|type_def| type_def.name == name)
+                            .map(|type_def| {
+                                diagnostics::locate(&module.source, &module.path, type_def.span)
+                            })
+                    })
+            });
             diags.push(check::Diagnostic {
                 severity: "error",
                 code: "E1012",
@@ -379,7 +400,7 @@ fn run_check_command(args: &[String]) -> ! {
                     name,
                     mods.join("', '")
                 ),
-                location: None,
+                location,
             });
         }
 

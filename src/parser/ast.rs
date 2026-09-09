@@ -808,6 +808,8 @@ pub type TypeField = (String, String);
 pub struct TypeDef {
     pub name: String,           // lowercase type name
     pub fields: Vec<TypeField>, // (field_name, vba_type) in declaration order
+    /// Source range covering the `Type` declaration, used for diagnostics.
+    pub span: SourceSpan,
 }
 
 #[derive(Debug, Clone)]

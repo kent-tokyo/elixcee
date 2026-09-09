@@ -661,6 +661,7 @@ impl Parser {
 
     /// Parse a `Type Name ... End Type` block.
     fn parse_type_def(&mut self) -> Result<TypeDef, String> {
+        let start = self.peek_span().start;
         self.expect_ident("type")?;
         let name = self.consume_ident()?.to_lowercase();
         self.eat_stmt_end()?;
@@ -684,8 +685,13 @@ impl Parser {
             self.skip_to_eol();
         }
         self.consume_end_kw("type")?;
+        let end = self.peek_span().start;
         self.skip_nl();
-        Ok(TypeDef { name, fields })
+        Ok(TypeDef {
+            name,
+            fields,
+            span: SourceSpan { start, end },
+        })
     }
 
     fn parse_sub(&mut self, access: AccessModifier) -> Result<SubDef, String> {

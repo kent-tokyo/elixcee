@@ -311,6 +311,8 @@ fn multi_file_check_reports_a_cross_module_type_collision() {
         "expected an E1012 diagnostic: {:?}",
         v
     );
+    let diagnostic = diags.iter().find(|d| d["code"] == "E1012").unwrap();
+    assert_eq!(diagnostic["location"]["line"], 1);
 }
 
 #[test]
@@ -329,4 +331,11 @@ fn check_reports_a_duplicate_type_in_one_module() {
             .iter()
             .any(|d| d["code"] == "E1012")
     );
+    let diagnostic = output.1["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "E1012")
+        .unwrap();
+    assert_eq!(diagnostic["location"]["line"], 1);
 }
