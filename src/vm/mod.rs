@@ -12721,10 +12721,16 @@ impl Vm {
                     };
                 }
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
-                    return if field == "value" {
-                        self.read_range_ref_value(&r)
-                    } else {
-                        Ok(Variant::Empty)
+                    return match field.as_str() {
+                        "value" => self.read_range_ref_value(&r),
+                        "address" => Ok(Variant::Str(range_address(&r))),
+                        "row" => Ok(Variant::Integer(
+                            r.single_rect().map_or(0, |area| area.start_row) as i64,
+                        )),
+                        "column" => Ok(Variant::Integer(
+                            r.single_rect().map_or(0, |area| area.start_col) as i64,
+                        )),
+                        _ => Ok(Variant::Empty),
                     };
                 }
                 if let Some(ObjectRef::Collection(id)) = self.object_variables.get(var).cloned() {
@@ -14189,6 +14195,23 @@ fn column_letters(mut col: u32) -> String {
         col = (col - 1) / 26;
     }
     out.chars().rev().collect()
+}
+
+fn range_address(range: &RangeRef) -> String {
+    range
+        .areas
+        .iter()
+        .map(|area| {
+            let start = format!("${}${}", column_letters(area.start_col), area.start_row);
+            let end = format!("${}${}", column_letters(area.end_col), area.end_row);
+            if start == end {
+                start
+            } else {
+                format!("{start}:{end}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 pub fn parse_multi_area_addr(addr: &str) -> Option<Vec<Rect>> {
@@ -18079,6 +18102,19 @@ mod tests {
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
         assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
+    }
+
+    #[test]
+    fn worksheet_change_target_exposes_address_row_and_column() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"C4:D5\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Address = \"$C$4:$D$5\" Then\n        Cells(1,1).Value = Target.Row\n        Cells(1,2).Value = Target.Column\n    End If\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(3));
     }
 
     #[test]

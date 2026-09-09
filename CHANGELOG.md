@@ -29,6 +29,7 @@
 - 矩形のVBA数式書き込みも、全矩形を一つの `Target` として書き込み後に一度だけ通知するようにしました。
 - 複数module実行の `run_sub_multi_with_events` でも、一意な `Worksheet_Change` handlerを値／数式書き込み後に自動通知できるようにしました。重複handlerは拒否します。
 - `Worksheet_Change` handler内の追加変更をbounded queueで順次処理し、累積64件を超える無限イベント連鎖はエラーにするようにしました。
+- `Worksheet_Change(Target As Range)`から `Target.Address`、`Target.Row`、`Target.Column`を参照できるようにしました。
 - `ClearContents` と `Clear` を区別し、追跡済みのセル数値書式・コメントを前者では保持、後者では対象セルから除去するようにしました。
 - Rangeオブジェクトの単一矩形について `Rows.Count` と `Columns.Count` を評価できるようにしました。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls/c:numFmt@formatCode`を`Vm.set_chart_data_labels_number_format`（Python binding／型stub含む）から検証付きで追加／更新できるようにしました。`sourceLinked`と他のdata-label内容を保持し、Chart作成とExcel再openは未完です。
