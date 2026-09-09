@@ -10949,7 +10949,11 @@ impl Vm {
                                 method
                             )
                         })?;
-                        self.clear_range_on_sheet(&range.sheet, area)?;
+                        self.clear_range_on_sheet(
+                            &range.sheet,
+                            area,
+                            method == "clearcontents",
+                        )?;
                     } else {
                         return Err(format!("Range method '{}' is not implemented", method));
                     }
@@ -11049,7 +11053,10 @@ impl Vm {
                     )?;
                 }
             }
-            Stmt::RangeClear { addr, .. } => {
+            Stmt::RangeClear {
+                addr,
+                contents_only,
+            } => {
                 let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeClear: invalid address '{}'", addr))?;
@@ -11062,6 +11069,7 @@ impl Vm {
                         end_row: r2,
                         end_col: c2,
                     },
+                    *contents_only,
                 )?;
             }
             Stmt::RangeOffsetWrite {
@@ -13316,7 +13324,12 @@ impl Vm {
         self.dispatch_worksheet_change_after_range_write(sheet, area)
     }
 
-    fn clear_range_on_sheet(&mut self, sheet: &str, area: Rect) -> Result<(), String> {
+    fn clear_range_on_sheet(
+        &mut self,
+        sheet: &str,
+        area: Rect,
+        contents_only: bool,
+    ) -> Result<(), String> {
         self.check_sheet_not_protected(sheet, sheet)?;
         self.record_edit_history();
         let mut spill_changed = Vec::new();
@@ -13356,6 +13369,23 @@ impl Vm {
         self.workbook_formula_tracking_valid = true;
         self.workbook_formula_structure_dirty = true;
         self.cell_index_dirty = true;
+        if !contents_only {
+            if let Some(formats) = self.cell_number_formats.get_mut(sheet) {
+                formats.retain(|&(row, col), _| !rect_has_cell(area, row, col));
+            }
+            if let Some(formats) = self.pending_number_formats.get_mut(sheet) {
+                formats.retain(|&(row, col), _| !rect_has_cell(area, row, col));
+            }
+            if let Some(attrs) = self.pending_style_attrs.get_mut(sheet) {
+                attrs.retain(|&(row, col), _| !rect_has_cell(area, row, col));
+            }
+            if let Some(copies) = self.pending_style_copies.get_mut(sheet) {
+                copies.retain(|&(row, col), _| !rect_has_cell(area, row, col));
+            }
+            if let Some(comments) = self.comment_cells.get_mut(sheet) {
+                comments.retain(|&(row, col)| !rect_has_cell(area, row, col));
+            }
+        }
         self.dispatch_worksheet_change_after_range_write(sheet, area)
     }
 
@@ -18575,6 +18605,32 @@ mod tests {
         assert_eq!(vm.get_cell(1, 1), Variant::Empty);
         assert_eq!(vm.get_cell(2, 1), Variant::Empty);
         assert_eq!(vm.get_cell(3, 1), Variant::Empty);
+    }
+
+    #[test]
+    fn clear_contents_preserves_cell_metadata_but_clear_removes_it() {
+        let mut vm = Vm::new();
+        vm.cell_number_formats
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((1, 1), "0.00".to_string());
+        vm.comment_cells
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((1, 1));
+        vm.set_cell_value(1, 1, Variant::Integer(7)).unwrap();
+        let contents = parser::parse(
+            "Sub MySub()\n    Range(\"A1\").ClearContents\nEnd Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&contents, "MySub").unwrap();
+        assert_eq!(vm.get_cell_number_format(1, 1), Some("0.00"));
+        assert!(vm.comment_cells["sheet1"].contains(&(1, 1)));
+
+        let clear = parser::parse("Sub MySub()\n    Range(\"A1\").Clear\nEnd Sub\n").unwrap();
+        vm.run_sub(&clear, "MySub").unwrap();
+        assert_eq!(vm.get_cell_number_format(1, 1), None);
+        assert!(!vm.comment_cells["sheet1"].contains(&(1, 1)));
     }
 
     #[test]
