@@ -10905,24 +10905,19 @@ impl Vm {
                 }
             }
             Stmt::RangeClear { addr, .. } => {
-                let active = self.active_sheet.clone();
-                self.check_sheet_not_protected(&active, &active)?;
                 let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeClear: invalid address '{}'", addr))?;
                 let sheet = self.active_sheet.clone();
-                if let Some(cells) = self.sheets.get_mut(&sheet) {
-                    self.cell_tile_cache
-                        .lock()
-                        .expect("cell tile cache mutex poisoned")
-                        .remove(&sheet);
-                    for r in r1..=r2 {
-                        for c in c1..=c2 {
-                            cells.remove(&(r, c));
-                        }
-                    }
-                }
-                self.cell_index_dirty = true;
+                self.clear_range_on_sheet(
+                    &sheet,
+                    Rect {
+                        start_row: r1,
+                        start_col: c1,
+                        end_row: r2,
+                        end_col: c2,
+                    },
+                )?;
             }
             Stmt::RangeOffsetWrite {
                 addr,
@@ -13137,6 +13132,49 @@ impl Vm {
             .entry(sheet.to_string())
             .or_default()
             .extend(spill_changed);
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty = true;
+        self.cell_index_dirty = true;
+        Ok(())
+    }
+
+    fn clear_range_on_sheet(&mut self, sheet: &str, area: Rect) -> Result<(), String> {
+        self.check_sheet_not_protected(sheet, sheet)?;
+        self.record_edit_history();
+        let mut spill_changed = Vec::new();
+        for row in area.start_row..=area.end_row {
+            for col in area.start_col..=area.end_col {
+                self.clear_spill_for_anchor(sheet, (row, col), &mut spill_changed);
+            }
+        }
+        self.formula_plan.remove(sheet);
+        self.formula_dirty_cells.remove(sheet);
+        if self.sheet_cells_mut(sheet).is_none() {
+            return Err(format!("sheet '{}' not found", sheet));
+        }
+        for row in area.start_row..=area.end_row {
+            for col in area.start_col..=area.end_col {
+                self.sheet_cells_mut(sheet)
+                    .expect("sheet existence checked above")
+                    .remove(&(row, col));
+                self.formula_ast_cache
+                    .entry(sheet.to_string())
+                    .or_default()
+                    .remove(&(row, col));
+                self.workbook_formula_dirty
+                    .entry(sheet.to_string())
+                    .or_default()
+                    .insert((row, col));
+            }
+        }
+        self.workbook_formula_dirty
+            .entry(sheet.to_string())
+            .or_default()
+            .extend(spill_changed);
+        self.cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned")
+            .remove(sheet);
         self.workbook_formula_tracking_valid = true;
         self.workbook_formula_structure_dirty = true;
         self.cell_index_dirty = true;
@@ -18287,6 +18325,20 @@ mod tests {
         assert_eq!(vm.get_cell(1, 1), Variant::Empty);
         assert_eq!(vm.get_cell(2, 1), Variant::Empty);
         assert_eq!(vm.get_cell(3, 1), Variant::Empty);
+    }
+
+    #[test]
+    fn range_clear_invalidates_formula_dependencies_and_is_undoable() {
+        let mut vm = Vm::new();
+        vm.set_cell_value(1, 1, Variant::Integer(4)).unwrap();
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        let program = parser::parse("Sub MySub()\n    Range(\"A1\").Clear\nEnd Sub\n").unwrap();
+        vm.run_sub(&program, "MySub").unwrap();
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(1));
+        assert!(vm.undo_edit());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
     }
 
     #[test]
