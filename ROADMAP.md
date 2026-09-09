@@ -172,6 +172,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 MATCH wildcard補完: `~*` / `~?` / `~~`をリテラルwildcardとして扱うbounded DP経路を追加した。criteria系を含む全wildcard仕様のExcel oracle校正は未完。
 - [x] 部分 BUILD: 動的配列のspill衝突・shape・所有権・stale解放・依存更新を主要2D配列関数へ接続し、FILTER等の既存経路も拡張した。LET／LAMBDAを含む全配列関数のshape伝播とExcel oracle校正は未完。
 - [x] G4 local BUILD: spill矩形の衝突検出、anchor所有権、stale解放、undo/redo復元、主要2D配列関数のshape接続とatomic rollbackを実装・回帰検証した。全配列関数のshape伝播とExcel oracleは未完。
+- [x] 部分 MEASURE: 現行環境のLibreOffice oracleを算術8ケースで再実行したが、8件すべてrunner timeout、比較可能な出力は0件だった。これはExcel oracleや数式一致率の証拠には数えず、Range/Cellsを含む既知のoracle実行境界として記録した。[local oracle記録](docs/measurements/formula-oracle-local-2026-09-10.md)
 - [ ] MEASURE: Excel／EPPlus／Aspose.Cellsはversion・計算設定・license利用条件を固定して比較。実行していない公式対応表と、実測一致率を分ける。
 
 ### G5 — 保存メモリの段階削減（X4 / X5）
