@@ -47,6 +47,15 @@ CASES = {
     "replace": ('=REPLACE("elixcee",4,3,"X")', "eliXe"),
     "date": ("=DATE(2024,2,29)", 45351),
     "date1904": ("=DATE(2024,2,29)", 45351),
+    "days": ("=DAYS(DATE(2024,3,1),DATE(2024,2,29))", 1),
+    "year": ("=YEAR(DATE(2024,2,29))", 2024),
+    "month": ("=MONTH(DATE(2024,2,29))", 2),
+    "day": ("=DAY(DATE(2024,2,29))", 29),
+    "edate": ("=EDATE(DATE(2024,1,31),1)", 45351),
+    "eomonth": ("=EOMONTH(DATE(2024,2,1),0)", 45351),
+    "floor": ("=FLOOR(5.7,2)", 4),
+    "ceiling": ("=CEILING(5.1,2)", 6),
+    "mround": ("=MROUND(10,3)", 9),
     "left": ('=LEFT("elixcee",3)', "eli"),
     "mid": ('=MID("hello",2,3)', "ell"),
     "len": ('=LEN("hello")', 5),
@@ -66,7 +75,10 @@ CASES = {
 # LibreOffice 26.2.5 on this host leaves IFNA results as #N/A, including the
 # direct NA() form. Keep the case in the generated workbook as a visible
 # probe, but do not misclassify this oracle limitation as an engine mismatch.
-ORACLE_UNSUPPORTED = {"ifna", "xmatch", "textjoin"}
+# LibreOffice 26.2.5 on this host also leaves DAYS() as #NAME? in this
+# generated workbook. Keep it visible as a probe, but exclude it from the
+# cross-engine count for the same reason as the other build-specific gaps.
+ORACLE_UNSUPPORTED = {"days", "ifna", "xmatch", "textjoin"}
 
 
 def serial_or_value(value):
@@ -109,7 +121,7 @@ def run(soffice: str, with_elixcee: bool = False) -> dict:
             sheet.cell(row=row, column=1, value=name)
             sheet.cell(row=row, column=2, value=formula)
             sheet.cell(row=row, column=3, value=expected)
-            if name == "date1904":
+            if name in {"date1904", "edate", "eomonth"}:
                 sheet.cell(row=row, column=2).number_format = "yyyy-mm-dd"
         input_book.calculation.fullCalcOnLoad = True
         input_book.calculation.forceFullCalc = True

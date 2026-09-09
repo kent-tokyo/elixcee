@@ -12,12 +12,13 @@ independent oracle, not Microsoft Excel.
 
 - Host: macOS arm64
 - Backend: `/opt/homebrew/bin/soffice`
-- Cases: 42 (the original set plus logical, rounding, lookup, criteria, text,
-  numeric, and string-normalization probes; `IFNA`, `XMATCH`, and `TEXTJOIN`
+- Cases: 51 (the original set plus logical, rounding, lookup, criteria, text,
+  numeric, date-boundary, and string-normalization probes; `DAYS`, `IFNA`,
+  `XMATCH`, and `TEXTJOIN`
   are retained as oracle probes)
-- Comparable results: 39
-- Matches: 39
-- Skipped: 3 (`IFNA`, `XMATCH`, and `TEXTJOIN`, because this LibreOffice build does not evaluate these probes)
+- Comparable results: 47
+- Matches: 47
+- Skipped: 4 (`DAYS`, `IFNA`, `XMATCH`, and `TEXTJOIN`, because this LibreOffice build does not evaluate these probes)
 - Mismatches: 0
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
 
@@ -25,14 +26,14 @@ The harness exits with status 1 if any comparable case mismatches. Oracle
 unsupported probes are reported in `skipped` and are not silently counted as
 matches; this run exited with status 0.
 
-The expanded 42-case command was rerun after the later local changes using a
+The expanded 51-case command was rerun after the later local changes using a
 dedicated writable temporary directory (`TMPDIR=/private/tmp/elixcee-formula-oracle-run`)
-because the default temporary directories were full or unavailable. It again
-reported 39/39 comparable matches, 3 explicit skips, and zero mismatches.
+because the default temporary directories were full or unavailable. It
+reported 47/47 comparable matches, 4 explicit skips, and zero mismatches.
 
 The same generated workbook was then recalculated by the installed elixcee
 wheel with `--with-elixcee`. After the documented date-serial normalization,
-elixcee matched all 39 comparable probes (39/39); the same three probes were
+elixcee matched all 47 comparable probes (47/47); the same four probes were
 skipped because the LibreOffice oracle did not produce comparable values.
 The wheel was elixcee 1.0.5 on CPython 3.13.6, macOS 26.5.2 arm64.
 The binding-specific Error object was normalized to its displayed error code
