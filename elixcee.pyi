@@ -513,6 +513,12 @@ class Vm:
         """Update an existing shape's solid fill with RGB or ARGB hex color."""
         ...
 
+    def set_drawing_shape_line_color(
+        self, drawing_part: str, anchor_index: int, color: str
+    ) -> None:
+        """Update an existing shape line's solid color with RGB or ARGB hex."""
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 

@@ -1504,6 +1504,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to an existing drawing shape's line color.
+    fn set_drawing_shape_line_color(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        color: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_shape_line_color(drawing_part, anchor_index, color)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Move a sheet to an absolute 0-based position among the workbook's sheets.
     ///
     /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
@@ -5669,6 +5681,82 @@ fn rewrite_drawing_shape_fill(
     Ok(out)
 }
 
+fn rewrite_drawing_shape_line_color(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, String>,
+) -> Result<String, String> {
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
+    let mut out = xml.to_string();
+    for (&anchor_index, color) in ordered {
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=anchor_index {
+            let candidates = [
+                ("<xdr:twoCellAnchor>", "</xdr:twoCellAnchor>"),
+                ("<xdr:twoCellAnchor ", "</xdr:twoCellAnchor>"),
+                ("<xdr:oneCellAnchor>", "</xdr:oneCellAnchor>"),
+                ("<xdr:oneCellAnchor ", "</xdr:oneCellAnchor>"),
+                ("<xdr:absoluteAnchor>", "</xdr:absoluteAnchor>"),
+                ("<xdr:absoluteAnchor ", "</xdr:absoluteAnchor>"),
+            ];
+            let (open, closing) = candidates
+                .iter()
+                .filter_map(|(opening, closing)| {
+                    out[cursor..]
+                        .find(opening)
+                        .map(|offset| (cursor + offset, *closing))
+                })
+                .min_by_key(|(position, _)| *position)
+                .ok_or_else(|| format!("drawing anchor index {anchor_index} is out of range"))?;
+            let close_rel = out[open..]
+                .find(closing)
+                .ok_or_else(|| "drawing anchor is unterminated".to_string())?;
+            let close = open + close_rel + closing.len();
+            if current == anchor_index {
+                selected = Some((open, close));
+                break;
+            }
+            cursor = close;
+        }
+        let (open, close) = selected.expect("anchor selection loop always selects its index");
+        let anchor = &out[open..close];
+        let line = anchor
+            .find("<a:ln")
+            .ok_or_else(|| "drawing shape is missing <a:ln>".to_string())?;
+        let line_end = line
+            + anchor[line..]
+                .find("</a:ln>")
+                .ok_or_else(|| "drawing shape line is unterminated".to_string())?;
+        let line_body = &anchor[line..line_end];
+        let color_rel = line_body
+            .find("<a:srgbClr")
+            .ok_or_else(|| "drawing shape line is missing <a:srgbClr>".to_string())?;
+        let color_start = line + color_rel;
+        let tag_end = color_start
+            + anchor[color_start..]
+                .find('>')
+                .ok_or_else(|| "drawing line RGB color is unterminated".to_string())?;
+        let tag = &anchor[color_start..=tag_end];
+        let attr_rel = tag
+            .find("val=")
+            .ok_or_else(|| "drawing line RGB color is missing val".to_string())?;
+        let value_start = color_start + attr_rel + "val=".len();
+        let quote = anchor.as_bytes()[value_start];
+        if quote != b'"' && quote != b'\'' {
+            return Err("drawing line RGB color val attribute is malformed".to_string());
+        }
+        let value_end = anchor[value_start + 1..]
+            .find(quote as char)
+            .map(|rel| value_start + 1 + rel)
+            .ok_or_else(|| "drawing line RGB color val attribute is unterminated".to_string())?;
+        let mut replacement = anchor.to_string();
+        replacement.replace_range(value_start + 1..value_end, &color[2..]);
+        out.replace_range(open..close, &replacement);
+    }
+    Ok(out)
+}
+
 /// Rewrites only the worksheet source sheet attribute in pivot cache definitions.
 /// Pivot cache contents and table-based sources are left byte-for-byte unchanged.
 fn rewrite_pivot_cache_sheet_refs(
@@ -6222,6 +6310,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_drawing_shape_rotation_edits = !vm.drawing_shape_rotation_edits.is_empty();
     let has_drawing_shape_flip_edits = !vm.drawing_shape_flip_edits.is_empty();
     let has_drawing_shape_fill_edits = !vm.drawing_shape_fill_edits.is_empty();
+    let has_drawing_shape_line_edits = !vm.drawing_shape_line_edits.is_empty();
     // Keep writer-owned static package parts regenerated. A source raw copy can
     // carry source-only defaults or relationship-id ordering that is valid in
     // isolation but diverges from the writer's carried relationship contract.
@@ -6343,6 +6432,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(drawing_part) {
                 return Err(format!(
                     "drawing shape fill edit rejected: source workbook has no {drawing_part}"
+                ));
+            }
+        }
+        for drawing_part in vm.drawing_shape_line_edits.keys() {
+            if !raw_entries.contains_key(drawing_part) {
+                return Err(format!(
+                    "drawing shape line edit rejected: source workbook has no {drawing_part}"
                 ));
             }
         }
@@ -6644,7 +6740,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_drawing_shape_hidden_edits
                 || has_drawing_shape_rotation_edits
                 || has_drawing_shape_flip_edits
-                || has_drawing_shape_fill_edits)
+                || has_drawing_shape_fill_edits
+                || has_drawing_shape_line_edits)
                 && (vm.drawing_anchor_edits.contains_key(&name)
                     || vm.drawing_shape_name_edits.contains_key(&name)
                     || vm.drawing_shape_description_edits.contains_key(&name)
@@ -6652,7 +6749,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || vm.drawing_shape_hidden_edits.contains_key(&name)
                     || vm.drawing_shape_rotation_edits.contains_key(&name)
                     || vm.drawing_shape_flip_edits.contains_key(&name)
-                    || vm.drawing_shape_fill_edits.contains_key(&name))
+                    || vm.drawing_shape_fill_edits.contains_key(&name)
+                    || vm.drawing_shape_line_edits.contains_key(&name))
                 && name.starts_with("xl/drawings/")
                 && name.ends_with(".xml")
                 && !name.contains("/_rels/")
@@ -6713,6 +6811,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 } else {
                     drawing
                 };
+                let drawing = if let Some(edits) = vm.drawing_shape_line_edits.get(&name) {
+                    rewrite_drawing_shape_line_color(&drawing, edits)?
+                } else {
+                    drawing
+                };
                 drawing.into_bytes()
             } else {
                 bytes
@@ -6745,7 +6848,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || has_drawing_shape_hidden_edits
                     || has_drawing_shape_rotation_edits
                     || has_drawing_shape_flip_edits
-                    || has_drawing_shape_fill_edits)
+                    || has_drawing_shape_fill_edits
+                    || has_drawing_shape_line_edits)
                     && (vm.drawing_anchor_edits.contains_key(&name)
                         || vm.drawing_shape_name_edits.contains_key(&name)
                         || vm.drawing_shape_description_edits.contains_key(&name)
@@ -6753,7 +6857,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                         || vm.drawing_shape_hidden_edits.contains_key(&name)
                         || vm.drawing_shape_rotation_edits.contains_key(&name)
                         || vm.drawing_shape_flip_edits.contains_key(&name)
-                        || vm.drawing_shape_fill_edits.contains_key(&name))
+                        || vm.drawing_shape_fill_edits.contains_key(&name)
+                        || vm.drawing_shape_line_edits.contains_key(&name))
                     && name.starts_with("xl/drawings/")
                     && name.ends_with(".xml"))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
@@ -10183,6 +10288,19 @@ mod tests {
         let actual = rewrite_drawing_shape_fill(source, &edits).unwrap();
         assert!(actual.contains(r#"<a:solidFill><a:srgbClr val="112233"/></a:solidFill>"#));
         assert!(actual.contains("<a:ln/>") && actual.contains("<xdr:spPr>"));
+    }
+
+    #[test]
+    fn drawing_shape_line_rewriter_updates_only_existing_line_color() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, "FF445566".to_string());
+        let source = concat!(
+            r#"<xdr:wsDr><xdr:twoCellAnchor><xdr:sp><xdr:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></xdr:spPr></xdr:sp></xdr:twoCellAnchor>"#,
+            r#"<xdr:twoCellAnchor><xdr:sp><xdr:spPr><a:ln><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></xdr:spPr></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"#,
+        );
+        let actual = rewrite_drawing_shape_line_color(source, &edits).unwrap();
+        assert!(actual.contains(r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/>"#));
+        assert!(actual.contains(r#"<a:srgbClr val="FFFFFF"/>"#));
     }
 
     #[test]
