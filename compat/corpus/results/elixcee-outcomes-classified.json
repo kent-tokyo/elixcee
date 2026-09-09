@@ -1,9 +1,9 @@
 {
   "total": 581,
   "counts": {
-    "PASS": 570,
+    "PASS": 572,
     "EXPECTED_RUNTIME_ERROR": 8,
-    "EXPECTED_UNSUPPORTED": 2,
+    "EXPECTED_UNSUPPORTED": 0,
     "NONDETERMINISTIC": 1,
     "MISMATCH": 0,
     "UNEXPLAINED": 0
@@ -1820,14 +1820,12 @@
     {
       "id": "unsupported_functions_0001",
       "category": "unsupported_functions",
-      "verdict": "EXPECTED_UNSUPPORTED",
-      "reason": "Application.WorksheetFunction.TextJoin — deliberately unimplemented worksheet function (this scenario's own category name is 'unsupported_functions'; it exists specifically to exercise the not-implemented path, not to pass)."
+      "verdict": "PASS"
     },
     {
       "id": "unsupported_functions_0002",
       "category": "unsupported_functions",
-      "verdict": "EXPECTED_UNSUPPORTED",
-      "reason": "Application.WorksheetFunction.Xlookup — deliberately unimplemented worksheet function, same reasoning as unsupported_functions_0001."
+      "verdict": "PASS"
     },
     {
       "id": "nondeterministic_0001",

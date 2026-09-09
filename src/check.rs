@@ -2333,21 +2333,11 @@ mod tests {
     }
 
     #[test]
-    fn a_deliberately_unimplemented_worksheet_function_is_not_flagged() {
-        // wsf_-prefixed names always reach the real dispatch table at
-        // runtime (`eval_wsf`'s own catch-all), never the generic "Unknown
-        // VBA function" fallback — `is_known_builtin_function` (and so
-        // `is_resolvable`) already treats every not-actually-implemented
-        // wsf_ name as unresolvable, and this compile-check inherits that
-        // via `is_resolvable` too, so a not-yet-implemented
-        // WorksheetFunction call is reported (not silently missed) — this
-        // test exists to pin the exact wording, which must come from
-        // `vm::builtin_call_error` (the real dispatch), not be invented.
-        let (msg, _) = compile_errors(
+    fn an_implemented_worksheet_function_is_not_a_compile_error() {
+        let msg = compile_errors(
             "Sub Main()\n    x = WorksheetFunction.TextJoin(\",\", True, \"a\", \"b\")\nEnd Sub\n",
-        )
-        .unwrap();
-        assert_eq!(msg, "WorksheetFunction.textjoin is not implemented");
+        );
+        assert!(msg.is_none());
     }
 
     #[test]

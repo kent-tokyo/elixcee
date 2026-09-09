@@ -14572,6 +14572,51 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
                 .sum();
             Ok(as_int_if_whole(total))
         }
+        "textjoin" => {
+            if vals.len() < 3 {
+                return Err("WorksheetFunction.TextJoin requires at least 3 arguments".into());
+            }
+            let delimiter = vba_to_str(&vals[0]);
+            let ignore_empty = is_truthy(&vals[1]);
+            let parts = flat_all(&vals[2..])
+                .into_iter()
+                .map(|value| vba_to_str(&value))
+                .filter(|value| !ignore_empty || !value.is_empty())
+                .collect::<Vec<_>>();
+            Ok(Variant::Str(parts.join(&delimiter)))
+        }
+        "xlookup" => {
+            if !(3..=6).contains(&vals.len()) {
+                return Err("WorksheetFunction.XLookup requires 3 to 6 arguments".into());
+            }
+            let key = &vals[0];
+            let lookup = flat_all(std::slice::from_ref(&vals[1]));
+            let result = flat_all(std::slice::from_ref(&vals[2]));
+            if lookup.len() != result.len() {
+                return Err(
+                    "WorksheetFunction.XLookup lookup and return arrays differ in size".into(),
+                );
+            }
+            let not_found = vals.get(3).cloned();
+            let match_mode = vals.get(4).map(to_f64_excel).transpose()?.unwrap_or(0.0);
+            let search_mode = vals.get(5).map(to_f64_excel).transpose()?.unwrap_or(1.0);
+            if match_mode != 0.0 || !(search_mode == 1.0 || search_mode == -1.0) {
+                return Err(
+                    "WorksheetFunction.XLookup supports exact match and search_mode 1/-1".into(),
+                );
+            }
+            let indices: Box<dyn Iterator<Item = usize>> = if search_mode == -1.0 {
+                Box::new((0..lookup.len()).rev())
+            } else {
+                Box::new(0..lookup.len())
+            };
+            for index in indices {
+                if vba_eq(&lookup[index], key) {
+                    return Ok(result[index].clone());
+                }
+            }
+            Ok(not_found.unwrap_or(Variant::Error(ExcelError::NA)))
+        }
         "round" => {
             if vals.is_empty() {
                 return Err("WorksheetFunction.Round requires arguments".into());
@@ -14667,10 +14712,7 @@ pub fn is_known_builtin_function(name: &str) -> bool {
 /// Used by `check::compile_check_errors` so its pre-flight rejection of an
 /// unresolvable `Expr::FuncCall` reports the same wording running it would
 /// have produced, instead of inventing separate text that could drift from
-/// a dispatch arm's own message — `wsf_textjoin`, for instance, fails
-/// inside `eval_wsf` with "WorksheetFunction.textjoin is not implemented",
-/// not the generic "Unknown VBA function" `eval_vba_func`'s own top-level
-/// fallback arm uses.
+/// a dispatch arm's own message.
 pub fn builtin_call_error(name: &str) -> Option<String> {
     let mut vm = Vm::new();
     vm.eval_vba_func(name, &[]).err()
@@ -17266,6 +17308,23 @@ mod tests {
             "Sub MySub()\n    Cells(1,1).Value = \"a\"\n    Cells(2,1).Value = \"b\"\n    Cells(3,1).Value = \"c\"\n    pos = WorksheetFunction.Match(\"b\", Range(\"A1:A3\"), 0)\nEnd Sub\n",
         );
         assert_eq!(vm.variables["pos"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn test_wsf_textjoin_flattens_ranges_and_skips_empty_values() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"A\"\n    Cells(2,1).Value = \"\"\n    Cells(3,1).Value = \"C\"\n    s = WorksheetFunction.TextJoin(\",\", True, Range(\"A1:A3\"))\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["s"], Variant::Str("A,C".into()));
+    }
+
+    #[test]
+    fn test_wsf_xlookup_exact_and_reverse_search() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"A\"\n    Cells(2,1).Value = \"B\"\n    Cells(3,1).Value = \"B\"\n    Cells(1,2).Value = 10\n    Cells(2,2).Value = 20\n    Cells(3,2).Value = 30\n    first = WorksheetFunction.XLookup(\"B\", Range(\"A1:A3\"), Range(\"B1:B3\"))\n    last = WorksheetFunction.XLookup(\"B\", Range(\"A1:A3\"), Range(\"B1:B3\"), -1, 0, -1)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["first"], Variant::Integer(20));
+        assert_eq!(vm.variables["last"], Variant::Integer(30));
     }
 
     // ── Range("A1:A10").Value 多セル読み取り ─────────────────────────────────
