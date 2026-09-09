@@ -6,6 +6,10 @@
 
 次の変更はここに記録します。
 
+- G2dの限定Chart系列編集を拡張し、既存要素のsmooth、負値反転表示、可視性（`delete`）をRust/Python APIと型stubから更新できるようにしました。系列・cache・Drawing relationshipを保持し、Chart作成、cache再計算、Excel再openは未完です。実Excel由来fixtureの一時copyによるload/save/ZIP再読込回帰を追加しました。
+
+- G4の独立formula oracleを72ケースへ拡張しました。LibreOfficeとelixceeの比較可能65ケースは65/65一致し、LibreOffice buildが評価しない6ケースは明示的にskipとして保存しています。結果JSONを`compat/corpus/results/formula-independent-20260910.json`へ固定しました。
+
 - G2dの限定Drawing編集として、既存shapeの`<a:prstDash>`を`Vm.set_drawing_shape_line_dash`（Python binding／型stub含む）からDrawingML標準値で更新できるようにしました。line作成、custom dash、Excel再openは未完です。
 
 - 複数moduleの`Worksheet_Change`自動dispatchで、表示名に加えて既存worksheet XMLの`sheetPr@codeName`をmodule名解決に利用するようにしました。codeNameはOOXMLから読み取る範囲に限定し、VBAプロジェクトの完全なExcelイベント意味論とExcel実機oracleは未完です。
