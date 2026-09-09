@@ -23775,6 +23775,64 @@ End Sub
     }
 
     #[test]
+    fn load_workbook_file_propagates_date1904_metadata_to_vm() {
+        // Start from a valid workbook produced by the project writer, then
+        // add the standard workbookPr flag while preserving every other ZIP
+        // part. This exercises the same path used by real .xlsx files.
+        use std::io::{Cursor, Read, Write};
+        use zip::write::SimpleFileOptions;
+
+        let base_path = std::env::temp_dir().join(format!(
+            "elixcee_vm_date1904_base_{}.xlsx",
+            std::process::id()
+        ));
+        let out_path =
+            std::env::temp_dir().join(format!("elixcee_vm_date1904_{}.xlsx", std::process::id()));
+        let mut source_vm = Vm::new();
+        source_vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        crate::save_workbook(&source_vm, base_path.to_str().unwrap()).unwrap();
+
+        let input = std::fs::read(&base_path).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(input)).unwrap();
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if name == "xl/workbook.xml" {
+                let xml = String::from_utf8(bytes).unwrap();
+                let marker = xml.find('>').unwrap();
+                let mut updated = String::with_capacity(xml.len() + 32);
+                updated.push_str(&xml[..=marker]);
+                updated.push_str("<workbookPr date1904=\"1\"/>");
+                updated.push_str(&xml[marker + 1..]);
+                bytes = updated.into_bytes();
+            }
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        let rewritten = writer.finish().unwrap().into_inner();
+        std::fs::write(&out_path, rewritten).unwrap();
+
+        let mut vm = Vm::new();
+        vm.load_workbook_file(out_path.to_str().unwrap()).unwrap();
+        assert!(vm.workbook_date1904());
+        assert!(vm.fork().workbook_date1904());
+
+        std::fs::remove_file(&base_path).unwrap();
+        std::fs::remove_file(&out_path).unwrap();
+    }
+
+    #[test]
     fn populate_from_sheets_lowercases_a_mixed_case_sheet_name() {
         // Regression test for the bug found while extracting
         // `load_workbook_file` out of main.rs: real Excel files commonly
