@@ -139,3 +139,14 @@ command was rerun against the now-built target with output suppressed to
 confirm the same successful terminal result. This is macOS local evidence;
 three-OS resource scaling, Excel reopen, and external comparisons remain
 outside its scope.
+
+The matching current-checkout static gate also passed:
+
+```sh
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0' \
+  cargo clippy --workspace --all-targets --offline -- -D warnings
+```
+
+Clippy completed with zero warnings, including the `elixcee-wasm` workspace
+member. This updates the local static-analysis evidence for the current
+candidate; it does not change the external compatibility boundaries above.
