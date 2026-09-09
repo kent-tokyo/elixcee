@@ -874,6 +874,12 @@ pub(crate) struct ChartLegendOverlayEdit {
     pub overlay: bool,
 }
 
+/// A bounded edit to the first chart data-labels `showVal` flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChartDataLabelsEdit {
+    pub show_value: bool,
+}
+
 /// A bounded edit to an existing chart style (`1..=48`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChartStyleEdit {
@@ -1291,6 +1297,8 @@ pub struct Vm {
     pub(crate) chart_style_edits: HashMap<String, ChartStyleEdit>,
     /// Explicit chart legend-overlay edits keyed by chart part.
     pub(crate) chart_legend_overlay_edits: HashMap<String, ChartLegendOverlayEdit>,
+    /// Explicit chart data-label edits keyed by chart part.
+    pub(crate) chart_data_labels_edits: HashMap<String, ChartDataLabelsEdit>,
     /// Explicit chart-axis title edits keyed by chart part and axis index.
     pub(crate) chart_axis_title_edits: HashMap<String, HashMap<usize, String>>,
     /// Explicit Pivot worksheet source edits keyed by cache definition part.
@@ -1759,6 +1767,7 @@ impl Vm {
             chart_legend_position_edits: HashMap::new(),
             chart_style_edits: HashMap::new(),
             chart_legend_overlay_edits: HashMap::new(),
+            chart_data_labels_edits: HashMap::new(),
             chart_axis_title_edits: HashMap::new(),
             pivot_source_edits: HashMap::new(),
             drawing_anchor_edits: HashMap::new(),
@@ -7600,6 +7609,23 @@ impl Vm {
         }
         self.chart_legend_overlay_edits
             .insert(chart_part.to_string(), ChartLegendOverlayEdit { overlay });
+        Ok(())
+    }
+
+    /// Queue an edit to the first existing chart data-labels `showVal` flag.
+    pub fn set_chart_data_labels_show_value(
+        &mut self,
+        chart_part: &str,
+        show_value: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .insert(chart_part.to_string(), ChartDataLabelsEdit { show_value });
         Ok(())
     }
 

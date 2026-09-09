@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache, Chart-title/style/axis-title/legend-overlay, two-cell Drawing-anchor/shape-name/hidden, worksheet-backed
+Chart-series-cache, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, and Drawing
 alternative-text edits.
 It is not evidence of
@@ -32,6 +32,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   axes are zero-based in document order.
 - `Vm.set_chart_legend_overlay(chart_part, overlay)` rewrites or adds only the
   first legend's `overlay` flag; a missing legend is rejected.
+- `Vm.set_chart_data_labels_show_value(chart_part, show_value)` rewrites or
+  adds only the first existing `<c:dLbls showVal>` flag; a missing data-label
+  element is rejected.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`

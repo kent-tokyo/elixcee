@@ -1221,6 +1221,17 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to the first chart data-labels show-value flag.
+    fn set_chart_data_labels_show_value(
+        &mut self,
+        chart_part: &str,
+        show_value: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_data_labels_show_value(chart_part, show_value)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -4706,6 +4717,47 @@ fn rewrite_chart_legend_overlay(xml: &str, overlay: bool) -> Result<String, Stri
     Ok(out)
 }
 
+/// Rewrites the first chart data-labels `showVal` attribute. Data-label
+/// creation and other label options remain outside this bounded operation.
+fn rewrite_chart_data_labels_show_value(xml: &str, show_value: bool) -> Result<String, String> {
+    let open = xml.find("<c:dLbls").filter(|&position| {
+        xml.as_bytes()
+            .get(position + b"<c:dLbls".len())
+            .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+    });
+    let Some(open) = open else {
+        return Err("chart data-labels element is missing".to_string());
+    };
+    let end = xml[open..]
+        .find('>')
+        .map(|offset| open + offset + 1)
+        .ok_or_else(|| "chart data-labels element is unterminated".to_string())?;
+    let tag = &xml[open..end];
+    let value = if show_value { "1" } else { "0" };
+    let mut replacement = tag.to_string();
+    if let Some(attr) = tag.find("showVal=") {
+        let value_start = attr + "showVal=".len();
+        let quote = tag.as_bytes()[value_start];
+        if quote != b'"' && quote != b'\'' {
+            return Err("chart data-labels showVal attribute is malformed".to_string());
+        }
+        let value_end = tag[value_start + 1..]
+            .find(quote as char)
+            .map(|offset| value_start + 1 + offset)
+            .ok_or_else(|| "chart data-labels showVal attribute is unterminated".to_string())?;
+        replacement.replace_range(value_start + 1..value_end, value);
+    } else {
+        let insert_at = tag
+            .rfind("/>")
+            .or_else(|| tag.rfind('>'))
+            .ok_or_else(|| "chart data-labels element is malformed".to_string())?;
+        replacement.insert_str(insert_at, &format!(" showVal=\"{value}\""));
+    }
+    let mut out = xml.to_string();
+    out.replace_range(open..end, &replacement);
+    Ok(out)
+}
+
 /// Rewrites or adds the chart-space style number while preserving all other
 /// chart XML, including series, titles, legends, and extension content.
 fn rewrite_chart_style(xml: &str, style: u32) -> Result<String, String> {
@@ -5532,6 +5584,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_chart_style_edits = !vm.chart_style_edits.is_empty();
     let has_chart_axis_title_edits = !vm.chart_axis_title_edits.is_empty();
     let has_chart_legend_overlay_edits = !vm.chart_legend_overlay_edits.is_empty();
+    let has_chart_data_labels_edits = !vm.chart_data_labels_edits.is_empty();
     let has_pivot_source_edits = !vm.pivot_source_edits.is_empty();
     let has_drawing_anchor_edits = !vm.drawing_anchor_edits.is_empty();
     let has_drawing_shape_name_edits = !vm.drawing_shape_name_edits.is_empty();
@@ -5589,6 +5642,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(chart_part) {
                 return Err(format!(
                     "chart legend overlay edit rejected: source workbook has no {chart_part}"
+                ));
+            }
+        }
+        for chart_part in vm.chart_data_labels_edits.keys() {
+            if !raw_entries.contains_key(chart_part) {
+                return Err(format!(
+                    "chart data-labels edit rejected: source workbook has no {chart_part}"
                 ));
             }
         }
@@ -5812,7 +5872,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_chart_legend_position_edits
                 || has_chart_style_edits
                 || has_chart_axis_title_edits
-                || has_chart_legend_overlay_edits)
+                || has_chart_legend_overlay_edits
+                || has_chart_data_labels_edits)
                 && name.starts_with("xl/charts/")
             {
                 let bytes = if bytes.is_empty() {
@@ -5845,6 +5906,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 }
                 if let Some(edit) = vm.chart_legend_overlay_edits.get(&name) {
                     chart = rewrite_chart_legend_overlay(&chart, edit.overlay)?;
+                }
+                if let Some(edit) = vm.chart_data_labels_edits.get(&name) {
+                    chart = rewrite_chart_data_labels_show_value(&chart, edit.show_value)?;
                 }
                 chart.into_bytes()
             } else if (allow_sheet_rename || has_pivot_source_edits)
@@ -5948,7 +6012,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || has_chart_legend_position_edits
                     || has_chart_style_edits
                     || has_chart_axis_title_edits
-                    || has_chart_legend_overlay_edits)
+                    || has_chart_legend_overlay_edits
+                    || has_chart_data_labels_edits)
                     && name.starts_with("xl/charts/")
                     && name.ends_with(".xml"))
                 || (has_pivot_source_edits
@@ -9074,6 +9139,34 @@ mod tests {
         assert!(
             actual.contains("<c:overlay val=\"0\"/>")
                 && actual.contains("<c:legendPos val=\"r\"/>")
+        );
+    }
+
+    #[test]
+    fn chart_data_labels_rewriter_updates_or_adds_show_value() {
+        let source = r#"<c:chart><c:plotArea><c:dLbls showVal="0"><c:showLegendKey val="1"/></c:dLbls></c:plotArea></c:chart>"#;
+        let actual = rewrite_chart_data_labels_show_value(source, true).unwrap();
+        assert!(actual.contains("<c:dLbls showVal=\"1\"><c:showLegendKey val=\"1\"/></c:dLbls>"));
+        let actual = rewrite_chart_data_labels_show_value(&actual, false).unwrap();
+        assert!(
+            actual.contains("<c:dLbls showVal=\"0\">")
+                && actual.contains("<c:showLegendKey val=\"1\"/>")
+        );
+
+        let actual = rewrite_chart_data_labels_show_value(
+            "<c:chart><c:dLbls><c:showVal val=\"0\"/></c:dLbls></c:chart>",
+            true,
+        )
+        .unwrap();
+        assert!(
+            actual.contains("<c:dLbls showVal=\"1\">") && actual.contains("<c:showVal val=\"0\"/>")
+        );
+    }
+
+    #[test]
+    fn chart_data_labels_rewriter_rejects_missing_element() {
+        assert!(
+            rewrite_chart_data_labels_show_value("<c:chart><c:plotArea/></c:chart>", true).is_err()
         );
     }
 
