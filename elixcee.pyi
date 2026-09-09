@@ -163,7 +163,7 @@ class Vm:
         ...
 
     def run_with_events(self, vba_code: str, macro_name: str, timeout_ms: int | None = None) -> None:
-        """Run ``Workbook_Open`` first when present, then execute *macro_name*."""
+        """Opt into ``Workbook_Open`` and bounded ``Worksheet_Change`` dispatch."""
         ...
 
     def run_event(self, vba_code: str, event_name: str, timeout_ms: int | None = None) -> bool:
@@ -173,7 +173,11 @@ class Vm:
     def run_worksheet_change(
         self, vba_code: str, target_address: str, timeout_ms: int | None = None
     ) -> bool:
-        """Dispatch ``Worksheet_Change(Target)`` with an explicit A1 target range."""
+        """Dispatch ``Worksheet_Change(Target)`` with an explicit A1 target range.
+
+        The handler can read ``Target.Value``, ``Address``, ``Row``, ``Column``,
+        ``Rows.Count``, and ``Columns.Count`` for the supported single-area model.
+        """
         ...
 
     def set_enable_events(self, enabled: bool) -> None:
@@ -188,7 +192,7 @@ class Vm:
     def set_cell(
         self, row: int, col: int, value: Any, trigger_events: bool = False
     ) -> None:
-        """Write a value and optionally dispatch cached Worksheet_Change."""
+        """Write a value and optionally dispatch cached ``Worksheet_Change``."""
         ...
 
     def get_cell(self, row: int, col: int) -> Any:
