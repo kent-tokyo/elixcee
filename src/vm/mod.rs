@@ -8611,6 +8611,42 @@ impl Vm {
                 let reference = self
                     .object_target_ref(target)?
                     .ok_or_else(|| format!("Object method '{}' requires an object", method))?;
+                if let ObjectRef::Worksheet(key) = &reference {
+                    return match method.as_str() {
+                        "range" => match args.as_slice() {
+                            [Expr::Str(addr)] => {
+                                let areas = parse_multi_area_addr(addr).ok_or_else(|| {
+                                    format!("Worksheet.Range: invalid address '{}'", addr)
+                                })?;
+                                Ok(ObjectRef::Range(RangeRef {
+                                    sheet: key.clone(),
+                                    areas,
+                                }))
+                            }
+                            _ => Err("Worksheet.Range requires one string address".to_string()),
+                        },
+                        "cells" | "item" => match args.as_slice() {
+                            [row, col] => {
+                                let row = to_cell_index(self.eval_expr(row)?, "row")?;
+                                let col = to_cell_index(self.eval_expr(col)?, "col")?;
+                                Ok(ObjectRef::Range(RangeRef::single(
+                                    key.clone(),
+                                    Rect {
+                                        start_row: row,
+                                        start_col: col,
+                                        end_row: row,
+                                        end_col: col,
+                                    },
+                                )))
+                            }
+                            _ => Err(format!("Worksheet.{} requires row and column", method)),
+                        },
+                        _ => Err(format!(
+                            "Worksheet method '{}' does not return an object",
+                            method
+                        )),
+                    };
+                }
                 if let ObjectRef::Range(range) = reference {
                     return match method.as_str() {
                         "cells" | "item" => {
@@ -18359,23 +18395,12 @@ mod tests {
     #[test]
     fn range_object_clear_uses_captured_sheet_and_shared_undo_path() {
         let program = parser::parse(
-            "Sub MySub()\n    r.Value = 8\n    Sheets(\"Sheet1\").Activate\n    r.ClearContents\nEnd Sub\n",
+            "Sub MySub()\n    Set ws = Sheets(\"Sheet2\")\n    Set r = ws.Range(\"A1\")\n    \
+             r.Value = 8\n    Sheets(\"Sheet1\").Activate\n    r.ClearContents\nEnd Sub\n",
         )
         .unwrap();
         let mut vm = Vm::new();
         vm.ensure_sheet("sheet2");
-        vm.object_variables.insert(
-            "r".to_string(),
-            ObjectRef::Range(RangeRef::single(
-                "sheet2".to_string(),
-                Rect {
-                    start_row: 1,
-                    start_col: 1,
-                    end_row: 1,
-                    end_col: 1,
-                },
-            )),
-        );
         vm.run_sub(&program, "MySub").unwrap();
         assert_eq!(vm.active_sheet, "sheet1");
         assert_eq!(vm.get_cell(1, 1), Variant::Empty);

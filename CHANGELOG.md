@@ -22,6 +22,7 @@
 - VBAの`Range(...).Offset(...).Value`も共通書き込み経路へ接続し、1-based座標外へのwraparoundを拒否するようにしました。
 - VBAの`Range(...).Clear`を範囲共通経路へ接続し、formula依存無効化・spill解放・矩形単位undoを適用しました。
 - `Set` で取得した Range オブジェクトの `.Clear` / `.ClearContents` も、保護・undo・spill解放・数式dirty無効化を共有するクリア経路へ接続しました。束縛先とアクティブシートが異なる場合も、束縛先のシートを更新します。
+- Worksheetオブジェクトの `.Range(...)` / `.Cells(row, col)` をRangeオブジェクトとして取得できるようにし、取得後の値書き込み・クリアを束縛シートへ接続しました。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls/c:numFmt@formatCode`を`Vm.set_chart_data_labels_number_format`（Python binding／型stub含む）から検証付きで追加／更新できるようにしました。`sourceLinked`と他のdata-label内容を保持し、Chart作成とExcel再openは未完です。
 - VBAイベントの部分BUILDとして、Python `Vm.set_cell(..., trigger_events=True)`から直前にparse済みVBAの`Worksheet_Change(Target)`を変更対象A1へ自動dispatchできるようにしました。既定動作は従来どおりイベントなしで、EnableEvents・再入抑止・timeoutを適用します。イベント連鎖・複数handler順序・Excel oracleは未完です。
 - VBAセル書込みの整合性を補強し、Python `Vm.set_cell`をVM共通の値書込み経路へ接続しました。1-based座標、variant budget、undo、spill解放、formula AST／dirty依存無効化を適用します。Excel oracleは未完です。
