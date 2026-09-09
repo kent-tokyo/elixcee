@@ -8998,9 +8998,8 @@ impl Vm {
                 Ok(())
             })();
             self.auto_event_suppression_depth -= 1;
-            let notify = result.and_then(|()| {
-                self.dispatch_worksheet_change_after_range_write(&r.sheet, area)
-            });
+            let notify = result
+                .and_then(|()| self.dispatch_worksheet_change_after_range_write(&r.sheet, area));
             self.active_sheet = prev;
             self.cell_index_dirty = true;
             notify
@@ -10040,7 +10039,9 @@ impl Vm {
             self.automatic_event_chain_active = true;
             self.automatic_event_chain_count = 1;
         }
-        let result = self.run_worksheet_change(&program, &target_address).map(|_| ());
+        let result = self
+            .run_worksheet_change(&program, &target_address)
+            .map(|_| ());
         if outer_chain {
             self.automatic_event_chain_active = false;
             self.pending_worksheet_changes.clear();
@@ -10998,16 +10999,9 @@ impl Vm {
                     }
                     if matches!(method.as_str(), "clear" | "clearcontents") {
                         let area = *range.single_rect().ok_or_else(|| {
-                            format!(
-                                "Range.{}: multi-area range cannot be cleared",
-                                method
-                            )
+                            format!("Range.{}: multi-area range cannot be cleared", method)
                         })?;
-                        self.clear_range_on_sheet(
-                            &range.sheet,
-                            area,
-                            method == "clearcontents",
-                        )?;
+                        self.clear_range_on_sheet(&range.sheet, area, method == "clearcontents")?;
                     } else {
                         return Err(format!("Range method '{}' is not implemented", method));
                     }
@@ -12778,7 +12772,7 @@ impl Vm {
                         return match fields[0].as_str() {
                             "areas" => Ok(Variant::Integer(r.areas.len() as i64)),
                             "rows" => Ok(Variant::Integer(
-                                r.single_rect().map_or(0, Rect::rows) as i64,
+                                r.single_rect().map_or(0, Rect::rows) as i64
                             )),
                             "columns" => Ok(Variant::Integer(
                                 r.single_rect().map_or(0, Rect::cols) as i64,
@@ -18709,10 +18703,8 @@ mod tests {
             .or_default()
             .insert((1, 1));
         vm.set_cell_value(1, 1, Variant::Integer(7)).unwrap();
-        let contents = parser::parse(
-            "Sub MySub()\n    Range(\"A1\").ClearContents\nEnd Sub\n",
-        )
-        .unwrap();
+        let contents =
+            parser::parse("Sub MySub()\n    Range(\"A1\").ClearContents\nEnd Sub\n").unwrap();
         vm.run_sub(&contents, "MySub").unwrap();
         assert_eq!(vm.get_cell_number_format(1, 1), Some("0.00"));
         assert!(vm.comment_cells["sheet1"].contains(&(1, 1)));
@@ -23171,7 +23163,8 @@ mod tests {
             ),
         ];
         let mut vm = Vm::new();
-        vm.run_sub_multi_with_events(&modules, "module1.Main").unwrap();
+        vm.run_sub_multi_with_events(&modules, "module1.Main")
+            .unwrap();
         assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
     }
 
@@ -23197,7 +23190,10 @@ mod tests {
         .unwrap();
         let mut vm = Vm::new();
         let error = vm.run_sub_with_events(&program, "Main").unwrap_err();
-        assert!(error.contains("event chain exceeded 64 dispatches"), "{error:?}");
+        assert!(
+            error.contains("event chain exceeded 64 dispatches"),
+            "{error:?}"
+        );
     }
 
     #[test]
