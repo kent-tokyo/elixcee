@@ -150,6 +150,12 @@ produced a CPython 3.13 arm64 wheel exposing
 binary is not used as Python binding evidence because it requires embedding
 Python symbols; the extension build is the supported boundary check.
 
+After the implementation commit, a clean low-disk rebuild reran
+`cargo test --offline --lib drawing_shape_text_rewriter` (1 passed) and
+warnings-denied `cargo clippy --offline --lib --all-targets` (success). The
+wheel was installed into the isolated test environment and the binding was
+resolved as `Vm.set_drawing_shape_text`.
+
 The title and series-name rewriter unit tests replaced XML-escaped text while
 retaining unrelated text runs, series references, and the surrounding plot
 area. The Pivot fixture changed
