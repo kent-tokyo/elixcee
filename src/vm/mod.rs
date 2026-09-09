@@ -11016,12 +11016,16 @@ impl Vm {
                 if *is_formula {
                     let s = vba_to_str(&v);
                     self.auto_event_suppression_depth += 1;
-                    for r in r1..=r2 {
-                        for c in c1..=c2 {
-                            self.set_cell_formula(r, c, &s)?;
+                    let result = (|| -> Result<(), String> {
+                        for r in r1..=r2 {
+                            for c in c1..=c2 {
+                                self.set_cell_formula(r, c, &s)?;
+                            }
                         }
-                    }
+                        Ok(())
+                    })();
                     self.auto_event_suppression_depth -= 1;
+                    result?;
                     self.dispatch_worksheet_change_after_range_write(
                         &active,
                         Rect {
@@ -11565,22 +11569,28 @@ impl Vm {
                     let prev = self.active_sheet.clone();
                     self.active_sheet = key.clone();
                     self.auto_event_suppression_depth += 1;
-                    for r in r1..=r2 {
-                        for c in c1..=c2 {
-                            self.set_cell_formula(r, c, &s)?;
+                    let result = (|| -> Result<(), String> {
+                        for r in r1..=r2 {
+                            for c in c1..=c2 {
+                                self.set_cell_formula(r, c, &s)?;
+                            }
                         }
-                    }
+                        Ok(())
+                    })();
                     self.auto_event_suppression_depth -= 1;
-                    self.dispatch_worksheet_change_after_range_write(
-                        &key,
-                        Rect {
-                            start_row: r1,
-                            start_col: c1,
-                            end_row: r2,
-                            end_col: c2,
-                        },
-                    )?;
+                    let notify = result.and_then(|()| {
+                        self.dispatch_worksheet_change_after_range_write(
+                            &key,
+                            Rect {
+                                start_row: r1,
+                                start_col: c1,
+                                end_row: r2,
+                                end_col: c2,
+                            },
+                        )
+                    });
                     self.active_sheet = prev;
+                    notify?;
                 } else {
                     for r in r1..=r2 {
                         for c in c1..=c2 {
