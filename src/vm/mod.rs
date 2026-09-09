@@ -856,6 +856,7 @@ pub(crate) struct ChartSeriesEdit {
     pub marker_size: Option<u32>,
     pub smooth: Option<bool>,
     pub invert_if_negative: Option<bool>,
+    pub deleted: Option<bool>,
     pub category_cache: Option<Vec<String>>,
     pub value_cache: Option<Vec<String>>,
 }
@@ -7513,6 +7514,7 @@ impl Vm {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7553,6 +7555,7 @@ impl Vm {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7604,6 +7607,7 @@ impl Vm {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7642,6 +7646,7 @@ impl Vm {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7675,6 +7680,7 @@ impl Vm {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7708,10 +7714,45 @@ impl Vm {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             });
         edit.invert_if_negative = Some(enabled);
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series deletion flag.
+    pub fn set_chart_series_deleted(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        deleted: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                invert_if_negative: None,
+                deleted: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.deleted = Some(deleted);
         Ok(())
     }
 
@@ -7770,6 +7811,7 @@ impl Vm {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             });

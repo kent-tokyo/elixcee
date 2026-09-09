@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache/smooth/invert-if-negative, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
+Chart-series-cache/smooth/invert-if-negative/visibility, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, Drawing
 alternative-text edits, and existing DrawingML text-run editing.
 It is not evidence of
@@ -79,6 +79,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_chart_series_invert_if_negative(chart_part, series_index, enabled)`
   updates only an existing `<c:invertIfNegative val>` flag (`0` or `1`); a
   missing flag is rejected rather than synthesized.
+- `Vm.set_chart_series_deleted(chart_part, series_index, deleted)` updates only
+  an existing `<c:delete val>` flag (`0` or `1`); the series is never removed
+  from the chart XML and a missing flag is rejected.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`
   rewrites existing category/value cache points while preserving the cache
   kind, formula, format code, and surrounding Chart XML.
@@ -140,6 +143,7 @@ cargo test chart_data_labels_rewriter --offline -- --nocapture
 cargo test chart_series_rewriter --offline -- --nocapture
 cargo test chart_series_marker --offline -- --nocapture
 cargo test chart_series_smooth --offline -- --nocapture
+cargo test chart_series_marker_smooth_and_visibility --offline -- --nocapture
 cargo test chart_series_cache --offline -- --nocapture
 cargo test pivot_refresh_on_load --offline -- --nocapture
 cargo test pivot_cache_field_caption --offline -- --nocapture

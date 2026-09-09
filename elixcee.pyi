@@ -448,6 +448,12 @@ class Vm:
         """Queue a bounded edit to an existing chart series negative-value display flag."""
         ...
 
+    def set_chart_series_deleted(
+        self, chart_part: str, series_index: int, deleted: bool
+    ) -> None:
+        """Queue a bounded edit to an existing chart series visibility flag."""
+        ...
+
     def set_chart_series_cache(
         self,
         chart_part: str,

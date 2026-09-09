@@ -1255,6 +1255,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to an existing chart series deletion flag.
+    fn set_chart_series_deleted(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        deleted: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_series_deleted(chart_part, series_index, deleted)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded update to cached category/value points of an existing
     /// chart series. Existing cache kind is preserved and formulas are not
     /// changed.
@@ -4701,6 +4713,14 @@ fn rewrite_chart_series_formulas(
                 "<c:invertIfNegative",
                 if enabled { "1" } else { "0" },
                 "chart series invert-if-negative is missing val",
+            )?;
+        }
+        if let Some(deleted) = edit.deleted {
+            replace_marker_attr(
+                &mut series,
+                "<c:delete",
+                if deleted { "1" } else { "0" },
+                "chart series delete is missing val",
             )?;
         }
         out.replace_range(open..close, &series);
@@ -10245,6 +10265,7 @@ mod tests {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10278,6 +10299,7 @@ mod tests {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10296,7 +10318,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_series_marker_and_smooth_rewriter_changes_only_selected_attributes() {
+    fn chart_series_marker_smooth_and_visibility_rewriter_changes_only_selected_attributes() {
         let mut edits = std::collections::HashMap::new();
         edits.insert(
             0,
@@ -10308,6 +10330,7 @@ mod tests {
                 marker_size: Some(12),
                 smooth: Some(true),
                 invert_if_negative: Some(true),
+                deleted: Some(true),
                 category_cache: None,
                 value_cache: None,
             },
@@ -10317,6 +10340,7 @@ mod tests {
             "<c:ser><c:marker><c:symbol val=\"circle\"/><c:size val=\"6\"/></c:marker>",
             "<c:smooth val=\"0\"/>",
             "<c:invertIfNegative val=\"0\"/>",
+            "<c:delete val=\"0\"/>",
             "<c:val><c:numRef><c:f>Sheet1!$A$1:$A$2</c:f></c:numRef></c:val></c:ser>",
             "</c:plotArea></c:chart>"
         );
@@ -10325,6 +10349,7 @@ mod tests {
         assert!(actual.contains("<c:size val=\"12\"/>"));
         assert!(actual.contains("<c:smooth val=\"1\"/>"));
         assert!(actual.contains("<c:invertIfNegative val=\"1\"/>"));
+        assert!(actual.contains("<c:delete val=\"1\"/>"));
     }
 
     #[test]
@@ -10340,6 +10365,7 @@ mod tests {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10360,6 +10386,7 @@ mod tests {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10968,6 +10995,7 @@ mod tests {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: Some(vec!["Jan & Feb".to_string(), "Mar".to_string()]),
                 value_cache: Some(vec!["10".to_string(), "20.5".to_string()]),
             },
@@ -11001,6 +11029,7 @@ mod tests {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: Some(vec!["1".to_string()]),
             },
@@ -11029,6 +11058,7 @@ mod tests {
                 marker_size: None,
                 smooth: None,
                 invert_if_negative: None,
+                deleted: None,
                 category_cache: None,
                 value_cache: Some(vec!["3.5".to_string()]),
             },
