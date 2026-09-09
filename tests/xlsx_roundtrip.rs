@@ -1284,12 +1284,29 @@ fn edit_chart_series_rewrites_selected_references_on_a_real_fixture() {
     .expect("chart series edit should be accepted");
     vm.set_drawing_anchor("xl/drawings/drawing1.xml", 0, 2, 3, 10, 12)
         .expect("drawing anchor edit should be accepted");
+    vm.set_chart_series_cache(
+        "xl/charts/chart1.xml",
+        0,
+        Some(vec![
+            "Open & ready".to_string(),
+            "ok".to_string(),
+            "bad".to_string(),
+        ]),
+        Some(vec!["42".to_string()]),
+    )
+    .expect("chart cache edit should be accepted");
     save_workbook(&vm, &output_path).expect("chart series edit should save");
 
     let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
     let chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
     assert!(chart.contains("<c:cat><c:strRef><c:f>Sheet1!$A$1:$A$5</c:f>"));
     assert!(chart.contains("<c:val><c:numRef><c:f>Sheet1!$B$1:$B$5</c:f>"));
+    assert!(chart.contains("<c:strCache><c:ptCount val=\"3\"/>"));
+    assert!(chart.contains("<c:v>Open &amp; ready</c:v>"));
+    assert!(
+        chart.contains("<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"1\"/>")
+    );
+    assert!(chart.contains("<c:v>42</c:v>"));
     assert!(output_entries.contains_key("xl/drawings/drawing1.xml"));
     assert!(output_entries.contains_key("xl/drawings/_rels/drawing1.xml.rels"));
     let drawing = String::from_utf8(output_entries["xl/drawings/drawing1.xml"].clone()).unwrap();

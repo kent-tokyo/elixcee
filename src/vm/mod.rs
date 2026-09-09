@@ -851,6 +851,8 @@ pub(crate) struct ChartSeriesEdit {
     pub name: Option<String>,
     pub categories: Option<String>,
     pub values: Option<String>,
+    pub category_cache: Option<Vec<String>>,
+    pub value_cache: Option<Vec<String>>,
 }
 
 /// A bounded edit to the textual title of one existing chart part.
@@ -7293,17 +7295,20 @@ impl Vm {
                 }
             }
         }
-        self.chart_series_edits
+        let edit = self
+            .chart_series_edits
             .entry(chart_part.to_string())
             .or_default()
-            .insert(
-                series_index,
-                ChartSeriesEdit {
-                    name: None,
-                    categories: categories.map(ToOwned::to_owned),
-                    values: values.map(ToOwned::to_owned),
-                },
-            );
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.categories = categories.map(ToOwned::to_owned);
+        edit.values = values.map(ToOwned::to_owned);
         Ok(())
     }
 
@@ -7335,8 +7340,68 @@ impl Vm {
                 name: None,
                 categories: None,
                 values: None,
+                category_cache: None,
+                value_cache: None,
             });
         edit.name = Some(name_formula.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded update to the cached category/value points of an
+    /// existing chart series. The cache element must already exist; this API
+    /// never invents a `strCache`/`numCache` kind or changes the series formula.
+    pub fn set_chart_series_cache(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        categories: Option<Vec<String>>,
+        values: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series cache edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if categories.is_none() && values.is_none() {
+            return Err("at least one chart series cache is required".to_string());
+        }
+        for (kind, entries) in [
+            ("category", categories.as_ref()),
+            ("value", values.as_ref()),
+        ] {
+            if let Some(entries) = entries {
+                if entries.len() > 16 * 1024 {
+                    return Err(format!("chart {kind} cache has too many points"));
+                }
+                for entry in entries {
+                    if entry.len() > 16 * 1024 || entry.chars().any(|c| c.is_control()) {
+                        return Err(format!("chart {kind} cache contains an invalid point"));
+                    }
+                    if kind == "value"
+                        && entry
+                            .parse::<f64>()
+                            .map_or(true, |value| !value.is_finite())
+                    {
+                        return Err("chart value cache points must be finite numbers".to_string());
+                    }
+                }
+            }
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.category_cache = categories;
+        edit.value_cache = values;
         Ok(())
     }
 

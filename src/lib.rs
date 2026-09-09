@@ -1166,6 +1166,21 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to cached category/value points of an existing
+    /// chart series. Existing cache kind is preserved and formulas are not
+    /// changed.
+    fn set_chart_series_cache(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        categories: Option<Vec<String>>,
+        values: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_series_cache(chart_part, series_index, categories, values)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded edit to the first text run in an existing chart title.
     fn set_chart_title(&mut self, chart_part: &str, text: &str) -> PyResult<()> {
         self.inner
@@ -4232,6 +4247,127 @@ fn rewrite_chart_series_formulas(
     Ok(out)
 }
 
+/// Rewrite cached points for selected chart series. The existing cache kind
+/// (`strCache` or `numCache`) is preserved; only its point count and values
+/// change. This keeps formula references and all surrounding chart XML opaque.
+fn rewrite_chart_series_caches(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, vm::ChartSeriesEdit>,
+) -> Result<String, String> {
+    fn next_series_open(xml: &str, cursor: usize) -> Option<usize> {
+        let exact = xml[cursor..].find("<c:ser>").map(|offset| cursor + offset);
+        let attributed = xml[cursor..].find("<c:ser ").map(|offset| cursor + offset);
+        match (exact, attributed) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(position), None) | (None, Some(position)) => Some(position),
+            (None, None) => None,
+        }
+    }
+
+    fn replace_cache(series: &str, container: &str, values: &[String]) -> Result<String, String> {
+        let container_open = series
+            .find(container)
+            .ok_or_else(|| format!("chart series is missing {container} reference"))?;
+        let body_start = container_open + container.len();
+        let container_close = series[body_start..]
+            .find("</c:cat>")
+            .or_else(|| series[body_start..].find("</c:val>"))
+            .map(|offset| body_start + offset)
+            .ok_or_else(|| "chart series cache container is unterminated".to_string())?;
+        let body = &series[body_start..container_close];
+        let (cache_open, cache_close_tag) = if body.contains("<c:strCache") {
+            ("<c:strCache", "</c:strCache>")
+        } else if body.contains("<c:numCache") {
+            ("<c:numCache", "</c:numCache>")
+        } else {
+            return Err(format!("chart series {container} is missing a cache"));
+        };
+        let cache_start = body
+            .find(cache_open)
+            .ok_or_else(|| format!("chart series {container} cache is missing"))?;
+        let cache_tag_end = body[cache_start..]
+            .find('>')
+            .map(|offset| cache_start + offset + 1)
+            .ok_or_else(|| "chart series cache is unterminated".to_string())?;
+        let cache_end = body[cache_tag_end..]
+            .find(cache_close_tag)
+            .map(|offset| cache_tag_end + offset)
+            .ok_or_else(|| "chart series cache is unterminated".to_string())?;
+        let cache_body = &body[cache_tag_end..cache_end];
+        let count_start = cache_body
+            .find("<c:ptCount")
+            .ok_or_else(|| "chart series cache is missing <c:ptCount>".to_string())?;
+        let count_end = cache_body[count_start..]
+            .find('>')
+            .map(|offset| count_start + offset + 1)
+            .ok_or_else(|| "chart series ptCount is unterminated".to_string())?;
+        let count_tag = reader::with_attr(
+            &cache_body[count_start..count_end],
+            "val",
+            &values.len().to_string(),
+        );
+        let points = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                format!(
+                    "<c:pt idx=\"{index}\"><c:v>{}</c:v></c:pt>",
+                    xml_escape(value)
+                )
+            })
+            .collect::<String>();
+        let mut new_cache_body = String::with_capacity(cache_body.len() + points.len());
+        new_cache_body.push_str(&cache_body[..count_start]);
+        new_cache_body.push_str(&count_tag);
+        new_cache_body.push_str(&points);
+        new_cache_body.push_str(&cache_body[count_end..]);
+
+        let mut new_body = String::with_capacity(body.len() + points.len());
+        new_body.push_str(&body[..cache_tag_end]);
+        new_body.push_str(&new_cache_body);
+        new_body.push_str(&body[cache_end..]);
+
+        let mut out = String::with_capacity(series.len() + points.len());
+        out.push_str(&series[..body_start]);
+        out.push_str(&new_body);
+        out.push_str(&series[container_close..]);
+        Ok(out)
+    }
+
+    fn selected_series(xml: &str, series_index: usize) -> Result<(usize, usize), String> {
+        let mut cursor = 0;
+        for current in 0..=series_index {
+            let open = next_series_open(xml, cursor)
+                .ok_or_else(|| format!("chart series index {series_index} is out of range"))?;
+            let close_rel = xml[open..]
+                .find("</c:ser>")
+                .ok_or_else(|| "chart series element is unterminated".to_string())?;
+            let close = open + close_rel + "</c:ser>".len();
+            if current == series_index {
+                return Ok((open, close));
+            }
+            cursor = close;
+        }
+        unreachable!()
+    }
+
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| **index);
+    let mut out = xml.to_string();
+    for (&series_index, edit) in ordered {
+        let (open, close) = selected_series(&out, series_index)?;
+        let mut series = out[open..close].to_string();
+        if let Some(values) = edit.category_cache.as_ref() {
+            series = replace_cache(&series, "<c:cat>", values)?;
+        }
+        if let Some(values) = edit.value_cache.as_ref() {
+            series = replace_cache(&series, "<c:val>", values)?;
+        }
+        out.replace_range(open..close, &series);
+    }
+    Ok(out)
+}
+
 /// Rewrites only the first text run in the first `<c:title>` element. The
 /// surrounding title formatting and all chart XML outside that text node are
 /// kept byte-for-byte unchanged.
@@ -5016,6 +5152,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 }
                 if let Some(edits) = vm.chart_series_edits.get(&name) {
                     chart = rewrite_chart_series_formulas(&chart, edits)?;
+                    chart = rewrite_chart_series_caches(&chart, edits)?;
                 }
                 if let Some(edit) = vm.chart_title_edits.get(&name) {
                     chart = rewrite_chart_title(&chart, &edit.text)?;
@@ -8011,6 +8148,8 @@ mod tests {
                 name: None,
                 categories: Some("Data & 2026!$A$2:$A$4".to_string()),
                 values: Some("Data & 2026!$B$2:$B$4".to_string()),
+                category_cache: None,
+                value_cache: None,
             },
         );
         let source = concat!(
@@ -8038,6 +8177,8 @@ mod tests {
                 name: Some("Data & 2026!$B$1".to_string()),
                 categories: None,
                 values: None,
+                category_cache: None,
+                value_cache: None,
             },
         );
         let source = concat!(
@@ -8062,6 +8203,8 @@ mod tests {
                 name: None,
                 categories: Some("Sheet1!$A$1".to_string()),
                 values: None,
+                category_cache: None,
+                value_cache: None,
             },
         );
         assert!(
@@ -8135,6 +8278,55 @@ mod tests {
         assert!(
             rewrite_drawing_anchors("<xdr:wsDr><xdr:oneCellAnchor/></xdr:wsDr>", &edits).is_err()
         );
+    }
+
+    #[test]
+    fn chart_series_cache_rewriter_preserves_formula_and_replaces_points() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(
+            0,
+            vm::ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                category_cache: Some(vec!["Jan & Feb".to_string(), "Mar".to_string()]),
+                value_cache: Some(vec!["10".to_string(), "20.5".to_string()]),
+            },
+        );
+        let source = concat!(
+            "<c:chart><c:ser><c:cat><c:strRef><c:f>Sheet1!$A$1:$A$2</c:f>",
+            "<c:strCache><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>old</c:v></c:pt></c:strCache>",
+            "</c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$B$1:$B$2</c:f>",
+            "<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"1\"/>",
+            "<c:pt idx=\"0\"><c:v>1</c:v></c:pt></c:numCache></c:numRef>",
+            "</c:val></c:ser></c:chart>"
+        );
+        let actual = rewrite_chart_series_caches(source, &edits).unwrap();
+        assert!(actual.contains("<c:f>Sheet1!$A$1:$A$2</c:f>"));
+        assert!(actual.contains("<c:ptCount val=\"2\"/>"));
+        assert!(actual.contains("<c:v>Jan &amp; Feb</c:v>"));
+        assert!(actual.contains("<c:v>20.5</c:v>"));
+        assert!(actual.contains("<c:formatCode>General</c:formatCode>"));
+    }
+
+    #[test]
+    fn chart_series_cache_rewriter_rejects_missing_cache() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(
+            0,
+            vm::ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                category_cache: None,
+                value_cache: Some(vec!["1".to_string()]),
+            },
+        );
+        assert!(rewrite_chart_series_caches(
+            "<c:chart><c:ser><c:val><c:numRef><c:f>A1</c:f></c:numRef></c:val></c:ser></c:chart>",
+            &edits
+        )
+        .is_err());
     }
 
     #[test]

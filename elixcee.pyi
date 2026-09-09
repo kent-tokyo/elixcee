@@ -324,6 +324,16 @@ class Vm:
         """Queue a bounded edit to an existing chart series name formula."""
         ...
 
+    def set_chart_series_cache(
+        self,
+        chart_part: str,
+        series_index: int,
+        categories: list[str] | None = ...,
+        values: list[str] | None = ...,
+    ) -> None:
+        """Update cached category/value points without changing formulas."""
+        ...
+
     def set_pivot_worksheet_source(
         self,
         cache_part: str,
