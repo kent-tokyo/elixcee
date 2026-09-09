@@ -23789,6 +23789,10 @@ End Sub
         ));
         let out_path =
             std::env::temp_dir().join(format!("elixcee_vm_date1904_{}.xlsx", std::process::id()));
+        let roundtrip_path = std::env::temp_dir().join(format!(
+            "elixcee_vm_date1904_roundtrip_{}.xlsx",
+            std::process::id()
+        ));
         let mut source_vm = Vm::new();
         source_vm.cells_mut().insert(
             (1, 1),
@@ -23828,9 +23832,12 @@ End Sub
         vm.load_workbook_file(out_path.to_str().unwrap()).unwrap();
         assert!(vm.workbook_date1904());
         assert!(vm.fork().workbook_date1904());
+        crate::save_workbook(&vm, roundtrip_path.to_str().unwrap()).unwrap();
+        assert!(reader::xlsx_date1904_for_path(roundtrip_path.to_str().unwrap()).unwrap());
 
         std::fs::remove_file(&base_path).unwrap();
         std::fs::remove_file(&out_path).unwrap();
+        std::fs::remove_file(&roundtrip_path).unwrap();
     }
 
     #[test]
