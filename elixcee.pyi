@@ -185,8 +185,10 @@ class Vm:
 
     # ── Cell access ────────────────────────────────────────────────────────────
 
-    def set_cell(self, row: int, col: int, value: Any) -> None:
-        """Write *value* into the cell at (``row``, ``col``) (1-based)."""
+    def set_cell(
+        self, row: int, col: int, value: Any, trigger_events: bool = False
+    ) -> None:
+        """Write a value and optionally dispatch cached Worksheet_Change."""
         ...
 
     def get_cell(self, row: int, col: int) -> Any:

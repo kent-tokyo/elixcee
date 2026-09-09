@@ -766,7 +766,8 @@ impl PyVm {
     /// Dispatch an explicitly requested zero-argument VBA event procedure.
     /// Returns ``True`` when it ran, or ``False`` when ``EnableEvents`` is
     /// disabled or re-entry is suppressed. Automatic event discovery and
-    /// ``Worksheet_Change`` Target binding are not implicit in headless mode.
+    /// ``Worksheet_Change`` Target binding remains explicit; cell writes can
+    /// opt into it with ``set_cell(..., trigger_events=True)``.
     #[pyo3(signature = (vba_code, event_name, timeout_ms = None))]
     fn run_event(
         &mut self,
@@ -821,11 +822,35 @@ impl PyVm {
     }
 
     /// Write a value into a cell. ``row`` and ``col`` are 1-based (VBA convention).
-    fn set_cell(&mut self, row: u32, col: u32, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    /// When ``trigger_events`` is true, dispatch the cached program's
+    /// ``Worksheet_Change(Target)`` after the write.
+    #[pyo3(signature = (row, col, value, trigger_events = false))]
+    fn set_cell(
+        &mut self,
+        row: u32,
+        col: u32,
+        value: &Bound<'_, PyAny>,
+        trigger_events: bool,
+    ) -> PyResult<()> {
         let v = py_to_variant(value)?;
         self.inner
             .check_variant_budget(&v)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let program = if trigger_events {
+            Some(
+                self.program_cache
+                    .as_ref()
+                    .ok_or_else(|| {
+                        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                            "trigger_events requires a previously parsed VBA program",
+                        )
+                    })?
+                    .1
+                    .clone(),
+            )
+        } else {
+            None
+        };
         self.inner.cells_mut().insert(
             (row, col),
             CellContent {
@@ -833,6 +858,18 @@ impl PyVm {
                 value: v,
             },
         );
+        if let Some(program) = program {
+            let target_address = format!("{}{}", xlsx_col_letters(col), row);
+            self.inner.deadline = self
+                .timeout_ms
+                .map(|ms| Instant::now() + Duration::from_millis(ms));
+            let result = self
+                .inner
+                .run_worksheet_change(&program, &target_address)
+                .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>);
+            self.inner.deadline = None;
+            result.map(|_| ())?;
+        }
         Ok(())
     }
 

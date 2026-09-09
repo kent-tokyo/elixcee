@@ -13,6 +13,7 @@
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls@showPercent`を`Vm.set_chart_data_labels_show_percent`（Python binding／型stub含む）から追加／更新できるようにしました。既存data-label属性・子要素・系列・軸・relationshipを保持し、data-label要素の新規作成とExcel再openは未完です。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls@showLeaderLines`を`Vm.set_chart_data_labels_show_leader_lines`（Python binding／型stub含む）から追加／更新できるようにしました。既存data-label属性・子要素・系列・軸・relationshipを保持し、data-label要素の新規作成とExcel再openは未完です。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls@showBubbleSize`を`Vm.set_chart_data_labels_show_bubble_size`（Python binding／型stub含む）から追加／更新できるようにしました。既存data-label属性・子要素・系列・軸・relationshipを保持し、data-label要素の新規作成とExcel再openは未完です。
+- VBAイベントの部分BUILDとして、Python `Vm.set_cell(..., trigger_events=True)`から直前にparse済みVBAの`Worksheet_Change(Target)`を変更対象A1へ自動dispatchできるようにしました。既定動作は従来どおりイベントなしで、EnableEvents・再入抑止・timeoutを適用します。イベント連鎖・複数handler順序・Excel oracleは未完です。
 - G2dの限定Chart編集として、軸タイトルを`Vm.set_chart_axis_title`（Python binding／型stub含む）からdocument orderの0-based indexで更新／追加できるようにしました。軸内の最初のtitle text runだけを変更し、系列・Chart title・relationshipは保持します。Chart作成、Excel再openは未完です。
 - G2dの限定Drawing編集として、既存anchorの`cNvPr@hidden`を`Vm.set_drawing_shape_hidden`（Python binding／型stub含む）から追加／更新できるようにしました。geometry・shape content・relationshipは保持し、Drawing作成とExcel再openは未完です。
 - G4/VBA互換性の部分BUILDとして、`WorksheetFunction.TextJoin`、`WorksheetFunction.XLookup`、`WorksheetFunction.XMatch`をVMへ接続しました。TEXTJOINは範囲flattenと空文字除外、XLOOKUP／XMATCHはexact／wildcard matchおよびsearch mode 1/-1/2/-2を実装し、旧compat corpusの「未実装」期待値を削除しました。完全な型変換とExcel oracle照合は未完です。
