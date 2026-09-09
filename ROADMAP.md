@@ -342,12 +342,12 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 - [x] VM-local Collectionとexport済みclass moduleのobject連携、Property・interface dispatch。
 - [x] VM-local Dictionary adapter。キー正規化などの制限は [FUNCTIONS](FUNCTIONS.md#in-memory-dictionary) に明記。
 - [x] 部分 BUILD: 未実装のVBA `ThisWorkbook.Save`／`ThisWorkbook.Close`（および同じmember判定に入るSave系呼出し）を既定のheadless実行で外部効果として拒否し、`SECURITY`／`E1011`へ構造化分類する回帰を追加した。実際の保存先指定、Close後state、イベント連携、外部リンクの実行、Excel oracleは未完。
-- [ ] Workbook_Open／Worksheet_Change等のイベントは、EnableEvents・再入抑止・決定的dispatch順・budget付きで設計。
+- [ ] Workbook_Open／Worksheet_Change等のイベントは、EnableEvents・再入抑止・決定的dispatch順・budget付きで設計。明示dispatch、Target binding、重複handler拒否は部分BUILD済みで、自動発火・イベント連鎖が残る。
 - [x] 部分 BUILD: `Vm.run_event`／Python `Vm.run_event`で明示指定したzero-argumentのWorkbook／Worksheetイベントをdispatchし、`Application.EnableEvents`による無効化、再入抑止、既定execution budgetを適用した。さらに`run_worksheet_change`／Python bindingで、active sheet上の明示A1 targetを`As Range`引数へ一時束縛できるようにした。自動発火、複数handlerの決定的順序、イベント連鎖は未完。
 - [x] 部分 BUILD: `Vm.run_sub_multi_with_events`で複数moduleから`Workbook_Open`を一意に解決してentrypointより先にdispatchし、標準module間および同一Program内の重複handlerを拒否する決定性境界を追加した。Worksheetイベントの自動発火、イベント連鎖は未完。
 - [x] 部分 BUILD: VMが実行中に確定したruntime failure categoryをside channelで保持し、CLI JSON診断が文字列再分類なしに利用する経路を追加した。blocked external effectとMsgBox拒否は発生箇所で直接分類し、未移行経路だけがメッセージ再分類へfallbackする。blocked external effectには新しい`E1011`を割り当て、既存の`E1006`（duplicate module name）を壊さない。entrypoint／compile／事前エラーと全エラー生成箇所の完全な型付き移行、独立Excel oracleは未完。
 - [x] 部分 BUILD: 同一／複数moduleで同名のUDT（`Type ... End Type`）を検出し、flat namespaceへの重複宣言・後勝ち上書きを実行前と`check --json`で拒否するようにした。大文字小文字を統一して決定的に検出するが、module-qualified UDT解決と診断位置は未完。
-- [ ] 複数module間のUDT名衝突と診断位置など、解決規則の残差を明確化。
+- [ ] 複数module間のUDT解決規則の残差（module-qualified参照など）を明確化。重複UDTの診断位置と実行前／CLI拒否は部分BUILD済み。
 - [ ] Excelとの型変換・丸め・日付・Empty／Error・配列境界・再計算の独立oracle比較を拡張。
 - [ ] 実運用macroの回帰と、数式の依存グラフ・循環・volatile／dynamic array等の対応境界を検証。
 
