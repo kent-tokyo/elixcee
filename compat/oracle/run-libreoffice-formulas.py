@@ -34,6 +34,8 @@ CASES = {
     "istext": ("=ISTEXT(B1)", True),
     "sum_mixed": ("=SUM(A1:B3)", 6),
     "sumproduct": ("=SUMPRODUCT(A1:A3,A1:A3)", 14),
+    "sum_sequence": ("=SUM(SEQUENCE(3))", 6),
+    "sum_transpose": ("=SUM(TRANSPOSE(A1:A3))", 6),
     "averageif": ('=AVERAGEIF(A1:A3,">1")', 2.5),
     "maxifs": ('=MAXIFS(A1:A3,A1:A3,">1")', 3),
     "minifs": ('=MINIFS(A1:A3,A1:A3,">1")', 2),
@@ -131,6 +133,7 @@ ORACLE_UNSUPPORTED = {
     "textjoin",
     "isoweeknum",
     "type_boolean",
+    "sum_sequence",
 }
 
 

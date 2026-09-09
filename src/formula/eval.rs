@@ -317,7 +317,11 @@ fn collect_values(
             }
             Ok(vals)
         }
-        other => Ok(vec![evaluate(other, cells)?]),
+        other => match evaluate(other, cells)? {
+            Variant::Array(values) => Ok(values),
+            Variant::VbaArray(array) => Ok(array.elements),
+            value => Ok(vec![value]),
+        },
     }
 }
 
@@ -8829,6 +8833,34 @@ mod tests {
         );
         assert!(evaluate(&fparse("=TAKE(SEQUENCE(3),1.5)").unwrap(), &c).is_err());
         assert!(evaluate(&fparse("=DROP(SEQUENCE(3),0)").unwrap(), &c).is_err());
+    }
+
+    #[test]
+    fn test_aggregate_functions_flatten_formula_arrays() {
+        let mut cells = HashMap::new();
+        cells.insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        cells.insert(
+            (2, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(2),
+            },
+        );
+        cells.insert(
+            (3, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(3),
+            },
+        );
+        assert_eq!(calc("=SUM(TRANSPOSE(A1:A3))", &cells), Variant::Integer(6));
+        assert_eq!(calc("=SUM(SEQUENCE(3))", &cells), Variant::Integer(6));
     }
 
     #[test]

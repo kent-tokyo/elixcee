@@ -14,6 +14,8 @@
 
 - G4のoracle runnerへ`ISERR`／`ISNA`／`ISNONTEXT`／`TYPE`の型・Errorケースを追加しました。LibreOffice build固有の`TYPE(TRUE)`差をskipへ分類し、LibreOffice 85/85・elixcee 85/85のpaired結果を固定しました。Excel oracle／再openの証拠ではありません。
 
+- G4の配列境界校正として、数式関数の引数で`Array`／`VbaArray`結果を平坦化し、`SUM(TRANSPOSE(...))`をpaired検証しました。LibreOfficeが`SEQUENCE`を評価しないため`SUM(SEQUENCE(3))`はskipとし、94ケース中LibreOffice 85/85・elixcee 85/85を確認しました。
+
 - G5bの保存前relationship carry-over判定で、保持対象partの存在確認を線形リスト探索からHashSet参照へ変更しました。出力形式・接続判定は維持し、`cargo check --lib --offline`（debuginfo無効の一時target）で型検証しました。速度／RSS効果は未測定です。
 
 - G2dの限定Drawing編集として、既存shapeの`<a:prstDash>`を`Vm.set_drawing_shape_line_dash`（Python binding／型stub含む）からDrawingML標準値で更新できるようにしました。line作成、custom dash、Excel再openは未完です。
