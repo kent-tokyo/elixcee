@@ -55,6 +55,13 @@ currently exposed separately and serial correction remains an open boundary.
 The Rust regression also verifies that a loaded `date1904` flag survives a
 VM save and reload; this checks metadata preservation only.
 
+The runner has since been extended with a separate nine-case LibreOffice-only
+probe covering `INT`, `TRUNC`, `SIGN`, `SQRT`, `ROWS`, `COLUMNS`, `ISLOGICAL`,
+and boolean/text `N` coercion. That follow-up has 74/74 LibreOffice matches
+out of 80 total cases; it has no paired elixcee result because the current
+Python binding is not installed in this environment. See the
+[follow-up probe](formula-independent-oracle-probe-2026-09-10.md).
+
 ## Reproduction
 
 ```sh

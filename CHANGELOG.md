@@ -10,6 +10,8 @@
 
 - G4の独立formula oracleを72ケースへ拡張しました。LibreOfficeとelixceeの比較可能65ケースは65/65一致し、LibreOffice buildが評価しない6ケースは明示的にskipとして保存しています。結果JSONを`compat/corpus/results/formula-independent-20260910.json`へ固定しました。
 
+- G4のoracle runnerへ`INT`／`TRUNC`／`SIGN`／`SQRT`／`ROWS`／`COLUMNS`／`ISLOGICAL`／`N` coercionの9ケースを追加し、LibreOffice-only probeで74/74一致を確認しました。現環境ではPython bindingが未導入のため追加分のelixcee比較は未完了で、既存の65/65 paired artifactとは別記録にしています。
+
 - G5bの保存前relationship carry-over判定で、保持対象partの存在確認を線形リスト探索からHashSet参照へ変更しました。出力形式・接続判定は維持し、`cargo check --lib --offline`（debuginfo無効の一時target）で型検証しました。速度／RSS効果は未測定です。
 
 - G2dの限定Drawing編集として、既存shapeの`<a:prstDash>`を`Vm.set_drawing_shape_line_dash`（Python binding／型stub含む）からDrawingML標準値で更新できるようにしました。line作成、custom dash、Excel再openは未完です。
