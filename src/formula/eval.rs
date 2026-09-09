@@ -560,6 +560,18 @@ fn eval_func(
         "GESTEP" => func_gestep(args, cells),
         "ERF" | "ERF.PRECISE" => func_erf(args, cells),
         "ERFC" | "ERFC.PRECISE" => func_erfc(args, cells),
+        "DEC2BIN" => func_dec_to_radix(args, cells, 2),
+        "DEC2HEX" => func_dec_to_radix(args, cells, 16),
+        "DEC2OCT" => func_dec_to_radix(args, cells, 8),
+        "BIN2DEC" => func_radix_to_dec(args, cells, 2),
+        "HEX2DEC" => func_radix_to_dec(args, cells, 16),
+        "OCT2DEC" => func_radix_to_dec(args, cells, 8),
+        "BIN2HEX" => func_radix_to_radix(args, cells, 2, 16),
+        "BIN2OCT" => func_radix_to_radix(args, cells, 2, 8),
+        "HEX2BIN" => func_radix_to_radix(args, cells, 16, 2),
+        "HEX2OCT" => func_radix_to_radix(args, cells, 16, 8),
+        "OCT2BIN" => func_radix_to_radix(args, cells, 8, 2),
+        "OCT2HEX" => func_radix_to_radix(args, cells, 8, 16),
         // ── Trigonometry ──────────────────────────────────────────────────────
         "PI" => func_pi(args, cells),
         "SIN" => func_trig1(args, cells, f64::sin),
@@ -5617,6 +5629,179 @@ fn func_erfc(
     Ok(Variant::Float(result))
 }
 
+fn radix_limits(base: u32) -> (usize, u32, i64, i64) {
+    match base {
+        2 => (10, 10, -512, 511),
+        8 => (10, 30, -(1i64 << 29), (1i64 << 29) - 1),
+        16 => (10, 40, -(1i64 << 39), (1i64 << 39) - 1),
+        _ => unreachable!(),
+    }
+}
+
+fn radix_digit(value: char) -> Option<u32> {
+    value.to_digit(16)
+}
+
+fn parse_radix_value(value: &Variant, base: u32) -> Result<i64, Variant> {
+    let text = to_str(value);
+    let text = text.trim();
+    let (max_digits, bits, min_value, max_value) = radix_limits(base);
+    if text.is_empty() {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let (negative, digits) = if let Some(rest) = text.strip_prefix('-') {
+        (true, rest)
+    } else {
+        (false, text)
+    };
+    if digits.is_empty() || digits.len() > max_digits {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let mut magnitude = 0u64;
+    for digit in digits.chars() {
+        let digit = match radix_digit(digit.to_ascii_uppercase()) {
+            Some(digit) if digit < base => digit as u64,
+            _ => return Err(Variant::Error(ExcelError::Num)),
+        };
+        magnitude = match magnitude
+            .checked_mul(base as u64)
+            .and_then(|value| value.checked_add(digit))
+        {
+            Some(value) => value,
+            None => return Err(Variant::Error(ExcelError::Num)),
+        };
+    }
+    if negative {
+        let signed = -(magnitude as i128);
+        if signed < min_value as i128 {
+            return Err(Variant::Error(ExcelError::Num));
+        }
+        return Ok(signed as i64);
+    }
+    // Excel uses a fixed-width two's-complement representation for a
+    // max-width negative input (10 binary/octal/hex digits).
+    let first_digit = radix_digit(digits.chars().next().unwrap().to_ascii_uppercase()).unwrap();
+    if digits.len() == max_digits && first_digit >= base / 2 {
+        let signed = magnitude as i128 - (1i128 << bits);
+        if signed < min_value as i128 || signed > max_value as i128 {
+            return Err(Variant::Error(ExcelError::Num));
+        }
+        Ok(signed as i64)
+    } else if magnitude > max_value as u64 {
+        Err(Variant::Error(ExcelError::Num))
+    } else {
+        Ok(magnitude as i64)
+    }
+}
+
+fn format_radix_value(value: i64, base: u32, places: Option<usize>) -> Result<Variant, String> {
+    let (max_digits, bits, min_value, max_value) = radix_limits(base);
+    if value < min_value || value > max_value {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let negative = value < 0;
+    let magnitude = if negative {
+        ((1i128 << bits) + value as i128) as u64
+    } else {
+        value as u64
+    };
+    let mut digits = if magnitude == 0 {
+        String::from("0")
+    } else {
+        let mut reversed = String::new();
+        let mut remaining = magnitude;
+        while remaining != 0 {
+            let digit = (remaining % base as u64) as u32;
+            reversed.push(
+                std::char::from_digit(digit, base)
+                    .unwrap()
+                    .to_ascii_uppercase(),
+            );
+            remaining /= base as u64;
+        }
+        reversed.chars().rev().collect()
+    };
+    let required_digits = if negative { max_digits } else { digits.len() };
+    if let Some(places) = places {
+        if places == 0 || places < required_digits || places > max_digits {
+            return Ok(Variant::Error(ExcelError::Num));
+        }
+        digits = format!("{digits:0>places$}");
+    } else if negative {
+        digits = format!("{digits:0>max_digits$}");
+    }
+    Ok(Variant::Str(digits))
+}
+
+fn optional_places(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Option<usize>, String> {
+    if args.len() < 2 {
+        return Ok(None);
+    }
+    let places = to_float(&evaluate(&args[1], cells)?)?;
+    if !places.is_finite() || places < 0.0 || places.fract() != 0.0 {
+        return Ok(Some(usize::MAX));
+    }
+    Ok(Some(places as usize))
+}
+
+fn func_dec_to_radix(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    base: u32,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(format!("DEC2{base} requires 1 or 2 arguments"));
+    }
+    let number = to_float(&evaluate(&args[0], cells)?)?;
+    let (_, _, min_value, max_value) = radix_limits(base);
+    if !number.is_finite() || number.trunc() < min_value as f64 || number.trunc() > max_value as f64
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let places = optional_places(args, cells)?;
+    if places == Some(usize::MAX) {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    format_radix_value(number.trunc() as i64, base, places)
+}
+
+fn func_radix_to_dec(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    base: u32,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err(format!("{base}2DEC requires 1 argument"));
+    }
+    match parse_radix_value(&evaluate(&args[0], cells)?, base) {
+        Ok(value) => Ok(Variant::Integer(value)),
+        Err(error) => Ok(error),
+    }
+}
+
+fn func_radix_to_radix(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    source_base: u32,
+    target_base: u32,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("base conversion requires 1 or 2 arguments".into());
+    }
+    let value = match parse_radix_value(&evaluate(&args[0], cells)?, source_base) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    let places = optional_places(args, cells)?;
+    if places == Some(usize::MAX) {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    format_radix_value(value, target_base, places)
+}
+
 // ── Trigonometry ──────────────────────────────────────────────────────────────
 
 fn func_pi(
@@ -8683,6 +8868,26 @@ mod tests {
             calc("=BITLSHIFT(281474976710655,1)", &c),
             Variant::Error(ExcelError::Num)
         );
+    }
+
+    #[test]
+    fn test_engineering_radix_conversions() {
+        let c = HashMap::new();
+        assert_eq!(calc("=DEC2BIN(10)", &c), Variant::Str("1010".into()));
+        assert_eq!(calc("=DEC2BIN(-1)", &c), Variant::Str("1111111111".into()));
+        assert_eq!(calc("=BIN2DEC(\"1111111111\")", &c), Variant::Integer(-1));
+        assert_eq!(calc("=DEC2HEX(255)", &c), Variant::Str("FF".into()));
+        assert_eq!(calc("=HEX2DEC(\"FF\")", &c), Variant::Integer(255));
+        assert_eq!(calc("=BIN2HEX(\"1010\")", &c), Variant::Str("A".into()));
+        assert_eq!(calc("=HEX2BIN(\"A\")", &c), Variant::Str("1010".into()));
+        assert_eq!(calc("=DEC2OCT(8)", &c), Variant::Str("10".into()));
+        assert_eq!(calc("=OCT2DEC(\"10\")", &c), Variant::Integer(8));
+        assert_eq!(calc("=BIN2OCT(\"1010\")", &c), Variant::Str("12".into()));
+        assert_eq!(calc("=OCT2BIN(\"12\")", &c), Variant::Str("1010".into()));
+        assert_eq!(calc("=HEX2OCT(\"FF\")", &c), Variant::Str("377".into()));
+        assert_eq!(calc("=OCT2HEX(\"377\")", &c), Variant::Str("FF".into()));
+        assert_eq!(calc("=DEC2BIN(512)", &c), Variant::Error(ExcelError::Num));
+        assert_eq!(calc("=DEC2BIN(10,3)", &c), Variant::Error(ExcelError::Num));
     }
 
     #[test]

@@ -344,6 +344,12 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `ERF` / `ERF.PRECISE` | Error function over one point or an interval | 2010 / 2013 |
 | `ERFC` / `ERFC.PRECISE` | Complementary error function | 2010 / 2013 |
 
+| `DEC2BIN` / `DEC2HEX` / `DEC2OCT` | Convert decimal integers to binary / hexadecimal / octal text | Classic |
+| `BIN2DEC` / `HEX2DEC` / `OCT2DEC` | Convert binary / hexadecimal / octal text to decimal integers | Classic |
+| `BIN2HEX` / `BIN2OCT` | Convert binary text to hexadecimal / octal text | Classic |
+| `HEX2BIN` / `HEX2OCT` | Convert hexadecimal text to binary / octal text | Classic |
+| `OCT2BIN` / `OCT2HEX` | Convert octal text to binary / hexadecimal text | Classic |
+
 ### Logical
 
 | Function | Description | Excel |

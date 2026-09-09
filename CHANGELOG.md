@@ -8,6 +8,7 @@
 - Formula coverage: add hyperbolic, reciprocal-trigonometric, and inverse-trigonometric formulas.
 - Formula coverage: add combinatorics and pairwise sum-of-squares formulas.
 - Formula coverage: add even/odd and precise/ISO ceiling-floor rounding formulas.
+- Formula coverage: add decimal, binary, hexadecimal, and octal conversion formulas.
 - Formula coverage: add common statistical functions `SUMSQ`, `GEOMEAN`, `HARMEAN`, `DEVSQ`, `AVEDEV`, exclusive percentile/rank, and inclusive/exclusive quartiles with argument-boundary regression tests.
 - Formula coverage: add standard-normal, binomial, and Poisson distribution functions with PMF/CDF modes and boundary regression tests.
 - Formula coverage: add gamma/log-gamma, beta distribution/inverse, chi-squared, and F-distribution functions with bounded numerical evaluation.
