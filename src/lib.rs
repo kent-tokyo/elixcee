@@ -1331,6 +1331,13 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to the first chart data-label position.
+    fn set_chart_data_labels_position(&mut self, chart_part: &str, position: &str) -> PyResult<()> {
+        self.inner
+            .set_chart_data_labels_position(chart_part, position)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -4866,6 +4873,71 @@ fn rewrite_chart_data_labels_show_value(xml: &str, show_value: bool) -> Result<S
     rewrite_chart_data_labels_flag(xml, "showVal", show_value)
 }
 
+/// Rewrites or adds the first chart data-labels position element while
+/// preserving existing flags and child elements.
+fn rewrite_chart_data_labels_position(xml: &str, position: &str) -> Result<String, String> {
+    if !matches!(
+        position,
+        "bestFit" | "b" | "ctr" | "inBase" | "inEnd" | "l" | "outEnd" | "r" | "t"
+    ) {
+        return Err("chart data-label position is outside the OOXML vocabulary".to_string());
+    }
+    let open = xml
+        .find("<c:dLbls")
+        .filter(|&offset| {
+            xml.as_bytes()
+                .get(offset + b"<c:dLbls".len())
+                .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+        })
+        .ok_or_else(|| "chart data-labels element is missing".to_string())?;
+    let open_end = xml[open..]
+        .find('>')
+        .map(|offset| open + offset + 1)
+        .ok_or_else(|| "chart data-labels element is unterminated".to_string())?;
+    let close = xml[open_end..]
+        .find("</c:dLbls>")
+        .map(|offset| open_end + offset)
+        .ok_or_else(|| "chart data-labels element is malformed".to_string())?;
+    let body = &xml[open_end..close];
+    let mut rewritten_body = body.to_string();
+    if let Some(pos_open_rel) = body.find("<c:dLblPos").filter(|&offset| {
+        body.as_bytes()
+            .get(offset + b"<c:dLblPos".len())
+            .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace() || *byte == b'/')
+    }) {
+        let pos_open = pos_open_rel;
+        let pos_end = body[pos_open..]
+            .find('>')
+            .map(|offset| pos_open + offset + 1)
+            .ok_or_else(|| "chart data-label position is unterminated".to_string())?;
+        let tag = &body[pos_open..pos_end];
+        let attr = "val=";
+        let attr_start = tag
+            .find(attr)
+            .ok_or_else(|| "chart data-label position val attribute is missing".to_string())?;
+        let value_start = attr_start + attr.len();
+        let quote =
+            tag.as_bytes().get(value_start).copied().ok_or_else(|| {
+                "chart data-label position val attribute is malformed".to_string()
+            })?;
+        if quote != b'"' && quote != b'\'' {
+            return Err("chart data-label position val attribute is malformed".to_string());
+        }
+        let value_end = tag[value_start + 1..]
+            .find(quote as char)
+            .map(|offset| value_start + 1 + offset)
+            .ok_or_else(|| "chart data-label position val attribute is unterminated".to_string())?;
+        let mut replacement = tag.to_string();
+        replacement.replace_range(value_start + 1..value_end, position);
+        rewritten_body.replace_range(pos_open..pos_end, &replacement);
+    } else {
+        rewritten_body.push_str(&format!("<c:dLblPos val=\"{position}\"/>"));
+    }
+    let mut out = xml.to_string();
+    out.replace_range(open_end..close, &rewritten_body);
+    Ok(out)
+}
+
 /// Rewrites or adds the chart-space style number while preserving all other
 /// chart XML, including series, titles, legends, and extension content.
 fn rewrite_chart_style(xml: &str, style: u32) -> Result<String, String> {
@@ -6053,6 +6125,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                             "showLegendKey",
                             show_legend_key,
                         )?;
+                    }
+                    if let Some(position) = edit.position.as_deref() {
+                        chart = rewrite_chart_data_labels_position(&chart, position)?;
                     }
                 }
                 chart.into_bytes()
@@ -9368,6 +9443,22 @@ mod tests {
             actual.contains("showLegendKey=\"1\"")
                 && actual.contains("<c:showLegendKey val=\"0\"/>")
         );
+    }
+
+    #[test]
+    fn chart_data_labels_rewriter_updates_or_adds_position() {
+        let source =
+            r#"<c:chart><c:dLbls showVal="1"><c:dLblPos val="inEnd"/><c:tx/></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_position(source, "outEnd").unwrap();
+        assert!(
+            actual.contains("<c:dLblPos val=\"outEnd\"/>")
+                && actual.contains("showVal=\"1\"")
+                && actual.contains("<c:tx/>")
+        );
+
+        let source = r#"<c:chart><c:dLbls showCat="1"></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_position(source, "ctr").unwrap();
+        assert!(actual.contains("<c:dLblPos val=\"ctr\"/>") && actual.contains("showCat=\"1\""));
     }
 
     #[test]

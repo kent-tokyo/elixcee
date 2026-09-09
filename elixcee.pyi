@@ -380,6 +380,14 @@ class Vm:
         """Update the first existing chart data-labels showLegendKey flag."""
         ...
 
+    def set_chart_data_labels_position(self, chart_part: str, position: str) -> None:
+        """Update or add the first chart data-label position.
+
+        Accepted values are ``bestFit``, ``b``, ``ctr``, ``inBase``,
+        ``inEnd``, ``l``, ``outEnd``, ``r``, and ``t``.
+        """
+        ...
+
     def set_chart_series_name_formula(
         self, chart_part: str, series_index: int, name_formula: str
     ) -> None:
