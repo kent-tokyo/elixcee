@@ -16,9 +16,9 @@ The [Excel COM adapter](../oracle-excel-com/UNVERIFIED.md) remains unverified sc
 | normalize.mjs / classify.mjs / run-classify.mjs | Compare logical cell values with an independent engine |
 | expected-outcomes.json / classify-elixcee-outcomes.mjs | Check elixcee's declared behavior, not Excel equivalence |
 
-The corpus contains 581 scenario definitions. A local macOS run with the 1.0.3 CLI
-on 2026-09-06 produced 570 PASS, 8 EXPECTED_RUNTIME_ERROR, 2 EXPECTED_UNSUPPORTED,
-and 1 NONDETERMINISTIC, with zero MISMATCH/UNEXPLAINED.
+The corpus contains 581 scenario definitions. The latest local macOS run with the
+current checkout's debug CLI on 2026-09-10 produced 572 PASS, 8
+EXPECTED_RUNTIME_ERROR, and 1 NONDETERMINISTIC, with zero MISMATCH/UNEXPLAINED.
 Self-expectation checks fail on MISMATCH or UNEXPLAINED;
 they must not turn unknown failures into expected outcomes.
 Oracle comparisons require actual comparable output: unavailable engines are not MATCH.

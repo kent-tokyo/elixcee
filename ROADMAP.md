@@ -397,7 +397,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 - [x] 部分 BUILD: 同一moduleで同名のUDT（`Type ... End Type`）を検出し、実行前と`check --json`で拒否するようにした。大文字小文字を統一し、module-qualified UDTの単一module解決と診断位置も追加した。複数module間の同名UDTは次項のmodule-local scopeで解決する。
 - [x] 複数module間のUDT解決規則を実装し、同名UDTでもSub／Function／Property本体のmodule-localなbare参照は実行中moduleを優先し、qualified参照は明示moduleへ解決するようにした。nested UDTも同じscopeで初期化する。重複UDTの同一module内拒否、手製ASTのflat fallback、外部module間のSub／Function衝突拒否は維持する。
 - [ ] Excelとの型変換・丸め・日付・Empty／Error・配列境界・再計算の独立oracle比較を拡張。
-- [ ] 実運用macroの回帰と、数式の依存グラフ・循環・volatile／dynamic array等の対応境界を検証。
+- [x] 部分 G4 local regression: 生成VBA corpus 581件を現行CLIで再実行し、572 PASS、8 EXPECTED_RUNTIME_ERROR、1 NONDETERMINISTIC、MISMATCH／UNEXPLAINED 0を確認した。実Excel由来の実運用macro、依存グラフ・循環・volatile／dynamic arrayのExcel意味論は未完。[測定記録](docs/measurements/vba-corpus-local-2026-09-10.md)
 
 ローカルsynthetic fixtureの通過数を、実Excelの意味論一致件数として扱いません。
 [互換性ハーネス](compat/README.md) と [CLI契約](docs/agent-contract.md) が検証の入口です。
