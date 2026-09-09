@@ -2,8 +2,8 @@
 
 Date: 2026-09-09 (Asia/Tokyo)
 
-This record covers the bounded explicit event-dispatch slice. It is not an
-Excel event-compatibility claim.
+This record covers the bounded event-dispatch slice. It is not an Excel
+event-compatibility claim.
 
 ## Scope
 
@@ -17,6 +17,11 @@ Excel event-compatibility claim.
   same-program duplicates are rejected as well.
 - `Vm.run_worksheet_change` binds an explicit A1 range on the active sheet to
   a single `As Range` parameter for `Worksheet_Change`.
+- The bound target exposes `Value`, `Address`, `Row`, `Column`, and the
+  single-area `Rows.Count` / `Columns.Count` members.
+- `run_sub_with_events` and `run_sub_multi_with_events` automatically dispatch
+  a unique handler after supported VBA value/formula writes. Handler writes
+  are queued and bounded to 64 cumulative dispatches.
 - Supported names are `Workbook_Open`, `Workbook_BeforeClose`,
   `Worksheet_Change`, `Worksheet_Calculate`, and `Worksheet_SelectionChange`.
 - `Application.EnableEvents = False` suppresses dispatch, and a handler cannot
@@ -40,11 +45,13 @@ git diff --check
 
 ## Result
 
-The event regression tests passed, and the full local Rust workspace passed
-1,601 tests on macOS arm64. Strict clippy, formatting, and diff checks passed.
+The target metadata regression and event regression tests passed. The full
+Rust target suite passed 1,663 tests on macOS arm64, including blackbox and
+benchmark targets. Strict clippy and diff checks passed.
 
 ## Not measured or claimed
 
-- Automatic event discovery after workbook load or cell mutation.
-- Multiple handler ordering or event chains.
+- Automatic event discovery after workbook load, beyond the opt-in event
+  runner.
+- Worksheet-scoped selection among multiple `Worksheet_Change` handlers.
 - Excel reopen, Excel oracle agreement, other OS behavior, or external review.
