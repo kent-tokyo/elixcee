@@ -9,6 +9,7 @@
 - Formula coverage: add gamma/log-gamma, beta distribution/inverse, chi-squared, and F-distribution functions with bounded numerical evaluation.
 - Formula coverage: add two-tailed/right-tailed Student t distribution and inverse functions.
 - Formula coverage: add `DAYS360` and `YEARFRAC` day-count conventions.
+- Formula coverage: add depreciation, effective/nominal rate, and equivalent-growth financial functions.
 
 次の変更はここに記録します。
 

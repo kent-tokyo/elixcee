@@ -260,6 +260,13 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `MIRR` | Modified internal rate of return | Classic |
 | `XNPV` | Net present value (irregular cash flows, date-weighted) | Classic |
 | `XIRR` | Internal rate of return (irregular cash flows) | Classic |
+| `SLN` | Straight-line depreciation | Classic |
+| `SYD` | Sum-of-years' digits depreciation | Classic |
+| `DB` | Fixed-declining balance depreciation | Classic |
+| `DDB` | Double-declining balance depreciation | Classic |
+| `EFFECT` | Effective annual interest rate | Classic |
+| `NOMINAL` | Nominal annual interest rate | Classic |
+| `RRI` | Equivalent growth interest rate | 2013 |
 
 ### Statistical
 

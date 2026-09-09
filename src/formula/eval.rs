@@ -589,6 +589,13 @@ fn eval_func(
         "MIRR" => func_mirr(args, cells),
         "XNPV" => func_xnpv(args, cells),
         "XIRR" => func_xirr(args, cells),
+        "SLN" => func_sln(args, cells),
+        "SYD" => func_syd(args, cells),
+        "DB" => func_db(args, cells),
+        "DDB" => func_ddb(args, cells),
+        "EFFECT" => func_effect(args, cells),
+        "NOMINAL" => func_nominal(args, cells),
+        "RRI" => func_rri(args, cells),
         // ── Database ─────────────────────────────────────────────────────────
         "DGET" => func_dget(args, cells),
         "DSUM" => func_dsum(args, cells),
@@ -6550,6 +6557,151 @@ fn func_xirr(
     Ok(Variant::Error(ExcelError::Num))
 }
 
+fn func_sln(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("SLN requires 3 arguments".into());
+    }
+    let cost = to_float(&evaluate(&args[0], cells)?)?;
+    let salvage = to_float(&evaluate(&args[1], cells)?)?;
+    let life = to_float(&evaluate(&args[2], cells)?)?;
+    if life <= 0.0 {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    Ok(Variant::Float((cost - salvage) / life))
+}
+
+fn func_syd(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("SYD requires 4 arguments".into());
+    }
+    let cost = to_float(&evaluate(&args[0], cells)?)?;
+    let salvage = to_float(&evaluate(&args[1], cells)?)?;
+    let life = to_float(&evaluate(&args[2], cells)?)?;
+    let period = to_float(&evaluate(&args[3], cells)?)?;
+    if life <= 0.0 || period <= 0.0 || period > life {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(
+        (cost - salvage) * (life - period + 1.0) * 2.0 / (life * (life + 1.0)),
+    ))
+}
+
+fn func_ddb(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 4 || args.len() > 5 {
+        return Err("DDB requires 4 or 5 arguments".into());
+    }
+    let cost = to_float(&evaluate(&args[0], cells)?)?;
+    let salvage = to_float(&evaluate(&args[1], cells)?)?;
+    let life = to_float(&evaluate(&args[2], cells)?)?;
+    let period = to_float(&evaluate(&args[3], cells)?)?;
+    let factor = if args.len() == 5 {
+        to_float(&evaluate(&args[4], cells)?)?
+    } else {
+        2.0
+    };
+    if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || period > life || factor <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let mut book = cost;
+    let mut depreciation = 0.0;
+    for _ in 1..=(period.ceil() as i64) {
+        depreciation = (book * factor / life).min((book - salvage).max(0.0));
+        book -= depreciation;
+    }
+    Ok(Variant::Float(depreciation))
+}
+
+fn func_db(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 4 || args.len() > 5 {
+        return Err("DB requires 4 or 5 arguments".into());
+    }
+    let cost = to_float(&evaluate(&args[0], cells)?)?;
+    let salvage = to_float(&evaluate(&args[1], cells)?)?;
+    let life = to_float(&evaluate(&args[2], cells)?)?;
+    let period = to_float(&evaluate(&args[3], cells)?)?;
+    let month = if args.len() == 5 {
+        to_float(&evaluate(&args[4], cells)?)?
+    } else {
+        12.0
+    };
+    if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || month <= 0.0 || month > 12.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let factor = ((1.0 - (salvage / cost).powf(1.0 / life)) * 1000.0).round() / 1000.0;
+    let mut book = cost;
+    let mut depreciation = 0.0;
+    let years = period.ceil() as i64;
+    for year in 1..=years {
+        let months = if year == 1 { month } else { 12.0 };
+        depreciation = (book * factor * months / 12.0).min((book - salvage).max(0.0));
+        book -= depreciation;
+    }
+    Ok(Variant::Float(depreciation))
+}
+
+fn func_effect(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("EFFECT requires 2 arguments".into());
+    }
+    let nominal = to_float(&evaluate(&args[0], cells)?)?;
+    let periods = to_float(&evaluate(&args[1], cells)?)?;
+    if periods < 1.0 || periods.fract() != 0.0 || !nominal.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(
+        (1.0 + nominal / periods).powf(periods) - 1.0,
+    ))
+}
+
+fn func_nominal(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("NOMINAL requires 2 arguments".into());
+    }
+    let effective = to_float(&evaluate(&args[0], cells)?)?;
+    let periods = to_float(&evaluate(&args[1], cells)?)?;
+    if periods < 1.0 || periods.fract() != 0.0 || effective <= -1.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(
+        periods * ((1.0 + effective).powf(1.0 / periods) - 1.0),
+    ))
+}
+
+fn func_rri(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("RRI requires 3 arguments".into());
+    }
+    let nper = to_float(&evaluate(&args[0], cells)?)?;
+    let pv = to_float(&evaluate(&args[1], cells)?)?;
+    let fv = to_float(&evaluate(&args[2], cells)?)?;
+    if nper <= 0.0 || pv <= 0.0 || fv <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float((fv / pv).powf(1.0 / nper) - 1.0))
+}
+
 // ── TEXTSPLIT ─────────────────────────────────────────────────────────────────
 
 fn func_textsplit(
@@ -10314,6 +10466,28 @@ mod tests {
         assert_eq!(calc("=SIGN(5)", &c), Variant::Integer(1));
         assert_eq!(calc("=SIGN(-3)", &c), Variant::Integer(-1));
         assert_eq!(calc("=SIGN(0)", &c), Variant::Integer(0));
+        assert_eq!(calc("=SLN(1000,100,5)", &c), Variant::Float(180.0));
+        assert_eq!(calc("=SYD(1000,100,5,1)", &c), Variant::Float(300.0));
+        assert_eq!(calc("=DDB(1000,100,5,1)", &c), Variant::Float(400.0));
+        assert!(
+            matches!(calc("=DB(1000,100,5,1)", &c), Variant::Float(v) if (v - 369.0).abs() < 1.0)
+        );
+        match calc("=EFFECT(0.1,4)", &c) {
+            Variant::Float(v) => assert!((v - 0.10381289).abs() < 1e-7),
+            other => panic!("EFFECT: {:?}", other),
+        }
+        match calc("=NOMINAL(0.10381289,4)", &c) {
+            Variant::Float(v) => assert!((v - 0.1).abs() < 1e-7),
+            other => panic!("NOMINAL: {:?}", other),
+        }
+        match calc("=RRI(5,100,150)", &c) {
+            Variant::Float(v) => assert!((v - 0.08447177).abs() < 1e-7),
+            other => panic!("RRI: {:?}", other),
+        }
+        assert_eq!(
+            calc("=SLN(1000,100,0)", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
     }
 
     #[test]
