@@ -329,7 +329,7 @@ class Vm:
     def set_chart_axis_title(
         self, chart_part: str, axis_index: int, text: str
     ) -> None:
-        """Update an existing chart axis title; axis_index is zero-based."""
+        """Update or add a chart axis title; axis_index is zero-based."""
         ...
 
     def set_chart_series_name_formula(

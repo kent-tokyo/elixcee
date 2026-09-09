@@ -4729,10 +4729,31 @@ fn rewrite_chart_axis_titles(
             .copied()
             .ok_or_else(|| format!("chart axis index {axis_index} is out of range"))?;
         let fragment = &out[open..close];
-        if !fragment.contains("<c:title") {
-            return Err(format!("chart axis index {axis_index} is missing a title"));
-        }
-        let rewritten = rewrite_chart_title(fragment, text)?;
+        let rewritten = if fragment.contains("<c:title") {
+            rewrite_chart_title(fragment, text)?
+        } else {
+            let title = format!(
+                "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
+                xml_escape(text)
+            );
+            let insertion = [
+                fragment.find("<c:numFmt"),
+                fragment.find("<c:majorTickMark"),
+                fragment.find("<c:minorTickMark"),
+                fragment.find("<c:tickLblPos"),
+                fragment.find("<c:crossAx"),
+                fragment.rfind("</c:"),
+            ]
+            .into_iter()
+            .flatten()
+            .min()
+            .ok_or_else(|| format!("chart axis index {axis_index} is malformed"))?;
+            let mut added = String::with_capacity(fragment.len() + title.len());
+            added.push_str(&fragment[..insertion]);
+            added.push_str(&title);
+            added.push_str(&fragment[insertion..]);
+            added
+        };
         out.replace_range(open..close, &rewritten);
     }
     Ok(out)
@@ -8950,15 +8971,18 @@ mod tests {
     }
 
     #[test]
-    fn chart_axis_title_rewriter_rejects_missing_title() {
+    fn chart_axis_title_rewriter_adds_missing_title_before_axis_tail() {
         let mut edits = std::collections::HashMap::new();
-        edits.insert(0usize, "Axis".to_string());
+        edits.insert(0usize, "Axis & title".to_string());
+        let actual = rewrite_chart_axis_titles(
+            "<c:chart><c:plotArea><c:valAx><c:axId val=\"1\"/><c:crossAx val=\"2\"/></c:valAx></c:plotArea></c:chart>",
+            &edits,
+        )
+        .unwrap();
+        assert!(actual.contains("<c:title><c:tx><c:rich>") && actual.contains("Axis &amp; title"));
         assert!(
-            rewrite_chart_axis_titles(
-                "<c:chart><c:plotArea><c:valAx/></c:plotArea></c:chart>",
-                &edits
-            )
-            .is_err()
+            actual.contains("</c:title><c:crossAx val=\"2\"/>")
+                && actual.contains("<c:axId val=\"1\"/>")
         );
     }
 

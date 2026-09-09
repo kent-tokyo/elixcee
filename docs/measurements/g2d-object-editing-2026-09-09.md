@@ -28,7 +28,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_chart_style(chart_part, style)` rewrites or adds only the chart-space
   `<c:style val>` with an Excel style number from 1 through 48.
 - `Vm.set_chart_axis_title(chart_part, axis_index, text)` rewrites only the
-  first text run of an existing axis title; axes are zero-based in document order.
+  first text run of an existing axis title, or adds a minimal title when absent;
+  axes are zero-based in document order.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`
