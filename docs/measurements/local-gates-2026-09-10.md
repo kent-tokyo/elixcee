@@ -41,7 +41,7 @@ All self-contained gates passed:
 
 This rerun covered commit `e3d8e27` (`feat: edit drawing line dash`) and its
 ancestors through worksheet code-name event resolution; all self-contained gates
-completed successfully.
+completed successfully. The documentation-only follow-up is `9ff3236`.
 
 The gate output recorded a WASM payload growth of 9.95%, within the 10% local
 baseline limit. The browser smoke returned `ok: true`, read the sample sheet,
