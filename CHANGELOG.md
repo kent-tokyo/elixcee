@@ -18,6 +18,7 @@
 - G4の配列形状境界として、`ROWS`／`COLUMNS`が参照・`SEQUENCE`・`TRANSPOSE`の既知形状を返す経路を追加しました。形状不明のflat arrayは推測せず1×1扱いを維持し、Rust回帰126件を確認しました。
 - G2dのChart系列編集にsolid RGB line colorの限定更新APIを追加しました。theme／gradient／欠損style chainは推測生成せず拒否し、XML rewriter回帰とExcel由来fixture保存回帰を確認しました。
 - G2dのChart系列編集にsolid RGB fill colorの限定更新APIを追加しました。theme／gradient／欠損style chainは推測生成せず拒否し、XML rewriter回帰を追加しました。
+- G2dのDrawing編集にpreset geometryの限定更新APIを追加しました。bounded DrawingML vocabularyを検証し、custom geometryと欠損要素は推測生成せず拒否します。
 
 - G5bの保存前relationship carry-over判定で、保持対象partの存在確認を線形リスト探索からHashSet参照へ変更しました。出力形式・接続判定は維持し、`cargo check --lib --offline`（debuginfo無効の一時target）で型検証しました。速度／RSS効果は未測定です。
 

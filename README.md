@@ -175,7 +175,7 @@ writer can still be lost or disconnected. Existing Drawing/relationship chains
 are preserved on tested paths, and bounded APIs can update selected Chart-series
 formulas, caches, marker attributes, solid RGB line and fill colors, smooth flags, negative-value display and series visibility flags, Chart title text, two-cell
 Drawing anchors, and worksheet-backed Pivot source fields. Drawing shape metadata and selected solid fill/line style
-attributes (rotation, flips, RGB/ARGB fill and line color, line width, and
+attributes (rotation, flips, preset geometry, RGB/ARGB fill and line color, line width, and
 preset dash) are also available through bounded APIs. Chart creation, general
 Drawing shape editing, Pivot cache recalculation, comments, hyperlinks, and
 other OOXML objects remain compatibility gaps unless covered by tests for the

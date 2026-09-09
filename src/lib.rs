@@ -1659,6 +1659,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to an existing DrawingML preset geometry.
+    fn set_drawing_shape_geometry(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        preset: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_shape_geometry(drawing_part, anchor_index, preset)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Move a sheet to an absolute 0-based position among the workbook's sheets.
     ///
     /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
@@ -6367,6 +6379,73 @@ fn rewrite_drawing_shape_line_dash(
     Ok(out)
 }
 
+/// Rewrites only the `prst` attribute of an existing DrawingML preset
+/// geometry. Custom geometry and missing geometry are rejected.
+fn rewrite_drawing_shape_geometry(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, String>,
+) -> Result<String, String> {
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
+    let mut out = xml.to_string();
+    for (&anchor_index, preset) in ordered {
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=anchor_index {
+            let candidates = [
+                ("<xdr:twoCellAnchor>", "</xdr:twoCellAnchor>"),
+                ("<xdr:twoCellAnchor ", "</xdr:twoCellAnchor>"),
+                ("<xdr:oneCellAnchor>", "</xdr:oneCellAnchor>"),
+                ("<xdr:oneCellAnchor ", "</xdr:oneCellAnchor>"),
+                ("<xdr:absoluteAnchor>", "</xdr:absoluteAnchor>"),
+                ("<xdr:absoluteAnchor ", "</xdr:absoluteAnchor>"),
+            ];
+            let (open, closing) = candidates
+                .iter()
+                .filter_map(|(opening, closing)| {
+                    out[cursor..]
+                        .find(opening)
+                        .map(|offset| (cursor + offset, *closing))
+                })
+                .min_by_key(|(position, _)| *position)
+                .ok_or_else(|| format!("drawing anchor index {anchor_index} is out of range"))?;
+            let close_rel = out[open..]
+                .find(closing)
+                .ok_or_else(|| "drawing anchor is unterminated".to_string())?;
+            let close = open + close_rel + closing.len();
+            if current == anchor_index {
+                selected = Some((open, close));
+                break;
+            }
+            cursor = close;
+        }
+        let (open, close) = selected.expect("anchor selection loop always selects its index");
+        let anchor = &out[open..close];
+        let geometry = anchor
+            .find("<a:prstGeom")
+            .ok_or_else(|| "drawing shape is missing <a:prstGeom>".to_string())?;
+        let tag_end = geometry
+            + anchor[geometry..]
+                .find('>')
+                .ok_or_else(|| "drawing preset geometry is unterminated".to_string())?;
+        let tag = &anchor[geometry..=tag_end];
+        let attr_rel = tag
+            .find("prst=")
+            .ok_or_else(|| "drawing preset geometry is missing prst".to_string())?;
+        let value_start = open + geometry + attr_rel + "prst=".len();
+        let quote = out.as_bytes()[value_start];
+        if quote != b'"' && quote != b'\'' {
+            return Err("drawing preset geometry prst attribute is malformed".to_string());
+        }
+        let value_end = out[value_start + 1..]
+            .find(quote as char)
+            .map(|rel| value_start + 1 + rel)
+            .ok_or_else(|| "drawing preset geometry prst attribute is unterminated".to_string())?;
+        out.replace_range(value_start + 1..value_end, preset);
+    }
+    Ok(out)
+}
+
 /// Rewrites only the worksheet source sheet attribute in pivot cache definitions.
 /// Pivot cache contents and table-based sources are left byte-for-byte unchanged.
 fn rewrite_pivot_cache_sheet_refs(
@@ -6927,6 +7006,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_drawing_shape_line_edits = !vm.drawing_shape_line_edits.is_empty();
     let has_drawing_shape_line_width_edits = !vm.drawing_shape_line_width_edits.is_empty();
     let has_drawing_shape_line_dash_edits = !vm.drawing_shape_line_dash_edits.is_empty();
+    let has_drawing_shape_geometry_edits = !vm.drawing_shape_geometry_edits.is_empty();
     // Keep writer-owned static package parts regenerated. A source raw copy can
     // carry source-only defaults or relationship-id ordering that is valid in
     // isolation but diverges from the writer's carried relationship contract.
@@ -7403,7 +7483,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_drawing_shape_fill_edits
                 || has_drawing_shape_line_edits
                 || has_drawing_shape_line_width_edits
-                || has_drawing_shape_line_dash_edits)
+                || has_drawing_shape_line_dash_edits
+                || has_drawing_shape_geometry_edits)
                 && (vm.drawing_anchor_edits.contains_key(&name)
                     || vm.drawing_shape_name_edits.contains_key(&name)
                     || vm.drawing_shape_description_edits.contains_key(&name)
@@ -7416,7 +7497,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || vm.drawing_shape_fill_edits.contains_key(&name)
                     || vm.drawing_shape_line_edits.contains_key(&name)
                     || vm.drawing_shape_line_width_edits.contains_key(&name)
-                    || vm.drawing_shape_line_dash_edits.contains_key(&name))
+                    || vm.drawing_shape_line_dash_edits.contains_key(&name)
+                    || vm.drawing_shape_geometry_edits.contains_key(&name))
                 && name.starts_with("xl/drawings/")
                 && name.ends_with(".xml")
                 && !name.contains("/_rels/")
@@ -7502,6 +7584,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 } else {
                     drawing
                 };
+                let drawing = if let Some(edits) = vm.drawing_shape_geometry_edits.get(&name) {
+                    rewrite_drawing_shape_geometry(&drawing, edits)?
+                } else {
+                    drawing
+                };
                 drawing.into_bytes()
             } else {
                 bytes
@@ -7541,7 +7628,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || has_drawing_shape_fill_edits
                     || has_drawing_shape_line_edits
                     || has_drawing_shape_line_width_edits
-                    || has_drawing_shape_line_dash_edits)
+                    || has_drawing_shape_line_dash_edits
+                    || has_drawing_shape_geometry_edits)
                     && (vm.drawing_anchor_edits.contains_key(&name)
                         || vm.drawing_shape_name_edits.contains_key(&name)
                         || vm.drawing_shape_description_edits.contains_key(&name)
@@ -11077,6 +11165,33 @@ mod tests {
         assert!(
             rewrite_drawing_shape_flip(
                 "<xdr:wsDr><xdr:absoluteAnchor><xdr:sp/></xdr:absoluteAnchor></xdr:wsDr>",
+                &edits
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn drawing_shape_geometry_rewriter_updates_only_selected_anchor() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(1usize, "roundRect".to_string());
+        let source = concat!(
+            r#"<xdr:wsDr><xdr:twoCellAnchor><xdr:sp><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:sp></xdr:twoCellAnchor>"#,
+            r#"<xdr:oneCellAnchor><xdr:sp><xdr:spPr><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></xdr:spPr></xdr:sp></xdr:oneCellAnchor></xdr:wsDr>"#,
+        );
+        let actual = rewrite_drawing_shape_geometry(source, &edits).unwrap();
+        assert!(actual.contains(r#"<a:prstGeom prst="rect">"#));
+        assert!(actual.contains(r#"<a:prstGeom prst="roundRect">"#));
+        assert!(!actual.contains(r#"<a:prstGeom prst="ellipse">"#));
+    }
+
+    #[test]
+    fn drawing_shape_geometry_rewriter_rejects_missing_geometry() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, "rect".to_string());
+        assert!(
+            rewrite_drawing_shape_geometry(
+                "<xdr:wsDr><xdr:twoCellAnchor><xdr:sp/></xdr:twoCellAnchor></xdr:wsDr>",
                 &edits
             )
             .is_err()

@@ -122,6 +122,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   updates only an existing line width after points-to-EMU conversion.
 - `Vm.set_drawing_shape_line_dash(drawing_part, anchor_index, dash)` updates
   only an existing `<a:prstDash>` using the DrawingML preset vocabulary.
+- `Vm.set_drawing_shape_geometry(drawing_part, anchor_index, preset)` updates
+  only an existing `<a:prstGeom prst>`. A bounded DrawingML preset vocabulary
+  is accepted; custom geometry and missing geometry are rejected.
   The save path is covered by `drawing_shape_line_dash_edit_survives_xlsx_save`
   using a minimal Drawing-backed XLSX fixture. The same save round-trip now
   covers `Vm.set_drawing_shape_text`, XML escaping (`&` to `&amp;`), and

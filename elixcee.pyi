@@ -594,6 +594,12 @@ class Vm:
         """Update an existing shape line's DrawingML preset dash."""
         ...
 
+    def set_drawing_shape_geometry(
+        self, drawing_part: str, anchor_index: int, preset: str
+    ) -> None:
+        """Update an existing DrawingML preset geometry."""
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 
