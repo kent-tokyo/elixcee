@@ -9794,7 +9794,6 @@ impl Vm {
             .map(|n| n.to_string_lossy().to_string());
         self.loaded_workbook_path = Some(path.to_string());
         self.external_links_policy = options.external_links;
-        self.workbook_date1904 = reader::xlsx_date1904_for_path(path)?;
         let sheets = reader::read_workbook_with_options(path, options).map_err(|error| {
             if error == "unsupported input extension; use .xlsx, .xlsm, or .ods" {
                 error
@@ -9805,6 +9804,8 @@ impl Vm {
         if sheets.is_empty() {
             return Err("workbook has no sheets".to_string());
         }
+        self.workbook_date1904 = reader::xlsx_date1904_for_path(path)
+            .map_err(|error| format!("cannot read '{}': {}", path, error))?;
         let names = self.populate_from_sheets(sheets);
         self.load_sheet_code_names(path)?;
         self.load_simple_defined_names(path)?;
