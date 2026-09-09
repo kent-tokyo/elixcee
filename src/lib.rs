@@ -1243,6 +1243,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to an existing chart series invert-if-negative flag.
+    fn set_chart_series_invert_if_negative(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        enabled: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_series_invert_if_negative(chart_part, series_index, enabled)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded update to cached category/value points of an existing
     /// chart series. Existing cache kind is preserved and formulas are not
     /// changed.
@@ -4681,6 +4693,14 @@ fn rewrite_chart_series_formulas(
                 "<c:smooth",
                 if smooth { "1" } else { "0" },
                 "chart series smooth is missing val",
+            )?;
+        }
+        if let Some(enabled) = edit.invert_if_negative {
+            replace_marker_attr(
+                &mut series,
+                "<c:invertIfNegative",
+                if enabled { "1" } else { "0" },
+                "chart series invert-if-negative is missing val",
             )?;
         }
         out.replace_range(open..close, &series);
@@ -10224,6 +10244,7 @@ mod tests {
                 marker_symbol: None,
                 marker_size: None,
                 smooth: None,
+                invert_if_negative: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10256,6 +10277,7 @@ mod tests {
                 marker_symbol: None,
                 marker_size: None,
                 smooth: None,
+                invert_if_negative: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10285,6 +10307,7 @@ mod tests {
                 marker_symbol: Some("diamond".to_string()),
                 marker_size: Some(12),
                 smooth: Some(true),
+                invert_if_negative: Some(true),
                 category_cache: None,
                 value_cache: None,
             },
@@ -10293,6 +10316,7 @@ mod tests {
             "<c:chart><c:plotArea>",
             "<c:ser><c:marker><c:symbol val=\"circle\"/><c:size val=\"6\"/></c:marker>",
             "<c:smooth val=\"0\"/>",
+            "<c:invertIfNegative val=\"0\"/>",
             "<c:val><c:numRef><c:f>Sheet1!$A$1:$A$2</c:f></c:numRef></c:val></c:ser>",
             "</c:plotArea></c:chart>"
         );
@@ -10300,6 +10324,7 @@ mod tests {
         assert!(actual.contains("<c:symbol val=\"diamond\"/>"));
         assert!(actual.contains("<c:size val=\"12\"/>"));
         assert!(actual.contains("<c:smooth val=\"1\"/>"));
+        assert!(actual.contains("<c:invertIfNegative val=\"1\"/>"));
     }
 
     #[test]
@@ -10314,6 +10339,7 @@ mod tests {
                 marker_symbol: Some("diamond".to_string()),
                 marker_size: None,
                 smooth: None,
+                invert_if_negative: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10333,6 +10359,7 @@ mod tests {
                 marker_symbol: None,
                 marker_size: None,
                 smooth: None,
+                invert_if_negative: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10940,6 +10967,7 @@ mod tests {
                 marker_symbol: None,
                 marker_size: None,
                 smooth: None,
+                invert_if_negative: None,
                 category_cache: Some(vec!["Jan & Feb".to_string(), "Mar".to_string()]),
                 value_cache: Some(vec!["10".to_string(), "20.5".to_string()]),
             },
@@ -10972,6 +11000,7 @@ mod tests {
                 marker_symbol: None,
                 marker_size: None,
                 smooth: None,
+                invert_if_negative: None,
                 category_cache: None,
                 value_cache: Some(vec!["1".to_string()]),
             },
@@ -10999,6 +11028,7 @@ mod tests {
                 marker_symbol: None,
                 marker_size: None,
                 smooth: None,
+                invert_if_negative: None,
                 category_cache: None,
                 value_cache: Some(vec!["3.5".to_string()]),
             },

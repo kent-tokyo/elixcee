@@ -12,7 +12,7 @@
       "recalculate": "warned",
       "excel_reopen": "unverified",
       "fixture": "compat/oracle-excel-com/fixtures/pristine/fixture5_chart_image_freeze_print.xlsm",
-      "notes": "Drawing/chart parts and relationships are retained when connectivity checks pass. A loaded workbook may rename a sheet and update qualified chart <c:f> references; bounded edits cover selected series formulas, caches, marker attributes, smooth flag, title, legend, axes, style, and data labels. Chart creation and general editing are not supported."
+      "notes": "Drawing/chart parts and relationships are retained when connectivity checks pass. A loaded workbook may rename a sheet and update qualified chart <c:f> references; bounded edits cover selected series formulas, caches, marker attributes, smooth and negative-value display flags, title, legend, axes, style, and data labels. Chart creation and general editing are not supported."
     },
     {
       "id": "pivot_tables",

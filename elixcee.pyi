@@ -442,6 +442,12 @@ class Vm:
         """Queue a bounded edit to an existing chart series smooth flag."""
         ...
 
+    def set_chart_series_invert_if_negative(
+        self, chart_part: str, series_index: int, enabled: bool
+    ) -> None:
+        """Queue a bounded edit to an existing chart series negative-value display flag."""
+        ...
+
     def set_chart_series_cache(
         self,
         chart_part: str,
