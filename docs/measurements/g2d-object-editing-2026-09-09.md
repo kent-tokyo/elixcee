@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache/smooth/invert-if-negative/visibility, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
+Chart-series-cache/smooth/invert-if-negative/visibility/line-color, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, Drawing
 alternative-text edits, and existing DrawingML text-run editing.
 It is not evidence of
@@ -142,6 +142,7 @@ cargo test --test xlsx_roundtrip pivot_worksheet_source --offline -- --nocapture
 cargo test --test xlsx_roundtrip edit_chart_series --offline -- --nocapture
 cargo test --test xlsx_roundtrip edit_chart_series_smooth_survives_real_fixture_save --offline -- --nocapture
 cargo test --test xlsx_roundtrip edit_chart_series_visibility_survives_real_fixture_save --offline -- --nocapture
+cargo test --test xlsx_roundtrip edit_chart_series_line_color_survives_real_fixture_save --offline -- --nocapture
 cargo test chart_title_rewriter --offline -- --nocapture
 cargo test chart_legend_overlay --offline -- --nocapture
 cargo test chart_data_labels_rewriter --offline -- --nocapture

@@ -1404,6 +1404,50 @@ fn edit_chart_series_visibility_survives_real_fixture_save() {
     assert!(output_chart.contains("<c:f>Sheet1!$A$6:$B$6</c:f>"));
 }
 
+/// G2d: series line-color editing rewrites only an existing solid RGB style
+/// in a temporary copy of the Excel-authored chart fixture.
+#[test]
+fn edit_chart_series_line_color_survives_real_fixture_save() {
+    let source_path = tmp_path("edit_chart_series_line_color_source.xlsm");
+    let output_path = tmp_path("edit_chart_series_line_color_output.xlsm");
+    let fixture_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&fixture_path).expect("real fixture must exist");
+    let mut entries = read_all_zip_entries(&fixture_bytes);
+    let chart = String::from_utf8(entries["xl/charts/chart1.xml"].clone()).unwrap();
+    let series_start = chart
+        .find("<c:ser>")
+        .expect("fixture should contain one chart series");
+    let series_end = chart
+        .find("</c:ser>")
+        .expect("fixture should contain one chart series");
+    let mut chart_with_line = chart;
+    let no_fill = chart_with_line[series_start..series_end]
+        .find("<a:noFill/>")
+        .map(|offset| series_start + offset)
+        .expect("fixture series should contain a line noFill marker");
+    chart_with_line.replace_range(
+        no_fill..no_fill + "<a:noFill/>".len(),
+        "<a:solidFill><a:srgbClr val=\"112233\"/></a:solidFill>",
+    );
+    entries.insert(
+        "xl/charts/chart1.xml".to_string(),
+        chart_with_line.into_bytes(),
+    );
+    std::fs::write(&source_path, write_all_zip_entries(&entries)).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("temporary fixture should load");
+    vm.set_chart_series_line_color("xl/charts/chart1.xml", 0, "#aBc123")
+        .expect("line color edit should be accepted");
+    save_workbook(&vm, &output_path).expect("line color edit should save");
+
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let output_chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(output_chart.contains("<a:srgbClr val=\"ABC123\"/>"));
+    assert!(output_chart.contains("<c:f>Sheet1!$A$6:$B$6</c:f>"));
+}
+
 /// A minimal Pivot cache package exercises the complete loaded-workbook rename
 /// path without requiring a binary Excel fixture. The cache itself is opaque;
 /// only its worksheet source sheet name may change.
