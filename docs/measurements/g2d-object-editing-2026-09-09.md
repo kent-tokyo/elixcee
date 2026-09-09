@@ -163,12 +163,14 @@ wheel was installed into the isolated test environment and the binding was
 resolved as `Vm.set_drawing_shape_text`.
 
 The subsequent low-disk workspace all-target run passed 1,680 library tests
-and all integration/benchmark targets, including the new text-run regression.
+and all integration/benchmark targets, including the first text-run regression;
+the indexed-run addition was verified separately below.
 
-The minimal Drawing-backed XLSX save test passed with line-dash, first-run,
-and indexed text-run edits. After reload from the saved ZIP, the selected runs
-were `Updated &amp; text` and `Second &amp; text`, confirming that an explicit
-run index can update a non-first run without reconstructing the text body.
+The indexed-run unit test and the minimal Drawing-backed XLSX save test passed
+after the follow-up API addition. The saved ZIP contained
+`Updated &amp; text` and `Second &amp; text`, confirming that an explicit run
+index can update a non-first run without reconstructing the text body. This
+follow-up targeted run did not rerun the full workspace count.
 
 The title and series-name rewriter unit tests replaced XML-escaped text while
 retaining unrelated text runs, series references, and the surrounding plot
