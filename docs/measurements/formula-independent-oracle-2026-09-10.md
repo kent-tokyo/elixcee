@@ -34,6 +34,7 @@ The same generated workbook was then recalculated by the installed elixcee
 wheel with `--with-elixcee`. After the documented date-serial normalization,
 elixcee matched all 39 comparable probes (39/39); the same three probes were
 skipped because the LibreOffice oracle did not produce comparable values.
+The wheel was elixcee 1.0.5 on CPython 3.13.6, macOS 26.5.2 arm64.
 The binding-specific Error object was normalized to its displayed error code
 for JSON output, while ordinary numeric and string values were compared without
 coercion.

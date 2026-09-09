@@ -46,6 +46,11 @@ from MISMATCH and UNEXPLAINED. Do not silently treat a crash, hang, or unknown r
 as expected. The LibreOffice runner's recorded availability limitations are in the
 corpus README; its outcomes are not Microsoft Excel measurements.
 
+The formula-only LibreOffice harness is `oracle/run-libreoffice-formulas.py`.
+With an installed local elixcee binding, `--with-elixcee` recalculates the same
+generated workbook and reports a separate elixcee result set. This is a local
+cross-check, not Microsoft Excel evidence.
+
 ## VBA semantic reference cases
 
 The [semantic suite](vba-semantics/README.md) compares values with independent JS
