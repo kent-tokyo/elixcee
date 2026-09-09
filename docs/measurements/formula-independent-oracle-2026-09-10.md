@@ -12,18 +12,21 @@ independent oracle, not Microsoft Excel.
 
 - Host: macOS arm64
 - Backend: `/opt/homebrew/bin/soffice`
-- Cases: 20 (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, mixed `SUM`, `IF`, `IFERROR`, `ISERROR`, `#DIV/0!`, `ROUND`, `DATE`, `DATE` with the 1904 workbook epoch, `LEFT`, `MID`, `LEN`, `CONCATENATE`, `MATCH`, `VLOOKUP`)
-- Comparable results: 20
-- Matches: 20
+- Cases: 28 (the original 20 plus `AND`, `OR`, `NOT`, `ROUNDUP`, `ROUNDDOWN`, `INDEX`, and `COUNTIF`; `IFNA` is retained as an oracle probe)
+- Comparable results: 27
+- Matches: 27
+- Skipped: 1 (`IFNA`, because this LibreOffice build leaves even `IFNA(NA(),...)` as `#N/A`)
 - Mismatches: 0
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
 
-The harness exits with status 1 if any comparable case mismatches; this run
-exited with status 0.
+The harness exits with status 1 if any comparable case mismatches. Oracle
+unsupported probes are reported in `skipped` and are not silently counted as
+matches; this run exited with status 0.
 
-The expanded run also covered an unhandled division error, error recovery,
-error inspection, and numeric/text mixed ranges. Error text is recorded as a
-cell result; it is not treated as a successful numeric coercion.
+The expanded run also covered logical operators, conditional aggregation,
+rounding boundaries, INDEX lookup, an unhandled division error, error
+recovery, error inspection, and numeric/text mixed ranges. Error text is
+recorded as a cell result; it is not treated as a successful numeric coercion.
 
 The `DATE` results were normalized from Python `datetime` to the 1900-system
 Excel serial (`45351`) before comparison, including the workbook carrying
