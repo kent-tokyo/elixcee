@@ -883,6 +883,7 @@ pub(crate) struct ChartDataLabelsEdit {
     pub show_percent: Option<bool>,
     pub show_leader_lines: Option<bool>,
     pub show_bubble_size: Option<bool>,
+    pub show_legend_key: Option<bool>,
 }
 
 /// A bounded edit to an existing chart style (`1..=48`).
@@ -7639,6 +7640,7 @@ impl Vm {
                 show_percent: None,
                 show_leader_lines: None,
                 show_bubble_size: None,
+                show_legend_key: None,
             });
         Ok(())
     }
@@ -7665,6 +7667,7 @@ impl Vm {
                 show_percent: None,
                 show_leader_lines: None,
                 show_bubble_size: None,
+                show_legend_key: None,
             });
         Ok(())
     }
@@ -7691,6 +7694,7 @@ impl Vm {
                 show_percent: Some(show_percent),
                 show_leader_lines: None,
                 show_bubble_size: None,
+                show_legend_key: None,
             });
         Ok(())
     }
@@ -7717,6 +7721,7 @@ impl Vm {
                 show_percent: None,
                 show_leader_lines: None,
                 show_bubble_size: None,
+                show_legend_key: None,
             });
         Ok(())
     }
@@ -7743,6 +7748,7 @@ impl Vm {
                 show_percent: None,
                 show_leader_lines: Some(show_leader_lines),
                 show_bubble_size: None,
+                show_legend_key: None,
             });
         Ok(())
     }
@@ -7769,6 +7775,34 @@ impl Vm {
                 show_percent: None,
                 show_leader_lines: None,
                 show_bubble_size: Some(show_bubble_size),
+                show_legend_key: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-labels `showLegendKey` flag.
+    pub fn set_chart_data_labels_show_legend_key(
+        &mut self,
+        chart_part: &str,
+        show_legend_key: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.show_legend_key = Some(show_legend_key))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: Some(show_legend_key),
             });
         Ok(())
     }

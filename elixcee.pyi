@@ -374,6 +374,12 @@ class Vm:
         """Update the first existing chart data-labels showBubbleSize flag."""
         ...
 
+    def set_chart_data_labels_show_legend_key(
+        self, chart_part: str, show_legend_key: bool
+    ) -> None:
+        """Update the first existing chart data-labels showLegendKey flag."""
+        ...
+
     def set_chart_series_name_formula(
         self, chart_part: str, series_index: int, name_formula: str
     ) -> None:

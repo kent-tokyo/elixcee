@@ -50,6 +50,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_chart_data_labels_show_bubble_size(chart_part, show_bubble_size)`
   rewrites or adds only the first existing `<c:dLbls showBubbleSize>` flag;
   a missing data-label element is rejected.
+- `Vm.set_chart_data_labels_show_legend_key(chart_part, show_legend_key)`
+  rewrites or adds only the first existing `<c:dLbls showLegendKey>` flag;
+  a missing data-label element is rejected.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`
