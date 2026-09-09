@@ -1243,6 +1243,17 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to the first chart data-labels show-series-name flag.
+    fn set_chart_data_labels_show_series_name(
+        &mut self,
+        chart_part: &str,
+        show_series_name: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_data_labels_show_series_name(chart_part, show_series_name)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -5934,6 +5945,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     if let Some(show_category) = edit.show_category {
                         chart = rewrite_chart_data_labels_flag(&chart, "showCat", show_category)?;
                     }
+                    if let Some(show_series_name) = edit.show_series_name {
+                        chart = rewrite_chart_data_labels_flag(
+                            &chart,
+                            "showSerName",
+                            show_series_name,
+                        )?;
+                    }
                 }
                 chart.into_bytes()
             } else if (allow_sheet_rename || has_pivot_source_edits)
@@ -9195,6 +9213,17 @@ mod tests {
         assert!(actual.contains("showVal=\"1\" showCat=\"1\"") && actual.contains("<c:txPr/>"));
         let actual = rewrite_chart_data_labels_show_value(&actual, false).unwrap();
         assert!(actual.contains("showVal=\"0\" showCat=\"1\""));
+    }
+
+    #[test]
+    fn chart_data_labels_rewriter_updates_show_series_name() {
+        let source =
+            r#"<c:chart><c:dLbls showVal="1"><c:showLegendKey val="1"/></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_flag(source, "showSerName", true).unwrap();
+        assert!(
+            actual.contains("showVal=\"1\" showSerName=\"1\"")
+                && actual.contains("<c:showLegendKey val=\"1\"/>")
+        );
     }
 
     #[test]

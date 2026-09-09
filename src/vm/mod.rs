@@ -879,6 +879,7 @@ pub(crate) struct ChartLegendOverlayEdit {
 pub(crate) struct ChartDataLabelsEdit {
     pub show_value: Option<bool>,
     pub show_category: Option<bool>,
+    pub show_series_name: Option<bool>,
 }
 
 /// A bounded edit to an existing chart style (`1..=48`).
@@ -7631,6 +7632,7 @@ impl Vm {
             .or_insert(ChartDataLabelsEdit {
                 show_value: Some(show_value),
                 show_category: None,
+                show_series_name: None,
             });
         Ok(())
     }
@@ -7653,6 +7655,30 @@ impl Vm {
             .or_insert(ChartDataLabelsEdit {
                 show_value: None,
                 show_category: Some(show_category),
+                show_series_name: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-labels `showSerName` flag.
+    pub fn set_chart_data_labels_show_series_name(
+        &mut self,
+        chart_part: &str,
+        show_series_name: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.show_series_name = Some(show_series_name))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: Some(show_series_name),
             });
         Ok(())
     }
