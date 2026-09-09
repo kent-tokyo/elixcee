@@ -8,6 +8,7 @@
 - Formula coverage: add standard-normal, binomial, and Poisson distribution functions with PMF/CDF modes and boundary regression tests.
 - Formula coverage: add gamma/log-gamma, beta distribution/inverse, chi-squared, and F-distribution functions with bounded numerical evaluation.
 - Formula coverage: add two-tailed/right-tailed Student t distribution and inverse functions.
+- Formula coverage: add `DAYS360` and `YEARFRAC` day-count conventions.
 
 次の変更はここに記録します。
 

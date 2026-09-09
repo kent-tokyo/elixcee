@@ -372,6 +372,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `NETWORKDAYS.INTL` | Workdays with custom weekend | 2010 |
 | `WORKDAY.INTL` | Date N workdays away with custom weekend | 2010 |
 | `DAYS` | Days between two dates | 2013 |
+| `DAYS360` | Days between dates using 360-day year conventions | Classic |
+| `YEARFRAC` | Fraction of a year between two dates | Classic |
 | `WEEKNUM` | Week number in a year (types 1/2/11-17/21) | Classic |
 | `ISOWEEKNUM` | ISO 8601 week number | 2013 |
 

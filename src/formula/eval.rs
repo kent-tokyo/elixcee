@@ -457,6 +457,8 @@ fn eval_func(
         "WEEKNUM" => func_weeknum(args, cells),
         "ISOWEEKNUM" => func_isoweeknum(args, cells),
         "DAYS" => func_days(args, cells),
+        "DAYS360" => func_days360(args, cells),
+        "YEARFRAC" => func_yearfrac(args, cells),
         "EDATE" => func_edate(args, cells),
         "DATEDIF" => func_datedif(args, cells),
         "DATEVALUE" => func_datevalue(args, cells),
@@ -3398,6 +3400,84 @@ fn func_days(
     let end = to_float(&evaluate(&args[0], cells)?)? as i64;
     let start = to_float(&evaluate(&args[1], cells)?)? as i64;
     Ok(Variant::Integer(end - start))
+}
+
+fn days360_serial(start: i64, end: i64, european: bool) -> i64 {
+    let (y1, m1, mut d1) = serial_to_ymd(start);
+    let (y2, m2, mut d2) = serial_to_ymd(end);
+    if !european {
+        if d1 == 31 || (m1 == 2 && d1 == days_in_month(y1, m1)) {
+            d1 = 30;
+        }
+        if d2 == 31 && d1 >= 30 {
+            d2 = 30;
+        }
+    } else {
+        if d1 == 31 {
+            d1 = 30;
+        }
+        if d2 == 31 {
+            d2 = 30;
+        }
+    }
+    (y2 - y1) as i64 * 360 + (m2 as i64 - m1 as i64) * 30 + d2 as i64 - d1 as i64
+}
+
+fn func_days360(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("DAYS360 requires 2 or 3 arguments".into());
+    }
+    let start = to_float(&evaluate(&args[0], cells)?)? as i64;
+    let end = to_float(&evaluate(&args[1], cells)?)? as i64;
+    let method = if args.len() == 3 {
+        is_truthy(&evaluate(&args[2], cells)?)
+    } else {
+        false
+    };
+    Ok(Variant::Integer(days360_serial(start, end, method)))
+}
+
+fn func_yearfrac(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("YEARFRAC requires 2 or 3 arguments".into());
+    }
+    let start = to_float(&evaluate(&args[0], cells)?)? as i64;
+    let end = to_float(&evaluate(&args[1], cells)?)? as i64;
+    let basis = if args.len() == 3 {
+        to_float(&evaluate(&args[2], cells)?)? as i32
+    } else {
+        0
+    };
+    if basis == 0 || basis == 4 {
+        return Ok(Variant::Float(
+            days360_serial(start, end, basis == 4) as f64 / 360.0,
+        ));
+    }
+    let days = (end - start) as f64;
+    let denom = match basis {
+        2 => 360.0,
+        3 => 365.0,
+        1 => {
+            let (y1, _, _) = serial_to_ymd(start);
+            let (y2, _, _) = serial_to_ymd(end);
+            if y1 == y2 {
+                if is_leap(y1) { 366.0 } else { 365.0 }
+            } else {
+                (y1..=y2)
+                    .map(|y| if is_leap(y) { 366.0 } else { 365.0 })
+                    .sum::<f64>()
+                    / (y2 - y1 + 1) as f64
+            }
+        }
+        _ => return Ok(Variant::Error(ExcelError::Num)),
+    };
+    Ok(Variant::Float(days / denom))
 }
 
 fn func_edate(
@@ -10382,6 +10462,35 @@ mod tests {
         }
         assert!(evaluate(&fparse("=RANDARRAY(2.5)").unwrap(), &c).is_err());
         assert!(evaluate(&fparse("=RANDARRAY(0,2)").unwrap(), &c).is_err());
+    }
+
+    #[test]
+    fn test_day_count_functions() {
+        let cells = HashMap::new();
+        assert_eq!(
+            calc("=DAYS360(DATE(2020,1,1),DATE(2020,7,1))", &cells),
+            Variant::Integer(180)
+        );
+        assert_eq!(
+            calc("=DAYS360(DATE(2020,2,29),DATE(2020,3,31))", &cells),
+            Variant::Integer(30)
+        );
+        assert_eq!(
+            calc("=DAYS360(DATE(2020,2,29),DATE(2020,3,31),TRUE)", &cells),
+            Variant::Integer(31)
+        );
+        match calc("=YEARFRAC(DATE(2020,1,1),DATE(2020,12,31),1)", &cells) {
+            Variant::Float(f) => assert!((f - 365.0 / 366.0).abs() < 1e-12),
+            other => panic!("YEARFRAC actual/actual: {:?}", other),
+        }
+        match calc("=YEARFRAC(DATE(2020,1,1),DATE(2021,1,1),3)", &cells) {
+            Variant::Float(f) => assert!((f - 366.0 / 365.0).abs() < 1e-12),
+            other => panic!("YEARFRAC actual/365: {:?}", other),
+        }
+        assert_eq!(
+            calc("=YEARFRAC(DATE(2020,1,1),DATE(2020,1,2),9)", &cells),
+            Variant::Error(ExcelError::Num)
+        );
     }
 
     #[test]
