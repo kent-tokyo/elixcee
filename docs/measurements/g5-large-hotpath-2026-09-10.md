@@ -81,6 +81,20 @@ existing 100k/400k/1M reports remain historical scoped evidence, while a new
 same-input before/after comparison still requires reproducible baseline
 artifacts plus RSS, durable-save, and output-verification capture.
 
+## Relationship-ownership follow-up (negative measurement)
+
+The ownership-only follow-up was built from the actual pre-change commit
+`8dac236` and the current candidate `fc73748`, each with a separate clean
+`CARGO_TARGET_DIR`, `CARGO_INCREMENTAL=0`, release profile, and
+`-C debuginfo=0`. Both `bench_workbook` binaries produced the same SHA-256:
+`8e2871b216756b9ae2cb0e5960c98e45bad995221e9933e007c0cfb5a3edfe95`.
+
+Because the optimized executable was byte-identical, no before/after timing
+or RSS number was collected. The change remains a source-level allocation
+reduction verified by round-trip tests and strict Clippy; it is not evidence
+of a runtime speedup. The result is intentionally retained as a negative
+measurement so later benchmark claims do not reuse an invalid comparison.
+
 The later same-day paired run in
 [g5-paired-v1.0.5-2026-09-10.md](g5-paired-v1.0.5-2026-09-10.md) used the
 available `v1.0.5` tag binary as a reproducible baseline and completed the
