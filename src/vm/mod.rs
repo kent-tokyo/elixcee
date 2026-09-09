@@ -14600,10 +14600,25 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
             let not_found = vals.get(3).cloned();
             let match_mode = vals.get(4).map(to_f64_excel).transpose()?.unwrap_or(0.0);
             let search_mode = vals.get(5).map(to_f64_excel).transpose()?.unwrap_or(1.0);
-            if match_mode != 0.0 || !(search_mode == 1.0 || search_mode == -1.0) {
-                return Err(
-                    "WorksheetFunction.XLookup supports exact match and search_mode 1/-1".into(),
-                );
+            if !(match_mode == 0.0 || match_mode == 2.0)
+                || !matches!(search_mode, 1.0 | -1.0 | 2.0 | -2.0)
+            {
+                return Err("WorksheetFunction.XLookup supports exact/wildcard match and search_mode 1/-1/2/-2".into());
+            }
+            if matches!(search_mode, 2.0 | -2.0) {
+                if match_mode == 2.0 {
+                    return Err("WorksheetFunction.XLookup wildcard match is incompatible with binary search".into());
+                }
+                let index = crate::formula::eval::xlookup_binary_index(
+                    &lookup,
+                    key,
+                    search_mode == 2.0,
+                    0,
+                )?;
+                return Ok(index
+                    .and_then(|i| result.get(i).cloned())
+                    .or(not_found)
+                    .unwrap_or(Variant::Error(ExcelError::NA)));
             }
             let indices: Box<dyn Iterator<Item = usize>> = if search_mode == -1.0 {
                 Box::new((0..lookup.len()).rev())
@@ -14611,7 +14626,13 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
                 Box::new(0..lookup.len())
             };
             for index in indices {
-                if vba_eq(&lookup[index], key) {
+                if (match_mode == 0.0 && vba_eq(&lookup[index], key))
+                    || (match_mode == 2.0
+                        && crate::formula::eval::wildcard_match(
+                            &vba_to_str(&lookup[index]),
+                            &vba_to_str(key),
+                        ))
+                {
                     return Ok(result[index].clone());
                 }
             }
@@ -14625,10 +14646,24 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
             let lookup = flat_all(std::slice::from_ref(&vals[1]));
             let match_mode = vals.get(2).map(to_f64_excel).transpose()?.unwrap_or(0.0);
             let search_mode = vals.get(3).map(to_f64_excel).transpose()?.unwrap_or(1.0);
-            if match_mode != 0.0 || !(search_mode == 1.0 || search_mode == -1.0) {
-                return Err(
-                    "WorksheetFunction.XMatch supports exact match and search_mode 1/-1".into(),
-                );
+            if !(match_mode == 0.0 || match_mode == 2.0)
+                || !matches!(search_mode, 1.0 | -1.0 | 2.0 | -2.0)
+            {
+                return Err("WorksheetFunction.XMatch supports exact/wildcard match and search_mode 1/-1/2/-2".into());
+            }
+            if matches!(search_mode, 2.0 | -2.0) {
+                if match_mode == 2.0 {
+                    return Err("WorksheetFunction.XMatch wildcard match is incompatible with binary search".into());
+                }
+                let index = crate::formula::eval::xlookup_binary_index(
+                    &lookup,
+                    key,
+                    search_mode == 2.0,
+                    0,
+                )?;
+                return Ok(index
+                    .map(|i| Variant::Integer(i as i64 + 1))
+                    .unwrap_or(Variant::Error(ExcelError::NA)));
             }
             let indices: Box<dyn Iterator<Item = usize>> = if search_mode == -1.0 {
                 Box::new((0..lookup.len()).rev())
@@ -14636,7 +14671,13 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
                 Box::new(0..lookup.len())
             };
             for index in indices {
-                if vba_eq(&lookup[index], key) {
+                if (match_mode == 0.0 && vba_eq(&lookup[index], key))
+                    || (match_mode == 2.0
+                        && crate::formula::eval::wildcard_match(
+                            &vba_to_str(&lookup[index]),
+                            &vba_to_str(key),
+                        ))
+                {
                     return Ok(Variant::Integer(index as i64 + 1));
                 }
             }
@@ -17353,12 +17394,30 @@ mod tests {
     }
 
     #[test]
+    fn test_wsf_xlookup_wildcard_and_binary_search() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"alpha\"\n    Cells(2,1).Value = \"beta\"\n    Cells(3,1).Value = \"gamma\"\n    Cells(1,2).Value = 10\n    Cells(2,2).Value = 20\n    Cells(3,2).Value = 30\n    wildcard = WorksheetFunction.XLookup(\"b*\", Range(\"A1:A3\"), Range(\"B1:B3\"), \"NF\", 2)\n    binary = WorksheetFunction.XLookup(20, Range(\"B1:B3\"), Range(\"A1:A3\"), \"NF\", 0, 2)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["wildcard"], Variant::Integer(20));
+        assert_eq!(vm.variables["binary"], Variant::Str("beta".into()));
+    }
+
+    #[test]
     fn test_wsf_xmatch_exact_and_reverse_search() {
         let vm = run(
             "Sub MySub()\n    Cells(1,1).Value = \"A\"\n    Cells(2,1).Value = \"B\"\n    Cells(3,1).Value = \"B\"\n    first = WorksheetFunction.XMatch(\"B\", Range(\"A1:A3\"))\n    last = WorksheetFunction.XMatch(\"B\", Range(\"A1:A3\"), 0, -1)\nEnd Sub\n",
         );
         assert_eq!(vm.variables["first"], Variant::Integer(2));
         assert_eq!(vm.variables["last"], Variant::Integer(3));
+    }
+
+    #[test]
+    fn test_wsf_xmatch_wildcard_and_binary_search() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"alpha\"\n    Cells(2,1).Value = \"beta\"\n    Cells(3,1).Value = \"gamma\"\n    Cells(1,2).Value = 10\n    Cells(2,2).Value = 20\n    Cells(3,2).Value = 30\n    wildcard = WorksheetFunction.XMatch(\"g*\", Range(\"A1:A3\"), 2)\n    binary = WorksheetFunction.XMatch(20, Range(\"B1:B3\"), 0, 2)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["wildcard"], Variant::Integer(3));
+        assert_eq!(vm.variables["binary"], Variant::Integer(2));
     }
 
     // ── Range("A1:A10").Value 多セル読み取り ─────────────────────────────────

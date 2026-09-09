@@ -1394,7 +1394,7 @@ fn matches_criteria(val: &Variant, criteria: &Variant) -> bool {
     }
 }
 
-fn wildcard_match(text: &str, pattern: &str) -> bool {
+pub(crate) fn wildcard_match(text: &str, pattern: &str) -> bool {
     if pattern.contains('~') {
         return wildcard_match_escaped(text, pattern);
     }
@@ -1980,7 +1980,7 @@ fn func_row(
 
 // ── XLOOKUP ───────────────────────────────────────────────────────────────────
 
-fn xlookup_binary_index(
+pub(crate) fn xlookup_binary_index(
     lookup: &[Variant],
     key: &Variant,
     ascending: bool,
