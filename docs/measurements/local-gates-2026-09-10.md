@@ -150,3 +150,14 @@ CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0' \
 Clippy completed with zero warnings, including the `elixcee-wasm` workspace
 member. This updates the local static-analysis evidence for the current
 candidate; it does not change the external compatibility boundaries above.
+
+Rustdoc generation for all workspace members also passed on the same checkout:
+
+```sh
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0' \
+  cargo doc --workspace --no-deps --offline
+```
+
+The command generated documentation for `elixcee`, `elixcee-wasm`, and
+`elixcee-types` without warnings or errors. The generated `target/doc` output
+is a build artifact and is not part of the repository.
