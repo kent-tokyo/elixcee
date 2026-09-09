@@ -98,7 +98,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_drawing_shape_line_dash(drawing_part, anchor_index, dash)` updates
   only an existing `<a:prstDash>` using the DrawingML preset vocabulary.
   The save path is covered by `drawing_shape_line_dash_edit_survives_xlsx_save`
-  using a minimal Drawing-backed XLSX fixture.
+  using a minimal Drawing-backed XLSX fixture. The same save round-trip now
+  covers `Vm.set_drawing_shape_text`, XML escaping (`&` to `&amp;`), and
+  retention of a second text run.
 - `Vm.set_chart_series_cache(...)` updates an existing cache or creates the
   matching cache when the selected series has only a `strRef`/`numRef` formula.
 - Missing source parts, series, references, malformed attributes, control
@@ -158,6 +160,10 @@ resolved as `Vm.set_drawing_shape_text`.
 
 The subsequent low-disk workspace all-target run passed 1,680 library tests
 and all integration/benchmark targets, including the new text-run regression.
+
+The minimal Drawing-backed XLSX save test passed with both line-dash and
+text-run edits. After reload from the saved ZIP, the selected first run was
+`Updated &amp; text`, while the unrelated second run remained `Keep`.
 
 The title and series-name rewriter unit tests replaced XML-escaped text while
 retaining unrelated text runs, series references, and the surrounding plot
