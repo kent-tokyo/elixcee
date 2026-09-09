@@ -28,7 +28,7 @@ All self-contained gates passed:
 - version, measurement-boundary, formula-dispatch, OOXML-matrix, and stream
   measurement-validator checks;
 - formatting and diff checks;
-- Rust workspace `--all-targets` tests: 1,677 passed, including Drawing flip, fill, line-color, line-width, line-dash, and worksheet code-name event regressions;
+- Rust workspace `--all-targets` tests: 1,679 library tests passed, including Drawing flip, fill, line-color, line-width, line-dash, and worksheet code-name event regressions;
 - benchmark smoke, blackbox/CLI/property/XLSX round-trip targets;
 - workspace Clippy with warnings denied, Rustdoc, and offline audit;
 - formula parser/evaluator, VBA parser, and XLSX-reader fuzz smoke, all with

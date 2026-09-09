@@ -416,9 +416,9 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 - [x] ZIP/XML構文・entry／part／全体・work budget、協調中断のローカルfixture。
 - [x] reader資源回収・read/mutate/write、semantic validatorと拒否self-test、Cargo測定境界の検査。
 - [x] reader cancellation BUILD: worksheetのCPU-bound XML event validation中もdeadline／cancelを確認し、SIGINT時は構造XML budget超過より`READER_CANCELED`を優先する回帰を固定した。
-- [x] 部分 FUZZ SMOKE: nightlyの4 target（`fuzz_formula_parser`／`fuzz_formula_eval`／`fuzz_vba_parser`／`fuzz_xlsx_reader`）を各5秒・RSS上限1 GiB・既存corpusで実行し、順に274,746／175,983／237,870／19,933 runs、panicなしを確認した。全targetの長時間fuzz、Linux／Windows、soak、隔離検証は未完。
+- [x] 部分 FUZZ SMOKE: nightlyの4 target（`fuzz_formula_parser`／`fuzz_formula_eval`／`fuzz_vba_parser`／`fuzz_xlsx_reader`）を各5秒・RSS上限1 GiB・既存corpusで実行し、最新の低ディスク再測定で順に213,931／145,288／209,211／21,408 runs、panicなしを確認した。全targetの長時間fuzz、Linux／Windows、soak、隔離検証は未完。[測定記録](docs/measurements/local-gates-2026-09-10.md)
 - [x] local gate BUILD: `scripts/check-local-gates.sh`に、version／measurement／formula／OOXML契約、Rust test／clippy／doc、offline audit、4 fuzz smoke、JS type／WASM／pack consumer／browser smokeを統合した。外部oracle、他OS、比較測定、公開操作は意図的に含めない。
-- [x] local gate evidence: 2026-09-10のmacOS arm64実行で全自己完結ゲート、Rust全target 1,663件、4 fuzz smoke、WASM／npm tarball／実Chrome smokeを成功させ、条件と外部未検証境界を[測定記録](docs/measurements/local-gates-2026-09-10.md)へ固定した。Excel oracle、他OS、外部レビュー、公開操作は未完。
+- [x] local gate evidence: 2026-09-10のmacOS arm64実行で、低ディスク設定のRust全target 1,679件、4 fuzz smoke、WASM／npm tarball／実Chrome smoke、offline auditを成功させ、標準設定のリンク容量不足と外部未検証境界を[測定記録](docs/measurements/local-gates-2026-09-10.md)へ固定した。Excel oracle、他OS、外部レビュー、公開操作は未完。
 - [ ] Linux／Windowsを含む資源校正と、長時間fuzz／CPU／RSS・隔離環境検証を完了する。
 
 既存のmacOS測定と安全策は [測定記録](docs/measurements/README.md)、
