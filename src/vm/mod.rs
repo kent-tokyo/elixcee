@@ -10823,6 +10823,21 @@ impl Vm {
                     } else {
                         return Err(format!("Dictionary method '{}' is not implemented", method));
                     }
+                } else if let Some(ObjectRef::Range(range)) = reference {
+                    if !args.is_empty() {
+                        return Err(format!("Range.{} expects no arguments", method));
+                    }
+                    if matches!(method.as_str(), "clear" | "clearcontents") {
+                        let area = *range.single_rect().ok_or_else(|| {
+                            format!(
+                                "Range.{}: multi-area range cannot be cleared",
+                                method
+                            )
+                        })?;
+                        self.clear_range_on_sheet(&range.sheet, area)?;
+                    } else {
+                        return Err(format!("Range method '{}' is not implemented", method));
+                    }
                 } else if let Some(ObjectRef::Class(id)) = reference {
                     let static_type = self.object_target_static_type(target);
                     if self
@@ -18339,6 +18354,46 @@ mod tests {
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(1));
         assert!(vm.undo_edit());
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
+    }
+
+    #[test]
+    fn range_object_clear_uses_captured_sheet_and_shared_undo_path() {
+        let program = parser::parse(
+            "Sub MySub()\n    r.Value = 8\n    Sheets(\"Sheet1\").Activate\n    r.ClearContents\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.ensure_sheet("sheet2");
+        vm.object_variables.insert(
+            "r".to_string(),
+            ObjectRef::Range(RangeRef::single(
+                "sheet2".to_string(),
+                Rect {
+                    start_row: 1,
+                    start_col: 1,
+                    end_row: 1,
+                    end_col: 1,
+                },
+            )),
+        );
+        vm.run_sub(&program, "MySub").unwrap();
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+        assert_eq!(
+            vm.sheets
+                .get("sheet2")
+                .and_then(|cells| cells.get(&(1, 1)))
+                .map(|cell| cell.value.clone()),
+            None
+        );
+        assert!(vm.undo_edit());
+        assert_eq!(
+            vm.sheets
+                .get("sheet2")
+                .and_then(|cells| cells.get(&(1, 1)))
+                .map(|cell| cell.value.clone()),
+            Some(Variant::Integer(8))
+        );
     }
 
     #[test]

@@ -2998,7 +2998,11 @@ impl Parser {
             // p.field = val  /  p.a.b = val  /  p.method (noop)
             self.advance(); // consume first '.'
             let field = self.consume_ident()?.to_lowercase();
-            if matches!(field.as_str(), "activate" | "select" | "removeall") && self.is_stmt_end() {
+            if matches!(
+                field.as_str(),
+                "activate" | "select" | "removeall" | "clear" | "clearcontents"
+            ) && self.is_stmt_end()
+            {
                 return Ok(Stmt::ObjectMethodCall {
                     target: ObjectTarget::Variable(name),
                     method: field,
