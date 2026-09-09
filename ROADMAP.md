@@ -48,7 +48,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 
 2026-09-06 macOSローカル: [Python回帰10件](tests/python/test_stream_writer_limits.py)は
 公開1.0.3で5件の問題を検出し、修正版wheelでは10/10成功。Rust全workspace／全target
-1,709 tests、全feature strict clippyも成功。これはG1のBUILD検証で、RSS／Excel互換性の測定ではありません。
+1,679 tests、全feature strict clippyも成功。これはG1のBUILD検証で、RSS／Excel互換性の測定ではありません。
 
 ### G2 — OOXMLの接続を保つ（X2 / X4）
 
@@ -428,7 +428,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 
 1.0.3のローカル検証（2026-09-06、macOS）:
 
-- [x] Rust全workspace／全targetの1,709 tests、strict clippy／Rustdoc、依存監査、測定記録検証。
+- [x] Rust全workspace／全targetの1,679 tests、strict clippy／Rustdoc、依存監査、測定記録検証。
 - [x] crate検証、wheel／sdist生成、独立Python環境でのimport・VBA・通常／fast保存往復。
 - [x] JS型／differential／WASM bundle／packed consumerと、VBA corpus 581件・意味論386件の既存ゲート。
 
