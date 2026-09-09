@@ -12777,6 +12777,11 @@ impl Vm {
                             "columns" => Ok(Variant::Integer(
                                 r.single_rect().map_or(0, Rect::cols) as i64,
                             )),
+                            "cells" => Ok(Variant::Integer(
+                                r.single_rect()
+                                    .map_or(0, |area| area.rows().saturating_mul(area.cols()))
+                                    as i64,
+                            )),
                             _ => Ok(Variant::Empty),
                         };
                     }
@@ -18109,6 +18114,18 @@ mod tests {
         vm.run_sub_with_events(&program, "Main").unwrap();
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(3));
+    }
+
+    #[test]
+    fn worksheet_change_target_cells_count_matches_rectangle_dimensions() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"C4:D5\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Cells.Count = 4 Then Cells(1,1).Value = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
     }
 
     #[test]

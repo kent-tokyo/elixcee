@@ -113,9 +113,10 @@ can explicitly bind an A1 target range to `Worksheet_Change(Target As Range)`.
 `vm.run_with_events(...)` opts into `Workbook_Open` dispatch before the selected
 macro, and VBA cell/range writes in that mode automatically dispatch a unique
 `Worksheet_Change` handler with bounded event chaining. `Target.Value`,
-`Target.Address`, `Target.Row`, `Target.Column`, `Target.Rows.Count`, and
-`Target.Columns.Count` are available for the supported single-area target
-model. Ambiguous multiple handlers are rejected deterministically.
+`Target.Address`, `Target.Row`, `Target.Column`, `Target.Rows.Count`,
+`Target.Columns.Count`, and `Target.Cells.Count` are available for the
+supported single-area target model. Ambiguous multiple handlers are rejected
+deterministically.
 `Vm.tables()` and `Vm.data_validations()` return typed structural metadata
 projections; they do not evaluate calculated-column or validation formulas.
 For loaded XLSX/XLSM sheets, `Vm.sheet_id(name)` and

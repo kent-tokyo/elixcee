@@ -120,6 +120,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G3 multi-module Worksheet_Change BUILD: `run_sub_multi_with_events` でも一意な標準moduleの `Worksheet_Change` を選択し、entrypointの値／数式書き込み後にTarget通知する経路を追加した。重複handlerは決定性のため拒否し、複数module連鎖・worksheet単位のhandler選択・Excel oracleは未完。
 - [x] G3 bounded Worksheet_Change chain BUILD: handler内の変更を累積64 dispatch以内のqueueで順次処理し、キュー長が増えない無限連鎖も固定上限で拒否するbounded連鎖を追加した。複数handlerのworksheet選択・Excel oracleは未完。
 - [x] G3 Worksheet_Change target metadata BUILD: `Worksheet_Change(Target As Range)`で`Target.Address`／`Target.Row`／`Target.Column`を読み取り可能にし、矩形書き込みの先頭セルと絶対A1アドレスを回帰固定した。Areas全体のExcel意味論・複数handler選択・Excel oracleは未完。
+- [x] G3 Worksheet_Change target cell-count BUILD: 単一矩形の`Target.Cells.Count`を`Rows.Count × Columns.Count`として評価し、既存のTarget寸法メタデータとの整合を回帰固定した。複数Areaの総数意味論とExcel oracleは未完。
 - [x] G3 Clear semantics BUILD: `ClearContents` は追跡済みのセル数値書式・コメントを保持し、`Clear` は対象セルの同メタデータを除去する差分を追加した。OOXML全書式・validation・conditional formatting・Excel oracleは未完。
 - [x] G3 Range dimension member BUILD: Rangeオブジェクトの `Rows.Count`／`Columns.Count` を単一矩形で評価できるようにし、イベントTargetの矩形サイズ検証を実行可能にした。複数Areaの総数意味論とExcel oracleは未完。
 - [x] G3 Worksheet-to-Range object BUILD: `Set ws = Sheets(...); Set r = ws.Range(...)` と `ws.Cells(row, col)` のRangeオブジェクト生成を追加し、Worksheetから取得したRangeでも束縛シートの編集経路を利用する。複雑なWorksheet memberとExcel oracleは未完。

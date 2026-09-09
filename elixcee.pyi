@@ -176,7 +176,8 @@ class Vm:
         """Dispatch ``Worksheet_Change(Target)`` with an explicit A1 target range.
 
         The handler can read ``Target.Value``, ``Address``, ``Row``, ``Column``,
-        ``Rows.Count``, and ``Columns.Count`` for the supported single-area model.
+        ``Rows.Count``, ``Columns.Count``, and ``Cells.Count`` for the supported
+        single-area model.
         """
         ...
 
