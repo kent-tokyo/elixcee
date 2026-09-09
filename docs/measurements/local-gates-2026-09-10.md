@@ -28,7 +28,7 @@ All self-contained gates passed:
 - version, measurement-boundary, formula-dispatch, OOXML-matrix, and stream
   measurement-validator checks;
 - formatting and diff checks;
-- Rust workspace `--all-targets` tests: 1,663 passed;
+- Rust workspace `--all-targets` tests: 1,670 passed, including Drawing flip regressions;
 - benchmark smoke, blackbox/CLI/property/XLSX round-trip targets;
 - workspace Clippy with warnings denied, Rustdoc, and offline audit;
 - formula parser/evaluator, VBA parser, and XLSX-reader fuzz smoke, all with
@@ -38,6 +38,10 @@ All self-contained gates passed:
 - real packed npm tarball consumer for CJS, ESM, browser conditions, file
   writes, export parity, and TypeScript declarations;
 - real Chrome browser smoke over HTTP.
+
+This rerun included commit `da6fd36` (`feat: edit drawing shape flips`); all
+self-contained gates completed successfully after the new Drawing transform
+editing path was added.
 
 The gate output recorded a WASM payload growth of 9.95%, within the 10% local
 baseline limit. The browser smoke returned `ok: true`, read the sample sheet,
@@ -52,4 +56,3 @@ following roadmap items:
 - Linux/Windows clean-install, resource, and long-running verification;
 - fixed-version comparisons with LogiSheets, EPPlus, or Aspose.Cells;
 - external review, registry publication, tag, or formal release.
-
