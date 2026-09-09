@@ -31,6 +31,7 @@
 - `Worksheet_Change` handler内の追加変更をbounded queueで順次処理し、累積64件を超える無限イベント連鎖はエラーにするようにしました。
 - `Worksheet_Change(Target As Range)`から `Target.Address`、`Target.Row`、`Target.Column`を参照できるようにしました。
 - `Worksheet_Change(Target As Range)`から単一矩形の `Target.Cells.Count` を参照できるようにしました。
+- `Worksheet_Change(Target As Range)`から `Target.Parent.Name` で束縛先worksheet名を参照できるようにしました。
 - 2026-09-10のmacOS arm64で自己完結ローカルゲートを再実行し、Rust全target 1,663件、Clippy、Rustdoc、offline audit、4 fuzz smoke、WASM、npm tarball、実Chrome smokeを成功させました。外部Excel oracle・他OS・外部レビュー・公開操作は未完です。
 - `ClearContents` と `Clear` を区別し、追跡済みのセル数値書式・コメントを前者では保持、後者では対象セルから除去するようにしました。
 - Rangeオブジェクトの単一矩形について `Rows.Count` と `Columns.Count` を評価できるようにしました。

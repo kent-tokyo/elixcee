@@ -115,8 +115,8 @@ macro, and VBA cell/range writes in that mode automatically dispatch a unique
 `Worksheet_Change` handler with bounded event chaining. `Target.Value`,
 `Target.Address`, `Target.Row`, `Target.Column`, `Target.Rows.Count`,
 `Target.Columns.Count`, and `Target.Cells.Count` are available for the
-supported single-area target model. Ambiguous multiple handlers are rejected
-deterministically.
+supported single-area target model. `Target.Parent.Name` identifies the bound
+worksheet. Ambiguous multiple handlers are rejected deterministically.
 `Vm.tables()` and `Vm.data_validations()` return typed structural metadata
 projections; they do not evaluate calculated-column or validation formulas.
 For loaded XLSX/XLSM sheets, `Vm.sheet_id(name)` and

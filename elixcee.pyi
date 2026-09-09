@@ -177,7 +177,7 @@ class Vm:
 
         The handler can read ``Target.Value``, ``Address``, ``Row``, ``Column``,
         ``Rows.Count``, ``Columns.Count``, and ``Cells.Count`` for the supported
-        single-area model.
+        single-area model; ``Target.Parent.Name`` identifies its worksheet.
         """
         ...
 

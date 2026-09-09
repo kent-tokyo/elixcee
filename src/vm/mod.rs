@@ -12768,6 +12768,9 @@ impl Vm {
                 // object-variable disambiguation as above.
                 self.require_live_object(var)?;
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
+                    if fields.as_slice() == ["parent", "name"] {
+                        return Ok(Variant::Str(self.sheet_display_name(&r.sheet)));
+                    }
                     if fields.len() == 2 && fields[1] == "count" {
                         return match fields[0].as_str() {
                             "areas" => Ok(Variant::Integer(r.areas.len() as i64)),
@@ -18121,6 +18124,18 @@ mod tests {
         let program = parser::parse(
             "Sub Main()\n    Range(\"C4:D5\").Value = 7\nEnd Sub\n\n\
              Sub Worksheet_Change(Target As Range)\n    If Target.Cells.Count = 4 Then Cells(1,1).Value = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+    }
+
+    #[test]
+    fn worksheet_change_target_parent_name_identifies_its_bound_sheet() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Parent.Name = \"Sheet1\" Then\n        Application.EnableEvents = False\n        Cells(1,1).Value = 1\n    End If\nEnd Sub\n",
         )
         .unwrap();
         let mut vm = Vm::new();
