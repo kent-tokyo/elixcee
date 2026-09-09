@@ -4395,24 +4395,34 @@ fn rewrite_chart_series_caches(
             .map(|offset| cache_tag_end + offset)
             .ok_or_else(|| "chart series cache is unterminated".to_string())?;
         let cache_body = &body[cache_tag_end..cache_end];
-        let count_start = cache_body
-            .find("<c:ptCount")
-            .ok_or_else(|| "chart series cache is missing <c:ptCount>".to_string())?;
-        let count_end = cache_body[count_start..]
-            .find('>')
-            .map(|offset| count_start + offset + 1)
-            .ok_or_else(|| "chart series ptCount is unterminated".to_string())?;
-        let count_tag = reader::with_attr(
-            &cache_body[count_start..count_end],
-            "val",
-            &values.len().to_string(),
-        );
+        let (count_start, count_end, count_tag) =
+            if let Some(count_start) = cache_body.find("<c:ptCount") {
+                let count_end = cache_body[count_start..]
+                    .find('>')
+                    .map(|offset| count_start + offset + 1)
+                    .ok_or_else(|| "chart series ptCount is unterminated".to_string())?;
+                (
+                    count_start,
+                    count_end,
+                    reader::with_attr(
+                        &cache_body[count_start..count_end],
+                        "val",
+                        &values.len().to_string(),
+                    ),
+                )
+            } else {
+                (0, 0, format!("<c:ptCount val=\"{}\"/>", values.len()))
+            };
         let points = point_values();
         let mut new_cache_body = String::with_capacity(cache_body.len() + points.len());
         new_cache_body.push_str(&cache_body[..count_start]);
         new_cache_body.push_str(&count_tag);
         new_cache_body.push_str(&points);
-        new_cache_body.push_str(&cache_body[count_end..]);
+        new_cache_body.push_str(if count_end == 0 {
+            cache_body
+        } else {
+            &cache_body[count_end..]
+        });
 
         let mut new_body = String::with_capacity(body.len() + points.len());
         new_body.push_str(&body[..cache_tag_end]);
@@ -8657,7 +8667,7 @@ mod tests {
         );
         let source = concat!(
             "<c:chart><c:ser><c:cat><c:strRef><c:f>Sheet1!$A$1:$A$2</c:f>",
-            "<c:strCache><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>old</c:v></c:pt></c:strCache>",
+            "<c:strCache><c:pt idx=\"0\"><c:v>old</c:v></c:pt></c:strCache>",
             "</c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$B$1:$B$2</c:f>",
             "<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"1\"/>",
             "<c:pt idx=\"0\"><c:v>1</c:v></c:pt></c:numCache></c:numRef>",
