@@ -1373,6 +1373,8 @@ fn rename_sheet_rewrites_pivot_worksheet_source_and_keeps_cache_owner() {
         concat!(
             "<pivotCacheDefinition xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" cacheId=\"7\">",
             "<cacheSource><worksheetSource ref=\"A1:B2\" sheet=\"Sheet1\"/></cacheSource>",
+            "<cacheFields count=\"2\"><cacheField name=\"Region\"><sharedItems/></cacheField>",
+            "<cacheField name=\"Amount\"><sharedItems count=\"2\"/></cacheField></cacheFields>",
             "</pivotCacheDefinition>"
         )
         .as_bytes(),
@@ -1390,6 +1392,12 @@ fn rename_sheet_rewrites_pivot_worksheet_source_and_keeps_cache_owner() {
     .expect("pivot source edit should be accepted");
     vm.set_pivot_cache_refresh_on_load("xl/pivotCache/pivotCacheDefinition1.xml", true)
         .expect("pivot refresh policy edit should be accepted");
+    vm.set_pivot_cache_field_caption(
+        "xl/pivotCache/pivotCacheDefinition1.xml",
+        1,
+        "Amount & total",
+    )
+    .expect("pivot field caption edit should be accepted");
     save_workbook(&vm, &output_path).expect("pivot sheet rename should save");
 
     let entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
@@ -1401,6 +1409,9 @@ fn rename_sheet_rewrites_pivot_worksheet_source_and_keeps_cache_owner() {
     assert!(cache.contains("sheet=\"Data &amp; 2026\""));
     assert!(cache.contains("ref=\"A1:C3\""));
     assert!(cache.contains("refreshOnLoad=\"1\""));
+    assert!(cache.contains(
+        "<cacheField name=\"Amount &amp; total\"><sharedItems count=\"2\"/></cacheField>"
+    ));
 
     let _ = std::fs::remove_file(source_path);
     let _ = std::fs::remove_file(output_path);
