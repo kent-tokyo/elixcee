@@ -20,13 +20,14 @@ independent oracle, not Microsoft Excel.
 - Matches: 65
 - Skipped: 6 (`DAYS`, `IFNA`, `MAXIFS`, `MINIFS`, `XMATCH`, and `TEXTJOIN`, because this LibreOffice build does not evaluate these probes)
 - Mismatches: 0
+- Machine-readable result: `compat/corpus/results/formula-independent-20260910.json`
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
 
 The harness exits with status 1 if any comparable case mismatches. Oracle
 unsupported probes are reported in `skipped` and are not silently counted as
 matches; this run exited with status 0.
 
-The expanded 65-case command was rerun after the later local changes using a
+The expanded 72-case command was rerun after the later local changes using a
 dedicated writable temporary directory (`TMPDIR=/private/tmp/elixcee-formula-oracle-run`)
 because the default temporary directories were full or unavailable. It
 reported 65/65 comparable matches, 6 explicit skips, and zero mismatches.
@@ -66,7 +67,8 @@ When the default temporary directory is unavailable, use:
 ```sh
 TMPDIR=/private/tmp/elixcee-formula-oracle-run \
   python3 compat/oracle/run-libreoffice-formulas.py \
-  --soffice /opt/homebrew/bin/soffice
+  --soffice /opt/homebrew/bin/soffice --output \
+  compat/corpus/results/formula-independent-20260910.json
 ```
 
 With the isolated elixcee wheel available on `PYTHONPATH`:
@@ -75,7 +77,8 @@ With the isolated elixcee wheel available on `PYTHONPATH`:
 PYTHONPATH=/private/tmp/elixcee-test-venv-20260910/lib/python3.13/site-packages \
 TMPDIR=/private/tmp/elixcee-formula-oracle-run \
   python3 compat/oracle/run-libreoffice-formulas.py \
-  --soffice /opt/homebrew/bin/soffice --with-elixcee
+  --soffice /opt/homebrew/bin/soffice --with-elixcee --output \
+  compat/corpus/results/formula-independent-20260910.json
 ```
 
 The script writes its temporary workbook and LibreOffice profile below a
