@@ -497,6 +497,16 @@ class Vm:
         """Update an existing shape transform rotation from 0 through 359 degrees."""
         ...
 
+    def set_drawing_shape_flip(
+        self,
+        drawing_part: str,
+        anchor_index: int,
+        flip_horizontal: bool | None = None,
+        flip_vertical: bool | None = None,
+    ) -> None:
+        """Update an existing shape transform's horizontal or vertical flip state."""
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 

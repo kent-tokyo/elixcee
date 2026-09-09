@@ -916,6 +916,8 @@ pub(crate) struct DrawingAnchorEdit {
     pub to_col: u32,
 }
 
+pub(crate) type DrawingShapeFlipEdit = (Option<bool>, Option<bool>);
+
 const CELL_TILE_SIZE: u32 = 32;
 const MAX_CELL_TILES_PER_SHEET: usize = 256;
 const DENSE_TILE_CELL_THRESHOLD: usize = 128;
@@ -1339,6 +1341,9 @@ pub struct Vm {
     /// Explicit drawing shape rotation edits keyed by drawing part and
     /// document-order anchor index. Values are integer degrees.
     pub(crate) drawing_shape_rotation_edits: HashMap<String, HashMap<usize, i32>>,
+    /// Explicit DrawingML horizontal/vertical flip edits keyed by drawing
+    /// part and document-order anchor index.
+    pub(crate) drawing_shape_flip_edits: HashMap<String, HashMap<usize, DrawingShapeFlipEdit>>,
     /// Dynamic-array spill rectangles keyed by sheet and anchor coordinate.
     /// Included in edit history so undo cannot leave stale spill ownership.
     spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
@@ -1802,6 +1807,7 @@ impl Vm {
             drawing_shape_title_edits: HashMap::new(),
             drawing_shape_hidden_edits: HashMap::new(),
             drawing_shape_rotation_edits: HashMap::new(),
+            drawing_shape_flip_edits: HashMap::new(),
             spill_rects: HashMap::new(),
             edit_undo: Vec::new(),
             edit_redo: Vec::new(),
@@ -8262,6 +8268,33 @@ impl Vm {
             .entry(drawing_part.to_string())
             .or_default()
             .insert(anchor_index, degrees);
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing drawing shape's horizontal or
+    /// vertical flip state. At least one component must be supplied.
+    pub fn set_drawing_shape_flip(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        flip_horizontal: Option<bool>,
+        flip_vertical: Option<bool>,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if flip_horizontal.is_none() && flip_vertical.is_none() {
+            return Err("at least one drawing shape flip value is required".to_string());
+        }
+        self.drawing_shape_flip_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, (flip_horizontal, flip_vertical));
         Ok(())
     }
 

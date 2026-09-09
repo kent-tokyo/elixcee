@@ -1478,6 +1478,20 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to an existing drawing shape's horizontal or
+    /// vertical flip state. At least one component must be supplied.
+    fn set_drawing_shape_flip(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        flip_horizontal: Option<bool>,
+        flip_vertical: Option<bool>,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_shape_flip(drawing_part, anchor_index, flip_horizontal, flip_vertical)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Move a sheet to an absolute 0-based position among the workbook's sheets.
     ///
     /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
@@ -5467,6 +5481,87 @@ fn rewrite_drawing_shape_rotation(
     Ok(out)
 }
 
+fn rewrite_drawing_shape_flip(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, vm::DrawingShapeFlipEdit>,
+) -> Result<String, String> {
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
+    let mut out = xml.to_string();
+    for (&anchor_index, (flip_h, flip_v)) in ordered {
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=anchor_index {
+            let candidates = [
+                ("<xdr:twoCellAnchor>", "</xdr:twoCellAnchor>"),
+                ("<xdr:twoCellAnchor ", "</xdr:twoCellAnchor>"),
+                ("<xdr:oneCellAnchor>", "</xdr:oneCellAnchor>"),
+                ("<xdr:oneCellAnchor ", "</xdr:oneCellAnchor>"),
+                ("<xdr:absoluteAnchor>", "</xdr:absoluteAnchor>"),
+                ("<xdr:absoluteAnchor ", "</xdr:absoluteAnchor>"),
+            ];
+            let (open, closing) = candidates
+                .iter()
+                .filter_map(|(opening, closing)| {
+                    out[cursor..]
+                        .find(opening)
+                        .map(|offset| (cursor + offset, *closing))
+                })
+                .min_by_key(|(position, _)| *position)
+                .ok_or_else(|| format!("drawing anchor index {anchor_index} is out of range"))?;
+            let close_rel = out[open..]
+                .find(closing)
+                .ok_or_else(|| "drawing anchor is unterminated".to_string())?;
+            let close = open + close_rel + closing.len();
+            if current == anchor_index {
+                selected = Some((open, close));
+                break;
+            }
+            cursor = close;
+        }
+        let (open, close) = selected.expect("anchor selection loop always selects its index");
+        let anchor = &out[open..close];
+        let xfrm = anchor
+            .find("<a:xfrm")
+            .ok_or_else(|| "drawing shape is missing <a:xfrm>".to_string())?;
+        let tag_end = xfrm
+            + anchor[xfrm..]
+                .find('>')
+                .ok_or_else(|| "drawing shape transform is unterminated".to_string())?;
+        let mut tag = anchor[xfrm..=tag_end].to_string();
+        for (attribute, value) in [("flipH", *flip_h), ("flipV", *flip_v)] {
+            let Some(value) = value else { continue };
+            let value = if value { "1" } else { "0" };
+            if let Some(attr_rel) = tag.find(&format!("{attribute}=")) {
+                let value_start = attr_rel + attribute.len() + 1;
+                let quote = tag.as_bytes()[value_start];
+                if quote != b'"' && quote != b'\'' {
+                    return Err(format!(
+                        "drawing shape transform {attribute} attribute is malformed"
+                    ));
+                }
+                let value_end = tag[value_start + 1..]
+                    .find(quote as char)
+                    .map(|rel| value_start + 1 + rel)
+                    .ok_or_else(|| {
+                        format!("drawing shape transform {attribute} attribute is unterminated")
+                    })?;
+                tag.replace_range(value_start + 1..value_end, value);
+            } else {
+                let insert_at = tag
+                    .rfind("/>")
+                    .or_else(|| tag.rfind('>'))
+                    .ok_or_else(|| "drawing shape transform is malformed".to_string())?;
+                tag.insert_str(insert_at, &format!(" {attribute}=\"{value}\""));
+            }
+        }
+        let mut replacement = anchor.to_string();
+        replacement.replace_range(xfrm..=tag_end, &tag);
+        out.replace_range(open..close, &replacement);
+    }
+    Ok(out)
+}
+
 /// Rewrites only the worksheet source sheet attribute in pivot cache definitions.
 /// Pivot cache contents and table-based sources are left byte-for-byte unchanged.
 fn rewrite_pivot_cache_sheet_refs(
@@ -6018,6 +6113,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_drawing_shape_title_edits = !vm.drawing_shape_title_edits.is_empty();
     let has_drawing_shape_hidden_edits = !vm.drawing_shape_hidden_edits.is_empty();
     let has_drawing_shape_rotation_edits = !vm.drawing_shape_rotation_edits.is_empty();
+    let has_drawing_shape_flip_edits = !vm.drawing_shape_flip_edits.is_empty();
     // Keep writer-owned static package parts regenerated. A source raw copy can
     // carry source-only defaults or relationship-id ordering that is valid in
     // isolation but diverges from the writer's carried relationship contract.
@@ -6125,6 +6221,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(drawing_part) {
                 return Err(format!(
                     "drawing shape rotation edit rejected: source workbook has no {drawing_part}"
+                ));
+            }
+        }
+        for drawing_part in vm.drawing_shape_flip_edits.keys() {
+            if !raw_entries.contains_key(drawing_part) {
+                return Err(format!(
+                    "drawing shape flip edit rejected: source workbook has no {drawing_part}"
                 ));
             }
         }
@@ -6424,13 +6527,15 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_drawing_shape_description_edits
                 || has_drawing_shape_title_edits
                 || has_drawing_shape_hidden_edits
-                || has_drawing_shape_rotation_edits)
+                || has_drawing_shape_rotation_edits
+                || has_drawing_shape_flip_edits)
                 && (vm.drawing_anchor_edits.contains_key(&name)
                     || vm.drawing_shape_name_edits.contains_key(&name)
                     || vm.drawing_shape_description_edits.contains_key(&name)
                     || vm.drawing_shape_title_edits.contains_key(&name)
                     || vm.drawing_shape_hidden_edits.contains_key(&name)
-                    || vm.drawing_shape_rotation_edits.contains_key(&name))
+                    || vm.drawing_shape_rotation_edits.contains_key(&name)
+                    || vm.drawing_shape_flip_edits.contains_key(&name))
                 && name.starts_with("xl/drawings/")
                 && name.ends_with(".xml")
                 && !name.contains("/_rels/")
@@ -6481,6 +6586,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 } else {
                     drawing
                 };
+                let drawing = if let Some(edits) = vm.drawing_shape_flip_edits.get(&name) {
+                    rewrite_drawing_shape_flip(&drawing, edits)?
+                } else {
+                    drawing
+                };
                 drawing.into_bytes()
             } else {
                 bytes
@@ -6511,13 +6621,15 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || has_drawing_shape_description_edits
                     || has_drawing_shape_title_edits
                     || has_drawing_shape_hidden_edits
-                    || has_drawing_shape_rotation_edits)
+                    || has_drawing_shape_rotation_edits
+                    || has_drawing_shape_flip_edits)
                     && (vm.drawing_anchor_edits.contains_key(&name)
                         || vm.drawing_shape_name_edits.contains_key(&name)
                         || vm.drawing_shape_description_edits.contains_key(&name)
                         || vm.drawing_shape_title_edits.contains_key(&name)
                         || vm.drawing_shape_hidden_edits.contains_key(&name)
-                        || vm.drawing_shape_rotation_edits.contains_key(&name))
+                        || vm.drawing_shape_rotation_edits.contains_key(&name)
+                        || vm.drawing_shape_flip_edits.contains_key(&name))
                     && name.starts_with("xl/drawings/")
                     && name.ends_with(".xml"))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
@@ -9886,6 +9998,43 @@ mod tests {
         assert!(
             rewrite_drawing_shape_rotation(
                 "<xdr:wsDr><xdr:twoCellAnchor><xdr:sp/></xdr:twoCellAnchor></xdr:wsDr>",
+                &edits
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn drawing_shape_flip_rewriter_updates_only_selected_transform() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, (Some(true), Some(false)));
+        let source = concat!(
+            r#"<xdr:wsDr><xdr:twoCellAnchor><xdr:sp><xdr:spPr><a:xfrm rot="0" flipH="0"><a:off x="0" y="0"/></a:xfrm></xdr:spPr></xdr:sp></xdr:twoCellAnchor>"#,
+            r#"<xdr:twoCellAnchor><xdr:sp><xdr:spPr><a:xfrm rot="1200000" flipV="1"><a:off x="1" y="1"/></a:xfrm></xdr:spPr></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"#,
+        );
+        let actual = rewrite_drawing_shape_flip(source, &edits).unwrap();
+        assert!(actual.contains(r#"<a:xfrm rot="0" flipH="1" flipV="0">"#));
+        assert!(actual.contains(r#"<a:xfrm rot="1200000" flipV="1">"#));
+        assert!(actual.contains(r#"<a:off x="0" y="0"/>"#));
+    }
+
+    #[test]
+    fn drawing_shape_flip_rewriter_adds_missing_attributes() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, (None, Some(true)));
+        let source = r#"<xdr:wsDr><xdr:oneCellAnchor><xdr:sp><xdr:spPr><a:xfrm><a:off x="0" y="0"/></a:xfrm></xdr:spPr></xdr:sp></xdr:oneCellAnchor></xdr:wsDr>"#;
+        let actual = rewrite_drawing_shape_flip(source, &edits).unwrap();
+        assert!(actual.contains(r#"<a:xfrm flipV="1">"#));
+        assert!(!actual.contains("flipH="));
+    }
+
+    #[test]
+    fn drawing_shape_flip_rewriter_rejects_a_missing_transform() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, (Some(false), None));
+        assert!(
+            rewrite_drawing_shape_flip(
+                "<xdr:wsDr><xdr:absoluteAnchor><xdr:sp/></xdr:absoluteAnchor></xdr:wsDr>",
                 &edits
             )
             .is_err()
