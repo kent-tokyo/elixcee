@@ -175,6 +175,7 @@ class StreamWriterLimits(unittest.TestCase):
 
         workbook = elixcee.load_workbook(patched)
         self.assertTrue(workbook.workbook_date1904)
+        self.assertTrue(workbook.snapshot()["workbook_date1904"])
         workbook.save_workbook(roundtrip)
         self.assertTrue(elixcee.load_workbook(roundtrip).workbook_date1904)
 

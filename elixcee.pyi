@@ -230,7 +230,7 @@ class Vm:
         ...
 
     def snapshot(self, include_formulas: bool = False) -> dict[str, Any]:
-        """Return a detached workbook snapshot including hidden rows/columns; optionally include ``formulas``."""
+        """Return a detached workbook snapshot including calculation mode and date-system metadata; optionally include ``formulas``."""
         ...
 
     @property

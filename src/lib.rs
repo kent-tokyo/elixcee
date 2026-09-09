@@ -1006,6 +1006,7 @@ impl PyVm {
             vm::CalculationMode::Manual => "manual",
         };
         snapshot.set_item("calculation_mode", calculation_mode)?;
+        snapshot.set_item("workbook_date1904", self.inner.workbook_date1904())?;
 
         let sheets = PyDict::new(py);
         let formulas = include_formulas.then(|| PyDict::new(py));
