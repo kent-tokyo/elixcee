@@ -10290,25 +10290,37 @@ impl Vm {
                     .any(|sub| sub.name.eq_ignore_ascii_case("worksheet_change"))
             })
             .collect();
-        if change_handlers.len() > 1 {
-            return Err(format!(
-                "duplicate Worksheet_Change across modules '{}' — event dispatch order is ambiguous",
-                change_handlers
+        let selected_change_handler = match change_handlers.as_slice() {
+            [] => None,
+            [handler] => Some(*handler),
+            _ => {
+                let worksheet_handlers: Vec<_> = change_handlers
                     .iter()
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>()
-                    .join("', '")
-            ));
-        }
+                    .filter(|(name, _)| name.eq_ignore_ascii_case(&self.active_sheet))
+                    .collect();
+                if worksheet_handlers.len() == 1 {
+                    Some(*worksheet_handlers[0])
+                } else {
+                    return Err(format!(
+                        "duplicate Worksheet_Change across modules '{}' — event dispatch order is ambiguous",
+                        change_handlers
+                            .iter()
+                            .map(|(name, _)| name.as_str())
+                            .collect::<Vec<_>>()
+                            .join("', '")
+                    ));
+                }
+            }
+        };
         let previous = self.auto_event_program.take();
-        if let Some((_, program)) = change_handlers.first() {
-            self.auto_event_program = Some((*program).clone());
+        if let Some((_, program)) = selected_change_handler {
+            self.auto_event_program = Some(program.clone());
         }
         let result = (|| {
             if let Some((_, program)) = open_handlers.first() {
                 self.run_event(program, "Workbook_Open")?;
             }
-            self.run_sub_multi(modules, entrypoint)
+            self.run_sub_multi_impl(modules, entrypoint, true)
         })();
         self.auto_event_program = previous;
         result
@@ -10445,10 +10457,22 @@ impl Vm {
         modules: &[(String, Program)],
         entrypoint: &str,
     ) -> Result<(), String> {
+        self.run_sub_multi_impl(modules, entrypoint, false)
+    }
+
+    fn run_sub_multi_impl(
+        &mut self,
+        modules: &[(String, Program)],
+        entrypoint: &str,
+        allow_worksheet_change_collision: bool,
+    ) -> Result<(), String> {
         self.next_append_rows.clear();
         self.last_runtime_failure = None;
         let sub_collisions = parser::find_cross_module_sub_collisions(modules);
-        if let Some((name, mods)) = sub_collisions.first() {
+        if let Some((name, mods)) = sub_collisions
+            .iter()
+            .find(|(name, _)| !(allow_worksheet_change_collision && name == "worksheet_change"))
+        {
             return Err(format!(
                 "duplicate Sub '{}' across modules '{}' — cross-module name collisions aren't supported yet; own-module-first/Private scoping isn't modeled — rename one of them",
                 name,
@@ -23378,6 +23402,38 @@ mod tests {
         vm.run_sub_multi_with_events(&modules, "module1.Main")
             .unwrap();
         assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
+    }
+
+    #[test]
+    fn run_sub_multi_with_events_selects_change_handler_named_for_active_sheet() {
+        let modules = vec![
+            module(
+                "module1",
+                r#"Sub Main()
+    Range("A1").Value = 7
+End Sub
+"#,
+            ),
+            module(
+                "Sheet1",
+                r#"Sub Worksheet_Change(Target As Range)
+    If Target.Address = "$A$1" Then Cells(1,3).Value = Target.Value
+End Sub
+"#,
+            ),
+            module(
+                "Sheet2",
+                r#"Sub Worksheet_Change(Target As Range)
+    Cells(1,4).Value = Target.Value
+End Sub
+"#,
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi_with_events(&modules, "module1.Main")
+            .unwrap();
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 4), Variant::Empty);
     }
 
     #[test]
