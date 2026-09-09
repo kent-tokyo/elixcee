@@ -10536,6 +10536,79 @@ mod tests {
     }
 
     #[test]
+    fn drawing_shape_line_dash_edit_survives_xlsx_save() {
+        use std::io::{Cursor, Read, Write};
+        use zip::write::ZipWriter;
+
+        let mut zip = ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        let add = |zip: &mut ZipWriter<Cursor<Vec<u8>>>, name: &str, body: &str| {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        };
+        add(
+            &mut zip,
+            "[Content_Types].xml",
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>"#,
+        );
+        add(
+            &mut zip,
+            "_rels/.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+        );
+        add(
+            &mut zip,
+            "xl/workbook.xml",
+            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        );
+        add(
+            &mut zip,
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+        );
+        add(
+            &mut zip,
+            "xl/worksheets/sheet1.xml",
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData/><drawing r:id="rId1"/></worksheet>"#,
+        );
+        add(
+            &mut zip,
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#,
+        );
+        add(
+            &mut zip,
+            "xl/drawings/drawing1.xml",
+            r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from><xdr:sp><xdr:spPr><a:ln><a:prstDash val="solid"/></a:ln></xdr:spPr></xdr:sp><xdr:to><xdr:col>1</xdr:col><xdr:row>1</xdr:row></xdr:to></xdr:twoCellAnchor></xdr:wsDr>"#,
+        );
+        let directory = std::env::temp_dir().join(format!(
+            "elixcee-line-dash-save-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("source.xlsx");
+        let output = directory.join("output.xlsx");
+        std::fs::write(&source, zip.finish().unwrap().into_inner()).unwrap();
+
+        let mut vm = Vm::new();
+        vm.load_workbook_file(source.to_str().unwrap()).unwrap();
+        vm.set_drawing_shape_line_dash("xl/drawings/drawing1.xml", 0, "lgDashDot")
+            .unwrap();
+        save_workbook(&vm, output.to_str().unwrap()).unwrap();
+
+        let file = std::fs::File::open(output).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut drawing = String::new();
+        archive
+            .by_name("xl/drawings/drawing1.xml")
+            .unwrap()
+            .read_to_string(&mut drawing)
+            .unwrap();
+        assert!(drawing.contains(r#"<a:prstDash val="lgDashDot"/>"#));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn chart_series_cache_rewriter_preserves_formula_and_replaces_points() {
         let mut edits = std::collections::HashMap::new();
         edits.insert(
