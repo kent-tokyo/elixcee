@@ -1358,6 +1358,9 @@ pub struct Vm {
     /// Explicit DrawingML line-width edits keyed by drawing part and
     /// document-order anchor index. Values are EMU units.
     pub(crate) drawing_shape_line_width_edits: HashMap<String, HashMap<usize, u32>>,
+    /// Explicit DrawingML preset-dash edits keyed by drawing part and
+    /// document-order anchor index.
+    pub(crate) drawing_shape_line_dash_edits: HashMap<String, HashMap<usize, String>>,
     /// Dynamic-array spill rectangles keyed by sheet and anchor coordinate.
     /// Included in edit history so undo cannot leave stale spill ownership.
     spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
@@ -1826,6 +1829,7 @@ impl Vm {
             drawing_shape_fill_edits: HashMap::new(),
             drawing_shape_line_edits: HashMap::new(),
             drawing_shape_line_width_edits: HashMap::new(),
+            drawing_shape_line_dash_edits: HashMap::new(),
             spill_rects: HashMap::new(),
             edit_undo: Vec::new(),
             edit_redo: Vec::new(),
@@ -8458,6 +8462,49 @@ impl Vm {
             .entry(drawing_part.to_string())
             .or_default()
             .insert(anchor_index, width_emu);
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing drawing shape's preset line dash.
+    /// Only DrawingML `ST_PresetLineDashVal` values are accepted.
+    pub fn set_drawing_shape_line_dash(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        dash: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        let dash = dash.trim();
+        const ALLOWED: &[&str] = &[
+            "solid",
+            "dot",
+            "dash",
+            "lgDash",
+            "dashDot",
+            "lgDashDot",
+            "lgDashDotDot",
+            "sysDash",
+            "sysDot",
+            "sysDashDot",
+            "sysDashDotDot",
+        ];
+        let Some(value) = ALLOWED
+            .iter()
+            .find(|candidate| candidate.eq_ignore_ascii_case(dash))
+        else {
+            return Err("drawing shape line dash is not a valid DrawingML preset dash".to_string());
+        };
+        self.drawing_shape_line_dash_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, (*value).to_string());
         Ok(())
     }
 

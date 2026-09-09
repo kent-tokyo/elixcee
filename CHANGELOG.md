@@ -6,6 +6,8 @@
 
 次の変更はここに記録します。
 
+- G2dの限定Drawing編集として、既存shapeの`<a:prstDash>`を`Vm.set_drawing_shape_line_dash`（Python binding／型stub含む）からDrawingML標準値で更新できるようにしました。line作成、custom dash、Excel再openは未完です。
+
 - 複数moduleの`Worksheet_Change`自動dispatchで、表示名に加えて既存worksheet XMLの`sheetPr@codeName`をmodule名解決に利用するようにしました。codeNameはOOXMLから読み取る範囲に限定し、VBAプロジェクトの完全なExcelイベント意味論とExcel実機oracleは未完です。
 
 - G2dの限定Chart編集として、凡例の`c:overlay@val`を`Vm.set_chart_legend_overlay`（Python binding／型stub含む）から追加／更新できるようにしました。凡例の他の子要素・系列・title・relationshipは保持し、凡例欠損、Chart作成、Excel再openは未完です。

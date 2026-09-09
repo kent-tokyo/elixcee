@@ -525,6 +525,12 @@ class Vm:
         """Update an existing shape line width in points (0 through 1584)."""
         ...
 
+    def set_drawing_shape_line_dash(
+        self, drawing_part: str, anchor_index: int, dash: str
+    ) -> None:
+        """Update an existing shape line's DrawingML preset dash."""
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 
