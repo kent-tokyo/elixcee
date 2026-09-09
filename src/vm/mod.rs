@@ -27,6 +27,7 @@ pub const DEFAULT_MAX_VBA_STRING_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_MAX_VBA_ARRAY_ELEMENTS: usize = MAX_ARRAY_ELEMENTS;
 /// Default maximum number of materialized cells retained across VBA sheets.
 pub const DEFAULT_MAX_VBA_CELLS: usize = 5_000_000;
+const MAX_AUTOMATIC_WORKSHEET_CHANGES: usize = 64;
 
 fn is_blocked_external_effect(reason: &str) -> bool {
     let lower = reason.to_ascii_lowercase();
@@ -1234,6 +1235,9 @@ pub struct Vm {
     /// cached program so `run_sub` remains event-free for compatibility.
     auto_event_program: Option<Program>,
     auto_event_suppression_depth: usize,
+    pending_worksheet_changes: VecDeque<Rect>,
+    automatic_event_chain_active: bool,
+    automatic_event_chain_count: usize,
     pub exit_flag: Option<ExitKind>,
     /// Pending unconditional jump target (`GoTo <label>`).
     pending_goto: Option<String>,
@@ -1753,6 +1757,9 @@ impl Vm {
             event_dispatch_depth: 0,
             auto_event_program: None,
             auto_event_suppression_depth: 0,
+            pending_worksheet_changes: VecDeque::new(),
+            automatic_event_chain_active: false,
+            automatic_event_chain_count: 0,
             exit_flag: None,
             pending_goto: None,
             call_stack: Vec::new(),
@@ -9957,7 +9964,35 @@ impl Vm {
                 self.object_variable_types.remove(&target_name);
             }
         }
-        result.map(|()| true)
+        let mut result = result.map(|()| true);
+        if result.is_err() {
+            self.pending_worksheet_changes.clear();
+        } else if self.event_dispatch_depth == 0 {
+            while let Some(area) = self.pending_worksheet_changes.pop_front() {
+                if self.automatic_event_chain_count >= MAX_AUTOMATIC_WORKSHEET_CHANGES {
+                    result = Err(format!(
+                        "Worksheet_Change event chain exceeded {} dispatches",
+                        MAX_AUTOMATIC_WORKSHEET_CHANGES
+                    ));
+                    self.pending_worksheet_changes.clear();
+                    break;
+                }
+                self.automatic_event_chain_count += 1;
+                let target_address = format!(
+                    "{}{}:{}{}",
+                    column_letters(area.start_col),
+                    area.start_row,
+                    column_letters(area.end_col),
+                    area.end_row
+                );
+                if let Err(error) = self.run_worksheet_change(program, &target_address) {
+                    result = Err(error);
+                    self.pending_worksheet_changes.clear();
+                    break;
+                }
+            }
+        }
+        result
     }
 
     fn dispatch_worksheet_change_after_range_write(
@@ -9971,12 +10006,21 @@ impl Vm {
                 .iter()
                 .any(|sub| sub.name.eq_ignore_ascii_case("worksheet_change"))
         });
-        if self.event_dispatch_depth != 0
-            || self.auto_event_suppression_depth != 0
+        if self.auto_event_suppression_depth != 0
             || !self.enable_events
             || sheet != self.active_sheet
             || !has_handler
         {
+            return Ok(());
+        }
+        if self.event_dispatch_depth != 0 {
+            if self.pending_worksheet_changes.len() >= MAX_AUTOMATIC_WORKSHEET_CHANGES {
+                return Err(format!(
+                    "Worksheet_Change event chain exceeded {} queued changes",
+                    MAX_AUTOMATIC_WORKSHEET_CHANGES
+                ));
+            }
+            self.pending_worksheet_changes.push_back(area);
             return Ok(());
         }
         let program = self
@@ -9991,7 +10035,17 @@ impl Vm {
             column_letters(area.end_col),
             area.end_row
         );
-        self.run_worksheet_change(&program, &target_address).map(|_| ())
+        let outer_chain = !self.automatic_event_chain_active;
+        if outer_chain {
+            self.automatic_event_chain_active = true;
+            self.automatic_event_chain_count = 1;
+        }
+        let result = self.run_worksheet_change(&program, &target_address).map(|_| ());
+        if outer_chain {
+            self.automatic_event_chain_active = false;
+            self.pending_worksheet_changes.clear();
+        }
+        result
     }
 
     /// Run an entrypoint with an opt-in `Workbook_Open` dispatch first.
@@ -18004,20 +18058,20 @@ mod tests {
     fn run_sub_with_events_auto_dispatches_change_after_vba_cell_write() {
         let program = parser::parse(
             "Sub Main()\n    Cells(1,1).Value = 7\nEnd Sub\n\n\
-             Sub Worksheet_Change(Target As Range)\n    Cells(1,2).Value = Target.Value\nEnd Sub\n",
+             Sub Worksheet_Change(Target As Range)\n    If Target.Value = 7 Then\n        Cells(1,2).Value = 8\n    End If\nEnd Sub\n",
         )
         .unwrap();
         let mut vm = Vm::new();
         vm.run_sub_with_events(&program, "Main").unwrap();
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
-        assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
     }
 
     #[test]
     fn run_sub_with_events_dispatches_the_full_range_for_range_writes() {
         let program = parser::parse(
             "Sub Main()\n    Range(\"A1:B1\").Value = 7\nEnd Sub\n\n\
-             Sub Worksheet_Change(Target As Range)\n    Cells(1,3).Value = Target.Columns.Count\nEnd Sub\n",
+             Sub Worksheet_Change(Target As Range)\n    If Target.Columns.Count = 2 Then\n        Cells(1,3).Value = Target.Columns.Count\n    End If\nEnd Sub\n",
         )
         .unwrap();
         let mut vm = Vm::new();
@@ -18031,20 +18085,20 @@ mod tests {
     fn run_sub_with_events_auto_dispatches_after_formula_write() {
         let program = parser::parse(
             "Sub Main()\n    Range(\"A1\").Formula = \"=1+1\"\nEnd Sub\n\n\
-             Sub Worksheet_Change(Target As Range)\n    Cells(1,2).Value = Target.Value\nEnd Sub\n",
+             Sub Worksheet_Change(Target As Range)\n    If Target.Value = 2 Then\n        Cells(1,2).Value = 3\n    End If\nEnd Sub\n",
         )
         .unwrap();
         let mut vm = Vm::new();
         vm.run_sub_with_events(&program, "Main").unwrap();
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
-        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(3));
     }
 
     #[test]
     fn run_sub_with_events_dispatches_one_full_target_for_formula_range_write() {
         let program = parser::parse(
             "Sub Main()\n    Range(\"A1:B1\").Formula = \"=1+1\"\nEnd Sub\n\n\
-             Sub Worksheet_Change(Target As Range)\n    Cells(1,3).Value = Target.Columns.Count\nEnd Sub\n",
+             Sub Worksheet_Change(Target As Range)\n    If Target.Columns.Count = 2 Then\n        Cells(1,3).Value = Target.Columns.Count\n    End If\nEnd Sub\n",
         )
         .unwrap();
         let mut vm = Vm::new();
@@ -23077,12 +23131,37 @@ mod tests {
             ),
             module(
                 "sheet1",
-                "Sub Worksheet_Change(Target As Range)\n    Cells(1,3).Value = Target.Columns.Count\nEnd Sub\n",
+                "Sub Worksheet_Change(Target As Range)\n    If Target.Columns.Count = 2 Then\n        Cells(1,3).Value = Target.Columns.Count\n    End If\nEnd Sub\n",
             ),
         ];
         let mut vm = Vm::new();
         vm.run_sub_multi_with_events(&modules, "module1.Main").unwrap();
         assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
+    }
+
+    #[test]
+    fn run_sub_with_events_drains_bounded_worksheet_change_chain() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Value = 7 Then\n        Range(\"B1\").Value = 8\n    End If\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+    }
+
+    #[test]
+    fn run_sub_with_events_rejects_an_unbounded_worksheet_change_chain() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    Range(\"B1\").Value = Target.Value\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let error = vm.run_sub_with_events(&program, "Main").unwrap_err();
+        assert!(error.contains("event chain exceeded 64 dispatches"), "{error:?}");
     }
 
     #[test]
