@@ -1516,6 +1516,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to an existing drawing shape's line width in points.
+    fn set_drawing_shape_line_width(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        width_points: f64,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_shape_line_width(drawing_part, anchor_index, width_points)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Move a sheet to an absolute 0-based position among the workbook's sheets.
     ///
     /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
@@ -5757,6 +5769,76 @@ fn rewrite_drawing_shape_line_color(
     Ok(out)
 }
 
+fn rewrite_drawing_shape_line_width(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, u32>,
+) -> Result<String, String> {
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
+    let mut out = xml.to_string();
+    for (&anchor_index, width) in ordered {
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=anchor_index {
+            let candidates = [
+                ("<xdr:twoCellAnchor>", "</xdr:twoCellAnchor>"),
+                ("<xdr:twoCellAnchor ", "</xdr:twoCellAnchor>"),
+                ("<xdr:oneCellAnchor>", "</xdr:oneCellAnchor>"),
+                ("<xdr:oneCellAnchor ", "</xdr:oneCellAnchor>"),
+                ("<xdr:absoluteAnchor>", "</xdr:absoluteAnchor>"),
+                ("<xdr:absoluteAnchor ", "</xdr:absoluteAnchor>"),
+            ];
+            let (open, closing) = candidates
+                .iter()
+                .filter_map(|(opening, closing)| {
+                    out[cursor..]
+                        .find(opening)
+                        .map(|offset| (cursor + offset, *closing))
+                })
+                .min_by_key(|(position, _)| *position)
+                .ok_or_else(|| format!("drawing anchor index {anchor_index} is out of range"))?;
+            let close_rel = out[open..]
+                .find(closing)
+                .ok_or_else(|| "drawing anchor is unterminated".to_string())?;
+            let close = open + close_rel + closing.len();
+            if current == anchor_index {
+                selected = Some((open, close));
+                break;
+            }
+            cursor = close;
+        }
+        let (open, close) = selected.expect("anchor selection loop always selects its index");
+        let anchor = &out[open..close];
+        let line = anchor
+            .find("<a:ln")
+            .ok_or_else(|| "drawing shape is missing <a:ln>".to_string())?;
+        let tag_end = line
+            + anchor[line..]
+                .find('>')
+                .ok_or_else(|| "drawing shape line is unterminated".to_string())?;
+        let tag = &anchor[line..=tag_end];
+        let attr_rel = tag.find("w=");
+        let mut replacement = anchor.to_string();
+        if let Some(attr_rel) = attr_rel {
+            let value_start = line + attr_rel + 2;
+            let quote = anchor.as_bytes()[value_start];
+            if quote != b'"' && quote != b'\'' {
+                return Err("drawing line width w attribute is malformed".to_string());
+            }
+            let value_end = anchor[value_start + 1..]
+                .find(quote as char)
+                .map(|rel| value_start + 1 + rel)
+                .ok_or_else(|| "drawing line width w attribute is unterminated".to_string())?;
+            replacement.replace_range(value_start + 1..value_end, &width.to_string());
+        } else {
+            let insert_at = tag_end;
+            replacement.insert_str(insert_at, &format!(" w=\"{width}\""));
+        }
+        out.replace_range(open..close, &replacement);
+    }
+    Ok(out)
+}
+
 /// Rewrites only the worksheet source sheet attribute in pivot cache definitions.
 /// Pivot cache contents and table-based sources are left byte-for-byte unchanged.
 fn rewrite_pivot_cache_sheet_refs(
@@ -6311,6 +6393,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_drawing_shape_flip_edits = !vm.drawing_shape_flip_edits.is_empty();
     let has_drawing_shape_fill_edits = !vm.drawing_shape_fill_edits.is_empty();
     let has_drawing_shape_line_edits = !vm.drawing_shape_line_edits.is_empty();
+    let has_drawing_shape_line_width_edits = !vm.drawing_shape_line_width_edits.is_empty();
     // Keep writer-owned static package parts regenerated. A source raw copy can
     // carry source-only defaults or relationship-id ordering that is valid in
     // isolation but diverges from the writer's carried relationship contract.
@@ -6439,6 +6522,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(drawing_part) {
                 return Err(format!(
                     "drawing shape line edit rejected: source workbook has no {drawing_part}"
+                ));
+            }
+        }
+        for drawing_part in vm.drawing_shape_line_width_edits.keys() {
+            if !raw_entries.contains_key(drawing_part) {
+                return Err(format!(
+                    "drawing shape line-width edit rejected: source workbook has no {drawing_part}"
                 ));
             }
         }
@@ -6741,7 +6831,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_drawing_shape_rotation_edits
                 || has_drawing_shape_flip_edits
                 || has_drawing_shape_fill_edits
-                || has_drawing_shape_line_edits)
+                || has_drawing_shape_line_edits
+                || has_drawing_shape_line_width_edits)
                 && (vm.drawing_anchor_edits.contains_key(&name)
                     || vm.drawing_shape_name_edits.contains_key(&name)
                     || vm.drawing_shape_description_edits.contains_key(&name)
@@ -6750,7 +6841,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || vm.drawing_shape_rotation_edits.contains_key(&name)
                     || vm.drawing_shape_flip_edits.contains_key(&name)
                     || vm.drawing_shape_fill_edits.contains_key(&name)
-                    || vm.drawing_shape_line_edits.contains_key(&name))
+                    || vm.drawing_shape_line_edits.contains_key(&name)
+                    || vm.drawing_shape_line_width_edits.contains_key(&name))
                 && name.starts_with("xl/drawings/")
                 && name.ends_with(".xml")
                 && !name.contains("/_rels/")
@@ -6816,6 +6908,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 } else {
                     drawing
                 };
+                let drawing = if let Some(edits) = vm.drawing_shape_line_width_edits.get(&name) {
+                    rewrite_drawing_shape_line_width(&drawing, edits)?
+                } else {
+                    drawing
+                };
                 drawing.into_bytes()
             } else {
                 bytes
@@ -6849,7 +6946,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || has_drawing_shape_rotation_edits
                     || has_drawing_shape_flip_edits
                     || has_drawing_shape_fill_edits
-                    || has_drawing_shape_line_edits)
+                    || has_drawing_shape_line_edits
+                    || has_drawing_shape_line_width_edits)
                     && (vm.drawing_anchor_edits.contains_key(&name)
                         || vm.drawing_shape_name_edits.contains_key(&name)
                         || vm.drawing_shape_description_edits.contains_key(&name)
@@ -6858,7 +6956,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                         || vm.drawing_shape_rotation_edits.contains_key(&name)
                         || vm.drawing_shape_flip_edits.contains_key(&name)
                         || vm.drawing_shape_fill_edits.contains_key(&name)
-                        || vm.drawing_shape_line_edits.contains_key(&name))
+                        || vm.drawing_shape_line_edits.contains_key(&name)
+                        || vm.drawing_shape_line_width_edits.contains_key(&name))
                     && name.starts_with("xl/drawings/")
                     && name.ends_with(".xml"))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
@@ -10301,6 +10400,19 @@ mod tests {
         let actual = rewrite_drawing_shape_line_color(source, &edits).unwrap();
         assert!(actual.contains(r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="445566"/>"#));
         assert!(actual.contains(r#"<a:srgbClr val="FFFFFF"/>"#));
+    }
+
+    #[test]
+    fn drawing_shape_line_width_rewriter_updates_only_selected_line() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, 25400u32);
+        let source = concat!(
+            r#"<xdr:wsDr><xdr:twoCellAnchor><xdr:sp><xdr:spPr><a:ln w="12700"><a:solidFill/></a:ln></xdr:spPr></xdr:sp></xdr:twoCellAnchor>"#,
+            r#"<xdr:twoCellAnchor><xdr:sp><xdr:spPr><a:ln w="38100"/></xdr:spPr></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"#,
+        );
+        let actual = rewrite_drawing_shape_line_width(source, &edits).unwrap();
+        assert!(actual.contains(r#"<a:ln w="25400"><a:solidFill/>"#));
+        assert!(actual.contains(r#"<a:ln w="38100"/>"#));
     }
 
     #[test]

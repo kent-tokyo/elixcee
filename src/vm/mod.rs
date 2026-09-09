@@ -1350,6 +1350,9 @@ pub struct Vm {
     /// Explicit DrawingML line-color edits keyed by drawing part and
     /// document-order anchor index. Values are normalized ARGB hex strings.
     pub(crate) drawing_shape_line_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit DrawingML line-width edits keyed by drawing part and
+    /// document-order anchor index. Values are EMU units.
+    pub(crate) drawing_shape_line_width_edits: HashMap<String, HashMap<usize, u32>>,
     /// Dynamic-array spill rectangles keyed by sheet and anchor coordinate.
     /// Included in edit history so undo cannot leave stale spill ownership.
     spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
@@ -1816,6 +1819,7 @@ impl Vm {
             drawing_shape_flip_edits: HashMap::new(),
             drawing_shape_fill_edits: HashMap::new(),
             drawing_shape_line_edits: HashMap::new(),
+            drawing_shape_line_width_edits: HashMap::new(),
             spill_rects: HashMap::new(),
             edit_undo: Vec::new(),
             edit_redo: Vec::new(),
@@ -8376,6 +8380,35 @@ impl Vm {
             .entry(drawing_part.to_string())
             .or_default()
             .insert(anchor_index, color);
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing drawing shape's line width in
+    /// points. The accepted range is 0 through 1584 points.
+    pub fn set_drawing_shape_line_width(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        width_points: f64,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if !width_points.is_finite() || !(0.0..=1584.0).contains(&width_points) {
+            return Err(
+                "drawing shape line width must be finite and in 0..=1584 points".to_string(),
+            );
+        }
+        let width_emu = (width_points * 12_700.0).round() as u32;
+        self.drawing_shape_line_width_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, width_emu);
         Ok(())
     }
 
