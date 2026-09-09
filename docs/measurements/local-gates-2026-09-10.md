@@ -161,3 +161,29 @@ CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0' \
 The command generated documentation for `elixcee`, `elixcee-wasm`, and
 `elixcee-types` without warnings or errors. The generated `target/doc` output
 is a build artifact and is not part of the repository.
+
+## 1.0.6 release-candidate rerun
+
+After the version and documentation update, commit `9f363d2` was checked with
+the canonical self-contained gate:
+
+```sh
+bash scripts/check-local-gates.sh
+```
+
+The gate completed successfully. It included 1,690 Rust library tests, all
+integration and benchmark targets, warnings-denied Clippy, private-item
+Rustdoc, offline advisory scanning, and the package checks. The four sequential
+fuzz smoke runs completed without crash artifacts and stayed below the 1 GiB
+RSS limit:
+
+- `fuzz_formula_parser`: 173,978 runs, peak reported RSS 535 MiB
+- `fuzz_formula_eval`: 90,095 runs, peak reported RSS 525 MiB
+- `fuzz_vba_parser`: 148,727 runs, peak reported RSS 519 MiB
+- `fuzz_xlsx_reader`: 14,685 runs, peak reported RSS 327 MiB
+
+The WASM payload growth gate remained at 9.95% (below the 10% limit). The real
+packed npm tarball consumer passed CJS, ESM, browser-condition, filesystem,
+and TypeScript checks, and the real Chrome HTTP smoke returned `ok: true`.
+This is macOS local release-candidate evidence; Excel reopen, Linux/Windows,
+external review, and registry/publication state remain separate checks.
