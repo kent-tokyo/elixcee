@@ -13,6 +13,7 @@
 - G2dの限定Chart編集として、既存Chartの最初のtitle text runを`Vm.set_chart_title`（Python binding含む）から更新できるようにしました。XML escape、欠損title／text、制御文字、16KiB上限を検証し、周辺のChart XML・Drawing relationshipは保持します。Chart作成、複数runの完全編集、Excel再openは未完です。
 - G2dの限定Drawing編集として、既存two-cell anchorのfrom/toセルを`Vm.set_drawing_anchor`（Python binding含む）から1-based座標で更新できるようにしました。shape content、offset、relationshipを保持し、one-cell anchorや不正座標は拒否します。Drawing作成・一般shape編集・Excel再openは未完です。
 - G2dの限定Chart編集として、既存系列のcategory/value cacheを`Vm.set_chart_series_cache`（Python binding含む）から更新できるようにしました。既存`strCache`／`numCache`の点数・値だけを置換し、formula・formatCode・cache種別・周辺XMLを保持します。cache作成／再計算、Chart作成、Excel再openは未完です。
+- Chart系列にcacheが存在しない場合も、既存の`strRef`／`numRef`を変えずに`strCache`／`numCache`を生成してから点数・値を保存できるようにしました。
 - G2dの限定Drawing編集として、既存drawing anchor内の`cNvPr name`を`Vm.set_drawing_shape_name`（Python binding含む）から更新できるようにしました。two-cell／one-cell／absolute anchorに対応し、geometry・shape content・relationshipを保持します。Drawing作成・shape属性全般編集・Excel再openは未完です。
 - G2dの限定Drawing編集として、既存drawing anchor内のoptionalな`cNvPr descr`を`Vm.set_drawing_shape_description`（Python binding含む）から追加／更新できるようにしました。XML escapeと既存shape構造を保持し、Drawing作成・shape属性全般編集・Excel再openは未完です。
 - G2dの限定Drawing編集として、既存drawing anchor内のoptionalな`cNvPr title`を`Vm.set_drawing_shape_title`（Python binding含む）から追加／更新できるようにしました。geometry・shape content・relationshipは保持し、Drawing作成・shape属性全般編集・Excel再openは未完です。

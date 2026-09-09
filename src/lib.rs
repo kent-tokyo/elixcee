@@ -4304,8 +4304,9 @@ fn rewrite_chart_series_formulas(
 }
 
 /// Rewrite cached points for selected chart series. The existing cache kind
-/// (`strCache` or `numCache`) is preserved; only its point count and values
-/// change. This keeps formula references and all surrounding chart XML opaque.
+/// (`strCache` or `numCache`) is preserved; when absent, it is inferred from
+/// the reference kind. Only point count and values change, keeping formula
+/// references and all surrounding chart XML opaque.
 fn rewrite_chart_series_caches(
     xml: &str,
     edits: &std::collections::HashMap<usize, vm::ChartSeriesEdit>,
@@ -4331,6 +4332,50 @@ fn rewrite_chart_series_caches(
             .map(|offset| body_start + offset)
             .ok_or_else(|| "chart series cache container is unterminated".to_string())?;
         let body = &series[body_start..container_close];
+        let cache_kind = if body.contains("<c:strCache") {
+            Some(("<c:strCache", "strCache", "</c:strRef>"))
+        } else if body.contains("<c:numCache") {
+            Some(("<c:numCache", "numCache", "</c:numRef>"))
+        } else if body.contains("<c:strRef") {
+            Some(("<c:strCache", "strCache", "</c:strRef>"))
+        } else if body.contains("<c:numRef") {
+            Some(("<c:numCache", "numCache", "</c:numRef>"))
+        } else {
+            None
+        };
+        let (cache_open, cache_name, ref_close_tag) = cache_kind
+            .ok_or_else(|| "chart series reference is missing a cacheable formula".to_string())?;
+        let point_values = || {
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    format!(
+                        "<c:pt idx=\"{index}\"><c:v>{}</c:v></c:pt>",
+                        xml_escape(value)
+                    )
+                })
+                .collect::<String>()
+        };
+        if !body.contains(cache_open) {
+            let insert_at = body
+                .find(ref_close_tag)
+                .ok_or_else(|| "chart series reference is unterminated".to_string())?;
+            let cache = format!(
+                "<c:{cache_name}><c:ptCount val=\"{}\"/>{}</c:{cache_name}>",
+                values.len(),
+                point_values()
+            );
+            let mut new_body = String::with_capacity(body.len() + cache.len());
+            new_body.push_str(&body[..insert_at]);
+            new_body.push_str(&cache);
+            new_body.push_str(&body[insert_at..]);
+            let mut out = String::with_capacity(series.len() + cache.len());
+            out.push_str(&series[..body_start]);
+            out.push_str(&new_body);
+            out.push_str(&series[container_close..]);
+            return Ok(out);
+        }
         let (cache_open, cache_close_tag) = if body.contains("<c:strCache") {
             ("<c:strCache", "</c:strCache>")
         } else if body.contains("<c:numCache") {
@@ -4362,16 +4407,7 @@ fn rewrite_chart_series_caches(
             "val",
             &values.len().to_string(),
         );
-        let points = values
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                format!(
-                    "<c:pt idx=\"{index}\"><c:v>{}</c:v></c:pt>",
-                    xml_escape(value)
-                )
-            })
-            .collect::<String>();
+        let points = point_values();
         let mut new_cache_body = String::with_capacity(cache_body.len() + points.len());
         new_cache_body.push_str(&cache_body[..count_start]);
         new_cache_body.push_str(&count_tag);
@@ -8636,7 +8672,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_series_cache_rewriter_rejects_missing_cache() {
+    fn chart_series_cache_rewriter_creates_missing_numeric_cache() {
         let mut edits = std::collections::HashMap::new();
         edits.insert(
             0,
@@ -8648,11 +8684,15 @@ mod tests {
                 value_cache: Some(vec!["1".to_string()]),
             },
         );
-        assert!(rewrite_chart_series_caches(
+        let actual = rewrite_chart_series_caches(
             "<c:chart><c:ser><c:val><c:numRef><c:f>A1</c:f></c:numRef></c:val></c:ser></c:chart>",
-            &edits
+            &edits,
         )
-        .is_err());
+        .unwrap();
+        assert!(actual.contains(
+            "<c:numCache><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>1</c:v></c:pt></c:numCache>"
+        ));
+        assert!(actual.contains("<c:f>A1</c:f>"));
     }
 
     #[test]

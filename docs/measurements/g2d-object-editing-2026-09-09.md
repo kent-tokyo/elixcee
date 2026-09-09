@@ -36,6 +36,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   adds or replaces only the optional `<xdr:cNvPr descr>` attribute.
 - `Vm.set_drawing_shape_title(drawing_part, anchor_index, title)` adds or
   replaces only the optional `<xdr:cNvPr title>` attribute.
+- `Vm.set_chart_series_cache(...)` updates an existing cache or creates the
+  matching cache when the selected series has only a `strRef`/`numRef` formula.
 - Missing source parts, series, references, malformed attributes, control
   characters, and invalid A1 ranges are rejected before a successful save.
 - Explicit Pivot source edits also require the requested worksheet to exist in

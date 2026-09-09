@@ -7396,8 +7396,9 @@ impl Vm {
     }
 
     /// Queue a bounded update to the cached category/value points of an
-    /// existing chart series. The cache element must already exist; this API
-    /// never invents a `strCache`/`numCache` kind or changes the series formula.
+    /// existing chart series. When the formula reference has no cached value,
+    /// the matching `strCache`/`numCache` element is created; the series
+    /// formula itself is never changed.
     pub fn set_chart_series_cache(
         &mut self,
         chart_part: &str,
