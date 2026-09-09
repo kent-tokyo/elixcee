@@ -63,6 +63,14 @@ This is an environmental incomplete run, not a passing full-gate claim. The
 regenerable `target` cache was removed with `cargo clean` afterward; source
 files and user workbooks were not removed.
 
+After removing that cache, the Rust gate was rerun with
+`CARGO_INCREMENTAL=0 RUSTFLAGS='-C debuginfo=0'` to reduce temporary linker
+storage. Workspace all-target tests passed (1,679 library tests plus all
+workspace targets and benchmark smoke), and warnings-denied Clippy and
+Python-feature Rustdoc also passed. This is a valid low-disk Rust verification
+run; the canonical all-gates command remains incomplete because the original
+default-profile link step still exceeded the host's available disk space.
+
 ## Boundaries
 
 This is local BUILD and consumer-smoke evidence only. It does not complete the
