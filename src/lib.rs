@@ -7052,7 +7052,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || has_drawing_shape_flip_edits
                     || has_drawing_shape_fill_edits
                     || has_drawing_shape_line_edits
-                    || has_drawing_shape_line_width_edits)
+                    || has_drawing_shape_line_width_edits
+                    || has_drawing_shape_line_dash_edits)
                     && (vm.drawing_anchor_edits.contains_key(&name)
                         || vm.drawing_shape_name_edits.contains_key(&name)
                         || vm.drawing_shape_description_edits.contains_key(&name)
@@ -7062,7 +7063,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                         || vm.drawing_shape_flip_edits.contains_key(&name)
                         || vm.drawing_shape_fill_edits.contains_key(&name)
                         || vm.drawing_shape_line_edits.contains_key(&name)
-                        || vm.drawing_shape_line_width_edits.contains_key(&name))
+                        || vm.drawing_shape_line_width_edits.contains_key(&name)
+                        || vm.drawing_shape_line_dash_edits.contains_key(&name))
                     && name.starts_with("xl/drawings/")
                     && name.ends_with(".xml"))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
