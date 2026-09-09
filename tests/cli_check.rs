@@ -289,3 +289,26 @@ fn multi_file_check_reports_a_cross_module_sub_collision() {
         v
     );
 }
+
+#[test]
+fn multi_file_check_reports_a_cross_module_type_collision() {
+    let a = write_vba(
+        "Type Point\n    X As Long\nEnd Type\nSub Main()\n    x = 1\nEnd Sub\n",
+        "type_collide_a",
+    );
+    let b = write_vba("Type point\n    Y As Long\nEnd Type\n", "type_collide_b");
+    let output = Command::new(env!("CARGO_BIN_EXE_elixcee"))
+        .args(["check", a.to_str().unwrap(), b.to_str().unwrap(), "--json"])
+        .output()
+        .expect("run elixcee binary");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).expect("valid json");
+    assert!(!output.status.success(), "{:?}", v);
+    assert_eq!(v["ok"], false);
+    let diags = v["diagnostics"].as_array().unwrap();
+    assert!(
+        diags.iter().any(|d| d["code"] == "E1012"),
+        "expected an E1012 diagnostic: {:?}",
+        v
+    );
+}

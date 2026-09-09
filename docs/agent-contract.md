@@ -137,6 +137,7 @@ alone does not fail the check. Parse failure prevents analysis of that module.
 | E1008 | argument_count_mismatch | error |
 | E1009 | undefined_label | error |
 | E1010 | blocked_external_effect | error |
+| E1012 | duplicate_type | error |
 | E2001 | parse_error | error |
 | E3001 | io_error | error |
 | I1001 | interactive_call | info |

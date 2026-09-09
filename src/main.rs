@@ -354,6 +354,19 @@ fn run_check_command(args: &[String]) -> ! {
                 location: None,
             });
         }
+        for (name, mods) in parser::find_cross_module_type_collisions(&project) {
+            diags.push(check::Diagnostic {
+                severity: "error",
+                code: "E1012",
+                kind: "duplicate_type",
+                message: format!(
+                    "duplicate Type '{}' across modules '{}' — cross-module UDT resolution isn't supported yet",
+                    name,
+                    mods.join("', '")
+                ),
+                location: None,
+            });
+        }
 
         for m in &modules {
             let mut others: std::collections::HashSet<String> = std::collections::HashSet::new();
