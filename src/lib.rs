@@ -6779,9 +6779,6 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 "OOXML structural edit rejected: chart/drawing or pivot references cannot yet be rewritten safely; save without the structural edit or use a workbook without these objects".to_string(),
             );
         }
-        source_workbook_rels_xml = raw_entries
-            .get("xl/_rels/workbook.xml.rels")
-            .and_then(|bytes| String::from_utf8(bytes.clone()).ok());
         has_vba = is_xlsm_output && raw_entries.keys().any(|n| n.starts_with("xl/vbaProject"));
         // These parts are writer-owned or parsed into dedicated structures. Move
         // them out of the raw map instead of cloning them while retaining the map.
@@ -6894,6 +6891,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 }
             }
         }
+        source_workbook_rels_xml = raw_entries
+            .remove("xl/_rels/workbook.xml.rels")
+            .and_then(|bytes| String::from_utf8(bytes).ok());
 
         for (name, bytes) in raw_entries {
             if is_writer_owned_part(&name) {

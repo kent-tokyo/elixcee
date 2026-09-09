@@ -53,6 +53,11 @@ workspace run also passed 1,681 library tests and every integration/benchmark
 target. This is a small allocation reduction only; no speed or RSS improvement
 is claimed without a fresh benchmark.
 
+The follow-up also moves the writer-owned `xl/_rels/workbook.xml.rels` bytes
+out of the raw map after carry-over analysis instead of cloning them. The
+54-test `xlsx_roundtrip` suite and warnings-denied clippy passed after this
+change. Its speed and RSS effect remain unmeasured.
+
 Reproduction for the workspace gate:
 
 ```bash
