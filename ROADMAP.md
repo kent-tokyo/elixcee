@@ -173,7 +173,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] 部分 BUILD: 動的配列のspill衝突・shape・所有権・stale解放・依存更新を主要2D配列関数へ接続し、FILTER等の既存経路も拡張した。LET／LAMBDAを含む全配列関数のshape伝播とExcel oracle校正は未完。
 - [x] G4 local BUILD: spill矩形の衝突検出、anchor所有権、stale解放、undo/redo復元、主要2D配列関数のshape接続とatomic rollbackを実装・回帰検証した。全配列関数のshape伝播とExcel oracleは未完。
 - [x] 部分 MEASURE: 現行環境のLibreOffice oracleを算術8ケースで再実行したが、8件すべてrunner timeout、比較可能な出力は0件だった。これはExcel oracleや数式一致率の証拠には数えず、Range/Cellsを含む既知のoracle実行境界として記録した。[local oracle記録](docs/measurements/formula-oracle-local-2026-09-10.md)
-- [x] 部分 MEASURE: Basic object modelを使わず数式入りXLSXを直接LibreOfficeで再計算する独立経路を追加し、SUM／AVERAGE／IF／ROUND／DATE／LEFT／MATCHの7ケースを7/7一致で確認した。LibreOfficeはExcel oracleではなく、日付・型変換・動的配列全体の互換性は未完。[formula-only oracle記録](docs/measurements/formula-independent-oracle-2026-09-10.md)
+- [x] 部分 MEASURE: Basic object modelを使わず数式入りXLSXを直接LibreOfficeで再計算する独立経路を追加し、基本集計・エラー回復・文字列・検索を含む15ケースを15/15一致で確認した。LibreOfficeはExcel oracleではなく、日付・型変換・動的配列全体の互換性は未完。[formula-only oracle記録](docs/measurements/formula-independent-oracle-2026-09-10.md)
 - [ ] MEASURE: Excel／EPPlus／Aspose.Cellsはversion・計算設定・license利用条件を固定して比較。実行していない公式対応表と、実測一致率を分ける。
 
 ### G5 — 保存メモリの段階削減（X4 / X5）

@@ -12,9 +12,9 @@ independent oracle, not Microsoft Excel.
 
 - Host: macOS arm64
 - Backend: `/opt/homebrew/bin/soffice`
-- Cases: 7 (`SUM`, `AVERAGE`, `IF`, `ROUND`, `DATE`, `LEFT`, `MATCH`)
-- Comparable results: 7
-- Matches: 7
+- Cases: 15 (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNTA`, `IF`, `IFERROR`, `ROUND`, `DATE`, `LEFT`, `MID`, `LEN`, `CONCATENATE`, `MATCH`, `VLOOKUP`)
+- Comparable results: 15
+- Matches: 15
 - Mismatches: 0
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
 

@@ -21,11 +21,19 @@ from openpyxl.utils.datetime import to_excel
 CASES = {
     "sum": ("=SUM(A1:A3)", 6),
     "average": ("=AVERAGE(A1:A3)", 2),
+    "min": ("=MIN(A1:A3)", 1),
+    "max": ("=MAX(A1:A3)", 3),
+    "counta": ("=COUNTA(B1:B3)", 3),
     "if": ('=IF(A1>2,"yes","no")', "no"),
+    "iferror": ("=IFERROR(1/0,99)", 99),
     "round": ("=ROUND(1.235,2)", 1.24),
     "date": ("=DATE(2024,2,29)", 45351),
     "left": ('=LEFT("elixcee",3)', "eli"),
+    "mid": ('=MID("hello",2,3)', "ell"),
+    "len": ('=LEN("hello")', 5),
+    "concatenate": ('=CONCATENATE("A","B","C")', "ABC"),
     "match": ("=MATCH(2,A1:A3,0)", 2),
+    "vlookup": ('=VLOOKUP(2,A1:B3,2,FALSE)', "two"),
 }
 
 
@@ -43,6 +51,7 @@ def run(soffice: str) -> dict:
         sheet = input_book.active
         sheet.title = "Oracle"
         sheet["A1"], sheet["A2"], sheet["A3"] = 1, 2, 3
+        sheet["B1"], sheet["B2"], sheet["B3"] = "one", "two", "three"
         for row, (name, (formula, expected)) in enumerate(CASES.items(), start=5):
             sheet.cell(row=row, column=1, value=name)
             sheet.cell(row=row, column=2, value=formula)
