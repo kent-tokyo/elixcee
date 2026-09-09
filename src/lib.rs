@@ -4326,12 +4326,12 @@ fn direct_rel_targets(
 ) -> std::collections::HashSet<String> {
     let Some(text) = raw_entries
         .get(rels_name)
-        .and_then(|b| String::from_utf8(b.clone()).ok())
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
     else {
         return Default::default();
     };
     let base = rels_target_dir(rels_name);
-    reader::workbook_rels_decls(&text)
+    reader::workbook_rels_decls(text)
         .into_iter()
         .map(|(_, target)| normalize_part_path(&format!("{base}{target}")))
         .collect()
@@ -6281,11 +6281,11 @@ fn carry_over_rels(
 ) -> Vec<(String, String)> {
     let Some(rels_xml) = raw_entries
         .get(rels_part)
-        .and_then(|b| String::from_utf8(b.clone()).ok())
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
     else {
         return Vec::new();
     };
-    reader::workbook_rels_decls(&rels_xml)
+    reader::workbook_rels_decls(rels_xml)
         .into_iter()
         .filter(|(ty, _)| !skip_types.contains(&ty.as_str()))
         .filter(|(_, target)| {

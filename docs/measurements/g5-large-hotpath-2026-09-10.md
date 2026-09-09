@@ -43,6 +43,14 @@ a Criterion Broken pipe because `head` closed stdout; it was not used as a
 measurement. The broader G5 item remains open for fixed 100k/400k/1M workbook
 inputs, p50/p95 repetitions, RSS, durable save, and output verification.
 
+## Follow-up BUILD boundary
+
+The relationship graph and carry-over paths now parse UTF-8 XML through borrowed
+views instead of cloning each relationship payload into a temporary `String`.
+The targeted offline relationship test passed after this change. This is a
+small allocation reduction only; no speed or RSS improvement is claimed without
+a fresh benchmark.
+
 ## Baseline reconstruction boundary
 
 The historical large-workbook comparison could not be rerun in this pass.
