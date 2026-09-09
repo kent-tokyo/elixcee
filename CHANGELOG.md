@@ -7,6 +7,7 @@
 - Formula coverage: add common statistical functions `SUMSQ`, `GEOMEAN`, `HARMEAN`, `DEVSQ`, `AVEDEV`, exclusive percentile/rank, and inclusive/exclusive quartiles with argument-boundary regression tests.
 - Formula coverage: add standard-normal, binomial, and Poisson distribution functions with PMF/CDF modes and boundary regression tests.
 - Formula coverage: add gamma/log-gamma, beta distribution/inverse, chi-squared, and F-distribution functions with bounded numerical evaluation.
+- Formula coverage: add two-tailed/right-tailed Student t distribution and inverse functions.
 
 次の変更はここに記録します。
 

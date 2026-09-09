@@ -275,6 +275,10 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `NORM.DIST` / `NORMDIST` | Normal distribution CDF or PDF | 2010 / Classic |
 | `NORM.INV` / `NORMINV` | Inverse normal distribution | 2010 / Classic |
 | `T.DIST` | Student's t-distribution CDF or PDF | 2010 |
+| `T.DIST.2T` | Two-tailed Student's t-distribution probability | 2010 |
+| `T.DIST.RT` | Right-tailed Student's t-distribution probability | 2010 |
+| `T.INV` | Inverse Student's t-distribution | 2010 |
+| `T.INV.2T` | Two-tailed inverse Student's t-distribution | 2010 |
 | `NORM.S.DIST` / `NORMSDIST` | Standard normal distribution CDF or PDF | 2010 / Classic |
 | `NORM.S.INV` / `NORMSINV` | Inverse standard normal distribution | 2010 / Classic |
 | `BINOM.DIST` / `BINOMDIST` | Binomial distribution PMF or CDF | 2010 / Classic |

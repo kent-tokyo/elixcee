@@ -506,10 +506,10 @@ impl FormulaParser {
         if !abs_col {
             // Support dot-separated function names (e.g. MODE.MULT, NETWORKDAYS.INTL)
             while self.peek() == Some('.')
-                && matches!(self.chars.get(self.pos + 1), Some(c) if c.is_ascii_alphabetic())
+                && matches!(self.chars.get(self.pos + 1), Some(c) if c.is_ascii_alphanumeric())
             {
                 name.push(self.advance().unwrap()); // consume '.'
-                while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
+                while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric()) {
                     name.push(self.advance().unwrap().to_ascii_uppercase());
                 }
             }
@@ -997,6 +997,9 @@ mod tests {
     fn test_dot_function_name() {
         let expr = parse("=MODE.MULT(1,2,2)").unwrap();
         assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "MODE.MULT"));
+
+        let expr = parse("=T.DIST.2T(2,10)").unwrap();
+        assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "T.DIST.2T"));
     }
 
     #[test]

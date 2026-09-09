@@ -517,6 +517,10 @@ fn eval_func(
         "CHISQ.DIST" | "CHIDIST" => func_chisq_dist(args, cells),
         "F.DIST" | "FDIST" => func_f_dist(args, cells),
         "T.DIST" => func_t_dist(args, cells),
+        "T.DIST.2T" => func_t_dist_2t(args, cells),
+        "T.DIST.RT" => func_t_dist_rt(args, cells),
+        "T.INV" => func_t_inv(args, cells),
+        "T.INV.2T" => func_t_inv_2t(args, cells),
         // ── Rounding ─────────────────────────────────────────────────────────
         "FLOOR" | "FLOOR.MATH" => func_floor(args, cells),
         "CEILING" | "CEILING.MATH" => func_ceiling(args, cells),
@@ -4751,20 +4755,101 @@ fn func_t_dist(
     let t = to_float(&evaluate(&args[0], cells)?)?;
     let v = to_float(&evaluate(&args[1], cells)?)?;
     let cum = is_truthy(&evaluate(&args[2], cells)?);
-    if v < 1.0 {
+    if !t.is_finite() || !v.is_finite() || v < 1.0 {
         return Ok(Variant::Error(ExcelError::Num));
     }
-    if cum {
+    Ok(Variant::Float(t_dist_value(t, v, cum)))
+}
+
+fn t_dist_value(t: f64, v: f64, cumulative: bool) -> f64 {
+    if cumulative {
         let x = v / (v + t * t);
         let p = 0.5 * reg_inc_beta(x, v / 2.0, 0.5);
-        Ok(Variant::Float(if t >= 0.0 { 1.0 - p } else { p }))
+        if t >= 0.0 { 1.0 - p } else { p }
     } else {
         // PDF: Γ((v+1)/2) / (√(vπ) Γ(v/2)) * (1 + t²/v)^(-(v+1)/2)
-        let pdf = ((lgamma((v + 1.0) / 2.0) - lgamma(v / 2.0)).exp())
-            / (v * std::f64::consts::PI).sqrt()
-            * (1.0 + t * t / v).powf(-(v + 1.0) / 2.0);
-        Ok(Variant::Float(pdf))
+        ((lgamma((v + 1.0) / 2.0) - lgamma(v / 2.0)).exp()) / (v * std::f64::consts::PI).sqrt()
+            * (1.0 + t * t / v).powf(-(v + 1.0) / 2.0)
     }
+}
+
+fn func_t_dist_2t(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("T.DIST.2T requires 2 arguments".into());
+    }
+    let t = to_float(&evaluate(&args[0], cells)?)?;
+    let v = to_float(&evaluate(&args[1], cells)?)?;
+    if !t.is_finite() || !v.is_finite() || v < 1.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(2.0 * (1.0 - t_dist_value(t.abs(), v, true))))
+}
+
+fn func_t_dist_rt(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("T.DIST.RT requires 2 arguments".into());
+    }
+    let t = to_float(&evaluate(&args[0], cells)?)?;
+    let v = to_float(&evaluate(&args[1], cells)?)?;
+    if !t.is_finite() || !v.is_finite() || v < 1.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(1.0 - t_dist_value(t, v, true)))
+}
+
+fn invert_t_probability(probability: f64, v: f64, two_tailed: bool) -> f64 {
+    let target = if two_tailed {
+        1.0 - probability / 2.0
+    } else {
+        probability
+    };
+    let mut lo = -1.0e6;
+    let mut hi = 1.0e6;
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        if t_dist_value(mid, v, true) < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) / 2.0
+}
+
+fn func_t_inv(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("T.INV requires 2 arguments".into());
+    }
+    let p = to_float(&evaluate(&args[0], cells)?)?;
+    let v = to_float(&evaluate(&args[1], cells)?)?;
+    if !(0.0..1.0).contains(&p) || !v.is_finite() || v < 1.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(invert_t_probability(p, v, false)))
+}
+
+fn func_t_inv_2t(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("T.INV.2T requires 2 arguments".into());
+    }
+    let p = to_float(&evaluate(&args[0], cells)?)?;
+    let v = to_float(&evaluate(&args[1], cells)?)?;
+    if !(0.0..=1.0).contains(&p) || p == 0.0 || !v.is_finite() || v < 1.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(invert_t_probability(p, v, true).abs()))
 }
 
 // ── Rounding ──────────────────────────────────────────────────────────────────
@@ -10207,6 +10292,22 @@ mod tests {
         match calc("=T.DIST(2.228,10,TRUE)", &cn) {
             Variant::Float(f) => assert!((f - 0.975).abs() < 0.001),
             other => panic!("T.DIST df=10: {:?}", other),
+        }
+        match calc("=T.DIST.2T(2.228,10)", &cn) {
+            Variant::Float(f) => assert!((f - 0.05).abs() < 0.001),
+            other => panic!("T.DIST.2T: {:?}", other),
+        }
+        match calc("=T.DIST.RT(2.228,10)", &cn) {
+            Variant::Float(f) => assert!((f - 0.025).abs() < 0.001),
+            other => panic!("T.DIST.RT: {:?}", other),
+        }
+        match calc("=T.INV(0.975,10)", &cn) {
+            Variant::Float(f) => assert!((f - 2.228).abs() < 0.002),
+            other => panic!("T.INV: {:?}", other),
+        }
+        match calc("=T.INV.2T(0.05,10)", &cn) {
+            Variant::Float(f) => assert!((f - 2.228).abs() < 0.002),
+            other => panic!("T.INV.2T: {:?}", other),
         }
         match calc("=GAMMA(5)", &cn) {
             Variant::Float(f) => assert!((f - 24.0).abs() < 1e-6),
