@@ -886,6 +886,7 @@ pub(crate) struct ChartDataLabelsEdit {
     pub show_legend_key: Option<bool>,
     pub position: Option<String>,
     pub number_format: Option<String>,
+    pub separator: Option<String>,
 }
 
 /// A bounded edit to an existing chart style (`1..=48`).
@@ -7645,6 +7646,7 @@ impl Vm {
                 show_legend_key: None,
                 position: None,
                 number_format: None,
+                separator: None,
             });
         Ok(())
     }
@@ -7674,6 +7676,7 @@ impl Vm {
                 show_legend_key: None,
                 position: None,
                 number_format: None,
+                separator: None,
             });
         Ok(())
     }
@@ -7703,6 +7706,7 @@ impl Vm {
                 show_legend_key: None,
                 position: None,
                 number_format: None,
+                separator: None,
             });
         Ok(())
     }
@@ -7732,6 +7736,7 @@ impl Vm {
                 show_legend_key: None,
                 position: None,
                 number_format: None,
+                separator: None,
             });
         Ok(())
     }
@@ -7761,6 +7766,7 @@ impl Vm {
                 show_legend_key: None,
                 position: None,
                 number_format: None,
+                separator: None,
             });
         Ok(())
     }
@@ -7790,6 +7796,7 @@ impl Vm {
                 show_legend_key: None,
                 position: None,
                 number_format: None,
+                separator: None,
             });
         Ok(())
     }
@@ -7819,6 +7826,7 @@ impl Vm {
                 show_legend_key: Some(show_legend_key),
                 position: None,
                 number_format: None,
+                separator: None,
             });
         Ok(())
     }
@@ -7859,6 +7867,7 @@ impl Vm {
                 show_legend_key: None,
                 position: Some(position),
                 number_format: None,
+                separator: None,
             });
         Ok(())
     }
@@ -7898,6 +7907,47 @@ impl Vm {
                 show_legend_key: None,
                 position: None,
                 number_format: Some(number_format),
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-label separator.
+    pub fn set_chart_data_labels_separator(
+        &mut self,
+        chart_part: &str,
+        separator: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if separator.is_empty()
+            || separator.len() > 1024
+            || separator.chars().any(|c| c.is_control())
+        {
+            return Err(
+                "chart data-label separator must be 1..=1024 bytes without control characters"
+                    .to_string(),
+            );
+        }
+        let separator = separator.to_string();
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.separator = Some(separator.clone()))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: None,
+                number_format: None,
+                separator: Some(separator),
             });
         Ok(())
     }

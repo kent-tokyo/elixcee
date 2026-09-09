@@ -1349,6 +1349,17 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to the first chart data-label separator.
+    fn set_chart_data_labels_separator(
+        &mut self,
+        chart_part: &str,
+        separator: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_data_labels_separator(chart_part, separator)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -5020,6 +5031,67 @@ fn rewrite_chart_data_labels_number_format(
     Ok(out)
 }
 
+/// Rewrites or adds the first chart data-label separator value.
+fn rewrite_chart_data_labels_separator(xml: &str, separator: &str) -> Result<String, String> {
+    if separator.is_empty() || separator.len() > 1024 || separator.chars().any(|c| c.is_control()) {
+        return Err("chart data-label separator is invalid".to_string());
+    }
+    let open = xml
+        .find("<c:dLbls")
+        .filter(|&offset| {
+            xml.as_bytes()
+                .get(offset + b"<c:dLbls".len())
+                .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+        })
+        .ok_or_else(|| "chart data-labels element is missing".to_string())?;
+    let open_end = xml[open..]
+        .find('>')
+        .map(|offset| open + offset + 1)
+        .ok_or_else(|| "chart data-labels element is unterminated".to_string())?;
+    let close = xml[open_end..]
+        .find("</c:dLbls>")
+        .map(|offset| open_end + offset)
+        .ok_or_else(|| "chart data-labels element is malformed".to_string())?;
+    let body = &xml[open_end..close];
+    let mut rewritten_body = body.to_string();
+    if let Some(separator_open) = body.find("<c:separator").filter(|&offset| {
+        body.as_bytes()
+            .get(offset + b"<c:separator".len())
+            .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace() || *byte == b'/')
+    }) {
+        let separator_end = body[separator_open..]
+            .find('>')
+            .map(|offset| separator_open + offset + 1)
+            .ok_or_else(|| "chart data-label separator is unterminated".to_string())?;
+        let tag = &body[separator_open..separator_end];
+        let attr_start = tag
+            .find("val=")
+            .ok_or_else(|| "chart data-label separator val attribute is missing".to_string())?;
+        let value_start = attr_start + "val=".len();
+        let quote =
+            tag.as_bytes().get(value_start).copied().ok_or_else(|| {
+                "chart data-label separator val attribute is malformed".to_string()
+            })?;
+        if quote != b'"' && quote != b'\'' {
+            return Err("chart data-label separator val attribute is malformed".to_string());
+        }
+        let value_end = tag[value_start + 1..]
+            .find(quote as char)
+            .map(|offset| value_start + 1 + offset)
+            .ok_or_else(|| {
+                "chart data-label separator val attribute is unterminated".to_string()
+            })?;
+        let mut replacement = tag.to_string();
+        replacement.replace_range(value_start + 1..value_end, &xml_escape(separator));
+        rewritten_body.replace_range(separator_open..separator_end, &replacement);
+    } else {
+        rewritten_body.push_str(&format!("<c:separator val=\"{}\"/>", xml_escape(separator)));
+    }
+    let mut out = xml.to_string();
+    out.replace_range(open_end..close, &rewritten_body);
+    Ok(out)
+}
+
 /// Rewrites or adds the chart-space style number while preserving all other
 /// chart XML, including series, titles, legends, and extension content.
 fn rewrite_chart_style(xml: &str, style: u32) -> Result<String, String> {
@@ -6213,6 +6285,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     }
                     if let Some(number_format) = edit.number_format.as_deref() {
                         chart = rewrite_chart_data_labels_number_format(&chart, number_format)?;
+                    }
+                    if let Some(separator) = edit.separator.as_deref() {
+                        chart = rewrite_chart_data_labels_separator(&chart, separator)?;
                     }
                 }
                 chart.into_bytes()
@@ -9571,6 +9646,22 @@ mod tests {
         );
         assert!(rewrite_chart_data_labels_number_format(source, "").is_err());
         assert!(rewrite_chart_data_labels_number_format(source, "bad\nformat").is_err());
+    }
+
+    #[test]
+    fn chart_data_labels_rewriter_updates_or_adds_separator() {
+        let source = r#"<c:chart><c:dLbls showVal="1"><c:separator val=", "/><c:numFmt formatCode="0"/></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_separator(source, " | ").unwrap();
+        assert!(
+            actual.contains("<c:separator val=\" | \"/>")
+                && actual.contains("showVal=\"1\"")
+                && actual.contains("<c:numFmt formatCode=\"0\"/>")
+        );
+
+        let source = r#"<c:chart><c:dLbls></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_separator(source, "&").unwrap();
+        assert!(actual.contains("<c:separator val=\"&amp;\"/>"));
+        assert!(rewrite_chart_data_labels_separator(source, "").is_err());
     }
 
     #[test]

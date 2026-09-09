@@ -400,6 +400,10 @@ class Vm:
         """Update or add the first chart data-label number format code."""
         ...
 
+    def set_chart_data_labels_separator(self, chart_part: str, separator: str) -> None:
+        """Update or add the first chart data-label separator value."""
+        ...
+
     def set_chart_series_name_formula(
         self, chart_part: str, series_index: int, name_formula: str
     ) -> None:
