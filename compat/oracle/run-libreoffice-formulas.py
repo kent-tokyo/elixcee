@@ -46,13 +46,19 @@ CASES = {
     "match": ("=MATCH(2,A1:A3,0)", 2),
     "index": ("=INDEX(A1:B3,2,2)", "two"),
     "countif": ('=COUNTIF(A1:A3,">1")', 2),
+    "sumif": ('=SUMIF(A1:A3,">1",A1:A3)', 5),
+    "sumifs": ('=SUMIFS(A1:A3,A1:A3,">1")', 5),
+    "countifs": ('=COUNTIFS(A1:A3,">1")', 2),
     "vlookup": ('=VLOOKUP(2,A1:B3,2,FALSE)', "two"),
+    "xmatch": ("=XMATCH(2,A1:A3,0)", 2),
+    "right": ('=RIGHT("elixcee",3)', "cee"),
+    "textjoin": ('=TEXTJOIN("-",TRUE,B1:B3)', "one-two-three"),
 }
 
 # LibreOffice 26.2.5 on this host leaves IFNA results as #N/A, including the
 # direct NA() form. Keep the case in the generated workbook as a visible
 # probe, but do not misclassify this oracle limitation as an engine mismatch.
-ORACLE_UNSUPPORTED = {"ifna"}
+ORACLE_UNSUPPORTED = {"ifna", "xmatch", "textjoin"}
 
 
 def serial_or_value(value):

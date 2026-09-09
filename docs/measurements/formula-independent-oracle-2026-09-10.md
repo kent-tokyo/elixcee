@@ -12,10 +12,10 @@ independent oracle, not Microsoft Excel.
 
 - Host: macOS arm64
 - Backend: `/opt/homebrew/bin/soffice`
-- Cases: 28 (the original 20 plus `AND`, `OR`, `NOT`, `ROUNDUP`, `ROUNDDOWN`, `INDEX`, and `COUNTIF`; `IFNA` is retained as an oracle probe)
-- Comparable results: 27
-- Matches: 27
-- Skipped: 1 (`IFNA`, because this LibreOffice build leaves even `IFNA(NA(),...)` as `#N/A`)
+- Cases: 34 (the original set plus logical, rounding, lookup, criteria, and text probes; `IFNA`, `XMATCH`, and `TEXTJOIN` are retained as oracle probes)
+- Comparable results: 31
+- Matches: 31
+- Skipped: 3 (`IFNA`, `XMATCH`, and `TEXTJOIN`, because this LibreOffice build does not evaluate these probes)
 - Mismatches: 0
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
 
@@ -24,8 +24,9 @@ unsupported probes are reported in `skipped` and are not silently counted as
 matches; this run exited with status 0.
 
 The expanded run also covered logical operators, conditional aggregation,
-rounding boundaries, INDEX lookup, an unhandled division error, error
-recovery, error inspection, and numeric/text mixed ranges. Error text is
+rounding boundaries, INDEX/MATCH lookup, criteria aggregation, an unhandled
+division error, error recovery, error inspection, and numeric/text mixed
+ranges. Error text is
 recorded as a cell result; it is not treated as a successful numeric coercion.
 
 The `DATE` results were normalized from Python `datetime` to the 1900-system
