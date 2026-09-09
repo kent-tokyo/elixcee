@@ -23,6 +23,11 @@ The harness exits with status 1 if any comparable case mismatches. Oracle
 unsupported probes are reported in `skipped` and are not silently counted as
 matches; this run exited with status 0.
 
+The same 34-case command was rerun after the later local changes using a
+dedicated writable temporary directory (`TMPDIR=/private/tmp/elixcee-formula-oracle-run`)
+because the default temporary directories were full or unavailable. It again
+reported 31/31 comparable matches, 3 explicit skips, and zero mismatches.
+
 The expanded run also covered logical operators, conditional aggregation,
 rounding boundaries, INDEX/MATCH lookup, criteria aggregation, an unhandled
 division error, error recovery, error inspection, and numeric/text mixed
@@ -41,6 +46,14 @@ VM save and reload; this checks metadata preservation only.
 
 ```sh
 python3 compat/oracle/run-libreoffice-formulas.py \
+  --soffice /opt/homebrew/bin/soffice
+```
+
+When the default temporary directory is unavailable, use:
+
+```sh
+TMPDIR=/private/tmp/elixcee-formula-oracle-run \
+  python3 compat/oracle/run-libreoffice-formulas.py \
   --soffice /opt/homebrew/bin/soffice
 ```
 
