@@ -137,6 +137,7 @@ From the repository root, run:
 cargo test --test xlsx_roundtrip pivot_worksheet_source --offline -- --nocapture
 cargo test --test xlsx_roundtrip edit_chart_series --offline -- --nocapture
 cargo test --test xlsx_roundtrip edit_chart_series_smooth_survives_real_fixture_save --offline -- --nocapture
+cargo test --test xlsx_roundtrip edit_chart_series_visibility_survives_real_fixture_save --offline -- --nocapture
 cargo test chart_title_rewriter --offline -- --nocapture
 cargo test chart_legend_overlay --offline -- --nocapture
 cargo test chart_data_labels_rewriter --offline -- --nocapture
@@ -219,6 +220,10 @@ The save-path follow-up also passed `edit_chart_series_smooth_survives_real_fixt
 a temporary copy of the real Excel-authored fixture was loaded, its existing
 series smooth flag changed from `0` to `1`, saved, and verified after ZIP
 reload. The test validates the elixcee save path, not Excel's own reopen.
+
+The corresponding `edit_chart_series_visibility_survives_real_fixture_save`
+regression also passed with the same temporary-copy method, changing an
+existing series `<c:delete val>` from `0` to `1` while retaining its formula.
 
 ## Not measured or claimed
 

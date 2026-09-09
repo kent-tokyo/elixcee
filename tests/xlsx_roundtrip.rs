@@ -1370,6 +1370,40 @@ fn edit_chart_series_smooth_survives_real_fixture_save() {
     assert!(output_chart.contains("<c:f>Sheet1!$A$6:$B$6</c:f>"));
 }
 
+/// G2d: series visibility editing uses the same bounded save path and keeps
+/// the chart's existing formula references intact.
+#[test]
+fn edit_chart_series_visibility_survives_real_fixture_save() {
+    let source_path = tmp_path("edit_chart_series_visibility_source.xlsm");
+    let output_path = tmp_path("edit_chart_series_visibility_output.xlsm");
+    let fixture_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&fixture_path).expect("real fixture must exist");
+    let mut entries = read_all_zip_entries(&fixture_bytes);
+    let chart = String::from_utf8(entries["xl/charts/chart1.xml"].clone()).unwrap();
+    let series_end = chart
+        .find("</c:ser>")
+        .expect("fixture should contain one chart series");
+    let mut chart_with_delete = chart;
+    chart_with_delete.insert_str(series_end, "<c:delete val=\"0\"/>");
+    entries.insert(
+        "xl/charts/chart1.xml".to_string(),
+        chart_with_delete.into_bytes(),
+    );
+    std::fs::write(&source_path, write_all_zip_entries(&entries)).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("temporary fixture should load");
+    vm.set_chart_series_deleted("xl/charts/chart1.xml", 0, true)
+        .expect("visibility edit should be accepted");
+    save_workbook(&vm, &output_path).expect("visibility edit should save");
+
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let output_chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(output_chart.contains("<c:delete val=\"1\"/>"));
+    assert!(output_chart.contains("<c:f>Sheet1!$A$6:$B$6</c:f>"));
+}
+
 /// A minimal Pivot cache package exercises the complete loaded-workbook rename
 /// path without requiring a binary Excel fixture. The cache itself is opaque;
 /// only its worksheet source sheet name may change.
