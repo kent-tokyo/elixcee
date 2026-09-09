@@ -507,6 +507,12 @@ class Vm:
         """Update an existing shape transform's horizontal or vertical flip state."""
         ...
 
+    def set_drawing_shape_fill(
+        self, drawing_part: str, anchor_index: int, color: str
+    ) -> None:
+        """Update an existing shape's solid fill with RGB or ARGB hex color."""
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 

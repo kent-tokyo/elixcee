@@ -34,6 +34,7 @@
 - `Worksheet_Change(Target As Range)`から `Target.Parent.Name` で束縛先worksheet名を参照できるようにしました。
 - G2dの限定Drawing編集として、既存shapeの回転を `Vm.set_drawing_shape_rotation`（Python binding／型stub含む）から整数度で更新できるようにしました。既存transformがないshapeは安全のため拒否します。
 - G2dの限定Drawing編集として、既存shapeの水平／垂直反転を `Vm.set_drawing_shape_flip`（Python binding／型stub含む）から更新できるようにしました。既存transformがないshapeは安全のため拒否します。
+- G2dの限定Drawing編集として、既存shapeのsolid fill色を `Vm.set_drawing_shape_fill`（Python binding／型stub含む）からRGB／ARGB hexで更新できるようにしました。theme／gradient fillは対象外です。
 - 2026-09-10のmacOS arm64で自己完結ローカルゲートを再実行し、Rust全target 1,663件、Clippy、Rustdoc、offline audit、4 fuzz smoke、WASM、npm tarball、実Chrome smokeを成功させました。外部Excel oracle・他OS・外部レビュー・公開操作は未完です。
 - `ClearContents` と `Clear` を区別し、追跡済みのセル数値書式・コメントを前者では保持、後者では対象セルから除去するようにしました。
 - Rangeオブジェクトの単一矩形について `Rows.Count` と `Columns.Count` を評価できるようにしました。
