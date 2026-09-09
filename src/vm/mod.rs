@@ -1233,6 +1233,7 @@ pub struct Vm {
     /// `run_sub_with_events` executes. Kept separate from the ordinary
     /// cached program so `run_sub` remains event-free for compatibility.
     auto_event_program: Option<Program>,
+    auto_event_suppression_depth: usize,
     pub exit_flag: Option<ExitKind>,
     /// Pending unconditional jump target (`GoTo <label>`).
     pending_goto: Option<String>,
@@ -1751,6 +1752,7 @@ impl Vm {
             last_runtime_failure: None,
             event_dispatch_depth: 0,
             auto_event_program: None,
+            auto_event_suppression_depth: 0,
             exit_flag: None,
             pending_goto: None,
             call_stack: Vec::new(),
@@ -8979,6 +8981,7 @@ impl Vm {
             let prev = self.active_sheet.clone();
             self.active_sheet = r.sheet.clone();
             self.cell_index_dirty = true;
+            self.auto_event_suppression_depth += 1;
             let result = (|| -> Result<(), String> {
                 for row in area.start_row..=area.end_row {
                     for col in area.start_col..=area.end_col {
@@ -8987,9 +8990,13 @@ impl Vm {
                 }
                 Ok(())
             })();
+            self.auto_event_suppression_depth -= 1;
+            let notify = result.and_then(|()| {
+                self.dispatch_worksheet_change_after_range_write(&r.sheet, area)
+            });
             self.active_sheet = prev;
             self.cell_index_dirty = true;
-            result
+            notify
         } else {
             self.set_scalar_range_on_sheet(&r.sheet, area, v)?;
             Ok(())
@@ -9965,6 +9972,7 @@ impl Vm {
                 .any(|sub| sub.name.eq_ignore_ascii_case("worksheet_change"))
         });
         if self.event_dispatch_depth != 0
+            || self.auto_event_suppression_depth != 0
             || !self.enable_events
             || sheet != self.active_sheet
             || !has_handler
@@ -10979,11 +10987,22 @@ impl Vm {
                     .ok_or_else(|| format!("RangeWrite: invalid address '{}'", addr))?;
                 if *is_formula {
                     let s = vba_to_str(&v);
+                    self.auto_event_suppression_depth += 1;
                     for r in r1..=r2 {
                         for c in c1..=c2 {
                             self.set_cell_formula(r, c, &s)?;
                         }
                     }
+                    self.auto_event_suppression_depth -= 1;
+                    self.dispatch_worksheet_change_after_range_write(
+                        &active,
+                        Rect {
+                            start_row: r1,
+                            start_col: c1,
+                            end_row: r2,
+                            end_col: c2,
+                        },
+                    )?;
                 } else {
                     let sheet = self.active_sheet.clone();
                     self.set_scalar_range_on_sheet(
@@ -11517,11 +11536,22 @@ impl Vm {
                     let s = vba_to_str(&v);
                     let prev = self.active_sheet.clone();
                     self.active_sheet = key.clone();
+                    self.auto_event_suppression_depth += 1;
                     for r in r1..=r2 {
                         for c in c1..=c2 {
                             self.set_cell_formula(r, c, &s)?;
                         }
                     }
+                    self.auto_event_suppression_depth -= 1;
+                    self.dispatch_worksheet_change_after_range_write(
+                        &key,
+                        Rect {
+                            start_row: r1,
+                            start_col: c1,
+                            end_row: r2,
+                            end_col: c2,
+                        },
+                    )?;
                     self.active_sheet = prev;
                 } else {
                     for r in r1..=r2 {
@@ -17940,6 +17970,20 @@ mod tests {
         vm.run_sub_with_events(&program, "Main").unwrap();
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+    }
+
+    #[test]
+    fn run_sub_with_events_dispatches_one_full_target_for_formula_range_write() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1:B1\").Formula = \"=1+1\"\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    Cells(1,3).Value = Target.Columns.Count\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
     }
 
     #[test]
