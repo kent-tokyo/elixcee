@@ -28,7 +28,7 @@ All self-contained gates passed:
 - version, measurement-boundary, formula-dispatch, OOXML-matrix, and stream
   measurement-validator checks;
 - formatting and diff checks;
-- Rust workspace `--all-targets` tests: 1,672 passed, including Drawing flip and fill regressions;
+- Rust workspace `--all-targets` tests: 1,673 passed, including Drawing flip, fill, and line-color regressions;
 - benchmark smoke, blackbox/CLI/property/XLSX round-trip targets;
 - workspace Clippy with warnings denied, Rustdoc, and offline audit;
 - formula parser/evaluator, VBA parser, and XLSX-reader fuzz smoke, all with
@@ -39,7 +39,7 @@ All self-contained gates passed:
   writes, export parity, and TypeScript declarations;
 - real Chrome browser smoke over HTTP.
 
-This rerun included commit `3ebe91f` (`feat: edit drawing shape fills`); all
+This rerun included commit `c6c2122` (`feat: edit drawing shape line colors`); all
 self-contained gates completed successfully after the new Drawing transform
 editing path was added.
 
