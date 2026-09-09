@@ -344,6 +344,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 - [x] 部分 BUILD: `Vm.run_event`／Python `Vm.run_event`で明示指定したzero-argumentのWorkbook／Worksheetイベントをdispatchし、`Application.EnableEvents`による無効化、再入抑止、既定execution budgetを適用した。さらに`run_worksheet_change`／Python bindingで、active sheet上の明示A1 targetを`As Range`引数へ一時束縛できるようにした。自動発火、複数handlerの決定的順序、イベント連鎖は未完。
 - [x] 部分 BUILD: `Vm.run_sub_multi_with_events`で複数moduleから`Workbook_Open`を一意に解決してentrypointより先にdispatchし、標準module間および同一Program内の重複handlerを拒否する決定性境界を追加した。Worksheetイベントの自動発火、イベント連鎖は未完。
 - [x] 部分 BUILD: VMが実行中に確定したruntime failure categoryをside channelで保持し、CLI JSON診断が文字列再分類なしに利用する経路を追加した。blocked external effectとMsgBox拒否は発生箇所で直接分類し、未移行経路だけがメッセージ再分類へfallbackする。blocked external effectには新しい`E1011`を割り当て、既存の`E1006`（duplicate module name）を壊さない。entrypoint／compile／事前エラーと全エラー生成箇所の完全な型付き移行、独立Excel oracleは未完。
+- [x] 部分 BUILD: 複数moduleで同名のUDT（`Type ... End Type`）を検出し、flat namespaceへの後勝ち上書きを実行前に拒否するようにした。大文字小文字を統一して決定的に検出するが、module-qualified UDT解決と診断位置は未完。
 - [ ] 複数module間のUDT名衝突と診断位置など、解決規則の残差を明確化。
 - [ ] Excelとの型変換・丸め・日付・Empty／Error・配列境界・再計算の独立oracle比較を拡張。
 - [ ] 実運用macroの回帰と、数式の依存グラフ・循環・volatile／dynamic array等の対応境界を検証。

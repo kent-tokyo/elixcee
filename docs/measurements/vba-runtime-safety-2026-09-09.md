@@ -24,6 +24,8 @@ From the repository root, run:
 
 ```text
 cargo test workbook_save_and_close_are_blocked_as_external_effects --offline -- --nocapture
+cargo test type_collisions --offline -- --nocapture
+cargo test run_sub_multi_rejects_a_genuine_type_collision_before_binding --offline -- --nocapture
 cargo test --workspace --all-targets --offline --quiet
 cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo fmt --all -- --check
@@ -34,7 +36,7 @@ python3 scripts/check-ooxml-feature-matrix.py
 
 ## Result
 
-The targeted safety test passed. The full local Rust workspace passed 1,601
+The targeted safety and UDT-collision tests passed. The full local Rust workspace passed 1,603
 tests; strict clippy, formatting, diff, formula-dispatch, and OOXML matrix
 checks also passed on macOS arm64.
 

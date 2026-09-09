@@ -9298,6 +9298,14 @@ impl Vm {
                 mods.join("', '")
             ));
         }
+        let type_collisions = parser::find_cross_module_type_collisions(modules);
+        if let Some((name, mods)) = type_collisions.first() {
+            return Err(format!(
+                "duplicate Type '{}' across modules '{}' — cross-module UDT resolution isn't supported yet; rename one of them",
+                name,
+                mods.join("', '")
+            ));
+        }
 
         self.msgbox_log.clear();
         self.last_resolution_failure = None;
@@ -21562,6 +21570,24 @@ mod tests {
         let mut vm = Vm::new();
         let err = vm.run_sub_multi(&modules, "Module1.Main").unwrap_err();
         assert!(err.contains("duplicate Function 'foo'"), "{:?}", err);
+    }
+
+    #[test]
+    fn run_sub_multi_rejects_a_genuine_type_collision_before_binding() {
+        let modules = vec![
+            module(
+                "module1",
+                "Type Point\n    X As Long\nEnd Type\nSub Main()\n    x = 1\nEnd Sub\n",
+            ),
+            module("module2", "Type point\n    Y As Long\nEnd Type\n"),
+        ];
+        let mut vm = Vm::new();
+        let err = vm.run_sub_multi(&modules, "Module1.Main").unwrap_err();
+        assert!(err.contains("duplicate Type 'point'"), "{:?}", err);
+        assert!(
+            !vm.type_defs.contains_key("point"),
+            "a colliding UDT must not be silently installed"
+        );
     }
 
     #[test]

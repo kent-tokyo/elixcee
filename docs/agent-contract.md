@@ -96,6 +96,8 @@ can locate the offending source. I/O/setup errors have null locations.
 
 Runtime classification still recognizes selected error-message patterns.
 Do not assume every rejected operation has its own typed error code.
+Cross-module UDT name collisions are rejected before execution; module-qualified
+UDT resolution is not yet modeled.
 
 ## Multi-module projects
 

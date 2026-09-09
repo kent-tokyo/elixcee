@@ -4054,6 +4054,30 @@ pub fn find_cross_module_func_collisions(
         .collect()
 }
 
+/// Bare user-defined type names that appear in 2+ modules. The VM currently
+/// exposes one flat UDT namespace, so silently letting the later module
+/// overwrite the earlier definition would make `Dim value As T` depend on
+/// module traversal order. Callers should reject the project until
+/// module-qualified UDT resolution exists.
+pub fn find_cross_module_type_collisions(
+    modules: &[(String, Program)],
+) -> Vec<(String, Vec<String>)> {
+    let mut by_name: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (module_name, prog) in modules {
+        for type_def in &prog.type_defs {
+            by_name
+                .entry(type_def.name.clone())
+                .or_default()
+                .push(module_name.clone());
+        }
+    }
+    by_name
+        .into_iter()
+        .filter(|(_, mods)| mods.len() > 1)
+        .collect()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -5571,6 +5595,18 @@ mod tests {
         ];
         assert!(find_cross_module_sub_collisions(&modules).is_empty());
         assert!(find_cross_module_func_collisions(&modules).is_empty());
+    }
+
+    #[test]
+    fn type_collisions_are_case_insensitive_across_modules() {
+        let left = module("left", "Type Point\n    X As Long\nEnd Type\n");
+        let right = module("right", "Type point\n    Y As Long\nEnd Type\n");
+        let collisions = find_cross_module_type_collisions(&[left, right]);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].0, "point");
+        let mut modules = collisions[0].1.clone();
+        modules.sort();
+        assert_eq!(modules, vec!["left".to_string(), "right".to_string()]);
     }
 
     #[test]
