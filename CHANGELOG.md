@@ -15,6 +15,7 @@
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls@showBubbleSize`を`Vm.set_chart_data_labels_show_bubble_size`（Python binding／型stub含む）から追加／更新できるようにしました。既存data-label属性・子要素・系列・軸・relationshipを保持し、data-label要素の新規作成とExcel再openは未完です。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls@showLegendKey`を`Vm.set_chart_data_labels_show_legend_key`（Python binding／型stub含む）から追加／更新できるようにしました。既存data-label属性・子要素・系列・軸・relationshipを保持し、data-label要素の新規作成とExcel再openは未完です。
 - G2dの限定Chart編集として、既存Chartの最初の`c:dLbls/c:dLblPos@val`を`Vm.set_chart_data_labels_position`（Python binding／型stub含む）からOOXML定義値に限定して追加／更新できるようにしました。既存data-label属性・子要素・系列・軸・relationshipを保持し、Chart作成とExcel再openは未完です。
+- G2dの限定Chart編集として、既存Chartの最初の`c:dLbls/c:numFmt@formatCode`を`Vm.set_chart_data_labels_number_format`（Python binding／型stub含む）から検証付きで追加／更新できるようにしました。`sourceLinked`と他のdata-label内容を保持し、Chart作成とExcel再openは未完です。
 - VBAイベントの部分BUILDとして、Python `Vm.set_cell(..., trigger_events=True)`から直前にparse済みVBAの`Worksheet_Change(Target)`を変更対象A1へ自動dispatchできるようにしました。既定動作は従来どおりイベントなしで、EnableEvents・再入抑止・timeoutを適用します。イベント連鎖・複数handler順序・Excel oracleは未完です。
 - VBAセル書込みの整合性を補強し、Python `Vm.set_cell`をVM共通の値書込み経路へ接続しました。1-based座標、variant budget、undo、spill解放、formula AST／dirty依存無効化を適用します。Excel oracleは未完です。
 - G2dの限定Chart編集として、軸タイトルを`Vm.set_chart_axis_title`（Python binding／型stub含む）からdocument orderの0-based indexで更新／追加できるようにしました。軸内の最初のtitle text runだけを変更し、系列・Chart title・relationshipは保持します。Chart作成、Excel再openは未完です。

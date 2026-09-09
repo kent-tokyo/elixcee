@@ -885,6 +885,7 @@ pub(crate) struct ChartDataLabelsEdit {
     pub show_bubble_size: Option<bool>,
     pub show_legend_key: Option<bool>,
     pub position: Option<String>,
+    pub number_format: Option<String>,
 }
 
 /// A bounded edit to an existing chart style (`1..=48`).
@@ -7643,6 +7644,7 @@ impl Vm {
                 show_bubble_size: None,
                 show_legend_key: None,
                 position: None,
+                number_format: None,
             });
         Ok(())
     }
@@ -7671,6 +7673,7 @@ impl Vm {
                 show_bubble_size: None,
                 show_legend_key: None,
                 position: None,
+                number_format: None,
             });
         Ok(())
     }
@@ -7699,6 +7702,7 @@ impl Vm {
                 show_bubble_size: None,
                 show_legend_key: None,
                 position: None,
+                number_format: None,
             });
         Ok(())
     }
@@ -7727,6 +7731,7 @@ impl Vm {
                 show_bubble_size: None,
                 show_legend_key: None,
                 position: None,
+                number_format: None,
             });
         Ok(())
     }
@@ -7755,6 +7760,7 @@ impl Vm {
                 show_bubble_size: None,
                 show_legend_key: None,
                 position: None,
+                number_format: None,
             });
         Ok(())
     }
@@ -7783,6 +7789,7 @@ impl Vm {
                 show_bubble_size: Some(show_bubble_size),
                 show_legend_key: None,
                 position: None,
+                number_format: None,
             });
         Ok(())
     }
@@ -7811,6 +7818,7 @@ impl Vm {
                 show_bubble_size: None,
                 show_legend_key: Some(show_legend_key),
                 position: None,
+                number_format: None,
             });
         Ok(())
     }
@@ -7850,6 +7858,46 @@ impl Vm {
                 show_bubble_size: None,
                 show_legend_key: None,
                 position: Some(position),
+                number_format: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-label number format.
+    pub fn set_chart_data_labels_number_format(
+        &mut self,
+        chart_part: &str,
+        number_format: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let number_format = number_format.trim().to_string();
+        if number_format.is_empty()
+            || number_format.len() > 4096
+            || number_format.chars().any(|c| c.is_control())
+        {
+            return Err(
+                "chart data-label number format must be 1..=4096 bytes without control characters"
+                    .to_string(),
+            );
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.number_format = Some(number_format.clone()))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: None,
+                number_format: Some(number_format),
             });
         Ok(())
     }
