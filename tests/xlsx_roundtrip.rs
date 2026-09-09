@@ -1385,6 +1385,8 @@ fn rename_sheet_rewrites_pivot_worksheet_source_and_keeps_cache_owner() {
         Some("A1:C3"),
     )
     .expect("pivot source edit should be accepted");
+    vm.set_pivot_cache_refresh_on_load("xl/pivotCache/pivotCacheDefinition1.xml", true)
+        .expect("pivot refresh policy edit should be accepted");
     save_workbook(&vm, &output_path).expect("pivot sheet rename should save");
 
     let entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
@@ -1395,6 +1397,7 @@ fn rename_sheet_rewrites_pivot_worksheet_source_and_keeps_cache_owner() {
     assert!(workbook.contains("cacheId=\"7\""));
     assert!(cache.contains("sheet=\"Data &amp; 2026\""));
     assert!(cache.contains("ref=\"A1:C3\""));
+    assert!(cache.contains("refreshOnLoad=\"1\""));
 
     let _ = std::fs::remove_file(source_path);
     let _ = std::fs::remove_file(output_path);

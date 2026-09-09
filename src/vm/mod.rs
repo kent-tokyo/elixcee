@@ -866,6 +866,7 @@ pub(crate) struct ChartTitleEdit {
 pub(crate) struct PivotWorksheetSourceEdit {
     pub sheet: Option<String>,
     pub reference: Option<String>,
+    pub refresh_on_load: Option<bool>,
 }
 
 /// A bounded edit to one existing two-cell drawing anchor. Public API
@@ -7474,8 +7475,35 @@ impl Vm {
             PivotWorksheetSourceEdit {
                 sheet: sheet.map(ToOwned::to_owned),
                 reference: reference.map(ToOwned::to_owned),
+                refresh_on_load: None,
             },
         );
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the existing Pivot cache refresh policy.
+    /// This only changes the OOXML `refreshOnLoad` flag; it never fetches an
+    /// external source or recalculates cache records in the headless runtime.
+    pub fn set_pivot_cache_refresh_on_load(
+        &mut self,
+        cache_part: &str,
+        enabled: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("Pivot cache edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(cache_part.starts_with("xl/pivotCache/") && cache_part.ends_with(".xml")) {
+            return Err("cache_part must be an xl/pivotCache/*.xml path".to_string());
+        }
+        let edit = self
+            .pivot_source_edits
+            .entry(cache_part.to_string())
+            .or_insert_with(|| PivotWorksheetSourceEdit {
+                sheet: None,
+                reference: None,
+                refresh_on_load: None,
+            });
+        edit.refresh_on_load = Some(enabled);
         Ok(())
     }
 

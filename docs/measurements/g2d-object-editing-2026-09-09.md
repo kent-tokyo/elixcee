@@ -3,8 +3,8 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache, Chart-title, two-cell Drawing-anchor, and worksheet-backed
-Pivot-source edits.
+Chart-series-cache, Chart-title, two-cell Drawing-anchor, worksheet-backed
+Pivot-source, and Pivot refresh-policy edits.
 It is not evidence of
 Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 
@@ -14,6 +14,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   rewrites only selected series category/value `<c:f>` elements.
 - `Vm.set_pivot_worksheet_source(cache_part, sheet, reference)` rewrites only
   the first worksheet-backed `worksheetSource` `sheet` and/or A1 `ref`.
+- `Vm.set_pivot_cache_refresh_on_load(cache_part, enabled)` adds or replaces
+  only the root cache definition's `refreshOnLoad` flag.
 - `Vm.set_chart_title(chart_part, text)` rewrites only the first `<a:t>` inside
   the first `<c:title>` element.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
@@ -42,6 +44,7 @@ cargo test --test xlsx_roundtrip edit_chart_series --offline -- --nocapture
 cargo test chart_title_rewriter --offline -- --nocapture
 cargo test chart_series_rewriter --offline -- --nocapture
 cargo test chart_series_cache --offline -- --nocapture
+cargo test pivot_refresh_on_load --offline -- --nocapture
 cargo test drawing_anchor --offline -- --nocapture
 cargo test --workspace --all-targets --offline --quiet
 cargo clippy --workspace --all-targets --offline -- -D warnings
@@ -53,8 +56,8 @@ bash scripts/check-local-gates.sh
 ## Result
 
 On the recorded macOS arm64 environment, the Chart title, series-name,
-series-cache, Drawing anchor, and real-fixture targeted tests passed. The full
-Rust workspace passed 1,608 tests,
+  series-cache, Pivot refresh-policy, Drawing anchor, and real-fixture targeted
+  tests passed. The full Rust workspace passed 1,612 tests,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,
@@ -76,6 +79,7 @@ new point counts while their formulas and format code remained unchanged.
 ## Not measured or claimed
 
 - Excel reopen, repair-warning absence, or recalculated Chart/Pivot caches.
+- Excel-side execution of `refreshOnLoad` and external source retrieval.
 - Chart or Drawing creation, general Drawing editing beyond two-cell anchor
   markers, multiple title-run editing, cache creation/regeneration beyond
   existing caches, or table-backed Pivot sources.

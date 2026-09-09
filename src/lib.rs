@@ -1202,6 +1202,14 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a Pivot cache `refreshOnLoad` flag update without fetching or
+    /// recalculating the cache.
+    fn set_pivot_cache_refresh_on_load(&mut self, cache_part: &str, enabled: bool) -> PyResult<()> {
+        self.inner
+            .set_pivot_cache_refresh_on_load(cache_part, enabled)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded edit to an existing two-cell drawing anchor. All cell
     /// coordinates are 1-based; only two-cell anchors are supported.
     fn set_drawing_anchor(
@@ -4597,6 +4605,46 @@ fn rewrite_pivot_worksheet_source(
     Ok(out)
 }
 
+/// Rewrites the root Pivot cache definition's `refreshOnLoad` flag. This is a
+/// request for a later Excel-side refresh, not a headless cache refresh.
+fn rewrite_pivot_cache_refresh_on_load(xml: &str, enabled: bool) -> Result<String, String> {
+    let root_start = xml
+        .find("<pivotCacheDefinition")
+        .ok_or_else(|| "Pivot cache is missing <pivotCacheDefinition>".to_string())?;
+    let root_end = root_start
+        + xml[root_start..]
+            .find('>')
+            .ok_or_else(|| "Pivot cache definition element is unterminated".to_string())?
+        + 1;
+    let mut tag = xml[root_start..root_end].to_string();
+    let value = if enabled { "1" } else { "0" };
+    if let Some(attr_rel) = tag.find("refreshOnLoad=") {
+        let value_start = attr_rel + "refreshOnLoad=".len();
+        let quote = tag
+            .as_bytes()
+            .get(value_start)
+            .copied()
+            .ok_or_else(|| "Pivot refreshOnLoad attribute is unterminated".to_string())?;
+        if quote != b'"' && quote != b'\'' {
+            return Err("Pivot refreshOnLoad attribute is malformed".to_string());
+        }
+        let value_end = tag[value_start + 1..]
+            .find(quote as char)
+            .map(|rel| value_start + 1 + rel)
+            .ok_or_else(|| "Pivot refreshOnLoad attribute is unterminated".to_string())?;
+        tag.replace_range(value_start + 1..value_end, value);
+    } else {
+        let insert_at = tag
+            .strip_suffix('>')
+            .map(str::len)
+            .ok_or_else(|| "Pivot cache definition element is malformed".to_string())?;
+        tag.insert_str(insert_at, &format!(" refreshOnLoad=\"{value}\""));
+    }
+    let mut out = xml.to_string();
+    out.replace_range(root_start..root_end, &tag);
+    Ok(out)
+}
+
 /// Parses `rels_part` out of `raw_entries` (a source's raw zip contents) and returns
 /// every `(Type, Target)` relationship whose target both (a) survived into `passthrough`
 /// and (b) isn't already one of `skip_types` -- the types this writer emits its own
@@ -5175,7 +5223,12 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     pivot = rewrite_pivot_cache_sheet_refs(&pivot, &vm.sheet_renames_since_load)?;
                 }
                 if let Some(edit) = vm.pivot_source_edits.get(&name) {
-                    pivot = rewrite_pivot_worksheet_source(&pivot, edit)?;
+                    if edit.sheet.is_some() || edit.reference.is_some() {
+                        pivot = rewrite_pivot_worksheet_source(&pivot, edit)?;
+                    }
+                    if let Some(enabled) = edit.refresh_on_load {
+                        pivot = rewrite_pivot_cache_refresh_on_load(&pivot, enabled)?;
+                    }
                 }
                 pivot.into_bytes()
             } else if has_drawing_anchor_edits
@@ -8346,6 +8399,7 @@ mod tests {
         let edit = vm::PivotWorksheetSourceEdit {
             sheet: Some("Data & 2026".to_string()),
             reference: Some("A1:C3".to_string()),
+            refresh_on_load: None,
         };
         let source = r#"<pivotCacheDefinition><cacheSource><worksheetSource ref="A1:B2" sheet="Sheet1"/></cacheSource><extLst><x:note sheet="Sheet1"/></extLst></pivotCacheDefinition>"#;
         let actual = rewrite_pivot_worksheet_source(source, &edit).unwrap();
@@ -8360,8 +8414,29 @@ mod tests {
         let edit = vm::PivotWorksheetSourceEdit {
             sheet: Some("Sheet1".to_string()),
             reference: None,
+            refresh_on_load: None,
         };
         assert!(rewrite_pivot_worksheet_source("<cacheSource/>", &edit).is_err());
+    }
+
+    #[test]
+    fn pivot_refresh_on_load_rewriter_updates_or_adds_root_attribute() {
+        let source = r#"<pivotCacheDefinition cacheId="7"><cacheSource/></pivotCacheDefinition>"#;
+        assert_eq!(
+            rewrite_pivot_cache_refresh_on_load(source, true).unwrap(),
+            r#"<pivotCacheDefinition cacheId="7" refreshOnLoad="1"><cacheSource/></pivotCacheDefinition>"#
+        );
+        let existing =
+            r#"<pivotCacheDefinition refreshOnLoad="1"><cacheSource/></pivotCacheDefinition>"#;
+        assert_eq!(
+            rewrite_pivot_cache_refresh_on_load(existing, false).unwrap(),
+            r#"<pivotCacheDefinition refreshOnLoad="0"><cacheSource/></pivotCacheDefinition>"#
+        );
+    }
+
+    #[test]
+    fn pivot_refresh_on_load_rewriter_rejects_missing_root() {
+        assert!(rewrite_pivot_cache_refresh_on_load("<cacheSource/>", true).is_err());
     }
 
     #[cfg(feature = "python")]

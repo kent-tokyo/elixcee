@@ -348,6 +348,12 @@ class Vm:
         """
         ...
 
+    def set_pivot_cache_refresh_on_load(
+        self, cache_part: str, enabled: bool
+    ) -> None:
+        """Set an existing Pivot cache refreshOnLoad flag without recalculation."""
+        ...
+
     def set_drawing_anchor(
         self,
         drawing_part: str,

@@ -13,6 +13,7 @@
 - G2dの限定Chart編集として、既存Chartの最初のtitle text runを`Vm.set_chart_title`（Python binding含む）から更新できるようにしました。XML escape、欠損title／text、制御文字、16KiB上限を検証し、周辺のChart XML・Drawing relationshipは保持します。Chart作成、複数runの完全編集、Excel再openは未完です。
 - G2dの限定Drawing編集として、既存two-cell anchorのfrom/toセルを`Vm.set_drawing_anchor`（Python binding含む）から1-based座標で更新できるようにしました。shape content、offset、relationshipを保持し、one-cell anchorや不正座標は拒否します。Drawing作成・一般shape編集・Excel再openは未完です。
 - G2dの限定Chart編集として、既存系列のcategory/value cacheを`Vm.set_chart_series_cache`（Python binding含む）から更新できるようにしました。既存`strCache`／`numCache`の点数・値だけを置換し、formula・formatCode・cache種別・周辺XMLを保持します。cache作成／再計算、Chart作成、Excel再openは未完です。
+- G2dの限定Pivot編集として、既存cache definitionの`refreshOnLoad`を`Vm.set_pivot_cache_refresh_on_load`（Python binding含む）から追加／更新できるようにしました。外部取得・cache records変更・Pivot再集計は行わず、Excel側のrefreshと再openは未検証です。
 - イベント処理を拡張し、`run_with_events`（Rust／Python）で`Workbook_Open`を明示的に先行dispatchできるようにしました。通常の`run`／`run_sub`は従来どおりイベントを自動実行せず、open handlerの失敗時は本体Macroを実行しません。
 - VBAイベントの部分BUILDとして、明示指定したzero-argumentの`Workbook_Open`／`Workbook_BeforeClose`／`Worksheet_Change`／`Worksheet_Calculate`／`Worksheet_SelectionChange`を`Vm.run_event`（Python binding含む）から実行できるようにしました。`Application.EnableEvents`の無効化と再入抑止、既存execution budgetを適用しています。自動発火、`Worksheet_Change(Target)` binding、複数handler順序、イベント連鎖は未完です。
 - VBAの安全境界を補強し、`ThisWorkbook.Save`／`ThisWorkbook.Close`を既定のheadless実行で暗黙の成功扱いにせず、外部効果として拒否するようにしました。`E1011`の構造化runtime failure分類と回帰テストで検証しています。実際の保存・Close後state・イベント連携・Excel oracleは未完です。
