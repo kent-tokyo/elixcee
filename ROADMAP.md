@@ -98,7 +98,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 ### G4 — 関数・配列互換性の拡張（X3）
 
 - [x] G4 dispatcher契約監査: `compat/formula-contracts.json`と`check-formula-dispatch.py --check-contracts`で、mode-rich関数の引数形・対応／未対応mode・回帰テスト参照・oracle未検証状態を機械検査する。Excel oracle fixtureの一致校正は未完。
-- [x] G4 VBA WorksheetFunction BUILD: 数式側に既存実装のある`TEXTJOIN`／`XLOOKUP`をVBA `WorksheetFunction` dispatchへ接続し、範囲flatten、空値除外、exact match、forward/reverse searchの回帰を追加した。wildcard／binary mode、完全な型変換、Excel oracle校正は未完。
+- [x] G4 VBA WorksheetFunction BUILD: 数式側に既存実装のある`TEXTJOIN`／`XLOOKUP`／`XMATCH`をVBA `WorksheetFunction` dispatchへ接続し、範囲flatten、空値除外、exact match、forward/reverse searchの回帰を追加した。wildcard／binary mode、完全な型変換、Excel oracle校正は未完。
 - [x] G4 dispatcher棚卸し基盤: `scripts/check-formula-dispatch.py`で実際の`eval_func`からcanonical名・alias・重複名を抽出する検査を追加した。FUNCTIONS・引数形・未対応mode・oracle fixtureとの対応検査は未完。
 - [x] G4 dispatcher文書対応: `--check-docs`でworksheet関数表と実dispatchの218名（canonical 207 / alias 11）を照合し、未記載・stale記載をエラーにするlocal gateを追加した。引数形・未対応mode・oracle fixtureの対応検査は未完。
 - [x] G4 lookup引数形: `XLOOKUP` / `XMATCH`のmatch/search modeを整数値だけ受け付け、非整数・非有限・i32範囲外を`#VALUE!`にした。全関数の引数形検査は未完。

@@ -14617,6 +14617,31 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
             }
             Ok(not_found.unwrap_or(Variant::Error(ExcelError::NA)))
         }
+        "xmatch" => {
+            if !(2..=4).contains(&vals.len()) {
+                return Err("WorksheetFunction.XMatch requires 2 to 4 arguments".into());
+            }
+            let key = &vals[0];
+            let lookup = flat_all(std::slice::from_ref(&vals[1]));
+            let match_mode = vals.get(2).map(to_f64_excel).transpose()?.unwrap_or(0.0);
+            let search_mode = vals.get(3).map(to_f64_excel).transpose()?.unwrap_or(1.0);
+            if match_mode != 0.0 || !(search_mode == 1.0 || search_mode == -1.0) {
+                return Err(
+                    "WorksheetFunction.XMatch supports exact match and search_mode 1/-1".into(),
+                );
+            }
+            let indices: Box<dyn Iterator<Item = usize>> = if search_mode == -1.0 {
+                Box::new((0..lookup.len()).rev())
+            } else {
+                Box::new(0..lookup.len())
+            };
+            for index in indices {
+                if vba_eq(&lookup[index], key) {
+                    return Ok(Variant::Integer(index as i64 + 1));
+                }
+            }
+            Ok(Variant::Error(ExcelError::NA))
+        }
         "round" => {
             if vals.is_empty() {
                 return Err("WorksheetFunction.Round requires arguments".into());
@@ -17325,6 +17350,15 @@ mod tests {
         );
         assert_eq!(vm.variables["first"], Variant::Integer(20));
         assert_eq!(vm.variables["last"], Variant::Integer(30));
+    }
+
+    #[test]
+    fn test_wsf_xmatch_exact_and_reverse_search() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"A\"\n    Cells(2,1).Value = \"B\"\n    Cells(3,1).Value = \"B\"\n    first = WorksheetFunction.XMatch(\"B\", Range(\"A1:A3\"))\n    last = WorksheetFunction.XMatch(\"B\", Range(\"A1:A3\"), 0, -1)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["first"], Variant::Integer(2));
+        assert_eq!(vm.variables["last"], Variant::Integer(3));
     }
 
     // ── Range("A1:A10").Value 多セル読み取り ─────────────────────────────────

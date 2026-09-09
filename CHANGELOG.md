@@ -6,7 +6,7 @@
 
 次の変更はここに記録します。
 
-- G4/VBA互換性の部分BUILDとして、`WorksheetFunction.TextJoin`と`WorksheetFunction.XLookup`をVMへ接続しました。TEXTJOINは範囲flattenと空文字除外、XLOOKUPはexact matchおよびsearch mode 1/-1を実装し、旧compat corpusの「未実装」期待値を削除しました。wildcard／binary modeとExcel oracle照合は未完です。
+- G4/VBA互換性の部分BUILDとして、`WorksheetFunction.TextJoin`、`WorksheetFunction.XLookup`、`WorksheetFunction.XMatch`をVMへ接続しました。TEXTJOINは範囲flattenと空文字除外、XLOOKUP／XMATCHはexact matchおよびsearch mode 1/-1を実装し、旧compat corpusの「未実装」期待値を削除しました。wildcard／binary modeとExcel oracle照合は未完です。
 - G2dの限定Chart編集として、`Vm.set_chart_style`（Python binding／型stub含む）で既存Chartの`c:style@val`を1..48の範囲で更新し、欠損時はchart-spaceへ追加できるようにしました。系列・タイトル・凡例・Drawing relationshipは保持し、Chart作成とExcel再openは未完です。
 - イベントhandlerの決定性を強化し、同一Program内の重複`Workbook_Open`／`Worksheet_Change`を先頭選択せず拒否するようにしました。
 - `Worksheet_Change(Target As Range)`の部分BUILDとして、`run_worksheet_change`（Rust／Python）に明示A1 targetを渡せるようにしました。Target bindingは一時的なRange objectとして行い、不正範囲・型不一致・再入を拒否または抑止します。セル編集からの自動発火とイベント連鎖は未完です。
