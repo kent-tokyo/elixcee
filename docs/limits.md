@@ -9,7 +9,7 @@ Path-based workbook input is restricted to `.xlsx`, `.xlsm`, and `.ods` (case-in
 before opening the file. Unsupported or missing extensions return a deterministic error;
 the in-memory OOXML buffer reader is intentionally extension-independent.
 
-## Python append-only writer (Unreleased G1)
+## Python append-only writer (1.0.5 G1)
 
 `create_stream` writes accepted rows to a temporary ZIP, retaining one row's values
 and generated XML during `append`, not all accepted rows until `close`.
@@ -34,8 +34,10 @@ neither path is advertised as fully constant-memory.
 
 Regression: `python -I tests/python/test_stream_writer_limits.py` against an
 installed development wheel. This is a small-fixture gate, not an RSS measurement.
-The separate `create_stream_bounded` API is experimental until its implementation
-has passed the Rust/Python CI build and large-process RSS measurement.
+The separate `create_stream_bounded` API remains bounded/experimental by contract,
+but its current Rust/Python build and macOS large-process RSS evidence is recorded
+in [the measurement index](measurements/README.md). Cross-platform and CI evidence
+remain separate.
 The reproducible measurement entry point is
 `scripts/measure-stream-writer-memory.py`; it uses one child process per row-count
 case and records peak RSS, wall time, output size, and rows. It intentionally does

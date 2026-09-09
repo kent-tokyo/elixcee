@@ -36,8 +36,9 @@ Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
   `worksheetSource@sheet` are updated. In addition, existing chart-series
   category/value formulas and worksheet-backed Pivot `worksheetSource@sheet`／A1
 `ref` can be explicitly edited through the bounded APIs. Existing Chart title
-text and two-cell Drawing anchor markers are also supported by bounded APIs.
-Chart creation, cache regeneration/recalculation, general shape editing, and
+text, first-run Drawing shape text, and two-cell Drawing anchor markers are
+also supported by bounded APIs. Chart creation, cache
+regeneration/recalculation, general shape editing, and
 stale-anchor updates after row/column changes remain outside the contract.
 
 ## Explicit non-goals
@@ -77,7 +78,7 @@ injection, path traversal, or resource-exhaustion risk.
 
 Each release records implementation tests and static checks separately from
 measurements requiring Microsoft Excel, large fixtures, or another independent
-oracle. For v1.0.4, the local gate covers the Rust workspace/all-target tests,
+oracle. For v1.0.5, the local gate covers the Rust workspace/all-target tests,
 strict clippy/Rustdoc, fresh dependency audit, feature compilation, packaged
 crate/wheel/sdist, JavaScript differential/type checks, and the checked-in
 reader-measurement contract. Dated macOS reader measurements are
