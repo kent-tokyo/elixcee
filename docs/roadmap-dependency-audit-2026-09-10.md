@@ -17,10 +17,10 @@ tooling, but are not complete yet:
   local formula-only oracle now has 31 comparable matches out of 34 probes,
   and the 581-scenario VBA corpus has 0 MISMATCH/UNEXPLAINED outcomes; Excel
   semantic coverage and real production macro fixtures remain open.
-- G5 confirmation-grade large-workbook measurements, RSS, and resource
-  scaling. A new `v1.0.5`-tag versus current paired run now covers 100k/400k/1M
-  cells with durable save and output verification; the historical baseline,
-  20-pair confirmation, and RSS/resource gates remain open.
+- G5 RSS and cross-platform resource scaling. The `v1.0.5`-tag versus current
+  paired run now covers 100k/400k/1M cells with 20 pairs, durable save, and
+  output verification; historical-baseline reconstruction and RSS/resource
+  gates remain open.
 
 ## Requires an external engine, host, or service
 
