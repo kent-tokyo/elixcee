@@ -154,6 +154,30 @@ class StreamWriterLimits(unittest.TestCase):
             writer.append(["x" * 200])
         self.assertEqual(writer.row_count, 1)
 
+    def test_load_workbook_exposes_and_preserves_date1904_metadata(self):
+        source = self.directory.name + "/date1904-source.xlsx"
+        patched = self.directory.name + "/date1904-patched.xlsx"
+        roundtrip = self.directory.name + "/date1904-roundtrip.xlsx"
+        writer = elixcee.create_stream(source)
+        writer.append([42])
+        writer.close()
+
+        with zipfile.ZipFile(source) as archive:
+            parts = {name: archive.read(name) for name in archive.namelist()}
+        workbook = parts["xl/workbook.xml"].decode("utf-8")
+        marker = workbook.index(">") + 1
+        parts["xl/workbook.xml"] = (
+            workbook[:marker] + '<workbookPr date1904="1"/>' + workbook[marker:]
+        ).encode("utf-8")
+        with zipfile.ZipFile(patched, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, payload in parts.items():
+                archive.writestr(name, payload)
+
+        workbook = elixcee.load_workbook(patched)
+        self.assertTrue(workbook.workbook_date1904)
+        workbook.save_workbook(roundtrip)
+        self.assertTrue(elixcee.load_workbook(roundtrip).workbook_date1904)
+
 
 if __name__ == "__main__":
     unittest.main()
