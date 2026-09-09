@@ -321,6 +321,17 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `FLOOR.MATH` / `CEILING.MATH` | Round down / up to nearest multiple | 2013 |
 | `MROUND` | Round to nearest multiple | Classic |
 
+### Engineering
+
+| Function | Description | Excel |
+|---|---|---|
+| `BITAND` / `BITOR` / `BITXOR` | Bitwise AND / OR / XOR for non-negative 48-bit integers | 2013 |
+| `BITLSHIFT` / `BITRSHIFT` | Bitwise left / right shift | 2013 |
+| `DELTA` | Returns 1 when two numbers are equal | Classic |
+| `GESTEP` | Returns 1 when a number is greater than or equal to a step | Classic |
+| `ERF` / `ERF.PRECISE` | Error function over one point or an interval | 2010 / 2013 |
+| `ERFC` / `ERFC.PRECISE` | Complementary error function | 2010 / 2013 |
+
 ### Logical
 
 | Function | Description | Excel |

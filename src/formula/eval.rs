@@ -546,6 +546,16 @@ fn eval_func(
         "LOG" => func_log(args, cells),
         "LOG10" => func_log10(args, cells),
         "LN" => func_ln(args, cells),
+        // ── Engineering ─────────────────────────────────────────────────────
+        "BITAND" => func_bitwise(args, cells, "BITAND"),
+        "BITOR" => func_bitwise(args, cells, "BITOR"),
+        "BITXOR" => func_bitwise(args, cells, "BITXOR"),
+        "BITLSHIFT" => func_bitshift(args, cells, true),
+        "BITRSHIFT" => func_bitshift(args, cells, false),
+        "DELTA" => func_delta(args, cells),
+        "GESTEP" => func_gestep(args, cells),
+        "ERF" | "ERF.PRECISE" => func_erf(args, cells),
+        "ERFC" | "ERFC.PRECISE" => func_erfc(args, cells),
         // ── Trigonometry ──────────────────────────────────────────────────────
         "PI" => func_pi(args, cells),
         "SIN" => func_trig1(args, cells, f64::sin),
@@ -4666,6 +4676,9 @@ fn func_covariance_p(
 
 /// Error function (Horner's method, Abramowitz & Stegun 7.1.26, max error 1.5e-7)
 fn stat_erf(x: f64) -> f64 {
+    if x == 0.0 {
+        return 0.0;
+    }
     let t = 1.0 / (1.0 + 0.3275911 * x.abs());
     let p = t
         * (0.254829592
@@ -5373,6 +5386,165 @@ fn func_ln(
         return Ok(Variant::Error(ExcelError::Num));
     }
     Ok(Variant::Float(n.ln()))
+}
+
+// ── Engineering ─────────────────────────────────────────────────────────────
+
+const MAX_BITWISE_VALUE: u64 = (1u64 << 48) - 1;
+
+fn bitwise_integer(value: &Variant, name: &str) -> Result<u64, Variant> {
+    let number = match to_float(value) {
+        Ok(number) => number,
+        Err(_) => return Err(Variant::Error(ExcelError::Value)),
+    };
+    if !number.is_finite() || number < 0.0 || number > MAX_BITWISE_VALUE as f64 {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let integer = number.trunc();
+    if integer > i64::MAX as f64 {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let result = integer as u64;
+    if result > MAX_BITWISE_VALUE {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let _ = name;
+    Ok(result)
+}
+
+fn func_bitwise(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err(format!("{name} requires 2 arguments"));
+    }
+    let left = match bitwise_integer(&evaluate(&args[0], cells)?, name) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    let right = match bitwise_integer(&evaluate(&args[1], cells)?, name) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    let result = match name {
+        "BITAND" => left & right,
+        "BITOR" => left | right,
+        "BITXOR" => left ^ right,
+        _ => unreachable!(),
+    };
+    Ok(Variant::Integer(result as i64))
+}
+
+fn func_bitshift(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    left: bool,
+) -> Result<Variant, String> {
+    let name = if left { "BITLSHIFT" } else { "BITRSHIFT" };
+    if args.len() != 2 {
+        return Err(format!("{name} requires 2 arguments"));
+    }
+    let number = match bitwise_integer(&evaluate(&args[0], cells)?, name) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    let shift_value = match to_float(&evaluate(&args[1], cells)?) {
+        Ok(value) => value,
+        Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+    };
+    if !shift_value.is_finite() || shift_value.trunc() != shift_value || shift_value.abs() > 53.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let shift = shift_value as i32;
+    let effective_left = if shift < 0 { !left } else { left };
+    let amount = shift.unsigned_abs();
+    if effective_left && (amount >= 48 || number > (MAX_BITWISE_VALUE >> amount)) {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let result = if effective_left {
+        number << amount
+    } else {
+        number >> amount
+    };
+    if result > MAX_BITWISE_VALUE {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Integer(result as i64))
+}
+
+fn func_delta(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("DELTA requires 1 or 2 arguments".into());
+    }
+    let left = to_float(&evaluate(&args[0], cells)?)?;
+    let right = if args.len() == 2 {
+        to_float(&evaluate(&args[1], cells)?)?
+    } else {
+        0.0
+    };
+    if !left.is_finite() || !right.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Integer((left == right) as i64))
+}
+
+fn func_gestep(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("GESTEP requires 1 or 2 arguments".into());
+    }
+    let number = to_float(&evaluate(&args[0], cells)?)?;
+    let step = if args.len() == 2 {
+        to_float(&evaluate(&args[1], cells)?)?
+    } else {
+        0.0
+    };
+    if !number.is_finite() || !step.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Integer((number >= step) as i64))
+}
+
+fn func_erf(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("ERF requires 1 or 2 arguments".into());
+    }
+    let lower = to_float(&evaluate(&args[0], cells)?)?;
+    let result = if args.len() == 2 {
+        let upper = to_float(&evaluate(&args[1], cells)?)?;
+        stat_erf(upper) - stat_erf(lower)
+    } else {
+        stat_erf(lower)
+    };
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(result))
+}
+
+fn func_erfc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("ERFC requires 1 argument".into());
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    let result = 1.0 - stat_erf(value);
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(result))
 }
 
 // ── Trigonometry ──────────────────────────────────────────────────────────────
@@ -8233,6 +8405,33 @@ mod tests {
         assert_eq!(calc("=4*5", &c), Variant::Integer(20));
         assert_eq!(calc("=10/4", &c), Variant::Float(2.5));
         assert_eq!(calc("=(1+2)*3", &c), Variant::Integer(9));
+    }
+
+    #[test]
+    fn test_engineering_bitwise_and_error_functions() {
+        let c = HashMap::new();
+        assert_eq!(calc("=BITAND(13,7)", &c), Variant::Integer(5));
+        assert_eq!(calc("=BITOR(8,3)", &c), Variant::Integer(11));
+        assert_eq!(calc("=BITXOR(15,6)", &c), Variant::Integer(9));
+        assert_eq!(calc("=BITLSHIFT(3,2)", &c), Variant::Integer(12));
+        assert_eq!(calc("=BITRSHIFT(12,2)", &c), Variant::Integer(3));
+        assert_eq!(calc("=BITLSHIFT(8,-2)", &c), Variant::Integer(2));
+        assert_eq!(calc("=DELTA(4,4)", &c), Variant::Integer(1));
+        assert_eq!(calc("=DELTA(4)", &c), Variant::Integer(0));
+        assert_eq!(calc("=GESTEP(5,5)", &c), Variant::Integer(1));
+        assert_eq!(calc("=GESTEP(-1)", &c), Variant::Integer(0));
+        match calc("=ERF(0)", &c) {
+            Variant::Float(value) => assert!(value.abs() < 1e-12),
+            other => panic!("ERF: {:?}", other),
+        }
+        match calc("=ERFC(0)", &c) {
+            Variant::Float(value) => assert!((value - 1.0).abs() < 1e-12),
+            other => panic!("ERFC: {:?}", other),
+        }
+        assert_eq!(
+            calc("=BITLSHIFT(281474976710655,1)", &c),
+            Variant::Error(ExcelError::Num)
+        );
     }
 
     #[test]
