@@ -598,12 +598,18 @@ fn eval_func(
         "CHOOSEROWS" => func_chooserows(args, cells),
         // ── Math / Financial ─────────────────────────────────────────────────
         "COMBIN" => func_combin(args, cells),
+        "COMBINA" => func_combina(args, cells),
         "FACT" => func_fact(args, cells),
+        "FACTDOUBLE" => func_factdouble(args, cells),
         "PERMUT" => func_permut(args, cells),
+        "MULTINOMIAL" => func_multinomial(args, cells),
         "GCD" => func_gcd(args, cells),
         "LCM" => func_lcm(args, cells),
         "QUOTIENT" => func_quotient(args, cells),
         "SIGN" => func_sign(args, cells),
+        "SUMX2MY2" => func_sumx2my2(args, cells),
+        "SUMX2PY2" => func_sumx2py2(args, cells),
+        "SUMXMY2" => func_sumxmy2(args, cells),
         "PMT" => func_pmt(args, cells),
         "FV" => func_fv(args, cells),
         "PV" => func_pv(args, cells),
@@ -7871,6 +7877,44 @@ fn func_combin(
     Ok(as_integer_if_whole(result.round()))
 }
 
+fn func_combina(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("COMBINA requires 2 arguments".into());
+    }
+    let n = to_float(&evaluate(&args[0], cells)?)?;
+    let k = to_float(&evaluate(&args[1], cells)?)?;
+    if !n.is_finite()
+        || !k.is_finite()
+        || n < 0.0
+        || k < 0.0
+        || n.fract() != 0.0
+        || k.fract() != 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let n = n as u64;
+    let k = k as u64;
+    if n == 0 {
+        return Ok(Variant::Integer(if k == 0 { 1 } else { 0 }));
+    }
+    let total = n.saturating_add(k).saturating_sub(1);
+    if total > i64::MAX as u64 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let choose_k = k.min(total.saturating_sub(k));
+    let mut result = 1.0;
+    for i in 0..choose_k {
+        result = result * (total - i) as f64 / (i + 1) as f64;
+    }
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(as_integer_if_whole(result.round()))
+}
+
 // ── Math & Combinatorics ──────────────────────────────────────────────────────
 
 fn func_fact(
@@ -7890,6 +7934,29 @@ fn func_fact(
     let mut result = 1f64;
     for i in 2..=n {
         result *= i as f64;
+    }
+    Ok(as_integer_if_whole(result))
+}
+
+fn func_factdouble(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("FACTDOUBLE requires 1 argument".into());
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > 300.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let mut result = 1.0;
+    let mut n = value as i64;
+    while n > 1 {
+        result *= n as f64;
+        n -= 2;
+    }
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
     }
     Ok(as_integer_if_whole(result))
 }
@@ -8002,6 +8069,83 @@ fn func_sign(
     } else {
         0
     }))
+}
+
+fn func_multinomial(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() {
+        return Err("MULTINOMIAL requires at least 1 argument".into());
+    }
+    let values = collect_all(args, cells)?;
+    let mut total = 0u64;
+    let mut denominator = 1.0;
+    for value in values {
+        let number = to_float(&value)?;
+        if !number.is_finite() || number < 0.0 || number.fract() != 0.0 {
+            return Ok(Variant::Error(ExcelError::Num));
+        }
+        let number = number as u64;
+        total = match total.checked_add(number) {
+            Some(total) if total <= 170 => total,
+            _ => return Ok(Variant::Error(ExcelError::Num)),
+        };
+        for factor in 2..=number {
+            denominator *= factor as f64;
+        }
+    }
+    let mut numerator = 1.0;
+    for factor in 2..=total {
+        numerator *= factor as f64;
+    }
+    let result = numerator / denominator;
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(as_integer_if_whole(result.round()))
+}
+
+fn paired_sum<F>(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+    operation: F,
+) -> Result<Variant, String>
+where
+    F: Fn(f64, f64) -> f64,
+{
+    let (left, right) = collect_paired(args, cells, name)?;
+    let result = left
+        .iter()
+        .zip(right.iter())
+        .map(|(a, b)| operation(*a, *b))
+        .sum::<f64>();
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(as_integer_if_whole(result))
+}
+
+fn func_sumx2my2(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    paired_sum(args, cells, "SUMX2MY2", |a, b| a * a - b * b)
+}
+
+fn func_sumx2py2(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    paired_sum(args, cells, "SUMX2PY2", |a, b| a * a + b * b)
+}
+
+fn func_sumxmy2(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    paired_sum(args, cells, "SUMXMY2", |a, b| (a - b) * (a - b))
 }
 
 // ── DGET ─────────────────────────────────────────────────────────────────────
@@ -8498,6 +8642,24 @@ mod tests {
         assert_eq!(calc("=ATANH(1)", &c), Variant::Error(ExcelError::Num));
         assert_eq!(calc("=COT(0)", &c), Variant::Error(ExcelError::DivZero));
         assert_eq!(calc("=COTH(0)", &c), Variant::Error(ExcelError::DivZero));
+    }
+
+    #[test]
+    fn test_combinatorics_and_pairwise_sums() {
+        let c = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Integer(2)),
+            ((3, 1), Variant::Integer(3)),
+            ((1, 2), Variant::Integer(3)),
+            ((2, 2), Variant::Integer(2)),
+            ((3, 2), Variant::Integer(1)),
+        ]);
+        assert_eq!(calc("=COMBINA(5,2)", &c), Variant::Integer(15));
+        assert_eq!(calc("=FACTDOUBLE(7)", &c), Variant::Integer(105));
+        assert_eq!(calc("=MULTINOMIAL(2,3,1)", &c), Variant::Integer(60));
+        assert_eq!(calc("=SUMX2MY2(A1:A3,B1:B3)", &c), Variant::Integer(0));
+        assert_eq!(calc("=SUMX2PY2(A1:A3,B1:B3)", &c), Variant::Integer(28));
+        assert_eq!(calc("=SUMXMY2(A1:A3,B1:B3)", &c), Variant::Integer(8));
     }
 
     #[test]

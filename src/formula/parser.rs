@@ -523,6 +523,35 @@ impl FormulaParser {
             trailing_digits.push(self.advance().unwrap());
         }
 
+        // Some Excel function names contain digits in the middle of the name
+        // (for example SUMX2MY2 and SUMX2PY2), unlike a cell reference whose
+        // digits are its row suffix.  If the complete alphanumeric token is
+        // followed by `(`, treat the suffix as part of the function name;
+        // otherwise restore the position so A1-style references keep their
+        // normal interpretation.
+        if !abs_col && !trailing_digits.is_empty() {
+            let continuation_start = self.pos;
+            while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric() || c == '_') {
+                self.advance();
+            }
+            let continuation_end = self.pos;
+            let mut lookahead = self.pos;
+            while matches!(self.chars.get(lookahead), Some(' ' | '\t')) {
+                lookahead += 1;
+            }
+            if self.chars.get(lookahead) == Some(&'(') {
+                name.push_str(&trailing_digits);
+                name.extend(
+                    self.chars[continuation_start..continuation_end]
+                        .iter()
+                        .map(|c| c.to_ascii_uppercase()),
+                );
+                trailing_digits.clear();
+            } else {
+                self.pos = continuation_start;
+            }
+        }
+
         if abs_col || abs_row {
             // A '$' was seen anywhere in this token: it can only be a cell
             // reference, never a function name (Excel identifiers never
@@ -1010,6 +1039,9 @@ mod tests {
 
         let expr = parse("=ATAN2(1,1)").unwrap();
         assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "ATAN2"));
+
+        let expr = parse("=SUMX2MY2(A1:A3,B1:B3)").unwrap();
+        assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "SUMX2MY2"));
 
         // Cell references with the same letter+digit pattern must still work
         assert_eq!(

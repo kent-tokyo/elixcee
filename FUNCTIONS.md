@@ -320,6 +320,10 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `FLOOR` / `CEILING` | Round down / up to nearest integer | Classic |
 | `FLOOR.MATH` / `CEILING.MATH` | Round down / up to nearest multiple | 2013 |
 | `MROUND` | Round to nearest multiple | Classic |
+| `COMBINA` | Combinations with repetitions | 2013 |
+| `FACTDOUBLE` | Double factorial | Classic |
+| `MULTINOMIAL` | Multinomial coefficient | Classic |
+| `SUMX2MY2` / `SUMX2PY2` / `SUMXMY2` | Pairwise sums of squares and square differences | Classic |
 | `SINH` / `COSH` / `TANH` | Hyperbolic sine / cosine / tangent | Classic |
 | `ASINH` / `ACOSH` / `ATANH` | Inverse hyperbolic functions | 2013 |
 | `SEC` / `SECH` / `CSC` / `CSCH` | Secant / hyperbolic secant / cosecant variants | 2013 |
