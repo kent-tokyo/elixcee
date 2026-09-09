@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 import openpyxl
-from openpyxl.utils.datetime import to_excel
+from openpyxl.utils.datetime import CALENDAR_MAC_1904, to_excel
 
 
 CASES = {
@@ -32,6 +32,7 @@ CASES = {
     "error_value": ("=1/0", "#DIV/0!"),
     "round": ("=ROUND(1.235,2)", 1.24),
     "date": ("=DATE(2024,2,29)", 45351),
+    "date1904": ("=DATE(2024,2,29)", 45351),
     "left": ('=LEFT("elixcee",3)', "eli"),
     "mid": ('=MID("hello",2,3)', "ell"),
     "len": ('=LEN("hello")', 5),
@@ -52,6 +53,7 @@ def run(soffice: str) -> dict:
         root = Path(raw)
         source = root / "formula-oracle.xlsx"
         input_book = openpyxl.Workbook()
+        input_book.epoch = CALENDAR_MAC_1904
         sheet = input_book.active
         sheet.title = "Oracle"
         sheet["A1"], sheet["A2"], sheet["A3"] = 1, 2, 3
@@ -60,6 +62,8 @@ def run(soffice: str) -> dict:
             sheet.cell(row=row, column=1, value=name)
             sheet.cell(row=row, column=2, value=formula)
             sheet.cell(row=row, column=3, value=expected)
+            if name == "date1904":
+                sheet.cell(row=row, column=2).number_format = "yyyy-mm-dd"
         input_book.calculation.fullCalcOnLoad = True
         input_book.calculation.forceFullCalc = True
         input_book.save(source)

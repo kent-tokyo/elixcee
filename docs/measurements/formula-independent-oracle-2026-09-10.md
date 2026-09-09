@@ -12,9 +12,9 @@ independent oracle, not Microsoft Excel.
 
 - Host: macOS arm64
 - Backend: `/opt/homebrew/bin/soffice`
-- Cases: 19 (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, mixed `SUM`, `IF`, `IFERROR`, `ISERROR`, `#DIV/0!`, `ROUND`, `DATE`, `LEFT`, `MID`, `LEN`, `CONCATENATE`, `MATCH`, `VLOOKUP`)
-- Comparable results: 19
-- Matches: 19
+- Cases: 20 (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, mixed `SUM`, `IF`, `IFERROR`, `ISERROR`, `#DIV/0!`, `ROUND`, `DATE`, `DATE` with the 1904 workbook epoch, `LEFT`, `MID`, `LEN`, `CONCATENATE`, `MATCH`, `VLOOKUP`)
+- Comparable results: 20
+- Matches: 20
 - Mismatches: 0
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
 
@@ -25,9 +25,11 @@ The expanded run also covered an unhandled division error, error recovery,
 error inspection, and numeric/text mixed ranges. Error text is recorded as a
 cell result; it is not treated as a successful numeric coercion.
 
-The `DATE` result was normalized from Python `datetime` to Excel serial
-(`45351`) before comparison. This is a fixture-level type normalization, not a
-claim that all date-system behavior is compatible.
+The `DATE` results were normalized from Python `datetime` to the 1900-system
+Excel serial (`45351`) before comparison, including the workbook carrying
+`workbookPr@date1904="1"`. This is a fixture-level type normalization, not a
+claim that all date-system behavior is compatible; VM date-system metadata is
+currently exposed separately and serial correction remains an open boundary.
 
 ## Reproduction
 
@@ -38,5 +40,5 @@ python3 compat/oracle/run-libreoffice-formulas.py \
 
 The script writes its temporary workbook and LibreOffice profile below a
 temporary directory and removes them after the run. This record does not close
-Excel oracle validation, 1904 date-system coverage, error/type coercion,
+Excel oracle validation, full 1904 date-system conversion, error/type coercion,
 dynamic-array boundaries, or the EPPlus/Aspose comparison.
