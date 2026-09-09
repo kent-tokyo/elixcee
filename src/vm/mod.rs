@@ -10490,19 +10490,10 @@ impl Vm {
                 self.assign_scalar_variable(var, v)?;
             }
             Stmt::CellWrite { row, col, value } => {
-                let active = self.active_sheet.clone();
-                self.check_sheet_not_protected(&active, &active)?;
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 let v = self.eval_expr(value)?;
-                self.check_variant_budget(&v)?;
-                self.cells_mut().insert(
-                    (r, c),
-                    CellContent {
-                        formula: None,
-                        value: v,
-                    },
-                );
+                self.set_cell_value(r, c, v)?;
             }
             Stmt::SetCalcMode(mode) => {
                 let m = match mode {
@@ -13097,9 +13088,10 @@ impl Vm {
         if row == 0 || col == 0 {
             return Err("cell coordinates are 1-based and must be positive".to_string());
         }
+        let active = self.active_sheet.clone();
+        self.check_sheet_not_protected(&active, &active)?;
         self.check_variant_budget(&value)?;
         self.record_edit_history();
-        let active = self.active_sheet.clone();
         let mut spill_changed = Vec::new();
         self.clear_spill_for_anchor(&active, (row, col), &mut spill_changed);
         self.formula_plan.remove(&active);
@@ -15803,6 +15795,20 @@ mod tests {
         let mut vm = Vm::new();
         assert!(vm.set_cell_value(0, 1, Variant::Integer(1)).is_err());
         assert!(vm.set_cell_value(1, 0, Variant::Integer(1)).is_err());
+    }
+
+    #[test]
+    fn vba_cell_write_invalidates_formula_dependencies() {
+        let mut vm = Vm::new();
+        vm.set_cell_value(1, 1, Variant::Integer(1)).unwrap();
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+
+        let program = parser::parse("Sub MySub()\n    Cells(1, 1).Value = 7\nEnd Sub\n").unwrap();
+        vm.run_sub(&program, "MySub").unwrap();
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
     }
 
     #[test]

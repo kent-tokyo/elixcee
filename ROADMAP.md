@@ -108,6 +108,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G3 local BUILD: workbook／sheet-local nameと単純structured referenceをqualified formula評価へ接続し、sheet rename・row/column shiftの単純参照更新を回帰固定した。stable sheet IDそのものをformula node keyに使う設計は未完。
 - [x] 部分 BUILD: シート横断dirty graph、循環検出、manual→automatic、rename、cached valueの扱いを統合し、既存の総work・深さ・参照budgetを維持する。sheet delete／完全な構造変更と全budget組合せは未完。
 - [x] G3 local BUILD: cross-sheet dirty closure、循環診断、Manual→Automatic、rename、cached value rollbackを実装・単体検証した。sheet delete／構造変更全体と全budget組合せは未完。
+- [x] G3 VBA write consistency BUILD: `Cells(...).Value =` のVBA scalar writeを、Python writeと同じundo／spill解放／formula dirty invalidation経路へ接続し、後続formulaの再計算を回帰固定した。worksheetイベント自動発火と複数module連鎖は未完。
 - [x] 部分 BUILD: Empty／Error伝播、IF/IFERRORの遅延評価、1900系DATE／日付関数、ROUND系の境界をローカル回帰で固定した。1904 date-systemのVM計算接続、全型変換・丸め規則、独立期待値／Excel oracle校正は未完。
 - [x] 部分 MEASURE: 100／1,000 formulaのchainに加え、Data!A1からCalcシート1,000式へのcross-sheet fan-outを構成し、dirty／forced full再走査の代表セル一致、Manual→Automatic、cycleをrelease profile・macOS arm64で100反復測定した。p50/p95・CPU・RSSを記録し、dirtyが常に高速とは主張しない。大規模topology、独立oracle、Linux／Windowsは未完。詳細は[formula dirty calibration](docs/measurements/formula-dirty-calibration-2026-09-05.md)。
 
