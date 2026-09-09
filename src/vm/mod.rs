@@ -7593,7 +7593,7 @@ impl Vm {
     }
 
     /// Queue a bounded edit to the non-visual shape name of an existing
-    /// two-cell anchor. Geometry, shape content, and relationships remain
+    /// drawing anchor. Geometry, shape content, and relationships remain
     /// unchanged.
     pub fn set_drawing_shape_name(
         &mut self,

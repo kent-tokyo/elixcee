@@ -1245,7 +1245,7 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
-    /// Queue a bounded edit to a two-cell anchor's non-visual shape name.
+    /// Queue a bounded edit to an existing drawing anchor's non-visual shape name.
     fn set_drawing_shape_name(
         &mut self,
         drawing_part: &str,
@@ -4524,7 +4524,7 @@ fn rewrite_drawing_anchors(
     Ok(out)
 }
 
-/// Rewrites only the selected two-cell anchor's non-visual shape name.
+/// Rewrites only the selected drawing anchor's non-visual shape name.
 fn rewrite_drawing_shape_names(
     xml: &str,
     edits: &std::collections::HashMap<usize, String>,
@@ -4536,14 +4536,27 @@ fn rewrite_drawing_shape_names(
         let mut cursor = 0;
         let mut selected = None;
         for current in 0..=anchor_index {
-            let open = out[cursor..]
-                .find("<xdr:twoCellAnchor")
-                .map(|offset| cursor + offset)
+            let candidates = [
+                ("<xdr:twoCellAnchor>", "</xdr:twoCellAnchor>"),
+                ("<xdr:twoCellAnchor ", "</xdr:twoCellAnchor>"),
+                ("<xdr:oneCellAnchor>", "</xdr:oneCellAnchor>"),
+                ("<xdr:oneCellAnchor ", "</xdr:oneCellAnchor>"),
+                ("<xdr:absoluteAnchor>", "</xdr:absoluteAnchor>"),
+                ("<xdr:absoluteAnchor ", "</xdr:absoluteAnchor>"),
+            ];
+            let (open, closing) = candidates
+                .iter()
+                .filter_map(|(opening, closing)| {
+                    out[cursor..]
+                        .find(opening)
+                        .map(|offset| (cursor + offset, *closing))
+                })
+                .min_by_key(|(position, _)| *position)
                 .ok_or_else(|| format!("drawing anchor index {anchor_index} is out of range"))?;
             let close_rel = out[open..]
-                .find("</xdr:twoCellAnchor>")
-                .ok_or_else(|| "drawing twoCellAnchor is unterminated".to_string())?;
-            let close = open + close_rel + "</xdr:twoCellAnchor>".len();
+                .find(closing)
+                .ok_or_else(|| "drawing anchor is unterminated".to_string())?;
+            let close = open + close_rel + closing.len();
             if current == anchor_index {
                 selected = Some((open, close));
                 break;
@@ -8571,6 +8584,21 @@ mod tests {
             &edits
         )
         .is_err());
+    }
+
+    #[test]
+    fn drawing_shape_name_rewriter_supports_all_anchor_kinds() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(1usize, "Absolute & shape".to_string());
+        let source = concat!(
+            "<xdr:wsDr>",
+            "<xdr:oneCellAnchor><xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"1\" name=\"One\"/></xdr:nvPicPr></xdr:pic></xdr:oneCellAnchor>",
+            "<xdr:absoluteAnchor><xdr:sp><xdr:nvSpPr><xdr:cNvPr id=\"2\" name=\"Old\"/></xdr:nvSpPr></xdr:sp></xdr:absoluteAnchor>",
+            "</xdr:wsDr>"
+        );
+        let actual = rewrite_drawing_shape_names(source, &edits).unwrap();
+        assert!(actual.contains("name=\"One\""));
+        assert!(actual.contains("name=\"Absolute &amp; shape\""));
     }
 
     #[test]
