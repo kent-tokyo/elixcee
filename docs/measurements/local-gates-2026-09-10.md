@@ -28,7 +28,7 @@ All self-contained gates passed:
 - version, measurement-boundary, formula-dispatch, OOXML-matrix, and stream
   measurement-validator checks;
 - formatting and diff checks;
-- Rust workspace `--all-targets` tests: 1,673 passed, including Drawing flip, fill, and line-color regressions;
+- Rust workspace `--all-targets` tests: 1,676 passed, including Drawing flip, fill, line-color, line-width, and worksheet code-name event regressions;
 - benchmark smoke, blackbox/CLI/property/XLSX round-trip targets;
 - workspace Clippy with warnings denied, Rustdoc, and offline audit;
 - formula parser/evaluator, VBA parser, and XLSX-reader fuzz smoke, all with
@@ -39,9 +39,9 @@ All self-contained gates passed:
   writes, export parity, and TypeScript declarations;
 - real Chrome browser smoke over HTTP.
 
-This rerun included commit `c6c2122` (`feat: edit drawing shape line colors`); all
-self-contained gates completed successfully after the new Drawing transform
-editing path was added.
+This rerun included commit `7396d86` (`feat: resolve worksheet events by code name`)
+and its ancestors through the Drawing transform editing paths; all self-contained
+gates completed successfully.
 
 The gate output recorded a WASM payload growth of 9.95%, within the 10% local
 baseline limit. The browser smoke returned `ok: true`, read the sample sheet,
