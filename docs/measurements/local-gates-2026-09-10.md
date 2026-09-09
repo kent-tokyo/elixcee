@@ -47,6 +47,22 @@ The gate output recorded a WASM payload growth of 9.95%, within the 10% local
 baseline limit. The browser smoke returned `ok: true`, read the sample sheet,
 and completed write/read round-trip checks.
 
+## Follow-up after the snapshot change
+
+On the same host, a fresh run after the Python snapshot/date1904 changes passed
+version, measurement-boundary, formula-dispatch, OOXML-matrix,
+stream-validator, diff, and format checks. The Rust all-target build then
+stopped at the linker with `errno=28` (`No space left on device`). The
+reproducible command was:
+
+```sh
+env TMPDIR=/private/tmp bash scripts/check-local-gates.sh
+```
+
+This is an environmental incomplete run, not a passing full-gate claim. The
+regenerable `target` cache was removed with `cargo clean` afterward; source
+files and user workbooks were not removed.
+
 ## Boundaries
 
 This is local BUILD and consumer-smoke evidence only. It does not complete the

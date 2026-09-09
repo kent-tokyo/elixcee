@@ -9818,6 +9818,7 @@ impl Vm {
         self.workbook_date1904
     }
 
+    #[cfg_attr(not(feature = "python"), allow(dead_code))]
     pub(crate) fn set_workbook_date1904(&mut self, value: bool) {
         self.workbook_date1904 = value;
     }
