@@ -1219,6 +1219,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to an existing chart series marker size (2..=72).
+    fn set_chart_series_marker_size(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        size: u32,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_series_marker_size(chart_part, series_index, size)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded update to cached category/value points of an existing
     /// chart series. Existing cache kind is preserved and formulas are not
     /// changed.
@@ -4581,24 +4593,29 @@ fn rewrite_chart_series_formulas(
         Ok(())
     }
 
-    fn replace_marker_symbol(series: &mut String, symbol: &str) -> Result<(), String> {
-        let symbol_open = series
-            .find("<c:symbol")
+    fn replace_marker_attr(
+        series: &mut String,
+        element: &str,
+        value: &str,
+        missing_message: &str,
+    ) -> Result<(), String> {
+        let element_open = series
+            .find(element)
             .ok_or_else(|| "chart series marker is missing".to_string())?;
-        let tag_end = series[symbol_open..]
+        let tag_end = series[element_open..]
             .find('>')
-            .map(|offset| symbol_open + offset)
+            .map(|offset| element_open + offset)
             .ok_or_else(|| "chart series marker symbol is unterminated".to_string())?;
-        let tag = &series[symbol_open..=tag_end];
+        let tag = &series[element_open..=tag_end];
         let value_start = tag
             .find("val=\"")
-            .map(|offset| symbol_open + offset + "val=\"".len())
-            .ok_or_else(|| "chart series marker symbol is missing val".to_string())?;
+            .map(|offset| element_open + offset + "val=\"".len())
+            .ok_or_else(|| missing_message.to_string())?;
         let value_end = series[value_start..]
             .find('\"')
             .map(|offset| value_start + offset)
             .ok_or_else(|| "chart series marker symbol is unterminated".to_string())?;
-        series.replace_range(value_start..value_end, symbol);
+        series.replace_range(value_start..value_end, value);
         Ok(())
     }
 
@@ -4631,7 +4648,20 @@ fn rewrite_chart_series_formulas(
             replace_reference(&mut series, "<c:val>", formula)?;
         }
         if let Some(symbol) = edit.marker_symbol.as_deref() {
-            replace_marker_symbol(&mut series, symbol)?;
+            replace_marker_attr(
+                &mut series,
+                "<c:symbol",
+                symbol,
+                "chart marker symbol is missing val",
+            )?;
+        }
+        if let Some(size) = edit.marker_size {
+            replace_marker_attr(
+                &mut series,
+                "<c:size",
+                &size.to_string(),
+                "chart marker size is missing val",
+            )?;
         }
         out.replace_range(open..close, &series);
     }
@@ -10172,6 +10202,7 @@ mod tests {
                 categories: Some("Data & 2026!$A$2:$A$4".to_string()),
                 values: Some("Data & 2026!$B$2:$B$4".to_string()),
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10202,6 +10233,7 @@ mod tests {
                 categories: None,
                 values: None,
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10229,6 +10261,7 @@ mod tests {
                 categories: None,
                 values: None,
                 marker_symbol: Some("diamond".to_string()),
+                marker_size: Some(12),
                 category_cache: None,
                 value_cache: None,
             },
@@ -10241,7 +10274,7 @@ mod tests {
         );
         let actual = rewrite_chart_series_formulas(source, &edits).unwrap();
         assert!(actual.contains("<c:symbol val=\"diamond\"/>"));
-        assert!(actual.contains("<c:size val=\"6\"/>"));
+        assert!(actual.contains("<c:size val=\"12\"/>"));
     }
 
     #[test]
@@ -10254,6 +10287,7 @@ mod tests {
                 categories: None,
                 values: None,
                 marker_symbol: Some("diamond".to_string()),
+                marker_size: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10271,6 +10305,7 @@ mod tests {
                 categories: Some("Sheet1!$A$1".to_string()),
                 values: None,
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10876,6 +10911,7 @@ mod tests {
                 categories: None,
                 values: None,
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: Some(vec!["Jan & Feb".to_string(), "Mar".to_string()]),
                 value_cache: Some(vec!["10".to_string(), "20.5".to_string()]),
             },
@@ -10906,6 +10942,7 @@ mod tests {
                 categories: None,
                 values: None,
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: None,
                 value_cache: Some(vec!["1".to_string()]),
             },
@@ -10931,6 +10968,7 @@ mod tests {
                 categories: None,
                 values: None,
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: None,
                 value_cache: Some(vec!["3.5".to_string()]),
             },

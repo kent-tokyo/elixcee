@@ -71,6 +71,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   only an existing series marker's `<c:symbol val>`. Supported symbols are
   `circle`, `dash`, `diamond`, `dot`, `none`, `picture`, `plus`, `square`,
   `star`, `triangle`, and `x`; a missing marker is rejected.
+- `Vm.set_chart_series_marker_size(chart_part, series_index, size)` updates only
+  an existing marker's `<c:size val>` with the bounded OOXML range 2..72.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`
   rewrites existing category/value cache points while preserving the cache
   kind, formula, format code, and surrounding Chart XML.

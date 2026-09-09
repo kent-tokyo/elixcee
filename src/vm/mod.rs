@@ -853,6 +853,7 @@ pub(crate) struct ChartSeriesEdit {
     pub categories: Option<String>,
     pub values: Option<String>,
     pub marker_symbol: Option<String>,
+    pub marker_size: Option<u32>,
     pub category_cache: Option<Vec<String>>,
     pub value_cache: Option<Vec<String>>,
 }
@@ -7507,6 +7508,7 @@ impl Vm {
                 categories: None,
                 values: None,
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7544,6 +7546,7 @@ impl Vm {
                 categories: None,
                 values: None,
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7592,10 +7595,47 @@ impl Vm {
                 categories: None,
                 values: None,
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: None,
                 value_cache: None,
             });
         edit.marker_symbol = Some(symbol.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series marker size.
+    pub fn set_chart_series_marker_size(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        size: u32,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err(
+                "chart series marker edits require a loaded XLSX/XLSM workbook".to_string(),
+            );
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if !(2..=72).contains(&size) {
+            return Err("chart marker size must be in the range 2..=72".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.marker_size = Some(size);
         Ok(())
     }
 
@@ -7651,6 +7691,7 @@ impl Vm {
                 categories: None,
                 values: None,
                 marker_symbol: None,
+                marker_size: None,
                 category_cache: None,
                 value_cache: None,
             });
