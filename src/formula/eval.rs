@@ -558,6 +558,10 @@ fn eval_func(
         "SORTBY" => func_sortby(args, cells),
         "SEQUENCE" => func_sequence(args, cells),
         "TRANSPOSE" => func_transpose(args, cells),
+        "MUNIT" => func_munit(args, cells),
+        "MMULT" => func_mmult(args, cells),
+        "MDETERM" => func_mdeterm(args, cells),
+        "MINVERSE" => func_minverse(args, cells),
         "TOCOL" => func_tocol(args, cells),
         "TOROW" => func_torow(args, cells),
         "WRAPCOLS" => func_wrapcols(args, cells),
@@ -5959,6 +5963,169 @@ fn func_transpose(
     }
 }
 
+fn matrix_arg(
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<(Vec<Variant>, usize, usize), String> {
+    let values = flatten_array_vals(collect_values(expr, cells)?);
+    let (rows, cols) = array_shape_for_expr(expr, cells, values.len());
+    if rows == 0 || cols == 0 || rows.checked_mul(cols) != Some(values.len()) {
+        return Err(format!("{name}: array must be rectangular"));
+    }
+    Ok((values, rows, cols))
+}
+
+fn func_munit(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("MUNIT requires 1 argument".into());
+    }
+    let n = to_float(&evaluate(&args[0], cells)?)?;
+    if !n.is_finite() || n.fract() != 0.0 || n <= 0.0 || n > 4096.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let n = n as usize;
+    let mut result = vec![Variant::Integer(0); n * n];
+    for i in 0..n {
+        result[i * n + i] = Variant::Integer(1);
+    }
+    Ok(wrap_array(result))
+}
+
+fn func_mmult(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("MMULT requires 2 arguments".into());
+    }
+    let (left, rows, inner) = matrix_arg(&args[0], cells, "MMULT")?;
+    let (right, inner_right, cols) = matrix_arg(&args[1], cells, "MMULT")?;
+    if inner != inner_right {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let mut result = Vec::with_capacity(rows * cols);
+    for r in 0..rows {
+        for c in 0..cols {
+            let mut value = 0.0;
+            for k in 0..inner {
+                value += to_float(&left[r * inner + k])? * to_float(&right[k * cols + c])?;
+            }
+            result.push(as_integer_if_whole(value));
+        }
+    }
+    Ok(wrap_array(result))
+}
+
+fn matrix_numeric(
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<(Vec<f64>, usize), String> {
+    let (values, rows, cols) = matrix_arg(expr, cells, name)?;
+    if rows != cols {
+        return Err(format!("{name}: matrix must be square"));
+    }
+    Ok((
+        values.iter().map(to_float).collect::<Result<Vec<_>, _>>()?,
+        rows,
+    ))
+}
+
+fn func_mdeterm(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("MDETERM requires 1 argument".into());
+    }
+    let (mut matrix, n) = matrix_numeric(&args[0], cells, "MDETERM")?;
+    let mut determinant = 1.0;
+    for pivot in 0..n {
+        let Some(row) = (pivot..n).max_by(|a, b| {
+            matrix[*a * n + pivot]
+                .abs()
+                .total_cmp(&matrix[*b * n + pivot].abs())
+        }) else {
+            unreachable!()
+        };
+        if matrix[row * n + pivot].abs() < 1e-14 {
+            return Ok(Variant::Integer(0));
+        }
+        if row != pivot {
+            for col in 0..n {
+                matrix.swap(pivot * n + col, row * n + col);
+            }
+            determinant = -determinant;
+        }
+        let diagonal = matrix[pivot * n + pivot];
+        determinant *= diagonal;
+        for row in (pivot + 1)..n {
+            let factor = matrix[row * n + pivot] / diagonal;
+            for col in (pivot + 1)..n {
+                matrix[row * n + col] -= factor * matrix[pivot * n + col];
+            }
+        }
+    }
+    Ok(as_integer_if_whole(determinant))
+}
+
+fn func_minverse(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("MINVERSE requires 1 argument".into());
+    }
+    let (matrix, n) = matrix_numeric(&args[0], cells, "MINVERSE")?;
+    let mut augmented = vec![0.0; n * n * 2];
+    for r in 0..n {
+        for c in 0..n {
+            augmented[r * 2 * n + c] = matrix[r * n + c];
+            augmented[r * 2 * n + n + c] = if r == c { 1.0 } else { 0.0 };
+        }
+    }
+    for pivot in 0..n {
+        let Some(row) = (pivot..n).max_by(|a, b| {
+            augmented[*a * 2 * n + pivot]
+                .abs()
+                .total_cmp(&augmented[*b * 2 * n + pivot].abs())
+        }) else {
+            unreachable!()
+        };
+        if augmented[row * 2 * n + pivot].abs() < 1e-14 {
+            return Ok(Variant::Error(ExcelError::Num));
+        }
+        if row != pivot {
+            for c in 0..2 * n {
+                augmented.swap(pivot * 2 * n + c, row * 2 * n + c);
+            }
+        }
+        let diagonal = augmented[pivot * 2 * n + pivot];
+        for c in 0..2 * n {
+            augmented[pivot * 2 * n + c] /= diagonal;
+        }
+        for r in 0..n {
+            if r != pivot {
+                let factor = augmented[r * 2 * n + pivot];
+                for c in 0..2 * n {
+                    augmented[r * 2 * n + c] -= factor * augmented[pivot * 2 * n + c];
+                }
+            }
+        }
+    }
+    let mut result = Vec::with_capacity(n * n);
+    for r in 0..n {
+        for c in 0..n {
+            result.push(as_integer_if_whole(augmented[r * 2 * n + n + c]));
+        }
+    }
+    Ok(wrap_array(result))
+}
+
 // ── RANDARRAY ─────────────────────────────────────────────────────────────────
 //
 // Thread-local xorshift64 PRNG — no external crate needed.
@@ -7025,6 +7192,20 @@ fn array_shape_for_expr(
                     .max(1)
             };
             (dimension(args.first()), dimension(args.get(1)))
+        }
+        FormulaExpr::FuncCall { name, args } if name.eq_ignore_ascii_case("MUNIT") => {
+            let n = args
+                .first()
+                .and_then(|arg| evaluate(arg, cells).ok())
+                .and_then(|value| match value {
+                    Variant::Integer(n) if n > 0 => Some(n as usize),
+                    Variant::Float(n) if n.is_finite() && n.fract() == 0.0 && n > 0.0 => {
+                        Some(n as usize)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(1);
+            (n, n)
         }
         FormulaExpr::FuncCall { name, args } if name.eq_ignore_ascii_case("TRANSPOSE") => {
             let Some(arg) = args.first() else {
@@ -10665,6 +10846,45 @@ mod tests {
             calc("=YEARFRAC(DATE(2020,1,1),DATE(2020,1,2),9)", &cells),
             Variant::Error(ExcelError::Num)
         );
+    }
+
+    #[test]
+    fn test_matrix_functions() {
+        let cells = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Integer(2)),
+            ((2, 1), Variant::Integer(3)),
+            ((2, 2), Variant::Integer(4)),
+        ]);
+        assert_eq!(
+            calc("=MUNIT(2)", &cells),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(0),
+                Variant::Integer(0),
+                Variant::Integer(1),
+            ])
+        );
+        assert_eq!(calc("=MDETERM(A1:B2)", &cells), Variant::Integer(-2));
+        assert_eq!(
+            calc("=MMULT(A1:B2,MUNIT(2))", &cells),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(3),
+                Variant::Integer(4),
+            ])
+        );
+        match calc("=MINVERSE(A1:B2)", &cells) {
+            Variant::Array(values) => {
+                assert!((to_float(&values[0]).unwrap() + 2.0).abs() < 1e-9);
+                assert!((to_float(&values[1]).unwrap() - 1.0).abs() < 1e-9);
+                assert!((to_float(&values[2]).unwrap() - 1.5).abs() < 1e-9);
+                assert!((to_float(&values[3]).unwrap() + 0.5).abs() < 1e-9);
+            }
+            other => panic!("MINVERSE: {:?}", other),
+        }
+        assert_eq!(calc("=MINVERSE(MUNIT(1))", &cells), Variant::Integer(1));
     }
 
     #[test]
