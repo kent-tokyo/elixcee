@@ -8883,6 +8883,7 @@ mod tests {
             "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>New &amp; title</a:t>"
         ));
         assert!(actual.contains("</c:title><c:plotArea><c:layout/></c:plotArea>"));
+        assert_eq!(actual.matches("<c:title>").count(), 1);
     }
 
     #[test]
