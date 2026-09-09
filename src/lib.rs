@@ -1257,6 +1257,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to a drawing anchor's alternative-text description.
+    fn set_drawing_shape_description(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        description: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_shape_description(drawing_part, anchor_index, description)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Move a sheet to an absolute 0-based position among the workbook's sheets.
     ///
     /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
@@ -4525,9 +4537,10 @@ fn rewrite_drawing_anchors(
 }
 
 /// Rewrites only the selected drawing anchor's non-visual shape name.
-fn rewrite_drawing_shape_names(
+fn rewrite_drawing_shape_attribute(
     xml: &str,
     edits: &std::collections::HashMap<usize, String>,
+    attribute: &str,
 ) -> Result<String, String> {
     let mut ordered: Vec<_> = edits.iter().collect();
     ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
@@ -4573,20 +4586,27 @@ fn rewrite_drawing_shape_names(
                 .find('>')
                 .ok_or_else(|| "drawing cNvPr element is unterminated".to_string())?;
         let mut tag = anchor[c_nv_pr..=tag_end].to_string();
-        let attr = "name=";
-        let attr_rel = tag
-            .find(attr)
-            .ok_or_else(|| "drawing cNvPr is missing name attribute".to_string())?;
-        let value_start = attr_rel + attr.len();
-        let quote = tag.as_bytes()[value_start];
-        if quote != b'"' && quote != b'\'' {
-            return Err("drawing cNvPr name attribute is malformed".to_string());
+        let attr = format!("{attribute}=");
+        if let Some(attr_rel) = tag.find(&attr) {
+            let value_start = attr_rel + attr.len();
+            let quote = tag.as_bytes()[value_start];
+            if quote != b'"' && quote != b'\'' {
+                return Err(format!("drawing cNvPr {attribute} attribute is malformed"));
+            }
+            let value_end = tag[value_start + 1..]
+                .find(quote as char)
+                .map(|rel| value_start + 1 + rel)
+                .ok_or_else(|| format!("drawing cNvPr {attribute} attribute is unterminated"))?;
+            tag.replace_range(value_start + 1..value_end, &xml_escape(name));
+        } else if attribute == "descr" {
+            let insert_at = tag
+                .rfind("/>")
+                .or_else(|| tag.rfind('>'))
+                .ok_or_else(|| "drawing cNvPr element is malformed".to_string())?;
+            tag.insert_str(insert_at, &format!(" descr=\"{}\"", xml_escape(name)));
+        } else {
+            return Err(format!("drawing cNvPr is missing {attribute} attribute"));
         }
-        let value_end = tag[value_start + 1..]
-            .find(quote as char)
-            .map(|rel| value_start + 1 + rel)
-            .ok_or_else(|| "drawing cNvPr name attribute is unterminated".to_string())?;
-        tag.replace_range(value_start + 1..value_end, &xml_escape(name));
         let mut replacement = anchor.to_string();
         replacement.replace_range(c_nv_pr..=tag_end, &tag);
         out.replace_range(open..close, &replacement);
@@ -5136,6 +5156,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_pivot_source_edits = !vm.pivot_source_edits.is_empty();
     let has_drawing_anchor_edits = !vm.drawing_anchor_edits.is_empty();
     let has_drawing_shape_name_edits = !vm.drawing_shape_name_edits.is_empty();
+    let has_drawing_shape_description_edits = !vm.drawing_shape_description_edits.is_empty();
     // Keep writer-owned static package parts regenerated. A source raw copy can
     // carry source-only defaults or relationship-id ordering that is valid in
     // isolation but diverges from the writer's carried relationship contract.
@@ -5177,6 +5198,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             }
         }
         for drawing_part in vm.drawing_shape_name_edits.keys() {
+            if !raw_entries.contains_key(drawing_part) {
+                return Err(format!(
+                    "drawing shape edit rejected: source workbook has no {drawing_part}"
+                ));
+            }
+        }
+        for drawing_part in vm.drawing_shape_description_edits.keys() {
             if !raw_entries.contains_key(drawing_part) {
                 return Err(format!(
                     "drawing shape edit rejected: source workbook has no {drawing_part}"
@@ -5406,9 +5434,12 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     }
                 }
                 pivot.into_bytes()
-            } else if (has_drawing_anchor_edits || has_drawing_shape_name_edits)
+            } else if (has_drawing_anchor_edits
+                || has_drawing_shape_name_edits
+                || has_drawing_shape_description_edits)
                 && (vm.drawing_anchor_edits.contains_key(&name)
-                    || vm.drawing_shape_name_edits.contains_key(&name))
+                    || vm.drawing_shape_name_edits.contains_key(&name)
+                    || vm.drawing_shape_description_edits.contains_key(&name))
                 && name.starts_with("xl/drawings/")
                 && name.ends_with(".xml")
                 && !name.contains("/_rels/")
@@ -5428,8 +5459,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 } else {
                     drawing
                 };
-                if let Some(edits) = vm.drawing_shape_name_edits.get(&name) {
-                    rewrite_drawing_shape_names(&drawing, edits)?.into_bytes()
+                let drawing = if let Some(edits) = vm.drawing_shape_name_edits.get(&name) {
+                    rewrite_drawing_shape_attribute(&drawing, edits, "name")?
+                } else {
+                    drawing
+                };
+                if let Some(edits) = vm.drawing_shape_description_edits.get(&name) {
+                    rewrite_drawing_shape_attribute(&drawing, edits, "descr")?.into_bytes()
                 } else {
                     drawing.into_bytes()
                 }
@@ -5451,9 +5487,12 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || (has_pivot_source_edits
                     && name.starts_with("xl/pivotCache/")
                     && name.ends_with(".xml"))
-                || ((has_drawing_anchor_edits || has_drawing_shape_name_edits)
+                || ((has_drawing_anchor_edits
+                    || has_drawing_shape_name_edits
+                    || has_drawing_shape_description_edits)
                     && (vm.drawing_anchor_edits.contains_key(&name)
-                        || vm.drawing_shape_name_edits.contains_key(&name))
+                        || vm.drawing_shape_name_edits.contains_key(&name)
+                        || vm.drawing_shape_description_edits.contains_key(&name))
                     && name.starts_with("xl/drawings/")
                     && name.ends_with(".xml"))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
@@ -8518,7 +8557,7 @@ mod tests {
         let mut edits = std::collections::HashMap::new();
         edits.insert(0usize, "Chart & preview".to_string());
         let source = r#"<xdr:wsDr><xdr:twoCellAnchor><xdr:from/><xdr:to/><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="2" name="Old"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr/></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"#;
-        let actual = rewrite_drawing_shape_names(source, &edits).unwrap();
+        let actual = rewrite_drawing_shape_attribute(source, &edits, "name").unwrap();
         assert!(actual.contains("name=\"Chart &amp; preview\""));
         assert!(actual.contains("<xdr:spPr/></xdr:sp>"));
         assert!(actual.contains("<xdr:from/><xdr:to/>"));
@@ -8529,9 +8568,10 @@ mod tests {
         let mut edits = std::collections::HashMap::new();
         edits.insert(0usize, "Shape".to_string());
         assert!(
-            rewrite_drawing_shape_names(
+            rewrite_drawing_shape_attribute(
                 "<xdr:wsDr><xdr:twoCellAnchor><xdr:sp/></xdr:twoCellAnchor></xdr:wsDr>",
-                &edits
+                &edits,
+                "name"
             )
             .is_err()
         );
@@ -8596,9 +8636,18 @@ mod tests {
             "<xdr:absoluteAnchor><xdr:sp><xdr:nvSpPr><xdr:cNvPr id=\"2\" name=\"Old\"/></xdr:nvSpPr></xdr:sp></xdr:absoluteAnchor>",
             "</xdr:wsDr>"
         );
-        let actual = rewrite_drawing_shape_names(source, &edits).unwrap();
+        let actual = rewrite_drawing_shape_attribute(source, &edits, "name").unwrap();
         assert!(actual.contains("name=\"One\""));
         assert!(actual.contains("name=\"Absolute &amp; shape\""));
+    }
+
+    #[test]
+    fn drawing_shape_description_rewriter_adds_optional_attribute() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, "Accessible & clear".to_string());
+        let source = r#"<xdr:wsDr><xdr:oneCellAnchor><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="1" name="Shape"/></xdr:nvSpPr></xdr:sp></xdr:oneCellAnchor></xdr:wsDr>"#;
+        let actual = rewrite_drawing_shape_attribute(source, &edits, "descr").unwrap();
+        assert!(actual.contains("name=\"Shape\" descr=\"Accessible &amp; clear\""));
     }
 
     #[test]

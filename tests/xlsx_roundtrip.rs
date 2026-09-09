@@ -1286,6 +1286,8 @@ fn edit_chart_series_rewrites_selected_references_on_a_real_fixture() {
         .expect("drawing anchor edit should be accepted");
     vm.set_drawing_shape_name("xl/drawings/drawing1.xml", 0, "Ready & reviewed")
         .expect("drawing shape name edit should be accepted");
+    vm.set_drawing_shape_description("xl/drawings/drawing1.xml", 0, "Ready for review")
+        .expect("drawing shape description edit should be accepted");
     vm.set_chart_series_cache(
         "xl/charts/chart1.xml",
         0,
@@ -1317,6 +1319,7 @@ fn edit_chart_series_rewrites_selected_references_on_a_real_fixture() {
     assert!(drawing.contains("<xdr:to><xdr:col>11</xdr:col>"));
     assert!(drawing.contains("<xdr:row>9</xdr:row>"));
     assert!(drawing.contains("name=\"Ready &amp; reviewed\""));
+    assert!(drawing.contains("descr=\"Ready for review\""));
 }
 
 /// A minimal Pivot cache package exercises the complete loaded-workbook rename
