@@ -24,7 +24,7 @@ use std::sync::{
 };
 #[cfg(feature = "python")]
 use std::time::{Duration, Instant};
-#[cfg(any(feature = "python", test))]
+#[cfg(test)]
 use vm::CellContent;
 #[cfg(any(feature = "python", test))]
 use vm::{FillEdit, StyleAttrEdit};
