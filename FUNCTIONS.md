@@ -279,6 +279,12 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `NORM.S.INV` / `NORMSINV` | Inverse standard normal distribution | 2010 / Classic |
 | `BINOM.DIST` / `BINOMDIST` | Binomial distribution PMF or CDF | 2010 / Classic |
 | `POISSON.DIST` / `POISSON` | Poisson distribution PMF or CDF | 2010 / Classic |
+| `GAMMA` | Gamma function | 2010 |
+| `GAMMALN` / `GAMMALN.PRECISE` | Natural logarithm of gamma function | 2010 / 2013 |
+| `BETA.DIST` / `BETADIST` | Beta distribution PDF or CDF | 2010 / Classic |
+| `BETA.INV` / `BETAINV` | Inverse beta distribution | 2010 / Classic |
+| `CHISQ.DIST` / `CHIDIST` | Chi-squared distribution PDF or CDF | 2010 / Classic |
+| `F.DIST` / `FDIST` | F distribution PDF or CDF | 2010 / Classic |
 
 ### Math & Trigonometry
 

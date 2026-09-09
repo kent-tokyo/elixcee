@@ -148,6 +148,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 
 - [x] G4 統計関数拡張 BUILD: `SUMSQ`、`GEOMEAN`、`HARMEAN`、`DEVSQ`、`AVEDEV`、`PERCENTILE.EXC`、`PERCENTRANK.EXC`、`QUARTILE`／`QUARTILE.INC`／`QUARTILE.EXC`を追加した。exclusive percentile/quartileの境界、正値制約、空入力・範囲外引数を検証し、10ケースのRust回帰テストを追加した。Excel oracle校正と統計関数全体の完全一致は未完。
 - [x] G4 分布関数拡張 BUILD: `NORM.S.DIST`／`NORMSDIST`、`NORM.S.INV`／`NORMSINV`、`BINOM.DIST`／`BINOMDIST`、`POISSON.DIST`／`POISSON`を追加した。PMF/CDF、確率・整数引数の境界を検証する回帰を追加した。近似誤差、Excel oracle校正、分布関数全体の完全一致は未完。
+- [x] G4 特殊関数・分布拡張 BUILD: `GAMMA`、`GAMMALN`、`BETA.DIST`／`BETA.INV`、`CHISQ.DIST`、`F.DIST`を追加した。既存の不完全ベータ・ガンマ近似を再利用し、PDF/CDF・逆関数・境界検査を回帰へ追加した。Excel oracle校正、近似誤差の全域評価、分布関数全体の完全一致は未完。
 
 - [x] G4 dispatcher契約監査: `compat/formula-contracts.json`と`check-formula-dispatch.py --check-contracts`で、mode-rich関数の引数形・対応／未対応mode・回帰テスト参照・oracle未検証状態を機械検査する。Excel oracle fixtureの一致校正は未完。
 - [x] G4 VBA WorksheetFunction BUILD: 数式側に既存実装のある`TEXTJOIN`／`XLOOKUP`／`XMATCH`をVBA `WorksheetFunction` dispatchへ接続し、範囲flatten、空値除外、exact／wildcard match、forward/reverse／binary searchの回帰を追加した。完全な型変換とExcel oracle校正は未完。
