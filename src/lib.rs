@@ -8501,6 +8501,30 @@ mod tests {
     }
 
     #[test]
+    fn drawing_shape_name_rewriter_escapes_name_and_preserves_shape() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, "Chart & preview".to_string());
+        let source = r#"<xdr:wsDr><xdr:twoCellAnchor><xdr:from/><xdr:to/><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="2" name="Old"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr/></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"#;
+        let actual = rewrite_drawing_shape_names(source, &edits).unwrap();
+        assert!(actual.contains("name=\"Chart &amp; preview\""));
+        assert!(actual.contains("<xdr:spPr/></xdr:sp>"));
+        assert!(actual.contains("<xdr:from/><xdr:to/>"));
+    }
+
+    #[test]
+    fn drawing_shape_name_rewriter_rejects_missing_cnvpr() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, "Shape".to_string());
+        assert!(
+            rewrite_drawing_shape_names(
+                "<xdr:wsDr><xdr:twoCellAnchor><xdr:sp/></xdr:twoCellAnchor></xdr:wsDr>",
+                &edits
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn chart_series_cache_rewriter_preserves_formula_and_replaces_points() {
         let mut edits = std::collections::HashMap::new();
         edits.insert(

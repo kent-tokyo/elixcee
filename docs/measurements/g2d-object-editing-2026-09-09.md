@@ -62,7 +62,7 @@ bash scripts/check-local-gates.sh
 
 On the recorded macOS arm64 environment, the Chart title, series-name,
   series-cache, Pivot refresh-policy/field-caption, Drawing anchor/shape-name,
-  and real-fixture targeted tests passed. The full Rust workspace passed 1,615 tests,
+  and real-fixture targeted tests passed. The full Rust workspace passed 1,617 tests,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,
