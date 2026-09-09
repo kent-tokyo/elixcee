@@ -48,9 +48,17 @@ inputs, p50/p95 repetitions, RSS, durable save, and output verification.
 The relationship graph and carry-over paths now parse UTF-8 XML through borrowed
 views instead of cloning each relationship payload into a temporary `String`.
 The targeted offline relationship test and the 54-test `xlsx_roundtrip`
-integration suite passed after this change. This is a small allocation
-reduction only; no speed or RSS improvement is claimed without a fresh
-benchmark.
+integration suite passed after this change. A subsequent low-disk offline
+workspace run also passed 1,681 library tests and every integration/benchmark
+target. This is a small allocation reduction only; no speed or RSS improvement
+is claimed without a fresh benchmark.
+
+Reproduction for the workspace gate:
+
+```bash
+TMPDIR=/private/tmp CARGO_INCREMENTAL=0 RUSTFLAGS='-C debuginfo=0' \
+  cargo test --offline --workspace --all-targets --quiet
+```
 
 ## Baseline reconstruction boundary
 
