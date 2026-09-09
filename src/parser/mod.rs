@@ -721,6 +721,7 @@ impl Parser {
         self.skip_nl();
         Ok(SubDef {
             name,
+            module_name: None,
             params,
             param_types,
             access,
@@ -752,6 +753,7 @@ impl Parser {
         self.skip_nl();
         Ok(FuncDef {
             name,
+            module_name: None,
             params,
             param_types,
             return_type,
@@ -3967,10 +3969,18 @@ pub fn parse_with_span(input: &str) -> Result<Program, ParseErrorWithSpan> {
         });
     }
     let mut parser = Parser::new(tokens, spans);
-    parser.parse_program().map_err(|message| {
+    let mut program = parser.parse_program().map_err(|message| {
         let span = parser.peek_span();
         ParseErrorWithSpan { message, span }
-    })
+    })?;
+    let module_name = program.module_name.clone();
+    for sub in &mut program.subs {
+        sub.module_name = module_name.clone();
+    }
+    for func in &mut program.funcs {
+        func.module_name = module_name.clone();
+    }
+    Ok(program)
 }
 
 // ── Multi-module resolution (Milestone B2) ────────────────────────────────────
@@ -4069,11 +4079,10 @@ pub fn find_cross_module_func_collisions(
         .collect()
 }
 
-/// Bare user-defined type names that appear in 2+ modules. The VM currently
-/// exposes one flat UDT namespace, so silently letting the later module
-/// overwrite the earlier definition would make `Dim value As T` depend on
-/// module traversal order. Callers should reject the project until
-/// module-qualified UDT resolution exists.
+/// Bare user-defined type names that appear in 2+ modules. This is retained
+/// as an informational project scan for callers that want to report possible
+/// scope overlap; the VM resolves bare names against the active module and no
+/// longer rejects this condition by itself.
 pub fn find_cross_module_type_collisions(
     modules: &[(String, Program)],
 ) -> Vec<(String, Vec<String>)> {

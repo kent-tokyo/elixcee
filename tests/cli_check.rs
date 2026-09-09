@@ -291,7 +291,7 @@ fn multi_file_check_reports_a_cross_module_sub_collision() {
 }
 
 #[test]
-fn multi_file_check_reports_a_cross_module_type_collision() {
+fn multi_file_check_accepts_same_named_types_in_separate_modules() {
     let a = write_vba(
         "Type Point\n    X As Long\nEnd Type\nSub Main()\n    x = 1\nEnd Sub\n",
         "type_collide_a",
@@ -303,16 +303,9 @@ fn multi_file_check_reports_a_cross_module_type_collision() {
         .expect("run elixcee binary");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let v: Value = serde_json::from_str(stdout.trim()).expect("valid json");
-    assert!(!output.status.success(), "{:?}", v);
-    assert_eq!(v["ok"], false);
-    let diags = v["diagnostics"].as_array().unwrap();
-    assert!(
-        diags.iter().any(|d| d["code"] == "E1012"),
-        "expected an E1012 diagnostic: {:?}",
-        v
-    );
-    let diagnostic = diags.iter().find(|d| d["code"] == "E1012").unwrap();
-    assert_eq!(diagnostic["location"]["line"], 1);
+    assert!(output.status.success(), "{:?}", v);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["diagnostics"], serde_json::json!([]));
 }
 
 #[test]

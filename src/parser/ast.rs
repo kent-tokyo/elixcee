@@ -766,6 +766,10 @@ pub struct ClassFieldDef {
 #[derive(Debug, Clone)]
 pub struct SubDef {
     pub name: String,
+    /// Module scope used for resolving bare user-defined types. `None` is
+    /// retained for hand-built ASTs and single-source callers without a
+    /// declared module name.
+    pub module_name: Option<String>,
     pub params: Vec<String>,
     pub param_types: Vec<Option<String>>,
     pub access: AccessModifier,
@@ -775,6 +779,8 @@ pub struct SubDef {
 #[derive(Debug, Clone)]
 pub struct FuncDef {
     pub name: String,
+    /// Module scope used for resolving bare user-defined types.
+    pub module_name: Option<String>,
     pub params: Vec<String>,
     pub param_types: Vec<Option<String>>,
     pub return_type: Option<String>,

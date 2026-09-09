@@ -1164,6 +1164,10 @@ pub struct Vm {
     /// Currently active sheet name (lowercase).
     pub active_sheet: String,
     pub variables: HashMap<String, Variant>,
+    /// Module scope of the currently executing standard/class procedure.
+    /// Bare UDT names resolve against this module before the compatibility
+    /// fallback to the flat type namespace.
+    current_module_scope: Option<String>,
     pub calc_mode: CalculationMode,
     /// Whether explicit event dispatch is enabled. This mirrors
     /// `Application.EnableEvents`; events are never inferred from ordinary
@@ -1661,6 +1665,23 @@ pub struct Vm {
 }
 
 impl Vm {
+    /// Resolve a UDT using the active procedure's module scope first. A
+    /// qualified name is already unambiguous; a bare name falls back to the
+    /// legacy flat namespace for hand-built/single-module programs.
+    fn resolve_type_fields(&self, type_name: &str) -> Option<Vec<(String, String)>> {
+        if type_name.contains('.') {
+            return self.type_defs.get(type_name).cloned();
+        }
+        if let Some(module) = self.current_module_scope.as_deref()
+            && let Some(fields) =
+                self.type_defs
+                    .get(&format!("{}.{}", module.to_lowercase(), type_name))
+        {
+            return Some(fields.clone());
+        }
+        self.type_defs.get(type_name).cloned()
+    }
+
     pub fn new() -> Self {
         let mut sheets = HashMap::new();
         sheets.insert("sheet1".into(), HashMap::new());
@@ -1669,6 +1690,7 @@ impl Vm {
             sheet_order: vec!["sheet1".into()],
             active_sheet: "sheet1".into(),
             variables: HashMap::new(),
+            current_module_scope: None,
             calc_mode: CalculationMode::Automatic,
             enable_events: true,
             error_on_msgbox: false,
@@ -9573,10 +9595,10 @@ impl Vm {
     /// (module_name, Program) pairs. Rejects the run at load time if any
     /// bare Sub or Function name collides across modules — the flat merge
     /// used for in-body calls can't express VBA's own-module-first/Private
-    /// scoping, so a colliding name is refused rather than resolved
-    /// silently (see `parser::find_cross_module_sub_collisions`). Otherwise
-    /// behaves like `run_sub`, generalized to N modules; `entrypoint` may be
-    /// a bare name or a `Module.Sub`-qualified one.
+    /// scoping, so a colliding procedure is refused rather than resolved
+    /// silently. UDT names are module-scoped and may legitimately collide.
+    /// Otherwise behaves like `run_sub`, generalized to N modules;
+    /// `entrypoint` may be a bare name or a `Module.Sub`-qualified one.
     pub fn run_sub_multi(
         &mut self,
         modules: &[(String, Program)],
@@ -9600,14 +9622,6 @@ impl Vm {
                 mods.join("', '")
             ));
         }
-        let type_collisions = parser::find_cross_module_type_collisions(modules);
-        if let Some((name, mods)) = type_collisions.first() {
-            return Err(format!(
-                "duplicate Type '{}' across modules '{}' — cross-module UDT resolution isn't supported yet; rename one of them",
-                name,
-                mods.join("', '")
-            ));
-        }
         for (_, program) in modules {
             if let Some(name) = parser::find_type_collisions(program).first() {
                 return Err(format!(
@@ -9616,6 +9630,26 @@ impl Vm {
                 ));
             }
         }
+
+        // Files without `Attribute VB_Name` still receive a stable module
+        // name from the multi-module loader. Stamp that name onto cloned
+        // procedure definitions so bare UDT lookup works for both declared
+        // and derived module names.
+        let scoped_modules: Vec<(String, Program)> = modules
+            .iter()
+            .map(|(module_name, program)| {
+                let mut program = program.clone();
+                let scope = Some(module_name.to_lowercase());
+                for sub in &mut program.subs {
+                    sub.module_name = scope.clone();
+                }
+                for func in &mut program.funcs {
+                    func.module_name = scope.clone();
+                }
+                (module_name.to_lowercase(), program)
+            })
+            .collect();
+        let modules = scoped_modules;
 
         self.msgbox_log.clear();
         self.last_resolution_failure = None;
@@ -9642,7 +9676,7 @@ impl Vm {
         self.user_funcs.clear();
         self.user_subs.clear();
         self.current_class_instances.clear();
-        for (module_name, program) in modules {
+        for (module_name, program) in &modules {
             if program.is_class_module {
                 self.class_defs.insert(
                     module_name.clone(),
@@ -9697,9 +9731,9 @@ impl Vm {
         // `main.rs`'s own multi-module `elixcee check` path already does,
         // or a legitimate unqualified cross-module call would be
         // misreported as undefined.
-        for (name, program) in modules {
+        for (name, program) in &modules {
             let mut other_module_names: HashSet<String> = HashSet::new();
-            for (other_name, other_program) in modules {
+            for (other_name, other_program) in &modules {
                 if other_name != name && !other_program.is_class_module {
                     other_module_names.extend(other_program.subs.iter().map(|s| s.name.clone()));
                     other_module_names.extend(other_program.funcs.iter().map(|f| f.name.clone()));
@@ -9711,7 +9745,7 @@ impl Vm {
             }
         }
 
-        let sub = match parser::resolve_entrypoint(modules, entrypoint) {
+        let sub = match parser::resolve_entrypoint(&modules, entrypoint) {
             EntrypointResolution::Found(sub) => sub.clone(),
             EntrypointResolution::NotFound => {
                 return Err(format!("Sub '{}' not found", entrypoint));
@@ -9759,7 +9793,10 @@ impl Vm {
             procedure_name: sub.name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = sub.module_name.clone();
         let result = self.exec_body(&sub.body, |f| matches!(f, ExitKind::Sub));
+        self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         result?;
         for (p, old) in saved {
@@ -9798,9 +9835,12 @@ impl Vm {
             procedure_name: func.name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = func.module_name.clone();
         let result = self.exec_body(&func.body, |f| {
             matches!(f, ExitKind::Function | ExitKind::Sub)
         });
+        self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         result?;
         let ret_val = self.variables.remove(&ret_name).unwrap_or(Variant::Empty);
@@ -11183,8 +11223,12 @@ impl Vm {
                 }
             }
             Stmt::DimRecord { var, type_name } => {
-                if let Some(fields) = self.type_defs.get(type_name).cloned() {
-                    let record = make_record_default(&fields, &self.type_defs);
+                if let Some(fields) = self.resolve_type_fields(type_name) {
+                    let record = make_record_default(
+                        &fields,
+                        &self.type_defs,
+                        self.current_module_scope.as_deref(),
+                    );
                     self.variables.insert(var.clone(), record);
                 } else if matches!(
                     type_name.as_str(),
@@ -11247,8 +11291,12 @@ impl Vm {
                     .transpose()?
                     .unwrap_or(-1.0) as i64;
                 let len = upper.saturating_add(1) as usize;
-                let element = if let Some(fields) = self.type_defs.get(type_name).cloned() {
-                    make_record_default(&fields, &self.type_defs)
+                let element = if let Some(fields) = self.resolve_type_fields(type_name) {
+                    make_record_default(
+                        &fields,
+                        &self.type_defs,
+                        self.current_module_scope.as_deref(),
+                    )
                 } else {
                     Variant::Empty
                 };
@@ -13724,6 +13772,7 @@ fn closest_match(requested: &str, candidates: &[String]) -> Option<String> {
 fn make_record_default(
     fields: &[(String, String)],
     type_defs: &HashMap<String, Vec<(String, String)>>,
+    module_scope: Option<&str>,
 ) -> Variant {
     let map: HashMap<String, Variant> = fields
         .iter()
@@ -13734,8 +13783,11 @@ fn make_record_default(
                 "boolean" => Variant::Boolean(false),
                 "string" => Variant::Str(String::new()),
                 other => {
-                    if let Some(nested) = type_defs.get(other) {
-                        make_record_default(nested, type_defs)
+                    let nested = module_scope
+                        .and_then(|module| type_defs.get(&format!("{module}.{other}")))
+                        .or_else(|| type_defs.get(other));
+                    if let Some(nested) = nested {
+                        make_record_default(nested, type_defs, module_scope)
                     } else {
                         Variant::Empty
                     }
@@ -21936,21 +21988,22 @@ mod tests {
     }
 
     #[test]
-    fn run_sub_multi_rejects_a_genuine_type_collision_before_binding() {
+    fn run_sub_multi_resolves_bare_udts_in_their_own_module_scope() {
         let modules = vec![
             module(
                 "module1",
-                "Type Point\n    X As Long\nEnd Type\nSub Main()\n    x = 1\nEnd Sub\n",
+                "Type Point\n    X As Long\nEnd Type\nSub Main()\n    Dim p As Point\n    p.X = 11\n    x = p.X\nEnd Sub\n",
             ),
-            module("module2", "Type point\n    Y As Long\nEnd Type\n"),
+            module(
+                "module2",
+                "Type point\n    Y As Long\nEnd Type\nSub Other()\n    Dim p As point\n    p.Y = 22\n    y = p.Y\nEnd Sub\n",
+            ),
         ];
         let mut vm = Vm::new();
-        let err = vm.run_sub_multi(&modules, "Module1.Main").unwrap_err();
-        assert!(err.contains("duplicate Type 'point'"), "{:?}", err);
-        assert!(
-            !vm.type_defs.contains_key("point"),
-            "a colliding UDT must not be silently installed"
-        );
+        vm.run_sub_multi(&modules, "Module1.Main").unwrap();
+        assert_eq!(vm.variables["x"], Variant::Integer(11));
+        vm.run_sub_multi(&modules, "Module2.Other").unwrap();
+        assert_eq!(vm.variables["y"], Variant::Integer(22));
     }
 
     #[test]
