@@ -1254,6 +1254,17 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to the first chart data-labels show-percent flag.
+    fn set_chart_data_labels_show_percent(
+        &mut self,
+        chart_part: &str,
+        show_percent: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_data_labels_show_percent(chart_part, show_percent)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -5952,6 +5963,10 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                             show_series_name,
                         )?;
                     }
+                    if let Some(show_percent) = edit.show_percent {
+                        chart =
+                            rewrite_chart_data_labels_flag(&chart, "showPercent", show_percent)?;
+                    }
                 }
                 chart.into_bytes()
             } else if (allow_sheet_rename || has_pivot_source_edits)
@@ -9223,6 +9238,17 @@ mod tests {
         assert!(
             actual.contains("showVal=\"1\" showSerName=\"1\"")
                 && actual.contains("<c:showLegendKey val=\"1\"/>")
+        );
+    }
+
+    #[test]
+    fn chart_data_labels_rewriter_updates_show_percent() {
+        let source =
+            r#"<c:chart><c:dLbls showCat="1"><c:showLeaderLines val="1"/></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_flag(source, "showPercent", true).unwrap();
+        assert!(
+            actual.contains("showCat=\"1\" showPercent=\"1\"")
+                && actual.contains("<c:showLeaderLines val=\"1\"/>")
         );
     }
 
