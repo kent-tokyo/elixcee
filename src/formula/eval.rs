@@ -506,6 +506,10 @@ fn eval_func(
         "COVARIANCE.P" => func_covariance_p(args, cells),
         "NORM.DIST" | "NORMDIST" => func_norm_dist(args, cells),
         "NORM.INV" | "NORMINV" => func_norm_inv(args, cells),
+        "NORM.S.DIST" | "NORMSDIST" => func_norm_s_dist(args, cells),
+        "NORM.S.INV" | "NORMSINV" => func_norm_s_inv(args, cells),
+        "BINOM.DIST" | "BINOMDIST" => func_binom_dist(args, cells),
+        "POISSON.DIST" | "POISSON" => func_poisson_dist(args, cells),
         "T.DIST" => func_t_dist(args, cells),
         // ── Rounding ─────────────────────────────────────────────────────────
         "FLOOR" | "FLOOR.MATH" => func_floor(args, cells),
@@ -4360,6 +4364,105 @@ fn func_norm_inv(
         return Ok(Variant::Error(ExcelError::Num));
     }
     Ok(Variant::Float(mean + std * norm_ppf(p)))
+}
+
+fn func_norm_s_dist(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("NORM.S.DIST requires 2 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let cumulative = is_truthy(&evaluate(&args[1], cells)?);
+    Ok(Variant::Float(if cumulative {
+        norm_cdf(x, 0.0, 1.0)
+    } else {
+        norm_pdf(x, 0.0, 1.0)
+    }))
+}
+
+fn func_norm_s_inv(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("NORM.S.INV requires 1 argument".into());
+    }
+    let p = to_float(&evaluate(&args[0], cells)?)?;
+    if !(0.0..1.0).contains(&p) {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(norm_ppf(p)))
+}
+
+fn binom_coeff(n: i64, k: i64) -> f64 {
+    if k < 0 || k > n {
+        return 0.0;
+    }
+    let k = k.min(n - k);
+    (1..=k).fold(1.0, |value, i| value * (n - k + i) as f64 / i as f64)
+}
+
+fn func_binom_dist(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("BINOM.DIST requires 4 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let n = to_float(&evaluate(&args[1], cells)?)?;
+    let p = to_float(&evaluate(&args[2], cells)?)?;
+    let cumulative = is_truthy(&evaluate(&args[3], cells)?);
+    if !x.is_finite()
+        || !n.is_finite()
+        || x.fract() != 0.0
+        || n.fract() != 0.0
+        || x < 0.0
+        || n < 0.0
+        || x > n
+        || !(0.0..=1.0).contains(&p)
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let x = x as i64;
+    let n = n as i64;
+    let probability = |successes: i64| {
+        binom_coeff(n, successes)
+            * p.powi(successes as i32)
+            * (1.0 - p).powi((n - successes) as i32)
+    };
+    let result = if cumulative {
+        (0..=x).map(probability).sum()
+    } else {
+        probability(x)
+    };
+    Ok(Variant::Float(result))
+}
+
+fn func_poisson_dist(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("POISSON.DIST requires 3 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let mean = to_float(&evaluate(&args[1], cells)?)?;
+    let cumulative = is_truthy(&evaluate(&args[2], cells)?);
+    if !x.is_finite() || x.fract() != 0.0 || x < 0.0 || !mean.is_finite() || mean <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let x = x as i64;
+    let probability =
+        |k: i64| (-mean).exp() * mean.powi(k as i32) / (1..=k).fold(1.0, |v, i| v * i as f64);
+    let result = if cumulative {
+        (0..=x).map(probability).sum()
+    } else {
+        probability(x)
+    };
+    Ok(Variant::Float(result))
 }
 
 /// Natural log of gamma function.
@@ -10287,5 +10390,37 @@ mod tests {
             Variant::Float(0.6)
         );
         assert!(evaluate(&fparse("=GEOMEAN(A1:A4)").unwrap(), &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn test_distribution_functions() {
+        let cells = HashMap::new();
+        assert!(
+            matches!(calc("=NORM.S.DIST(0,TRUE)", &cells), Variant::Float(v) if (v - 0.5).abs() < 1e-9)
+        );
+        assert!(
+            matches!(calc("=NORM.S.DIST(0,FALSE)", &cells), Variant::Float(v) if (v - 0.39894228).abs() < 1e-7)
+        );
+        assert!(matches!(calc("=NORM.S.INV(0.5)", &cells), Variant::Float(v) if v.abs() < 1e-6));
+        assert!(
+            matches!(calc("=BINOM.DIST(2,4,0.5,FALSE)", &cells), Variant::Float(v) if (v - 0.375).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=BINOM.DIST(2,4,0.5,TRUE)", &cells), Variant::Float(v) if (v - 0.6875).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=POISSON.DIST(0,2,FALSE)", &cells), Variant::Float(v) if (v - 0.13533528).abs() < 1e-7)
+        );
+        assert!(
+            matches!(calc("=POISSON.DIST(2,2,TRUE)", &cells), Variant::Float(v) if (v - 0.6766764).abs() < 1e-6)
+        );
+        assert_eq!(
+            calc("=BINOM.DIST(5,4,0.5,FALSE)", &cells),
+            Variant::Error(ExcelError::Num)
+        );
+        assert_eq!(
+            calc("=POISSON.DIST(1,0,TRUE)", &cells),
+            Variant::Error(ExcelError::Num)
+        );
     }
 }
