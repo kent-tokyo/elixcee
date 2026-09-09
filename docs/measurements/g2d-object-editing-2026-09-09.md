@@ -85,6 +85,10 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`
   rewrites existing category/value cache points while preserving the cache
   kind, formula, format code, and surrounding Chart XML.
+- `Vm.set_chart_series_line_color(chart_part, series_index, color)` updates
+  only an existing series solid RGB line color. The six-digit RGB value may
+  include `#`; theme colors, gradients, missing style chains, and unsupported
+  series indexes are rejected rather than synthesized.
 - `Vm.set_drawing_anchor(drawing_part, anchor_index, from_row, from_col,
   to_row, to_col)` rewrites only the `<xdr:from>` and `<xdr:to>` cell markers
   of the selected two-cell anchor. Public cell coordinates are 1-based.

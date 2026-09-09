@@ -464,6 +464,12 @@ class Vm:
         """Update cached category/value points without changing formulas."""
         ...
 
+    def set_chart_series_line_color(
+        self, chart_part: str, series_index: int, color: str
+    ) -> None:
+        """Update an existing chart series solid line color using 6-digit RGB."""
+        ...
+
     def set_pivot_worksheet_source(
         self,
         cache_part: str,

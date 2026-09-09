@@ -123,7 +123,7 @@ For loaded XLSX/XLSM sheets, `Vm.sheet_id(name)` and
 `Vm.sheet_name_for_id(sheet_id)` expose stable source identities independently
 of tab order and rename operations; new or ODS sheets have no inferred ID.
 Loaded workbooks also support bounded edits to selected existing Chart-series
-formulas, caches, marker attributes, smooth flags, negative-value display and
+formulas, caches, marker attributes, solid RGB line colors, smooth flags, negative-value display and
 series visibility flags, plus the first Chart
 title text run; Chart creation and general object editing remain outside the
 current contract.
@@ -173,7 +173,7 @@ hidden rows/columns, and many unknown OOXML parts. Macro projects in `.xlsm`
 files are preserved during supported round trips. Features not modeled by the
 writer can still be lost or disconnected. Existing Drawing/relationship chains
 are preserved on tested paths, and bounded APIs can update selected Chart-series
-formulas, caches, marker attributes, smooth flags, negative-value display and series visibility flags, Chart title text, two-cell
+formulas, caches, marker attributes, solid RGB line colors, smooth flags, negative-value display and series visibility flags, Chart title text, two-cell
 Drawing anchors, and worksheet-backed Pivot source fields. Drawing shape metadata and selected solid fill/line style
 attributes (rotation, flips, RGB/ARGB fill and line color, line width, and
 preset dash) are also available through bounded APIs. Chart creation, general

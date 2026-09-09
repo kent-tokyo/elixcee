@@ -1319,6 +1319,9 @@ pub struct Vm {
     pub(crate) sheet_rename_only: bool,
     /// Explicit chart series edits keyed by chart part and zero-based series index.
     pub(crate) chart_series_edits: HashMap<String, HashMap<usize, ChartSeriesEdit>>,
+    /// Explicit chart series solid-line color edits keyed by chart part and
+    /// zero-based series index. Values are normalized six-digit RGB strings.
+    pub(crate) chart_series_line_color_edits: HashMap<String, HashMap<usize, String>>,
     /// Explicit chart title edits keyed by chart part.
     pub(crate) chart_title_edits: HashMap<String, ChartTitleEdit>,
     /// Explicit chart legend-position edits keyed by chart part.
@@ -1825,6 +1828,7 @@ impl Vm {
             ooxml_structural_edit_dirty: false,
             sheet_rename_only: false,
             chart_series_edits: HashMap::new(),
+            chart_series_line_color_edits: HashMap::new(),
             chart_title_edits: HashMap::new(),
             chart_legend_position_edits: HashMap::new(),
             chart_style_edits: HashMap::new(),
@@ -7817,6 +7821,32 @@ impl Vm {
             });
         edit.category_cache = categories;
         edit.value_cache = values;
+        Ok(())
+    }
+
+    /// Queue a bounded update to the existing solid RGB line color of one
+    /// chart series. Theme colors, gradients, and missing line properties are
+    /// rejected rather than guessed or synthesized.
+    pub fn set_chart_series_line_color(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        color: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let color = color.strip_prefix('#').unwrap_or(color);
+        if color.len() != 6 || !color.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("chart series line color must be a 6-digit RGB hex string".to_string());
+        }
+        self.chart_series_line_color_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .insert(series_index, color.to_ascii_uppercase());
         Ok(())
     }
 
