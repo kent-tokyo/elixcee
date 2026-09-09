@@ -13342,7 +13342,15 @@ impl Vm {
             .insert((row, col));
         self.workbook_formula_tracking_valid = true;
         self.workbook_formula_structure_dirty = true;
-        Ok(())
+        self.dispatch_worksheet_change_after_range_write(
+            &self.active_sheet.clone(),
+            Rect {
+                start_row: row,
+                start_col: col,
+                end_row: row,
+                end_col: col,
+            },
+        )
     }
 
     /// Register a simple A1 range scoped to one worksheet for workbook formula evaluation.
@@ -17919,6 +17927,19 @@ mod tests {
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
         assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
         assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
+    }
+
+    #[test]
+    fn run_sub_with_events_auto_dispatches_after_formula_write() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1\").Formula = \"=1+1\"\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    Cells(1,2).Value = Target.Value\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
     }
 
     #[test]
