@@ -358,6 +358,12 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `VALUETOTEXT` | Convert any value to its text representation | 2024/365 |
 | `REPT` | Repeat a text string N times | Classic |
 | `NUMBERVALUE` | Parse number with locale-specific decimal/group separators | 2013 |
+| `CLEAN` | Remove non-printing control characters | Classic |
+| `T` | Return text or empty text for non-text values | Classic |
+| `FIXED` | Format a number with fixed decimal places | Classic |
+| `DOLLAR` | Format a number as currency text | Classic |
+| `BASE` | Convert an integer to a string in a base from 2 to 36 | 2013 |
+| `DECIMAL` | Convert a base-2-to-36 string to an integer | 2013 |
 
 ### Date & Time
 

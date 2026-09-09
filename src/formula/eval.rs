@@ -443,6 +443,12 @@ fn eval_func(
         "TEXTAFTER" => func_textafter(args, cells),
         "VALUETOTEXT" => func_valuetotext(args, cells),
         "TRIM" => func_trim(args, cells),
+        "CLEAN" => func_clean(args, cells),
+        "T" => func_t(args, cells),
+        "FIXED" => func_fixed(args, cells),
+        "DOLLAR" => func_dollar(args, cells),
+        "BASE" => func_base(args, cells),
+        "DECIMAL" => func_decimal(args, cells),
         "UNICHAR" => func_char(args, cells),
         "UNICODE" => func_code(args, cells),
         "UPPER" => func_upper(args, cells),
@@ -2912,6 +2918,176 @@ fn func_trim(
     let s = to_str(&evaluate(&args[0], cells)?);
     let result = s.split_whitespace().collect::<Vec<_>>().join(" ");
     Ok(Variant::Str(result))
+}
+
+fn func_clean(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("CLEAN requires 1 argument".into());
+    }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    Ok(Variant::Str(
+        text.chars().filter(|c| *c as u32 > 31).collect(),
+    ))
+}
+
+fn func_t(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("T requires 1 argument".into());
+    }
+    match evaluate(&args[0], cells)? {
+        Variant::Str(text) => Ok(Variant::Str(text)),
+        _ => Ok(Variant::Str(String::new())),
+    }
+}
+
+fn grouped_decimal(mut text: String) -> String {
+    let negative = text.starts_with('-');
+    if negative {
+        text.remove(0);
+    }
+    let (integer, fraction) = text.split_once('.').unwrap_or((&text, ""));
+    let mut grouped = String::new();
+    for (index, ch) in integer.chars().enumerate() {
+        if index > 0 && (integer.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    if !fraction.is_empty() {
+        grouped.push('.');
+        grouped.push_str(fraction);
+    }
+    if negative {
+        format!("-{grouped}")
+    } else {
+        grouped
+    }
+}
+
+fn fixed_number(value: f64, decimals: i32, no_commas: bool) -> Result<String, String> {
+    if !value.is_finite() || !(-100..=100).contains(&decimals) {
+        return Err("FIXED: invalid number of decimals".into());
+    }
+    let factor = 10_f64.powi(decimals.abs());
+    let rounded = if decimals >= 0 {
+        (value * factor).round() / factor
+    } else {
+        (value / factor).round() * factor
+    };
+    let text = if decimals >= 0 {
+        format!("{rounded:.prec$}", prec = decimals as usize)
+    } else {
+        format!("{rounded:.0}")
+    };
+    Ok(if no_commas {
+        text
+    } else {
+        grouped_decimal(text)
+    })
+}
+
+fn func_fixed(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 3 {
+        return Err("FIXED requires 1 to 3 arguments".into());
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    let decimals = if args.len() >= 2 {
+        to_float(&evaluate(&args[1], cells)?)? as i32
+    } else {
+        2
+    };
+    let no_commas = args.len() == 3 && is_truthy(&evaluate(&args[2], cells)?);
+    fixed_number(value, decimals, no_commas).map(Variant::Str)
+}
+
+fn func_dollar(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("DOLLAR requires 1 or 2 arguments".into());
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    let decimals = if args.len() == 2 {
+        to_float(&evaluate(&args[1], cells)?)? as i32
+    } else {
+        2
+    };
+    let text = fixed_number(value.abs(), decimals, false).map_err(|e| format!("DOLLAR: {e}"))?;
+    Ok(Variant::Str(if value < 0.0 {
+        format!("-${}", text)
+    } else {
+        format!("${}", text)
+    }))
+}
+
+fn func_base(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("BASE requires 2 or 3 arguments".into());
+    }
+    let number = to_float(&evaluate(&args[0], cells)?)?;
+    let radix = to_float(&evaluate(&args[1], cells)?)?;
+    let min_length = if args.len() == 3 {
+        to_float(&evaluate(&args[2], cells)?)?
+    } else {
+        0.0
+    };
+    if !number.is_finite()
+        || number < 0.0
+        || number.fract() != 0.0
+        || !(2.0..=36.0).contains(&radix)
+        || min_length < 0.0
+        || min_length.fract() != 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let mut n = number as u64;
+    let radix = radix as u64;
+    let digits = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut result = if n == 0 {
+        "0".to_string()
+    } else {
+        let mut out = String::new();
+        while n > 0 {
+            out.push(digits[(n % radix) as usize] as char);
+            n /= radix;
+        }
+        out.chars().rev().collect()
+    };
+    while result.len() < min_length as usize {
+        result.insert(0, '0');
+    }
+    Ok(Variant::Str(result))
+}
+
+fn func_decimal(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("DECIMAL requires 2 arguments".into());
+    }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    let radix = to_float(&evaluate(&args[1], cells)?)?;
+    if !(2.0..=36.0).contains(&radix) || radix.fract() != 0.0 || text.is_empty() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    match u64::from_str_radix(&text, radix as u32) {
+        Ok(value) => Ok(as_integer_if_whole(value as f64)),
+        Err(_) => Ok(Variant::Error(ExcelError::Num)),
+    }
 }
 
 fn func_substitute(
@@ -10885,6 +11061,32 @@ mod tests {
             other => panic!("MINVERSE: {:?}", other),
         }
         assert_eq!(calc("=MINVERSE(MUNIT(1))", &cells), Variant::Integer(1));
+    }
+
+    #[test]
+    fn test_text_and_base_conversion_functions() {
+        let cells = HashMap::new();
+        assert_eq!(
+            calc("=CLEAN(\"a\"&CHAR(10)&\"b\")", &cells),
+            Variant::Str("ab".into())
+        );
+        assert_eq!(calc("=T(\"text\")", &cells), Variant::Str("text".into()));
+        assert_eq!(calc("=T(42)", &cells), Variant::Str(String::new()));
+        assert_eq!(
+            calc("=FIXED(1234.567,2,FALSE)", &cells),
+            Variant::Str("1,234.57".into())
+        );
+        assert_eq!(
+            calc("=FIXED(1234.567,0,TRUE)", &cells),
+            Variant::Str("1235".into())
+        );
+        assert_eq!(
+            calc("=DOLLAR(-1234.5,2)", &cells),
+            Variant::Str("-$1,234.50".into())
+        );
+        assert_eq!(calc("=BASE(255,16,4)", &cells), Variant::Str("00FF".into()));
+        assert_eq!(calc("=DECIMAL(\"FF\",16)", &cells), Variant::Integer(255));
+        assert_eq!(calc("=BASE(10,1)", &cells), Variant::Error(ExcelError::Num));
     }
 
     #[test]

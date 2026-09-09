@@ -11,6 +11,7 @@
 - Formula coverage: add `DAYS360` and `YEARFRAC` day-count conventions.
 - Formula coverage: add depreciation, effective/nominal rate, and equivalent-growth financial functions.
 - Formula coverage: add identity, multiplication, determinant, and inverse matrix functions.
+- Formula coverage: add text cleanup/formatting and base conversion functions.
 
 次の変更はここに記録します。
 
