@@ -509,7 +509,12 @@ fn eval_func(
         "STDEVP" | "STDEV.P" => func_stdev_p(args, cells),
         "VAR" | "VAR.S" => func_var_s(args, cells),
         "VARP" | "VAR.P" => func_var_p(args, cells),
-        "CORREL" => func_correl(args, cells),
+        "CORREL" | "PEARSON" => func_correl(args, cells),
+        "SLOPE" => func_slope(args, cells),
+        "INTERCEPT" => func_intercept(args, cells),
+        "RSQ" => func_rsq(args, cells),
+        "FORECAST.LINEAR" | "FORECAST" => func_forecast_linear(args, cells),
+        "STEYX" => func_steyx(args, cells),
         "COVARIANCE.S" | "COVAR" => func_covariance_s(args, cells),
         "COVARIANCE.P" => func_covariance_p(args, cells),
         "NORM.DIST" | "NORMDIST" => func_norm_dist(args, cells),
@@ -4526,6 +4531,100 @@ fn func_correl(
         return Ok(Variant::Error(ExcelError::DivZero));
     }
     Ok(Variant::Float(cov / (sa * sb)))
+}
+
+fn regression_slope(a: &[f64], b: &[f64]) -> Result<f64, String> {
+    if a.len() < 2 || a.len() != b.len() {
+        return Err("regression requires two equal arrays with at least 2 values".into());
+    }
+    let ma = a.iter().sum::<f64>() / a.len() as f64;
+    let mb = b.iter().sum::<f64>() / b.len() as f64;
+    let denominator = b.iter().map(|x| (x - mb).powi(2)).sum::<f64>();
+    if denominator == 0.0 {
+        return Err("regression: known_x values must vary".into());
+    }
+    Ok(a.iter()
+        .zip(b)
+        .map(|(y, x)| (x - mb) * (y - ma))
+        .sum::<f64>()
+        / denominator)
+}
+
+fn func_slope(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (known_y, known_x) = collect_paired(args, cells, "SLOPE")?;
+    regression_slope(&known_y, &known_x).map(Variant::Float)
+}
+
+fn func_intercept(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (known_y, known_x) = collect_paired(args, cells, "INTERCEPT")?;
+    let slope = regression_slope(&known_y, &known_x)?;
+    let my = known_y.iter().sum::<f64>() / known_y.len() as f64;
+    let mx = known_x.iter().sum::<f64>() / known_x.len() as f64;
+    Ok(Variant::Float(my - slope * mx))
+}
+
+fn func_rsq(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (known_y, known_x) = collect_paired(args, cells, "RSQ")?;
+    let slope = regression_slope(&known_y, &known_x)?;
+    let my = known_y.iter().sum::<f64>() / known_y.len() as f64;
+    let mx = known_x.iter().sum::<f64>() / known_x.len() as f64;
+    let ss_tot = known_y.iter().map(|y| (y - my).powi(2)).sum::<f64>();
+    if ss_tot == 0.0 {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let intercept = my - slope * mx;
+    let ss_res = known_y
+        .iter()
+        .zip(&known_x)
+        .map(|(y, x)| (y - (slope * x + intercept)).powi(2))
+        .sum::<f64>();
+    Ok(Variant::Float(1.0 - ss_res / ss_tot))
+}
+
+fn func_forecast_linear(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("FORECAST.LINEAR requires 3 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let (known_y, known_x) = collect_paired(&args[1..], cells, "FORECAST.LINEAR")?;
+    let slope = regression_slope(&known_y, &known_x)?;
+    let my = known_y.iter().sum::<f64>() / known_y.len() as f64;
+    let mx = known_x.iter().sum::<f64>() / known_x.len() as f64;
+    Ok(Variant::Float(my + slope * (x - mx)))
+}
+
+fn func_steyx(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (known_y, known_x) = collect_paired(args, cells, "STEYX")?;
+    if known_y.len() < 3 {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let slope = regression_slope(&known_y, &known_x)?;
+    let my = known_y.iter().sum::<f64>() / known_y.len() as f64;
+    let mx = known_x.iter().sum::<f64>() / known_x.len() as f64;
+    let intercept = my - slope * mx;
+    let residuals = known_y
+        .iter()
+        .zip(&known_x)
+        .map(|(y, x)| (y - (slope * x + intercept)).powi(2))
+        .sum::<f64>();
+    Ok(Variant::Float(
+        (residuals / (known_y.len() - 2) as f64).sqrt(),
+    ))
 }
 
 fn func_covariance_s(
@@ -10861,6 +10960,30 @@ mod tests {
         match calc("=CORREL(A1:A3,B1:B3)", &c) {
             Variant::Float(f) => assert!((f - 1.0).abs() < 1e-9),
             other => panic!("CORREL: {:?}", other),
+        }
+        match calc("=PEARSON(A1:A3,B1:B3)", &c) {
+            Variant::Float(f) => assert!((f - 1.0).abs() < 1e-9),
+            other => panic!("PEARSON: {:?}", other),
+        }
+        match calc("=SLOPE(B1:B3,A1:A3)", &c) {
+            Variant::Float(f) => assert!((f - 2.0).abs() < 1e-9),
+            other => panic!("SLOPE: {:?}", other),
+        }
+        match calc("=INTERCEPT(B1:B3,A1:A3)", &c) {
+            Variant::Float(f) => assert!(f.abs() < 1e-9),
+            other => panic!("INTERCEPT: {:?}", other),
+        }
+        match calc("=RSQ(B1:B3,A1:A3)", &c) {
+            Variant::Float(f) => assert!((f - 1.0).abs() < 1e-9),
+            other => panic!("RSQ: {:?}", other),
+        }
+        match calc("=FORECAST.LINEAR(4,B1:B3,A1:A3)", &c) {
+            Variant::Float(f) => assert!((f - 8.0).abs() < 1e-9),
+            other => panic!("FORECAST.LINEAR: {:?}", other),
+        }
+        match calc("=STEYX(B1:B3,A1:A3)", &c) {
+            Variant::Float(f) => assert!(f.abs() < 1e-9),
+            other => panic!("STEYX: {:?}", other),
         }
         // COVARIANCE.P
         let c2 = cells_from(&[

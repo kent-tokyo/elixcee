@@ -12,6 +12,7 @@
 - Formula coverage: add depreciation, effective/nominal rate, and equivalent-growth financial functions.
 - Formula coverage: add identity, multiplication, determinant, and inverse matrix functions.
 - Formula coverage: add text cleanup/formatting and base conversion functions.
+- Formula coverage: add linear-regression, forecast, and residual-error functions.
 
 次の変更はここに記録します。
 

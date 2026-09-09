@@ -277,6 +277,12 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `VAR` / `VAR.S` | Sample variance | Classic / 2010 |
 | `VARP` / `VAR.P` | Population variance | Classic / 2010 |
 | `CORREL` | Pearson correlation coefficient | Classic |
+| `PEARSON` | Pearson correlation coefficient (alias) | Classic |
+| `SLOPE` | Slope of a linear regression | Classic |
+| `INTERCEPT` | Y-intercept of a linear regression | Classic |
+| `RSQ` | R-squared of a linear regression | Classic |
+| `FORECAST.LINEAR` / `FORECAST` | Linear regression forecast | 2016 / Classic |
+| `STEYX` | Standard error of predicted y values | Classic |
 | `COVARIANCE.S` / `COVAR` | Sample covariance | Classic / 2010 |
 | `COVARIANCE.P` | Population covariance | 2010 |
 | `NORM.DIST` / `NORMDIST` | Normal distribution CDF or PDF | 2010 / Classic |
