@@ -18,6 +18,9 @@ independent oracle, not Microsoft Excel.
 - Mismatches: 0
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
 
+The harness exits with status 1 if any comparable case mismatches; this run
+exited with status 0.
+
 The `DATE` result was normalized from Python `datetime` to Excel serial
 (`45351`) before comparison. This is a fixture-level type normalization, not a
 claim that all date-system behavior is compatible.

@@ -103,6 +103,8 @@ def main() -> None:
     if args.output:
         args.output.write_text(encoded, encoding="utf-8")
     print(encoded, end="")
+    if payload["matches"] != payload["comparable_cases"]:
+        raise SystemExit("formula oracle mismatch")
 
 
 if __name__ == "__main__":
