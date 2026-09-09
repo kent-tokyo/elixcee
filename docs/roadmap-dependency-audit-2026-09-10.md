@@ -15,9 +15,10 @@ tooling, but are not complete yet:
   editing. The bounded Drawing surface now includes indexed existing text-run
   edits; creation, broad object editing, and Pivot recalculation remain open.
 - G4 independent oracle expansion and runtime-macro regression coverage. The
-  local formula-only oracle now has 31 comparable matches out of 34 probes,
-  and the 581-scenario VBA corpus has 0 MISMATCH/UNEXPLAINED outcomes; Excel
-  semantic coverage and real production macro fixtures remain open.
+  local formula-only oracle now has 47 comparable matches out of 51 probes
+  (four explicit LibreOffice-build skips), and the 581-scenario VBA corpus has
+  0 MISMATCH/UNEXPLAINED outcomes; Excel semantic coverage and real production
+  macro fixtures remain open.
 - G5 RSS and cross-platform resource scaling. The `v1.0.5`-tag versus current
   paired run now covers 100k/400k/1M cells with 20 pairs, durable save, and
   output verification; historical-baseline reconstruction and RSS/resource
