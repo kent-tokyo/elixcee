@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Run a small formula-only oracle without invoking the Basic object model.
+
+This is test infrastructure only. LibreOffice is an independent oracle and
+must not be described as Microsoft Excel compatibility evidence.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import subprocess
+import tempfile
+from pathlib import Path
+
+import openpyxl
+from openpyxl.utils.datetime import to_excel
+
+
+CASES = {
+    "sum": ("=SUM(A1:A3)", 6),
+    "average": ("=AVERAGE(A1:A3)", 2),
+    "if": ('=IF(A1>2,"yes","no")', "no"),
+    "round": ("=ROUND(1.235,2)", 1.24),
+    "date": ("=DATE(2024,2,29)", 45351),
+    "left": ('=LEFT("elixcee",3)', "eli"),
+    "match": ("=MATCH(2,A1:A3,0)", 2),
+}
+
+
+def serial_or_value(value):
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return to_excel(value)
+    return value
+
+
+def run(soffice: str) -> dict:
+    with tempfile.TemporaryDirectory(prefix="elixcee-formula-oracle-") as raw:
+        root = Path(raw)
+        source = root / "formula-oracle.xlsx"
+        input_book = openpyxl.Workbook()
+        sheet = input_book.active
+        sheet.title = "Oracle"
+        sheet["A1"], sheet["A2"], sheet["A3"] = 1, 2, 3
+        for row, (name, (formula, expected)) in enumerate(CASES.items(), start=5):
+            sheet.cell(row=row, column=1, value=name)
+            sheet.cell(row=row, column=2, value=formula)
+            sheet.cell(row=row, column=3, value=expected)
+        input_book.calculation.fullCalcOnLoad = True
+        input_book.calculation.forceFullCalc = True
+        input_book.save(source)
+
+        out_dir = root / "recalculated"
+        out_dir.mkdir()
+        profile = root / "profile"
+        subprocess.run(
+            [
+                soffice,
+                "--headless",
+                "--convert-to",
+                "xlsx",
+                "--outdir",
+                str(out_dir),
+                f"-env:UserInstallation={profile.as_uri()}",
+                str(source),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        result = out_dir / source.name
+        if not result.exists():
+            raise RuntimeError(f"LibreOffice did not produce {result}")
+        values = openpyxl.load_workbook(result, data_only=True).active
+        records = []
+        for row, (name, (_, expected)) in enumerate(CASES.items(), start=5):
+            actual = serial_or_value(values.cell(row=row, column=2).value)
+            records.append(
+                {
+                    "case": name,
+                    "formula": CASES[name][0],
+                    "expected": expected,
+                    "actual": actual,
+                    "match": actual == expected,
+                }
+            )
+        return {
+            "oracle": "libreoffice",
+            "comparable_cases": len(records),
+            "matches": sum(item["match"] for item in records),
+            "records": records,
+        }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--soffice", default="soffice")
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    payload = run(args.soffice)
+    encoded = json.dumps(payload, indent=2) + "\n"
+    if args.output:
+        args.output.write_text(encoded, encoding="utf-8")
+    print(encoded, end="")
+
+
+if __name__ == "__main__":
+    main()
