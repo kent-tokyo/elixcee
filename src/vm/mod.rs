@@ -1229,6 +1229,10 @@ pub struct Vm {
     /// Non-zero while an explicit event is being dispatched. A nested event
     /// is suppressed rather than recursively re-entering VBA.
     event_dispatch_depth: usize,
+    /// Program used for opt-in automatic Worksheet_Change dispatch while
+    /// `run_sub_with_events` executes. Kept separate from the ordinary
+    /// cached program so `run_sub` remains event-free for compatibility.
+    auto_event_program: Option<Program>,
     pub exit_flag: Option<ExitKind>,
     /// Pending unconditional jump target (`GoTo <label>`).
     pending_goto: Option<String>,
@@ -1746,6 +1750,7 @@ impl Vm {
             current_span: None,
             last_runtime_failure: None,
             event_dispatch_depth: 0,
+            auto_event_program: None,
             exit_flag: None,
             pending_goto: None,
             call_stack: Vec::new(),
@@ -9948,6 +9953,34 @@ impl Vm {
         result.map(|()| true)
     }
 
+    fn dispatch_worksheet_change_after_write(
+        &mut self,
+        sheet: &str,
+        row: u32,
+        col: u32,
+    ) -> Result<(), String> {
+        let has_handler = self.auto_event_program.as_ref().is_some_and(|program| {
+            program
+                .subs
+                .iter()
+                .any(|sub| sub.name.eq_ignore_ascii_case("worksheet_change"))
+        });
+        if self.event_dispatch_depth != 0
+            || !self.enable_events
+            || sheet != self.active_sheet
+            || !has_handler
+        {
+            return Ok(());
+        }
+        let program = self
+            .auto_event_program
+            .as_ref()
+            .expect("worksheet handler was checked above")
+            .clone();
+        let target_address = format!("{}{}", column_letters(col), row);
+        self.run_worksheet_change(&program, &target_address).map(|_| ())
+    }
+
     /// Run an entrypoint with an opt-in `Workbook_Open` dispatch first.
     ///
     /// The ordinary `run_sub` contract remains event-free for compatibility.
@@ -9955,14 +9988,19 @@ impl Vm {
     /// events are enabled, then runs `sub_name`; an event failure prevents the
     /// main entrypoint from running.
     pub fn run_sub_with_events(&mut self, program: &Program, sub_name: &str) -> Result<(), String> {
-        if program
-            .subs
-            .iter()
-            .any(|sub| sub.name.eq_ignore_ascii_case("workbook_open"))
-        {
-            self.run_event(program, "Workbook_Open")?;
-        }
-        self.run_sub(program, sub_name)
+        let previous = self.auto_event_program.replace(program.clone());
+        let result = (|| {
+            if program
+                .subs
+                .iter()
+                .any(|sub| sub.name.eq_ignore_ascii_case("workbook_open"))
+            {
+                self.run_event(program, "Workbook_Open")?;
+            }
+            self.run_sub(program, sub_name)
+        })();
+        self.auto_event_program = previous;
+        result
     }
 
     /// Run a multi-module entrypoint with an opt-in, uniquely resolved
@@ -13136,7 +13174,7 @@ impl Vm {
             .insert((row, col));
         self.workbook_formula_tracking_valid = true;
         self.workbook_formula_structure_dirty = true;
-        Ok(())
+        self.dispatch_worksheet_change_after_write(sheet, row, col)
     }
 
     fn set_scalar_range_on_sheet(
@@ -13962,6 +14000,16 @@ impl Default for Vm {
 /// a plain `"A1:C10"` (no comma) still returns a 1-element `Vec` so callers
 /// can treat single- and multi-area addresses uniformly. `parse_range_addr`
 /// itself is untouched — every other caller keeps its current signature.
+fn column_letters(mut col: u32) -> String {
+    let mut out = String::new();
+    while col > 0 {
+        let digit = ((col - 1) % 26) as u8;
+        out.push((b'A' + digit) as char);
+        col = (col - 1) / 26;
+    }
+    out.chars().rev().collect()
+}
+
 pub fn parse_multi_area_addr(addr: &str) -> Option<Vec<Rect>> {
     addr.split(',')
         .map(|piece| {
@@ -17823,6 +17871,19 @@ mod tests {
         let mut vm = Vm::new();
         let err = vm.run_event(&program, "Worksheet_Change").unwrap_err();
         assert!(err.contains("Target binding is not implemented"), "{err:?}");
+    }
+
+    #[test]
+    fn run_sub_with_events_auto_dispatches_change_after_vba_cell_write() {
+        let program = parser::parse(
+            "Sub Main()\n    Cells(1,1).Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    Cells(1,2).Value = Target.Value\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
     }
 
     #[test]

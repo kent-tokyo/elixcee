@@ -113,6 +113,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G3 VBA offset write consistency BUILD: `Range(...).Offset(...).Value` も共通書込み経路へ接続し、1-based座標境界を検証して負のwraparoundを拒否する回帰を追加した。worksheetイベント自動発火と複数module連鎖は未完。
 - [x] G3 VBA range clear consistency BUILD: `Range(...).Clear` を範囲共通経路へ接続し、formula dirty invalidation・spill解放・矩形単位undoを適用した。書式・コメント等のClear細分類とworksheetイベント自動発火は未完。
 - [x] G3 VBA object-range clear BUILD: `Set r = ...Range(...); r.Clear/ClearContents` も束縛Rangeのsheetと矩形を共通クリア経路へ接続し、アクティブシート変更後も誤シートへ書かない回帰を追加した。Clear細分類とworksheetイベント自動発火は未完。
+- [x] G3 Worksheet_Change auto-dispatch BUILD: `run_sub_with_events` 実行中のVBAセル値書き込みで、同一Programに一意な `Worksheet_Change(Target As Range)` がある場合だけactive sheetの変更対象を自動dispatchする経路を追加した。EnableEvents・再入抑止・明示実行との分離を維持し、複数module連鎖・worksheet単位のhandler選択・Excel oracleは未完。
 - [x] G3 Worksheet-to-Range object BUILD: `Set ws = Sheets(...); Set r = ws.Range(...)` と `ws.Cells(row, col)` のRangeオブジェクト生成を追加し、Worksheetから取得したRangeでも束縛シートの編集経路を利用する。複雑なWorksheet memberとExcel oracleは未完。
 - [x] 部分 BUILD: Empty／Error伝播、IF/IFERRORの遅延評価、1900系DATE／日付関数、ROUND系の境界をローカル回帰で固定した。1904 date-systemのVM計算接続、全型変換・丸め規則、独立期待値／Excel oracle校正は未完。
 - [x] 部分 MEASURE: 100／1,000 formulaのchainに加え、Data!A1からCalcシート1,000式へのcross-sheet fan-outを構成し、dirty／forced full再走査の代表セル一致、Manual→Automatic、cycleをrelease profile・macOS arm64で100反復測定した。p50/p95・CPU・RSSを記録し、dirtyが常に高速とは主張しない。大規模topology、独立oracle、Linux／Windowsは未完。詳細は[formula dirty calibration](docs/measurements/formula-dirty-calibration-2026-09-05.md)。
