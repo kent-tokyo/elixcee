@@ -130,6 +130,7 @@ From the repository root, run:
 ```text
 cargo test --test xlsx_roundtrip pivot_worksheet_source --offline -- --nocapture
 cargo test --test xlsx_roundtrip edit_chart_series --offline -- --nocapture
+cargo test --test xlsx_roundtrip edit_chart_series_smooth_survives_real_fixture_save --offline -- --nocapture
 cargo test chart_title_rewriter --offline -- --nocapture
 cargo test chart_legend_overlay --offline -- --nocapture
 cargo test chart_data_labels_rewriter --offline -- --nocapture
