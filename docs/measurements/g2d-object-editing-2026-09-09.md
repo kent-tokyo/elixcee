@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache, Chart-title/style, two-cell Drawing-anchor/shape-name/hidden, worksheet-backed
+Chart-series-cache, Chart-title/style/axis-title, two-cell Drawing-anchor/shape-name/hidden, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, and Drawing
 alternative-text edits.
 It is not evidence of
@@ -27,6 +27,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   adds a minimal legend before `plotArea` when the chart has no legend.
 - `Vm.set_chart_style(chart_part, style)` rewrites or adds only the chart-space
   `<c:style val>` with an Excel style number from 1 through 48.
+- `Vm.set_chart_axis_title(chart_part, axis_index, text)` rewrites only the
+  first text run of an existing axis title; axes are zero-based in document order.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`

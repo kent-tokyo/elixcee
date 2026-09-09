@@ -1202,6 +1202,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to an existing chart-axis title.
+    fn set_chart_axis_title(
+        &mut self,
+        chart_part: &str,
+        axis_index: usize,
+        text: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_axis_title(chart_part, axis_index, text)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue an edit to an existing worksheet-backed Pivot cache source.
     /// Only the source sheet and/or A1 range is changed; cache records and
     /// PivotTable layout remain opaque and are not recalculated.
@@ -4678,6 +4690,54 @@ fn rewrite_chart_style(xml: &str, style: u32) -> Result<String, String> {
     Ok(out)
 }
 
+/// Rewrites the first text run of one existing chart axis title. Axis index is
+/// zero-based across the chart's cat/val/date/ser axes in document order.
+fn rewrite_chart_axis_titles(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, String>,
+) -> Result<String, String> {
+    let axis_names = ["catAx", "valAx", "dateAx", "serAx"];
+    let mut axes = Vec::new();
+    for name in axis_names {
+        let mut cursor = 0;
+        let open_tag = format!("<c:{name}");
+        let close_tag = format!("</c:{name}>");
+        while let Some(rel) = xml[cursor..].find(&open_tag) {
+            let open = cursor + rel;
+            if xml
+                .as_bytes()
+                .get(open + open_tag.len())
+                .is_some_and(|byte| *byte == b'>' || byte.is_ascii_whitespace())
+            {
+                let close = open
+                    + xml[open..]
+                        .find(&close_tag)
+                        .ok_or_else(|| format!("chart {name} element is unterminated"))?
+                    + close_tag.len();
+                axes.push((open, close));
+            }
+            cursor = open + open_tag.len();
+        }
+    }
+    axes.sort_by_key(|(open, _)| *open);
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
+    let mut out = xml.to_string();
+    for (&axis_index, text) in ordered {
+        let (open, close) = axes
+            .get(axis_index)
+            .copied()
+            .ok_or_else(|| format!("chart axis index {axis_index} is out of range"))?;
+        let fragment = &out[open..close];
+        if !fragment.contains("<c:title") {
+            return Err(format!("chart axis index {axis_index} is missing a title"));
+        }
+        let rewritten = rewrite_chart_title(fragment, text)?;
+        out.replace_range(open..close, &rewritten);
+    }
+    Ok(out)
+}
+
 /// Rewrite selected two-cell drawing anchors while preserving shape XML,
 /// relationship IDs, and all extension content. Public VM coordinates have
 /// already been validated as 1-based; OOXML markers are zero-based.
@@ -5383,6 +5443,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_chart_title_edits = !vm.chart_title_edits.is_empty();
     let has_chart_legend_position_edits = !vm.chart_legend_position_edits.is_empty();
     let has_chart_style_edits = !vm.chart_style_edits.is_empty();
+    let has_chart_axis_title_edits = !vm.chart_axis_title_edits.is_empty();
     let has_pivot_source_edits = !vm.pivot_source_edits.is_empty();
     let has_drawing_anchor_edits = !vm.drawing_anchor_edits.is_empty();
     let has_drawing_shape_name_edits = !vm.drawing_shape_name_edits.is_empty();
@@ -5426,6 +5487,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(chart_part) {
                 return Err(format!(
                     "chart style edit rejected: source workbook has no {chart_part}"
+                ));
+            }
+        }
+        for chart_part in vm.chart_axis_title_edits.keys() {
+            if !raw_entries.contains_key(chart_part) {
+                return Err(format!(
+                    "chart axis title edit rejected: source workbook has no {chart_part}"
                 ));
             }
         }
@@ -5647,7 +5715,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_chart_series_edits
                 || has_chart_title_edits
                 || has_chart_legend_position_edits
-                || has_chart_style_edits)
+                || has_chart_style_edits
+                || has_chart_axis_title_edits)
                 && name.starts_with("xl/charts/")
             {
                 let bytes = if bytes.is_empty() {
@@ -5674,6 +5743,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 }
                 if let Some(edit) = vm.chart_style_edits.get(&name) {
                     chart = rewrite_chart_style(&chart, edit.style)?;
+                }
+                if let Some(edits) = vm.chart_axis_title_edits.get(&name) {
+                    chart = rewrite_chart_axis_titles(&chart, edits)?;
                 }
                 chart.into_bytes()
             } else if (allow_sheet_rename || has_pivot_source_edits)
@@ -5775,7 +5847,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || ((has_chart_series_edits
                     || has_chart_title_edits
                     || has_chart_legend_position_edits
-                    || has_chart_style_edits)
+                    || has_chart_style_edits
+                    || has_chart_axis_title_edits)
                     && name.starts_with("xl/charts/")
                     && name.ends_with(".xml"))
                 || (has_pivot_source_edits
@@ -8857,6 +8930,35 @@ mod tests {
     fn chart_style_rewriter_rejects_out_of_range_style() {
         assert!(rewrite_chart_style("<c:chartSpace/>", 0).is_err());
         assert!(rewrite_chart_style("<c:chartSpace/>", 49).is_err());
+    }
+
+    #[test]
+    fn chart_axis_title_rewriter_changes_only_selected_axis_title() {
+        let source = concat!(
+            "<c:chart><c:plotArea>",
+            "<c:catAx><c:axId val=\"1\"/><c:title><c:tx><c:rich><a:t>Category</a:t></c:rich></c:tx></c:title></c:catAx>",
+            "<c:valAx><c:axId val=\"2\"/><c:title><c:tx><c:rich><a:t>Value</a:t></c:rich></c:tx></c:title></c:valAx>",
+            "</c:plotArea><c:legend/></c:chart>"
+        );
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(1usize, "Amount & total".to_string());
+        let actual = rewrite_chart_axis_titles(source, &edits).unwrap();
+        assert!(actual.contains("<a:t>Category</a:t>"));
+        assert!(actual.contains("<a:t>Amount &amp; total</a:t>"));
+        assert!(actual.contains("<c:legend/>") && actual.contains("<c:axId val=\"2\"/>"));
+    }
+
+    #[test]
+    fn chart_axis_title_rewriter_rejects_missing_title() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, "Axis".to_string());
+        assert!(
+            rewrite_chart_axis_titles(
+                "<c:chart><c:plotArea><c:valAx/></c:plotArea></c:chart>",
+                &edits
+            )
+            .is_err()
+        );
     }
 
     #[test]

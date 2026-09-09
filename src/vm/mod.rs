@@ -1283,6 +1283,8 @@ pub struct Vm {
     pub(crate) chart_legend_position_edits: HashMap<String, ChartLegendPositionEdit>,
     /// Explicit chart-style edits keyed by chart part.
     pub(crate) chart_style_edits: HashMap<String, ChartStyleEdit>,
+    /// Explicit chart-axis title edits keyed by chart part and axis index.
+    pub(crate) chart_axis_title_edits: HashMap<String, HashMap<usize, String>>,
     /// Explicit Pivot worksheet source edits keyed by cache definition part.
     pub(crate) pivot_source_edits: HashMap<String, PivotWorksheetSourceEdit>,
     /// Explicit drawing anchor edits keyed by drawing part and zero-based
@@ -1748,6 +1750,7 @@ impl Vm {
             chart_title_edits: HashMap::new(),
             chart_legend_position_edits: HashMap::new(),
             chart_style_edits: HashMap::new(),
+            chart_axis_title_edits: HashMap::new(),
             pivot_source_edits: HashMap::new(),
             drawing_anchor_edits: HashMap::new(),
             drawing_shape_name_edits: HashMap::new(),
@@ -7542,6 +7545,33 @@ impl Vm {
         }
         self.chart_style_edits
             .insert(chart_part.to_string(), ChartStyleEdit { style });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart-axis title. The axis index is
+    /// zero-based in document order across cat/val/date/ser axes.
+    pub fn set_chart_axis_title(
+        &mut self,
+        chart_part: &str,
+        axis_index: usize,
+        text: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart axis title edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if text.len() > 16 * 1024 || text.chars().any(|c| c.is_control()) {
+            return Err(
+                "chart axis title must be at most 16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        self.chart_axis_title_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .insert(axis_index, text.to_string());
         Ok(())
     }
 
