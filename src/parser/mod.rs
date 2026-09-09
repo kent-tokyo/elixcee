@@ -676,7 +676,7 @@ impl Parser {
                 let field_name = self.consume_ident()?.to_lowercase();
                 let vba_type = if self.is_ident("as") {
                     self.advance();
-                    self.consume_ident()?.to_lowercase()
+                    self.consume_qualified_type_name()?
                 } else {
                     "variant".into()
                 };
@@ -692,6 +692,21 @@ impl Parser {
             fields,
             span: SourceSpan { start, end },
         })
+    }
+
+    /// Consume a case-insensitive VBA type name, including a module-qualified
+    /// form such as `Types.Point`. Keeping the dot inside the type token is
+    /// important: it lets the VM resolve qualified UDTs without confusing
+    /// them with member access in expressions.
+    fn consume_qualified_type_name(&mut self) -> Result<String, String> {
+        let mut name = self.consume_ident()?.to_lowercase();
+        if *self.peek() == Tok::Dot {
+            self.advance();
+            let member = self.consume_ident()?.to_lowercase();
+            name.push('.');
+            name.push_str(&member);
+        }
+        Ok(name)
     }
 
     fn parse_sub(&mut self, access: AccessModifier) -> Result<SubDef, String> {
@@ -1749,7 +1764,7 @@ impl Parser {
             self.expect_tok(Tok::RParen)?;
             if self.is_ident("as") {
                 self.advance();
-                let type_name = self.consume_ident()?.to_lowercase();
+                let type_name = self.consume_qualified_type_name()?;
                 if type_name == "object" || !Self::is_vba_builtin_type(&type_name) {
                     return Ok(Stmt::DimArrayRecord {
                         name,
@@ -1770,7 +1785,7 @@ impl Parser {
                 } else {
                     false
                 };
-                let type_name = self.consume_ident()?.to_lowercase();
+                let type_name = self.consume_qualified_type_name()?;
                 if instantiate && type_name == "collection" {
                     return Ok(Stmt::DimObjectNew {
                         var,
@@ -1778,13 +1793,7 @@ impl Parser {
                         value: ObjectExpr::NewCollection,
                     });
                 }
-                if instantiate
-                    && type_name == "scripting"
-                    && *self.peek() == Tok::Dot
-                    && self.is_ident_at(1, "dictionary")
-                {
-                    self.advance();
-                    self.advance();
+                if instantiate && type_name == "scripting.dictionary" {
                     return Ok(Stmt::DimObjectNew {
                         var,
                         type_name: "scripting.dictionary".to_string(),
@@ -4437,6 +4446,18 @@ mod tests {
                     type_name: "mytype".to_string()
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn test_module_qualified_udt_name_is_preserved() {
+        let body = parse_body("Sub MySub()\n    Dim p As Types.Point\nEnd Sub\n");
+        assert_eq!(
+            body[0],
+            Stmt::DimRecord {
+                var: "p".to_string(),
+                type_name: "types.point".to_string(),
+            }
         );
     }
     #[test]

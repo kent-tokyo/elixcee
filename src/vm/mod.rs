@@ -9369,6 +9369,12 @@ impl Vm {
         }
         for td in &program.type_defs {
             self.type_defs.insert(td.name.clone(), td.fields.clone());
+            if let Some(module_name) = program.module_name.as_deref() {
+                self.type_defs.insert(
+                    format!("{}.{}", module_name.to_lowercase(), td.name),
+                    td.fields.clone(),
+                );
+            }
         }
         self.validate_and_bind_implements()?;
 
@@ -9509,6 +9515,10 @@ impl Vm {
             }
             for td in &program.type_defs {
                 self.type_defs.insert(td.name.clone(), td.fields.clone());
+                self.type_defs.insert(
+                    format!("{}.{}", module_name.to_lowercase(), td.name),
+                    td.fields.clone(),
+                );
             }
         }
         self.validate_and_bind_implements()?;
@@ -21188,6 +21198,25 @@ mod tests {
         assert_eq!(vm.variables["x"], Variant::Str("Alice".into()));
         assert_eq!(vm.variables["y"], Variant::Integer(30));
         assert_eq!(vm.variables["z"], Variant::Float(9.5));
+    }
+
+    #[test]
+    fn test_module_qualified_udt_resolution() {
+        let program = parser::parse(concat!(
+            "Attribute VB_Name = \"Types\"\n",
+            "Type Point\n",
+            "    X As Integer\n",
+            "End Type\n",
+            "Sub MySub()\n",
+            "    Dim p As Types.Point\n",
+            "    p.X = 7\n",
+            "    result = p.X\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "MySub").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(7));
     }
 
     #[test]

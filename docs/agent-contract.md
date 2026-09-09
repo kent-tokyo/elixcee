@@ -97,7 +97,10 @@ can locate the offending source. I/O/setup errors have null locations.
 Runtime classification still recognizes selected error-message patterns.
 Do not assume every rejected operation has its own typed error code.
 Same-module and cross-module UDT name collisions are rejected before execution
-and reported by `check`; module-qualified UDT resolution is not yet modeled.
+and reported by `check`. A module-qualified UDT name such as `Types.Point` is
+preserved by the parser and resolves when that module's definition is available;
+same-name UDTs across modules remain rejected because bare-reference scope is
+not yet modeled.
 
 ## Multi-module projects
 
