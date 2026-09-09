@@ -121,3 +121,21 @@ all-target test, Excel reopen, or other external gates. A subsequent broad
 `cargo test --lib --offline` attempt ran under the host's critically low disk
 budget, but its terminal exit status was not captured, so it is deliberately
 not recorded as a passing regression run.
+
+## Current all-target regression rerun
+
+After host storage recovered, the low-disk Rust settings were reused with the
+current checkout:
+
+```sh
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0' \
+  cargo test --all-targets --offline
+```
+
+The run completed successfully. The library target reported 1,690 passed tests;
+blackbox, CLI, property, XLSX round-trip, and version targets also passed, and
+the VM benchmark smoke completed every listed benchmark successfully. The
+command was rerun against the now-built target with output suppressed to
+confirm the same successful terminal result. This is macOS local evidence;
+three-OS resource scaling, Excel reopen, and external comparisons remain
+outside its scope.
