@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache/smooth/invert-if-negative/visibility/line-color, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
+Chart-series-cache/smooth/invert-if-negative/visibility/line-color/fill-color, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, Drawing
 alternative-text edits, and existing DrawingML text-run editing.
 It is not evidence of
@@ -89,6 +89,9 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   only an existing series solid RGB line color. The six-digit RGB value may
   include `#`; theme colors, gradients, missing style chains, and unsupported
   series indexes are rejected rather than synthesized.
+- `Vm.set_chart_series_fill_color(chart_part, series_index, color)` updates
+  only an existing series solid RGB fill color. Theme colors, gradients,
+  missing fill chains, and unsupported series indexes are rejected.
 - `Vm.set_drawing_anchor(drawing_part, anchor_index, from_row, from_col,
   to_row, to_col)` rewrites only the `<xdr:from>` and `<xdr:to>` cell markers
   of the selected two-cell anchor. Public cell coordinates are 1-based.

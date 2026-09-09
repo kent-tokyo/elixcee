@@ -1295,6 +1295,19 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to the existing solid RGB fill color of one chart
+    /// series. Theme colors and missing fill properties are rejected.
+    fn set_chart_series_fill_color(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        color: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_series_fill_color(chart_part, series_index, color)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded edit to the first text run in an existing chart title.
     fn set_chart_title(&mut self, chart_part: &str, text: &str) -> PyResult<()> {
         self.inner
@@ -4829,6 +4842,87 @@ fn rewrite_chart_series_line_colors(
     Ok(out)
 }
 
+/// Rewrite the existing solid RGB fill color for selected chart series. Only
+/// literal RGB fills are accepted; theme and gradient fills remain opaque.
+fn rewrite_chart_series_fill_colors(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, String>,
+) -> Result<String, String> {
+    fn next_series_open(xml: &str, cursor: usize) -> Option<usize> {
+        let exact = xml[cursor..].find("<c:ser>").map(|offset| cursor + offset);
+        let attributed = xml[cursor..].find("<c:ser ").map(|offset| cursor + offset);
+        match (exact, attributed) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(position), None) | (None, Some(position)) => Some(position),
+            (None, None) => None,
+        }
+    }
+
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
+    let mut out = xml.to_string();
+    for (&series_index, color) in ordered {
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=series_index {
+            let open = next_series_open(&out, cursor)
+                .ok_or_else(|| format!("chart series index {series_index} is out of range"))?;
+            let close_rel = out[open..]
+                .find("</c:ser>")
+                .ok_or_else(|| "chart series element is unterminated".to_string())?;
+            let close = open + close_rel + "</c:ser>".len();
+            if current == series_index {
+                selected = Some((open, close));
+                break;
+            }
+            cursor = close;
+        }
+        let (open, close) = selected.expect("series selection loop always selects its index");
+        let series = &out[open..close];
+        let sp_pr = series
+            .find("<c:spPr")
+            .ok_or_else(|| "chart series is missing <c:spPr>".to_string())?;
+        let sp_pr_end = sp_pr
+            + series[sp_pr..]
+                .find('>')
+                .ok_or_else(|| "chart series <c:spPr> is unterminated".to_string())?;
+        let sp_pr_close = series[sp_pr_end..]
+            .find("</c:spPr>")
+            .map(|offset| sp_pr_end + offset)
+            .ok_or_else(|| "chart series <c:spPr> is unterminated".to_string())?;
+        let body = &series[sp_pr_end..sp_pr_close];
+        let color_start = sp_pr_end
+            + body
+                .find("<a:solidFill")
+                .ok_or_else(|| "chart series fill is missing <a:solidFill>".to_string())?;
+        let color_start = color_start
+            + series[color_start..]
+                .find("<a:srgbClr")
+                .ok_or_else(|| "chart series fill is missing <a:srgbClr>".to_string())?;
+        let tag_end = color_start
+            + series[color_start..]
+                .find('>')
+                .ok_or_else(|| "chart series fill RGB color is unterminated".to_string())?;
+        let tag = &series[color_start..=tag_end];
+        let attr_rel = tag
+            .find("val=")
+            .ok_or_else(|| "chart series fill RGB color is missing val".to_string())?;
+        let value_start = open + color_start + attr_rel + "val=".len();
+        let quote = out.as_bytes()[value_start];
+        if quote != b'"' && quote != b'\'' {
+            return Err("chart series fill RGB color val attribute is malformed".to_string());
+        }
+        let value_end = out[value_start + 1..]
+            .find(quote as char)
+            .map(|rel| value_start + 1 + rel)
+            .ok_or_else(|| {
+                "chart series fill RGB color val attribute is unterminated".to_string()
+            })?;
+        out.replace_range(value_start + 1..value_end, color);
+    }
+    Ok(out)
+}
+
 /// Rewrite cached points for selected chart series. The existing cache kind
 /// (`strCache` or `numCache`) is preserved; when absent, it is inferred from
 /// the reference kind. Only point count and values change, keeping formula
@@ -6812,6 +6906,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let allow_sheet_rename = vm.ooxml_structural_edit_dirty && vm.sheet_rename_only;
     let has_chart_series_edits = !vm.chart_series_edits.is_empty();
     let has_chart_series_line_color_edits = !vm.chart_series_line_color_edits.is_empty();
+    let has_chart_series_fill_color_edits = !vm.chart_series_fill_color_edits.is_empty();
     let has_chart_title_edits = !vm.chart_title_edits.is_empty();
     let has_chart_legend_position_edits = !vm.chart_legend_position_edits.is_empty();
     let has_chart_style_edits = !vm.chart_style_edits.is_empty();
@@ -6855,6 +6950,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(chart_part) {
                 return Err(format!(
                     "chart series line color edit rejected: source workbook has no {chart_part}"
+                ));
+            }
+        }
+        for chart_part in vm.chart_series_fill_color_edits.keys() {
+            if !raw_entries.contains_key(chart_part) {
+                return Err(format!(
+                    "chart series fill color edit rejected: source workbook has no {chart_part}"
                 ));
             }
         }
@@ -7165,6 +7267,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             let bytes = if (allow_sheet_rename
                 || has_chart_series_edits
                 || has_chart_series_line_color_edits
+                || has_chart_series_fill_color_edits
                 || has_chart_title_edits
                 || has_chart_legend_position_edits
                 || has_chart_style_edits
@@ -7191,6 +7294,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 }
                 if let Some(edits) = vm.chart_series_line_color_edits.get(&name) {
                     chart = rewrite_chart_series_line_colors(&chart, edits)?;
+                }
+                if let Some(edits) = vm.chart_series_fill_color_edits.get(&name) {
+                    chart = rewrite_chart_series_fill_colors(&chart, edits)?;
                 }
                 if let Some(edit) = vm.chart_title_edits.get(&name) {
                     chart = rewrite_chart_title(&chart, &edit.text)?;
@@ -7411,6 +7517,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                         || (name.starts_with("xl/pivotCache/") && name.ends_with(".xml"))))
                 || ((has_chart_series_edits
                     || has_chart_series_line_color_edits
+                    || has_chart_series_fill_color_edits
                     || has_chart_title_edits
                     || has_chart_legend_position_edits
                     || has_chart_style_edits
@@ -10420,6 +10527,29 @@ mod tests {
         edits.insert(0usize, "ABCDEF".to_string());
         let source = r#"<c:chart><c:ser><c:spPr><a:ln><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:ln></c:spPr></c:ser></c:chart>"#;
         let error = rewrite_chart_series_line_colors(source, &edits).unwrap_err();
+        assert!(error.contains("missing <a:srgbClr>"));
+    }
+
+    #[test]
+    fn chart_series_fill_color_rewriter_changes_only_selected_series() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(1usize, "ABC123".to_string());
+        let source = concat!(
+            r#"<c:chart><c:plotArea><c:ser><c:spPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill></c:spPr></c:ser>"#,
+            r#"<c:ser><c:spPr><a:solidFill><a:srgbClr val="445566"/></a:solidFill></c:spPr></c:ser></c:plotArea></c:chart>"#,
+        );
+        let actual = rewrite_chart_series_fill_colors(source, &edits).unwrap();
+        assert!(actual.contains(r#"<a:srgbClr val="112233"/>"#));
+        assert!(actual.contains(r#"<a:srgbClr val="ABC123"/>"#));
+        assert!(!actual.contains(r#"<a:srgbClr val="445566"/>"#));
+    }
+
+    #[test]
+    fn chart_series_fill_color_rewriter_rejects_theme_style() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, "ABCDEF".to_string());
+        let source = r#"<c:chart><c:ser><c:spPr><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></c:spPr></c:ser></c:chart>"#;
+        let error = rewrite_chart_series_fill_colors(source, &edits).unwrap_err();
         assert!(error.contains("missing <a:srgbClr>"));
     }
 
