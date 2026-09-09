@@ -15,6 +15,7 @@
 - G2dの限定Chart編集として、既存系列のcategory/value cacheを`Vm.set_chart_series_cache`（Python binding含む）から更新できるようにしました。既存`strCache`／`numCache`の点数・値だけを置換し、formula・formatCode・cache種別・周辺XMLを保持します。cache作成／再計算、Chart作成、Excel再openは未完です。
 - G2dの限定Drawing編集として、既存drawing anchor内の`cNvPr name`を`Vm.set_drawing_shape_name`（Python binding含む）から更新できるようにしました。two-cell／one-cell／absolute anchorに対応し、geometry・shape content・relationshipを保持します。Drawing作成・shape属性全般編集・Excel再openは未完です。
 - G2dの限定Drawing編集として、既存drawing anchor内のoptionalな`cNvPr descr`を`Vm.set_drawing_shape_description`（Python binding含む）から追加／更新できるようにしました。XML escapeと既存shape構造を保持し、Drawing作成・shape属性全般編集・Excel再openは未完です。
+- G2dの限定Drawing編集として、既存drawing anchor内のoptionalな`cNvPr title`を`Vm.set_drawing_shape_title`（Python binding含む）から追加／更新できるようにしました。geometry・shape content・relationshipは保持し、Drawing作成・shape属性全般編集・Excel再openは未完です。
 - G2dの限定Pivot編集として、既存cache definitionの`refreshOnLoad`を`Vm.set_pivot_cache_refresh_on_load`（Python binding含む）から追加／更新できるようにしました。外部取得・cache records変更・Pivot再集計は行わず、Excel側のrefreshと再openは未検証です。
 - G2dの限定Pivot編集として、既存cache fieldの`name`を`Vm.set_pivot_cache_field_caption`（Python binding含む）から更新できるようにしました。sharedItems・cache records・PivotTable layoutは保持し、cache values変更・再集計・Excel再openは未完です。
 - イベント処理を拡張し、`run_with_events`（Rust／Python）で`Workbook_Open`を明示的に先行dispatchできるようにしました。通常の`run`／`run_sub`は従来どおりイベントを自動実行せず、open handlerの失敗時は本体Macroを実行しません。

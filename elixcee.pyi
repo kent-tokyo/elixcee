@@ -388,6 +388,12 @@ class Vm:
         """Update an existing drawing anchor's alternative-text description."""
         ...
 
+    def set_drawing_shape_title(
+        self, drawing_part: str, anchor_index: int, title: str
+    ) -> None:
+        """Add or update an existing drawing anchor's title metadata."""
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 

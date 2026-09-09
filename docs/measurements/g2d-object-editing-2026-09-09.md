@@ -34,6 +34,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   two-cell, one-cell, and absolute anchors in document order.
 - `Vm.set_drawing_shape_description(drawing_part, anchor_index, description)`
   adds or replaces only the optional `<xdr:cNvPr descr>` attribute.
+- `Vm.set_drawing_shape_title(drawing_part, anchor_index, title)` adds or
+  replaces only the optional `<xdr:cNvPr title>` attribute.
 - Missing source parts, series, references, malformed attributes, control
   characters, and invalid A1 ranges are rejected before a successful save.
 - Explicit Pivot source edits also require the requested worksheet to exist in
@@ -66,7 +68,7 @@ bash scripts/check-local-gates.sh
 
 On the recorded macOS arm64 environment, the Chart title, series-name,
   series-cache, Pivot refresh-policy/field-caption, Drawing anchor/shape-name,
-  and real-fixture targeted tests passed. The full Rust workspace passed 1,619 tests,
+  and real-fixture targeted tests passed. The full Rust workspace passed 1,620 tests,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,
