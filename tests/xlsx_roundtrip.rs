@@ -246,6 +246,16 @@ fn read_all_zip_entries(bytes: &[u8]) -> HashMap<String, Vec<u8>> {
     out
 }
 
+fn write_all_zip_entries(entries: &HashMap<String, Vec<u8>>) -> Vec<u8> {
+    let mut names: Vec<_> = entries.keys().collect();
+    names.sort();
+    let mut zip = ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+    for name in names {
+        zip_add(&mut zip, name, &entries[name]);
+    }
+    zip.finish().unwrap().into_inner()
+}
+
 fn is_writer_owned(name: &str) -> bool {
     matches!(
         name,
@@ -1323,6 +1333,41 @@ fn edit_chart_series_rewrites_selected_references_on_a_real_fixture() {
     assert!(drawing.contains("name=\"Ready &amp; reviewed\""));
     assert!(drawing.contains("descr=\"Ready for review\""));
     assert!(drawing.contains("title=\"Review title\""));
+}
+
+/// G2d: the chart-series smooth edit is exercised through the loaded-workbook
+/// save path. The real fixture has no smooth flag, so the test injects only
+/// that existing-OOXML element into a temporary copy before loading it.
+#[test]
+fn edit_chart_series_smooth_survives_real_fixture_save() {
+    let source_path = tmp_path("edit_chart_series_smooth_source.xlsm");
+    let output_path = tmp_path("edit_chart_series_smooth_output.xlsm");
+    let fixture_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&fixture_path).expect("real fixture must exist");
+    let mut entries = read_all_zip_entries(&fixture_bytes);
+    let chart = String::from_utf8(entries["xl/charts/chart1.xml"].clone()).unwrap();
+    let series_end = chart
+        .find("</c:ser>")
+        .expect("fixture should contain one chart series");
+    let mut chart_with_smooth = chart;
+    chart_with_smooth.insert_str(series_end, "<c:smooth val=\"0\"/>");
+    entries.insert(
+        "xl/charts/chart1.xml".to_string(),
+        chart_with_smooth.into_bytes(),
+    );
+    std::fs::write(&source_path, write_all_zip_entries(&entries)).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("temporary fixture should load");
+    vm.set_chart_series_smooth("xl/charts/chart1.xml", 0, true)
+        .expect("smooth edit should be accepted");
+    save_workbook(&vm, &output_path).expect("smooth edit should save");
+
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let output_chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(output_chart.contains("<c:smooth val=\"1\"/>"));
+    assert!(output_chart.contains("<c:f>Sheet1!$A$6:$B$6</c:f>"));
 }
 
 /// A minimal Pivot cache package exercises the complete loaded-workbook rename

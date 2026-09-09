@@ -207,6 +207,11 @@ offline all-target gate (1,683 library tests, 54 XLSX round-trip tests, and all
 integration/benchmark targets). This remains BUILD evidence only and does not
 establish Excel reopen or chart rendering compatibility.
 
+The save-path follow-up also passed `edit_chart_series_smooth_survives_real_fixture_save`:
+a temporary copy of the real Excel-authored fixture was loaded, its existing
+series smooth flag changed from `0` to `1`, saved, and verified after ZIP
+reload. The test validates the elixcee save path, not Excel's own reopen.
+
 ## Not measured or claimed
 
 - Excel reopen, repair-warning absence, or recalculated Chart/Pivot caches.
