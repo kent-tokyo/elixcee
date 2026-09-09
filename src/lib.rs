@@ -1465,6 +1465,19 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to an existing drawing shape's rotation in
+    /// integer degrees from 0 through 359.
+    fn set_drawing_shape_rotation(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        degrees: i32,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_shape_rotation(drawing_part, anchor_index, degrees)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Move a sheet to an absolute 0-based position among the workbook's sheets.
     ///
     /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
@@ -5375,6 +5388,85 @@ fn rewrite_drawing_shape_attribute(
     Ok(out)
 }
 
+/// Rewrites only an existing DrawingML transform rotation on the selected
+/// document-order drawing anchors. The transform is intentionally not created
+/// when absent because its geometry is required for a valid shape.
+fn rewrite_drawing_shape_rotation(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, i32>,
+) -> Result<String, String> {
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
+    let mut out = xml.to_string();
+    for (&anchor_index, degrees) in ordered {
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=anchor_index {
+            let candidates = [
+                ("<xdr:twoCellAnchor>", "</xdr:twoCellAnchor>"),
+                ("<xdr:twoCellAnchor ", "</xdr:twoCellAnchor>"),
+                ("<xdr:oneCellAnchor>", "</xdr:oneCellAnchor>"),
+                ("<xdr:oneCellAnchor ", "</xdr:oneCellAnchor>"),
+                ("<xdr:absoluteAnchor>", "</xdr:absoluteAnchor>"),
+                ("<xdr:absoluteAnchor ", "</xdr:absoluteAnchor>"),
+            ];
+            let (open, closing) = candidates
+                .iter()
+                .filter_map(|(opening, closing)| {
+                    out[cursor..]
+                        .find(opening)
+                        .map(|offset| (cursor + offset, *closing))
+                })
+                .min_by_key(|(position, _)| *position)
+                .ok_or_else(|| format!("drawing anchor index {anchor_index} is out of range"))?;
+            let close_rel = out[open..]
+                .find(closing)
+                .ok_or_else(|| "drawing anchor is unterminated".to_string())?;
+            let close = open + close_rel + closing.len();
+            if current == anchor_index {
+                selected = Some((open, close));
+                break;
+            }
+            cursor = close;
+        }
+        let (open, close) = selected.expect("anchor selection loop always selects its index");
+        let anchor = &out[open..close];
+        let xfrm = anchor
+            .find("<a:xfrm")
+            .ok_or_else(|| "drawing shape is missing <a:xfrm>".to_string())?;
+        let tag_end = xfrm
+            + anchor[xfrm..]
+                .find('>')
+                .ok_or_else(|| "drawing shape transform is unterminated".to_string())?;
+        let mut tag = anchor[xfrm..=tag_end].to_string();
+        let value = i64::from(*degrees) * 60_000;
+        if let Some(attr_rel) = tag.find("rot=") {
+            let value_start = attr_rel + "rot=".len();
+            let quote = tag.as_bytes()[value_start];
+            if quote != b'"' && quote != b'\'' {
+                return Err("drawing shape transform rot attribute is malformed".to_string());
+            }
+            let value_end = tag[value_start + 1..]
+                .find(quote as char)
+                .map(|rel| value_start + 1 + rel)
+                .ok_or_else(|| {
+                    "drawing shape transform rot attribute is unterminated".to_string()
+                })?;
+            tag.replace_range(value_start + 1..value_end, &value.to_string());
+        } else {
+            let insert_at = tag
+                .rfind("/>")
+                .or_else(|| tag.rfind('>'))
+                .ok_or_else(|| "drawing shape transform is malformed".to_string())?;
+            tag.insert_str(insert_at, &format!(" rot=\"{value}\""));
+        }
+        let mut replacement = anchor.to_string();
+        replacement.replace_range(xfrm..=tag_end, &tag);
+        out.replace_range(open..close, &replacement);
+    }
+    Ok(out)
+}
+
 /// Rewrites only the worksheet source sheet attribute in pivot cache definitions.
 /// Pivot cache contents and table-based sources are left byte-for-byte unchanged.
 fn rewrite_pivot_cache_sheet_refs(
@@ -5925,6 +6017,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_drawing_shape_description_edits = !vm.drawing_shape_description_edits.is_empty();
     let has_drawing_shape_title_edits = !vm.drawing_shape_title_edits.is_empty();
     let has_drawing_shape_hidden_edits = !vm.drawing_shape_hidden_edits.is_empty();
+    let has_drawing_shape_rotation_edits = !vm.drawing_shape_rotation_edits.is_empty();
     // Keep writer-owned static package parts regenerated. A source raw copy can
     // carry source-only defaults or relationship-id ordering that is valid in
     // isolation but diverges from the writer's carried relationship contract.
@@ -6025,6 +6118,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(drawing_part) {
                 return Err(format!(
                     "drawing hidden edit rejected: source workbook has no {drawing_part}"
+                ));
+            }
+        }
+        for drawing_part in vm.drawing_shape_rotation_edits.keys() {
+            if !raw_entries.contains_key(drawing_part) {
+                return Err(format!(
+                    "drawing shape rotation edit rejected: source workbook has no {drawing_part}"
                 ));
             }
         }
@@ -6323,12 +6423,14 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_drawing_shape_name_edits
                 || has_drawing_shape_description_edits
                 || has_drawing_shape_title_edits
-                || has_drawing_shape_hidden_edits)
+                || has_drawing_shape_hidden_edits
+                || has_drawing_shape_rotation_edits)
                 && (vm.drawing_anchor_edits.contains_key(&name)
                     || vm.drawing_shape_name_edits.contains_key(&name)
                     || vm.drawing_shape_description_edits.contains_key(&name)
                     || vm.drawing_shape_title_edits.contains_key(&name)
-                    || vm.drawing_shape_hidden_edits.contains_key(&name))
+                    || vm.drawing_shape_hidden_edits.contains_key(&name)
+                    || vm.drawing_shape_rotation_edits.contains_key(&name))
                 && name.starts_with("xl/drawings/")
                 && name.ends_with(".xml")
                 && !name.contains("/_rels/")
@@ -6374,6 +6476,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 } else {
                     drawing
                 };
+                let drawing = if let Some(edits) = vm.drawing_shape_rotation_edits.get(&name) {
+                    rewrite_drawing_shape_rotation(&drawing, edits)?
+                } else {
+                    drawing
+                };
                 drawing.into_bytes()
             } else {
                 bytes
@@ -6403,12 +6510,14 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || has_drawing_shape_name_edits
                     || has_drawing_shape_description_edits
                     || has_drawing_shape_title_edits
-                    || has_drawing_shape_hidden_edits)
+                    || has_drawing_shape_hidden_edits
+                    || has_drawing_shape_rotation_edits)
                     && (vm.drawing_anchor_edits.contains_key(&name)
                         || vm.drawing_shape_name_edits.contains_key(&name)
                         || vm.drawing_shape_description_edits.contains_key(&name)
                         || vm.drawing_shape_title_edits.contains_key(&name)
-                        || vm.drawing_shape_hidden_edits.contains_key(&name))
+                        || vm.drawing_shape_hidden_edits.contains_key(&name)
+                        || vm.drawing_shape_rotation_edits.contains_key(&name))
                     && name.starts_with("xl/drawings/")
                     && name.ends_with(".xml"))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
@@ -9754,6 +9863,33 @@ mod tests {
         let actual = rewrite_drawing_shape_attribute(&actual, &edits, "hidden").unwrap();
         assert!(actual.contains("hidden=\"0\""));
         assert!(actual.contains("<xdr:from/><xdr:to/>") && actual.contains("<xdr:sp>"));
+    }
+
+    #[test]
+    fn drawing_shape_rotation_rewriter_updates_only_selected_transform() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, 45i32);
+        let source = concat!(
+            r#"<xdr:wsDr><xdr:twoCellAnchor><xdr:sp><xdr:spPr><a:xfrm rot="0"><a:off x="0" y="0"/></a:xfrm></xdr:spPr></xdr:sp></xdr:twoCellAnchor>"#,
+            r#"<xdr:twoCellAnchor><xdr:sp><xdr:spPr><a:xfrm rot="1200000"><a:off x="1" y="1"/></a:xfrm></xdr:spPr></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"#,
+        );
+        let actual = rewrite_drawing_shape_rotation(source, &edits).unwrap();
+        assert!(actual.contains(r#"<a:xfrm rot="2700000">"#));
+        assert!(actual.contains(r#"<a:xfrm rot="1200000">"#));
+        assert!(actual.contains(r#"<a:off x="0" y="0"/>"#));
+    }
+
+    #[test]
+    fn drawing_shape_rotation_rewriter_rejects_a_missing_transform() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, 90i32);
+        assert!(
+            rewrite_drawing_shape_rotation(
+                "<xdr:wsDr><xdr:twoCellAnchor><xdr:sp/></xdr:twoCellAnchor></xdr:wsDr>",
+                &edits
+            )
+            .is_err()
+        );
     }
 
     #[test]

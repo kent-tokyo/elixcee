@@ -491,6 +491,12 @@ class Vm:
         """Add or update an existing drawing anchor's hidden metadata flag."""
         ...
 
+    def set_drawing_shape_rotation(
+        self, drawing_part: str, anchor_index: int, degrees: int
+    ) -> None:
+        """Update an existing shape transform rotation from 0 through 359 degrees."""
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 
