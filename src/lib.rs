@@ -1295,6 +1295,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to an existing drawing anchor's hidden state.
+    fn set_drawing_shape_hidden(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        hidden: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_drawing_shape_hidden(drawing_part, anchor_index, hidden)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Move a sheet to an absolute 0-based position among the workbook's sheets.
     ///
     /// Unlike openpyxl's ``Worksheet.move_sheet(offset)`` (a relative offset),
@@ -4814,7 +4826,7 @@ fn rewrite_drawing_shape_attribute(
                 .map(|rel| value_start + 1 + rel)
                 .ok_or_else(|| format!("drawing cNvPr {attribute} attribute is unterminated"))?;
             tag.replace_range(value_start + 1..value_end, &xml_escape(name));
-        } else if matches!(attribute, "descr" | "title") {
+        } else if matches!(attribute, "descr" | "title" | "hidden") {
             let insert_at = tag
                 .rfind("/>")
                 .or_else(|| tag.rfind('>'))
@@ -5376,6 +5388,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let has_drawing_shape_name_edits = !vm.drawing_shape_name_edits.is_empty();
     let has_drawing_shape_description_edits = !vm.drawing_shape_description_edits.is_empty();
     let has_drawing_shape_title_edits = !vm.drawing_shape_title_edits.is_empty();
+    let has_drawing_shape_hidden_edits = !vm.drawing_shape_hidden_edits.is_empty();
     // Keep writer-owned static package parts regenerated. A source raw copy can
     // carry source-only defaults or relationship-id ordering that is valid in
     // isolation but diverges from the writer's carried relationship contract.
@@ -5448,6 +5461,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(drawing_part) {
                 return Err(format!(
                     "drawing shape edit rejected: source workbook has no {drawing_part}"
+                ));
+            }
+        }
+        for drawing_part in vm.drawing_shape_hidden_edits.keys() {
+            if !raw_entries.contains_key(drawing_part) {
+                return Err(format!(
+                    "drawing hidden edit rejected: source workbook has no {drawing_part}"
                 ));
             }
         }
@@ -5687,11 +5707,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             } else if (has_drawing_anchor_edits
                 || has_drawing_shape_name_edits
                 || has_drawing_shape_description_edits
-                || has_drawing_shape_title_edits)
+                || has_drawing_shape_title_edits
+                || has_drawing_shape_hidden_edits)
                 && (vm.drawing_anchor_edits.contains_key(&name)
                     || vm.drawing_shape_name_edits.contains_key(&name)
                     || vm.drawing_shape_description_edits.contains_key(&name)
-                    || vm.drawing_shape_title_edits.contains_key(&name))
+                    || vm.drawing_shape_title_edits.contains_key(&name)
+                    || vm.drawing_shape_hidden_edits.contains_key(&name))
                 && name.starts_with("xl/drawings/")
                 && name.ends_with(".xml")
                 && !name.contains("/_rels/")
@@ -5721,11 +5743,23 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 } else {
                     drawing
                 };
-                if let Some(edits) = vm.drawing_shape_title_edits.get(&name) {
-                    rewrite_drawing_shape_attribute(&drawing, edits, "title")?.into_bytes()
+                let drawing = if let Some(edits) = vm.drawing_shape_title_edits.get(&name) {
+                    rewrite_drawing_shape_attribute(&drawing, edits, "title")?
                 } else {
-                    drawing.into_bytes()
-                }
+                    drawing
+                };
+                let drawing = if let Some(edits) = vm.drawing_shape_hidden_edits.get(&name) {
+                    let edits = edits
+                        .iter()
+                        .map(|(&index, &hidden)| {
+                            (index, if hidden { "1" } else { "0" }.to_string())
+                        })
+                        .collect();
+                    rewrite_drawing_shape_attribute(&drawing, &edits, "hidden")?
+                } else {
+                    drawing
+                };
+                drawing.into_bytes()
             } else {
                 bytes
             };
@@ -5750,11 +5784,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || ((has_drawing_anchor_edits
                     || has_drawing_shape_name_edits
                     || has_drawing_shape_description_edits
-                    || has_drawing_shape_title_edits)
+                    || has_drawing_shape_title_edits
+                    || has_drawing_shape_hidden_edits)
                     && (vm.drawing_anchor_edits.contains_key(&name)
                         || vm.drawing_shape_name_edits.contains_key(&name)
                         || vm.drawing_shape_description_edits.contains_key(&name)
-                        || vm.drawing_shape_title_edits.contains_key(&name))
+                        || vm.drawing_shape_title_edits.contains_key(&name)
+                        || vm.drawing_shape_hidden_edits.contains_key(&name))
                     && name.starts_with("xl/drawings/")
                     && name.ends_with(".xml"))
                 || (name.starts_with("xl/worksheets/") && !name.contains("/_rels/"))
@@ -8894,6 +8930,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn drawing_shape_hidden_rewriter_adds_and_updates_flag() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, "1".to_string());
+        let source = r#"<xdr:wsDr><xdr:twoCellAnchor><xdr:from/><xdr:to/><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="2" name="Shape"/></xdr:nvSpPr></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"#;
+        let actual = rewrite_drawing_shape_attribute(source, &edits, "hidden").unwrap();
+        assert!(actual.contains("name=\"Shape\" hidden=\"1\""));
+
+        edits.insert(0, "0".to_string());
+        let actual = rewrite_drawing_shape_attribute(&actual, &edits, "hidden").unwrap();
+        assert!(actual.contains("hidden=\"0\""));
+        assert!(actual.contains("<xdr:from/><xdr:to/>") && actual.contains("<xdr:sp>"));
     }
 
     #[test]

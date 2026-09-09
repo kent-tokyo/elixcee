@@ -1297,6 +1297,9 @@ pub struct Vm {
     /// Explicit drawing shape-title edits keyed by drawing part and
     /// document-order anchor index.
     pub(crate) drawing_shape_title_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit drawing shape hidden-state edits keyed by drawing part and
+    /// document-order anchor index.
+    pub(crate) drawing_shape_hidden_edits: HashMap<String, HashMap<usize, bool>>,
     /// Dynamic-array spill rectangles keyed by sheet and anchor coordinate.
     /// Included in edit history so undo cannot leave stale spill ownership.
     spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
@@ -1750,6 +1753,7 @@ impl Vm {
             drawing_shape_name_edits: HashMap::new(),
             drawing_shape_description_edits: HashMap::new(),
             drawing_shape_title_edits: HashMap::new(),
+            drawing_shape_hidden_edits: HashMap::new(),
             spill_rects: HashMap::new(),
             edit_undo: Vec::new(),
             edit_redo: Vec::new(),
@@ -7782,6 +7786,28 @@ impl Vm {
             .entry(drawing_part.to_string())
             .or_default()
             .insert(anchor_index, title.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing drawing anchor's hidden metadata.
+    pub fn set_drawing_shape_hidden(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        hidden: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        self.drawing_shape_hidden_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, hidden);
         Ok(())
     }
 

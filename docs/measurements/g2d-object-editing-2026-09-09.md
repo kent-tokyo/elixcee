@@ -3,7 +3,7 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
-Chart-series-cache, Chart-title/style, two-cell Drawing-anchor/shape-name, worksheet-backed
+Chart-series-cache, Chart-title/style, two-cell Drawing-anchor/shape-name/hidden, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, and Drawing
 alternative-text edits.
 It is not evidence of
@@ -42,6 +42,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   adds or replaces only the optional `<xdr:cNvPr descr>` attribute.
 - `Vm.set_drawing_shape_title(drawing_part, anchor_index, title)` adds or
   replaces only the optional `<xdr:cNvPr title>` attribute.
+- `Vm.set_drawing_shape_hidden(drawing_part, anchor_index, hidden)` adds or
+  replaces only the `<xdr:cNvPr hidden>` flag.
 - `Vm.set_chart_series_cache(...)` updates an existing cache or creates the
   matching cache when the selected series has only a `strRef`/`numRef` formula.
 - Missing source parts, series, references, malformed attributes, control

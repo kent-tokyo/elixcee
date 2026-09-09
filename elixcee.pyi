@@ -402,6 +402,12 @@ class Vm:
         """Add or update an existing drawing anchor's title metadata."""
         ...
 
+    def set_drawing_shape_hidden(
+        self, drawing_part: str, anchor_index: int, hidden: bool
+    ) -> None:
+        """Add or update an existing drawing anchor's hidden metadata flag."""
+        ...
+
     def move_sheet(self, name: str, new_index: int) -> None:
         """Move a sheet to an absolute 0-based position among the workbook's sheets.
 
