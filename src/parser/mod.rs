@@ -4078,6 +4078,24 @@ pub fn find_cross_module_type_collisions(
         .collect()
 }
 
+/// Duplicate UDT names within one module. VBA does not permit a second
+/// `Type` declaration with the same case-insensitive name; returning the
+/// names in sorted order keeps diagnostics independent of declaration/hash
+/// iteration details.
+pub fn find_type_collisions(program: &Program) -> Vec<String> {
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for type_def in &program.type_defs {
+        *counts.entry(type_def.name.as_str()).or_default() += 1;
+    }
+    let mut names: Vec<String> = counts
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(name, _)| name.to_string())
+        .collect();
+    names.sort();
+    names
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -5607,6 +5625,14 @@ mod tests {
         let mut modules = collisions[0].1.clone();
         modules.sort();
         assert_eq!(modules, vec!["left".to_string(), "right".to_string()]);
+    }
+
+    #[test]
+    fn type_collisions_detect_duplicate_declarations_in_one_module() {
+        let program =
+            parse("Type Point\n    X As Long\nEnd Type\nType point\n    Y As Long\nEnd Type\n")
+                .unwrap();
+        assert_eq!(find_type_collisions(&program), vec!["point".to_string()]);
     }
 
     #[test]

@@ -19,7 +19,7 @@
 - G2dのChart/Pivot限定編集の再現手順と検証結果を`docs/measurements/g2d-object-editing-2026-09-09.md`へ記録しました。ローカルBUILD証拠と、Excel再open・再集計・他OS・外部比較の未検証境界を分離しています。
 - VBA runtime error診断の部分BUILDとして、VMが実行中の失敗カテゴリを構造化side channelで保持し、CLI JSONがそれを優先利用するようにしました。blocked external effectには`E1011`を割り当て、既存の`E1006`（duplicate module name）を維持しています。事前／compile errorと全エラー生成箇所の完全移行は未完です。
 - runtime failure分類を発生箇所へ寄せ、blocked external effectと`error_on_msgbox`によるMsgBox拒否をVMが直接`RuntimeFailureKind`へ記録するようにしました。既存利用者向けの文字列エラーは維持し、未移行経路だけをfallback分類します。全エラー生成箇所の型付き移行とExcel oracleは未完です。
-- 複数moduleの同名UDTを大文字小文字非依存で検出し、実行前に明示拒否するようにしました。後勝ちの型定義上書きを防ぎますが、module-qualified UDT解決と診断位置は未完です。
+- 同一／複数moduleの同名UDTを大文字小文字非依存で検出し、実行前と`check --json`で`E1012`として明示拒否するようにしました。重複宣言・後勝ちの型定義上書きを防ぎますが、module-qualified UDT解決と診断位置は未完です。
 - 次期高速化目標を、同一条件の17セル・1,000×10・10,000×10で現行比1.1倍（処理時間90.9%以下）に設定しました。openpyxl比の提示値は再現計測前の暫定基準として扱い、耐久性・出力検証を含む再測定後に達成判定します。
 - WriterのDeflate level 1候補を同一条件で測定し、1,000×10と10,000×10では現行比1.1倍を達成しました。17セルは1.02倍に留まり、同期固定費を含む全ケース目標は未完了です。出力サイズ増加も確認したため、公開採用前の評価項目として残します。
 - 未変更のpassthrough entryとstyles.xmlを圧縮済みのまま移送するWriter最適化を追加しました。大規模ケースでは変更前との同一実行内比較で約1.30倍を確認しましたが、17セルは未達です。workbook.xml/relsのraw copyは関係ID不整合のため採用していません。

@@ -9238,6 +9238,13 @@ impl Vm {
                 .map(|s| (s.name.clone(), Arc::new(s.clone())))
                 .collect();
         }
+        let duplicate_types = parser::find_type_collisions(program);
+        if let Some(name) = duplicate_types.first() {
+            return Err(format!(
+                "duplicate Type '{}' in one module — UDT declarations must be unique",
+                name
+            ));
+        }
         for td in &program.type_defs {
             self.type_defs.insert(td.name.clone(), td.fields.clone());
         }
@@ -9305,6 +9312,14 @@ impl Vm {
                 name,
                 mods.join("', '")
             ));
+        }
+        for (_, program) in modules {
+            if let Some(name) = parser::find_type_collisions(program).first() {
+                return Err(format!(
+                    "duplicate Type '{}' in one module — UDT declarations must be unique",
+                    name
+                ));
+            }
         }
 
         self.msgbox_log.clear();

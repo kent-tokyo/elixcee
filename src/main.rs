@@ -322,6 +322,21 @@ fn run_check_command(args: &[String]) -> ! {
 
     let (modules, mut diags) = check_load_modules(&vba_files);
 
+    for module in &modules {
+        for name in parser::find_type_collisions(&module.program) {
+            diags.push(check::Diagnostic {
+                severity: "error",
+                code: "E1012",
+                kind: "duplicate_type",
+                message: format!(
+                    "duplicate Type '{}' in module '{}' — UDT declarations must be unique",
+                    name, module.name
+                ),
+                location: None,
+            });
+        }
+    }
+
     if modules.len() > 1 {
         let project: Vec<(String, parser::Program)> = modules
             .iter()

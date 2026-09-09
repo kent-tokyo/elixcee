@@ -312,3 +312,21 @@ fn multi_file_check_reports_a_cross_module_type_collision() {
         v
     );
 }
+
+#[test]
+fn check_reports_a_duplicate_type_in_one_module() {
+    let output = run_check_json(
+        "Type Point\n    X As Long\nEnd Type\nType point\n    Y As Long\nEnd Type\n",
+        None,
+        "type_same_module",
+    );
+    assert!(!output.0, "expected duplicate Type to fail: {:?}", output.1);
+    assert_eq!(output.1["ok"], false);
+    assert!(
+        output.1["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "E1012")
+    );
+}

@@ -36,7 +36,7 @@ python3 scripts/check-ooxml-feature-matrix.py
 
 ## Result
 
-The targeted safety and UDT-collision tests passed. The full local Rust workspace passed 1,603
+The targeted safety and UDT-collision tests passed. The full local Rust workspace passed 1,604
 tests; strict clippy, formatting, diff, formula-dispatch, and OOXML matrix
 checks also passed on macOS arm64.
 
