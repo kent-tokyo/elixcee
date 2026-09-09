@@ -354,6 +354,12 @@ class Vm:
         """Set an existing Pivot cache refreshOnLoad flag without recalculation."""
         ...
 
+    def set_pivot_cache_field_caption(
+        self, cache_part: str, field_index: int, caption: str
+    ) -> None:
+        """Update one existing Pivot cache field caption without recalculation."""
+        ...
+
     def set_drawing_anchor(
         self,
         drawing_part: str,

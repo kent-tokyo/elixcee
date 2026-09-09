@@ -867,6 +867,7 @@ pub(crate) struct PivotWorksheetSourceEdit {
     pub sheet: Option<String>,
     pub reference: Option<String>,
     pub refresh_on_load: Option<bool>,
+    pub field_captions: HashMap<usize, String>,
 }
 
 /// A bounded edit to one existing two-cell drawing anchor. Public API
@@ -7480,6 +7481,7 @@ impl Vm {
                 sheet: sheet.map(ToOwned::to_owned),
                 reference: reference.map(ToOwned::to_owned),
                 refresh_on_load: None,
+                field_captions: HashMap::new(),
             },
         );
         Ok(())
@@ -7506,8 +7508,45 @@ impl Vm {
                 sheet: None,
                 reference: None,
                 refresh_on_load: None,
+                field_captions: HashMap::new(),
             });
         edit.refresh_on_load = Some(enabled);
+        Ok(())
+    }
+
+    /// Queue a bounded update to one existing Pivot cache field caption.
+    /// Records and PivotTable layout are left unchanged.
+    pub fn set_pivot_cache_field_caption(
+        &mut self,
+        cache_part: &str,
+        field_index: usize,
+        caption: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("Pivot cache edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(cache_part.starts_with("xl/pivotCache/") && cache_part.ends_with(".xml")) {
+            return Err("cache_part must be an xl/pivotCache/*.xml path".to_string());
+        }
+        if caption.is_empty()
+            || caption.len() > 16 * 1024
+            || caption.chars().any(|c| c.is_control())
+        {
+            return Err(
+                "Pivot cache field caption must be 1..=16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        let edit = self
+            .pivot_source_edits
+            .entry(cache_part.to_string())
+            .or_insert_with(|| PivotWorksheetSourceEdit {
+                sheet: None,
+                reference: None,
+                refresh_on_load: None,
+                field_captions: HashMap::new(),
+            });
+        edit.field_captions.insert(field_index, caption.to_string());
         Ok(())
     }
 

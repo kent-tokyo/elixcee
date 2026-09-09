@@ -4,7 +4,7 @@ Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers only the bounded local BUILD for existing Chart-series,
 Chart-series-cache, Chart-title, two-cell Drawing-anchor/shape-name, worksheet-backed
-Pivot-source, and Pivot refresh-policy edits.
+Pivot-source, Pivot refresh-policy, and Pivot field-caption edits.
 It is not evidence of
 Excel reopening, Pivot recalculation, or general OOXML object compatibility.
 
@@ -16,6 +16,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   the first worksheet-backed `worksheetSource` `sheet` and/or A1 `ref`.
 - `Vm.set_pivot_cache_refresh_on_load(cache_part, enabled)` adds or replaces
   only the root cache definition's `refreshOnLoad` flag.
+- `Vm.set_pivot_cache_field_caption(cache_part, field_index, caption)` rewrites
+  only an existing `cacheField@name` attribute.
 - `Vm.set_chart_title(chart_part, text)` rewrites only the first `<a:t>` inside
   the first `<c:title>` element.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
@@ -47,6 +49,7 @@ cargo test chart_title_rewriter --offline -- --nocapture
 cargo test chart_series_rewriter --offline -- --nocapture
 cargo test chart_series_cache --offline -- --nocapture
 cargo test pivot_refresh_on_load --offline -- --nocapture
+cargo test pivot_cache_field_caption --offline -- --nocapture
 cargo test drawing_anchor --offline -- --nocapture
 cargo test --workspace --all-targets --offline --quiet
 cargo clippy --workspace --all-targets --offline -- -D warnings
@@ -58,8 +61,8 @@ bash scripts/check-local-gates.sh
 ## Result
 
 On the recorded macOS arm64 environment, the Chart title, series-name,
-  series-cache, Pivot refresh-policy, Drawing anchor/shape-name, and real-fixture
-  targeted tests passed. The full Rust workspace passed 1,613 tests,
+  series-cache, Pivot refresh-policy/field-caption, Drawing anchor/shape-name,
+  and real-fixture targeted tests passed. The full Rust workspace passed 1,615 tests,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,

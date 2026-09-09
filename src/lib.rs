@@ -1210,6 +1210,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded update to one existing Pivot cache field caption.
+    fn set_pivot_cache_field_caption(
+        &mut self,
+        cache_part: &str,
+        field_index: usize,
+        caption: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_pivot_cache_field_caption(cache_part, field_index, caption)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded edit to an existing two-cell drawing anchor. All cell
     /// coordinates are 1-based; only two-cell anchors are supported.
     fn set_drawing_anchor(
@@ -4372,7 +4384,7 @@ fn rewrite_chart_series_caches(
     }
 
     let mut ordered: Vec<_> = edits.iter().collect();
-    ordered.sort_by_key(|(index, _)| **index);
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
     let mut out = xml.to_string();
     for (&series_index, edit) in ordered {
         let (open, close) = selected_series(&out, series_index)?;
@@ -4485,7 +4497,7 @@ fn rewrite_drawing_anchors(
     }
 
     let mut ordered: Vec<_> = edits.iter().collect();
-    ordered.sort_by_key(|(index, _)| **index);
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
     let mut out = xml.to_string();
     for (&anchor_index, edit) in ordered {
         let mut cursor = 0;
@@ -4518,7 +4530,7 @@ fn rewrite_drawing_shape_names(
     edits: &std::collections::HashMap<usize, String>,
 ) -> Result<String, String> {
     let mut ordered: Vec<_> = edits.iter().collect();
-    ordered.sort_by_key(|(index, _)| **index);
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
     let mut out = xml.to_string();
     for (&anchor_index, name) in ordered {
         let mut cursor = 0;
@@ -4711,6 +4723,76 @@ fn rewrite_pivot_cache_refresh_on_load(xml: &str, enabled: bool) -> Result<Strin
     }
     let mut out = xml.to_string();
     out.replace_range(root_start..root_end, &tag);
+    Ok(out)
+}
+
+/// Rewrites selected `cacheField@name` captions while leaving shared items,
+/// records, and field ordering untouched.
+fn rewrite_pivot_cache_field_captions(
+    xml: &str,
+    edits: &std::collections::HashMap<usize, String>,
+) -> Result<String, String> {
+    let fields_start = xml
+        .find("<cacheFields")
+        .ok_or_else(|| "Pivot cache is missing <cacheFields>".to_string())?;
+    let fields_end = fields_start
+        + xml[fields_start..]
+            .find("</cacheFields>")
+            .ok_or_else(|| "Pivot cacheFields element is unterminated".to_string())?
+        + "</cacheFields>".len();
+    let mut out = xml.to_string();
+    let mut ordered: Vec<_> = edits.iter().collect();
+    ordered.sort_by_key(|(index, _)| std::cmp::Reverse(**index));
+    for (&field_index, caption) in ordered {
+        let fields = &out[fields_start..fields_end];
+        let mut cursor = 0;
+        let mut selected = None;
+        for current in 0..=field_index {
+            let exact = fields[cursor..]
+                .find("<cacheField>")
+                .map(|offset| cursor + offset);
+            let attributed = fields[cursor..]
+                .find("<cacheField ")
+                .map(|offset| cursor + offset);
+            let open = match (exact, attributed) {
+                (Some(left), Some(right)) => left.min(right),
+                (Some(position), None) | (None, Some(position)) => position,
+                (None, None) => {
+                    return Err(format!(
+                        "Pivot cache field index {field_index} is out of range"
+                    ));
+                }
+            };
+            let end = fields[open..]
+                .find('>')
+                .map(|offset| open + offset + 1)
+                .ok_or_else(|| "Pivot cacheField element is unterminated".to_string())?;
+            if current == field_index {
+                selected = Some((open, end));
+                break;
+            }
+            cursor = end;
+        }
+        let (open, end) = selected.expect("field selection loop always selects its index");
+        let mut tag = fields[open..end].to_string();
+        let attr = "name=";
+        let attr_rel = tag
+            .find(attr)
+            .ok_or_else(|| "Pivot cacheField is missing name attribute".to_string())?;
+        let value_start = attr_rel + attr.len();
+        let quote = tag.as_bytes()[value_start];
+        if quote != b'"' && quote != b'\'' {
+            return Err("Pivot cacheField name attribute is malformed".to_string());
+        }
+        let value_end = tag[value_start + 1..]
+            .find(quote as char)
+            .map(|rel| value_start + 1 + rel)
+            .ok_or_else(|| "Pivot cacheField name attribute is unterminated".to_string())?;
+        tag.replace_range(value_start + 1..value_end, &xml_escape(caption));
+        let absolute_open = fields_start + open;
+        let absolute_end = fields_start + end;
+        out.replace_range(absolute_open..absolute_end, &tag);
+    }
     Ok(out)
 }
 
@@ -5305,6 +5387,9 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     }
                     if let Some(enabled) = edit.refresh_on_load {
                         pivot = rewrite_pivot_cache_refresh_on_load(&pivot, enabled)?;
+                    }
+                    if !edit.field_captions.is_empty() {
+                        pivot = rewrite_pivot_cache_field_captions(&pivot, &edit.field_captions)?;
                     }
                 }
                 pivot.into_bytes()
@@ -8482,6 +8567,7 @@ mod tests {
             sheet: Some("Data & 2026".to_string()),
             reference: Some("A1:C3".to_string()),
             refresh_on_load: None,
+            field_captions: std::collections::HashMap::new(),
         };
         let source = r#"<pivotCacheDefinition><cacheSource><worksheetSource ref="A1:B2" sheet="Sheet1"/></cacheSource><extLst><x:note sheet="Sheet1"/></extLst></pivotCacheDefinition>"#;
         let actual = rewrite_pivot_worksheet_source(source, &edit).unwrap();
@@ -8497,6 +8583,7 @@ mod tests {
             sheet: Some("Sheet1".to_string()),
             reference: None,
             refresh_on_load: None,
+            field_captions: std::collections::HashMap::new(),
         };
         assert!(rewrite_pivot_worksheet_source("<cacheSource/>", &edit).is_err());
     }
@@ -8519,6 +8606,32 @@ mod tests {
     #[test]
     fn pivot_refresh_on_load_rewriter_rejects_missing_root() {
         assert!(rewrite_pivot_cache_refresh_on_load("<cacheSource/>", true).is_err());
+    }
+
+    #[test]
+    fn pivot_cache_field_caption_rewriter_preserves_children() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(1usize, "Amount & total".to_string());
+        let source = r#"<pivotCacheDefinition><cacheFields count="2"><cacheField name="Region"><sharedItems/></cacheField><cacheField name="Amount"><sharedItems count="2"/></cacheField></cacheFields><extLst><x:keep/></extLst></pivotCacheDefinition>"#;
+        let actual = rewrite_pivot_cache_field_captions(source, &edits).unwrap();
+        assert!(actual.contains(
+            "<cacheField name=\"Amount &amp; total\"><sharedItems count=\"2\"/></cacheField>"
+        ));
+        assert!(actual.contains("name=\"Region\""));
+        assert!(actual.contains("<extLst><x:keep/></extLst>"));
+    }
+
+    #[test]
+    fn pivot_cache_field_caption_rewriter_rejects_missing_field() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(0usize, "Region".to_string());
+        assert!(
+            rewrite_pivot_cache_field_captions(
+                "<pivotCacheDefinition><cacheFields/></pivotCacheDefinition>",
+                &edits
+            )
+            .is_err()
+        );
     }
 
     #[cfg(feature = "python")]
