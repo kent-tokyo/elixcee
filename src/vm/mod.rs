@@ -21248,6 +21248,36 @@ mod tests {
     }
 
     #[test]
+    fn test_module_qualified_udt_resolution_across_modules() {
+        let types = parser::parse(concat!(
+            "Attribute VB_Name = \"Types\"\n",
+            "Type Point\n",
+            "    X As Integer\n",
+            "End Type\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Attribute VB_Name = \"MainModule\"\n",
+            "Sub Main()\n",
+            "    Dim p As Types.Point\n",
+            "    p.X = 9\n",
+            "    result = p.X\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[
+                ("Types".to_string(), types),
+                ("MainModule".to_string(), main),
+            ],
+            "Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(9));
+    }
+
+    #[test]
     fn test_dim_multi_declarator_end_to_end() {
         // `Dim a As Integer, b As Person` — a comma-separated multi-declarator
         // Dim mixing a built-in type with a user-defined type. Previously

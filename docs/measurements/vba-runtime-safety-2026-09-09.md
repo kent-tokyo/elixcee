@@ -3,8 +3,8 @@
 Date: 2026-09-09 (Asia/Tokyo)
 
 This record covers the local safety boundary for VBA workbook `Save` and
-`Close` members. It does not implement persistence or claim Excel semantic
-equivalence.
+`Close` members and the bounded UDT-resolution diagnostics. It does not
+implement persistence or claim Excel semantic equivalence.
 
 ## Scope
 
@@ -26,6 +26,7 @@ From the repository root, run:
 cargo test workbook_save_and_close_are_blocked_as_external_effects --offline -- --nocapture
 cargo test type_collisions --offline -- --nocapture
 cargo test run_sub_multi_rejects_a_genuine_type_collision_before_binding --offline -- --nocapture
+cargo test module_qualified_udt_resolution --offline -- --nocapture
 cargo test --workspace --all-targets --offline --quiet
 cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo fmt --all -- --check
@@ -36,9 +37,9 @@ python3 scripts/check-ooxml-feature-matrix.py
 
 ## Result
 
-The targeted safety and UDT-collision tests passed. The full local Rust workspace passed 1,604
-tests; strict clippy, formatting, diff, formula-dispatch, and OOXML matrix
-checks also passed on macOS arm64.
+The targeted safety, UDT-collision, and module-qualified UDT tests passed. The
+full local Rust workspace passed 1,613 tests; strict clippy, formatting, diff,
+formula-dispatch, and OOXML matrix checks also passed on macOS arm64.
 
 ## Not measured or claimed
 
