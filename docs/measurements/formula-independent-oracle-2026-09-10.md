@@ -30,6 +30,8 @@ Excel serial (`45351`) before comparison, including the workbook carrying
 `workbookPr@date1904="1"`. This is a fixture-level type normalization, not a
 claim that all date-system behavior is compatible; VM date-system metadata is
 currently exposed separately and serial correction remains an open boundary.
+The Rust regression also verifies that a loaded `date1904` flag survives a
+VM save and reload; this checks metadata preservation only.
 
 ## Reproduction
 
