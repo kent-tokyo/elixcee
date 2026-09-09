@@ -1207,6 +1207,18 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a bounded edit to an existing chart series marker symbol.
+    fn set_chart_series_marker_symbol(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        symbol: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .set_chart_series_marker_symbol(chart_part, series_index, symbol)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded update to cached category/value points of an existing
     /// chart series. Existing cache kind is preserved and formulas are not
     /// changed.
@@ -4569,6 +4581,27 @@ fn rewrite_chart_series_formulas(
         Ok(())
     }
 
+    fn replace_marker_symbol(series: &mut String, symbol: &str) -> Result<(), String> {
+        let symbol_open = series
+            .find("<c:symbol")
+            .ok_or_else(|| "chart series marker is missing".to_string())?;
+        let tag_end = series[symbol_open..]
+            .find('>')
+            .map(|offset| symbol_open + offset)
+            .ok_or_else(|| "chart series marker symbol is unterminated".to_string())?;
+        let tag = &series[symbol_open..=tag_end];
+        let value_start = tag
+            .find("val=\"")
+            .map(|offset| symbol_open + offset + "val=\"".len())
+            .ok_or_else(|| "chart series marker symbol is missing val".to_string())?;
+        let value_end = series[value_start..]
+            .find('\"')
+            .map(|offset| value_start + offset)
+            .ok_or_else(|| "chart series marker symbol is unterminated".to_string())?;
+        series.replace_range(value_start..value_end, symbol);
+        Ok(())
+    }
+
     let mut out = xml.to_string();
     for (&series_index, edit) in edits {
         let mut cursor = 0;
@@ -4596,6 +4629,9 @@ fn rewrite_chart_series_formulas(
         }
         if let Some(formula) = edit.values.as_deref() {
             replace_reference(&mut series, "<c:val>", formula)?;
+        }
+        if let Some(symbol) = edit.marker_symbol.as_deref() {
+            replace_marker_symbol(&mut series, symbol)?;
         }
         out.replace_range(open..close, &series);
     }
@@ -10135,6 +10171,7 @@ mod tests {
                 name: None,
                 categories: Some("Data & 2026!$A$2:$A$4".to_string()),
                 values: Some("Data & 2026!$B$2:$B$4".to_string()),
+                marker_symbol: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10164,6 +10201,7 @@ mod tests {
                 name: Some("Data & 2026!$B$1".to_string()),
                 categories: None,
                 values: None,
+                marker_symbol: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10182,6 +10220,48 @@ mod tests {
     }
 
     #[test]
+    fn chart_series_marker_rewriter_changes_only_selected_symbol() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(
+            0,
+            vm::ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: Some("diamond".to_string()),
+                category_cache: None,
+                value_cache: None,
+            },
+        );
+        let source = concat!(
+            "<c:chart><c:plotArea>",
+            "<c:ser><c:marker><c:symbol val=\"circle\"/><c:size val=\"6\"/></c:marker>",
+            "<c:val><c:numRef><c:f>Sheet1!$A$1:$A$2</c:f></c:numRef></c:val></c:ser>",
+            "</c:plotArea></c:chart>"
+        );
+        let actual = rewrite_chart_series_formulas(source, &edits).unwrap();
+        assert!(actual.contains("<c:symbol val=\"diamond\"/>"));
+        assert!(actual.contains("<c:size val=\"6\"/>"));
+    }
+
+    #[test]
+    fn chart_series_marker_rewriter_rejects_missing_marker() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(
+            0,
+            vm::ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: Some("diamond".to_string()),
+                category_cache: None,
+                value_cache: None,
+            },
+        );
+        assert!(rewrite_chart_series_formulas("<c:chart><c:ser/></c:chart>", &edits).is_err());
+    }
+
+    #[test]
     fn chart_series_rewriter_rejects_missing_series_or_reference() {
         let mut edits = std::collections::HashMap::new();
         edits.insert(
@@ -10190,6 +10270,7 @@ mod tests {
                 name: None,
                 categories: Some("Sheet1!$A$1".to_string()),
                 values: None,
+                marker_symbol: None,
                 category_cache: None,
                 value_cache: None,
             },
@@ -10794,6 +10875,7 @@ mod tests {
                 name: None,
                 categories: None,
                 values: None,
+                marker_symbol: None,
                 category_cache: Some(vec!["Jan & Feb".to_string(), "Mar".to_string()]),
                 value_cache: Some(vec!["10".to_string(), "20.5".to_string()]),
             },
@@ -10823,6 +10905,7 @@ mod tests {
                 name: None,
                 categories: None,
                 values: None,
+                marker_symbol: None,
                 category_cache: None,
                 value_cache: Some(vec!["1".to_string()]),
             },
@@ -10847,6 +10930,7 @@ mod tests {
                 name: None,
                 categories: None,
                 values: None,
+                marker_symbol: None,
                 category_cache: None,
                 value_cache: Some(vec!["3.5".to_string()]),
             },

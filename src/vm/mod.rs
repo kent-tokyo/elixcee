@@ -852,6 +852,7 @@ pub(crate) struct ChartSeriesEdit {
     pub name: Option<String>,
     pub categories: Option<String>,
     pub values: Option<String>,
+    pub marker_symbol: Option<String>,
     pub category_cache: Option<Vec<String>>,
     pub value_cache: Option<Vec<String>>,
 }
@@ -7505,6 +7506,7 @@ impl Vm {
                 name: None,
                 categories: None,
                 values: None,
+                marker_symbol: None,
                 category_cache: None,
                 value_cache: None,
             });
@@ -7541,10 +7543,59 @@ impl Vm {
                 name: None,
                 categories: None,
                 values: None,
+                marker_symbol: None,
                 category_cache: None,
                 value_cache: None,
             });
         edit.name = Some(name_formula.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series marker symbol.
+    pub fn set_chart_series_marker_symbol(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        symbol: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err(
+                "chart series marker edits require a loaded XLSX/XLSM workbook".to_string(),
+            );
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if !matches!(
+            symbol,
+            "circle"
+                | "dash"
+                | "diamond"
+                | "dot"
+                | "none"
+                | "picture"
+                | "plus"
+                | "square"
+                | "star"
+                | "triangle"
+                | "x"
+        ) {
+            return Err("chart marker symbol is not a supported DrawingML value".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.marker_symbol = Some(symbol.to_string());
         Ok(())
     }
 
@@ -7599,6 +7650,7 @@ impl Vm {
                 name: None,
                 categories: None,
                 values: None,
+                marker_symbol: None,
                 category_cache: None,
                 value_cache: None,
             });

@@ -67,6 +67,10 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   XML escaping and control-character/size validation.
 - `Vm.set_chart_series_name_formula(chart_part, series_index, name_formula)`
   rewrites only the `<c:f>` inside the selected series' `<c:tx>` element.
+- `Vm.set_chart_series_marker_symbol(chart_part, series_index, symbol)` updates
+  only an existing series marker's `<c:symbol val>`. Supported symbols are
+  `circle`, `dash`, `diamond`, `dot`, `none`, `picture`, `plus`, `square`,
+  `star`, `triangle`, and `x`; a missing marker is rejected.
 - `Vm.set_chart_series_cache(chart_part, series_index, categories, values)`
   rewrites existing category/value cache points while preserving the cache
   kind, formula, format code, and surrounding Chart XML.
@@ -125,6 +129,7 @@ cargo test chart_title_rewriter --offline -- --nocapture
 cargo test chart_legend_overlay --offline -- --nocapture
 cargo test chart_data_labels_rewriter --offline -- --nocapture
 cargo test chart_series_rewriter --offline -- --nocapture
+cargo test chart_series_marker --offline -- --nocapture
 cargo test chart_series_cache --offline -- --nocapture
 cargo test pivot_refresh_on_load --offline -- --nocapture
 cargo test pivot_cache_field_caption --offline -- --nocapture
@@ -142,7 +147,7 @@ bash scripts/check-local-gates.sh
 ## Result
 
 On the recorded macOS arm64 environment, the Chart title, legend-overlay,
-data-label, series-name, series-cache, Pivot refresh-policy/field-caption,
+data-label, series-name, marker-symbol, series-cache, Pivot refresh-policy/field-caption,
 Drawing anchor/shape-name/text-run, line-dash persistence, and real-fixture targeted tests passed. The full Rust workspace passed the current workspace test set,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
