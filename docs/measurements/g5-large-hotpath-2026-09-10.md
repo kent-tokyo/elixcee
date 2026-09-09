@@ -58,3 +58,10 @@ This is a reconstruction limitation, not a new performance result. The
 existing 100k/400k/1M reports remain historical scoped evidence, while a new
 same-input before/after comparison still requires reproducible baseline
 artifacts plus RSS, durable-save, and output-verification capture.
+
+The later same-day paired run in
+[g5-paired-v1.0.5-2026-09-10.md](g5-paired-v1.0.5-2026-09-10.md) used the
+available `v1.0.5` tag binary as a reproducible baseline and completed the
+durable-save, ZIP-equality, and streaming output checks for 100k, 400k, and 1M
+cells. It does not retroactively reconstruct the older historical baseline or
+close the RSS, 20-pair confirmation, and cross-platform gates.

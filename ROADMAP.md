@@ -270,7 +270,7 @@ temp directoryの1M行観測はappend 3回で14.24 MiB、normal-fresh単発で12
 
 - [ ] G2の接続graphとExcel再open、G3–G4の独立oracle、G5の行数別RSSを根拠として、対応matrixと既知の損失を更新する。
 - [x] 部分 G6 local BUILD/GATE: macOSで失敗時の元出力保護、4 targetの短時間fuzz、`cargo audit --no-fetch --stale`、Python/Rust API回帰を実施した。Linux／Windows、長時間fuzz／soak、3 OS資源校正は未完。
-- [ ] 大規模速度は同じ入力・編集・耐久性・反復条件で再測定。互換性やRSSの悪化を速度向上で相殺しない。
+- [x] 部分 G5 paired MEASURE: `v1.0.5`タグと現行release binaryを同一fixture・編集・耐久保存・再読込・ZIP全part同値・streaming全セル検証で100k／400k／1Mセル各4ペア比較し、p50総時間で1.366x／1.338x／1.368x（全て1.2x目標達成）を確認した。20ペア確認測定、RSS、他OS、互換性評価は未完。[G5測定](docs/measurements/g5-paired-v1.0.5-2026-09-10.md)
 
 ### LogiSheets 対抗トラック（L0–L6）
 

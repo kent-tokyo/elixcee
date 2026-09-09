@@ -9,6 +9,7 @@ fixture, host, and scope limit its conclusions. Open work belongs in the
 
 - [VM hot paths, 2026-09-05](vm-hotpath-optimization-2026-09-05.md): tile cache, write paths, threshold calibration.
 - [G5 large hot paths, 2026-09-10](g5-large-hotpath-2026-09-10.md): same-binary cached append and dirty-closure comparisons.
+- [G5 paired v1.0.5 comparison, 2026-09-10](g5-paired-v1.0.5-2026-09-10.md): 100k/400k/1M same-fixture before/after measurements, all above the 1.2x target.
 - [Formula oracle local rerun, 2026-09-10](formula-oracle-local-2026-09-10.md): eight arithmetic LibreOffice cases, all timeout and therefore not comparable.
 - [Formula-only independent oracle, 2026-09-10](formula-independent-oracle-2026-09-10.md): 28 direct XLSX formula probes, 27 comparable matches and one explicitly skipped unsupported probe.
 - [Formula dirty propagation, 2026-09-05](formula-dirty-calibration-2026-09-05.md): dirty/full equivalence, matrix, p50/p95, resources.
