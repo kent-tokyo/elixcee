@@ -94,6 +94,8 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   updates only an existing line width after points-to-EMU conversion.
 - `Vm.set_drawing_shape_line_dash(drawing_part, anchor_index, dash)` updates
   only an existing `<a:prstDash>` using the DrawingML preset vocabulary.
+  The save path is covered by `drawing_shape_line_dash_edit_survives_xlsx_save`
+  using a minimal Drawing-backed XLSX fixture.
 - `Vm.set_chart_series_cache(...)` updates an existing cache or creates the
   matching cache when the selected series has only a `strRef`/`numRef` formula.
 - Missing source parts, series, references, malformed attributes, control
@@ -119,6 +121,7 @@ cargo test chart_series_cache --offline -- --nocapture
 cargo test pivot_refresh_on_load --offline -- --nocapture
 cargo test pivot_cache_field_caption --offline -- --nocapture
 cargo test drawing_anchor --offline -- --nocapture
+cargo test drawing_shape_line_dash_edit_survives_xlsx_save --offline -- --nocapture
 cargo test --workspace --all-targets --offline --quiet
 cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo fmt --all -- --check
@@ -130,7 +133,7 @@ bash scripts/check-local-gates.sh
 
 On the recorded macOS arm64 environment, the Chart title, legend-overlay,
 data-label, series-name, series-cache, Pivot refresh-policy/field-caption,
-Drawing anchor/shape-name, and real-fixture targeted tests passed. The full Rust workspace passed 1,638 tests,
+Drawing anchor/shape-name, line-dash persistence, and real-fixture targeted tests passed. The full Rust workspace passed the current workspace test set,
 including 54 XLSX round-trip tests. Strict
 clippy, formatting, version/formula/OOXML checks, offline audit, four five-second
 fuzz smoke targets, TypeScript checks, WASM smoke, packed npm consumer smoke,
