@@ -12,13 +12,13 @@ independent oracle, not Microsoft Excel.
 
 - Host: macOS arm64
 - Backend: `/opt/homebrew/bin/soffice`
-- Cases: 61 (the original set plus logical, rounding, lookup, criteria, text,
+- Cases: 65 (the original set plus logical, rounding, lookup, criteria, text,
   numeric, date-boundary, and string-normalization probes; `DAYS`, `IFNA`,
-  `XMATCH`, and `TEXTJOIN`
+  `MAXIFS`, `MINIFS`, `XMATCH`, and `TEXTJOIN`
   are retained as oracle probes)
-- Comparable results: 57
-- Matches: 57
-- Skipped: 4 (`DAYS`, `IFNA`, `XMATCH`, and `TEXTJOIN`, because this LibreOffice build does not evaluate these probes)
+- Comparable results: 59
+- Matches: 59
+- Skipped: 6 (`DAYS`, `IFNA`, `MAXIFS`, `MINIFS`, `XMATCH`, and `TEXTJOIN`, because this LibreOffice build does not evaluate these probes)
 - Mismatches: 0
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
 
@@ -26,14 +26,14 @@ The harness exits with status 1 if any comparable case mismatches. Oracle
 unsupported probes are reported in `skipped` and are not silently counted as
 matches; this run exited with status 0.
 
-The expanded 61-case command was rerun after the later local changes using a
+The expanded 65-case command was rerun after the later local changes using a
 dedicated writable temporary directory (`TMPDIR=/private/tmp/elixcee-formula-oracle-run`)
 because the default temporary directories were full or unavailable. It
-reported 57/57 comparable matches, 4 explicit skips, and zero mismatches.
+reported 59/59 comparable matches, 6 explicit skips, and zero mismatches.
 
 The same generated workbook was then recalculated by the installed elixcee
 wheel with `--with-elixcee`. After the documented date-serial normalization,
-elixcee matched all 57 comparable probes (57/57); the same four probes were
+elixcee matched all 59 comparable probes (59/59); the same six probes were
 skipped because the LibreOffice oracle did not produce comparable values.
 The wheel was elixcee 1.0.5 on CPython 3.13.6, macOS 26.5.2 arm64.
 The binding-specific Error object was normalized to its displayed error code

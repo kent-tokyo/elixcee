@@ -28,6 +28,10 @@ CASES = {
     "countblank": ("=COUNTBLANK(A4:A4)", 1),
     "isblank": ("=ISBLANK(A4)", True),
     "sum_mixed": ("=SUM(A1:B3)", 6),
+    "sumproduct": ("=SUMPRODUCT(A1:A3,A1:A3)", 14),
+    "averageif": ('=AVERAGEIF(A1:A3,">1")', 2.5),
+    "maxifs": ('=MAXIFS(A1:A3,A1:A3,">1")', 3),
+    "minifs": ('=MINIFS(A1:A3,A1:A3,">1")', 2),
     "if": ('=IF(A1>2,"yes","no")', "no"),
     "iferror": ("=IFERROR(1/0,99)", 99),
     "and": ("=AND(A1=1,A2=2)", True),
@@ -85,10 +89,11 @@ CASES = {
 # LibreOffice 26.2.5 on this host leaves IFNA results as #N/A, including the
 # direct NA() form. Keep the case in the generated workbook as a visible
 # probe, but do not misclassify this oracle limitation as an engine mismatch.
-# LibreOffice 26.2.5 on this host also leaves DAYS() as #NAME? in this
-# generated workbook. Keep it visible as a probe, but exclude it from the
-# cross-engine count for the same reason as the other build-specific gaps.
-ORACLE_UNSUPPORTED = {"days", "ifna", "xmatch", "textjoin"}
+# LibreOffice 26.2.5 on this host also leaves DAYS(), MAXIFS(), and MINIFS()
+# as #NAME? in this generated workbook. Keep them visible as probes, but
+# exclude them from the cross-engine count for the same reason as the other
+# build-specific gaps.
+ORACLE_UNSUPPORTED = {"days", "ifna", "maxifs", "minifs", "xmatch", "textjoin"}
 
 
 def serial_or_value(value):
