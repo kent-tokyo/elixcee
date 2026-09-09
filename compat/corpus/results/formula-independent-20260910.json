@@ -1,7 +1,7 @@
 {
   "oracle": "libreoffice",
-  "comparable_cases": 74,
-  "matches": 74,
+  "comparable_cases": 79,
+  "matches": 79,
   "skipped": [
     {
       "case": "maxifs",
@@ -17,6 +17,10 @@
     },
     {
       "case": "days",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "isoweeknum",
       "reason": "oracle_unsupported"
     },
     {
@@ -408,6 +412,20 @@
       "match": true
     },
     {
+      "case": "weeknum_monday",
+      "formula": "=WEEKNUM(DATE(2024,2,29),2)",
+      "expected": 9,
+      "actual": 9,
+      "match": true
+    },
+    {
+      "case": "networkdays",
+      "formula": "=NETWORKDAYS(DATE(2024,2,26),DATE(2024,3,1))",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
       "case": "datevalue",
       "formula": "=DATEVALUE(\"2024-02-29\")",
       "expected": 45351,
@@ -426,6 +444,27 @@
       "formula": "=EOMONTH(DATE(2024,2,1),0)",
       "expected": 45351,
       "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "hour",
+      "formula": "=HOUR(TIME(14,30,15))",
+      "expected": 14,
+      "actual": 14,
+      "match": true
+    },
+    {
+      "case": "minute",
+      "formula": "=MINUTE(TIME(14,30,15))",
+      "expected": 30,
+      "actual": 30,
+      "match": true
+    },
+    {
+      "case": "second",
+      "formula": "=SECOND(TIME(14,30,15))",
+      "expected": 15,
+      "actual": 15,
       "match": true
     },
     {
@@ -548,8 +587,8 @@
       "match": true
     }
   ],
-  "elixcee_comparable_cases": 74,
-  "elixcee_matches": 74,
+  "elixcee_comparable_cases": 79,
+  "elixcee_matches": 79,
   "elixcee_records": [
     {
       "case": "sum",
@@ -876,6 +915,18 @@
       "match": true
     },
     {
+      "case": "weeknum_monday",
+      "expected": 9,
+      "actual": 9,
+      "match": true
+    },
+    {
+      "case": "networkdays",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
       "case": "datevalue",
       "expected": 45351,
       "actual": 45351.0,
@@ -891,6 +942,24 @@
       "case": "eomonth",
       "expected": 45351,
       "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "hour",
+      "expected": 14,
+      "actual": 14,
+      "match": true
+    },
+    {
+      "case": "minute",
+      "expected": 30,
+      "actual": 30,
+      "match": true
+    },
+    {
+      "case": "second",
+      "expected": 15,
+      "actual": 15,
       "match": true
     },
     {

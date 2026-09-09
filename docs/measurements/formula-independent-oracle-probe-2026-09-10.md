@@ -8,15 +8,16 @@ calculation reference, not Microsoft Excel.
 
 ## Result
 
-- total cases in the runner: 80
-- LibreOffice-comparable cases: 74
-- LibreOffice matches: 74/74
-- elixcee-comparable cases: 74
-- elixcee matches: 74/74
-- build-specific skips: 6 (`DAYS`, `IFNA`, `MAXIFS`, `MINIFS`, `XMATCH`,
-  `TEXTJOIN`)
+- total cases in the runner: 86
+- LibreOffice-comparable cases: 79
+- LibreOffice matches: 79/79
+- elixcee-comparable cases: 79
+- elixcee matches: 79/79
+- build-specific skips: 7 (`DAYS`, `IFNA`, `MAXIFS`, `MINIFS`, `XMATCH`,
+  `TEXTJOIN`, `ISOWEEKNUM`)
 - added probe coverage: `INT`, `TRUNC`, `SIGN`, `SQRT`, `ROWS`, `COLUMNS`,
-  `ISLOGICAL`, and boolean/text `N` coercion
+  `ISLOGICAL`, boolean/text `N` coercion, `WEEKNUM`, `NETWORKDAYS`, `HOUR`,
+  `MINUTE`, and `SECOND`
 
 ## Reproduction
 

@@ -12,13 +12,13 @@ independent oracle, not Microsoft Excel.
 
 - Host: macOS arm64
 - Backend: `/opt/homebrew/bin/soffice`
-- Cases: 80 (the original set plus logical, rounding, lookup, criteria, text,
+- Cases: 86 (the original set plus logical, rounding, lookup, criteria, text,
   numeric, date-boundary, and string-normalization probes; `DAYS`, `IFNA`,
   `MAXIFS`, `MINIFS`, `XMATCH`, and `TEXTJOIN`
-  are retained as oracle probes)
-- Comparable results: 74
-- Matches: 74
-- Skipped: 6 (`DAYS`, `IFNA`, `MAXIFS`, `MINIFS`, `XMATCH`, and `TEXTJOIN`, because this LibreOffice build does not evaluate these probes)
+  and `ISOWEEKNUM` are retained as oracle probes)
+- Comparable results: 79
+- Matches: 79
+- Skipped: 7 (`DAYS`, `IFNA`, `MAXIFS`, `MINIFS`, `XMATCH`, `TEXTJOIN`, and `ISOWEEKNUM`, because this LibreOffice build does not evaluate these probes)
 - Mismatches: 0
 - Machine-readable result: `compat/corpus/results/formula-independent-20260910.json`
 - Command: `python3 compat/oracle/run-libreoffice-formulas.py --soffice /opt/homebrew/bin/soffice`
@@ -27,14 +27,14 @@ The harness exits with status 1 if any comparable case mismatches. Oracle
 unsupported probes are reported in `skipped` and are not silently counted as
 matches; this run exited with status 0.
 
-The expanded 80-case command was rerun after the later local changes using a
+The expanded 86-case command was rerun after the later local changes using a
 dedicated writable temporary directory (`TMPDIR=/private/tmp/elixcee-formula-oracle-run`)
 because the default temporary directories were full or unavailable. It
-reported 74/74 comparable matches, 6 explicit skips, and zero mismatches.
+reported 79/79 comparable matches, 7 explicit skips, and zero mismatches.
 
 The same generated workbook was then recalculated by a wheel built from the
 current source (`elixcee` 1.0.5) with `--with-elixcee`. After the documented
-date-serial normalization, elixcee matched all 74 comparable probes (74/74);
+date-serial normalization, elixcee matched all 79 comparable probes (79/79);
 the same six probes were
 skipped because the LibreOffice oracle did not produce comparable values.
 The wheel was elixcee 1.0.5 on CPython 3.13.6, macOS 26.5.2 arm64.
@@ -56,8 +56,9 @@ currently exposed separately and serial correction remains an open boundary.
 The Rust regression also verifies that a loaded `date1904` flag survives a
 VM save and reload; this checks metadata preservation only.
 
-The nine newly added probes cover `INT`, `TRUNC`, `SIGN`, `SQRT`, `ROWS`,
-`COLUMNS`, `ISLOGICAL`, and boolean/text `N` coercion. `ROWS` and `COLUMNS`
+The newly added probes cover `INT`, `TRUNC`, `SIGN`, `SQRT`, `ROWS`,
+`COLUMNS`, `ISLOGICAL`, boolean/text `N` coercion, `WEEKNUM`,
+`NETWORKDAYS`, `HOUR`, `MINUTE`, and `SECOND`. `ROWS` and `COLUMNS`
 initially exposed a real `#NAME?` gap in elixcee; their implementation and
 paired 74/74 result are included in the current artifact. See the
 [follow-up probe](formula-independent-oracle-probe-2026-09-10.md).

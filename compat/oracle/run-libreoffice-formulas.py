@@ -77,9 +77,15 @@ CASES = {
     "month": ("=MONTH(DATE(2024,2,29))", 2),
     "day": ("=DAY(DATE(2024,2,29))", 29),
     "weekday": ("=WEEKDAY(DATE(2024,2,29))", 5),
+    "weeknum_monday": ("=WEEKNUM(DATE(2024,2,29),2)", 9),
+    "isoweeknum": ("=ISOWEEKNUM(DATE(2024,2,29))", 9),
+    "networkdays": ("=NETWORKDAYS(DATE(2024,2,26),DATE(2024,3,1))", 5),
     "datevalue": ('=DATEVALUE("2024-02-29")', 45351),
     "edate": ("=EDATE(DATE(2024,1,31),1)", 45351),
     "eomonth": ("=EOMONTH(DATE(2024,2,1),0)", 45351),
+    "hour": ("=HOUR(TIME(14,30,15))", 14),
+    "minute": ("=MINUTE(TIME(14,30,15))", 30),
+    "second": ("=SECOND(TIME(14,30,15))", 15),
     "floor": ("=FLOOR(5.7,2)", 4),
     "ceiling": ("=CEILING(5.1,2)", 6),
     "mround": ("=MROUND(10,3)", 9),
@@ -108,7 +114,16 @@ CASES = {
 # as #NAME? in this generated workbook. Keep them visible as probes, but
 # exclude them from the cross-engine count for the same reason as the other
 # build-specific gaps.
-ORACLE_UNSUPPORTED = {"days", "ifna", "maxifs", "minifs", "xmatch", "textjoin"}
+# This LibreOffice build also leaves ISOWEEKNUM() as #NAME?.
+ORACLE_UNSUPPORTED = {
+    "days",
+    "ifna",
+    "maxifs",
+    "minifs",
+    "xmatch",
+    "textjoin",
+    "isoweeknum",
+}
 
 
 def serial_or_value(value):
