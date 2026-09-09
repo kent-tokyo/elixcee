@@ -6402,7 +6402,7 @@ fn carry_over_rels(
     raw_entries: &std::collections::HashMap<String, Vec<u8>>,
     rels_part: &str,
     target_base: &str,
-    passthrough_names: &[String],
+    passthrough_names: &std::collections::HashSet<String>,
     skip_types: &[&str],
 ) -> Vec<(String, String)> {
     let Some(rels_xml) = raw_entries
@@ -6968,7 +6968,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             Some(archive)
         };
         let drop_external_links = vm.external_links_policy == reader::ExternalLinksPolicy::Drop;
-        let passthrough_names: Vec<String> = raw_entries
+        let passthrough_names: std::collections::HashSet<String> = raw_entries
             .keys()
             .filter(|name| !is_writer_owned_part(name))
             .filter(|name| is_xlsm_output || !name.starts_with("xl/vbaProject"))

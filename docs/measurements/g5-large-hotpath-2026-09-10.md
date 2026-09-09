@@ -58,6 +58,14 @@ out of the raw map after carry-over analysis instead of cloning them. The
 54-test `xlsx_roundtrip` suite and warnings-denied clippy passed after this
 change. Its speed and RSS effect remain unmeasured.
 
+The subsequent carry-over lookup changes the surviving-part membership check
+from a linear `Vec` scan to a `HashSet` lookup. This preserves the emitted
+relationships and connectivity decision while reducing the analysis cost as
+the passthrough-part count grows. `cargo check --lib --offline` passed with
+debuginfo disabled in a dedicated temporary target. The focused test binary
+could not be linked in the available disk space, so no speed or RSS gain is
+claimed and the full test gate remains open.
+
 Reproduction for the workspace gate:
 
 ```bash

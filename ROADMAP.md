@@ -198,6 +198,7 @@ G5全体は未完了であり、constant-memoryを主張しない。
 - [x] G5b 部分 BUILD: passthrough relationshipの接続解析とcarry-over判定を借用UTF-8 viewで行い、解析用の一時String cloneを除去した。relationship内容は保存時に必要な範囲だけ所有し、全payload遅延化・RSS測定・速度効果の実測は未完了。
 - [x] G5b 部分 BUILD: writer-owned `xl/_rels/workbook.xml.rels`もcarry-over判定後にraw mapから所有権移動し、workbook relationship XMLの一時cloneを除去した。XLSX round-trip 54件とstrict clippyを再実行したが、速度／RSS効果は未測定。
 - [x] G5b 部分 BUILD: relationship接続・pruning解析後に`raw_entries`側の`.rels` bytesを解放し、解析用文字列索引とentry名だけを保持するようにした。最終出力は元ZIPから再取得するため、全payload遅延化とRSS測定は未完了。所有権移動の前後release binaryはSHAが一致し、速度／RSSの改善値は得られなかった（[G5測定](docs/measurements/g5-large-hotpath-2026-09-10.md)）。
+- [x] G5b 部分 BUILD: relationship carry-over判定の保持対象part lookupを`HashSet`化し、part数が増えたブックでの線形探索を除去した。出力形式・接続判定は維持し、`cargo check --lib --offline`で型検証した。速度／RSS効果と全workspace testはディスク容量不足のため未測定・未完了とする。
 - [x] G5b 部分 BUILD: shared-string本文を`Vec<String>`へ二重保持せず、所有するindexから参照を座標順に並べて直接出力する経路へ変更した。未編集styles XMLはstyle解決後に解放し、元ZIPから直接copyする。passthrough XMLも出力時に一件ずつdrainして処理済みpayloadを解放する。styles/workbook/[Content_Types]/worksheetのwriter-owned cloneも所有権移動し、cell/row/column style編集時は対象sheetだけをoverlay cloneするようにした。font/fill/borderを使わないstyle編集ではcellXfsだけを展開する。その他の補助索引とdisk spoolは未完了のため、G5b全体は未完了。
 - [x] G5c BUILD: 追記専用APIに`create_stream_bounded`を追加し、「1行上限」と「総work量」を分けた。既存`max_pending_bytes`の累積制限は維持し、stub・README・limitsへ移行例を追加した。
 - [x] G5d BUILD: bounded追記Writerは固定worksheet構造・列上限・row buffer・64 KiB codec bufferを使い、inline stringsでunique stringsを蓄積しない。通常VMの全セル保持は対象外。
