@@ -14,7 +14,7 @@ tooling, but are not complete yet:
 - G2d general Chart/Drawing creation and editing, and general Pivot source/cache
   editing.
 - G4 independent oracle expansion and runtime-macro regression coverage. The
-  local formula-only oracle now has 27 comparable matches out of 28 probes,
+  local formula-only oracle now has 31 comparable matches out of 34 probes,
   and the 581-scenario VBA corpus has 0 MISMATCH/UNEXPLAINED outcomes; Excel
   semantic coverage and real production macro fixtures remain open.
 - G5 reproducible large-workbook before/after measurements, RSS, durable save,
