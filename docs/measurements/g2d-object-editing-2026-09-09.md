@@ -95,7 +95,7 @@ new point counts while their formulas and format code remained unchanged.
 - Excel reopen, repair-warning absence, or recalculated Chart/Pivot caches.
 - Excel-side execution of `refreshOnLoad` and external source retrieval.
 - Chart or Drawing creation, general Drawing editing beyond two-cell anchor
-  markers and shape names, multiple title-run editing, cache creation/regeneration beyond
-  existing caches, or table-backed Pivot sources.
+  markers and shape names, multiple title-run editing, cache recalculation beyond
+  writing cached points, or table-backed Pivot sources.
 - Linux/Windows clean-install, resource calibration, external review, or
   LogiSheets/EPPlus/Aspose.Cells comparison.

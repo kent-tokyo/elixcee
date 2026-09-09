@@ -60,7 +60,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G2d 部分 BUILD: sheet renameに限定したChart `<c:f>`とPivot `worksheetSource@sheet`の安全な参照更新、およびDrawing／relationship chain保持を実装・回帰検証した。Chart/Drawing作成・一般編集、row/column編集に伴うanchor更新、Pivot source/cache編集・再集計は未完。
 - [x] G2d Chart rename BUILD: 単純なsheet renameに限り、Chart XMLの`<c:f>`に含まれるqualified sheet referenceを既存formula parserで安全に書き換え、Drawing owner／relationshipを保持して保存する経路を実fixtureで検証した。chart creation、一般のChart/Drawing編集、Pivot更新、Excel再openは未完。
 - [x] G2d Pivot rename BUILD: 単純なsheet renameに限り、Pivot cache definitionの`worksheetSource@sheet`をXML escape付きで更新し、cache本体・cacheId・table source・再集計には触れずに保存する経路と回帰を追加した。Pivot source/cacheの一般編集、再集計、Excel再openは未完。
-- [x] G2d Chart series BUILD: 既存Chart XMLに対する`Vm.set_chart_series_formulas`（Python binding／型stub含む）を追加し、0-based series indexでcategory／valueの`<c:f>`だけを明示更新できるようにした。対象Chart・系列・参照の欠損は保存前に拒否し、Drawing／relationship chainは保持する。Chart作成、cache再生成・再計算、Drawingの一般shape編集、Excel再openは未完。
+- [x] G2d Chart series BUILD: 既存Chart XMLに対する`Vm.set_chart_series_formulas`（Python binding／型stub含む）を追加し、0-based series indexでcategory／valueの`<c:f>`だけを明示更新できるようにした。対象Chart・系列・参照の欠損は保存前に拒否し、Drawing／relationship chainは保持する。Chart作成、cache再計算、Drawingの一般shape編集、Excel再openは未完。
 - [x] G2d Chart series-name BUILD: 既存Chart XMLに対する`Vm.set_chart_series_name_formula`（Python binding／型stub含む）を追加し、0-based系列の`<c:tx>`内`<c:f>`だけを更新できるようにした。系列・name referenceの欠損は拒否し、category/value/cache/Drawing relationshipは変更しない。Chart作成、Excel再openは未完。
 - [x] G2d Chart title BUILD: 既存Chart XMLに対する`Vm.set_chart_title`（Python binding／型stub含む）を追加し、最初の`<c:title>`内の最初の`<a:t>`だけをXML escape付きで更新できるようにした。title／text欠損、制御文字、16KiB超は拒否し、Drawing／relationship chainは保持する。複数text runの完全編集、Chart作成、Excel再openは未完。
 - [x] G2d Drawing anchor BUILD: 既存Drawing XMLの指定したtwo-cell anchorについて、1-basedのfrom/toセルを`Vm.set_drawing_anchor`（Python binding／型stub含む）から限定更新できるようにした。anchor index・one-cell anchor・欠損marker・逆順座標は拒否し、shape content／offset／relationshipは保持する。Drawing作成・一般shape編集・row/column変更への自動追従・Excel再openは未完。
@@ -403,7 +403,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 
 | 分類 | 対象 | 完了条件 |
 |---|---|---|
-| ローカル実装が残る | G2dのChart/Drawing作成・一般編集、Pivotのcache一般編集（worksheet-backed sourceの限定編集は実装済み）、VBAの実保存／Close後state・イベント・型付きruntime error・UDT解決 | API設計、実装、fixture回帰、Rust/Python/WASM境界の検証 |
+| ローカル実装が残る | G2dのChart/Drawing作成・一般編集、Pivotのcache一般編集（worksheet-backed sourceの限定編集は実装済み）、VBAの実保存／Close後state・イベント・型付きruntime error | API設計、実装、fixture回帰、Rust/Python/WASM境界の検証 |
 | ローカル測定が残る | 大規模1mの1.2倍、formula dirty propagation完全校正、実運用macro corpus、長時間fuzz／CPU／RSS | 固定入力・反復・資源上限・失敗条件を記録した再現可能な測定 |
 | 外部環境に依存 | Excel再open／修復警告、Excel oracle、Linux／Windows clean-install・資源校正、3 OS検証 | 対象環境の実行結果とversionを取得。macOSローカル結果では代替しない |
 | 外部サービス・将来公開に依存 | LogiSheets固定版の取得を伴う競合比較、外部レビュー、registry／GitHub Release／tag公開 | 取得元・固定version・公開状態を別途記録。未実施の推測は完了扱いにしない |

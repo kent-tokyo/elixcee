@@ -4390,6 +4390,29 @@ fn rewrite_chart_series_caches(
             .find('>')
             .map(|offset| cache_start + offset + 1)
             .ok_or_else(|| "chart series cache is unterminated".to_string())?;
+        let cache_tag = &body[cache_start..cache_tag_end];
+        if cache_tag.trim_end().ends_with("/>") {
+            let opening_tag = cache_tag
+                .trim_end()
+                .strip_suffix("/>")
+                .expect("checked self-closing cache tag")
+                .to_string()
+                + ">";
+            let expanded = format!(
+                "{opening_tag}<c:ptCount val=\"{}\"/>{}</c:{cache_name}>",
+                values.len(),
+                point_values()
+            );
+            let mut new_body = String::with_capacity(body.len() + expanded.len());
+            new_body.push_str(&body[..cache_start]);
+            new_body.push_str(&expanded);
+            new_body.push_str(&body[cache_tag_end..]);
+            let mut out = String::with_capacity(series.len() + expanded.len());
+            out.push_str(&series[..body_start]);
+            out.push_str(&new_body);
+            out.push_str(&series[container_close..]);
+            return Ok(out);
+        }
         let cache_end = body[cache_tag_end..]
             .find(cache_close_tag)
             .map(|offset| cache_tag_end + offset)
@@ -8703,6 +8726,29 @@ mod tests {
             "<c:numCache><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>1</c:v></c:pt></c:numCache>"
         ));
         assert!(actual.contains("<c:f>A1</c:f>"));
+    }
+
+    #[test]
+    fn chart_series_cache_rewriter_expands_empty_self_closing_cache() {
+        let mut edits = std::collections::HashMap::new();
+        edits.insert(
+            0,
+            vm::ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                category_cache: None,
+                value_cache: Some(vec!["3.5".to_string()]),
+            },
+        );
+        let source = concat!(
+            "<c:chart><c:ser><c:val><c:numRef><c:f>A1</c:f>",
+            "<c:numCache formatCode=\"0.0\"/></c:numRef></c:val></c:ser></c:chart>"
+        );
+        let actual = rewrite_chart_series_caches(source, &edits).unwrap();
+        assert!(actual.contains(
+            "<c:numCache formatCode=\"0.0\"><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>3.5</c:v></c:pt></c:numCache>"
+        ));
     }
 
     #[test]
