@@ -4664,7 +4664,7 @@ fn rewrite_chart_sheet_refs(
 fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
     let title = chart.title.as_deref().map(|text| {
         format!(
-            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
             xml_escape(text)
         )
     }).unwrap_or_default();
@@ -4713,7 +4713,7 @@ fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
     let axes = if chart.chart_type == "pie" {
         String::new()
     } else {
-        "<c:catAx><c:axId val=\"201\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"b\"/><c:numFmt formatCode=\"General\" sourceLinked=\"1\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"202\"/><c:crosses val=\"autoZero\"/><c:lblOffset val=\"100\"/></c:catAx><c:valAx><c:axId val=\"202\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"l\"/><c:majorGridlines/><c:numFmt formatCode=\"General\" sourceLinked=\"1\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"201\"/><c:crosses val=\"autoZero\"/></c:valAx>".to_string()
+        "<c:catAx><c:axId val=\"201\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"b\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"202\"/><c:crosses val=\"autoZero\"/></c:catAx><c:valAx><c:axId val=\"202\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"l\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"201\"/><c:crosses val=\"autoZero\"/></c:valAx>".to_string()
     };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><c:chart>{title}<c:plotArea><c:layout/>{plot_chart}{axes}</c:plotArea><c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>"
@@ -5314,7 +5314,7 @@ fn rewrite_chart_title(xml: &str, text: &str) -> Result<String, String> {
                 "chart title element is missing and plotArea is unavailable".to_string()
             })?;
         let title = format!(
-            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
             xml_escape(text)
         );
         let mut out = String::with_capacity(xml.len() + title.len());
@@ -5801,7 +5801,7 @@ fn rewrite_chart_axis_titles(
             rewrite_chart_title(fragment, text)?
         } else {
             let title = format!(
-                "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
+                "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
                 xml_escape(text)
             );
             let insertion = [
