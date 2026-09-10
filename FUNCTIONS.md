@@ -286,6 +286,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `YIELDMAT` | Yield of a security paying interest at maturity | Classic |
 | `DURATION` | Macaulay duration of a security | Classic |
 | `MDURATION` | Modified duration of a security | 2010 |
+| `PRICE` | Price of a coupon-bearing security | Classic |
+| `YIELD` | Yield of a coupon-bearing security | Classic |
 | `TBILLPRICE` / `TBILLYIELD` / `TBILLEQ` | Treasury bill price, yield, and equivalent yield | Classic |
 
 ### Statistical

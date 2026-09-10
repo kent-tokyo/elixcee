@@ -743,6 +743,8 @@ fn eval_func(
         "YIELDMAT" => func_yieldmat(args, cells),
         "DURATION" => func_duration(args, cells, false),
         "MDURATION" => func_duration(args, cells, true),
+        "PRICE" => func_price(args, cells),
+        "YIELD" => func_yield(args, cells),
         "TBILLPRICE" => func_tbillprice(args, cells),
         "TBILLYIELD" => func_tbillyield(args, cells),
         "TBILLEQ" => func_tbilleq(args, cells),
@@ -10490,6 +10492,212 @@ fn func_duration(
     Ok(Variant::Float(result))
 }
 
+fn bond_price_for_yield(
+    settlement: i64,
+    maturity: i64,
+    coupon_rate: f64,
+    yield_rate: f64,
+    redemption: f64,
+    frequency: i32,
+    basis: i32,
+) -> Result<f64, Variant> {
+    if !coupon_rate.is_finite()
+        || !yield_rate.is_finite()
+        || !redemption.is_finite()
+        || redemption <= 0.0
+        || yield_rate <= -(frequency as f64)
+    {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let (previous, next_coupon) = coupon_boundaries(settlement, maturity, frequency);
+    let period_days = coupon_day_count(previous, next_coupon, basis);
+    let first_days = coupon_day_count(settlement, next_coupon, basis);
+    if period_days <= 0.0 || first_days <= 0.0 {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let frequency_f = frequency as f64;
+    let coupon = redemption * coupon_rate / frequency_f;
+    let rate_per_period = yield_rate / frequency_f;
+    let mut payment_date = next_coupon;
+    let mut period_index = 0_i64;
+    let mut dirty_price = 0.0;
+    while payment_date <= maturity {
+        period_index += 1;
+        let periods_from_settlement = (period_index - 1) as f64 + first_days / period_days;
+        let discount = (1.0 + rate_per_period).powf(periods_from_settlement);
+        let cashflow = coupon
+            + if payment_date == maturity {
+                redemption
+            } else {
+                0.0
+            };
+        dirty_price += cashflow / discount;
+        payment_date = coupon_month_shift(payment_date, 12 / frequency);
+        if period_index > 10_000 {
+            return Err(Variant::Error(ExcelError::Num));
+        }
+    }
+    let accrued = coupon * coupon_day_count(previous, settlement, basis) / period_days;
+    let clean_price = dirty_price - accrued;
+    if !clean_price.is_finite() || clean_price <= 0.0 {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    Ok(clean_price)
+}
+
+fn bond_pricing_arguments(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<(i64, i64, f64, f64, i32, i32), String> {
+    if args.len() < 6 || args.len() > 7 {
+        return Err(format!("{name} requires 6 or 7 arguments"));
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let coupon_rate = to_float(&evaluate(&args[2], cells)?)?;
+    let yield_rate = to_float(&evaluate(&args[3], cells)?)?;
+    let _redemption = to_float(&evaluate(&args[4], cells)?)?;
+    let frequency = to_float(&evaluate(&args[5], cells)?)?;
+    let basis = if args.len() == 7 {
+        to_float(&evaluate(&args[6], cells)?)?
+    } else {
+        0.0
+    };
+    if !settlement.is_finite()
+        || !maturity.is_finite()
+        || !frequency.is_finite()
+        || !basis.is_finite()
+        || settlement.fract() != 0.0
+        || maturity.fract() != 0.0
+        || maturity <= settlement
+        || frequency.fract() != 0.0
+        || !matches!(frequency as i32, 1 | 2 | 4)
+        || basis.fract() != 0.0
+        || !(0.0..=4.0).contains(&basis)
+    {
+        return Err(format!("{name}: invalid bond arguments"));
+    }
+    Ok((
+        settlement as i64,
+        maturity as i64,
+        coupon_rate,
+        yield_rate,
+        frequency as i32,
+        basis as i32,
+    ))
+}
+
+fn func_price(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (settlement, maturity, coupon_rate, yield_rate, frequency, basis) =
+        bond_pricing_arguments(args, cells, "PRICE")?;
+    let redemption = to_float(&evaluate(&args[4], cells)?)?;
+    match bond_price_for_yield(
+        settlement,
+        maturity,
+        coupon_rate,
+        yield_rate,
+        redemption,
+        frequency,
+        basis,
+    ) {
+        Ok(value) => Ok(Variant::Float(value)),
+        Err(error) => Ok(error),
+    }
+}
+
+fn func_yield(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 6 || args.len() > 7 {
+        return Err("YIELD requires 6 or 7 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let coupon_rate = to_float(&evaluate(&args[2], cells)?)?;
+    let target_price = to_float(&evaluate(&args[3], cells)?)?;
+    let redemption = to_float(&evaluate(&args[4], cells)?)?;
+    let frequency = to_float(&evaluate(&args[5], cells)?)?;
+    let basis = if args.len() == 7 {
+        to_float(&evaluate(&args[6], cells)?)?
+    } else {
+        0.0
+    };
+    if !settlement.is_finite()
+        || !maturity.is_finite()
+        || !coupon_rate.is_finite()
+        || !target_price.is_finite()
+        || !redemption.is_finite()
+        || !frequency.is_finite()
+        || !basis.is_finite()
+        || settlement.fract() != 0.0
+        || maturity.fract() != 0.0
+        || maturity <= settlement
+        || target_price <= 0.0
+        || redemption <= 0.0
+        || frequency.fract() != 0.0
+        || !matches!(frequency as i32, 1 | 2 | 4)
+        || basis.fract() != 0.0
+        || !(0.0..=4.0).contains(&basis)
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let frequency = frequency as i32;
+    let basis = basis as i32;
+    let settlement_serial = settlement as i64;
+    let maturity_serial = maturity as i64;
+    let low = -(frequency as f64) + 1e-10;
+    let high = 10.0;
+    let low_price = bond_price_for_yield(
+        settlement_serial,
+        maturity_serial,
+        coupon_rate,
+        low,
+        redemption,
+        frequency,
+        basis,
+    )
+    .unwrap_or(0.0);
+    let high_price = bond_price_for_yield(
+        settlement_serial,
+        maturity_serial,
+        coupon_rate,
+        high,
+        redemption,
+        frequency,
+        basis,
+    )
+    .unwrap_or(0.0);
+    if target_price > low_price || target_price < high_price {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let mut lo = low;
+    let mut hi = high;
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        let price = bond_price_for_yield(
+            settlement_serial,
+            maturity_serial,
+            coupon_rate,
+            mid,
+            redemption,
+            frequency,
+            basis,
+        )
+        .unwrap_or(0.0);
+        if price > target_price {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(Variant::Float((lo + hi) / 2.0))
+}
+
 fn func_pduration(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -15264,6 +15472,23 @@ mod tests {
         };
         assert!(duration.is_finite() && duration > 0.0);
         assert!((mduration - duration / 1.05).abs() < 1e-12);
+        let price = match calc(
+            "=PRICE(DATE(2020,3,1),DATE(2021,1,15),0.08,0.1,100,2,0)",
+            &c,
+        ) {
+            Variant::Float(value) => value,
+            other => panic!("PRICE unexpected: {:?}", other),
+        };
+        assert!(price.is_finite() && price > 0.0);
+        assert!(matches!(
+            calc(
+                &format!(
+                    "=YIELD(DATE(2020,3,1),DATE(2021,1,15),0.08,{price},100,2,0)"
+                ),
+                &c
+            ),
+            Variant::Float(value) if (value - 0.1).abs() < 1e-10
+        ));
     }
 
     #[test]
