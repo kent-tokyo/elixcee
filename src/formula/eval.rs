@@ -515,6 +515,7 @@ fn eval_func(
         "XMATCH" => func_xmatch(args, cells),
         // -- Info --
         "ISBLANK" => func_isblank(args, cells),
+        "ISFORMULA" => func_isformula(args, cells),
         "ISREF" => func_isref(args, cells),
         "ISERROR" => func_iserror(args, cells),
         "ISERR" => func_iserror(args, cells),
@@ -5055,6 +5056,48 @@ fn func_isblank(
         evaluate(&args[0], cells)?,
         Variant::Empty
     )))
+}
+
+fn func_isformula(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("ISFORMULA requires 1 argument".into());
+    }
+    match &args[0] {
+        FormulaExpr::CellRef {
+            col, row, sheet, ..
+        } if sheet.is_none() => Ok(Variant::Boolean(
+            cells
+                .get(&(*row, *col))
+                .is_some_and(|cell| cell.formula.is_some()),
+        )),
+        FormulaExpr::Range {
+            c1,
+            r1,
+            c2,
+            r2,
+            sheet,
+            ..
+        } if sheet.is_none() => Ok(Variant::Array(
+            (*r1..=*r2)
+                .flat_map(|row| {
+                    (*c1..=*c2).map(move |col| {
+                        Variant::Boolean(
+                            cells
+                                .get(&(row, col))
+                                .is_some_and(|cell| cell.formula.is_some()),
+                        )
+                    })
+                })
+                .collect(),
+        )),
+        FormulaExpr::CellRef { .. } | FormulaExpr::Range { .. } => {
+            Err("ISFORMULA: cross-sheet references require workbook context".into())
+        }
+        _ => Ok(Variant::Boolean(false)),
+    }
 }
 
 fn func_isref(
@@ -15296,6 +15339,26 @@ mod tests {
         assert_eq!(calc("=ISREF(A1:A3)", &c), Variant::Boolean(true));
         assert_eq!(calc("=ISREF(1+2)", &c), Variant::Boolean(false));
         assert_eq!(calc("=ISREF(INDIRECT(\"A1\"))", &c), Variant::Boolean(true));
+        let mut formula_cells = c.clone();
+        formula_cells.insert(
+            (2, 1),
+            CellContent {
+                formula: Some("=A1*2".into()),
+                value: Variant::Integer(2),
+            },
+        );
+        assert_eq!(
+            calc("=ISFORMULA(A1)", &formula_cells),
+            Variant::Boolean(false)
+        );
+        assert_eq!(
+            calc("=ISFORMULA(A2)", &formula_cells),
+            Variant::Boolean(true)
+        );
+        assert_eq!(
+            calc("=ISFORMULA(A1:A2)", &formula_cells),
+            Variant::Array(vec![Variant::Boolean(false), Variant::Boolean(true)])
+        );
     }
 
     #[test]

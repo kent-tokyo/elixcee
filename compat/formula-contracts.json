@@ -18,6 +18,7 @@
     {"name":"ARRAYTOTEXT","argument_shape":"array [, format]","supported_modes":{"format":[0,1]},"unsupported_modes":["full 2D array metadata formatting"],"oracle_status":"unverified","tests":["test_string_functions"]},
     {"name":"PHI","argument_shape":"x","supported_modes":{"distribution":["standard normal density"]},"unsupported_modes":["non-finite input parity"],"oracle_status":"unverified","tests":["test_distribution_functions"]},
     {"name":"GAUSS","argument_shape":"z","supported_modes":{"distribution":["standard normal CDF minus 0.5"]},"unsupported_modes":["non-finite input parity"],"oracle_status":"unverified","tests":["test_distribution_functions"]},
-    {"name":"SINGLE","argument_shape":"array","supported_modes":{"selection":["first value of bounded array","scalar passthrough"]},"unsupported_modes":["full Excel implicit-intersection context"],"oracle_status":"unverified","tests":["test_spill_sequence"]}
+    {"name":"SINGLE","argument_shape":"array","supported_modes":{"selection":["first value of bounded array","scalar passthrough"]},"unsupported_modes":["full Excel implicit-intersection context"],"oracle_status":"unverified","tests":["test_spill_sequence"]},
+    {"name":"ISFORMULA","argument_shape":"reference","supported_modes":{"reference":["single cell","bounded range"]},"unsupported_modes":["cross-sheet reference context"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]}
   ]
 }
