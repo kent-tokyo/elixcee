@@ -23,6 +23,9 @@
   XIRR, with the oracle version and license mode recorded in the output.
 - Diagnostic artifacts: add deterministic synthetic XLSX, VBA source, and
   expected-JSON bundles for all five diagnostic corpus classes.
+- Snapshot BUILD: add bounded deterministic `input_candidates` and
+  `output_candidates` alongside dependency edges and diagnostics when the
+  Python snapshot dependency projection is explicitly enabled.
 - CI guidance: add a reproducible `diagnose-workbook` workflow, failure-artifact
   triage rules, and a redistributable diagnostic-corpus contract. This documents
   the supported diagnostic surface; it does not expand the VBA or Excel oracle.
