@@ -742,6 +742,7 @@ fn eval_func(
         "SYD" => func_syd(args, cells),
         "DB" => func_db(args, cells),
         "DDB" => func_ddb(args, cells),
+        "VDB" => func_vdb(args, cells),
         "AMORLINC" => func_amorlinc(args, cells),
         "AMORDEGRC" => func_amordegrc(args, cells),
         "EFFECT" => func_effect(args, cells),
@@ -11955,6 +11956,83 @@ fn func_ddb(
     Ok(Variant::Float(depreciation))
 }
 
+fn func_vdb(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 5 || args.len() > 7 {
+        return Err("VDB requires 5 to 7 arguments".into());
+    }
+    let cost = to_float(&evaluate(&args[0], cells)?)?;
+    let salvage = to_float(&evaluate(&args[1], cells)?)?;
+    let life = to_float(&evaluate(&args[2], cells)?)?;
+    let start_period = to_float(&evaluate(&args[3], cells)?)?;
+    let end_period = to_float(&evaluate(&args[4], cells)?)?;
+    let factor = if args.len() >= 6 {
+        to_float(&evaluate(&args[5], cells)?)?
+    } else {
+        2.0
+    };
+    let no_switch = if args.len() == 7 {
+        let value = to_float(&evaluate(&args[6], cells)?)?;
+        if !value.is_finite() || (value != 0.0 && value != 1.0) {
+            return Ok(Variant::Error(ExcelError::Num));
+        }
+        value == 1.0
+    } else {
+        false
+    };
+    if !cost.is_finite()
+        || !salvage.is_finite()
+        || !life.is_finite()
+        || !start_period.is_finite()
+        || !end_period.is_finite()
+        || !factor.is_finite()
+        || cost < 0.0
+        || salvage < 0.0
+        || salvage > cost
+        || life <= 0.0
+        || start_period < 0.0
+        || end_period <= start_period
+        || end_period > life
+        || factor <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let mut book = cost;
+    let mut depreciation = 0.0;
+    let last_segment = end_period.ceil() as usize;
+    for period in 0..last_segment {
+        let period_start = period as f64;
+        let period_end = period_start + 1.0;
+        let overlap = (end_period.min(period_end) - start_period.max(period_start)).max(0.0);
+        if overlap == 0.0 {
+            let full_declining = (book * factor / life).min((book - salvage).max(0.0));
+            book -= full_declining;
+            continue;
+        }
+        let declining = book * factor / life;
+        let straight = if life > period_start {
+            (book - salvage).max(0.0) / (life - period_start)
+        } else {
+            0.0
+        };
+        let full_depreciation = if no_switch || declining >= straight {
+            declining
+        } else {
+            straight
+        }
+        .min((book - salvage).max(0.0));
+        depreciation += full_depreciation * overlap;
+        book -= full_depreciation;
+    }
+    if depreciation.is_finite() {
+        Ok(Variant::Float(depreciation))
+    } else {
+        Ok(Variant::Error(ExcelError::Num))
+    }
+}
+
 fn func_db(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -16752,6 +16830,18 @@ mod tests {
         assert_eq!(calc("=SLN(1000,100,5)", &c), Variant::Float(180.0));
         assert_eq!(calc("=SYD(1000,100,5,1)", &c), Variant::Float(300.0));
         assert_eq!(calc("=DDB(1000,100,5,1)", &c), Variant::Float(400.0));
+        assert_eq!(
+            calc("=VDB(1000,100,5,0,1,2,TRUE)", &c),
+            Variant::Float(400.0)
+        );
+        assert_eq!(
+            calc("=VDB(1000,100,5,0,1,2,FALSE)", &c),
+            Variant::Float(400.0)
+        );
+        assert_eq!(
+            calc("=VDB(1000,100,5,2,1)", &c),
+            Variant::Error(ExcelError::Num)
+        );
         assert!(
             matches!(calc("=DB(1000,100,5,1)", &c), Variant::Float(v) if (v - 369.0).abs() < 1.0)
         );

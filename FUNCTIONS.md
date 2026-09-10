@@ -266,6 +266,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `SYD` | Sum-of-years' digits depreciation | Classic |
 | `DB` | Fixed-declining balance depreciation | Classic |
 | `DDB` | Double-declining balance depreciation | Classic |
+| `VDB` | Variable declining-balance depreciation with optional straight-line switch | Classic |
 | `AMORLINC` | Linear depreciation for an asset purchased during a period | Classic |
 | `AMORDEGRC` | Declining-balance depreciation for an asset purchased during a period | Classic |
 | `EFFECT` | Effective annual interest rate | Classic |
