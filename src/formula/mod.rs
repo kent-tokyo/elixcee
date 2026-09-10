@@ -7,6 +7,7 @@ mod workbook;
 pub use ast::{FormulaExpr, SheetQualifier};
 pub use eval::evaluate;
 pub(crate) use eval::references_another_sheet;
+pub(crate) use eval::with_sheet_context;
 pub use parser::{RefOccurrence, parse, parse_with_refs};
 pub use rewrite::{
     MoveRect, MoveRewrite, RefAxis, StructuralEdit, rename_sheet_references, shift_references,

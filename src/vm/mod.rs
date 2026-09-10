@@ -14325,7 +14325,14 @@ impl Vm {
             // do not read the active sheet as a misleading initial value.
             Variant::Empty
         } else {
-            formula::evaluate(&expr, self.cells())?
+            let sheet_number = self
+                .sheet_order
+                .iter()
+                .position(|name| name == &self.active_sheet)
+                .map_or(1, |index| index + 1);
+            formula::with_sheet_context(sheet_number, self.sheet_order.len(), || {
+                formula::evaluate(&expr, self.cells())
+            })?
         };
         self.check_variant_budget(&value)?;
         self.record_edit_history();
@@ -14576,7 +14583,15 @@ impl Vm {
                     continue;
                 }
                 let (row, col, ref expr) = plan.cells[idx];
-                let value = formula::evaluate(expr, self.cells())?;
+                let sheet_number = self
+                    .sheet_order
+                    .iter()
+                    .position(|name| name == &active)
+                    .map_or(1, |index| index + 1);
+                let value =
+                    formula::with_sheet_context(sheet_number, self.sheet_order.len(), || {
+                        formula::evaluate(expr, self.cells())
+                    })?;
                 if let Some(cell) = self
                     .sheets
                     .get_mut(&active)
@@ -14668,7 +14683,14 @@ impl Vm {
         // Update cell values directly, bypassing cells_mut() to avoid N dirty-flag sets.
         for idx in order {
             let (row, col, ref expr) = formula_cells[idx];
-            let value = formula::evaluate(expr, self.cells())?;
+            let sheet_number = self
+                .sheet_order
+                .iter()
+                .position(|name| name == &active)
+                .map_or(1, |index| index + 1);
+            let value = formula::with_sheet_context(sheet_number, self.sheet_order.len(), || {
+                formula::evaluate(expr, self.cells())
+            })?;
             if let Some(cell) = self
                 .sheets
                 .get_mut(&active)

@@ -22,6 +22,8 @@
     {"name":"ISFORMULA","argument_shape":"reference","supported_modes":{"reference":["single cell","bounded range"]},"unsupported_modes":["cross-sheet reference context"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]},
     {"name":"TEXTSPLIT","argument_shape":"text, col_delimiter [, row_delimiter [, ignore_empty [, match_mode [, pad_with]]]]","supported_modes":{"ignore_empty":[0,1],"match_mode":[0,1],"pad_with":["scalar"]},"unsupported_modes":["array delimiters","2D shape metadata"],"oracle_status":"unverified","tests":["test_textsplit"]},
     {"name":"TOCOL","argument_shape":"array [, ignore [, scan_by_column]]","supported_modes":{"ignore":[0,1,2,3]},"unsupported_modes":["scan_by_column shape semantics"],"oracle_status":"unverified","tests":["test_tocol_torow"]},
-    {"name":"TOROW","argument_shape":"array [, ignore [, scan_by_column]]","supported_modes":{"ignore":[0,1,2,3]},"unsupported_modes":["scan_by_column shape semantics"],"oracle_status":"unverified","tests":["test_tocol_torow"]}
+    {"name":"TOROW","argument_shape":"array [, ignore [, scan_by_column]]","supported_modes":{"ignore":[0,1,2,3]},"unsupported_modes":["scan_by_column shape semantics"],"oracle_status":"unverified","tests":["test_tocol_torow"]},
+    {"name":"SHEET","argument_shape":"[value]","supported_modes":{"reference":["current bounded sheet","single cell or range"]},"unsupported_modes":["3D reference and external workbook context"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]},
+    {"name":"SHEETS","argument_shape":"[reference]","supported_modes":{"reference":["current bounded workbook","single cell or range"]},"unsupported_modes":["3D reference and external workbook context"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]}
   ]
 }

@@ -13,6 +13,25 @@ use crate::vm::{CellContent, ExcelError, Variant};
 
 thread_local! {
     static BINDINGS: RefCell<Vec<HashMap<String, Variant>>> = const { RefCell::new(vec![]) };
+    static SHEET_CONTEXT: RefCell<(usize, usize)> = const { RefCell::new((1, 1)) };
+}
+
+pub(crate) fn with_sheet_context<T>(
+    sheet_number: usize,
+    sheet_count: usize,
+    f: impl FnOnce() -> T,
+) -> T {
+    SHEET_CONTEXT.with(|context| {
+        let previous = *context.borrow();
+        *context.borrow_mut() = (sheet_number.max(1), sheet_count.max(1));
+        let result = f();
+        *context.borrow_mut() = previous;
+        result
+    })
+}
+
+fn sheet_context() -> (usize, usize) {
+    SHEET_CONTEXT.with(|context| *context.borrow())
 }
 
 fn push_bindings(frame: HashMap<String, Variant>) {
@@ -516,6 +535,8 @@ fn eval_func(
         // -- Info --
         "ISBLANK" => func_isblank(args, cells),
         "ISFORMULA" => func_isformula(args, cells),
+        "SHEET" => func_sheet(args, cells),
+        "SHEETS" => func_sheets(args, cells),
         "ISREF" => func_isref(args, cells),
         "ISERROR" => func_iserror(args, cells),
         "ISERR" => func_iserror(args, cells),
@@ -5098,6 +5119,54 @@ fn func_isformula(
         }
         _ => Ok(Variant::Boolean(false)),
     }
+}
+
+fn func_sheet(
+    args: &[FormulaExpr],
+    _cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() > 1 {
+        return Err("SHEET requires 0 or 1 argument".into());
+    }
+    let (sheet_number, _) = sheet_context();
+    if let Some(reference) = args.first() {
+        match reference {
+            FormulaExpr::CellRef { sheet, .. } | FormulaExpr::Range { sheet, .. }
+                if sheet.is_some() =>
+            {
+                return Ok(Variant::Error(ExcelError::NA));
+            }
+            FormulaExpr::CellRef { .. }
+            | FormulaExpr::Range { .. }
+            | FormulaExpr::FuncCall { .. } => {}
+            _ => return Ok(Variant::Error(ExcelError::Value)),
+        }
+    }
+    Ok(Variant::Integer(sheet_number as i64))
+}
+
+fn func_sheets(
+    args: &[FormulaExpr],
+    _cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() > 1 {
+        return Err("SHEETS requires 0 or 1 argument".into());
+    }
+    let (_, sheet_count) = sheet_context();
+    if let Some(reference) = args.first() {
+        match reference {
+            FormulaExpr::CellRef { sheet, .. } | FormulaExpr::Range { sheet, .. }
+                if sheet.is_some() =>
+            {
+                return Ok(Variant::Integer(1));
+            }
+            FormulaExpr::CellRef { .. }
+            | FormulaExpr::Range { .. }
+            | FormulaExpr::FuncCall { .. } => return Ok(Variant::Integer(1)),
+            _ => return Ok(Variant::Error(ExcelError::Value)),
+        }
+    }
+    Ok(Variant::Integer(sheet_count as i64))
 }
 
 fn func_isref(
@@ -15378,6 +15447,18 @@ mod tests {
         assert_eq!(calc("=ISREF(A1:A3)", &c), Variant::Boolean(true));
         assert_eq!(calc("=ISREF(1+2)", &c), Variant::Boolean(false));
         assert_eq!(calc("=ISREF(INDIRECT(\"A1\"))", &c), Variant::Boolean(true));
+        assert_eq!(calc("=SHEET()", &c), Variant::Integer(1));
+        assert_eq!(calc("=SHEET(A1)", &c), Variant::Integer(1));
+        assert_eq!(calc("=SHEETS()", &c), Variant::Integer(1));
+        assert_eq!(calc("=SHEETS(A1:A3)", &c), Variant::Integer(1));
+        assert_eq!(
+            with_sheet_context(3, 5, || calc("=SHEET()", &c)),
+            Variant::Integer(3)
+        );
+        assert_eq!(
+            with_sheet_context(3, 5, || calc("=SHEETS()", &c)),
+            Variant::Integer(5)
+        );
         let mut formula_cells = c.clone();
         formula_cells.insert(
             (2, 1),

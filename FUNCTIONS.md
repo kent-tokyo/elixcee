@@ -577,6 +577,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `FORMULATEXT` | Return formula of a cell as text | 2013 |
 | `CELL` | Return cell metadata (address, row, col, type, contents, width, …) | Classic |
 | `INFO` | Return bounded runtime information (`system`, `osversion`, `release`, `recalc`) | Classic |
+| `SHEET` | Return the current bounded worksheet number or a referenced sheet number | 2013 |
+| `SHEETS` | Return the current bounded worksheet count or one referenced sheet | 2013 |
 
 ### Array / Spill Functions
 

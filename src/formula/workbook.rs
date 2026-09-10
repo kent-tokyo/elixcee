@@ -205,7 +205,13 @@ pub(crate) fn recalculate(
         }
         let expr = &parsed[&key];
         let mapped = remap_expr(expr, &key.0, &offsets)?;
-        let value = eval::evaluate(&mapped, &merged)?;
+        let sheet_number = names
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(&key.0))
+            .map_or(1, |index| index + 1);
+        let value = eval::with_sheet_context(sheet_number, names.len(), || {
+            eval::evaluate(&mapped, &merged)
+        })?;
         let offset = offsets[&key.0.to_ascii_lowercase()];
         let mapped_row = key
             .1
@@ -647,6 +653,38 @@ mod tests {
         );
         assert_eq!(sheets["Sheet2"][&(1, 1)].value, Variant::Integer(6));
         assert_eq!(sheets["Sheet1"][&(1, 2)].value, Variant::Integer(7));
+    }
+
+    #[test]
+    fn supplies_sheet_context_to_unqualified_sheet_functions() {
+        let mut sheets = HashMap::new();
+        sheets.insert(
+            "Sheet1".to_string(),
+            HashMap::from([
+                ((1, 1), cell(Variant::Empty, Some("=SHEET()"))),
+                ((1, 2), cell(Variant::Empty, Some("=Sheet2!A1"))),
+            ]),
+        );
+        sheets.insert(
+            "Sheet2".to_string(),
+            HashMap::from([
+                ((1, 1), cell(Variant::Empty, Some("=SHEET()"))),
+                ((1, 2), cell(Variant::Empty, Some("=Sheet1!A1"))),
+            ]),
+        );
+        assert!(
+            recalculate(
+                &mut sheets,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                None,
+                true
+            )
+            .unwrap()
+        );
+        assert_eq!(sheets["Sheet1"][&(1, 1)].value, Variant::Integer(1));
+        assert_eq!(sheets["Sheet2"][&(1, 1)].value, Variant::Integer(2));
     }
 
     #[test]
