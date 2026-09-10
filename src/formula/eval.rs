@@ -727,7 +727,9 @@ fn eval_func(
         "DOLLARFR" => func_dollarfr(args, cells),
         "PDURATION" => func_pduration(args, cells),
         "PRICEDISC" => func_pricedisc(args, cells),
+        "DISC" => func_disc(args, cells),
         "RECEIVED" => func_received(args, cells),
+        "YIELDDISC" => func_yielddisc(args, cells),
         "TBILLPRICE" => func_tbillprice(args, cells),
         "TBILLYIELD" => func_tbillyield(args, cells),
         "TBILLEQ" => func_tbilleq(args, cells),
@@ -10086,6 +10088,34 @@ fn func_pricedisc(
     ))
 }
 
+fn func_disc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 4 || args.len() > 5 {
+        return Err("DISC requires 4 or 5 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let price = to_float(&evaluate(&args[2], cells)?)?;
+    let redemption = to_float(&evaluate(&args[3], cells)?)?;
+    let basis = if args.len() == 5 {
+        to_float(&evaluate(&args[4], cells)?)?
+    } else {
+        0.0
+    };
+    let year_fraction = match bond_day_fraction(settlement, maturity, basis) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    if !price.is_finite() || !redemption.is_finite() || price <= 0.0 || redemption <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(
+        (redemption - price) / redemption / year_fraction,
+    ))
+}
+
 fn func_received(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -10116,6 +10146,32 @@ fn func_received(
         return Ok(Variant::Error(ExcelError::Num));
     }
     Ok(Variant::Float(investment / denominator))
+}
+
+fn func_yielddisc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 4 || args.len() > 5 {
+        return Err("YIELDDISC requires 4 or 5 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let price = to_float(&evaluate(&args[2], cells)?)?;
+    let redemption = to_float(&evaluate(&args[3], cells)?)?;
+    let basis = if args.len() == 5 {
+        to_float(&evaluate(&args[4], cells)?)?
+    } else {
+        0.0
+    };
+    let year_fraction = match bond_day_fraction(settlement, maturity, basis) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    if !price.is_finite() || !redemption.is_finite() || price <= 0.0 || redemption <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float((redemption / price - 1.0) / year_fraction))
 }
 
 fn func_tbillprice(
@@ -14679,7 +14735,13 @@ mod tests {
             matches!(calc("=PRICEDISC(1,181,0.1,100,2)", &c), Variant::Float(value) if (value - 95.0).abs() < 1e-9)
         );
         assert!(
+            matches!(calc("=DISC(1,181,95,100,2)", &c), Variant::Float(value) if (value - 0.1).abs() < 1e-12)
+        );
+        assert!(
             matches!(calc("=RECEIVED(1,181,95,0.1,2)", &c), Variant::Float(value) if (value - 100.0).abs() < 1e-9)
+        );
+        assert!(
+            matches!(calc("=YIELDDISC(1,181,95,100,2)", &c), Variant::Float(value) if (value - (100.0 / 95.0 - 1.0) / 0.5).abs() < 1e-12)
         );
         assert!(
             matches!(calc("=TBILLPRICE(1,181,0.1)", &c), Variant::Float(value) if (value - 95.0).abs() < 1e-9)

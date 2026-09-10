@@ -273,7 +273,9 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `DOLLARDE` / `DOLLARFR` | Convert fractional dollar quotations | Classic |
 | `PDURATION` | Number of periods for a growth investment | 2013 |
 | `PRICEDISC` | Price of a discounted security | Classic |
+| `DISC` | Discount rate of a security | Classic |
 | `RECEIVED` | Amount received at maturity for a discounted security | Classic |
+| `YIELDDISC` | Annual yield of a discounted security | Classic |
 | `TBILLPRICE` / `TBILLYIELD` / `TBILLEQ` | Treasury bill price, yield, and equivalent yield | Classic |
 
 ### Statistical
