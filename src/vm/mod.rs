@@ -861,6 +861,29 @@ pub(crate) struct ChartSeriesEdit {
     pub value_cache: Option<Vec<String>>,
 }
 
+/// A bounded request to create one chart in an existing Drawing part. The
+/// writer assigns a collision-free chart part name during save.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChartCreation {
+    pub drawing_part: String,
+    pub chart_type: String,
+    pub categories: String,
+    pub values: String,
+    pub additional_series: Vec<ChartCreationSeries>,
+    pub title: Option<String>,
+    pub from_row: u32,
+    pub from_col: u32,
+    pub to_row: u32,
+    pub to_col: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChartCreationSeries {
+    pub categories: String,
+    pub values: String,
+    pub title: Option<String>,
+}
+
 /// A bounded edit to the textual title of one existing chart part.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ChartTitleEdit {
@@ -1319,6 +1342,8 @@ pub struct Vm {
     pub(crate) sheet_rename_only: bool,
     /// Explicit chart series edits keyed by chart part and zero-based series index.
     pub(crate) chart_series_edits: HashMap<String, HashMap<usize, ChartSeriesEdit>>,
+    /// New charts queued for insertion into existing worksheet drawings.
+    pub(crate) chart_creations: Vec<ChartCreation>,
     /// Explicit chart series solid-line color edits keyed by chart part and
     /// zero-based series index. Values are normalized six-digit RGB strings.
     pub(crate) chart_series_line_color_edits: HashMap<String, HashMap<usize, String>>,
@@ -1834,6 +1859,7 @@ impl Vm {
             ooxml_structural_edit_dirty: false,
             sheet_rename_only: false,
             chart_series_edits: HashMap::new(),
+            chart_creations: Vec::new(),
             chart_series_line_color_edits: HashMap::new(),
             chart_series_fill_color_edits: HashMap::new(),
             chart_title_edits: HashMap::new(),
@@ -7532,6 +7558,121 @@ impl Vm {
             });
         edit.categories = categories.map(ToOwned::to_owned);
         edit.values = values.map(ToOwned::to_owned);
+        Ok(())
+    }
+
+    /// Queue a new chart for an existing worksheet Drawing part.
+    /// Coordinates are 1-based cells; the chart part and relationship id are
+    /// assigned during save. Formula text uses chart XML spelling and does not
+    /// require a leading `=`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_chart(
+        &mut self,
+        drawing_part: &str,
+        chart_type: &str,
+        categories: &str,
+        values: &str,
+        title: Option<&str>,
+        from_row: u32,
+        from_col: u32,
+        to_row: u32,
+        to_col: u32,
+    ) -> Result<String, String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart creation requires a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml")) {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        let chart_type = chart_type.to_ascii_lowercase();
+        if !matches!(chart_type.as_str(), "line" | "bar" | "area" | "pie") {
+            return Err("chart_type must be line, bar, area, or pie".to_string());
+        }
+        for (kind, formula) in [("categories", categories), ("values", values)] {
+            if formula.is_empty() || formula.len() > 16 * 1024 {
+                return Err(format!("chart {kind} formula must be 1..=16384 bytes"));
+            }
+            if formula.chars().any(|c| c.is_control()) {
+                return Err(format!("chart {kind} formula contains a control character"));
+            }
+        }
+        if from_row == 0 || from_col == 0 || to_row < from_row || to_col < from_col {
+            return Err("chart anchor must be positive and ordered".to_string());
+        }
+        if to_row - from_row > 1_000 || to_col - from_col > 1_000 {
+            return Err("chart anchor span is too large".to_string());
+        }
+        let title = title.map(str::to_owned);
+        if let Some(text) = &title
+            && (text.is_empty() || text.len() > 16 * 1024 || text.chars().any(|c| c.is_control()))
+        {
+            return Err(
+                "chart title must be 1..=16384 bytes without control characters".to_string(),
+            );
+        }
+        let index = self.chart_creations.len() + 1;
+        self.chart_creations.push(ChartCreation {
+            drawing_part: drawing_part.to_string(),
+            chart_type,
+            categories: categories.to_string(),
+            values: values.to_string(),
+            additional_series: Vec::new(),
+            title,
+            from_row,
+            from_col,
+            to_row,
+            to_col,
+        });
+        Ok(format!("xl/charts/chart-new-{index}.xml"))
+    }
+
+    /// Queue another category/value pair for a chart created by `add_chart`.
+    /// The chart part uses one-based creation order (`chart-new-1.xml`).
+    pub fn add_chart_series(
+        &mut self,
+        chart_part: &str,
+        categories: &str,
+        values: &str,
+        title: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(index_text) = chart_part
+            .strip_prefix("xl/charts/chart-new-")
+            .and_then(|part| part.strip_suffix(".xml"))
+        else {
+            return Err("chart_part must be an xl/charts/chart-new-N.xml path".to_string());
+        };
+        let index = index_text
+            .parse::<usize>()
+            .ok()
+            .and_then(|value| value.checked_sub(1))
+            .ok_or_else(|| "chart_part creation index must be positive".to_string())?;
+        let chart = self
+            .chart_creations
+            .get_mut(index)
+            .ok_or_else(|| format!("created chart does not exist: {chart_part}"))?;
+        if categories.is_empty() || values.is_empty() {
+            return Err("created chart series formulas must not be empty".to_string());
+        }
+        if categories.len() > 16 * 1024 || values.len() > 16 * 1024 {
+            return Err("created chart series formulas must be 1..=16384 bytes".to_string());
+        }
+        if categories.chars().any(|c| c.is_control()) || values.chars().any(|c| c.is_control()) {
+            return Err("created chart series formulas contain a control character".to_string());
+        }
+        let title = title.map(str::to_owned);
+        if let Some(text) = &title
+            && (text.is_empty() || text.len() > 16 * 1024 || text.chars().any(|c| c.is_control()))
+        {
+            return Err("created chart series title is invalid".to_string());
+        }
+        if chart.additional_series.len() >= 64 {
+            return Err("created chart supports at most 65 series".to_string());
+        }
+        chart.additional_series.push(ChartCreationSeries {
+            categories: categories.to_string(),
+            values: values.to_string(),
+            title,
+        });
         Ok(())
     }
 

@@ -330,6 +330,35 @@ class Vm:
         """
         ...
 
+    def add_chart(
+        self,
+        drawing_part: str,
+        chart_type: str,
+        categories: str,
+        values: str,
+        title: str | None = ...,
+        from_row: int = ...,
+        from_col: int = ...,
+        to_row: int = ...,
+        to_col: int = ...,
+    ) -> str:
+        """Create a bounded chart in an existing worksheet Drawing.
+
+        Returns the generated chart-part path. Supported types are ``line``,
+        ``bar``, ``area``, and ``pie``; formulas use chart XML spelling.
+        """
+        ...
+
+    def add_chart_series(
+        self,
+        chart_part: str,
+        categories: str,
+        values: str,
+        title: str | None = ...,
+    ) -> None:
+        """Add a category/value series to a chart created by ``add_chart``."""
+        ...
+
     def set_chart_title(self, chart_part: str, text: str) -> None:
         """Queue a bounded edit or add operation for a chart title."""
         ...

@@ -125,11 +125,12 @@ projections; they do not evaluate calculated-column or validation formulas.
 For loaded XLSX/XLSM sheets, `Vm.sheet_id(name)` and
 `Vm.sheet_name_for_id(sheet_id)` expose stable source identities independently
 of tab order and rename operations; new or ODS sheets have no inferred ID.
-Loaded workbooks also support bounded edits to selected existing Chart-series
-formulas, caches, marker attributes, solid RGB line and fill colors, smooth flags, negative-value display and
-series visibility flags, plus the first Chart
-title text run; Chart creation and general object editing remain outside the
-current contract.
+Loaded workbooks also support creating bounded line/bar/area/pie charts in an
+existing worksheet Drawing, including additional category/value series, plus bounded edits to selected existing Chart-series
+formulas, caches, marker attributes, solid RGB line and fill colors, smooth flags,
+negative-value display and series visibility flags, plus the first Chart title
+text run. Chart creation requires an existing Drawing; general object editing
+and Pivot cache recalculation remain outside the current contract.
 
 For large XLSX/XLSM files, `open_stream(path, sheet=None)` yields rows without
 materializing the whole workbook. Set `include_row_numbers=True` to receive
@@ -179,14 +180,17 @@ The Rust reader/writer preserves supported cell data, formulas, styles, merges,
 hidden rows/columns, and many unknown OOXML parts. Macro projects in `.xlsm`
 files are preserved during supported round trips. Features not modeled by the
 writer can still be lost or disconnected. Existing Drawing/relationship chains
-are preserved on tested paths, and bounded APIs can update selected Chart-series
-formulas, caches, marker attributes, solid RGB line and fill colors, smooth flags, negative-value display and series visibility flags, Chart title text, two-cell
-Drawing anchors, and worksheet-backed Pivot source fields. Drawing shape metadata and selected solid fill/line style
+are preserved on tested paths, and bounded APIs can create simple charts in an
+existing Drawing or update selected Chart-series formulas, caches, marker
+attributes, solid RGB line and fill colors, smooth flags, negative-value display
+and series visibility flags, Chart title text, two-cell Drawing anchors, and
+worksheet-backed Pivot source fields. Drawing shape metadata and selected solid fill/line style
 attributes (rotation, flips, preset geometry, RGB/ARGB fill and line color, line width, and
-preset dash) are also available through bounded APIs. Chart creation, general
-Drawing shape editing, Pivot cache recalculation, comments, hyperlinks, and
-other OOXML objects remain compatibility gaps unless covered by tests for the
-version in use.
+preset dash) are also available through bounded APIs. General Drawing shape
+editing, Pivot cache recalculation, comments, hyperlinks, and other OOXML
+objects remain compatibility gaps unless covered by tests for the version in
+use. Excel desktop reopen is an external validation gate, not implied by local
+OOXML round-trip tests.
 
 The project runs Rust tests, property tests, compatibility fixtures, and
 differential tests for the JavaScript package in CI. Compatibility with Excel's
@@ -202,20 +206,14 @@ behavior; it is not a claim of complete Excel or VBA compatibility.
 
 ```bash
 cargo test --workspace
-cargo fmt --check
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo audit --no-fetch
-cargo deny check --disable-fetch
-python3 scripts/check-reader-measurements.py docs/measurements/*.json
-python3 scripts/check-reader-measurements.py --self-test
-bash scripts/check-measurement-boundary.sh
 ```
 
-Offline dependency checks use the local advisory database and `deny.toml`.
-A stale database does not establish the absence of newly published advisories.
-
-The short-term plan is in [ROADMAP.md](ROADMAP.md). Public design and policy
-documents are in [docs/](docs/).
+The development phases, current status, and release gates are maintained in
+[ROADMAP.md](ROADMAP.md). The published 1.0.7 contract covers the documented
+G0/G1 foundation and incremental G2/G3/G4 capabilities; compatibility limits
+and security policy are in [docs/](docs/).
 
 New to elixcee? Start with the [English quick start](docs/quickstart.md),
 then read the [beginner tutorial](docs/tutorial-beginners.md) or see the

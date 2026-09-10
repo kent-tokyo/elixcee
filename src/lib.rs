@@ -1195,6 +1195,50 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Queue a new chart in an existing worksheet Drawing part. Returns the
+    /// generated chart part path. Coordinates are 1-based worksheet cells.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (drawing_part, chart_type, categories, values, title = None, from_row = 1, from_col = 1, to_row = 15, to_col = 8))]
+    fn add_chart(
+        &mut self,
+        drawing_part: &str,
+        chart_type: &str,
+        categories: &str,
+        values: &str,
+        title: Option<&str>,
+        from_row: u32,
+        from_col: u32,
+        to_row: u32,
+        to_col: u32,
+    ) -> PyResult<String> {
+        self.inner
+            .add_chart(
+                drawing_part,
+                chart_type,
+                categories,
+                values,
+                title,
+                from_row,
+                from_col,
+                to_row,
+                to_col,
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Queue another category/value series for a chart created by `add_chart`.
+    fn add_chart_series(
+        &mut self,
+        chart_part: &str,
+        categories: &str,
+        values: &str,
+        title: Option<&str>,
+    ) -> PyResult<()> {
+        self.inner
+            .add_chart_series(chart_part, categories, values, title)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     /// Queue a bounded edit to an existing chart series name formula.
     fn set_chart_series_name_formula(
         &mut self,
@@ -4617,6 +4661,130 @@ fn rewrite_chart_sheet_refs(
     Ok(out)
 }
 
+fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
+    let title = chart.title.as_deref().map(|text| {
+        format!(
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r><a:endParaRPr lang=\"en-US\"/></a:p></c:rich></c:tx><c:layout/><c:overlay val=\"0\"/></c:title>",
+            xml_escape(text)
+        )
+    }).unwrap_or_default();
+    let mut series = String::new();
+    let marker = if matches!(chart.chart_type.as_str(), "line" | "area") {
+        "<c:marker><c:symbol val=\"none\"/></c:marker>"
+    } else {
+        ""
+    };
+    let series_shape = if chart.chart_type == "bar" {
+        "<c:spPr><a:solidFill><a:schemeClr val=\"accent1\"/></a:solidFill><a:ln><a:noFill/></a:ln><a:effectLst/></c:spPr><c:invertIfNegative val=\"0\"/>"
+    } else {
+        "<c:spPr><a:ln><a:prstDash val=\"solid\"/></a:ln></c:spPr>"
+    };
+    let mut append_series = |index: usize, categories: &str, values: &str, name: Option<&str>| {
+        let series_name = name
+            .map(|value| format!("<c:tx><c:v>{}</c:v></c:tx>", xml_escape(value)))
+            .unwrap_or_default();
+        series.push_str(&format!(
+            "<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/>{series_name}{series_shape}{marker}<c:cat><c:strRef><c:f>{}</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>{}</c:f></c:numRef></c:val></c:ser>",
+            xml_escape(categories),
+            xml_escape(values),
+        ));
+    };
+    append_series(0, &chart.categories, &chart.values, None);
+    for (index, extra) in chart.additional_series.iter().enumerate() {
+        append_series(
+            index + 1,
+            &extra.categories,
+            &extra.values,
+            extra.title.as_deref(),
+        );
+    }
+    let plot_chart = match chart.chart_type.as_str() {
+        "bar" => format!(
+            "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:varyColors val=\"0\"/>{series}<c:gapWidth val=\"150\"/><c:overlap val=\"0\"/><c:axId val=\"201\"/><c:axId val=\"202\"/></c:barChart>"
+        ),
+        "area" => format!(
+            "<c:areaChart><c:grouping val=\"standard\"/>{series}<c:axId val=\"201\"/><c:axId val=\"202\"/></c:areaChart>"
+        ),
+        "pie" => format!("<c:pieChart>{series}</c:pieChart>"),
+        _ => format!(
+            "<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>{series}<c:axId val=\"201\"/><c:axId val=\"202\"/></c:lineChart>"
+        ),
+    };
+    let axes = if chart.chart_type == "pie" {
+        String::new()
+    } else {
+        "<c:catAx><c:axId val=\"201\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"b\"/><c:numFmt formatCode=\"General\" sourceLinked=\"1\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"202\"/><c:crosses val=\"autoZero\"/><c:lblOffset val=\"100\"/></c:catAx><c:valAx><c:axId val=\"202\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"l\"/><c:majorGridlines/><c:numFmt formatCode=\"General\" sourceLinked=\"1\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"201\"/><c:crosses val=\"autoZero\"/></c:valAx>".to_string()
+    };
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><c:chart>{title}<c:plotArea><c:layout/>{plot_chart}{axes}</c:plotArea><c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>"
+    )
+}
+
+fn append_created_chart_to_drawing(
+    xml: &str,
+    relationship_id: &str,
+    chart_part: &str,
+    chart: &vm::ChartCreation,
+    chart_index: usize,
+) -> Result<String, String> {
+    let from_row = chart.from_row - 1;
+    let from_col = chart.from_col - 1;
+    let to_row = chart.to_row;
+    let to_col = chart.to_col;
+    let name = format!("elixcee chart {chart_part}");
+    let anchor = format!(
+        "<xdr:twoCellAnchor><xdr:from><xdr:col>{from_col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{from_row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>{to_col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{to_row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{}\" name=\"{}\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"{}\"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>",
+        10_000 + chart_index,
+        xml_escape(&name),
+        xml_escape(relationship_id),
+    );
+    let pos = xml
+        .rfind("</xdr:wsDr>")
+        .ok_or_else(|| "drawing part is missing </xdr:wsDr>".to_string())?;
+    let mut output = xml.to_string();
+    output.insert_str(pos, &anchor);
+    Ok(output)
+}
+
+fn append_created_chart_relationship(
+    xml: &str,
+    relationship_id: &str,
+    chart_part: &str,
+) -> Result<String, String> {
+    if reader::relationship_ids(xml)
+        .iter()
+        .any(|id| id == relationship_id)
+    {
+        return Err(format!(
+            "drawing relationship id already exists: {relationship_id}"
+        ));
+    }
+    if xml.contains(&format!(
+        "Target=\"../{}\"",
+        chart_part.strip_prefix("xl/").unwrap_or(chart_part)
+    )) {
+        return Err(format!(
+            "drawing relationship target already exists: {chart_part}"
+        ));
+    }
+    let target = chart_part.strip_prefix("xl/").unwrap_or(chart_part);
+    let rel = format!(
+        "<Relationship Id=\"{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart\" Target=\"../{}\"/>",
+        xml_escape(relationship_id),
+        xml_escape(target),
+    );
+    let pos = xml
+        .rfind("</Relationships>")
+        .ok_or_else(|| "drawing relationships are missing </Relationships>".to_string())?;
+    let mut output = xml.to_string();
+    output.insert_str(pos, &rel);
+    Ok(output)
+}
+
+fn render_created_chart_relationships() -> String {
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.microsoft.com/office/2011/relationships/chartStyle\" Target=\"style1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.microsoft.com/office/2011/relationships/chartColorStyle\" Target=\"colors1.xml\"/></Relationships>".to_string()
+}
+
 /// Rewrite one or more existing chart series' category/value formulas without
 /// touching the surrounding chart XML. Series indexes are zero-based and are
 /// counted by `<c:ser>` order. Missing series or missing references are hard
@@ -5146,7 +5314,7 @@ fn rewrite_chart_title(xml: &str, text: &str) -> Result<String, String> {
                 "chart title element is missing and plotArea is unavailable".to_string()
             })?;
         let title = format!(
-            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r><a:endParaRPr lang=\"en-US\"/></a:p></c:rich></c:tx></c:title>",
             xml_escape(text)
         );
         let mut out = String::with_capacity(xml.len() + title.len());
@@ -5633,7 +5801,7 @@ fn rewrite_chart_axis_titles(
             rewrite_chart_title(fragment, text)?
         } else {
             let title = format!(
-                "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
+                "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r><a:endParaRPr lang=\"en-US\"/></a:p></c:rich></c:tx></c:title>",
                 xml_escape(text)
             );
             let insertion = [
@@ -6941,6 +7109,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let mut source_workbook_rels_xml: Option<String> = None;
     let mut source_relationship_parts: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+    let mut original_drawing_relationship_max: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
     let mut surviving_source_parts = std::collections::HashSet::new();
     // Same idea as `carried_rels`, but for the root `_rels/.rels` file (docProps/core.xml,
     // docProps/app.xml, ...) -- see `carried_rels`'s own comment below for why this is
@@ -6984,6 +7154,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     let mut reserved_table_part_numbers: Vec<u32> = Vec::new();
     let allow_sheet_rename = vm.ooxml_structural_edit_dirty && vm.sheet_rename_only;
     let has_chart_series_edits = !vm.chart_series_edits.is_empty();
+    let has_chart_creations = !vm.chart_creations.is_empty();
     let has_chart_series_line_color_edits = !vm.chart_series_line_color_edits.is_empty();
     let has_chart_series_fill_color_edits = !vm.chart_series_fill_color_edits.is_empty();
     let has_chart_title_edits = !vm.chart_title_edits.is_empty();
@@ -7023,6 +7194,21 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if !raw_entries.contains_key(chart_part) {
                 return Err(format!(
                     "chart series edit rejected: source workbook has no {chart_part}"
+                ));
+            }
+        }
+        for chart in &vm.chart_creations {
+            if !raw_entries.contains_key(&chart.drawing_part) {
+                return Err(format!(
+                    "chart creation rejected: source workbook has no {}",
+                    chart.drawing_part
+                ));
+            }
+            let rels = part_rels_name(&chart.drawing_part);
+            if !raw_entries.contains_key(&rels) {
+                return Err(format!(
+                    "chart creation rejected: drawing has no relationship part {}",
+                    rels
                 ));
             }
         }
@@ -7471,7 +7657,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     }
                 }
                 pivot.into_bytes()
-            } else if (has_drawing_anchor_edits
+            } else if (has_chart_creations
+                || has_drawing_anchor_edits
                 || has_drawing_shape_name_edits
                 || has_drawing_shape_description_edits
                 || has_drawing_shape_title_edits
@@ -7485,7 +7672,11 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || has_drawing_shape_line_width_edits
                 || has_drawing_shape_line_dash_edits
                 || has_drawing_shape_geometry_edits)
-                && (vm.drawing_anchor_edits.contains_key(&name)
+                && (vm
+                    .chart_creations
+                    .iter()
+                    .any(|chart| chart.drawing_part == name)
+                    || vm.drawing_anchor_edits.contains_key(&name)
                     || vm.drawing_shape_name_edits.contains_key(&name)
                     || vm.drawing_shape_description_edits.contains_key(&name)
                     || vm.drawing_shape_title_edits.contains_key(&name)
@@ -7589,6 +7780,42 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 } else {
                     drawing
                 };
+                let mut drawing = drawing;
+                for (global_index, chart) in vm
+                    .chart_creations
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, chart)| chart.drawing_part == name)
+                {
+                    let chart_part = format!("xl/charts/chart-new-{}.xml", global_index + 1);
+                    let rels_name = part_rels_name(&name);
+                    let rels = source_relationship_parts
+                        .get(&rels_name)
+                        .ok_or_else(|| format!("drawing relationships are missing: {rels_name}"))?;
+                    let same_drawing_before = vm.chart_creations[..global_index]
+                        .iter()
+                        .filter(|previous| previous.drawing_part == chart.drawing_part)
+                        .count();
+                    let base_max = *original_drawing_relationship_max
+                        .entry(rels_name.clone())
+                        .or_insert_with(|| {
+                            reader::relationship_ids(rels)
+                                .iter()
+                                .filter_map(|id| {
+                                    id.strip_prefix("rId").and_then(|n| n.parse::<u32>().ok())
+                                })
+                                .max()
+                                .unwrap_or(0)
+                        });
+                    let next_id = base_max + same_drawing_before as u32 + 1;
+                    drawing = append_created_chart_to_drawing(
+                        &drawing,
+                        &format!("rId{next_id}"),
+                        &chart_part,
+                        chart,
+                        global_index,
+                    )?;
+                }
                 drawing.into_bytes()
             } else {
                 bytes
@@ -7616,7 +7843,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 || (has_pivot_source_edits
                     && name.starts_with("xl/pivotCache/")
                     && name.ends_with(".xml"))
-                || ((has_drawing_anchor_edits
+                || ((has_chart_creations
+                    || has_drawing_anchor_edits
                     || has_drawing_shape_name_edits
                     || has_drawing_shape_description_edits
                     || has_drawing_shape_title_edits
@@ -7630,7 +7858,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                     || has_drawing_shape_line_width_edits
                     || has_drawing_shape_line_dash_edits
                     || has_drawing_shape_geometry_edits)
-                    && (vm.drawing_anchor_edits.contains_key(&name)
+                    && (vm.chart_creations.iter().any(|chart| chart.drawing_part == name)
+                        || vm.drawing_anchor_edits.contains_key(&name)
                         || vm.drawing_shape_name_edits.contains_key(&name)
                         || vm.drawing_shape_description_edits.contains_key(&name)
                         || vm.drawing_shape_title_edits.contains_key(&name)
@@ -7689,6 +7918,53 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             if let Some(ct) = resolved {
                 carried_overrides.push((part_name, ct));
             }
+        }
+
+        // Add newly-created charts after the source pass so their parts and the
+        // patched Drawing relationship XML are written through the same
+        // passthrough channel as other surgical OOXML edits.
+        for (index, chart) in vm.chart_creations.iter().enumerate() {
+            let chart_part = format!("xl/charts/chart-new-{}.xml", index + 1);
+            passthrough.push((
+                chart_part.clone(),
+                render_created_chart_xml(chart).into_bytes(),
+            ));
+            if surviving_source_parts.contains("xl/charts/style1.xml")
+                && surviving_source_parts.contains("xl/charts/colors1.xml")
+            {
+                passthrough.push((
+                    format!("xl/charts/_rels/chart-new-{}.xml.rels", index + 1),
+                    render_created_chart_relationships().into_bytes(),
+                ));
+            }
+            carried_overrides.push((
+                format!("/{chart_part}"),
+                "application/vnd.openxmlformats-officedocument.drawingml.chart+xml".to_string(),
+            ));
+            let rels_name = part_rels_name(&chart.drawing_part);
+            let rels = source_relationship_parts
+                .get(&rels_name)
+                .ok_or_else(|| format!("drawing relationships are missing: {rels_name}"))?;
+            let same_drawing_before = vm.chart_creations[..index]
+                .iter()
+                .filter(|previous| previous.drawing_part == chart.drawing_part)
+                .count();
+            let base_max = *original_drawing_relationship_max
+                .entry(rels_name.clone())
+                .or_insert_with(|| {
+                    reader::relationship_ids(rels)
+                        .iter()
+                        .filter_map(|id| id.strip_prefix("rId").and_then(|n| n.parse::<u32>().ok()))
+                        .max()
+                        .unwrap_or(0)
+                });
+            let next_id = base_max + same_drawing_before as u32 + 1;
+            let updated_rels =
+                append_created_chart_relationship(rels, &format!("rId{next_id}"), &chart_part)?;
+            source_relationship_parts.insert(rels_name.clone(), updated_rels.clone());
+            passthrough_source_names.retain(|name| name != &rels_name);
+            passthrough.retain(|(name, _)| name != &rels_name);
+            passthrough.push((rels_name, updated_rels.into_bytes()));
         }
 
         // Any OTHER relationship (theme, calcChain, docProps, ...) whose target survived

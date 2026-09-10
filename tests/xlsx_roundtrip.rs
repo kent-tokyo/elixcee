@@ -1335,6 +1335,83 @@ fn edit_chart_series_rewrites_selected_references_on_a_real_fixture() {
     assert!(drawing.contains("title=\"Review title\""));
 }
 
+/// G2d: create a new chart part and connect it to an existing Drawing.
+#[test]
+fn create_chart_connects_new_part_to_existing_drawing() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let output_path = tmp_path("create_chart_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let chart_part = vm
+        .add_chart(
+            "xl/drawings/drawing1.xml",
+            "line",
+            "Sheet1!$A$1:$A$5",
+            "Sheet1!$B$1:$B$5",
+            Some("Created chart"),
+            2,
+            2,
+            12,
+            10,
+        )
+        .expect("chart creation should be accepted");
+    assert_eq!(chart_part, "xl/charts/chart-new-1.xml");
+    vm.add_chart_series(
+        &chart_part,
+        "Sheet1!$C$1:$C$5",
+        "Sheet1!$B$1:$B$5",
+        Some("Second series"),
+    )
+    .expect("a second series should be accepted");
+    let second_chart_part = vm
+        .add_chart(
+            "xl/drawings/drawing1.xml",
+            "bar",
+            "Sheet1!$C$1:$C$5",
+            "Sheet1!$B$1:$B$5",
+            Some("Second chart"),
+            14,
+            2,
+            24,
+            10,
+        )
+        .expect("a second chart should be accepted");
+    assert_eq!(second_chart_part, "xl/charts/chart-new-2.xml");
+    save_workbook(&vm, &output_path).expect("created chart should save");
+    if let Ok(kept_path) = std::env::var("ELIXCEE_KEEP_CHART_OUTPUT") {
+        std::fs::copy(&output_path, kept_path).expect("chart output should be copied");
+    }
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries[chart_part.as_str()].clone()).unwrap();
+    assert!(chart.contains("<c:lineChart>"));
+    assert!(chart.contains("<c:f>Sheet1!$A$1:$A$5</c:f>"));
+    assert!(chart.contains("Created chart"));
+    assert!(chart.contains("<c:idx val=\"1\"/><c:order val=\"1\"/><c:tx><c:v>Second series</c:v>"));
+    let second_chart =
+        String::from_utf8(output_entries[second_chart_part.as_str()].clone()).unwrap();
+    assert!(second_chart.contains("<c:barChart>"));
+    let drawing = String::from_utf8(output_entries["xl/drawings/drawing1.xml"].clone()).unwrap();
+    let rels =
+        String::from_utf8(output_entries["xl/drawings/_rels/drawing1.xml.rels"].clone()).unwrap();
+    assert!(rels.contains("relationships/chart"));
+    assert!(rels.contains("Target=\"../charts/chart-new-1.xml\""));
+    assert!(rels.contains("Target=\"../charts/chart-new-2.xml\""));
+    for chart_name in ["chart-new-1.xml", "chart-new-2.xml"] {
+        let relation = rels
+            .split("<Relationship ")
+            .find(|fragment| fragment.contains(&format!("Target=\"../charts/{chart_name}\"")))
+            .expect("created chart relationship should exist");
+        let relation_id = relation
+            .split("Id=\"")
+            .nth(1)
+            .and_then(|value| value.split('"').next())
+            .expect("created chart relationship should have an id");
+        assert!(drawing.contains(&format!("r:id=\"{relation_id}\"")));
+    }
+    assert_eq!(drawing.matches("<xdr:graphicFrame").count(), 3);
+}
+
 /// G2d: the chart-series smooth edit is exercised through the loaded-workbook
 /// save path. The real fixture has no smooth flag, so the test injects only
 /// that existing-OOXML element into a temporary copy before loading it.

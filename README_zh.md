@@ -6,7 +6,7 @@ elixcee 是一个使用 Rust/Python 编写的无头 Excel 工作簿自动化运�
 
 elixcee 不是 VBA 专用执行器，而是工作簿自动化运行时：可以在同一个工作簿模型上直接编辑数据、重新计算受支持的公式，以及执行、诊断和测试受支持的 VBA。它适合没有安装 Excel 的 CI 和服务器环境中的 `.xlsx`/`.xlsm` 读写。
 
-它不是 Excel 桌面应用的完整替代品。屏幕更新和对话框等 UI 功能会被跳过、简化建模或报告错误。现有图表系列公式、缓存和部分显示属性，以及基于工作表的 Pivot source 提供有限编辑 API，但不支持创建图表、一般 Drawing 编辑或 Pivot 重新计算。需要完整 Excel 对象模型或完整 OOXML 兼容性时，请先检查支持边界。
+它不是 Excel 桌面应用的完整替代品。屏幕更新和对话框等 UI 功能会被跳过、简化建模或报告错误。支持在现有 Drawing 中有限创建 line/bar/area/pie 图表（包括追加系列），也支持有限编辑现有图表系列、缓存和基于工作表的 Pivot source；一般 Drawing 编辑和 Pivot 重新计算仍不在当前契约内。需要完整 Excel 对象模型或完整 OOXML 兼容性时，请先检查支持边界。
 
 版本：**1.0.7**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 JavaScript 包仍为 private，尚未发布。
@@ -100,11 +100,13 @@ run 的 `--file` 读取使用默认预算并支持 SIGINT，不接受这三个�
 
 ```bash
 cargo test --workspace
-cargo fmt --check
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-计划见 [ROADMAP.md](ROADMAP.md)，其他公开政策和限制见 [docs/](docs/)。
+开发阶段、当前状态和发布门槛统一维护在 [ROADMAP.md](ROADMAP.md)。
+已发布的 1.0.7 包含文档化的 G0/G1 基础，以及逐步加入的 G2/G3/G4 能力。
+兼容性限制和安全策略请参阅 [docs/](docs/)。
 
 入门资料：[简体中文快速开始](docs/quickstart-zh.md)、[初学者教程](docs/tutorial-beginners-zh.md)、
 [浏览器 playground](playground/README-zh.md)。playground可以在英语、日语和简体中文之间切换。

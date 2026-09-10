@@ -19,8 +19,8 @@ ExcelをインストールできないCIやサーバーでの
 Excelデスクトップアプリの完全な代替ではありません。画面更新、グラフ、
 ダイアログなどのUI機能は、スキップ・簡易モデル化・エラー化されます。
 既存Chartの系列formula・cache・marker・smooth・負値表示・可視性・title、two-cell
-Drawing anchor、worksheet-backed Pivot sourceには限定編集APIがありますが、Chart
-作成、一般のDrawing shape編集、Pivot再集計は対象外です。
+Drawing anchor、worksheet-backed Pivot sourceには限定編集APIがあります。既存Drawingへの
+line/bar/area/pie Chart作成にも対応しますが、一般のDrawing shape編集とPivot再集計は対象外です。
 完全なExcelオブジェクトモデルやOOXML互換性が必要な場合は、対応範囲を確認してください。
 
 ### 用途別の選択
@@ -98,7 +98,7 @@ boundedなイベント連鎖が反映されます。明示的なA1 targetを
 APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 `Vm.tables()` と `Vm.data_validations()` は、テーブル列・範囲・検証規則を構造化された型付きmetadataとして返します。計算列数式や検証数式の評価は行いません。
 読込済みXLSX/XLSMでは、`Vm.sheet_id(name)` と `Vm.sheet_name_for_id(sheet_id)` により、タブ順やrenameから独立した元ファイルのsheet IDを参照できます。新規sheetやODS sheetには推測したIDを付けません。
-読込済みworkbookでは、既存Chartの系列formula・cache・限定属性と最初のtitle text runにも限定編集APIがあります。Chart作成や一般のobject編集は現在の契約対象外です。
+読込済みworkbookでは、既存Drawingへの限定的なline/bar/area/pie Chart作成（系列追加を含む）と、既存Chart系列の限定編集を提供しています。Chart作成には既存Drawingが必要です。一般的なobject編集とPivot cache再集計は現在の契約対象外です。
 
 大きなXLSX/XLSMには、全体を展開しない`open_stream(path, sheet=None)`を使えます。
 `include_row_numbers=True`では`(行番号, 値)`を返し、`max_rows=N`で読み取り行数を
@@ -133,10 +133,11 @@ OSのブロッキング読込中は次のZIP chunk境界で検出されます。
 
 ```bash
 cargo test --workspace
-cargo fmt --check
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-計画は[ROADMAP.md](ROADMAP.md)、文書一覧は[docs/README.md](docs/README.md)、
-ライセンスは[MITの説明](docs/licensing.md)と[第三者表記](THIRD_PARTY_NOTICES.md)を参照してください。
+開発フェーズ、現在の状態、リリースゲートは[ROADMAP.md](ROADMAP.md)に集約しています。
+公開済み1.0.7は、文書化したG0/G1の基盤と、段階的なG2/G3/G4の機能を含みます。
+互換性の制約とセキュリティ方針は[docs/](docs/)を参照してください。
 `Vm.tables()` と `Vm.data_validations()` は、テーブル列・範囲・検証規則を構造化された型付きmetadataとして返します。計算列数式や検証数式の評価は行いません。
