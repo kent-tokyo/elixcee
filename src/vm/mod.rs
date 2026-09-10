@@ -15833,6 +15833,12 @@ fn formula_spill_shape(
     use formula::FormulaExpr;
 
     let fallback = value.array_shape()?;
+    if let formula::FormulaExpr::Range { c1, r1, c2, r2, .. } = expr {
+        let rows = (r2.max(r1) - r2.min(r1) + 1) as usize;
+        let cols = (c2.max(c1) - c2.min(c1) + 1) as usize;
+        let shape = ArrayShape::new(rows, cols);
+        return (shape.cell_count() == value_len(value)).then_some(shape);
+    }
     let FormulaExpr::FuncCall { name, args } = expr else {
         return Some(fallback);
     };
@@ -15855,6 +15861,60 @@ fn formula_spill_shape(
             let rows = dimension(args.first(), 1)?.max(1);
             let cols = dimension(args.get(1), 1)?.max(1);
             exact(rows, cols).or(Some(fallback))
+        }
+        "FREQUENCY" => {
+            let bins = match args.get(1)? {
+                FormulaExpr::Range { c1, r1, c2, r2, .. } => {
+                    (c2.max(c1) - c2.min(c1) + 1) as usize * (r2.max(r1) - r2.min(r1) + 1) as usize
+                }
+                expr => formula::evaluate(expr, cells)
+                    .ok()
+                    .map(|value| value_len(&value))
+                    .unwrap_or(0),
+            };
+            exact(bins.saturating_add(1), 1).or(Some(fallback))
+        }
+        "MODE.MULT" => exact(value_len(value), 1).or(Some(fallback)),
+        "LINEST" | "LOGEST" => {
+            let x_cols = match args.get(1) {
+                Some(FormulaExpr::Range { c1, c2, .. }) => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                Some(expr) => formula::evaluate(expr, cells)
+                    .ok()
+                    .and_then(|value| {
+                        formula_spill_shape(expr, cells, &value).or_else(|| value.array_shape())
+                    })
+                    .map_or(1, |shape| shape.cols),
+                None => 1,
+            };
+            let constant = args
+                .get(2)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+                .is_none_or(|value| is_truthy(&value));
+            let width = x_cols.saturating_add(usize::from(constant));
+            let rows = if args
+                .get(3)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+                .is_some_and(|value| is_truthy(&value))
+            {
+                5
+            } else {
+                1
+            };
+            exact(rows, width).or(Some(fallback))
+        }
+        "TREND" | "GROWTH" => {
+            let known_x_cols = match args.get(1) {
+                Some(FormulaExpr::Range { c1, c2, .. }) => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                _ => 1,
+            };
+            if known_x_cols > 1 {
+                let new_x = args.get(2)?;
+                if let FormulaExpr::Range { r1, r2, .. } = new_x {
+                    let rows = (r2.max(r1) - r2.min(r1) + 1) as usize;
+                    return exact(rows, 1).or(Some(fallback));
+                }
+            }
+            Some(fallback)
         }
         "TRANSPOSE" => match args.first()? {
             FormulaExpr::Range { c1, r1, c2, r2, .. } => exact(
@@ -16074,6 +16134,298 @@ fn formula_spill_shape(
             };
             exact(shape.rows, shape.cols).or(Some(fallback))
         }
+        "GROUPBY" => {
+            let source = args.first()?;
+            let group_cols = match source {
+                FormulaExpr::Range { c1, c2, .. } => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                _ => {
+                    let source_value = formula::evaluate(source, cells).ok()?;
+                    formula_spill_shape(source, cells, &source_value)
+                        .or_else(|| source_value.array_shape())?
+                        .cols
+                }
+            };
+            let values = args.get(1)?;
+            let value_cols = match values {
+                FormulaExpr::Range { c1, c2, .. } => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                _ => {
+                    let value = formula::evaluate(values, cells).ok()?;
+                    formula_spill_shape(values, cells, &value)
+                        .or_else(|| value.array_shape())?
+                        .cols
+                }
+            };
+            let reducer_count = match args.get(2) {
+                Some(FormulaExpr::FuncCall { name, args })
+                    if name.eq_ignore_ascii_case("HSTACK") && !args.is_empty() =>
+                {
+                    args.len()
+                }
+                Some(_) => 1,
+                None => return Some(fallback),
+            };
+            let width = group_cols.saturating_add(value_cols.saturating_mul(reducer_count));
+            if width == 0 || !value_len(value).is_multiple_of(width) {
+                Some(fallback)
+            } else {
+                exact(value_len(value) / width, width).or(Some(fallback))
+            }
+        }
+        "PIVOTBY" => {
+            let values_for_shape = |expr: &FormulaExpr| -> Option<Variant> {
+                match expr {
+                    FormulaExpr::Range { c1, r1, c2, r2, .. } => Some(Variant::Array(
+                        (*r1..=*r2)
+                            .flat_map(|row| {
+                                (*c1..=*c2).map(move |col| {
+                                    cells
+                                        .get(&(row, col))
+                                        .map_or(Variant::Empty, |cell| cell.value.clone())
+                                })
+                            })
+                            .collect(),
+                    )),
+                    _ => formula::evaluate(expr, cells).ok(),
+                }
+            };
+            let mut rows = values_for_shape(args.first()?)?;
+            let mut cols = values_for_shape(args.get(1)?)?;
+            let data = args.get(2).and_then(values_for_shape);
+            let field_shape = |expr: &FormulaExpr, value: &Variant| -> Option<(usize, usize)> {
+                if let FormulaExpr::Range { c1, r1, c2, r2, .. } = expr {
+                    return Some((
+                        (r2.max(r1) - r2.min(r1) + 1) as usize,
+                        (c2.max(c1) - c2.min(c1) + 1) as usize,
+                    ));
+                }
+                formula_spill_shape(expr, cells, value)
+                    .or_else(|| value.array_shape())
+                    .map(|shape| (shape.rows, shape.cols))
+            };
+            let distinct_count = |value: &Variant, width: usize| -> Option<usize> {
+                let values = match value {
+                    Variant::Array(values) => values,
+                    _ => return Some(1),
+                };
+                if width == 0 || !values.len().is_multiple_of(width) {
+                    return None;
+                }
+                let mut distinct = Vec::new();
+                for key in values.chunks(width) {
+                    if !distinct.iter().any(|candidate: &Vec<Variant>| {
+                        candidate.iter().zip(key).all(|(left, right)| left == right)
+                    }) {
+                        distinct.push(key.to_vec());
+                    }
+                }
+                Some(distinct.len())
+            };
+            let (_, row_width) = field_shape(args.first()?, &rows)?;
+            let (_, col_width) = field_shape(args.get(1)?, &cols)?;
+            let data_width_for_headers = match args.get(2)? {
+                FormulaExpr::Range { c1, c2, .. } => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                _ => data
+                    .as_ref()
+                    .and_then(Variant::array_shape)
+                    .map_or(1, |shape| shape.cols),
+            };
+            let field_headers = match args
+                .get(4)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+            {
+                None => 3,
+                Some(Variant::Integer(value)) => value,
+                Some(Variant::Float(value)) if value.is_finite() && value.fract() == 0.0 => {
+                    value as i64
+                }
+                _ => return Some(fallback),
+            };
+            if !(0..=3).contains(&field_headers) {
+                return Some(fallback);
+            }
+            let explicit_field_headers = args.get(4).is_some();
+            let automatic_input_headers = !explicit_field_headers
+                && data_width_for_headers > 0
+                && matches!(
+                    data.as_ref(),
+                    Some(Variant::Array(values))
+                        if values.len() > data_width_for_headers
+                            && matches!(values.first(), Some(Variant::Str(_)))
+                            && matches!(
+                                values.get(data_width_for_headers),
+                                Some(Variant::Integer(_) | Variant::Float(_))
+                            )
+                );
+            let input_headers = if explicit_field_headers {
+                matches!(field_headers, 1 | 3)
+            } else {
+                automatic_input_headers
+            };
+            if input_headers {
+                let drop_header = |value: &mut Variant, width: usize| -> Option<()> {
+                    let Variant::Array(values) = value else {
+                        return None;
+                    };
+                    if width == 0 || values.len() < width {
+                        return None;
+                    }
+                    values.drain(..width);
+                    Some(())
+                };
+                drop_header(&mut rows, row_width)?;
+                drop_header(&mut cols, col_width)?;
+            }
+            let row_count = distinct_count(&rows, row_width)?;
+            let col_count = distinct_count(&cols, col_width)?;
+            let data_shape = args.get(2).and_then(|arg| match arg {
+                FormulaExpr::Range { c1, c2, .. } => Some((c2.max(c1) - c2.min(c1) + 1) as usize),
+                _ => data.as_ref().and_then(|value| {
+                    formula_spill_shape(arg, cells, value)
+                        .or_else(|| value.array_shape())
+                        .map(|shape| shape.cols)
+                }),
+            })?;
+            let show_field_header_row = if explicit_field_headers {
+                matches!(field_headers, 2 | 3)
+            } else if automatic_input_headers {
+                row_width > 1 || col_width > 1
+            } else {
+                true
+            };
+            let number = |index: usize| -> Option<i64> {
+                match args
+                    .get(index)
+                    .and_then(|arg| formula::evaluate(arg, cells).ok())
+                {
+                    Some(Variant::Integer(value)) => Some(value),
+                    Some(Variant::Float(value)) if value.is_finite() && value.fract() == 0.0 => {
+                        Some(value as i64)
+                    }
+                    None => Some(0),
+                    _ => None,
+                }
+            };
+            let row_total = number(5)?;
+            let col_total = number(7)?;
+            if !(-2..=2).contains(&row_total) || !(-2..=2).contains(&col_total) {
+                return Some(fallback);
+            }
+            if row_total.unsigned_abs() >= 2 && row_width < 2 {
+                return Some(fallback);
+            }
+            if col_total.unsigned_abs() >= 2 && col_width < 2 {
+                return Some(fallback);
+            }
+            let reducer_vertical = matches!(
+                args.get(3),
+                Some(FormulaExpr::FuncCall { name, args })
+                    if name.eq_ignore_ascii_case("VSTACK") && !args.is_empty()
+            );
+            let reducer_count = match args.get(3) {
+                Some(FormulaExpr::FuncCall { name, args })
+                    if (name.eq_ignore_ascii_case("HSTACK")
+                        || name.eq_ignore_ascii_case("VSTACK"))
+                        && !args.is_empty() =>
+                {
+                    args.len()
+                }
+                Some(_) => 1,
+                None => return Some(fallback),
+            };
+            let output_value_width = if reducer_vertical {
+                data_shape
+            } else {
+                data_shape.saturating_mul(reducer_count)
+            };
+            let col_subtotal_count = if col_total.unsigned_abs() >= 2 {
+                let Variant::Array(values) = &cols else {
+                    return Some(fallback);
+                };
+                let mut parents = Vec::new();
+                for key in values.chunks(col_width) {
+                    let parent = &key[..col_width - 1];
+                    if !parents.iter().any(|candidate: &Vec<Variant>| {
+                        candidate
+                            .iter()
+                            .zip(parent)
+                            .all(|(left, right)| left == right)
+                    }) {
+                        parents.push(parent.to_vec());
+                    }
+                }
+                parents.len()
+            } else {
+                0
+            };
+            let total_column = row_total != 0 || col_total != 0;
+            let output_cols = row_width
+                .saturating_add(
+                    col_count
+                        .saturating_add(col_subtotal_count)
+                        .saturating_mul(output_value_width),
+                )
+                .saturating_add(usize::from(total_column).saturating_mul(output_value_width));
+            let data_output_rows = if reducer_vertical {
+                row_count.saturating_mul(reducer_count)
+            } else {
+                row_count
+            };
+            let row_subtotal_count = if row_total.unsigned_abs() >= 2 {
+                let Variant::Array(values) = &rows else {
+                    return Some(fallback);
+                };
+                let mut parents = Vec::new();
+                for key in values.chunks(row_width) {
+                    let parent = &key[..row_width - 1];
+                    if !parents.iter().any(|candidate: &Vec<Variant>| {
+                        candidate
+                            .iter()
+                            .zip(parent)
+                            .all(|(left, right)| left == right)
+                    }) {
+                        parents.push(parent.to_vec());
+                    }
+                }
+                parents.len()
+            } else {
+                0
+            };
+            let total_output_rows = if col_total != 0 {
+                if reducer_vertical { reducer_count } else { 1 }
+            } else {
+                0
+            };
+            let output_rows = data_output_rows
+                .saturating_add(row_subtotal_count.saturating_mul(if reducer_vertical {
+                    reducer_count
+                } else {
+                    1
+                }))
+                .saturating_add(usize::from(show_field_header_row))
+                .saturating_add(total_output_rows);
+            exact(output_rows, output_cols).or(Some(fallback))
+        }
+        "TEXTSPLIT" => {
+            let text = formula::evaluate(args.first()?, cells).ok()?;
+            let text = spill_text_scalar(&text)?;
+            let row_delimiters = args
+                .get(2)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+                .and_then(|value| spill_text_delimiters(&value))
+                .filter(|delimiters| delimiters.iter().any(|delimiter| !delimiter.is_empty()));
+            let ignore_empty = args
+                .get(3)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+                .is_some_and(|value| is_truthy(&value));
+            let rows = row_delimiters.as_deref().map_or(1, |delimiters| {
+                split_part_count(&text, delimiters, ignore_empty)
+            });
+            if rows == 0 || !value_len(value).is_multiple_of(rows) {
+                Some(fallback)
+            } else {
+                exact(rows, value_len(value) / rows).or(Some(fallback))
+            }
+        }
         "TOCOL" => Some(ArrayShape::new(value_len(value), 1)),
         "TOROW" => Some(ArrayShape::new(1, value_len(value))),
         "WRAPCOLS" => {
@@ -16115,6 +16467,55 @@ fn value_len(value: &Variant) -> usize {
         Variant::Array(values) => values.len(),
         _ => 1,
     }
+}
+
+fn spill_text_scalar(value: &Variant) -> Option<String> {
+    match value {
+        Variant::Str(value) => Some(value.clone()),
+        Variant::Integer(value) => Some(value.to_string()),
+        Variant::Float(value) if value.is_finite() => Some(value.to_string()),
+        Variant::Boolean(value) => Some(if *value { "TRUE" } else { "FALSE" }.to_string()),
+        Variant::Empty => Some(String::new()),
+        _ => None,
+    }
+}
+
+fn spill_text_delimiters(value: &Variant) -> Option<Vec<String>> {
+    match value {
+        Variant::Array(values) => values.iter().map(spill_text_scalar).collect(),
+        value => Some(vec![spill_text_scalar(value)?]),
+    }
+}
+
+fn split_part_count(text: &str, delimiters: &[String], ignore_empty: bool) -> usize {
+    let mut start = 0usize;
+    let mut parts = 0usize;
+    loop {
+        let next = delimiters
+            .iter()
+            .filter(|delimiter| !delimiter.is_empty())
+            .filter_map(|delimiter| {
+                text[start..]
+                    .find(delimiter)
+                    .map(|offset| (start + offset, delimiter.len()))
+            })
+            .min_by(|(left_pos, left_len), (right_pos, right_len)| {
+                left_pos
+                    .cmp(right_pos)
+                    .then_with(|| right_len.cmp(left_len))
+            });
+        let Some((end, delimiter_len)) = next else {
+            break;
+        };
+        if !ignore_empty || end > start {
+            parts += 1;
+        }
+        start = end + delimiter_len;
+    }
+    if !ignore_empty || start < text.len() {
+        parts += 1;
+    }
+    parts
 }
 
 /// `ReDim Preserve arr(...)` on an array of the same rank as `new_bounds`.
@@ -22774,6 +23175,111 @@ mod tests {
     }
 
     #[test]
+    fn recalculate_all_with_spills_uses_regression_stats_shape() {
+        let mut vm = Vm::new();
+        for (row, values) in [
+            (1, [10, 1, 1]),
+            (2, [12, 2, 1]),
+            (3, [13, 1, 2]),
+            (4, [15, 2, 2]),
+            (5, [14, 3, 1]),
+            (6, [16, 1, 3]),
+        ] {
+            for (column, value) in values.into_iter().enumerate() {
+                vm.cells_mut().insert(
+                    (row, column as u32 + 1),
+                    CellContent {
+                        formula: None,
+                        value: Variant::Integer(value),
+                    },
+                );
+            }
+        }
+        vm.set_cell_formula(1, 5, "=LINEST(A1:A6,B1:C6,TRUE,TRUE)")
+            .unwrap();
+        vm.set_cell_formula(1, 10, "=TREND(A1:A6,B1:C6,B1:C2)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(5, 3));
+        match vm.get_cell(1, 5) {
+            Variant::Float(value) => assert!((value - 3.0).abs() < 1e-9),
+            other => panic!("unexpected LINEST coefficient: {other:?}"),
+        }
+        let trend_rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 10)))
+            .copied()
+            .unwrap();
+        assert_eq!(trend_rect.shape, ArrayShape::new(2, 1));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_frequency_vertical_shape() {
+        let mut vm = Vm::new();
+        for (row, value) in [1, 2, 2, 3, 4, 5, 100, 3].into_iter().enumerate() {
+            vm.cells_mut().insert(
+                (row as u32 + 1, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(value),
+                },
+            );
+        }
+        for (row, value) in [2, 3, 5].into_iter().enumerate() {
+            vm.cells_mut().insert(
+                (row as u32 + 1, 2),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(value),
+                },
+            );
+        }
+        vm.set_cell_formula(1, 4, "=FREQUENCY(A1:A8,B1:B3)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 4)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(4, 1));
+        assert_eq!(vm.get_cell(4, 4), Variant::Integer(1));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_mode_mult_vertical_shape() {
+        let mut vm = Vm::new();
+        for (row, value) in [1, 1, 2, 2, 3].into_iter().enumerate() {
+            vm.cells_mut().insert(
+                (row as u32 + 1, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(value),
+                },
+            );
+        }
+        vm.set_cell_formula(1, 3, "=MODE.MULT(A1:A5)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 3)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 1));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(2));
+    }
+
+    #[test]
     fn recalculate_all_with_spills_uses_transpose_shape_for_range_arrays() {
         let mut vm = Vm::new();
         vm.cells_mut().insert(
@@ -22801,6 +23307,323 @@ mod tests {
             .copied()
             .unwrap();
         assert_eq!(rect.shape, ArrayShape::new(2, 1));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_textsplit_row_shape() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 2, "=TEXTSPLIT(\"a,b;c,d\",\",\",\";\")")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(2, 2), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(2, 3), Variant::Str("b".into()));
+        assert_eq!(vm.get_cell(3, 2), Variant::Str("c".into()));
+        assert_eq!(vm.get_cell(3, 3), Variant::Str("d".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(2, 2)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 2));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_groupby_composite_key_shape() {
+        let mut vm = Vm::new();
+        for (row, (first, second, value)) in
+            [(1, ("a", "x", 1)), (2, ("a", "y", 2)), (3, ("b", "x", 3))]
+        {
+            vm.set_cell_value(row, 1, Variant::Str(first.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(second.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 5, "=GROUPBY(A1:B3,C1:C3,\"SUM\")")
+            .unwrap();
+        vm.recalculate_all().unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(1, 6), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 7), Variant::Integer(1));
+        assert_eq!(vm.get_cell(3, 5), Variant::Str("b".into()));
+        assert_eq!(vm.get_cell(3, 7), Variant::Integer(3));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(3, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_groupby_reducer_vector_shape() {
+        let mut vm = Vm::new();
+        for (row, (key, value)) in [(1, ("a", 1)), (2, ("a", 3)), (3, ("b", 5))] {
+            vm.set_cell_value(row, 1, Variant::Str(key.into())).unwrap();
+            vm.set_cell_value(row, 2, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 4, "=GROUPBY(A1:A3,B1:B3,HSTACK(SUM,AVERAGE))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 4), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 6), Variant::Float(2.0));
+        assert_eq!(vm.get_cell(2, 4), Variant::Str("b".into()));
+        assert_eq!(vm.get_cell(2, 5), Variant::Integer(5));
+        assert_eq!(vm.get_cell(2, 6), Variant::Float(5.0));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 4)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_multi_value_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, col_key, first, second)) in [
+            (1, ("a", "x", 1, 10)),
+            (2, ("a", "y", 2, 20)),
+            (3, ("b", "x", 3, 30)),
+            (4, ("b", "y", 4, 40)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Integer(first)).unwrap();
+            vm.set_cell_value(row, 4, Variant::Integer(second)).unwrap();
+        }
+        vm.set_cell_formula(1, 6, "=PIVOTBY(A1:A4,B1:B4,C1:D4,\"SUM\")")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 6), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 7), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 8), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 9), Variant::Str("y".into()));
+        assert_eq!(vm.get_cell(1, 10), Variant::Str("y".into()));
+        assert_eq!(vm.get_cell(2, 6), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(2, 7), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 8), Variant::Integer(10));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 6)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(3, 5));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_reducer_vector_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, col_key, value)) in [
+            (1, ("a", "x", 1)),
+            (2, ("a", "y", 2)),
+            (3, ("b", "x", 3)),
+            (4, ("b", "y", 4)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 5, "=PIVOTBY(A1:A4,B1:B4,C1:C4,HSTACK(SUM,AVERAGE))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 6), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 7), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 8), Variant::Str("y".into()));
+        assert_eq!(vm.get_cell(1, 9), Variant::Str("y".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(3, 5));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_vertical_reducer_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, col_key, value)) in [
+            (1, ("a", "x", 1)),
+            (2, ("a", "y", 2)),
+            (3, ("b", "x", 3)),
+            (4, ("b", "y", 4)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 5, "=PIVOTBY(A1:A4,B1:B4,C1:C4,VSTACK(SUM,AVERAGE))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 6), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 7), Variant::Str("y".into()));
+        assert_eq!(vm.get_cell(2, 5), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(3, 5), Variant::Str("a".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(5, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_input_header_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, col_key, value)) in [
+            (1, ("Category", "Year", "Amount")),
+            (2, ("a", "x", "1")),
+            (3, ("a", "y", "2")),
+            (4, ("b", "x", "3")),
+            (5, ("b", "y", "4")),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(
+                row,
+                3,
+                if row == 1 {
+                    Variant::Str(value.into())
+                } else {
+                    Variant::Integer(value.parse().unwrap())
+                },
+            )
+            .unwrap();
+        }
+        vm.set_cell_formula(1, 5, "=PIVOTBY(A1:A5,B1:B5,C1:C5,SUM,1)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(2, 5), Variant::Str("b".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 3));
+        vm.set_cell_formula(10, 5, "=PIVOTBY(A1:A5,B1:B5,C1:C5,SUM)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(10, 5), Variant::Str("a".into()));
+        let automatic_rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(10, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(automatic_rect.shape, ArrayShape::new(2, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_composite_field_shape() {
+        let mut vm = Vm::new();
+        for (row, (first, second, col_key, value)) in [
+            (1, ("a", "x", "x", 10)),
+            (2, ("a", "y", "y", 20)),
+            (3, ("b", "x", "x", 30)),
+            (4, ("b", "y", "y", 40)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(first.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(second.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 4, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 6, "=PIVOTBY(A1:B4,C1:C4,D1:D4,\"SUM\")")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 6), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 7), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 8), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 9), Variant::Str("y".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 6)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(5, 4));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_row_subtotal_shape() {
+        let mut vm = Vm::new();
+        for (row, (first, second, col_key, value)) in [
+            (1, ("a", "x", "x", 10)),
+            (2, ("a", "y", "y", 20)),
+            (3, ("b", "x", "x", 30)),
+            (4, ("b", "y", "y", 40)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(first.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(second.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 4, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 6, "=PIVOTBY(A1:B4,C1:C4,D1:D4,\"SUM\",0,2,1,0)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(3, 6), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(3, 7), Variant::Str("Subtotal".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 6)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(6, 5));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_column_subtotal_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, parent, child, value)) in [
+            (1, ("a", "p", "x", 1)),
+            (2, ("a", "p", "y", 2)),
+            (3, ("a", "q", "x", 3)),
+            (4, ("a", "q", "y", 4)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(parent.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Str(child.into()))
+                .unwrap();
+            vm.set_cell_value(row, 4, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 6, "=PIVOTBY(A1:A4,B1:C4,D1:D4,\"SUM\",0,0,1,2)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 6)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 8));
     }
 
     #[test]

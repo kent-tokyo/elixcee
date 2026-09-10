@@ -58,6 +58,7 @@ def validate_contracts(contract_path: Path, dispatch: set[str], documented: set[
     if not isinstance(rows, list) or not rows:
         raise ValueError("formula contract functions must be a non-empty list")
     seen: set[str] = set()
+    missing_tests: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("formula contract entries must be objects")
@@ -84,8 +85,24 @@ def validate_contracts(contract_path: Path, dispatch: set[str], documented: set[
             raise ValueError(f"formula contract missing tests: {name}")
         for test in tests:
             if test not in source:
-                raise ValueError(f"formula contract test not found in source: {name}: {test}")
+                missing_tests.append(f"{name}: {test}")
+    if missing_tests:
+        raise ValueError(
+            "formula contract tests not found in workspace sources: "
+            + "; ".join(missing_tests)
+        )
     return len(rows)
+
+
+def collect_rust_sources(source_path: Path) -> str:
+    """Load the evaluator and workspace Rust tests used by contract anchors."""
+    project_root = source_path.resolve().parents[2]
+    paths = sorted(
+        path
+        for path in project_root.rglob("*.rs")
+        if "target" not in path.parts
+    )
+    return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
 
 def main() -> int:
@@ -115,7 +132,12 @@ def main() -> int:
         dispatch = set(canonical) | set(aliases)
         documented = extract_documented_functions(args.docs.read_text(encoding="utf-8"))
     if args.check_contracts:
-        count = validate_contracts(args.contracts, dispatch, documented, args.source.read_text(encoding="utf-8"))
+        count = validate_contracts(
+            args.contracts,
+            dispatch,
+            documented,
+            collect_rust_sources(args.source),
+        )
         print(f"formula contracts: ok ({count} functions)")
     if args.check_docs:
         missing = sorted(dispatch - documented)

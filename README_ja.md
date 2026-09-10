@@ -7,8 +7,9 @@ Microsoft Excelなしで、ワークブックの編集、対応する数式の�
 Excelワークブック自動化ランタイムです。
 PyO3によるPython API、単体CLI、実験的な`@elixcee/xlsx` JavaScript/WASMパッケージを提供します。
 
-バージョンは **1.0.6** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+バージョンは **1.0.7** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 JavaScriptパッケージはprivate・未公開です。
+現在のブランチは公開済み1.0.7の契約に対応しています。次の変更は`[Unreleased]`に記録し、次回リリースまで公開版の機能とは区別します。
 
 elixceeはVBA専用の実行ツールではありません。同じworkbookモデル上で、直接の
 データ編集、対応する数式の再計算、VBAの実行・診断・テストを行えます。
@@ -87,6 +88,8 @@ vm.undo()                                # 編集を取り消し
 
 数式評価、範囲、シート、VBA `Collection`／class moduleサブセット、スタイル、テーブル、データ検証、AutoFilter、
 名前定義、pandas連携、`.xlsx`/`.xlsm`/`.ods`入出力にも対応しています。
+`INDIRECT`はboundedなA1範囲と絶対R1C1参照、`OFFSET`は元範囲の寸法とboundedな`height`／`width`を扱います。
+相対R1C1、sheet-qualified／外部参照、Excel oracle校正は現在の契約対象外です。
 明示的なzero-argumentのWorkbook／Worksheetイベントは`vm.run_event(...)`で呼び出せます。
 `EnableEvents`、VBAセル／数式書き込み後の一意な`Worksheet_Change`自動発火、
 boundedなイベント連鎖が反映されます。明示的なA1 targetを
@@ -122,6 +125,9 @@ OSのブロッキング読込中は次のZIP chunk境界で検出されます。
 
 対応するVBA構文・ワークシート関数は[FUNCTIONS.md](FUNCTIONS.md)にまとめています。
 既知の制約と診断形式は[docs/](docs/)を参照してください。
+
+初心者向けには[日本語クイックスタート](docs/quickstart-ja.md)、[日本語チュートリアル](docs/tutorial-beginners-ja.md)、
+[ブラウザーplayground](playground/README-ja.md)を用意しています。playground内で英語・日本語・簡体中文を切り替えられます。
 
 ## 開発
 

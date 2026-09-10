@@ -13,6 +13,8 @@ fixture, host, and scope limit its conclusions. Open work belongs in the
 - [Formula oracle local rerun, 2026-09-10](formula-oracle-local-2026-09-10.md): eight arithmetic LibreOffice cases, all timeout and therefore not comparable.
 - [Formula-only independent oracle, 2026-09-10](formula-independent-oracle-2026-09-10.md): 94 direct XLSX formula probes, 85/85 paired matches, and 9 explicitly skipped unsupported probes.
 - [Formula oracle follow-up probe, 2026-09-10](formula-independent-oracle-probe-2026-09-10.md): `ROWS`/`COLUMNS` gap discovery and paired repair evidence.
+- [Formula oracle expansion, 2026-09-10](formula-independent-oracle-expansion-2026-09-10.md): 155 probes, 118/118 LibreOffice-comparable matches, including multi-column LINEST/LOGEST/TREND/GROWTH projections, and explicit build-specific skips for newer statistical and conversion names.
+- [Excel function coverage inventory, 2026-09-10](formula-coverage-inventory-2026-09-10.md): 481 official function-table names, zero missing after the explicit external-service boundary, and 534 elixcee dispatch literals including aliases and explicit boundaries.
 - [Formula dirty propagation, 2026-09-05](formula-dirty-calibration-2026-09-05.md): dirty/full equivalence, matrix, p50/p95, resources.
 - [Writer streaming follow-up, 2026-09-05](writer-streaming-follow-up-2026-09-05.md): worksheet sink and passthrough clone reduction; remaining whole-ZIP work.
 - [Writer streaming, 2026-09-07](writer-streaming-2026-09-07.md): release-wheel append and transaction-batched normal-VM RSS rerun through one million rows.

@@ -4,7 +4,7 @@ This document defines the v1 support policy for a headless Excel workbook
 automation runtime, not a promise to emulate the Excel desktop application.
 The runtime has three related surfaces on its workbook model: direct workbook
 editing, supported formula recalculation, and execution/diagnosis of the
-documented data-processing VBA subset. Current coverage is documented for **1.0.6**.
+documented data-processing VBA subset. Current coverage is documented for **1.0.7**.
 Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
 
 ## Supported contract
@@ -20,6 +20,11 @@ Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
   diagnostics, and documented workbook editing operations are
   supported only to the extent listed in [FUNCTIONS.md](../FUNCTIONS.md) and
   the public API signatures.
+- Formula references produced by `INDIRECT` and `OFFSET` are supported within
+  the bounded contract: A1 ranges and absolute R1C1 references for
+  `INDIRECT`, and bounded source ranges with `height`/`width` for `OFFSET`.
+  Relative R1C1, sheet-qualified or external references, and Excel-oracle
+  equivalence remain unverified or unsupported.
 - Default safety behavior rejects blocked external effects, malformed or
   over-budget input, unsafe paths, and unsafe output conditions with an error.
   A rejected input does not produce a partially trusted workbook.
@@ -78,7 +83,7 @@ injection, path traversal, or resource-exhaustion risk.
 
 Each release records implementation tests and static checks separately from
 measurements requiring Microsoft Excel, large fixtures, or another independent
-oracle. For v1.0.6, the local gate covers the Rust workspace/all-target tests,
+oracle. For v1.0.7, the local gate covers the Rust workspace/all-target tests,
 strict clippy/Rustdoc, fresh dependency audit, feature compilation, packaged
 crate/wheel/sdist, JavaScript differential/type checks, and the checked-in
 reader-measurement contract. Dated macOS reader measurements are

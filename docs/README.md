@@ -1,8 +1,10 @@
 # Documentation map
 
-Documentation version: **1.0.6**. API/coverage pages describe this version;
+Documentation version: **1.0.7**. API/coverage pages describe this version;
 dated benchmark records retain their original baseline and source hashes.
 The JavaScript package remains private at 0.0.0-development.
+The current branch may contain unreleased changes; the published 1.0.7
+contract ends at the `[1.0.7]` section of the changelog.
 
 elixcee is a headless Excel workbook automation runtime. Its native contract
 covers workbook editing, supported formula recalculation, and data-processing
@@ -14,6 +16,7 @@ replacement.
 | Need | Maintained reference |
 |---|---|
 | Install and first example | [English](../README.md), [日本語](../README_ja.md), [中文](../README_zh.md) |
+| Browser-first beginner workflow | [Playground](../playground/README.md) with an in-page English/Japanese/Simplified Chinese switch |
 | Current priorities and remaining gates | [Roadmap](../ROADMAP.md) |
 | Roadmap dependency classification | [Dependency audit](roadmap-dependency-audit-2026-09-10.md) |
 | VBA and formula coverage | [FUNCTIONS](../FUNCTIONS.md) |

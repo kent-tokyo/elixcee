@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "elixcee_version": "1.0.6",
+  "elixcee_version": "1.0.7",
   "scope": "native Rust/Python workbook paths",
   "statuses": ["supported", "preserved", "warned", "rejected", "unverified"],
   "features": [

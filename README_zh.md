@@ -8,8 +8,9 @@ elixcee 不是 VBA 专用执行器，而是工作簿自动化运行时：可以�
 
 它不是 Excel 桌面应用的完整替代品。屏幕更新和对话框等 UI 功能会被跳过、简化建模或报告错误。现有图表系列公式、缓存和部分显示属性，以及基于工作表的 Pivot source 提供有限编辑 API，但不支持创建图表、一般 Drawing 编辑或 Pivot 重新计算。需要完整 Excel 对象模型或完整 OOXML 兼容性时，请先检查支持边界。
 
-版本：**1.0.6**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+版本：**1.0.7**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 JavaScript 包仍为 private，尚未发布。
+当前分支遵循已发布的 1.0.7 契约。后续变更会记录在 `[Unreleased]` 中，并与已发布功能分开。
 
 ## 安装
 
@@ -67,6 +68,8 @@ vm.undo()                                # 撤销编辑
 Python API 还支持公式、范围、工作表、VBA `Collection` 与类模块子集、样式、表格、数据验证、AutoFilter、
 名称定义、pandas，以及 `.xlsx`/`.xlsm`/`.ods` 文件。接口签名见 [elixcee.pyi](elixcee.pyi)，
 VBA 和工作表函数列表见 [FUNCTIONS.md](FUNCTIONS.md)。
+`INDIRECT`支持有界A1范围和绝对R1C1引用，`OFFSET`支持源范围尺寸以及有界的`height`/`width`结果。
+相对R1C1、带工作表限定的引用、外部引用和Excel oracle校准不在当前公式契约内。
 `Vm.tables()` 和 `Vm.data_validations()` 返回表格列、范围及验证规则的结构化类型元数据；不会执行计算列公式或验证公式。
 对于已加载的 XLSX/XLSM 工作表，`Vm.sheet_id(name)` 和 `Vm.sheet_name_for_id(sheet_id)` 可在标签顺序或重命名变化后解析原始 sheet ID；新建或 ODS 工作表不会推测 ID。
 
@@ -102,3 +105,6 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 计划见 [ROADMAP.md](ROADMAP.md)，其他公开政策和限制见 [docs/](docs/)。
+
+入门资料：[简体中文快速开始](docs/quickstart-zh.md)、[初学者教程](docs/tutorial-beginners-zh.md)、
+[浏览器 playground](playground/README-zh.md)。playground可以在英语、日语和简体中文之间切换。

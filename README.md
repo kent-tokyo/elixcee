@@ -5,8 +5,11 @@ supported formulas, and run data-processing VBA without Microsoft Excel. The cor
 is Rust, with a Python API (PyO3), a standalone CLI, and an experimental
 `@elixcee/xlsx` JavaScript/WASM package.
 
-Version: **1.0.6**. See the [changelog](CHANGELOG.md) for versioned changes.
+Version: **1.0.7**. See the [changelog](CHANGELOG.md) for versioned changes.
 The experimental JS package remains private and is not published. [English](README.md) | [日本語](README_ja.md) | [中文](README_zh.md)
+
+The current branch follows the published 1.0.7 contract. New work is recorded
+under `[Unreleased]` and is not part of this artifact until a later release.
 
 elixcee is a workbook automation runtime, not a VBA-only execution tool. Use the
 same workbook model for direct data edits, supported formula recalculation, and
@@ -161,7 +164,11 @@ The interpreter supports common data-processing constructs including
 sheets, Excel-style `Range`/`Cells` operations, and the documented built-in VBA
 `Collection`, in-memory Dictionary, and class-module subsets (see the documented limits). Formula support includes
 arithmetic, comparisons, criteria functions, lookup functions, date/time,
-text, statistical, financial, logical, and dynamic-array functions.
+text, statistical, financial, logical, reference-producing (`INDIRECT` and
+`OFFSET`), and dynamic-array functions. `INDIRECT` supports bounded A1 ranges
+and absolute R1C1 references; `OFFSET` supports bounded source ranges and
+`height`/`width` results. Relative R1C1 and external/sheet-qualified references
+remain outside the current formula contract.
 
 The maintained coverage list is [FUNCTIONS.md](FUNCTIONS.md). Unsupported or
 intentional no-op behavior is documented there and in the diagnostic contract.
@@ -209,5 +216,12 @@ A stale database does not establish the absence of newly published advisories.
 
 The short-term plan is in [ROADMAP.md](ROADMAP.md). Public design and policy
 documents are in [docs/](docs/).
+
+New to elixcee? Start with the [English quick start](docs/quickstart.md),
+then read the [beginner tutorial](docs/tutorial-beginners.md) or see the
+[browser playground](playground/README.md). The Pages workflow publishes the
+playground at `https://kent-tokyo.github.io/elixcee/playground/` when enabled;
+its language selector switches the UI and quick-start guidance between English,
+Japanese, and Simplified Chinese.
 
 License: [MIT licensing information](docs/licensing.md). See [third-party notices](THIRD_PARTY_NOTICES.md).

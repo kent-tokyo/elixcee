@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+Next changes go here. The entries below are released in 1.0.7.
+
+## [1.0.7] - 2026-09-10
+
+- Formula compatibility: expand `INDIRECT` to bounded A1 ranges and absolute R1C1 references (`a1=FALSE`), and expand `OFFSET` using the source range dimensions plus bounded `height`/`width`. Both now feed aggregate and spill consumers as row-major arrays. Relative R1C1, sheet-qualified/external references, and Excel-oracle validation remain outside the current contract.
+- Documentation: synchronize the English, Japanese, and Simplified Chinese README/quick-start/tutorial/playground guidance with the headless workbook-editing, formula-recalculation, VBA, and language-switching browser workflows. The JavaScript/WASM package remains private and unpublished.
 - `UNICHAR`／`UNICODE`を`CHAR`／`CODE`のaliasから分離し、Unicode scalar code pointを正しく扱う経路とsurrogate／空文字列の`#VALUE!`境界を追加しました。
 - `INDEX`のbounded reference formで4番目の`area_num=1`を受け付け、union参照や別areaは`#REF!`として安全に拒否する回帰を追加しました。
 - `CHOOSE`で選択肢がworksheet rangeの場合にscalar評価せず、bounded arrayとして返すspill経路を追加しました。
