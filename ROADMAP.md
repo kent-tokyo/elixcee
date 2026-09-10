@@ -147,10 +147,11 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 ### G4 — 関数・配列互換性の拡張（X3）
 
 - [x] G4 離散分布関数 BUILD: `BINOM.DIST.RANGE`、`NEGBINOM.DIST`、`HYPGEOM.DIST`、`PERMUTATIONA`を追加し、PMF/CDF・範囲境界・母集団制約・非負整数条件を回帰した。Excelの全型変換・大規模引数・oracle校正は未完。
-- [x] G4 Database集計関数 BUILD: `DPRODUCT`、`DSTDEV`／`DSTDEVP`、`DVAR`／`DVARP`を既存の条件抽出基盤へ接続し、標本／母集団の分母、数値列抽出、空集合の境界を回帰した。Excelの全型変換・criteria互換性・oracle校正は未完。
+- [x] G4 Database集計関数 BUILD: `DPRODUCT`、`DSTDEV`／`DSTDEVP`、`DVAR`／`DVARP`を既存の条件抽出基盤へ接続し、標本／母集団の分母、数値列抽出、空集合の境界を回帰した。criteria範囲が見出し行だけの場合の全レコード選択もDGET／集計系へ接続した。Excelの全型変換・criteria互換性・oracle校正は未完。
 - [x] G4 統計要約関数 BUILD: `MODE.SNGL`、`MODE.MULT`、`TRIMMEAN`、`SKEW`、`KURT`を追加し、最頻値、複数spill、対称trim、標本歪度、過剰標本尖度と定義域を回帰した。Excelの全型変換・浮動小数点最頻値・oracle校正は未完。
 - [x] G4 順位・母集団統計 BUILD: `RANK.EQ`／`RANK.AVG`と`SKEW.P`を追加し、同順位平均、昇順／降順、母集団標準化と定義域を回帰した。Excelの全型変換・浮動小数点順位・oracle校正は未完。
-- [x] G4 度数分布 BUILD: `FREQUENCY`を配列結果として追加し、階級ごとの包含境界、最終超過階級、空の階級範囲を回帰した。Excelの未ソートbins・全型変換・spill oracle校正は未完。
+- [x] G4 度数分布 BUILD: `FREQUENCY`を配列結果として追加し、階級ごとの包含境界、最終超過階級、空の階級範囲を回帰した。VMではExcel互換の縦方向spill shapeも復元する。Excelの未ソートbins・全型変換・spill oracle校正は未完。
+- [x] G4 MODE.MULT spill shape BUILD: 複数最頻値のflat結果をVMで縦方向spillへ復元し、同順位値の順序と2×1矩形を回帰した。Excelの全型変換・spill oracle校正は未完。
 - [x] G4 確率集計 BUILD: `PROB`を追加し、値／確率範囲の長さ、確率合計・非負条件、下限／上限の包含範囲を回帰した。Excelの全型変換・丸め・oracle校正は未完。
 - [x] G4 二項逆関数 BUILD: `BINOM.INV`を追加し、累積確率の最小成功数、確率・試行回数・alphaの境界を回帰した。Excelの全型変換・数値精度・oracle校正は未完。
 - [x] G4 F分布両側モード BUILD: `F.DIST.2T`を追加し、既存の累積F分布から両側確率を導出して、x・自由度・確率上限の境界を回帰した。Excelの全型変換・数値精度・oracle校正は未完。
@@ -191,8 +192,18 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 動的配列trim BUILD: `TRIMRANGE`を外周の空行／空列走査へ接続し、trim_rows／trim_colsの0–3 mode、全空配列、2D shapeを回帰した。trim reference構文・空文字列細則・Excel oracle校正は未完。
 - [x] G4 文字列メタデータ境界BUILD: `PHONETIC`をheadless-safeなsource-text fallbackとして追加し、OOXML phonetic run未保持時に外部locale/UIへ依存せず決定的な値を返す境界を回帰した。phonetic runの読込・編集・Excel oracle校正は未完。
 - [x] G4 URL文字列BUILD: `ENCODEURL`をUTF-8のRFC 3986 unreserved文字以外のpercent-encodingとして追加し、ASCII・空白・Unicode境界を回帰した。Excelのlocale／異常Unicode挙動のoracle校正は未完。
-- [x] G4 AGGREGATE mode拡張BUILD: `AGGREGATE`の7/8/10/11（標本・母集団の標準偏差／分散）、13（MODE.SNGL）、14/15（k指定LARGE／SMALL）、17–21（quartile／percentile／percentrank）を既存関数へ接続した。nested reference除外・全option意味論・Excel oracle校正は未完。
-- [x] G4 SUBTOTAL mode拡張BUILD: `SUBTOTAL`の7/8/10/11と101–111 aliasを標準偏差／分散の既存集計へ接続し、通常／hidden-row番号の同値性を回帰した。hidden row実モデル・Excel oracle校正は未完。
+- [x] G4 AGGREGATE mode拡張BUILD: `AGGREGATE`の7/8/10/11（標本・母集団の標準偏差／分散）、13（MODE.SNGL）、14/15（k指定LARGE／SMALL）、17–21（quartile／percentile／percentrank）を既存関数へ接続した。さらにoptions 0–3のnested SUBTOTAL／AGGREGATE除外と、2/3/6/7のError除外・その他のError伝播を追加した。hidden-row metadata、完全なreference-form意味論、Excel oracle校正は未完。
+- [x] G4 SUBTOTAL mode拡張BUILD: `SUBTOTAL`の7/8/10/11と101–111 aliasを標準偏差／分散の既存集計へ接続し、通常／hidden-row番号の同値性を回帰した。さらに範囲内のnested SUBTOTAL／AGGREGATE除外とError伝播を追加した。hidden row実モデル・Excel oracle校正は未完。
+- [x] G4 条件集計shape BUILD: `SUMIFS`／`COUNTIFS`／`AVERAGEIFS`／`MAXIFS`／`MINIFS`のsum／target／criteria範囲について矩形shape一致を検証し、同じ要素数でも行列形状が異なる入力を`#VALUE!`として拒否する。Excelの全型変換・criteria oracle校正は未完。
+- [x] G4 WEEKDAY mode BUILD: `WEEKDAY`のreturn_type 11–17（週開始曜日を月曜から日曜へ指定）を実装し、代表的な木曜日の戻り値を回帰した。日付型変換・Excel oracle校正は未完。
+- [x] G4 NETWORKDAYS/WORKDAY.INTL boundary BUILD: `NETWORKDAYS.INTL`／`WORKDAY.INTL`の週末コードを整数に限定し、7文字のカスタム週末マスクを`0/1`だけに検証した。休日・日付の全型変換とExcel oracle校正は未完。
+- [x] G4 DATE normalization BUILD: `DATE`のmonth/day overflow・underflowと0–99年の1900加算を実装し、月0／13、日0、2桁年を回帰した。1900未満・全型変換・Excel oracle校正は未完。
+- [x] G4 DATEVALUE parsing BUILD: `DATEVALUE`へslash／hyphen／dot区切り、英語month name/abbreviation、`T`付きISO date-time入力を追加し、`DATE`共有のbounded正規化を回帰した。非英語locale固有の日付名・全型変換・Excel oracle校正は未完。
+- [x] G4 TIMEVALUE parsing BUILD: `TIMEVALUE`へ24時間表記とAM/PM表記を追加し、時間・分・秒の範囲外を`#VALUE!`として拒否する回帰を追加した。locale固有の時刻名とExcel oracle校正は未完。
+- [x] G4 WEEK mode boundary BUILD: `WEEKDAY`／`WEEKNUM`の`return_type`を整数に限定し、浮動小数の暗黙切り捨てを拒否する回帰を追加した。日付型変換とExcel oracle校正は未完。
+- [x] G4 TRANSLATE safety BUILD: `TRANSLATE`に同一言語タグのoffline identity経路を追加し、異なる言語の翻訳は外部I/Oなしで`#N/A`へfail-closedする回帰を追加した。翻訳サービス互換とExcel oracle校正は未完。
+- [x] G4 GROUPBY sort BUILD: 複合row fieldに対する`GROUPBY`のsort_orderをスカラーだけでなくfieldごとの`VSTACK(1,-1)`ベクトルへ拡張し、各キーの昇降順を回帰した。Excel oracle校正は未完。
+- [x] G4 SORTBY multi-key BUILD: 1D dataでも複数のsort-by配列を辞書式に適用し、2D経路と同じ昇降順・tie-break処理を回帰した。異形shapeとExcel oracle校正は未完。
 - [x] G4 CONVERT単位拡張BUILD: `CONVERT`へangstrom／pica、ton／slug／atomic mass、立方インチ系、force、torr、electronvolt、frequency、bit／byte系を追加し、カテゴリ境界を維持した。Excel全単位表・大文字小文字細則・oracle校正は未完。
 - [x] G4 XML抽出BUILD: `FILTERXML`をローカルXMLの要素／属性XPath（absolute／descendant、wildcard、text）subsetへ接続し、複数結果・不正XML・未検出境界を回帰した。完全XPath、namespace、外部entity、Excel oracle校正は未完。
 - [x] G4 GROUPBY配列集計BUILD: `GROUPBY`を1列row_fields／valuesのグループ化、SUM／AVERAGE／COUNT／COUNTA／MIN／MAX／PRODUCT reducer、filter配列、first-seen／昇降順へ接続した。多列field relationship、headers／totals深度、LAMBDA reducer、Excel oracle校正は未完。
@@ -202,6 +213,14 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 implicit-intersection補完BUILD: `SINGLE`を既存flat array評価へ接続し、配列先頭値・scalar透過・空配列境界を回帰した。Excelの完全なimplicit-intersection規則とoracle校正は未完。
 - [x] G4 formula metadata BUILD: `ISFORMULA`を`CellContent.formula`へ接続し、単一セル・bounded range・非参照式の判定を回帰した。跨ぎsheet参照とExcel全型変換のoracle校正は未完。
 - [x] G4 TEXTSPLIT mode BUILD: `TEXTSPLIT`へrow delimiter、case-insensitive match、pad valueを追加し、既存ignore-empty placeholderとflat row-major配列を回帰した。完全な2D shape・複数delimiter配列・Excel oracle校正は未完。
+- [x] G4 TEXTSPLIT delimiter-array BUILD: `TEXTSPLIT`の列／行delimiterへ動的配列結果を受け付け、最短位置・同位置では最長delimiterを優先するbounded splitと矩形paddingを回帰した。完全な2D shape metadataとExcel oracle校正は未完。
+- [x] G4 TEXTSPLIT single-axis BUILD: 列delimiterが空でrow delimiterだけが指定される公式形式を許可し、1列vertical spillと「両軸delimiter空は拒否」の境界を回帰した。完全な2D shape metadataとExcel oracle校正は未完。
+- [x] G4 GROUPBY multi-field BUILD: 複数列row_fieldsを行単位の複合キーとして扱い、重複キーを集約しながらキー列＋reducer列をrow-major出力する経路と回帰を追加した。Excel oracle校正は未完。
+- [x] G4 GROUPBY LAMBDA reducer BUILD: `GROUPBY`のreducerへ単一／複数引数のbounded `LAMBDA(values, ...)`を受け付け、各グループの値配列と列全体の値配列をLAMBDAへ渡す経路、複数LAMBDAのHSTACK vector回帰を追加した。ネスト／高階LAMBDAとExcel oracle校正は未完。
+- [x] G4 GROUPBY headers/totals BUILD: `field_headers`の0–3（入力header除外／表示／生成）と`total_depth`の0／1／-1（末尾／先頭grand total）を限定実装し、複合キー・filter後のtotalを回帰した。先頭subtotal（-2）、任意深度、複数LAMBDAベクトル、Excel oracle校正は未完。
+- [x] G4 GROUPBY multi-value BUILD: 複数列`values`を同一reducerで列ごとに集計し、出力幅・headers・grand total・filter後の値をvalues列数に合わせた。複数LAMBDA vectorとsubtotalsはbounded範囲で接続し、Excel oracle校正は未完。
+- [x] G4 GROUPBY subtotal BUILD: 複合row fieldで`total_depth=2/-2`を指定した場合に、親キー単位の末尾／先頭subtotalとgrand totalをvalues列ごとに出力する経路と、親キーが交互に現れる入力を含む回帰を追加した。任意深度、複数LAMBDAベクトル、Excel oracle校正は未完。
+- [x] G4 GROUPBY reducer-vector BUILD: `HSTACK(SUM,AVERAGE)`形式のbounded reducer vectorを受け付け、reducer×values列の順で出力幅・headers・subtotal・grand totalを展開した。`VSTACK`方向、複雑なlambda vector、Excel oracle校正は未完。
 - [x] G4 worksheet context BUILD: `SHEET`／`SHEETS`をsingle-sheet evaluatorの既定値とworkbook recalculationのsheet index/count contextへ接続した。3D参照、名前付き範囲全域、Excel oracle校正は未完。
 - [x] G4 ISOMITTED AST／LAMBDA BUILD: 空引数スロットを`FormulaExpr::Omitted`として保持し、`ISOMITTED`が構文上の省略と明示的`Empty`を区別できるようにした。高階LAMBDA呼出しの不足引数は省略束縛として追跡し、`LAMBDA(...)(...)`の直接呼出しを評価する。名前付きLAMBDA再利用、Excel oracle校正は未完。
 - [x] G4 compatibility alias BUILD: `F.TEST`／`CHISQ.TEST`／`DBCS`を既存の検証済み実装へ接続し、Excelの新名称／旧名称の同値経路を回帰した。alias固有のExcel oracle校正は未完。
@@ -210,15 +229,22 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 EUROCONVERT BUILD: 固定EU換算率、通貨別丸め、full_precision、triangulation_precisionを実装し、同一通貨・無効コード・精度境界を回帰した。Excelの追加locale／oracle校正は未完。
 - [x] G4 logical constants BUILD: `TRUE()`／`FALSE()`のExcel関数形式を追加し、引数なしの戻り値と不正引数を既存の論理評価へ接続した。裸の`TRUE`／`FALSE`リテラルは従来どおりパーサーで扱う。
 - [x] G4 DETECTLANGUAGE local BUILD: 外部Translation Servicesへ接続せず、Unicode scriptと限定語彙から`ja`／`zh`／`ko`／`ar`／`he`／`el`／`ru`／主要Latin言語を決定的に検出する。曖昧・空・長大入力は`#N/A`、非文字列は`#VALUE!`とし、Excelのサービス結果・対応言語全域は未完。
-- [x] G4 PIVOTBY配列集計BUILD: `PIVOTBY`を1列row／column fieldsとvaluesのcross-tab、行列ヘッダー、空組合せのreducer評価へ接続した。multi-field relationship、headers／totals depth、sort／filter／LAMBDA、Excel oracle校正は未完。
+- [x] G4 GETPIVOTDATA grid BUILD: アンカーから bounded なworksheet-rendered PivotTableを探索し、値フィールド見出し、field/itemの行・列項目、Grand Totalを可視セルから取得する。外部cache・OLAP・複数Pivot選択・非認識レイアウトは推測せず`#REF!`とし、Excel oracle校正は未完。
+- [x] G4 独立oracle統計・分布拡張: LibreOffice 26.2.5のformula-only fixtureへ統計回帰7件と分布境界14件を追加し、比較可能な92/92件の一致を確認した。LibreOffice側で`#NAME?`となる30件は明示skipとして保持し、Excel／elixceeのペア一致とは主張しない。Excel oracle、全型変換、近似誤差の全域校正は未完。[測定記録](docs/measurements/formula-independent-oracle-expansion-2026-09-10.md)
+- [x] G4 独立oracle回帰 follow-up: LibreOffice formula-only fixtureへ多列`LINEST`／`LOGEST`／`TREND`／`GROWTH`の係数・R²・予測scalar projectionを追加し、比較可能な118/118件の一致を確認した。これはLibreOffice evidenceであり、Excel oracleと現行wheelのpaired 118-case検証は未完。[測定記録](docs/measurements/formula-independent-oracle-expansion-2026-09-10.md)
+- [x] G4 Excel公式関数棚卸し: 2026-09-10時点のMicrosoft公式関数テーブル481名を実ディスパッチ534リテラル（canonical＋alias＋明示的外部境界）と照合し、外部サービス依存14名を境界分離した後の未対応名0件を確認した。意味論・数値精度・Excel再open・Aspose/EPPlus同一版比較は未完。[測定記録](docs/measurements/formula-coverage-inventory-2026-09-10.md)
+- [x] G4 oracle変換・整数・統計拡張: `GCD`／`LCM`／`QUOTIENT`／`ROMAN`／`NETWORKDAYS.INTL`／`EVEN`／`ODD`／`SUMSQ`／`DEVSQ`／`TRIMMEAN`／`CONVERT`／`DOLLARDE`／`GEOMEAN`／`HARMEAN`／`AVEDEV`／`SKEW`／`KURT`を独立fixtureへ追加し、LibreOffice比較17/17一致を確認した。`ARABIC`／`BASE`／`DECIMAL`／`MODE.SNGL`とLibreOffice独自挙動の`DOLLARFR`はskipし、未評価を一致扱いしない。[測定記録](docs/measurements/formula-independent-oracle-expansion-2026-09-10.md)
+- [x] G4 型coercion BUILD: `SUM`と`AVERAGE`で、直接引数の文字列・論理値とRange内の文字列・論理値を別経路で評価するExcel仕様を実装し、`SUM("2",TRUE)`、`AVERAGE(3,"2")`、Range内非数値の回帰を追加した。LibreOfficeの直接coercion差はoracle skipとして記録し、Excel仕様根拠を分離した。[測定記録](docs/measurements/formula-independent-oracle-expansion-2026-09-10.md)
+- [x] G4 PIVOTBY配列集計BUILD: `PIVOTBY`を1列または複数列のrow／column fieldsとvaluesのcross-tab、行列ヘッダー、空組合せのreducer評価へ接続した。複合fieldは行単位キーとして比較し、valuesの複数列は列fieldごとにreducerを展開する。VMの2D spill shapeもfield幅・total depthを反映して復元する。`field_headers=0`のヘッダーなし出力、boundedな自動ヘッダー推定と明示ヘッダー、filter_array、キー列とvalues列を指定できる±sort order、複合fieldを並べるfield-vector sort、`HSTACK`／`VSTACK` reducer vector、単一／複数引数のbounded `LAMBDA` reducer vector、row/column grand totalの0/1/-1、複数row/column fieldに対するsubtotalの2/-2（末尾／先頭）、`PERCENTOF`の`relative_to` 0–4（列／行／総計／親列／親行）も接続した。column totalのみの場合の矩形paddingとVM幅推論も回帰した。曖昧な自動判定、ネスト／高階LAMBDA vector、複合キーのExcel oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素三角関数 BUILD: `IMSIN`／`IMCOS`／`IMTAN`、`IMSINH`／`IMCOSH`／`IMTANH`、`IMSEC`／`IMCSC`／`IMCOT`を複素公式と除算へ接続し、原点・接尾辞・極のゼロ除算を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素逆三角関数 BUILD: `IMASIN`／`IMACOS`／`IMATAN`／`IMACOT`を主値平方根・対数ヘルパーへ接続し、実軸の代表値と主値計算を回帰した。複素関数全体、branch cut・Excel oracle校正は未完。
 - [x] G4 複素逆双曲線関数 BUILD: `IMASINH`／`IMACOSH`／`IMATANH`と`IMSECH`／`IMCSCH`／`IMCOTH`を主値計算・共通除算へ接続し、原点と極の境界を回帰した。複素関数全体、branch cut・Excel oracle校正は未完。
 - [x] G4 回帰予測配列 BUILD: `TREND`と`GROWTH`を配列結果として追加し、線形／指数回帰、const指定、new_x範囲、正値制約を回帰した。多変量LINEST互換、Excelの全型変換・spill oracle校正は未完。
-- [x] G4 単回帰LINEST BUILD: `LINEST`の単回帰について係数・切片、`const`、`stats`時の標準誤差・R²・F・自由度・平方和を配列結果として追加した。多変量回帰、Excelの全型変換・2D spill・oracle校正は未完。
-- [x] G4 指数回帰LOGEST BUILD: `LOGEST`の単回帰について指数係数・基底、`const`、`stats`時の回帰統計を配列結果として追加した。多変量回帰、Excelの全型変換・2D spill・oracle校正は未完。
+- [x] G4 LINEST多変量回帰 BUILD: `LINEST`へ複数列`known_x`の最小二乗解、係数逆順、切片、`const`、`stats`の標準誤差・R²・F・自由度・平方和と2D配列paddingを接続した。VMの5行×係数幅spill shape、特異行列、観測数不足も回帰した。Excelの全型変換とoracle校正は未完。
+- [x] G4 LOGEST多変量回帰 BUILD: `LOGEST`へ対数変換した複数列`known_x`の回帰、指数係数／基底、`const`、`stats`の回帰統計を接続した。正値制約と特異行列を検証する。VMのspill shape接続、Excelの全型変換とoracle校正は未完。
+- [x] G4 TREND/GROWTH多変量予測 BUILD: `TREND`／`GROWTH`へ複数列`known_x`と同幅`new_x`の予測を接続し、線形／対数線形係数、切片、行単位の配列結果と次元検証を回帰した。Excelの全型変換・2D spill metadata・oracle校正は未完。
 - [x] G4 債券・割引証券関数 BUILD: `PDURATION`、`PRICEDISC`、`RECEIVED`、`TBILLPRICE`／`TBILLYIELD`／`TBILLEQ`を追加し、期間・basis・割引率・価格の境界を回帰した。Excelのうるう年・basis全域・丸め・oracle校正は未完。
 - [x] G4 Engineering単位・表記変換 BUILD: `CONVERT`の主要単位カテゴリ（長さ・質量・時間・面積・体積・温度・圧力・エネルギー・電力・速度）と`ROMAN`／`ARABIC`を追加し、カテゴリ不一致・定義域・canonical Roman表記を回帰した。Excelの全単位表・locale・oracle校正は未完。
 - [x] G4 分布関数ファミリー拡張 BUILD: `GAMMA.DIST`／`GAMMA.INV`、`CHISQ.DIST.RT`／`CHISQ.INV`系、`F.DIST.RT`／`F.INV`系、`WEIBULL.DIST`、`EXPON.DIST`、`LOGNORM.DIST`／`LOGNORM.INV`を追加し、PDF/CDF・片側・逆関数の代表値と定義域を回帰した。近似精度の全域評価とExcel oracle校正は未完。
@@ -261,6 +287,10 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 FILTER shape伝播: 元の2D range幅と出力要素数から`FILTER`の行列shapeを復元し、2D抽出結果を既定spill再計算へ接続した。include形状の全組合せ、異幅入力、Excel oracle校正は未完。
 - [x] G4 TAKE/DROP shape接続: 元配列shapeに基づく行・列単位のTAKE/DROPと任意列数引数を追加し、2D結果を既定spill再計算へ接続した。行／列件数は整数かつ非zeroであることを検証する。全shape伝播、Excel oracle校正は未完。
 - [x] G4 axis shape伝播: 1列sourceの`UNIQUE` / `SORT`と、`TOCOL` / `TOROW`の出力軸を既定spill再計算へ接続した。2D sourceの全意味論、全shape伝播、Excel oracle校正は未完。
+- [x] G4 TOCOL/TOROW scan BUILD: `TOCOL`／`TOROW`の`scan_by_column`を2D rangeのcolumn-major traversalへ接続し、`ignore`の0–3範囲検証と行major／列major回帰を追加した。完全なshape metadataとExcel oracle校正は未完。
+- [x] G4 TEXTBEFORE/TEXTAFTER boundary BUILD: 空delimiter、`match_end`、`if_not_found`、`instance_num`／`match_mode`の厳密な0/1・整数境界を実装し、公式例に対応する前後抽出を回帰した。完全なUnicode境界とExcel oracle校正は未完。
+- [x] G4 stacked-array shape BUILD: `VSTACK`／`HSTACK`の構成要素shapeを再帰推論し、複合dynamic arrayを入力とする`TOCOL`／`TOROW`のcolumn-major走査を回帰した。全配列関数のshape metadataとExcel oracle校正は未完。
+- [x] G4 TEXTSPLIT spill-shape BUILD: row delimiterの実値から矩形行数を復元し、flat resultの長さと整合する場合だけ2D spill footprintを採用するVM経路と回帰を追加した。array delimiterの全shape、空行／padの全境界、Excel oracle校正は未完。
 - [x] G4 INDEX array shape接続: `INDEX(range,0,0)`の全範囲、行配列、列配列について元rangeと引数からshapeを復元し、既定spill再計算へ接続した。行／列番号は整数値として検証し、非整数値を`#VALUE!`として拒否する。2D切出し全体、Excel oracle校正は未完。
 - [x] G4 choose axis接続: 2D入力の`CHOOSECOLS` / `CHOOSEROWS`を行列単位で選択し、選択後shapeを既定spill再計算へ接続した。行／列indexは整数値として検証し、非整数値を`#VALUE!`として拒否する。1D legacy経路、Excel oracle校正は未完。
 - [x] G4 2D unique/sort接続: 2D入力の`UNIQUE`を行／列単位の重複排除、`SORT`を行列のsort_index・sort_order・by_colに接続し、結果shapeを既定spill再計算へ接続した。`UNIQUE`のexactly_once／by_colと`SORT`のby_colはtruthy型変換に揃え、1D／2D `SORT`のsort_index／sort_orderは不正値を`#VALUE!`として拒否する。型意味論全体とExcel oracle校正は未完。
@@ -568,3 +598,29 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 | 外部サービス・将来公開に依存 | LogiSheets固定版の取得を伴う競合比較、外部レビュー、registry／GitHub Release／tag公開 | 取得元・固定version・公開状態を別途記録。未実施の推測は完了扱いにしない |
 
 現在の候補版では、自己完結ローカルゲートとmacOS測定を完了した項目だけを `[x]` とし、上表の外部依存項目は未完のまま維持する。
+- [x] G4 MATCH近似検索の安全境界: `match_type=1/-1`で入力範囲をそれぞれ昇順／降順として検証し、未ソート範囲を`#N/A`、比較不能な値を`#VALUE!`にする回帰を追加した。Excelの全型変換とoracle校正は未完。
+- [x] G4 LOOKUP近似検索の安全境界: 昇順lookup vectorを検証し、未ソート範囲を`#N/A`、比較不能な値を`#VALUE!`にする回帰を追加した。Excelの全型変換とoracle校正は未完。
+- [x] G4 VLOOKUP/HLOOKUP近似検索の安全境界: デフォルト近似モードでキー列／キー行の昇順を検証し、未ソート範囲を`#N/A`、比較不能な値を`#VALUE!`にする回帰を追加した。Excelの全型変換とoracle校正は未完。
+- [x] G4 XLOOKUP/XMATCH binary検索の安全境界: `search_mode=2/-2`でlookup arrayを昇順／降順として検証し、未ソート範囲を`#N/A`、比較不能な値を`#VALUE!`にする回帰を追加した。Excelの全型変換とoracle校正は未完。
+- [x] G4 LOOKUP/XLOOKUP shape引数: lookup配列とresult／return配列のflattened要素数を検証し、不一致を`#VALUE!`として拒否する回帰を追加した。2D形状の厳密な行列一致とExcel oracle校正は未完。
+- [x] G4 LOOKUP vector shape: vector formを1行／1列に限定し、result vectorの行列方向をlookup vectorと一致検証する。Excelの全型変換とoracle校正は未完。
+- [x] G4 MATCH/XMATCH vector shape: lookup arrayを1行／1列に限定し、2D矩形をflattenして検索しない安全境界を追加した。Excelの全型変換とoracle校正は未完。
+- [x] G4 Unicode text semantics: `UNICHAR`／`UNICODE`をlegacy `CHAR`／`CODE` aliasから分離し、Unicode scalar code point、surrogate、非整数、空文字列の境界を回帰した。Excelの全型変換とoracle校正は未完。
+- [x] G4 INDEX reference-form boundary: 単一明示rangeに限り`area_num=1`の4引数形式を受け付け、union参照や別areaを`#REF!`として拒否する回帰を追加した。複数areaの参照ASTとExcel oracle校正は未完。
+- [x] G4 CHOOSE array result: 選択肢が単一worksheet rangeの場合にscalar評価せずbounded arrayを返し、既存のscalar選択とspill入力を両立した。array index_numとExcel oracle校正は未完。
+- [x] G4 CHOOSE array index: `SEQUENCE`等のbounded arrayを`index_num`として評価し、indexごとの選択結果をflattened spill arrayへ展開する。不正indexは`#VALUE!`で停止し、Excel oracle校正は未完。
+- [x] G4 IF array broadcasting: bounded array条件を要素単位で評価し、scalar／同長arrayのtrue/false branchをbroadcastするspill経路を追加した。scalar条件のlazy評価は維持し、Excel oracle校正は未完。
+- [x] G4 IFS array broadcasting: bounded array条件を要素単位で評価し、各要素のfirst-true branchをscalar／同長arrayから選択するspill経路を追加した。Excel oracle校正は未完。
+- [x] G4 IFERROR/IFNA array errors: 配列内のErrorを要素単位で置換し、`IFERROR`は全Error、`IFNA`は`#N/A`だけをfallback対象にした。Excel oracle校正は未完。
+- [x] G4 logical array evaluation: `AND`／`OR`がbounded arrayの各要素を集約し、`NOT`がarrayを要素単位で反転する経路を追加した。配列内Errorの保持と`IFERROR`への接続を回帰した。Excelの完全な参照型変換とoracle校正は未完。
+- [x] G4 XOR array evaluation: `XOR`もbounded arrayを要素単位でflattenして排他的論理和を計算し、配列内Errorを保持する経路を追加した。Excelの完全な参照型変換とoracle校正は未完。
+- [x] G4 SWITCH array evaluation: `SWITCH`の配列expressionを要素単位でfirst-match/default選択し、scalar／同長arrayの結果をbroadcastするspill経路を追加した。matchなし・defaultなしは要素`#N/A`とし、Excel oracle校正は未完。
+- [x] G4 aggregate Error propagation: `SUM`／`AVERAGE`の矩形参照・bounded array・直接引数でErrorを黙って除外せず、Excel互換のError伝播へ修正した。非数値の既存無視／coercion規則とoracle校正は未完。
+- [x] G4 statistical aggregate Error propagation: `MIN`／`MAX`／`PRODUCT`／`MEDIAN`にも矩形参照・bounded array・直接引数のError伝播を適用した。非数値の型変換細則とExcel oracle校正は未完。
+- [x] G4 COUNT/COUNTA array semantics: `COUNT`／`COUNTA`がdynamic arrayを要素単位で数え、Date・Error・Empty・空文字列の境界をExcelの参照集計規則へ合わせた。全型変換とoracle校正は未完。
+- [x] G4 conditional aggregate Error propagation: `SUMIF(S)`／`AVERAGEIF(S)`／`MAXIFS`／`MINIFS`でcriteriaに一致した結果範囲のErrorを黙って除外せず伝播するよう修正した。criteria coercion全域とExcel oracle校正は未完。
+- [x] G4 conditional aggregate array flatten: 条件範囲・結果範囲として渡されたbounded dynamic arrayを要素単位へflattenし、`COUNTIF(S)`／`SUMIF(S)`／`AVERAGEIF(S)`／`MAXIFS`／`MINIFS`の配列入力を回帰した。2D shape metadataとExcel oracle校正は未完。
+- [x] G4 A-statistics array/coercion: `AVERAGEA`／`MINA`／`MAXA`／`VARA`／`VARPA`のbounded array flatten、logical/text/Empty coercion、Error伝播を共通経路へ統合した。Excelの参照と直接引数の細部、oracle校正は未完。
+- [x] G4 classic dispersion array flatten: `STDEV.S`／`STDEV.P`／`VAR.S`／`VAR.P`がbounded dynamic arrayを要素単位で集計する経路を追加し、sample/populationの分母を回帰した。Error伝播とExcel oracle校正は未完。
+- [x] G4 paired-statistics array flatten: `CORREL`／`COVARIANCE.S`／`COVARIANCE.P`と回帰・検定系が2本のbounded dynamic arrayを要素単位でflattenし、等長検証する経路を共通化した。Error伝播とExcel oracle校正は未完。
+- [x] G4 reference-producing formula expansion: `INDIRECT`をA1範囲・絶対R1C1範囲・`a1`指定へ接続し、`OFFSET`の元range寸法・height／widthをbounded矩形配列として集計・spill経路へ渡すようにした。相対R1C1、sheet-qualified／外部参照、Excel oracle校正は未完。

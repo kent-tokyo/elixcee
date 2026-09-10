@@ -4,6 +4,61 @@
 
 ## [Unreleased]
 
+- `UNICHAR`／`UNICODE`を`CHAR`／`CODE`のaliasから分離し、Unicode scalar code pointを正しく扱う経路とsurrogate／空文字列の`#VALUE!`境界を追加しました。
+- `INDEX`のbounded reference formで4番目の`area_num=1`を受け付け、union参照や別areaは`#REF!`として安全に拒否する回帰を追加しました。
+- `CHOOSE`で選択肢がworksheet rangeの場合にscalar評価せず、bounded arrayとして返すspill経路を追加しました。
+- `CHOOSE`の`index_num`に`SEQUENCE`等のbounded arrayを受け付け、各indexの選択結果を配列として返す経路を追加しました。不正indexは`#VALUE!`で停止します。
+- `IF`の条件をbounded arrayとして要素単位に評価し、scalar／同長arrayの分岐をbroadcastするspill経路を追加しました。scalar条件のlazy評価は維持します。
+- `IFS`にもbounded array条件とscalar／同長array branchのbroadcastを追加し、各要素で最初に真になる条件を選択できるようにしました。
+- `CHOOSE`のarray indexで要素内のErrorを配列全体へ早期昇格させず保持するようにし、`IFERROR`／`IFNA`の要素単位置換と接続しました。
+
+- Documentation/playground: make the GitHub Pages quick-start guidance switch between English, Japanese, and Simplified Chinese in one page instead of showing translations side by side.
+- Formula coverage: extend `TEXTSPLIT` to accept dynamic-array row and column delimiters, with deterministic earliest-match splitting and longest-delimiter tie-breaking.
+- Formula compatibility: allow an empty column delimiter when a row delimiter is supplied, producing the documented single-column split.
+- Formula coverage: extend bounded `GROUPBY` to composite multi-column row keys, preserving key columns and appending the reducer result.
+- Formula coverage: allow bounded `GROUPBY` reducers to be `LAMBDA(values, ...)`, passing each group's value array through the existing lambda evaluator.
+- Formula coverage: extend bounded `GROUPBY` reducers to multiple `LAMBDA` reducers and two-argument lambdas receiving the group subset plus the column-wide value set.
+- Formula coverage: extend `LINEST` and `LOGEST` to bounded multi-column `known_x` regression with coefficient reversal, intercept/constant handling, statistics rows, and singular-matrix validation.
+- Formula coverage: extend `TREND` and `GROWTH` to bounded multi-column `known_x`/`new_x` prediction using the shared least-squares and log-linear regression path.
+- Formula compatibility: preserve the vertical spill shape of `FREQUENCY` results in VM recalculation instead of treating the flat count vector as a horizontal array.
+- Formula compatibility: preserve the vertical spill shape of `MODE.MULT` results in VM recalculation.
+- Formula compatibility: treat a database criteria range containing only its header row as an all-records criteria branch for `DGET` and database aggregators.
+- Formula compatibility: make `AGGREGATE` honor options 0–7 for nested aggregate exclusion and error propagation, while documenting the remaining hidden-row metadata boundary.
+- Formula compatibility: make `SUBTOTAL` ignore nested `SUBTOTAL`/`AGGREGATE` references and propagate worksheet errors across function numbers 1–11 and 101–111.
+- Formula compatibility: validate rectangular range-shape equality in `SUMIFS`, `COUNTIFS`, `AVERAGEIFS`, `MAXIFS`, and `MINIFS` instead of silently truncating mismatched criteria ranges.
+- Formula compatibility: add `WEEKDAY` return types 11–17 for Monday-through-Sunday week starts.
+- Formula compatibility: validate `NETWORKDAYS.INTL`/`WORKDAY.INTL` weekend codes as integers or seven-character `0`/`1` masks, with custom-mask regressions.
+- Formula compatibility: normalize `DATE` month/day overflow and underflow, and apply Excel's 0–99 year mapping.
+- Formula coverage: extend bounded `DATEVALUE` parsing to dot-separated, English month-name, and ISO date-time strings, sharing `DATE` normalization.
+- Formula compatibility: extend bounded `TIMEVALUE` parsing to 24-hour and AM/PM text, with explicit hour/minute/second validation.
+- Formula compatibility: require integer `return_type` values for `WEEKDAY` and `WEEKNUM` instead of silently truncating fractional modes.
+- Formula coverage: add a deterministic offline `TRANSLATE` identity mode for matching language tags while keeping cross-language translation fail-closed.
+- Formula coverage: extend bounded `GROUPBY` composite-key sorting to field-vector sort orders such as `VSTACK(1,-1)`.
+- Formula compatibility: make `SORTBY` honor multiple sort-by arrays for 1D data with lexicographic key ordering, matching its existing 2D path.
+- Formula coverage: add bounded `GROUPBY` field-header modes and leading/trailing grand totals, including totals after filter selection.
+- Formula coverage: extend bounded `PIVOTBY` to multiple value columns, repeating each column field header and reducing each value column independently.
+- Formula coverage: connect bounded `PIVOTBY` filter arrays and ascending/descending row and column key sorting through its optional arguments.
+- Formula coverage: add bounded `PIVOTBY` row and column grand totals for total depths 0, 1, and -1, including multiple value columns.
+- Formula coverage: accept bounded multi-column `PIVOTBY` row and column fields as composite keys, and preserve their key columns in the spill output and shape inference.
+- Formula compatibility: honor explicit `PIVOTBY` `field_headers=0` by omitting the generated header row and matching the reduced spill shape.
+- Formula coverage: accept bounded `PIVOTBY` field-vector sort orders for lexicographic ordering of composite row and column keys.
+- Formula coverage: accept bounded horizontal reducer vectors such as `HSTACK(SUM,AVERAGE)` in `PIVOTBY`, expanding each reducer across every value column and preserving spill shape.
+- Formula coverage: add bounded vertical `PIVOTBY` reducer vectors such as `VSTACK(SUM,AVERAGE)`, laying out each aggregation on its own result row and updating spill shape inference.
+- Formula compatibility: allow scalar `PIVOTBY` row and column sort orders to target aggregated value columns after the field columns, including descending row-total and column-total regressions.
+- Formula coverage: add bounded `PIVOTBY` row subtotals for composite row fields with `row_total_depth=2/-2`, including leading/trailing placement and VM spill-row shape inference.
+- Formula coverage: add bounded `PIVOTBY` column subtotals for composite column fields with `col_total_depth=2/-2`, including subtotal columns, top/bottom total rows, rectangular padding, and VM spill-width inference.
+- Formula coverage: connect bounded `PIVOTBY` `relative_to` modes 0–4 to `PERCENTOF`, covering column, row, grand, parent-column, and parent-row denominators.
+- Formula compatibility: add bounded automatic `PIVOTBY` header inference for the unambiguous text-header/numeric-second-row pattern, with VM spill-shape parity and legacy no-header preservation.
+- Formula coverage: support bounded `PIVOTBY` reducer vectors containing multiple `LAMBDA` reducers and two-argument reducers that receive the matching subset and `relative_to` denominator set.
+- Formula coverage: extend bounded `GROUPBY` to multiple value columns, applying the selected reducer independently to each value column and preserving the wider spill shape.
+- Formula coverage: add bounded `GROUPBY total_depth=2` trailing subtotals for composite row fields, including one subtotal per parent key and a final grand total across multiple value columns.
+- Formula coverage: add bounded `GROUPBY total_depth=-2` leading subtotals and grand total placement, including interleaved parent-key input regression coverage.
+- Formula coverage: accept bounded horizontal reducer vectors such as `HSTACK(SUM,AVERAGE)` in `GROUPBY`, expanding each reducer across every values column.
+- Formula coverage: implement `scan_by_column` traversal for `TOCOL` and `TOROW`, including strict `ignore` mode validation for bounded 2D ranges.
+- Formula compatibility: complete the bounded `TEXTBEFORE`/`TEXTAFTER` optional modes for empty delimiters, `match_end`, strict mode values, and `if_not_found` fallbacks.
+- Formula compatibility: propagate bounded `VSTACK`/`HSTACK` row-major shapes into `TOCOL`/`TOROW`, so column-major scans remain correct for composed dynamic arrays.
+- Formula compatibility: recover the 2D spill footprint of `TEXTSPLIT` from its row delimiters when the flat result is rectangular, preserving dependent-cell placement.
+- Formula coverage: add bounded worksheet-grid `GETPIVOTDATA` lookup for visible field/item values and Grand Total, failing closed for external-cache and unrecognized PivotTable layouts.
 - Formula coverage: add a deterministic, offline `DETECTLANGUAGE` subset with conservative `#N/A` handling for ambiguous text; Microsoft Translation Services is not invoked.
 - Formula coverage: add zero-argument `TRUE()` and `FALSE()` logical constant functions alongside the existing literal form.
 - Formula coverage: add database product, sample/population standard deviation, and sample/population variance formulas using the shared criteria engine.
@@ -386,3 +441,22 @@
 - G4の2D配列対応を拡張し、`SORTBY`で2Dデータを複数の1列sort-by配列と各昇降順に従って行単位に並べ替え、結果shapeを既定spill再計算へ接続しました。型変換とExcel oracle照合は未完です。
 - G4の2D配列対応を拡張し、生成された2D配列に対する`FILTER`の行／列includeと結果shape接続を追加しました。行／列ベクトル以外のincludeは明示エラーにし、既存Range経路を維持しています。複合includeとExcel oracle照合は未完です。
 - G4の2D `UNIQUE`で`exactly_once`／`by_col`を既存のtruthy型変換に揃え、Boolean以外の数値フラグも扱えるようにしました。型意味論全体とExcel oracle照合は未完です。
+- G4の`MATCH`近似検索（`match_type=1/-1`）で入力範囲の昇順／降順を検証し、未ソート範囲は`#N/A`、比較不能な混在型は`#VALUE!`として早期に返すようにしました。完全なExcel型変換とoracle校正は未完です。
+- G4の`LOOKUP`で近似検索ベクトルの昇順を検証し、未ソート範囲は`#N/A`、比較不能な値は`#VALUE!`として早期に返すようにしました。完全なExcel型変換とoracle校正は未完です。
+- G4の`VLOOKUP`／`HLOOKUP`の近似モードでキー列／キー行の昇順を検証し、未ソート範囲は`#N/A`、比較不能な値は`#VALUE!`として二分探索前に返すようにしました。完全なExcel型変換とoracle校正は未完です。
+- G4の`XLOOKUP`／`XMATCH`のbinary search mode（`2/-2`）でlookup arrayの昇順／降順を検証し、未ソート範囲は`#N/A`、比較不能な値は`#VALUE!`として返す回帰を追加しました。完全なExcel型変換とoracle校正は未完です。
+- G4の`LOOKUP`／`XLOOKUP`でlookup配列とresult／return配列の要素数を検証し、不一致を`#VALUE!`として拒否する引数形回帰を追加しました。
+- `LOOKUP`のvector formで1行／1列以外のlookup配列を拒否し、result vectorの行列方向までlookup vectorと一致することを検証するようにしました。
+- `MATCH`／`XMATCH`でもlookup arrayを1行／1列に限定し、2D矩形のflatten検索を`#VALUE!`として拒否する回帰を追加しました。
+- Expanded dynamic-array logical evaluation: `AND` and `OR` now aggregate array elements, while `NOT` broadcasts elementwise and preserves element errors for `IFERROR`.
+- Extended `XOR` to aggregate bounded dynamic-array elements with the same deterministic error propagation.
+- Extended `SWITCH` to broadcast bounded array expressions through first-match and default branches.
+- Corrected `SUM` and `AVERAGE` to propagate worksheet and array errors instead of silently dropping them.
+- Applied the same worksheet and array error propagation to `MIN`, `MAX`, `PRODUCT`, and `MEDIAN`.
+- Corrected `COUNT` and `COUNTA` to count bounded dynamic-array elements with Excel-compatible Date, Error, Empty, and empty-string boundaries.
+- Corrected conditional aggregators to propagate errors from selected `SUMIF(S)`, `AVERAGEIF(S)`, `MAXIFS`, and `MINIFS` result cells.
+- Added bounded dynamic-array flattening for the conditional aggregation family, including `COUNTIF(S)` and result-range alignment.
+- Unified A-statistics coercion and error handling for `AVERAGEA`, `MINA`, `MAXA`, `VARA`, and `VARPA`, including bounded dynamic arrays.
+- Extended classic standard-deviation and variance functions to consume bounded dynamic-array elements.
+- Extended paired statistics to consume equal-length bounded dynamic arrays through the shared collector.
+- `INDIRECT`の範囲参照と絶対R1C1形式、`OFFSET`の元範囲寸法およびheight／widthをbounded配列として評価し、`SUM`とdynamic-array利用へ接続しました。相対R1C1・外部参照・Excel oracle校正は未完です。

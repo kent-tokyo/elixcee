@@ -223,14 +223,14 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `COMBIN` | Number of combinations C(n, k) | Classic |
 | `COUNTIF` / `SUMIF` / `AVERAGEIF` | Conditional count / sum / average | 2007 |
 | `COUNTIFS` / `SUMIFS` / `AVERAGEIFS` | Multi-criteria count / sum / average | 2007 |
-| `SUBTOTAL` | Aggregate with selectable function (1–11, 101–111; hidden rows are not modeled) | Classic |
-| `AGGREGATE` | Extended subtotal (1–21; array/reference option filtering remains bounded) | 2010 |
+| `SUBTOTAL` | Aggregate with selectable function (1–11, 101–111; nested aggregates are ignored, hidden rows are not modeled) | Classic |
+| `AGGREGATE` | Extended subtotal (1–21; options 0–7 filter nested aggregates/errors; hidden rows are not modeled) | 2010 |
 | `PERCENTILE` / `PERCENTILE.INC` | Percentile (inclusive) | Classic / 2010 |
 | `PERCENTILE.EXC` | Percentile (exclusive) | 2010 |
 | `PERCENTOF` | Percentage represented by a subset of a data set | 365 |
 | `PERCENTRANK` / `PERCENTRANK.INC` | Percent rank | Classic / 2010 |
 | `PERCENTRANK.EXC` | Percent rank (exclusive) | 2010 |
-| `MODE.MULT` | Most frequent value | 2010 |
+| `MODE.MULT` | Most frequent values with vertical spill shape | 2010 |
 | `MINIFS` / `MAXIFS` | Conditional min / max | 2019 |
 | `SUMSQ` | Sum of squares | Classic |
 | `GEOMEAN` | Geometric mean | Classic |
@@ -324,17 +324,17 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `FORECAST.ETS.SEASONALITY` | Detect a bounded repeating seasonality length | 2016 |
 | `FORECAST.ETS.CONFINT` | Bounded forecast interval from seasonal-naive residuals | 2016 |
 | `FORECAST.ETS.STAT` | Bounded ETS diagnostic metrics (1-8) | 2016 |
-| `TREND` | Linear regression predictions | Classic |
-| `GROWTH` | Exponential regression predictions | Classic |
-| `LINEST` | Linear regression coefficients and optional statistics | Classic |
-| `LOGEST` | Exponential regression coefficients and optional statistics | Classic |
+| `TREND` | Linear regression predictions, including bounded multi-column `known_x`/`new_x` arrays | Classic |
+| `GROWTH` | Exponential regression predictions, including bounded multi-column `known_x`/`new_x` arrays | Classic |
+| `LINEST` | Linear regression coefficients and optional statistics, including bounded multi-column `known_x` arrays | Classic |
+| `LOGEST` | Exponential regression coefficients and optional statistics, including bounded multi-column `known_x` arrays | Classic |
 | `STEYX` | Standard error of predicted y values | Classic |
 | `COVARIANCE.S` / `COVAR` | Sample covariance | Classic / 2010 |
 | `COVARIANCE.P` | Population covariance | 2010 |
 | `FTEST` / `F.TEST` | Two-sample F-test probability for equality of variances | Classic / 2010 |
 | `CHITEST` / `CHISQ.TEST` | Chi-square test probability for observed and expected data | Classic / 2010 |
 | `MODE` / `MODE.SNGL` / `MODE.MULT` | Most frequent numeric value | Classic / 2010 / 2010 |
-| `FREQUENCY` | Frequency distribution over bins | Classic |
+| `FREQUENCY` | Frequency distribution over bins with vertical spill shape | Classic |
 | `PROB` | Probability of values within inclusive limits | Classic |
 | `TRIMMEAN` | Mean after symmetric outlier trimming | Classic |
 | `SKEW` | Sample skewness | Classic |
@@ -456,13 +456,13 @@ per-function mode coverage, and independent oracle tests are tracked in
 
 | Function | Description | Excel |
 |---|---|---|
-| `IF` | Conditional value | Classic |
+| `IF` | Conditional scalar or bounded array value with scalar/array branch broadcasting | Classic |
 | `AND` / `OR` / `NOT` | Logical operators | Classic |
 | `IFERROR` | Fallback on any error | 2007 |
 | `IFNA` | Fallback on `#N/A` only | 2013 |
 | `TRUE` / `FALSE` | Return the logical constants TRUE / FALSE (zero-argument function form) | Classic |
 | `XOR` | Exclusive OR | 2013 |
-| `IFS` | Multi-condition branch | 2019 |
+| `IFS` | Multi-condition scalar or bounded array branch with broadcasting | 2019 |
 | `SWITCH` | Switch/case | 2019 |
 
 ### Text
@@ -490,11 +490,11 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `CODE` | Code point of first character | Classic |
 | `ASC` | Full-width → half-width (DBCS) | Classic |
 | `JIS` / `DBCS` | Half-width → full-width (DBCS) | Classic / 2013 |
-| `UNICHAR` | Character from Unicode code point | 2013 |
-| `UNICODE` | Unicode code point of first character | 2013 |
+| `UNICHAR` | Character from a valid Unicode scalar code point; surrogate and non-integral values return `#VALUE!` | 2013 |
+| `UNICODE` | Unicode scalar code point of the first character; an empty string returns `#VALUE!` | 2013 |
 | `CONCAT` | Concatenate strings / ranges | 2019 |
 | `TEXTJOIN` | Join with delimiter | 2019 |
-| `TEXTSPLIT` | Split text into a bounded row/column array with ignore, match, and pad modes | 2024/365 |
+| `TEXTSPLIT` | Split text into a bounded row/column array with scalar or array delimiters, ignore, match, and pad modes | 2024/365 |
 | `TEXTBEFORE` | Extract text before the Nth occurrence of a delimiter | 2024/365 |
 | `TEXTAFTER` | Extract text after the Nth occurrence of a delimiter | 2024/365 |
 | `VALUETOTEXT` | Convert any value to its text representation | 2024/365 |
@@ -523,11 +523,11 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `DATE` | Create date serial (Excel epoch) | Classic |
 | `TODAY` / `NOW` | Today's date / current datetime | Classic |
 | `YEAR` / `MONTH` / `DAY` | Extract date parts | Classic |
-| `WEEKDAY` | Day of week (1–3 return types) | Classic |
+| `WEEKDAY` | Day of week (integer return types 1–3 and 11–17) | Classic |
 | `DATEDIF` | Difference in Y / M / D / MD / YM / YD | Classic |
-| `DATEVALUE` | Parse "YYYY/MM/DD" or "YYYY-MM-DD" | Classic |
+| `DATEVALUE` | Parse bounded numeric, English month-name, and ISO date-time strings | Classic |
 | `TIME` | Create time serial | Classic |
-| `TIMEVALUE` | Parse "HH:MM:SS" | Classic |
+| `TIMEVALUE` | Parse bounded 24-hour or AM/PM time text | Classic |
 | `HOUR` / `MINUTE` / `SECOND` | Extract time parts | Classic |
 | `EOMONTH` | Last day of month N months from start | 2007 |
 | `EDATE` | Date N months from start | 2007 |
@@ -538,27 +538,28 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `DAYS` | Days between two dates | 2013 |
 | `DAYS360` | Days between dates using 360-day year conventions | Classic |
 | `YEARFRAC` | Fraction of a year between two dates | Classic |
-| `WEEKNUM` | Week number in a year (types 1/2/11-17/21) | Classic |
+| `WEEKNUM` | Week number in a year (integer types 1/2/11-17/21) | Classic |
 | `ISOWEEKNUM` | ISO 8601 week number | 2013 |
 
 ### Lookup & Reference
 
 | Function | Description | Excel |
 |---|---|---|
-| `VLOOKUP` / `HLOOKUP` | Vertical / horizontal lookup | Classic |
-| `INDEX` | Value or row/column array at an offset | Classic |
-| `MATCH` | Position of a value (including exact-match wildcards) | Classic |
-| `CHOOSE` | Choose from list by index | Classic |
-| `INDIRECT` | Evaluate a cell reference from a string | Classic |
-| `OFFSET` | Cell reference shifted by rows/cols | Classic |
+| `VLOOKUP` / `HLOOKUP` | Exact or ascending sorted approximate vertical / horizontal lookup | Classic |
+| `INDEX` | Value or row/column array at an offset; bounded single-range reference form accepts `area_num=1` | Classic |
+| `MATCH` | Position of a value in a one-row/one-column array; exact wildcards and validated sorted approximate lookup | Classic |
+| `GETPIVOTDATA` | Read a value from a bounded worksheet-rendered PivotTable grid | Classic |
+| `CHOOSE` | Choose from list by scalar or bounded array index; selected ranges return arrays for spill evaluation | Classic |
+| `INDIRECT` | Evaluate bounded A1 or absolute R1C1 cell/range references from a string | Classic |
+| `OFFSET` | Shift a cell/range reference by rows/cols with bounded height/width | Classic |
 | `ADDRESS` | Cell address as string (e.g. `"$A$1"`) | Classic |
 | `COUNTBLANK` | Count blank cells in a range | Classic |
 | `ROW` / `COLUMN` | Row / column number of reference | Classic |
 | `ROWS` / `COLUMNS` | Number of rows / columns in a reference | Classic |
-| `LOOKUP` | Sorted vector lookup | Classic |
+| `LOOKUP` | Ascending sorted-vector approximate lookup | Classic |
 | `TRANSPOSE` | Transpose rows and columns | Classic |
 | `XLOOKUP` | Flexible lookup (exact, wildcard, next-larger, next-smaller; binary search on sorted numeric ranges) | 365/2021 |
-| `XMATCH` | Extended MATCH with exact, wildcard, and binary search modes | 365/2021 |
+| `XMATCH` | Extended one-row/one-column MATCH with exact, wildcard, and binary search modes | 365/2021 |
 
 ### Information
 
@@ -595,8 +596,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `SORTBY` | Sort by one or more external arrays | 365/2021 |
 | `SEQUENCE` | Generate a sequence of numbers | 365/2021 |
 | `RANDARRAY` | Generate a random number array | 365/2021 |
-| `TOCOL` | Convert range/array to a single column | 2024/365 |
-| `TOROW` | Convert range/array to a single row | 2024/365 |
+| `TOCOL` | Convert range/array to a single column with row- or column-major scan | 2024/365 |
+| `TOROW` | Convert range/array to a single row with row- or column-major scan | 2024/365 |
 | `WRAPCOLS` | Wrap 1D array into multiple columns | 2024/365 |
 | `WRAPROWS` | Wrap 1D array into multiple rows | 2024/365 |
 | `TAKE` | Take first (or last) N elements from an array | 2024/365 |
@@ -608,8 +609,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `EXPAND` | Expand an array to a requested rectangle with a padding value | 2024/365 |
 | `TRIMRANGE` | Remove blank outer rows and columns from an array | 2024/365 |
 | `SINGLE` | Return the first value of a bounded array (implicit intersection) | 365/2021 |
-| `GROUPBY` | Group a one-column array and aggregate values with a bounded reducer | 2024/365 |
-| `PIVOTBY` | Cross-tabulate one-column row and column keys with a bounded reducer | 2024/365 |
+| `GROUPBY` | Group one- or multi-column row fields and aggregate one- or multi-column values with bounded built-in, `HSTACK`/`VSTACK` reducer-vector, or single-/multi-argument `LAMBDA` reducers; supports basic headers, grand totals, and subtotals | 2024/365 |
+| `PIVOTBY` | Cross-tabulate one- or multi-column row and column keys with bounded built-in, `HSTACK`/`VSTACK` reducer-vector, or single-/multi-argument `LAMBDA` reducers; supports bounded automatic and explicit field headers, multiple value columns, filter, scalar and field-vector sort, grand totals, composite row/column subtotals, and `PERCENTOF` `relative_to` modes | 2024/365 |
 | `MAKEARRAY` | Generate an array by calling a LAMBDA with row and column indices | 2024/365 |
 | `MUNIT` | Identity matrix | Classic |
 | `MMULT` | Matrix multiplication | Classic |
@@ -645,6 +646,29 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `DVAR`     | Sample variance of a filtered database column | Classic |
 | `DVARP`    | Population variance of a filtered database column | Classic |
 
+### External-service boundaries
+
+These official worksheet names are recognized, but the evaluator returns
+`#N/A` without evaluating arguments or performing code loading, network I/O, or
+live cube/data access.
+
+| Function | Headless behavior |
+|---|---|
+| `CALL` | Reject external code invocation |
+| `REGISTER.ID` | Reject external code registration |
+| `CUBEKPIMEMBER` | Reject live cube access |
+| `CUBEMEMBER` | Reject live cube access |
+| `CUBEMEMBERPROPERTY` | Reject live cube access |
+| `CUBERANKEDMEMBER` | Reject live cube access |
+| `CUBESET` | Reject live cube access |
+| `CUBESETCOUNT` | Reject live cube access |
+| `CUBEVALUE` | Reject live cube access |
+| `IMAGE` | Reject remote image retrieval |
+| `RTD` | Reject live data-server access |
+| `STOCKHISTORY` | Reject external market-data access |
+| `TRANSLATE` | Return text for bounded same-language identity; reject remote translation |
+| `WEBSERVICE` | Reject network access |
+
 ---
 
 ## Criteria Syntax (COUNTIF / SUMIF / SUMIFS / etc.)
@@ -665,3 +689,20 @@ per-function mode coverage, and independent oracle tests are tracked in
 | Function | Reason |
 |---|---|
 | `IMAGE(source, ...)` | Fetches images from URLs — not applicable in a headless VBA emulator |
+| `CALL` | Loads or invokes external code — rejected without code execution |
+| `REGISTER.ID` | Loads or invokes external code — rejected without code execution |
+| `CUBEKPIMEMBER` | Requires a live OLAP/Data Model connection — rejected without external data |
+| `CUBEMEMBER` | Requires a live OLAP/Data Model connection — rejected without external data |
+| `CUBEMEMBERPROPERTY` | Requires a live OLAP/Data Model connection — rejected without external data |
+| `CUBERANKEDMEMBER` | Requires a live OLAP/Data Model connection — rejected without external data |
+| `CUBESET` | Requires a live OLAP/Data Model connection — rejected without external data |
+| `CUBESETCOUNT` | Requires a live OLAP/Data Model connection — rejected without external data |
+| `CUBEVALUE` | Requires a live OLAP/Data Model connection — rejected without external data |
+| `RTD` | Requires a live external service — rejected without network I/O |
+| `STOCKHISTORY` | Requires a live external service — rejected without network I/O |
+| `TRANSLATE` with different source/target languages | Requires a live external service — rejected without network I/O |
+| `WEBSERVICE` | Requires a live external service — rejected without network I/O |
+
+These names are recognized by the formula evaluator and return `#N/A` without
+evaluating their arguments. They are intentionally not counted as local
+calculation implementations.

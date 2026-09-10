@@ -311,61 +311,7 @@ fn collect_values(
         FormulaExpr::FuncCall { name, args }
             if name.eq_ignore_ascii_case("OFFSET") && args.len() >= 3 =>
         {
-            let (base_row, base_col) = match &args[0] {
-                FormulaExpr::CellRef { row, col, .. } => (*row, *col),
-                FormulaExpr::Range { r1, c1, .. } => (*r1, *c1),
-                _ => return Ok(vec![evaluate(expr, cells)?]),
-            };
-            let row_offset = to_float(&evaluate(&args[1], cells)?)? as i64;
-            let col_offset = to_float(&evaluate(&args[2], cells)?)? as i64;
-            let height = args
-                .get(3)
-                .map(|arg| {
-                    evaluate(arg, cells).and_then(|value| to_float(&value).map(|v| v as i64))
-                })
-                .transpose()?
-                .unwrap_or(1);
-            let width = args
-                .get(4)
-                .map(|arg| {
-                    evaluate(arg, cells).and_then(|value| to_float(&value).map(|v| v as i64))
-                })
-                .transpose()?
-                .unwrap_or(1);
-            if height <= 0 || width <= 0 {
-                return Err("OFFSET: height and width must be positive".to_string());
-            }
-            let row = (base_row as i64)
-                .checked_add(row_offset)
-                .ok_or_else(|| "OFFSET: row overflow".to_string())?;
-            let col = (base_col as i64)
-                .checked_add(col_offset)
-                .ok_or_else(|| "OFFSET: column overflow".to_string())?;
-            if row < 1 || col < 1 {
-                return Err("OFFSET: reference is outside the worksheet".to_string());
-            }
-            let total = (height as u64)
-                .checked_mul(width as u64)
-                .ok_or_else(|| "OFFSET: range is too large".to_string())?;
-            if total > 1_000_000 {
-                return Err("OFFSET: range too large (maximum is 1,000,000 cells)".to_string());
-            }
-            let mut vals = Vec::with_capacity(total as usize);
-            for row_offset in 0..height {
-                for col_offset in 0..width {
-                    let target_row = row
-                        .checked_add(row_offset)
-                        .ok_or_else(|| "OFFSET: row overflow".to_string())?;
-                    let target_col = col
-                        .checked_add(col_offset)
-                        .ok_or_else(|| "OFFSET: column overflow".to_string())?;
-                    if target_row > u32::MAX as i64 || target_col > u32::MAX as i64 {
-                        return Err("OFFSET: reference is outside the worksheet".to_string());
-                    }
-                    vals.push(cell_val(cells, target_row as u32, target_col as u32));
-                }
-            }
-            Ok(vals)
+            Ok(offset_values(args, cells)?)
         }
         other => match evaluate(other, cells)? {
             Variant::Array(values) => Ok(values),
@@ -373,6 +319,86 @@ fn collect_values(
             value => Ok(vec![value]),
         },
     }
+}
+
+/// Resolve an OFFSET reference to its bounded row-major cell values.
+///
+/// OFFSET is a reference-producing function.  Keeping the reference expansion
+/// here (rather than returning only its top-left cell) lets aggregators and
+/// dynamic-array consumers share the same height/width semantics.
+fn offset_values(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Vec<Variant>, String> {
+    if args.len() < 3 || args.len() > 5 {
+        return Err("OFFSET requires 3 to 5 arguments".into());
+    }
+    let (base_row, base_col, base_height, base_width) = match &args[0] {
+        FormulaExpr::CellRef { row, col, .. } => (*row, *col, 1_i64, 1_i64),
+        FormulaExpr::Range { r1, c1, r2, c2, .. } => (
+            *r1,
+            *c1,
+            (i64::from(r1.max(r2) - r1.min(r2)) + 1),
+            (i64::from(c1.max(c2) - c1.min(c2)) + 1),
+        ),
+        _ => return Err("OFFSET: first argument must be a cell or range reference".into()),
+    };
+    let integer_argument = |arg: &FormulaExpr, label: &str| -> Result<i64, String> {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || value < i64::MIN as f64 {
+            return Err(format!("OFFSET: {label} must be an integer"));
+        }
+        if value > i64::MAX as f64 {
+            return Err(format!("OFFSET: {label} is out of range"));
+        }
+        Ok(value as i64)
+    };
+    let row_offset = integer_argument(&args[1], "row offset")?;
+    let col_offset = integer_argument(&args[2], "column offset")?;
+    let height = args
+        .get(3)
+        .map(|arg| integer_argument(arg, "height"))
+        .transpose()?
+        .unwrap_or(base_height);
+    let width = args
+        .get(4)
+        .map(|arg| integer_argument(arg, "width"))
+        .transpose()?
+        .unwrap_or(base_width);
+    if height <= 0 || width <= 0 {
+        return Err("OFFSET: height and width must be positive".into());
+    }
+    let row = i64::from(base_row)
+        .checked_add(row_offset)
+        .ok_or_else(|| "OFFSET: row overflow".to_string())?;
+    let col = i64::from(base_col)
+        .checked_add(col_offset)
+        .ok_or_else(|| "OFFSET: column overflow".to_string())?;
+    if row < 1 || col < 1 {
+        return Err("OFFSET: reference is outside the worksheet".into());
+    }
+    let total = (height as u64)
+        .checked_mul(width as u64)
+        .ok_or_else(|| "OFFSET: range is too large".to_string())?;
+    if total > 1_000_000 {
+        return Err("OFFSET: range too large (maximum is 1,000,000 cells)".into());
+    }
+    let mut values = Vec::with_capacity(total as usize);
+    for row_delta in 0..height {
+        for col_delta in 0..width {
+            let target_row = row
+                .checked_add(row_delta)
+                .ok_or_else(|| "OFFSET: row overflow".to_string())?;
+            let target_col = col
+                .checked_add(col_delta)
+                .ok_or_else(|| "OFFSET: column overflow".to_string())?;
+            if target_row > u32::MAX as i64 || target_col > u32::MAX as i64 {
+                return Err("OFFSET: reference is outside the worksheet".into());
+            }
+            values.push(cell_val(cells, target_row as u32, target_col as u32));
+        }
+    }
+    Ok(values)
 }
 
 fn collect_all(
@@ -384,6 +410,83 @@ fn collect_all(
         out.extend(collect_values(a, cells)?);
     }
     Ok(out)
+}
+
+/// Flatten the engine's bounded one-dimensional array representation for
+/// functions whose worksheet contract consumes a value range.
+fn flatten_values(values: Vec<Variant>) -> Vec<Variant> {
+    values
+        .into_iter()
+        .flat_map(variant_values)
+        .collect()
+}
+
+/// Collect numeric values for scalar statistical aggregators while retaining
+/// Excel worksheet errors.  Range text and logical values remain excluded;
+/// array-produced values are flattened one level, matching the existing
+/// bounded-array representation.
+fn collect_numeric_values_with_errors(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Vec<f64>, ExcelError> {
+    let values = collect_all(args, cells).map_err(|_| ExcelError::Value)?;
+    let mut numbers = Vec::new();
+    for value in values {
+        match value {
+            Variant::Error(error) => return Err(error),
+            Variant::Array(values) => {
+                for value in values {
+                    if let Variant::Error(error) = value {
+                        return Err(error);
+                    }
+                    if let Some(number) = as_f64(&value) {
+                        numbers.push(number);
+                    }
+                }
+            }
+            Variant::VbaArray(array) => {
+                for value in array.elements {
+                    if let Variant::Error(error) = value {
+                        return Err(error);
+                    }
+                    if let Some(number) = as_f64(&value) {
+                        numbers.push(number);
+                    }
+                }
+            }
+            value => {
+                if let Some(number) = as_f64(&value) {
+                    numbers.push(number);
+                }
+            }
+        }
+    }
+    Ok(numbers)
+}
+
+fn expression_shape(
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<(u64, u64), String> {
+    match expr {
+        FormulaExpr::Range { c1, r1, c2, r2, .. } => Ok((
+            (r1.max(r2) - r1.min(r2) + 1) as u64,
+            (c1.max(c2) - c1.min(c2) + 1) as u64,
+        )),
+        _ => Ok((collect_values(expr, cells)?.len() as u64, 1)),
+    }
+}
+
+fn ensure_same_shape(
+    expected: (u64, u64),
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+    function_name: &str,
+) -> Result<(), String> {
+    if expression_shape(expr, cells)? != expected {
+        return Err(format!("{function_name}: ranges must have the same shape"));
+    }
+    Ok(())
 }
 
 fn cell_val(cells: &HashMap<(u32, u32), CellContent>, row: u32, col: u32) -> Variant {
@@ -525,8 +628,8 @@ fn eval_func(
         "BAHTTEXT" => func_bahttext(args, cells),
         "BASE" => func_base(args, cells),
         "DECIMAL" => func_decimal(args, cells),
-        "UNICHAR" => func_char(args, cells),
-        "UNICODE" => func_code(args, cells),
+        "UNICHAR" => func_unichar(args, cells),
+        "UNICODE" => func_unicode(args, cells),
         "UPPER" => func_upper(args, cells),
         "VALUE" => func_value(args, cells),
         "REPT" => func_rept(args, cells),
@@ -591,6 +694,7 @@ fn eval_func(
         "HLOOKUP" => func_hlookup(args, cells),
         "INDEX" => func_index(args, cells),
         "MATCH" => func_match_fn(args, cells),
+        "GETPIVOTDATA" => func_getpivotdata(args, cells),
         // ── Statistics ───────────────────────────────────────────────────────
         "STDEV" | "STDEV.S" => func_stdev_s(args, cells),
         "STDEVA" => func_stdev_a(args, cells),
@@ -882,41 +986,45 @@ fn eval_func(
         "SCAN" => func_scan(args, cells),
         "BYROW" => func_byrow(args, cells),
         "BYCOL" => func_bycol(args, cells),
+        // These worksheet names require code loading, a remote service, or a
+        // live cube/data connection. Recognize them explicitly but fail
+        // closed without evaluating arguments or performing external I/O.
+        "CALL" | "CUBEKPIMEMBER" | "CUBEMEMBER" | "CUBEMEMBERPROPERTY" | "CUBERANKEDMEMBER"
+        | "CUBESET" | "CUBESETCOUNT" | "CUBEVALUE" | "IMAGE" | "REGISTER.ID" | "RTD"
+        | "STOCKHISTORY" | "WEBSERVICE" => func_external_boundary(name),
+        "TRANSLATE" => func_translate(args, cells),
         _ => Ok(Variant::Error(ExcelError::Name)),
     }
 }
 
-// ── Arithmetic ────────────────────────────────────────────────────────────────
-
-/// Collect numeric values from a single Range argument without allocating `Vec<Variant>`.
-/// Falls back to collect_all for non-Range args or multiple args.
-macro_rules! range_nums_fast {
-    ($args:expr, $cells:expr) => {{
-        if $args.len() == 1 {
-            if let FormulaExpr::Range { c1, r1, c2, r2, .. } = &$args[0] {
-                let mut nums: Vec<f64> = vec![];
-                for row in *r1..=*r2 {
-                    for col in *c1..=*c2 {
-                        if let Some(f) = cell_ref($cells, row, col).and_then(as_f64) {
-                            nums.push(f);
-                        }
-                    }
-                }
-                nums
-            } else {
-                collect_all($args, $cells)?
-                    .iter()
-                    .filter_map(as_f64)
-                    .collect::<Vec<_>>()
-            }
-        } else {
-            collect_all($args, $cells)?
-                .iter()
-                .filter_map(as_f64)
-                .collect::<Vec<_>>()
-        }
-    }};
+fn func_external_boundary(name: &str) -> Result<Variant, String> {
+    let _ = name;
+    Ok(Variant::Error(ExcelError::NA))
 }
+
+fn func_translate(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Ok(Variant::Error(ExcelError::NA));
+    }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    let source = to_str(&evaluate(&args[1], cells)?);
+    let target = to_str(&evaluate(&args[2], cells)?);
+    let normalize_language = |language: &str| language.trim().to_ascii_lowercase();
+    if !source.trim().is_empty()
+        && !target.trim().is_empty()
+        && normalize_language(&source) == normalize_language(&target)
+    {
+        return Ok(Variant::Str(text));
+    }
+    // Actual translation requires Microsoft's remote service. Keep the
+    // offline runtime deterministic and fail closed for non-identity pairs.
+    Ok(Variant::Error(ExcelError::NA))
+}
+
+// ── Arithmetic ────────────────────────────────────────────────────────────────
 
 fn func_sum(
     args: &[FormulaExpr],
@@ -929,23 +1037,22 @@ fn func_sum(
         let mut sum = 0f64;
         for row in *r1..=*r2 {
             for col in *c1..=*c2 {
-                if let Some(f) = cell_ref(cells, row, col).and_then(as_f64) {
-                    sum += f;
+                if let Some(value) = cell_ref(cells, row, col) {
+                    if let Variant::Error(error) = value {
+                        return Ok(Variant::Error(error.clone()));
+                    }
+                    if let Some(f) = as_f64(value) {
+                        sum += f;
+                    }
                 }
             }
         }
         return Ok(as_integer_if_whole(sum));
     }
-    let sum: f64 = collect_all(args, cells)?
-        .iter()
-        .filter_map(|v| {
-            if matches!(v, Variant::Str(_)) {
-                None
-            } else {
-                to_float(v).ok()
-            }
-        })
-        .sum();
+    let sum: f64 = match collect_direct_numeric_args(args, cells, true) {
+        Ok(values) => values.into_iter().sum(),
+        Err(error) => return Ok(Variant::Error(error)),
+    };
     Ok(as_integer_if_whole(sum))
 }
 
@@ -953,11 +1060,73 @@ fn func_average(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    let nums = range_nums_fast!(args, cells);
+    let nums = match collect_direct_numeric_args(args, cells, false) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
     if nums.is_empty() {
-        return Err("AVERAGE: no numeric values".into());
+        return Ok(Variant::Error(ExcelError::DivZero));
     }
     Ok(Variant::Float(nums.iter().sum::<f64>() / nums.len() as f64))
+}
+
+/// Collect values for SUM/AVERAGE using Excel's reference-vs-direct-argument
+/// coercion rule: numbers in a range are numeric, while scalar text and
+/// logical arguments are coerced as direct arguments. Array-producing
+/// expressions contribute their numeric elements without treating text as a
+/// scalar argument.
+fn collect_direct_numeric_args(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    coerce_direct: bool,
+) -> Result<Vec<f64>, ExcelError> {
+    let mut values = Vec::new();
+    for arg in args {
+        let is_reference = matches!(arg, FormulaExpr::Range { .. })
+            || matches!(arg, FormulaExpr::FuncCall { name, .. } if name.eq_ignore_ascii_case("OFFSET"));
+        if is_reference {
+            let referenced = collect_values(arg, cells).map_err(|_| ExcelError::Value)?;
+            for value in &referenced {
+                if let Variant::Error(error) = value {
+                    return Err(error.clone());
+                }
+                if let Some(number) = as_f64(value) {
+                    values.push(number);
+                }
+            }
+            continue;
+        }
+        match evaluate(arg, cells).map_err(|_| ExcelError::Value)? {
+            Variant::Array(array) => {
+                for value in array {
+                    if let Variant::Error(error) = value {
+                        return Err(error);
+                    }
+                    if let Some(number) = as_f64(&value) {
+                        values.push(number);
+                    }
+                }
+            }
+            Variant::VbaArray(array) => {
+                for value in array.elements {
+                    if let Variant::Error(error) = value {
+                        return Err(error);
+                    }
+                    if let Some(number) = as_f64(&value) {
+                        values.push(number);
+                    }
+                }
+            }
+            Variant::Error(error) => return Err(error),
+            value if coerce_direct => {
+                values.push(to_float(&value).map_err(|_| ExcelError::Value)?);
+            }
+            Variant::Integer(value) => values.push(value as f64),
+            Variant::Float(value) => values.push(value),
+            _ => {}
+        }
+    }
+    Ok(values)
 }
 
 fn func_percentof(
@@ -978,55 +1147,49 @@ fn func_percentof(
     Ok(as_integer_if_whole(subset / all))
 }
 
+fn append_a_value(value: Variant, values: &mut Vec<f64>) -> Result<(), ExcelError> {
+    match value {
+        Variant::Empty => {}
+        Variant::Integer(n) => values.push(n as f64),
+        Variant::Float(value) => values.push(value),
+        Variant::Boolean(value) => values.push(if value { 1.0 } else { 0.0 }),
+        Variant::Str(text) => values.push(text.parse::<f64>().unwrap_or(0.0)),
+        Variant::Error(error) => return Err(error),
+        Variant::Array(values_array) => {
+            for value in values_array {
+                append_a_value(value, values)?;
+            }
+        }
+        Variant::VbaArray(array) => {
+            for value in array.elements {
+                append_a_value(value, values)?;
+            }
+        }
+        Variant::Null | Variant::Record(_) => {}
+        Variant::Date(value) => values.push(value as f64),
+    }
+    Ok(())
+}
+
 fn collect_a_values(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
-) -> Result<Vec<f64>, String> {
-    Ok(collect_all(args, cells)?
-        .into_iter()
-        .filter_map(|value| match value {
-            Variant::Empty => None,
-            Variant::Integer(n) => Some(n as f64),
-            Variant::Float(value) => Some(value),
-            Variant::Boolean(value) => Some(if value { 1.0 } else { 0.0 }),
-            Variant::Str(text) => Some(text.parse::<f64>().unwrap_or(0.0)),
-            Variant::Error(_) => None,
-            Variant::Array(values) => Some(
-                values
-                    .into_iter()
-                    .filter_map(|nested| match nested {
-                        Variant::Integer(n) => Some(n as f64),
-                        Variant::Float(value) => Some(value),
-                        Variant::Boolean(value) => Some(if value { 1.0 } else { 0.0 }),
-                        Variant::Str(text) => Some(text.parse::<f64>().unwrap_or(0.0)),
-                        _ => None,
-                    })
-                    .sum(),
-            ),
-            Variant::VbaArray(array) => Some(
-                array
-                    .elements
-                    .into_iter()
-                    .filter_map(|nested| match nested {
-                        Variant::Integer(n) => Some(n as f64),
-                        Variant::Float(value) => Some(value),
-                        Variant::Boolean(value) => Some(if value { 1.0 } else { 0.0 }),
-                        Variant::Str(text) => Some(text.parse::<f64>().unwrap_or(0.0)),
-                        _ => None,
-                    })
-                    .sum(),
-            ),
-            Variant::Null | Variant::Record(_) => None,
-            Variant::Date(value) => Some(value as f64),
-        })
-        .collect())
+) -> Result<Vec<f64>, ExcelError> {
+    let mut values = Vec::new();
+    for value in collect_all(args, cells).map_err(|_| ExcelError::Value)? {
+        append_a_value(value, &mut values)?;
+    }
+    Ok(values)
 }
 
 fn func_averagea(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    let values = collect_a_values(args, cells)?;
+    let values = match collect_a_values(args, cells) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
     if values.is_empty() {
         return Err("AVERAGEA: no values".into());
     }
@@ -1039,7 +1202,11 @@ fn func_min(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    let min = range_nums_fast!(args, cells).into_iter().reduce(f64::min);
+    let values = match collect_numeric_values_with_errors(args, cells) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
+    let min = values.into_iter().reduce(f64::min);
     min.map(as_integer_if_whole)
         .ok_or_else(|| "MIN: no numeric values".into())
 }
@@ -1048,7 +1215,11 @@ fn func_max(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    let max = range_nums_fast!(args, cells).into_iter().reduce(f64::max);
+    let values = match collect_numeric_values_with_errors(args, cells) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
+    let max = values.into_iter().reduce(f64::max);
     max.map(as_integer_if_whole)
         .ok_or_else(|| "MAX: no numeric values".into())
 }
@@ -1057,11 +1228,12 @@ fn func_mina(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
+    let values = match collect_a_values(args, cells) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
     Ok(as_integer_if_whole(
-        collect_a_values(args, cells)?
-            .into_iter()
-            .reduce(f64::min)
-            .unwrap_or(0.0),
+        values.into_iter().reduce(f64::min).unwrap_or(0.0),
     ))
 }
 
@@ -1069,11 +1241,12 @@ fn func_maxa(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
+    let values = match collect_a_values(args, cells) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
     Ok(as_integer_if_whole(
-        collect_a_values(args, cells)?
-            .into_iter()
-            .reduce(f64::max)
-            .unwrap_or(0.0),
+        values.into_iter().reduce(f64::max).unwrap_or(0.0),
     ))
 }
 
@@ -1081,24 +1254,50 @@ fn func_count(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    Ok(Variant::Integer(
-        collect_all(args, cells)?
-            .iter()
-            .filter(|v| matches!(v, Variant::Integer(_) | Variant::Float(_)))
-            .count() as i64,
-    ))
+    let mut count = 0usize;
+    for value in collect_all(args, cells)? {
+        count += match value {
+            Variant::Integer(_) | Variant::Float(_) | Variant::Date(_) => 1,
+            Variant::Array(values) => values
+                .into_iter()
+                .filter(|value| {
+                    matches!(value, Variant::Integer(_) | Variant::Float(_) | Variant::Date(_))
+                })
+                .count(),
+            Variant::VbaArray(array) => array
+                .elements
+                .into_iter()
+                .filter(|value| {
+                    matches!(value, Variant::Integer(_) | Variant::Float(_) | Variant::Date(_))
+                })
+                .count(),
+            _ => 0,
+        };
+    }
+    Ok(Variant::Integer(count as i64))
 }
 
 fn func_counta(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    Ok(Variant::Integer(
-        collect_all(args, cells)?
-            .iter()
-            .filter(|v| !matches!(v, Variant::Empty))
-            .count() as i64,
-    ))
+    let mut count = 0usize;
+    for value in collect_all(args, cells)? {
+        count += match value {
+            Variant::Array(values) => values
+                .into_iter()
+                .filter(|value| !matches!(value, Variant::Empty))
+                .count(),
+            Variant::VbaArray(array) => array
+                .elements
+                .into_iter()
+                .filter(|value| !matches!(value, Variant::Empty))
+                .count(),
+            value if !matches!(value, Variant::Empty) => 1,
+            _ => 0,
+        };
+    }
+    Ok(Variant::Integer(count as i64))
 }
 
 fn func_parity(
@@ -1133,6 +1332,52 @@ fn func_if(
     if let Variant::Error(error) = condition {
         return Ok(Variant::Error(error));
     }
+    let condition_values = match condition {
+        Variant::Array(ref values) => Some(values.clone()),
+        Variant::VbaArray(ref array) => Some(array.elements.clone()),
+        _ => None,
+    };
+    if let Some(condition_values) = condition_values {
+        let true_value = evaluate(&args[1], cells)?;
+        let false_value = if args.len() == 3 {
+            evaluate(&args[2], cells)?
+        } else {
+            Variant::Boolean(false)
+        };
+        let values = |value: Variant| match value {
+            Variant::Array(values) => values,
+            Variant::VbaArray(array) => array.elements,
+            scalar => vec![scalar],
+        };
+        let true_values = values(true_value);
+        let false_values = values(false_value);
+        let broadcast = |branch: &[Variant], index: usize| -> Result<Variant, ExcelError> {
+            if branch.len() == 1 {
+                Ok(branch[0].clone())
+            } else if branch.len() == condition_values.len() {
+                Ok(branch[index].clone())
+            } else {
+                Err(ExcelError::Value)
+            }
+        };
+        let mut result = Vec::with_capacity(condition_values.len());
+        for (index, condition) in condition_values.iter().enumerate() {
+            if let Variant::Error(error) = condition {
+                result.push(Variant::Error(error.clone()));
+                continue;
+            }
+            let branch = if is_truthy(condition) {
+                &true_values
+            } else {
+                &false_values
+            };
+            match broadcast(branch, index) {
+                Ok(value) => result.push(value),
+                Err(error) => return Ok(Variant::Error(error)),
+            }
+        }
+        return Ok(Variant::Array(result));
+    }
     if is_truthy(&condition) {
         evaluate(&args[1], cells)
     } else if args.len() == 3 {
@@ -1152,6 +1397,26 @@ fn func_and(
         match evaluate(a, cells)? {
             Variant::Error(error) => {
                 first_error.get_or_insert(error);
+            }
+            Variant::Array(values) => {
+                for value in values {
+                    match value {
+                        Variant::Error(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                        value => result &= is_truthy(&value),
+                    }
+                }
+            }
+            Variant::VbaArray(array) => {
+                for value in array.elements {
+                    match value {
+                        Variant::Error(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                        value => result &= is_truthy(&value),
+                    }
+                }
             }
             value => result &= is_truthy(&value),
         };
@@ -1173,6 +1438,26 @@ fn func_or(
             Variant::Error(error) => {
                 first_error.get_or_insert(error);
             }
+            Variant::Array(values) => {
+                for value in values {
+                    match value {
+                        Variant::Error(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                        value => result |= is_truthy(&value),
+                    }
+                }
+            }
+            Variant::VbaArray(array) => {
+                for value in array.elements {
+                    match value {
+                        Variant::Error(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                        value => result |= is_truthy(&value),
+                    }
+                }
+            }
             value => result |= is_truthy(&value),
         }
     }
@@ -1190,10 +1475,29 @@ fn func_not(
         return Err("NOT requires 1 argument".into());
     }
     let value = evaluate(&args[0], cells)?;
-    if let Variant::Error(error) = value {
-        return Ok(Variant::Error(error));
+    match value {
+        Variant::Error(error) => Ok(Variant::Error(error)),
+        Variant::Array(values) => Ok(Variant::Array(
+            values
+                .into_iter()
+                .map(|value| match value {
+                    Variant::Error(error) => Variant::Error(error),
+                    value => Variant::Boolean(!is_truthy(&value)),
+                })
+                .collect(),
+        )),
+        Variant::VbaArray(array) => Ok(Variant::Array(
+            array
+                .elements
+                .into_iter()
+                .map(|value| match value {
+                    Variant::Error(error) => Variant::Error(error),
+                    value => Variant::Boolean(!is_truthy(&value)),
+                })
+                .collect(),
+        )),
+        value => Ok(Variant::Boolean(!is_truthy(&value))),
     }
-    Ok(Variant::Boolean(!is_truthy(&value)))
 }
 
 fn func_boolean_constant(args: &[FormulaExpr], value: bool) -> Result<Variant, String> {
@@ -1214,6 +1518,14 @@ fn func_iferror(
         return Err("IFERROR requires 2 arguments".into());
     }
     match evaluate(&args[0], cells) {
+        Ok(Variant::Array(values)) => {
+            let fallback = variant_values(evaluate(&args[1], cells)?);
+            map_error_fallback(values, fallback, |_| true)
+        }
+        Ok(Variant::VbaArray(array)) => {
+            let fallback = variant_values(evaluate(&args[1], cells)?);
+            map_error_fallback(array.elements, fallback, |_| true)
+        }
         Ok(Variant::Error(_)) | Err(_) => evaluate(&args[1], cells),
         Ok(v) => Ok(v),
     }
@@ -1232,10 +1544,49 @@ fn func_ifna(
         return Err("IFNA requires 2 arguments".into());
     }
     match evaluate(&args[0], cells) {
+        Ok(Variant::Array(values)) => {
+            let fallback = variant_values(evaluate(&args[1], cells)?);
+            map_error_fallback(values, fallback, |error| error == &ExcelError::NA)
+        }
+        Ok(Variant::VbaArray(array)) => {
+            let fallback = variant_values(evaluate(&args[1], cells)?);
+            map_error_fallback(array.elements, fallback, |error| error == &ExcelError::NA)
+        }
         Ok(Variant::Error(ExcelError::NA)) => evaluate(&args[1], cells),
         Ok(value) => Ok(value),
         Err(error) => Err(error),
     }
+}
+
+fn variant_values(value: Variant) -> Vec<Variant> {
+    match value {
+        Variant::Array(values) => values,
+        Variant::VbaArray(array) => array.elements,
+        scalar => vec![scalar],
+    }
+}
+
+fn map_error_fallback(
+    values: Vec<Variant>,
+    fallback: Vec<Variant>,
+    replace: impl Fn(&ExcelError) -> bool,
+) -> Result<Variant, String> {
+    if fallback.len() != 1 && fallback.len() != values.len() {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let mut result = Vec::with_capacity(values.len());
+    for (index, value) in values.into_iter().enumerate() {
+        let replacement = if fallback.len() == 1 {
+            fallback[0].clone()
+        } else {
+            fallback[index].clone()
+        };
+        match value {
+            Variant::Error(error) if replace(&error) => result.push(replacement),
+            value => result.push(value),
+        }
+    }
+    Ok(Variant::Array(result))
 }
 
 // ── Text ──────────────────────────────────────────────────────────────────────
@@ -1567,6 +1918,22 @@ fn func_vlookup(
         }
         Ok(Variant::Error(ExcelError::NA))
     } else {
+        let mut sorted = true;
+        for row in r1..r2 {
+            let left = cell_val(cells, row, c1);
+            let right = cell_val(cells, row + 1, c1);
+            let order = match variant_cmp(&left, &right) {
+                Ok(order) => order,
+                Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+            };
+            if order == Ordering::Greater {
+                sorted = false;
+                break;
+            }
+        }
+        if !sorted {
+            return Ok(Variant::Error(ExcelError::NA));
+        }
         // Binary search for largest row where cell <= key (data assumed sorted ascending)
         let (mut lo, mut hi) = (r1 as i64, r2 as i64);
         let mut best: Option<u32> = None;
@@ -1623,6 +1990,22 @@ fn func_hlookup(
         }
         Ok(Variant::Error(ExcelError::NA))
     } else {
+        let mut sorted = true;
+        for col in c1..c2 {
+            let left = cell_val(cells, r1, col);
+            let right = cell_val(cells, r1, col + 1);
+            let order = match variant_cmp(&left, &right) {
+                Ok(order) => order,
+                Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+            };
+            if order == Ordering::Greater {
+                sorted = false;
+                break;
+            }
+        }
+        if !sorted {
+            return Ok(Variant::Error(ExcelError::NA));
+        }
         // Binary search for largest col where cell <= key (data assumed sorted ascending)
         let (mut lo, mut hi) = (c1 as i64, c2 as i64);
         let mut best: Option<u32> = None;
@@ -1648,8 +2031,8 @@ fn func_index(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.len() < 2 || args.len() > 3 {
-        return Err("INDEX requires 2 or 3 arguments".into());
+    if args.len() < 2 || args.len() > 4 {
+        return Err("INDEX requires 2 to 4 arguments".into());
     }
     let (c1, r1, c2, r2) = require_range(&args[0], "INDEX")?;
     let integer_index = |arg: &FormulaExpr| -> Result<i64, String> {
@@ -1670,7 +2053,7 @@ fn func_index(
         Ok(value) => value,
         Err(_) => return Ok(Variant::Error(ExcelError::Value)),
     };
-    let col_off = if args.len() == 3 {
+    let col_off = if args.len() >= 3 {
         match integer_index(&args[2]) {
             Ok(value) => value,
             Err(_) => return Ok(Variant::Error(ExcelError::Value)),
@@ -1678,6 +2061,18 @@ fn func_index(
     } else {
         1i64
     };
+    if args.len() == 4 {
+        let area_num = match integer_index(&args[3]) {
+            Ok(value) => value,
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+        };
+        // The parser has no union/reference-area AST yet.  Accept the
+        // single-area reference form explicitly, but never silently select a
+        // different area when a caller asks for one.
+        if area_num != 1 {
+            return Ok(Variant::Error(ExcelError::Ref));
+        }
+    }
     if row_off < 0 || col_off < 0 {
         return Ok(Variant::Error(ExcelError::Value));
     }
@@ -1717,6 +2112,10 @@ fn func_match_fn(
         return Err("MATCH requires 2 or 3 arguments".into());
     }
     let key = evaluate(&args[0], cells)?;
+    let lookup_shape = expression_shape(&args[1], cells)?;
+    if lookup_shape.0 != 1 && lookup_shape.1 != 1 {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
     let vals = collect_values(&args[1], cells)?;
     let mtype = if args.len() == 3 {
         match evaluate(&args[2], cells)? {
@@ -1731,6 +2130,25 @@ fn func_match_fn(
     } else {
         1
     };
+
+    if matches!(mtype, 1 | -1) {
+        let ascending = mtype == 1;
+        let mut sorted = true;
+        for pair in vals.windows(2) {
+            let order = match variant_cmp(&pair[0], &pair[1]) {
+                Ok(order) => order,
+                Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+            };
+            if (ascending && order == Ordering::Greater) || (!ascending && order == Ordering::Less)
+            {
+                sorted = false;
+                break;
+            }
+        }
+        if !sorted {
+            return Ok(Variant::Error(ExcelError::NA));
+        }
+    }
 
     match mtype {
         0 => Ok(vals
@@ -1775,6 +2193,155 @@ fn func_match_fn(
         }
         _t => Ok(Variant::Error(ExcelError::Value)),
     }
+}
+
+fn pivot_reference_bounds(expr: &FormulaExpr) -> Option<(u32, u32, u32, u32)> {
+    match expr {
+        FormulaExpr::CellRef {
+            col,
+            row,
+            sheet: None,
+            ..
+        } => Some((*row, *col, *row, *col)),
+        FormulaExpr::Range {
+            c1,
+            r1,
+            c2,
+            r2,
+            sheet: None,
+            ..
+        } => Some((*r1, *c1, *r2, *c2)),
+        _ => None,
+    }
+}
+
+fn pivot_item_matches(actual: &Variant, wanted: &Variant) -> bool {
+    match (actual, wanted) {
+        (Variant::Str(left), Variant::Str(right)) => left.eq_ignore_ascii_case(right),
+        _ => variant_eq(actual, wanted),
+    }
+}
+
+fn pivot_data_header_matches(actual: &str, wanted: &str) -> bool {
+    let actual = actual.trim().to_ascii_lowercase();
+    let wanted = wanted.trim().to_ascii_lowercase();
+    if actual == wanted {
+        return true;
+    }
+    [
+        "sum of ",
+        "count of ",
+        "average of ",
+        "min of ",
+        "max of ",
+        "product of ",
+    ]
+    .iter()
+    .any(|prefix| {
+        actual
+            .strip_prefix(prefix)
+            .is_some_and(|name| name == wanted)
+    })
+}
+
+/// Resolve a bounded worksheet-rendered PivotTable without reading external
+/// connections or inventing cache records. The supported shape has a header
+/// row containing the value field, field labels with row/column items, and an
+/// optional `Grand Total` row. Unrecognized PivotTable layouts fail closed.
+fn func_getpivotdata(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 254 || !(args.len() - 2).is_multiple_of(2) {
+        return Err("GETPIVOTDATA requires 2 to 254 arguments with field/item pairs".into());
+    }
+    let data_field = match evaluate(&args[0], cells)? {
+        Variant::Str(value) if !value.trim().is_empty() => value,
+        _ => return Ok(Variant::Error(ExcelError::Value)),
+    };
+    let Some((anchor_row, anchor_col, _, _)) = pivot_reference_bounds(&args[1]) else {
+        return Ok(Variant::Error(ExcelError::Ref));
+    };
+    let max_row = anchor_row.saturating_add(255);
+    let max_col = anchor_col.saturating_add(63);
+    let header_row = anchor_row;
+    let data_col = (anchor_col..=max_col).find(|col| {
+        matches!(
+            cells.get(&(header_row, *col)).map(|cell| &cell.value),
+            Some(Variant::Str(value)) if pivot_data_header_matches(value, &data_field)
+        )
+    });
+    let Some(data_col) = data_col else {
+        return Ok(Variant::Error(ExcelError::Ref));
+    };
+
+    let mut target_row = None;
+    let mut target_col = Some(data_col);
+    for pair in args[2..].chunks_exact(2) {
+        let field = match evaluate(&pair[0], cells)? {
+            Variant::Str(value) if !value.trim().is_empty() => value,
+            _ => return Ok(Variant::Error(ExcelError::Value)),
+        };
+        let item = evaluate(&pair[1], cells)?;
+        let field_position = (anchor_row..=max_row)
+            .flat_map(|row| (anchor_col..=max_col).map(move |col| (row, col)))
+            .find(|(row, col)| {
+                matches!(
+                    cells.get(&(*row, *col)).map(|cell| &cell.value),
+                    Some(Variant::Str(value)) if value.eq_ignore_ascii_case(&field)
+                )
+            });
+        let Some((field_row, field_col)) = field_position else {
+            return Ok(Variant::Error(ExcelError::Ref));
+        };
+
+        let row_match = (field_row.saturating_add(1)..=max_row).find(|row| {
+            cells
+                .get(&(*row, field_col))
+                .is_some_and(|cell| pivot_item_matches(&cell.value, &item))
+        });
+        let col_match = (field_col.saturating_add(1)..=max_col).find(|col| {
+            cells
+                .get(&(field_row, *col))
+                .is_some_and(|cell| pivot_item_matches(&cell.value, &item))
+        });
+        if row_match.is_none() && col_match.is_none() {
+            return Ok(Variant::Error(ExcelError::Ref));
+        }
+        if let Some(row) = row_match {
+            if target_row.is_some_and(|existing| existing != row) {
+                return Ok(Variant::Error(ExcelError::Ref));
+            }
+            target_row = Some(row);
+        }
+        if let Some(col) = col_match {
+            if target_col.is_some_and(|existing| existing != col && existing != data_col) {
+                return Ok(Variant::Error(ExcelError::Ref));
+            }
+            target_col = Some(col);
+        }
+    }
+
+    let grand_total_row = (header_row.saturating_add(1)..=max_row).find(|row| {
+        cells.get(&(*row, anchor_col)).is_some_and(|cell| {
+            matches!(&cell.value, Variant::Str(value) if value.eq_ignore_ascii_case("grand total"))
+        })
+    });
+    let grand_total_col = (anchor_col..=max_col).find(|col| {
+        matches!(
+            cells.get(&(header_row, *col)).map(|cell| &cell.value),
+            Some(Variant::Str(value)) if value.eq_ignore_ascii_case("grand total")
+        )
+    });
+    let row = target_row
+        .or(grand_total_row)
+        .ok_or_else(|| "GETPIVOTDATA: Grand Total is not visible".to_string())?;
+    let col = if target_col == Some(data_col) && target_row.is_none() {
+        grand_total_col.unwrap_or(data_col)
+    } else {
+        target_col.unwrap_or(data_col)
+    };
+    Ok(cell_val(cells, row, col))
 }
 
 // ── Criteria matching (for COUNTIF / SUMIF / COUNTIFS / SUMIFS) ──────────────
@@ -2070,7 +2637,7 @@ fn func_countif(
     if args.len() != 2 {
         return Err("COUNTIF requires 2 arguments".into());
     }
-    let vals = collect_values(&args[0], cells)?;
+    let vals = flatten_values(collect_values(&args[0], cells)?);
     let pcrit = parse_criteria(&evaluate(&args[1], cells)?);
     Ok(Variant::Integer(
         vals.iter().filter(|v| matches_parsed(v, &pcrit)).count() as i64,
@@ -2084,23 +2651,36 @@ fn func_sumif(
     if args.len() < 2 || args.len() > 3 {
         return Err("SUMIF requires 2 or 3 arguments".into());
     }
-    let range_vals = collect_values(&args[0], cells)?;
+    let range_vals = flatten_values(collect_values(&args[0], cells)?);
     let pcrit = parse_criteria(&evaluate(&args[1], cells)?);
     let total: f64 = if args.len() == 3 {
-        let sum_vals = collect_values(&args[2], cells)?;
-        range_vals
-            .iter()
-            .zip(sum_vals.iter())
-            .filter(|(rv, _)| matches_parsed(rv, &pcrit))
-            .filter_map(|(_, sv)| to_float(sv).ok())
-            .sum()
+        let sum_vals = flatten_values(collect_values(&args[2], cells)?);
+        let mut total = 0.0;
+        for (rv, sv) in range_vals.iter().zip(sum_vals.iter()) {
+            if matches_parsed(rv, &pcrit) {
+                if let Variant::Error(error) = sv {
+                    return Ok(Variant::Error(error.clone()));
+                }
+                if let Ok(value) = to_float(sv) {
+                    total += value;
+                }
+            }
+        }
+        total
     } else {
         // 2-arg: criteria range = sum range — avoid cloning range_vals
-        range_vals
-            .iter()
-            .filter(|rv| matches_parsed(rv, &pcrit))
-            .filter_map(|v| to_float(v).ok())
-            .sum()
+        let mut total = 0.0;
+        for value in &range_vals {
+            if matches_parsed(value, &pcrit) {
+                if let Variant::Error(error) = value {
+                    return Ok(Variant::Error(error.clone()));
+                }
+                if let Ok(number) = to_float(value) {
+                    total += number;
+                }
+            }
+        }
+        total
     };
     Ok(as_integer_if_whole(total))
 }
@@ -2112,12 +2692,16 @@ fn func_sumifs(
     if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err("SUMIFS requires sum_range then pairs of (range,criteria)".into());
     }
-    let sum_vals = collect_values(&args[0], cells)?;
+    let sum_vals = flatten_values(collect_values(&args[0], cells)?);
+    let sum_shape = expression_shape(&args[0], cells)?;
     let n = sum_vals.len();
     let mut mask = vec![true; n];
     let mut i = 1;
     while i + 1 < args.len() {
-        let range_vals = collect_values(&args[i], cells)?;
+        if ensure_same_shape(sum_shape, &args[i], cells, "SUMIFS").is_err() {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        let range_vals = flatten_values(collect_values(&args[i], cells)?);
         let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
             if j < n && !matches_parsed(rv, &pcrit) {
@@ -2126,12 +2710,17 @@ fn func_sumifs(
         }
         i += 2;
     }
-    let total: f64 = sum_vals
-        .iter()
-        .enumerate()
-        .filter(|(j, _)| mask[*j])
-        .filter_map(|(_, v)| to_float(v).ok())
-        .sum();
+    let mut total = 0.0;
+    for (index, value) in sum_vals.iter().enumerate() {
+        if mask[index] {
+            if let Variant::Error(error) = value {
+                return Ok(Variant::Error(error.clone()));
+            }
+            if let Ok(number) = to_float(value) {
+                total += number;
+            }
+        }
+    }
     Ok(as_integer_if_whole(total))
 }
 
@@ -2142,7 +2731,8 @@ fn func_countifs(
     if args.len() < 2 || !args.len().is_multiple_of(2) {
         return Err("COUNTIFS requires pairs of (range,criteria)".into());
     }
-    let first_vals = collect_values(&args[0], cells)?;
+    let first_vals = flatten_values(collect_values(&args[0], cells)?);
+    let first_shape = expression_shape(&args[0], cells)?;
     let n = first_vals.len();
     let mut mask = vec![true; n];
     let pcrit0 = parse_criteria(&evaluate(&args[1], cells)?);
@@ -2153,7 +2743,10 @@ fn func_countifs(
     }
     let mut i = 2;
     while i + 1 < args.len() {
-        let range_vals = collect_values(&args[i], cells)?;
+        if ensure_same_shape(first_shape, &args[i], cells, "COUNTIFS").is_err() {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        let range_vals = flatten_values(collect_values(&args[i], cells)?);
         let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
             if j < n && !matches_parsed(rv, &pcrit) {
@@ -2172,10 +2765,10 @@ fn func_median(
     if args.is_empty() {
         return Err("MEDIAN requires at least 1 argument".into());
     }
-    let mut nums: Vec<f64> = collect_all(args, cells)?
-        .iter()
-        .filter_map(as_f64)
-        .collect();
+    let mut nums = match collect_numeric_values_with_errors(args, cells) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
     if nums.is_empty() {
         return Err("MEDIAN: no numeric values".into());
     }
@@ -2309,10 +2902,11 @@ fn func_product(
     if args.is_empty() {
         return Err("PRODUCT requires at least 1 argument".into());
     }
-    let product: f64 = collect_all(args, cells)?
-        .iter()
-        .filter_map(as_f64)
-        .fold(1.0, |acc, x| acc * x);
+    let values = match collect_numeric_values_with_errors(args, cells) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
+    let product: f64 = values.into_iter().fold(1.0, |acc, x| acc * x);
     Ok(as_integer_if_whole(product))
 }
 
@@ -2384,14 +2978,86 @@ fn func_ifs(
     if args.len() < 2 || !args.len().is_multiple_of(2) {
         return Err("IFS requires an even number of arguments".into());
     }
-    let mut i = 0;
-    while i + 1 < args.len() {
-        if is_truthy(&evaluate(&args[i], cells)?) {
-            return evaluate(&args[i + 1], cells);
+    // Keep the scalar path lazy: Excel callers commonly use IFS to guard a
+    // branch that would otherwise produce an error.  Only materialize all
+    // branches when at least one condition is a dynamic array.
+    let mut conditions = Vec::with_capacity(args.len() / 2);
+    let mut array_len = None;
+    for condition in args.iter().step_by(2) {
+        let value = evaluate(condition, cells)?;
+        let length = match &value {
+            Variant::Array(values) => Some(values.len()),
+            Variant::VbaArray(array) => Some(array.elements.len()),
+            _ => None,
+        };
+        if let Some(length) = length {
+            array_len = Some(array_len.unwrap_or(0).max(length));
         }
-        i += 2;
+        conditions.push(value);
     }
-    Err("IFS: no condition matched".into())
+    let Some(array_len) = array_len else {
+        let mut i = 0;
+        while i + 1 < args.len() {
+            if is_truthy(&conditions[i / 2]) {
+                return evaluate(&args[i + 1], cells);
+            }
+            i += 2;
+        }
+        return Err("IFS: no condition matched".into());
+    };
+
+    let as_values = |value: Variant| match value {
+        Variant::Array(values) => values,
+        Variant::VbaArray(array) => array.elements,
+        scalar => vec![scalar],
+    };
+    let branches: Vec<Vec<Variant>> = args
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .map(|branch| evaluate(branch, cells).map(as_values))
+        .collect::<Result<_, _>>()?;
+    let value_at = |values: &[Variant], index: usize| -> Result<Variant, ExcelError> {
+        if values.len() == 1 {
+            Ok(values[0].clone())
+        } else if values.len() == array_len {
+            Ok(values[index].clone())
+        } else {
+            Err(ExcelError::Value)
+        }
+    };
+    let mut result = Vec::with_capacity(array_len);
+    for index in 0..array_len {
+        let mut matched = false;
+        let mut condition_error = None;
+        for (condition, branch) in conditions.iter().zip(branches.iter()) {
+            let condition_value = match condition {
+                Variant::Array(values) => value_at(values, index),
+                Variant::VbaArray(array) => value_at(&array.elements, index),
+                scalar => Ok(scalar.clone()),
+            };
+            let condition_value = match condition_value {
+                Ok(value) => value,
+                Err(error) => return Ok(Variant::Error(error)),
+            };
+            if let Variant::Error(error) = condition_value {
+                condition_error = Some(error);
+                continue;
+            }
+            if is_truthy(&condition_value) {
+                match value_at(branch, index) {
+                    Ok(value) => result.push(value),
+                    Err(error) => return Ok(Variant::Error(error)),
+                }
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            result.push(Variant::Error(condition_error.unwrap_or(ExcelError::NA)));
+        }
+    }
+    Ok(Variant::Array(result))
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
@@ -2443,6 +3109,63 @@ fn serial_weekday(serial: i64) -> u32 {
     ((serial % 7 + 6) % 7) as u32 // 0=Sun,1=Mon,...,5=Fri,6=Sat
 }
 
+fn integer_mode_arg(value: f64, function_name: &str) -> Result<u32, String> {
+    if !value.is_finite() || value.fract() != 0.0 || value < 0.0 || value > u32::MAX as f64 {
+        return Err(format!("{function_name}: return_type must be an integer"));
+    }
+    Ok(value as u32)
+}
+
+fn normalize_date_components(
+    year_value: f64,
+    month_value: f64,
+    day_value: f64,
+) -> Result<Variant, String> {
+    if !year_value.is_finite() || !month_value.is_finite() || !day_value.is_finite() {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let mut year = year_value.trunc() as i64;
+    // Excel interprets 0..99 as 1900..1999 for DATE arguments.
+    if (0..=1899).contains(&year) {
+        year += 1900;
+    }
+    if !(1900..=9999).contains(&year) {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let month_index = month_value.trunc() as i64 - 1;
+    let normalized_year = year + month_index.div_euclid(12);
+    if !(1900..=9999).contains(&normalized_year) {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let normalized_month = month_index.rem_euclid(12) as u32 + 1;
+    let first_day = date_to_serial(normalized_year as i32, normalized_month, 1);
+    let serial = first_day
+        .checked_add(day_value.trunc() as i64 - 1)
+        .ok_or_else(|| "DATE: serial overflow".to_string())?;
+    if serial < 1 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Date(serial))
+}
+
+fn english_month_number(token: &str) -> Option<f64> {
+    match token.trim().to_ascii_lowercase().as_str() {
+        "jan" | "january" => Some(1.0),
+        "feb" | "february" => Some(2.0),
+        "mar" | "march" => Some(3.0),
+        "apr" | "april" => Some(4.0),
+        "may" => Some(5.0),
+        "jun" | "june" => Some(6.0),
+        "jul" | "july" => Some(7.0),
+        "aug" | "august" => Some(8.0),
+        "sep" | "sept" | "september" => Some(9.0),
+        "oct" | "october" => Some(10.0),
+        "nov" | "november" => Some(11.0),
+        "dec" | "december" => Some(12.0),
+        _ => None,
+    }
+}
+
 fn func_date(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -2450,10 +3173,10 @@ fn func_date(
     if args.len() != 3 {
         return Err("DATE requires 3 arguments".into());
     }
-    let y = to_float(&evaluate(&args[0], cells)?)? as i32;
-    let m = to_float(&evaluate(&args[1], cells)?)? as u32;
-    let d = to_float(&evaluate(&args[2], cells)?)? as u32;
-    Ok(Variant::Date(date_to_serial(y, m, d)))
+    let year_value = to_float(&evaluate(&args[0], cells)?)?;
+    let month_value = to_float(&evaluate(&args[1], cells)?)?;
+    let day_value = to_float(&evaluate(&args[2], cells)?)?;
+    normalize_date_components(year_value, month_value, day_value)
 }
 
 fn func_today(
@@ -2640,6 +3363,16 @@ pub(crate) fn xlookup_binary_index(
     Ok(index)
 }
 
+fn validate_lookup_sorted(lookup: &[Variant], ascending: bool) -> Result<bool, String> {
+    for pair in lookup.windows(2) {
+        let order = variant_cmp(&pair[0], &pair[1])?;
+        if (ascending && order == Ordering::Greater) || (!ascending && order == Ordering::Less) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn func_xlookup(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -2650,6 +3383,9 @@ fn func_xlookup(
     let key = evaluate(&args[0], cells)?;
     let lookup = collect_values(&args[1], cells)?;
     let return_arr = collect_values(&args[2], cells)?;
+    if return_arr.len() != lookup.len() {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
     let not_found = if args.len() >= 4 {
         Some(evaluate(&args[3], cells)?)
     } else {
@@ -2675,6 +3411,11 @@ fn func_xlookup(
     if matches!(search_mode, 2 | -2) {
         if match_mode == 2 {
             return Err("XLOOKUP: wildcard match_mode is incompatible with binary search".into());
+        }
+        match validate_lookup_sorted(&lookup, search_mode == 2) {
+            Ok(true) => {}
+            Ok(false) => return Ok(Variant::Error(ExcelError::NA)),
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
         }
         let index = xlookup_binary_index(&lookup, &key, search_mode == 2, match_mode)?;
         return Ok(index
@@ -2744,6 +3485,74 @@ fn func_xlookup(
 
 // ── SUBTOTAL ──────────────────────────────────────────────────────────────────
 
+fn is_nested_aggregate_formula(formula: &str) -> bool {
+    let normalized: String = formula
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .flat_map(char::to_uppercase)
+        .collect();
+    normalized.starts_with("=SUBTOTAL(") || normalized.starts_with("=AGGREGATE(")
+}
+
+/// Collect AGGREGATE inputs while preserving worksheet errors and nested
+/// aggregate provenance. Ordinary collection helpers intentionally flatten
+/// values for most functions; AGGREGATE needs the extra information because
+/// its options select whether errors and nested SUBTOTAL/AGGREGATE results are
+/// ignored.
+fn collect_aggregate_values(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    ignore_nested: bool,
+) -> Result<Vec<Variant>, String> {
+    let mut values = Vec::new();
+    for expr in args {
+        match expr {
+            FormulaExpr::Range { c1, r1, c2, r2, .. } => {
+                let (rmin, rmax) = (r1.min(r2), r1.max(r2));
+                let (cmin, cmax) = (c1.min(c2), c1.max(c2));
+                let rows = (rmax - rmin + 1) as u64;
+                let cols = (cmax - cmin + 1) as u64;
+                if rows * cols > 1_000_000 {
+                    return Err(format!(
+                        "Range too large ({} cells); maximum is 1,000,000",
+                        rows * cols
+                    ));
+                }
+                for row in *rmin..=*rmax {
+                    for col in *cmin..=*cmax {
+                        if ignore_nested
+                            && cells
+                                .get(&(row, col))
+                                .and_then(|cell| cell.formula.as_deref())
+                                .is_some_and(is_nested_aggregate_formula)
+                        {
+                            continue;
+                        }
+                        values.push(cell_val(cells, row, col));
+                    }
+                }
+            }
+            FormulaExpr::FuncCall { name, .. }
+                if ignore_nested
+                    && (name.eq_ignore_ascii_case("SUBTOTAL")
+                        || name.eq_ignore_ascii_case("AGGREGATE")) => {}
+            other => values.extend(collect_values(other, cells)?),
+        }
+    }
+    Ok(values)
+}
+
+fn aggregate_option(
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<u32, String> {
+    let value = to_float(&evaluate(expr, cells)?)?;
+    if !value.is_finite() || value.fract() != 0.0 || !(0.0..=7.0).contains(&value) {
+        return Err("AGGREGATE: options must be an integer from 0 to 7".into());
+    }
+    Ok(value as u32)
+}
+
 fn func_subtotal(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -2753,19 +3562,83 @@ fn func_subtotal(
     }
     let fn_num = to_float(&evaluate(&args[0], cells)?)? as u32;
     let rest = &args[1..];
+    let values = collect_aggregate_values(rest, cells, true)?;
+    if let Some(error) = values.iter().find_map(|value| match value {
+        Variant::Error(error) => Some(error.clone()),
+        _ => None,
+    }) {
+        return Ok(Variant::Error(error));
+    }
+    let nums: Vec<f64> = values.iter().filter_map(as_f64).collect();
     // 101-111 = ignore hidden rows (same behavior here since no hidden rows)
     match fn_num % 100 {
-        1 => func_average(rest, cells),
-        2 => func_count(rest, cells),
-        3 => func_counta(rest, cells),
-        4 => func_max(rest, cells),
-        5 => func_min(rest, cells),
-        6 => func_product(rest, cells),
-        7 => func_stdev_s(rest, cells),
-        8 => func_stdev_p(rest, cells),
-        9 => func_sum(rest, cells),
-        10 => func_var_s(rest, cells),
-        11 => func_var_p(rest, cells),
+        1 => {
+            if nums.is_empty() {
+                return Err("SUBTOTAL: no values".into());
+            }
+            Ok(Variant::Float(nums.iter().sum::<f64>() / nums.len() as f64))
+        }
+        2 => Ok(Variant::Integer(nums.len() as i64)),
+        3 => Ok(Variant::Integer(
+            values
+                .iter()
+                .filter(|value| !matches!(value, Variant::Empty))
+                .count() as i64,
+        )),
+        4 => nums
+            .iter()
+            .copied()
+            .reduce(f64::max)
+            .map(as_integer_if_whole)
+            .ok_or_else(|| "SUBTOTAL: no values".into()),
+        5 => nums
+            .iter()
+            .copied()
+            .reduce(f64::min)
+            .map(as_integer_if_whole)
+            .ok_or_else(|| "SUBTOTAL: no values".into()),
+        6 => Ok(as_integer_if_whole(nums.iter().product::<f64>())),
+        7 => {
+            if nums.len() < 2 {
+                return Err("SUBTOTAL: at least 2 numeric values required".into());
+            }
+            let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+            Ok(Variant::Float(
+                (nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>()
+                    / (nums.len() - 1) as f64)
+                    .sqrt(),
+            ))
+        }
+        8 => {
+            if nums.is_empty() {
+                return Err("SUBTOTAL: at least 1 numeric value required".into());
+            }
+            let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+            Ok(Variant::Float(
+                (nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / nums.len() as f64)
+                    .sqrt(),
+            ))
+        }
+        9 => Ok(as_integer_if_whole(nums.iter().sum::<f64>())),
+        10 => {
+            if nums.len() < 2 {
+                return Err("SUBTOTAL: at least 2 numeric values required".into());
+            }
+            let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+            Ok(Variant::Float(
+                nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>()
+                    / (nums.len() - 1) as f64,
+            ))
+        }
+        11 => {
+            if nums.is_empty() {
+                return Err("SUBTOTAL: at least 1 numeric value required".into());
+            }
+            let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+            Ok(Variant::Float(
+                nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / nums.len() as f64,
+            ))
+        }
         n => Err(format!("SUBTOTAL: unsupported function_num {}", n)),
     }
 }
@@ -2779,19 +3652,24 @@ fn func_averageif(
     if args.len() < 2 || args.len() > 3 {
         return Err("AVERAGEIF requires 2 or 3 arguments".into());
     }
-    let range_vals = collect_values(&args[0], cells)?;
+    let range_vals = flatten_values(collect_values(&args[0], cells)?);
     let pcrit = parse_criteria(&evaluate(&args[1], cells)?);
     let avg_vals = if args.len() == 3 {
-        collect_values(&args[2], cells)?
+        flatten_values(collect_values(&args[2], cells)?)
     } else {
         range_vals.clone()
     };
-    let nums: Vec<f64> = range_vals
-        .iter()
-        .zip(avg_vals.iter())
-        .filter(|(rv, _)| matches_parsed(rv, &pcrit))
-        .filter_map(|(_, av)| to_float(av).ok())
-        .collect();
+    let mut nums = Vec::new();
+    for (rv, av) in range_vals.iter().zip(avg_vals.iter()) {
+        if matches_parsed(rv, &pcrit) {
+            if let Variant::Error(error) = av {
+                return Ok(Variant::Error(error.clone()));
+            }
+            if let Ok(value) = to_float(av) {
+                nums.push(value);
+            }
+        }
+    }
     if nums.is_empty() {
         return Err("AVERAGEIF: no matching values".into());
     }
@@ -2805,12 +3683,16 @@ fn func_averageifs(
     if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err("AVERAGEIFS requires avg_range then pairs".into());
     }
-    let avg_vals = collect_values(&args[0], cells)?;
+    let avg_vals = flatten_values(collect_values(&args[0], cells)?);
+    let avg_shape = expression_shape(&args[0], cells)?;
     let n = avg_vals.len();
     let mut mask = vec![true; n];
     let mut i = 1;
     while i + 1 < args.len() {
-        let range_vals = collect_values(&args[i], cells)?;
+        if ensure_same_shape(avg_shape, &args[i], cells, "AVERAGEIFS").is_err() {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        let range_vals = flatten_values(collect_values(&args[i], cells)?);
         let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
             if j < n && !matches_parsed(rv, &pcrit) {
@@ -2819,12 +3701,17 @@ fn func_averageifs(
         }
         i += 2;
     }
-    let nums: Vec<f64> = avg_vals
-        .iter()
-        .enumerate()
-        .filter(|(j, _)| mask[*j])
-        .filter_map(|(_, v)| to_float(v).ok())
-        .collect();
+    let mut nums = Vec::new();
+    for (index, value) in avg_vals.iter().enumerate() {
+        if mask[index] {
+            if let Variant::Error(error) = value {
+                return Ok(Variant::Error(error.clone()));
+            }
+            if let Ok(number) = to_float(value) {
+                nums.push(number);
+            }
+        }
+    }
     if nums.is_empty() {
         return Err("AVERAGEIFS: no matching values".into());
     }
@@ -2887,12 +3774,16 @@ fn func_maxifs(
     if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err("MAXIFS requires max_range then pairs".into());
     }
-    let max_vals = collect_values(&args[0], cells)?;
+    let max_vals = flatten_values(collect_values(&args[0], cells)?);
+    let max_shape = expression_shape(&args[0], cells)?;
     let n = max_vals.len();
     let mut mask = vec![true; n];
     let mut i = 1;
     while i + 1 < args.len() {
-        let range_vals = collect_values(&args[i], cells)?;
+        if ensure_same_shape(max_shape, &args[i], cells, "MAXIFS").is_err() {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        let range_vals = flatten_values(collect_values(&args[i], cells)?);
         let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
             if j < n && !matches_parsed(rv, &pcrit) {
@@ -2901,12 +3792,17 @@ fn func_maxifs(
         }
         i += 2;
     }
-    let max = max_vals
-        .iter()
-        .enumerate()
-        .filter(|(j, _)| mask[*j])
-        .filter_map(|(_, v)| as_f64(v))
-        .reduce(f64::max);
+    let mut max = None;
+    for (index, value) in max_vals.iter().enumerate() {
+        if mask[index] {
+            if let Variant::Error(error) = value {
+                return Ok(Variant::Error(error.clone()));
+            }
+            if let Some(number) = as_f64(value) {
+                max = Some(max.map_or(number, |current: f64| current.max(number)));
+            }
+        }
+    }
     max.map(as_integer_if_whole)
         .ok_or_else(|| "MAXIFS: no matching values".into())
 }
@@ -2918,12 +3814,16 @@ fn func_minifs(
     if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err("MINIFS requires min_range then pairs".into());
     }
-    let min_vals = collect_values(&args[0], cells)?;
+    let min_vals = flatten_values(collect_values(&args[0], cells)?);
+    let min_shape = expression_shape(&args[0], cells)?;
     let n = min_vals.len();
     let mut mask = vec![true; n];
     let mut i = 1;
     while i + 1 < args.len() {
-        let range_vals = collect_values(&args[i], cells)?;
+        if ensure_same_shape(min_shape, &args[i], cells, "MINIFS").is_err() {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        let range_vals = flatten_values(collect_values(&args[i], cells)?);
         let pcrit = parse_criteria(&evaluate(&args[i + 1], cells)?);
         for (j, rv) in range_vals.iter().enumerate() {
             if j < n && !matches_parsed(rv, &pcrit) {
@@ -2932,12 +3832,17 @@ fn func_minifs(
         }
         i += 2;
     }
-    let min = min_vals
-        .iter()
-        .enumerate()
-        .filter(|(j, _)| mask[*j])
-        .filter_map(|(_, v)| as_f64(v))
-        .reduce(f64::min);
+    let mut min = None;
+    for (index, value) in min_vals.iter().enumerate() {
+        if mask[index] {
+            if let Variant::Error(error) = value {
+                return Ok(Variant::Error(error.clone()));
+            }
+            if let Some(number) = as_f64(value) {
+                min = Some(min.map_or(number, |current: f64| current.min(number)));
+            }
+        }
+    }
     min.map(as_integer_if_whole)
         .ok_or_else(|| "MINIFS: no matching values".into())
 }
@@ -3369,19 +4274,43 @@ fn func_aggregate(
         return Err("AGGREGATE requires at least 3 arguments".into());
     }
     let fn_num = to_float(&evaluate(&args[0], cells)?)? as u32;
-    let options = to_float(&evaluate(&args[1], cells)?)? as u32;
+    let options = match aggregate_option(&args[1], cells) {
+        Ok(options) => options,
+        Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+    };
     let rest = &args[2..];
-    // options & 6 != 0 means "ignore errors"
-    let _ignore_errors = options & 6 != 0;
-    let nums: Vec<f64> = collect_all(rest, cells)?
-        .iter()
-        .filter_map(|v| match v {
-            Variant::Integer(n) => Some(*n as f64),
-            Variant::Float(f) => Some(*f),
+    // Options 0-3 ignore nested SUBTOTAL/AGGREGATE; options 2, 3, 6, 7
+    // ignore worksheet errors. Hidden-row options are accepted, but the core
+    // cell model has no hidden-row metadata, so they currently behave like
+    // their visible-row counterparts.
+    let ignore_nested = options < 4;
+    let ignore_errors = matches!(options, 2 | 3 | 6 | 7);
+    let mut values = collect_aggregate_values(rest, cells, ignore_nested)?;
+    if !ignore_errors
+        && let Some(error) = values.iter().find_map(|value| match value {
+            Variant::Error(error) => Some(error.clone()),
             _ => None,
         })
-        .collect();
-    // For fn_num that need filtered nums, handle ignore_errors by already filtering non-numeric
+    {
+        return Ok(Variant::Error(error));
+    }
+    if ignore_errors {
+        values.retain(|value| !matches!(value, Variant::Error(_)));
+    }
+    let nums: Vec<f64> = values.iter().filter_map(as_f64).collect();
+    let aggregate_nums = |expr: &FormulaExpr| -> Result<Vec<f64>, String> {
+        Ok(
+            collect_aggregate_values(std::slice::from_ref(expr), cells, ignore_nested)?
+                .into_iter()
+                .filter_map(|value| match value {
+                    Variant::Error(_) if ignore_errors => None,
+                    Variant::Integer(number) => Some(number as f64),
+                    Variant::Float(number) => Some(number),
+                    _ => None,
+                })
+                .collect(),
+        )
+    };
     match fn_num % 100 {
         1 => {
             if nums.is_empty() {
@@ -3390,13 +4319,12 @@ fn func_aggregate(
             Ok(Variant::Float(nums.iter().sum::<f64>() / nums.len() as f64))
         }
         2 => Ok(Variant::Integer(nums.len() as i64)),
-        3 => {
-            let count = collect_all(rest, cells)?
+        3 => Ok(Variant::Integer(
+            values
                 .iter()
-                .filter(|v| !matches!(v, Variant::Empty))
-                .count();
-            Ok(Variant::Integer(count as i64))
-        }
+                .filter(|value| !matches!(value, Variant::Empty))
+                .count() as i64,
+        )),
         4 => nums
             .iter()
             .copied()
@@ -3410,11 +4338,47 @@ fn func_aggregate(
             .map(as_integer_if_whole)
             .ok_or_else(|| "AGGREGATE: no values".into()),
         6 => Ok(as_integer_if_whole(nums.iter().fold(1.0, |a, &x| a * x))),
-        7 => func_stdev_s(rest, cells),
-        8 => func_stdev_p(rest, cells),
+        7 => {
+            if nums.len() < 2 {
+                return Err("AGGREGATE: at least 2 numeric values required".into());
+            }
+            let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+            Ok(Variant::Float(
+                (nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>()
+                    / (nums.len() - 1) as f64)
+                    .sqrt(),
+            ))
+        }
+        8 => {
+            if nums.is_empty() {
+                return Err("AGGREGATE: at least 1 numeric value required".into());
+            }
+            let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+            Ok(Variant::Float(
+                (nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / nums.len() as f64)
+                    .sqrt(),
+            ))
+        }
         9 => Ok(as_integer_if_whole(nums.iter().sum::<f64>())),
-        10 => func_var_s(rest, cells),
-        11 => func_var_p(rest, cells),
+        10 => {
+            if nums.len() < 2 {
+                return Err("AGGREGATE: at least 2 numeric values required".into());
+            }
+            let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+            Ok(Variant::Float(
+                nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>()
+                    / (nums.len() - 1) as f64,
+            ))
+        }
+        11 => {
+            if nums.is_empty() {
+                return Err("AGGREGATE: at least 1 numeric value required".into());
+            }
+            let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+            Ok(Variant::Float(
+                nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / nums.len() as f64,
+            ))
+        }
         12 => {
             // MEDIAN
             let mut s = nums.clone();
@@ -3430,15 +4394,105 @@ fn func_aggregate(
             };
             Ok(as_integer_if_whole(r))
         }
-        13 => func_mode_mult(rest, cells, false),
-        14 => func_large(rest, cells),
-        15 => func_small(rest, cells),
-        16 => func_percentile(rest, cells),
-        17 => func_quartile(rest, cells, false),
-        18 => func_percentile_exc(rest, cells),
-        19 => func_quartile(rest, cells, true),
-        20 => func_percentrank(rest, cells),
-        21 => func_percentrank_exc(rest, cells),
+        13 => {
+            if nums.is_empty() {
+                return Err("AGGREGATE: no values".into());
+            }
+            let mut frequencies = HashMap::new();
+            for value in nums {
+                *frequencies.entry(value.to_bits()).or_insert(0_usize) += 1;
+            }
+            let maximum = frequencies.values().copied().max().unwrap_or(0);
+            frequencies
+                .into_iter()
+                .filter_map(|(value, count)| (count == maximum).then_some(f64::from_bits(value)))
+                .reduce(f64::min)
+                .map(as_integer_if_whole)
+                .ok_or_else(|| "AGGREGATE: no mode".into())
+        }
+        14 | 15 => {
+            if rest.len() != 2 {
+                return Err("AGGREGATE LARGE/SMALL requires ref and k".into());
+            }
+            let mut data = aggregate_nums(&rest[0])?;
+            let k = to_float(&evaluate(&rest[1], cells)?)?;
+            if !k.is_finite() || k.fract() != 0.0 || k < 1.0 || k > data.len() as f64 {
+                return Err("AGGREGATE: k out of range".into());
+            }
+            data.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+            let index = k as usize - 1;
+            Ok(as_integer_if_whole(if fn_num % 100 == 14 {
+                data[data.len() - 1 - index]
+            } else {
+                data[index]
+            }))
+        }
+        16..=19 => {
+            if rest.len() != 2 {
+                return Err("AGGREGATE percentile mode requires ref and k".into());
+            }
+            let data = aggregate_nums(&rest[0])?;
+            let k = to_float(&evaluate(&rest[1], cells)?)?;
+            match fn_num % 100 {
+                16 => percentile_value(data, k, false),
+                17 => percentile_value(data, k / 4.0, false),
+                18 => percentile_value(data, k, true),
+                19 => percentile_value(data, k / 4.0, true),
+                _ => unreachable!(),
+            }
+        }
+        20 | 21 => {
+            if !(2..=3).contains(&rest.len()) {
+                return Err(
+                    "AGGREGATE PERCENTRANK requires ref, x, and optional significance".into(),
+                );
+            }
+            let mut data = aggregate_nums(&rest[0])?;
+            let x = to_float(&evaluate(&rest[1], cells)?)?;
+            let significance = if rest.len() == 3 {
+                to_float(&evaluate(&rest[2], cells)?)?
+            } else {
+                3.0
+            };
+            if !significance.is_finite() || significance < 0.0 || significance.fract() != 0.0 {
+                return Err("AGGREGATE: invalid significance".into());
+            }
+            if data.is_empty() || !x.is_finite() {
+                return Err("AGGREGATE: invalid percent rank input".into());
+            }
+            data.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+            if x < data[0] || x > data[data.len() - 1] {
+                return Err("AGGREGATE: x is out of range".into());
+            }
+            let upper = data.partition_point(|value| *value <= x);
+            let rank = if upper == 0 {
+                1.0
+            } else if upper == data.len() {
+                data.len() as f64
+            } else {
+                let high = data[upper];
+                let low = data[upper - 1];
+                upper as f64
+                    + if high == low {
+                        0.0
+                    } else {
+                        (x - low) / (high - low)
+                    }
+            };
+            let normalized = if fn_num % 100 == 20 {
+                if data.len() == 1 {
+                    0.0
+                } else {
+                    (rank - 1.0) / (data.len() - 1) as f64
+                }
+            } else {
+                rank / (data.len() as f64 + 1.0)
+            };
+            let multiplier = 10_f64.powf(significance);
+            Ok(Variant::Float(
+                (normalized * multiplier).round() / multiplier,
+            ))
+        }
         n => Err(format!("AGGREGATE: unsupported function_num {}", n)),
     }
 }
@@ -4378,6 +5432,46 @@ fn func_code(
         .ok_or_else(|| "CODE: empty string".into())
 }
 
+/// Return the Unicode scalar value requested by UNICHAR.
+///
+/// UNICHAR is deliberately separate from CHAR: CHAR is the legacy character
+/// function, while UNICHAR accepts the full Unicode scalar range and must not
+/// manufacture UTF-16 surrogate code points.
+fn func_unichar(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("UNICHAR requires 1 argument".into());
+    }
+    let value = match to_float(&evaluate(&args[0], cells)?) {
+        Ok(value) if value.is_finite() && value.fract() == 0.0 => value,
+        _ => return Ok(Variant::Error(ExcelError::Value)),
+    };
+    if !(1.0..=0x10_FFFF as f64).contains(&value) {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    match char::from_u32(value as u32) {
+        Some(character) => Ok(Variant::Str(character.to_string())),
+        None => Ok(Variant::Error(ExcelError::Value)),
+    }
+}
+
+/// Return the Unicode scalar value of the first character in a string.
+fn func_unicode(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("UNICODE requires 1 argument".into());
+    }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    match text.chars().next() {
+        Some(character) => Ok(Variant::Integer(character as i64)),
+        None => Ok(Variant::Error(ExcelError::Value)),
+    }
+}
+
 fn func_asc(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -4541,16 +5635,23 @@ fn func_weekday(
     }
     let serial = to_float(&evaluate(&args[0], cells)?)? as i64;
     let return_type = if args.len() == 2 {
-        to_float(&evaluate(&args[1], cells)?)? as u32
+        integer_mode_arg(to_float(&evaluate(&args[1], cells)?)?, "WEEKDAY")?
     } else {
         1
     };
     // serial_weekday: 0=Sun,1=Mon,...,5=Fri,6=Sat
     let wd = serial_weekday(serial);
     let result = match return_type {
-        1 => wd + 1,           // Sun=1..Sat=7
-        2 => (wd + 6) % 7 + 1, // Mon=1..Sun=7
-        3 => (wd + 6) % 7,     // Mon=0..Sun=6
+        1 => wd + 1,            // Sun=1..Sat=7
+        2 => (wd + 6) % 7 + 1,  // Mon=1..Sun=7
+        3 => (wd + 6) % 7,      // Mon=0..Sun=6
+        11 => (wd + 6) % 7 + 1, // Mon=1..Sun=7
+        12 => (wd + 5) % 7 + 1, // Tue=1..Mon=7
+        13 => (wd + 4) % 7 + 1, // Wed=1..Tue=7
+        14 => (wd + 3) % 7 + 1, // Thu=1..Wed=7
+        15 => (wd + 2) % 7 + 1, // Fri=1..Thu=7
+        16 => (wd + 1) % 7 + 1, // Sat=1..Fri=7
+        17 => wd + 1,           // Sun=1..Sat=7
         _ => return Err(format!("WEEKDAY: unsupported return_type {}", return_type)),
     };
     Ok(Variant::Integer(result as i64))
@@ -4594,7 +5695,7 @@ fn func_weeknum(
     }
     let serial = to_float(&evaluate(&args[0], cells)?)? as i64;
     let return_type = if args.len() == 2 {
-        to_float(&evaluate(&args[1], cells)?)? as u32
+        integer_mode_arg(to_float(&evaluate(&args[1], cells)?)?, "WEEKNUM")?
     } else {
         1
     };
@@ -4792,23 +5893,72 @@ fn func_datevalue(
     if args.len() != 1 {
         return Err("DATEVALUE requires 1 argument".into());
     }
-    let s = to_str(&evaluate(&args[0], cells)?);
-    // Support YYYY/MM/DD and YYYY-MM-DD
-    let parts: Vec<&str> = if s.contains('/') {
-        s.splitn(3, '/').collect()
-    } else {
-        s.splitn(3, '-').collect()
-    };
-    if parts.len() == 3
-        && let (Ok(y), Ok(m), Ok(d)) = (
-            parts[0].trim().parse::<i32>(),
-            parts[1].trim().parse::<u32>(),
-            parts[2].trim().parse::<u32>(),
-        )
-    {
-        return Ok(Variant::Date(date_to_serial(y, m, d)));
+    let original = to_str(&evaluate(&args[0], cells)?);
+    let trimmed = original.trim();
+    let date_part = trimmed
+        .split_once('T')
+        .filter(|(_, time)| time.contains(':'))
+        .map(|(date, _)| date)
+        .or_else(|| {
+            trimmed
+                .split_once('t')
+                .filter(|(_, time)| time.contains(':'))
+                .map(|(date, _)| date)
+        })
+        .or_else(|| {
+            trimmed
+                .find(' ')
+                .and_then(|index| trimmed[index..].contains(':').then_some(&trimmed[..index]))
+        })
+        .unwrap_or(trimmed);
+    let named_tokens: Vec<&str> = date_part
+        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter(|token| !token.is_empty())
+        .collect();
+    if named_tokens.len() == 3 {
+        let named_date = if let Some(month) = english_month_number(named_tokens[0]) {
+            named_tokens[1]
+                .parse::<f64>()
+                .ok()
+                .zip(named_tokens[2].parse::<f64>().ok())
+                .map(|(day, year)| (year, month, day))
+        } else if let Some(month) = english_month_number(named_tokens[1]) {
+            named_tokens[0]
+                .parse::<f64>()
+                .ok()
+                .zip(named_tokens[2].parse::<f64>().ok())
+                .map(|(day, year)| (year, month, day))
+        } else {
+            None
+        };
+        if let Some((year, month, day)) = named_date {
+            return normalize_date_components(year, month, day);
+        }
     }
-    Err(format!("DATEVALUE: cannot parse '{}'", s))
+    let separator = if date_part.contains('/') {
+        '/'
+    } else if date_part.contains('-') {
+        '-'
+    } else if date_part.contains('.') {
+        '.'
+    } else {
+        return Err(format!("DATEVALUE: cannot parse '{}'", original));
+    };
+    let parts: Vec<&str> = date_part.split(separator).collect();
+    if parts.len() != 3 {
+        return Err(format!("DATEVALUE: cannot parse '{}'", original));
+    }
+    let parsed = (|| {
+        Some((
+            parts[0].trim().parse::<f64>().ok()?,
+            parts[1].trim().parse::<f64>().ok()?,
+            parts[2].trim().parse::<f64>().ok()?,
+        ))
+    })();
+    match parsed {
+        Some((year, month, day)) => normalize_date_components(year, month, day),
+        None => Err(format!("DATEVALUE: cannot parse '{}'", original)),
+    }
 }
 
 fn func_now(
@@ -4847,22 +5997,54 @@ fn func_timevalue(
     if args.len() != 1 {
         return Err("TIMEVALUE requires 1 argument".into());
     }
-    let s = to_str(&evaluate(&args[0], cells)?);
-    let parts: Vec<&str> = s.splitn(3, ':').collect();
-    if parts.len() >= 2
-        && let (Ok(h), Ok(m)) = (
-            parts[0].trim().parse::<f64>(),
-            parts[1].trim().parse::<f64>(),
-        )
-    {
-        let sec = if parts.len() == 3 {
-            parts[2].trim().parse::<f64>().unwrap_or(0.0)
-        } else {
-            0.0
-        };
-        return Ok(Variant::Float((h * 3600.0 + m * 60.0 + sec) / 86400.0));
+    let original = to_str(&evaluate(&args[0], cells)?);
+    let trimmed = original.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let (clock, meridiem) = if let Some(clock) = lower.strip_suffix("am") {
+        (clock.trim(), Some(false))
+    } else if let Some(clock) = lower.strip_suffix("pm") {
+        (clock.trim(), Some(true))
+    } else {
+        (lower.as_str(), None)
+    };
+    let parts: Vec<&str> = clock.split(':').collect();
+    if parts.len() < 2 || parts.len() > 3 {
+        return Err(format!("TIMEVALUE: cannot parse '{}'", original));
     }
-    Err(format!("TIMEVALUE: cannot parse '{}'", s))
+    let parsed = (
+        parts[0].trim().parse::<f64>(),
+        parts[1].trim().parse::<f64>(),
+        parts
+            .get(2)
+            .map_or(Ok(0.0), |part| part.trim().parse::<f64>()),
+    );
+    let (mut hour, minute, second) = match parsed {
+        (Ok(hour), Ok(minute), Ok(second))
+            if hour.is_finite()
+                && minute.is_finite()
+                && second.is_finite()
+                && (0.0..60.0).contains(&minute)
+                && (0.0..60.0).contains(&second) =>
+        {
+            (hour, minute, second)
+        }
+        _ => return Err(format!("TIMEVALUE: cannot parse '{}'", original)),
+    };
+    if let Some(is_pm) = meridiem {
+        if !(1.0..=12.0).contains(&hour) {
+            return Err(format!("TIMEVALUE: cannot parse '{}'", original));
+        }
+        if is_pm && hour < 12.0 {
+            hour += 12.0;
+        } else if !is_pm && hour == 12.0 {
+            hour = 0.0;
+        }
+    } else if !(0.0..24.0).contains(&hour) {
+        return Err(format!("TIMEVALUE: cannot parse '{}'", original));
+    }
+    Ok(Variant::Float(
+        (hour * 3600.0 + minute * 60.0 + second) / 86400.0,
+    ))
 }
 
 fn serial_frac(v: f64) -> f64 {
@@ -4905,15 +6087,25 @@ fn func_second(
 fn parse_weekend_mask(v: &Variant) -> Result<[bool; 7], String> {
     // Returns [Mon,Tue,Wed,Thu,Fri,Sat,Sun] true = is weekend
     match v {
-        Variant::Str(s) if s.len() == 7 => {
+        Variant::Str(s)
+            if s.chars().count() == 7
+                && s.chars().all(|character| matches!(character, '0' | '1')) =>
+        {
             let mut mask = [false; 7];
             for (i, c) in s.chars().enumerate() {
                 mask[i] = c == '1';
             }
             Ok(mask)
         }
+        Variant::Str(_) => {
+            Err("NETWORKDAYS.INTL: weekend mask must contain seven 0/1 characters".into())
+        }
         _ => {
-            let n = to_float(v)? as u32;
+            let number = to_float(v)?;
+            if !number.is_finite() || number.fract() != 0.0 {
+                return Err("NETWORKDAYS.INTL: weekend code must be an integer".into());
+            }
+            let n = number as u32;
             Ok(match n {
                 1 => [false, false, false, false, false, true, true],
                 2 => [true, false, false, false, false, false, true],
@@ -5020,6 +6212,86 @@ fn func_switch(
         return Err("SWITCH requires at least 3 arguments".into());
     }
     let expr = evaluate(&args[0], cells)?;
+    if matches!(&expr, Variant::Array(_) | Variant::VbaArray(_)) {
+        let expression_values = variant_values(expr);
+        let count = expression_values.len();
+        let has_default = args.len().is_multiple_of(2);
+        let pair_end = if has_default { args.len() - 1 } else { args.len() };
+        let mut selected = vec![None; count];
+
+        let broadcast = |value: Variant| -> Result<Vec<Variant>, ExcelError> {
+            let values = variant_values(value);
+            if values.len() == 1 {
+                Ok(vec![values[0].clone(); count])
+            } else if values.len() == count {
+                Ok(values)
+            } else {
+                Err(ExcelError::Value)
+            }
+        };
+
+        let mut i = 1;
+        while i + 1 < pair_end {
+            let match_values = broadcast(evaluate(&args[i], cells)?);
+            let match_values = match match_values {
+                Ok(values) => values,
+                Err(error) => return Ok(Variant::Error(error)),
+            };
+            let mut matched = vec![false; count];
+            for index in 0..count {
+                if selected[index].is_some() {
+                    continue;
+                }
+                if let Variant::Error(error) = &expression_values[index] {
+                    selected[index] = Some(Variant::Error(error.clone()));
+                    continue;
+                }
+                if !matches!(&match_values[index], Variant::Error(_))
+                    && variant_eq(&expression_values[index], &match_values[index])
+                {
+                    matched[index] = true;
+                }
+            }
+            if matched.iter().any(|matched| *matched) {
+                let result_values = match broadcast(evaluate(&args[i + 1], cells)?) {
+                    Ok(values) => values,
+                    Err(error) => return Ok(Variant::Error(error)),
+                };
+                for index in 0..count {
+                    if matched[index] {
+                        selected[index] = Some(result_values[index].clone());
+                    }
+                }
+            }
+            i += 2;
+        }
+
+        if selected.iter().any(Option::is_none) {
+            if has_default {
+                let default_values = match broadcast(evaluate(&args[args.len() - 1], cells)?) {
+                    Ok(values) => values,
+                    Err(error) => return Ok(Variant::Error(error)),
+                };
+                for (index, value) in selected.iter_mut().enumerate() {
+                    if value.is_none() {
+                        *value = Some(default_values[index].clone());
+                    }
+                }
+            } else {
+                for value in &mut selected {
+                    if value.is_none() {
+                        *value = Some(Variant::Error(ExcelError::NA));
+                    }
+                }
+            }
+        }
+        return Ok(Variant::Array(
+            selected
+                .into_iter()
+                .map(Option::unwrap)
+                .collect(),
+        ));
+    }
     let mut i = 1;
     while i + 1 < args.len() {
         let v = evaluate(&args[i], cells)?;
@@ -5050,6 +6322,28 @@ fn func_xor(
             Variant::Error(error) => {
                 first_error.get_or_insert(error);
             }
+            Variant::Array(values) => {
+                for value in values {
+                    match value {
+                        Variant::Error(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                        value if is_truthy(&value) => count += 1,
+                        _ => {}
+                    }
+                }
+            }
+            Variant::VbaArray(array) => {
+                for value in array.elements {
+                    match value {
+                        Variant::Error(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                        value if is_truthy(&value) => count += 1,
+                        _ => {}
+                    }
+                }
+            }
             value if is_truthy(&value) => count += 1,
             _ => {}
         }
@@ -5069,11 +6363,67 @@ fn func_choose(
     if args.len() < 2 {
         return Err("CHOOSE requires at least 2 arguments".into());
     }
-    let idx = to_float(&evaluate(&args[0], cells)?)? as usize;
-    if idx < 1 || idx >= args.len() {
-        return Err("CHOOSE: index out of range".into());
+    let choose_index = |index: &Variant| -> Result<Option<usize>, String> {
+        let index = to_float(index)?;
+        if !index.is_finite() || index.fract() != 0.0 {
+            return Ok(None);
+        }
+        let idx = index as i64;
+        if idx < 1 || idx >= args.len() as i64 {
+            return Ok(None);
+        }
+        Ok(Some(idx as usize))
+    };
+    let choose_one = |index: &Variant| -> Result<Variant, String> {
+        let Some(idx) = choose_index(index)? else {
+            return Ok(Variant::Error(ExcelError::Value));
+        };
+        // A selected reference is an array result in worksheet context.  Do
+        // not force it through the scalar evaluator, which would reject a
+        // Range.
+        match &args[idx] {
+            FormulaExpr::Range { .. } => Ok(Variant::Array(collect_values(&args[idx], cells)?)),
+            _ => evaluate(&args[idx], cells),
+        }
+    };
+
+    match evaluate(&args[0], cells)? {
+        Variant::Array(indices) => {
+            let mut result = Vec::new();
+            for index in indices {
+                // An invalid index is a CHOOSE argument error, not an
+                // elementwise worksheet error.  Validate the complete index
+                // array before allowing selected expressions to contribute
+                // their own errors to the result array.
+                if choose_index(&index)?.is_none() {
+                    return Ok(Variant::Error(ExcelError::Value));
+                }
+                match choose_one(&index)? {
+                    Variant::Array(values) => result.extend(values),
+                    Variant::VbaArray(array) => result.extend(array.elements),
+                    Variant::Error(error) => result.push(Variant::Error(error)),
+                    value => result.push(value),
+                }
+            }
+            Ok(Variant::Array(result))
+        }
+        Variant::VbaArray(indices) => {
+            let mut result = Vec::new();
+            for index in indices.elements {
+                if choose_index(&index)?.is_none() {
+                    return Ok(Variant::Error(ExcelError::Value));
+                }
+                match choose_one(&index)? {
+                    Variant::Array(values) => result.extend(values),
+                    Variant::VbaArray(array) => result.extend(array.elements),
+                    Variant::Error(error) => result.push(Variant::Error(error)),
+                    value => result.push(value),
+                }
+            }
+            Ok(Variant::Array(result))
+        }
+        index => choose_one(&index),
     }
-    evaluate(&args[idx], cells)
 }
 
 fn func_column(
@@ -5110,12 +6460,38 @@ fn func_lookup(
         return Err("LOOKUP requires 2 or 3 arguments".into());
     }
     let key = evaluate(&args[0], cells)?;
+    let lookup_shape = expression_shape(&args[1], cells)?;
+    if lookup_shape.0 != 1 && lookup_shape.1 != 1 {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
     let lookup = collect_values(&args[1], cells)?;
     let result = if args.len() == 3 {
+        if expression_shape(&args[2], cells)? != lookup_shape {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
         collect_values(&args[2], cells)?
     } else {
         lookup.clone()
     };
+    if result.len() != lookup.len() {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+
+    let mut sorted = true;
+    for pair in lookup.windows(2) {
+        let order = match variant_cmp(&pair[0], &pair[1]) {
+            Ok(order) => order,
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
+        };
+        if order == std::cmp::Ordering::Greater {
+            sorted = false;
+            break;
+        }
+    }
+    if !sorted {
+        return Ok(Variant::Error(ExcelError::NA));
+    }
+
     let mut best: Option<usize> = None;
     for (i, v) in lookup.iter().enumerate() {
         match variant_cmp(v, &key) {
@@ -5136,6 +6512,10 @@ fn func_xmatch(
         return Err("XMATCH requires 2 to 4 arguments".into());
     }
     let key = evaluate(&args[0], cells)?;
+    let lookup_shape = expression_shape(&args[1], cells)?;
+    if lookup_shape.0 != 1 && lookup_shape.1 != 1 {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
     let lookup = collect_values(&args[1], cells)?;
     let match_mode = if args.len() >= 3 {
         match lookup_mode(&evaluate(&args[2], cells)?) {
@@ -5157,6 +6537,11 @@ fn func_xmatch(
     if matches!(search_mode, 2 | -2) {
         if match_mode == 2 {
             return Err("XMATCH: wildcard match_mode is incompatible with binary search".into());
+        }
+        match validate_lookup_sorted(&lookup, search_mode == 2) {
+            Ok(true) => {}
+            Ok(false) => return Ok(Variant::Error(ExcelError::NA)),
+            Err(_) => return Ok(Variant::Error(ExcelError::Value)),
         }
         let index = xlookup_binary_index(&lookup, &key, search_mode == 2, match_mode)?;
         return Ok(index
@@ -5627,13 +7012,9 @@ fn collect_nums(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Vec<f64>, String> {
-    Ok(collect_all(args, cells)?
+    Ok(flatten_values(collect_all(args, cells)?)
         .into_iter()
-        .filter_map(|v| match v {
-            Variant::Integer(n) => Some(n as f64),
-            Variant::Float(f) => Some(f),
-            _ => None,
-        })
+        .filter_map(|value| as_f64(&value))
         .collect())
 }
 
@@ -5695,7 +7076,10 @@ fn func_var_a(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    let values = collect_a_values(args, cells)?;
+    let values = match collect_a_values(args, cells) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
     if values.len() < 2 {
         return Err("VARA requires at least 2 values".into());
     }
@@ -5709,7 +7093,10 @@ fn func_var_pa(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    let values = collect_a_values(args, cells)?;
+    let values = match collect_a_values(args, cells) {
+        Ok(values) => values,
+        Err(error) => return Ok(Variant::Error(error)),
+    };
     if values.is_empty() {
         return Err("VARPA requires at least 1 value".into());
     }
@@ -5816,11 +7203,11 @@ fn collect_paired(
     if args.len() != 2 {
         return Err(format!("{fname} requires 2 arguments"));
     }
-    let a: Vec<f64> = collect_values(&args[0], cells)?
+    let a: Vec<f64> = flatten_values(collect_values(&args[0], cells)?)
         .into_iter()
         .filter_map(|v| as_f64(&v))
         .collect();
-    let b: Vec<f64> = collect_values(&args[1], cells)?
+    let b: Vec<f64> = flatten_values(collect_values(&args[1], cells)?)
         .into_iter()
         .filter_map(|v| as_f64(&v))
         .collect();
@@ -6300,7 +7687,11 @@ fn func_forecast_ets_stat(
 struct RegressionInputs {
     known_y: Vec<f64>,
     known_x: Vec<f64>,
+    known_x_rows: usize,
+    known_x_cols: usize,
     new_x: Vec<f64>,
+    new_x_rows: usize,
+    new_x_cols: usize,
     constant: bool,
 }
 
@@ -6320,9 +7711,20 @@ fn regression_inputs(
         .into_iter()
         .filter_map(|v| as_f64(&v))
         .collect::<Vec<_>>();
-    if known_y.is_empty() || known_y.len() != known_x.len() {
+    if known_y.is_empty() {
+        return Err(format!("{name}: known_y must have non-zero length"));
+    }
+    let (mut known_x_rows, mut known_x_cols) = array_shape_for_expr(&args[1], cells, known_x.len());
+    if known_x_rows == 1 && known_x_cols == known_y.len() && known_y.len() > 1 {
+        known_x_rows = known_y.len();
+        known_x_cols = 1;
+    }
+    if known_x_rows != known_y.len()
+        || known_x_cols == 0
+        || known_x_rows.saturating_mul(known_x_cols) != known_x.len()
+    {
         return Err(format!(
-            "{name}: known arrays must have equal non-zero length"
+            "{name}: known arrays must have compatible dimensions"
         ));
     }
     let new_x = if args.len() >= 3 {
@@ -6336,6 +7738,22 @@ fn regression_inputs(
     if new_x.is_empty() {
         return Err(format!("{name}: new_x must not be empty"));
     }
+    let (mut new_x_rows, new_x_cols) = if args.len() >= 3 {
+        array_shape_for_expr(&args[2], cells, new_x.len())
+    } else {
+        (known_x_rows, known_x_cols)
+    };
+    if new_x_rows == 1 && new_x_cols == known_x_cols && known_x_cols > 1 {
+        new_x_rows = 1;
+    }
+    if new_x_cols == 0
+        || new_x_cols != known_x_cols
+        || new_x_rows.saturating_mul(new_x_cols) != new_x.len()
+    {
+        return Err(format!(
+            "{name}: new_x must have the same column count as known_x"
+        ));
+    }
     let constant = if args.len() == 4 {
         is_truthy(&evaluate(&args[3], cells)?)
     } else {
@@ -6344,7 +7762,11 @@ fn regression_inputs(
     Ok(RegressionInputs {
         known_y,
         known_x,
+        known_x_rows,
+        known_x_cols,
         new_x,
+        new_x_rows,
+        new_x_cols,
         constant,
     })
 }
@@ -6354,6 +7776,35 @@ fn func_trend(
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
     let inputs = regression_inputs(args, cells, "TREND")?;
+    if inputs.known_x_cols > 1 {
+        let coefficients = regression_coefficients(
+            &inputs.known_y,
+            &inputs.known_x,
+            inputs.known_x_rows,
+            inputs.known_x_cols,
+            inputs.constant,
+            false,
+            "TREND",
+        )?;
+        let intercept = if inputs.constant {
+            coefficients[inputs.known_x_cols]
+        } else {
+            0.0
+        };
+        return Ok(Variant::Array(
+            (0..inputs.new_x_rows)
+                .map(|row| {
+                    let value = (0..inputs.known_x_cols)
+                        .map(|column| {
+                            inputs.new_x[row * inputs.new_x_cols + column] * coefficients[column]
+                        })
+                        .sum::<f64>()
+                        + intercept;
+                    as_integer_if_whole(value)
+                })
+                .collect(),
+        ));
+    }
     let slope = regression_slope(&inputs.known_y, &inputs.known_x)?;
     let intercept = if inputs.constant {
         let mean_y = inputs.known_y.iter().sum::<f64>() / inputs.known_y.len() as f64;
@@ -6382,6 +7833,35 @@ fn func_growth(
     {
         return Err("GROWTH: values must be positive".into());
     }
+    if inputs.known_x_cols > 1 {
+        let coefficients = regression_coefficients(
+            &inputs.known_y,
+            &inputs.known_x,
+            inputs.known_x_rows,
+            inputs.known_x_cols,
+            inputs.constant,
+            true,
+            "GROWTH",
+        )?;
+        let intercept = if inputs.constant {
+            coefficients[inputs.known_x_cols]
+        } else {
+            0.0
+        };
+        return Ok(Variant::Array(
+            (0..inputs.new_x_rows)
+                .map(|row| {
+                    let log_value = (0..inputs.known_x_cols)
+                        .map(|column| {
+                            inputs.new_x[row * inputs.new_x_cols + column] * coefficients[column]
+                        })
+                        .sum::<f64>()
+                        + intercept;
+                    as_integer_if_whole(log_value.exp())
+                })
+                .collect(),
+        ));
+    }
     let log_y = inputs
         .known_y
         .iter()
@@ -6402,6 +7882,247 @@ fn func_growth(
             .map(|x| as_integer_if_whole((intercept + slope * x).exp()))
             .collect(),
     ))
+}
+
+fn solve_regression_system(
+    mut matrix: Vec<f64>,
+    mut rhs: Vec<f64>,
+    dimension: usize,
+    name: &str,
+) -> Result<Vec<f64>, String> {
+    for pivot in 0..dimension {
+        let Some(row) = (pivot..dimension).max_by(|left, right| {
+            matrix[*left * dimension + pivot]
+                .abs()
+                .total_cmp(&matrix[*right * dimension + pivot].abs())
+        }) else {
+            return Err(format!("{name}: singular design matrix"));
+        };
+        let pivot_value = matrix[row * dimension + pivot];
+        if !pivot_value.is_finite() || pivot_value.abs() < 1e-12 {
+            return Err(format!("{name}: singular design matrix"));
+        }
+        if row != pivot {
+            for column in 0..dimension {
+                matrix.swap(pivot * dimension + column, row * dimension + column);
+            }
+            rhs.swap(pivot, row);
+        }
+        let diagonal = matrix[pivot * dimension + pivot];
+        for column in pivot..dimension {
+            matrix[pivot * dimension + column] /= diagonal;
+        }
+        rhs[pivot] /= diagonal;
+        for row in 0..dimension {
+            if row == pivot {
+                continue;
+            }
+            let factor = matrix[row * dimension + pivot];
+            if factor == 0.0 {
+                continue;
+            }
+            for column in pivot..dimension {
+                matrix[row * dimension + column] -= factor * matrix[pivot * dimension + column];
+            }
+            rhs[row] -= factor * rhs[pivot];
+        }
+    }
+    if rhs.iter().all(|value| value.is_finite()) {
+        Ok(rhs)
+    } else {
+        Err(format!("{name}: non-finite regression result"))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn regression_coefficients(
+    known_y: &[f64],
+    known_x: &[f64],
+    x_rows: usize,
+    x_cols: usize,
+    constant: bool,
+    log_mode: bool,
+    name: &str,
+) -> Result<Vec<f64>, String> {
+    if x_rows != known_y.len() || known_x.len() != x_rows.saturating_mul(x_cols) {
+        return Err(format!(
+            "{name}: known arrays must have compatible dimensions"
+        ));
+    }
+    let transformed_y = if log_mode {
+        if known_y
+            .iter()
+            .any(|value| *value <= 0.0 || !value.is_finite())
+        {
+            return Err(format!(
+                "{name}: known_y must contain positive finite values"
+            ));
+        }
+        known_y.iter().map(|value| value.ln()).collect::<Vec<_>>()
+    } else {
+        known_y.to_vec()
+    };
+    let dimension = x_cols + usize::from(constant);
+    let mut normal = vec![0.0; dimension * dimension];
+    let mut rhs = vec![0.0; dimension];
+    for row in 0..x_rows {
+        let mut design = Vec::with_capacity(dimension);
+        design.extend_from_slice(&known_x[row * x_cols..(row + 1) * x_cols]);
+        if constant {
+            design.push(1.0);
+        }
+        for left in 0..dimension {
+            rhs[left] += design[left] * transformed_y[row];
+            for right in 0..dimension {
+                normal[left * dimension + right] += design[left] * design[right];
+            }
+        }
+    }
+    solve_regression_system(normal, rhs, dimension, name)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn multivariate_regression(
+    known_y: &[f64],
+    known_x: &[f64],
+    x_rows: usize,
+    x_cols: usize,
+    constant: bool,
+    stats: bool,
+    log_mode: bool,
+    name: &str,
+) -> Result<Variant, String> {
+    if x_rows != known_y.len() || known_x.len() != x_rows.saturating_mul(x_cols) {
+        return Err(format!(
+            "{name}: known arrays must have compatible dimensions"
+        ));
+    }
+    let transformed_y = if log_mode {
+        if known_y
+            .iter()
+            .any(|value| *value <= 0.0 || !value.is_finite())
+        {
+            return Err(format!(
+                "{name}: known_y must contain positive finite values"
+            ));
+        }
+        known_y.iter().map(|value| value.ln()).collect::<Vec<_>>()
+    } else {
+        known_y.to_vec()
+    };
+    let dimension = x_cols + usize::from(constant);
+    if transformed_y.len() < dimension {
+        return Err(format!("{name}: insufficient observations"));
+    }
+    let mut normal = vec![0.0; dimension * dimension];
+    let mut rhs = vec![0.0; dimension];
+    for row in 0..x_rows {
+        let mut design = Vec::with_capacity(dimension);
+        design.extend_from_slice(&known_x[row * x_cols..(row + 1) * x_cols]);
+        if constant {
+            design.push(1.0);
+        }
+        for left in 0..dimension {
+            rhs[left] += design[left] * transformed_y[row];
+            for right in 0..dimension {
+                normal[left * dimension + right] += design[left] * design[right];
+            }
+        }
+    }
+    let coefficients = solve_regression_system(normal.clone(), rhs, dimension, name)?;
+    let predictions = (0..x_rows)
+        .map(|row| {
+            let mut prediction = (0..x_cols)
+                .map(|column| known_x[row * x_cols + column] * coefficients[column])
+                .sum::<f64>();
+            if constant {
+                prediction += coefficients[x_cols];
+            }
+            prediction
+        })
+        .collect::<Vec<_>>();
+    let residuals = transformed_y
+        .iter()
+        .zip(&predictions)
+        .map(|(value, prediction)| value - prediction)
+        .collect::<Vec<_>>();
+    let ss_resid = residuals.iter().map(|value| value * value).sum::<f64>();
+    let mean_y = transformed_y.iter().sum::<f64>() / transformed_y.len() as f64;
+    let ss_total = if constant {
+        transformed_y
+            .iter()
+            .map(|value| (value - mean_y).powi(2))
+            .sum::<f64>()
+    } else {
+        transformed_y.iter().map(|value| value * value).sum::<f64>()
+    };
+    let ss_reg = (ss_total - ss_resid).max(0.0);
+    let degrees = x_rows as i64 - dimension as i64;
+    if stats && degrees <= 0 {
+        return Err(format!("{name}: insufficient degrees of freedom"));
+    }
+    let mut output = Vec::with_capacity(if stats { dimension * 5 } else { dimension });
+    for column in (0..x_cols).rev() {
+        output.push(as_integer_if_whole(if log_mode {
+            coefficients[column].exp()
+        } else {
+            coefficients[column]
+        }));
+    }
+    if constant {
+        output.push(as_integer_if_whole(if log_mode {
+            coefficients[x_cols].exp()
+        } else {
+            coefficients[x_cols]
+        }));
+    }
+    if !stats {
+        return Ok(Variant::Array(output));
+    }
+    let variance = ss_resid / degrees as f64;
+    let standard_error = variance.sqrt();
+    let mut standard_errors = vec![0.0; dimension];
+    for column in 0..dimension {
+        let mut unit = vec![0.0; dimension];
+        unit[column] = 1.0;
+        let inverse_column = solve_regression_system(normal.clone(), unit, dimension, name)?;
+        standard_errors[column] = (variance * inverse_column[column]).max(0.0).sqrt();
+    }
+    for column in (0..x_cols).rev() {
+        output.push(as_integer_if_whole(standard_errors[column]));
+    }
+    if constant {
+        output.push(as_integer_if_whole(standard_errors[x_cols]));
+    }
+    let r_squared = if ss_total == 0.0 {
+        0.0
+    } else {
+        1.0 - ss_resid / ss_total
+    };
+    let f_stat = if ss_resid == 0.0 {
+        f64::INFINITY
+    } else {
+        ss_reg / (x_cols as f64 * variance)
+    };
+    output.push(as_integer_if_whole(r_squared));
+    output.push(as_integer_if_whole(standard_error));
+    output.extend(std::iter::repeat_n(
+        Variant::Error(ExcelError::NA),
+        dimension - 2,
+    ));
+    output.push(as_integer_if_whole(f_stat));
+    output.push(as_integer_if_whole(degrees as f64));
+    output.extend(std::iter::repeat_n(
+        Variant::Error(ExcelError::NA),
+        dimension - 2,
+    ));
+    output.push(as_integer_if_whole(ss_reg));
+    output.push(as_integer_if_whole(ss_resid));
+    output.extend(std::iter::repeat_n(
+        Variant::Error(ExcelError::NA),
+        dimension - 2,
+    ));
+    Ok(Variant::Array(output))
 }
 
 fn func_linest(
@@ -6427,7 +8148,13 @@ fn func_linest(
         (1..=known_y.len()).map(|value| value as f64).collect()
     };
     if known_x.len() != known_y.len() {
-        return Err("LINEST: known arrays must have equal length".into());
+        let compatible_multivariate = args.get(1).is_some_and(|expr| {
+            let (x_rows, x_cols) = array_shape_for_expr(expr, cells, known_x.len());
+            x_cols > 1 && x_rows > 1 && x_rows == known_y.len()
+        });
+        if !compatible_multivariate {
+            return Err("LINEST: known arrays must have equal length".into());
+        }
     }
     let constant = if args.len() >= 3 {
         is_truthy(&evaluate(&args[2], cells)?)
@@ -6439,6 +8166,14 @@ fn func_linest(
     } else {
         false
     };
+    if args.len() >= 2 {
+        let (x_rows, x_cols) = array_shape_for_expr(&args[1], cells, known_x.len());
+        if x_cols > 1 && x_rows > 1 {
+            return multivariate_regression(
+                &known_y, &known_x, x_rows, x_cols, constant, stats, false, "LINEST",
+            );
+        }
+    }
     let n = known_y.len() as f64;
     let mean_y = known_y.iter().sum::<f64>() / n;
     let mean_x = known_x.iter().sum::<f64>() / n;
@@ -6547,7 +8282,13 @@ fn func_logest(
     } else {
         (1..=known_y.len()).map(|value| value as f64).collect()
     };
-    if known_x.len() != known_y.len() || known_x.iter().any(|value| !value.is_finite()) {
+    let compatible_multivariate = args.get(1).is_some_and(|expr| {
+        let (x_rows, x_cols) = array_shape_for_expr(expr, cells, known_x.len());
+        x_cols > 1 && x_rows > 1 && x_rows == known_y.len()
+    });
+    if (known_x.len() != known_y.len() && !compatible_multivariate)
+        || known_x.iter().any(|value| !value.is_finite())
+    {
         return Err("LOGEST: known arrays must have equal length".into());
     }
     let constant = if args.len() >= 3 {
@@ -6560,6 +8301,14 @@ fn func_logest(
     } else {
         false
     };
+    if args.len() >= 2 {
+        let (x_rows, x_cols) = array_shape_for_expr(&args[1], cells, known_x.len());
+        if x_cols > 1 && x_rows > 1 {
+            return multivariate_regression(
+                &known_y, &known_x, x_rows, x_cols, constant, stats, true, "LOGEST",
+            );
+        }
+    }
     let log_y = known_y.iter().map(|value| value.ln()).collect::<Vec<_>>();
     let n = log_y.len() as f64;
     let mean_y = log_y.iter().sum::<f64>() / n;
@@ -10585,20 +12334,61 @@ fn func_indirect(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.is_empty() {
-        return Err("INDIRECT requires 1 argument".into());
+    if args.is_empty() || args.len() > 2 {
+        return Err("INDIRECT requires 1 or 2 arguments".into());
     }
     let addr_str = match evaluate(&args[0], cells)? {
         Variant::Str(s) => s,
         other => return Err(format!("INDIRECT: expected string, got {}", other)),
     };
-    // Resolve through elixcee-types's parse_cell_addr / parse_range_addr
-    let ((r1, c1), _) = crate::types::parse_range_addr(addr_str.trim())
-        .ok_or_else(|| format!("INDIRECT: invalid reference '{}'", addr_str))?;
-    Ok(cells
-        .get(&(r1, c1))
-        .map(|c| c.value.clone())
-        .unwrap_or(Variant::Empty))
+    let a1 = args
+        .get(1)
+        .map(|arg| evaluate(arg, cells).map(|value| is_truthy(&value)))
+        .transpose()?
+        .unwrap_or(true);
+    let reference = if a1 {
+        crate::types::parse_range_addr(addr_str.trim())
+    } else {
+        parse_r1c1_range(addr_str.trim())
+    }
+    .ok_or_else(|| format!("INDIRECT: invalid reference '{}'", addr_str))?;
+    let ((r1, c1), (r2, c2)) = reference;
+    let mut values = Vec::new();
+    for row in r1.min(r2)..=r1.max(r2) {
+        for col in c1.min(c2)..=c1.max(c2) {
+            values.push(cell_val(cells, row, col));
+        }
+    }
+    Ok(wrap_array(values))
+}
+
+/// Parse the absolute R1C1 form accepted by INDIRECT(...,FALSE).
+/// Relative R[delta]C[delta] references need a caller cell context and are
+/// deliberately rejected by this context-free formula evaluator.
+fn parse_r1c1_range(addr: &str) -> Option<((u32, u32), (u32, u32))> {
+    fn parse_piece(piece: &str) -> Option<(u32, u32)> {
+        let piece = piece.trim().to_ascii_uppercase();
+        let (row_text, col_text) = piece.strip_prefix('R')?.split_once('C')?;
+        if row_text.is_empty()
+            || col_text.is_empty()
+            || row_text.starts_with('[')
+            || col_text.starts_with('[')
+        {
+            return None;
+        }
+        let row = row_text.parse::<u32>().ok()?;
+        let col = col_text.parse::<u32>().ok()?;
+        if row == 0 || col == 0 {
+            return None;
+        }
+        Some((row, col))
+    }
+    if let Some((left, right)) = addr.split_once(':') {
+        Some((parse_piece(left)?, parse_piece(right)?))
+    } else {
+        let cell = parse_piece(addr)?;
+        Some((cell, cell))
+    }
 }
 
 // ── OFFSET ────────────────────────────────────────────────────────────────────
@@ -10607,29 +12397,14 @@ fn func_offset(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.len() < 3 {
-        return Err("OFFSET requires at least 3 arguments".into());
-    }
-    // First arg must be a cell/range reference expression — read coords without evaluating
-    let (base_row, base_col): (u32, u32) = match args.first() {
-        Some(FormulaExpr::CellRef { row, col, .. }) => (*row, *col),
-        Some(FormulaExpr::Range { r1, c1, .. }) => (*r1, *c1),
-        _ => return Err("OFFSET: first argument must be a cell reference".into()),
+    let values = match offset_values(args, cells) {
+        Ok(values) => values,
+        Err(error) if error.contains("outside the worksheet") => {
+            return Ok(Variant::Error(ExcelError::Ref));
+        }
+        Err(error) => return Err(error),
     };
-    let row_off = to_float(&evaluate(&args[1], cells)?)? as i64;
-    let col_off = to_float(&evaluate(&args[2], cells)?)? as i64;
-    // height / width (args[3], args[4]): if > 1 would mean a range result; return top-left only
-    let new_row_i = base_row as i64 + row_off;
-    let new_col_i = base_col as i64 + col_off;
-    if new_row_i < 1 || new_col_i < 1 {
-        return Ok(Variant::Error(ExcelError::Ref));
-    }
-    let new_row = new_row_i as u32;
-    let new_col = new_col_i as u32;
-    Ok(cells
-        .get(&(new_row, new_col))
-        .map(|c| c.value.clone())
-        .unwrap_or(Variant::Empty))
+    Ok(wrap_array(values))
 }
 
 // ── Array / spill helpers ─────────────────────────────────────────────────────
@@ -10921,21 +12696,34 @@ fn groupby_aggregate(name: &str, values: &[Variant]) -> Result<Variant, String> 
     }
 }
 
-fn func_groupby(
-    args: &[FormulaExpr],
+fn groupby_reduce(
+    reducer: &FormulaExpr,
+    values: &[Variant],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.len() < 3 || args.len() > 8 {
-        return Err("GROUPBY requires 3 to 8 arguments".into());
+    groupby_reduce_with_total(reducer, values, values, cells)
+}
+
+fn groupby_reduce_with_total(
+    reducer: &FormulaExpr,
+    values: &[Variant],
+    total: &[Variant],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if matches!(reducer, FormulaExpr::FuncCall { name, .. } if name.eq_ignore_ascii_case("LAMBDA"))
+    {
+        let (params, _) = extract_lambda(reducer)?;
+        let args = if params.len() >= 2 {
+            vec![
+                Variant::Array(values.to_vec()),
+                Variant::Array(total.to_vec()),
+            ]
+        } else {
+            vec![Variant::Array(values.to_vec())]
+        };
+        return call_lambda(reducer, args, cells);
     }
-    let group_values = flatten_array_vals(collect_values(&args[0], cells)?);
-    let data_values = flatten_array_vals(collect_values(&args[1], cells)?);
-    let (group_rows, group_cols) = array_shape_for_expr(&args[0], cells, group_values.len());
-    let (data_rows, data_cols) = array_shape_for_expr(&args[1], cells, data_values.len());
-    if group_cols != 1 || data_cols != 1 || group_rows != data_rows {
-        return Ok(Variant::Error(ExcelError::Value));
-    }
-    let aggregate_name = match &args[2] {
+    let name = match reducer {
         FormulaExpr::FuncCall {
             name,
             args: call_args,
@@ -10943,45 +12731,289 @@ fn func_groupby(
         FormulaExpr::Str(name) => name,
         _ => return Ok(Variant::Error(ExcelError::Value)),
     };
+    groupby_aggregate(name, values)
+}
+
+fn func_groupby(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 3 || args.len() > 8 {
+        return Err("GROUPBY requires 3 to 8 arguments".into());
+    }
+    let mut group_values = flatten_array_vals(collect_values(&args[0], cells)?);
+    let mut data_values = flatten_array_vals(collect_values(&args[1], cells)?);
+    let (mut group_rows, group_cols) = array_shape_for_expr(&args[0], cells, group_values.len());
+    let (data_rows, data_cols) = array_shape_for_expr(&args[1], cells, data_values.len());
+    if group_cols == 0 || data_cols == 0 || group_rows != data_rows {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let reducer = &args[2];
+    let reducer_vertical = matches!(
+        reducer,
+        FormulaExpr::FuncCall { name, args }
+            if name.eq_ignore_ascii_case("VSTACK") && !args.is_empty()
+    );
+    let reducers: Vec<&FormulaExpr> = match reducer {
+        FormulaExpr::FuncCall { name, args }
+            if (name.eq_ignore_ascii_case("HSTACK") || name.eq_ignore_ascii_case("VSTACK")) =>
+        {
+            if args.is_empty() {
+                return Ok(Variant::Error(ExcelError::Value));
+            }
+            args.iter().collect()
+        }
+        _ => vec![reducer],
+    };
+    if reducers.iter().any(|reducer| {
+        !matches!(reducer, FormulaExpr::Str(_))
+            && !matches!(reducer, FormulaExpr::FuncCall { name, .. } if name.eq_ignore_ascii_case("LAMBDA"))
+            && !matches!(reducer, FormulaExpr::FuncCall { args, .. } if args.is_empty())
+    }) {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let reducer_count = reducers.len();
+    let output_value_count = if reducer_vertical {
+        data_cols
+    } else {
+        data_cols.saturating_mul(reducer_count)
+    };
+    let integer_option = |index: usize, default: i64| -> Result<i64, String> {
+        let Some(expr) = args.get(index) else {
+            return Ok(default);
+        };
+        match evaluate(expr, cells)? {
+            Variant::Integer(value) => Ok(value),
+            Variant::Float(value) if value.is_finite() && value.fract() == 0.0 => Ok(value as i64),
+            _ => Ok(i64::MIN),
+        }
+    };
+    let field_headers = integer_option(3, 0)?;
+    if !(0..=3).contains(&field_headers) {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let total_depth = integer_option(4, 0)?;
+    if !(-2..=2).contains(&total_depth) {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let generated_headers = field_headers == 2;
+    let input_headers = field_headers == 1 || field_headers == 3;
+    let header_values = if input_headers {
+        if group_rows < 2 {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        let mut headers = group_values[..group_cols].to_vec();
+        if reducer_vertical {
+            headers.extend(data_values[..data_cols].iter().cloned());
+        } else {
+            for _ in &reducers {
+                headers.extend(data_values[..data_cols].iter().cloned());
+            }
+        }
+        Some(headers)
+    } else if generated_headers {
+        let mut headers = (1..=group_cols)
+            .map(|index| Variant::Str(format!("Field{index}")))
+            .collect::<Vec<_>>();
+        if reducer_vertical {
+            headers.extend((1..=data_cols).map(|index| {
+                if data_cols == 1 {
+                    Variant::Str("Values".into())
+                } else {
+                    Variant::Str(format!("Value{index}"))
+                }
+            }));
+        } else {
+            for reducer_index in 0..reducer_count {
+                headers.extend((1..=data_cols).map(|index| {
+                    if data_cols == 1 && reducer_count == 1 {
+                        Variant::Str("Values".into())
+                    } else {
+                        Variant::Str(format!("Value{}-{}", reducer_index + 1, index))
+                    }
+                }));
+            }
+        }
+        Some(headers)
+    } else {
+        None
+    };
+    if input_headers {
+        group_values.drain(..group_cols);
+        data_values.drain(..data_cols);
+        group_rows -= 1;
+    }
     let filter = if let Some(filter_expr) = args.get(6) {
         let flags = eval_as_bool_array(filter_expr, cells)?;
-        if flags.len() != group_values.len() {
+        if flags.len() != group_rows {
             return Ok(Variant::Error(ExcelError::Value));
         }
         Some(flags)
     } else {
         None
     };
-    let mut groups: Vec<(Variant, Vec<Variant>)> = Vec::new();
-    for (index, (group, value)) in group_values.iter().zip(data_values.iter()).enumerate() {
+    let mut groups: Vec<(Vec<Variant>, Vec<Vec<Variant>>)> = Vec::new();
+    let mut included_values = vec![Vec::new(); data_cols];
+    for index in 0..group_rows {
         if filter.as_ref().is_some_and(|flags| !flags[index]) {
             continue;
         }
-        if let Some((_, group_data)) = groups.iter_mut().find(|(key, _)| variant_eq(key, group)) {
-            group_data.push(value.clone());
+        let key = group_values[index * group_cols..(index + 1) * group_cols].to_vec();
+        let row_values = data_values[index * data_cols..(index + 1) * data_cols].to_vec();
+        for (column, value) in row_values.iter().enumerate() {
+            included_values[column].push(value.clone());
+        }
+        if let Some((_, group_data)) = groups.iter_mut().find(|(candidate, _)| {
+            candidate.len() == key.len()
+                && candidate
+                    .iter()
+                    .zip(&key)
+                    .all(|(left, right)| variant_eq(left, right))
+        }) {
+            group_data.push(row_values);
         } else {
-            groups.push((group.clone(), vec![value.clone()]));
+            groups.push((key, vec![row_values]));
         }
     }
-    if let Some(sort_expr) = args.get(5) {
-        let sort_order = match evaluate(sort_expr, cells)? {
-            Variant::Integer(value) if value == 1 || value == -1 => value,
-            Variant::Float(value) if value == 1.0 || value == -1.0 => value as i64,
-            _ => return Ok(Variant::Error(ExcelError::Value)),
+    let sort_orders = if let Some(sort_expr) = args.get(5) {
+        let value = evaluate(sort_expr, cells)?;
+        let scalar_order = |value: &Variant| match value {
+            Variant::Integer(value) if *value == 1 || *value == -1 => Some(*value),
+            Variant::Float(value) if *value == 1.0 || *value == -1.0 => Some(*value as i64),
+            _ => None,
         };
-        groups.sort_by(|left, right| {
-            let ordering = variant_cmp(&left.0, &right.0).unwrap_or(Ordering::Equal);
-            if sort_order < 0 {
-                ordering.reverse()
-            } else {
-                ordering
+        match value {
+            Variant::Array(values) => {
+                if values.len() != group_cols {
+                    return Ok(Variant::Error(ExcelError::Value));
+                }
+                let Some(orders) = values.iter().map(scalar_order).collect::<Option<Vec<_>>>()
+                else {
+                    return Ok(Variant::Error(ExcelError::Value));
+                };
+                orders
             }
+            value => {
+                let Some(order) = scalar_order(&value) else {
+                    return Ok(Variant::Error(ExcelError::Value));
+                };
+                vec![order; group_cols]
+            }
+        }
+    } else {
+        vec![1; group_cols]
+    };
+    if args.get(5).is_some() {
+        groups.sort_by(|left, right| {
+            left.0
+                .iter()
+                .zip(&right.0)
+                .zip(&sort_orders)
+                .map(|((left, right), order)| {
+                    let ordering = variant_cmp(left, right)
+                        .unwrap_or_else(|_| to_str(left).cmp(&to_str(right)));
+                    if *order < 0 {
+                        ordering.reverse()
+                    } else {
+                        ordering
+                    }
+                })
+                .find(|ordering| *ordering != Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
         });
     }
-    let mut result = Vec::with_capacity(groups.len() * 2);
-    for (key, group_data) in groups {
-        result.push(key);
-        result.push(groupby_aggregate(aggregate_name, &group_data)?);
+    let width = group_cols + output_value_count;
+    let reduce_rows =
+        |reducer: &FormulaExpr, rows: &[Vec<Variant>]| -> Result<Vec<Variant>, String> {
+            (0..data_cols)
+                .map(|column| {
+                    let values = rows
+                        .iter()
+                        .map(|row| row[column].clone())
+                        .collect::<Vec<_>>();
+                    groupby_reduce_with_total(reducer, &values, &included_values[column], cells)
+                })
+                .collect()
+        };
+    let totals = if total_depth != 0 {
+        Some(
+            reducers
+                .iter()
+                .map(|reducer| {
+                    included_values
+                        .iter()
+                        .map(|values| groupby_reduce_with_total(reducer, values, values, cells))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
+    let mut result = Vec::with_capacity(
+        header_values.as_ref().map_or(0, Vec::len)
+            + (groups.len() + usize::from(totals.is_some())) * width,
+    );
+    if let Some(headers) = header_values {
+        result.extend(headers);
+    }
+    if total_depth < 0 {
+        result.push(Variant::Str("Total".into()));
+        result.extend((1..group_cols).map(|_| Variant::Empty));
+        result.extend(totals.clone().expect("total requested"));
+    }
+    for index in 0..groups.len() {
+        let (key, group_data) = &groups[index];
+        if total_depth == -2 && group_cols >= 2 {
+            let prefix = &key[..group_cols.saturating_sub(1)];
+            let parent_appeared_before = groups[..index]
+                .iter()
+                .any(|(candidate_key, _)| candidate_key[..group_cols.saturating_sub(1)] == *prefix);
+            if !parent_appeared_before {
+                let mut subtotal_rows = Vec::new();
+                for (candidate_key, candidate_data) in &groups {
+                    if candidate_key[..group_cols.saturating_sub(1)] == *prefix {
+                        subtotal_rows.extend(candidate_data.iter().cloned());
+                    }
+                }
+                result.extend(prefix.iter().cloned());
+                result.push(Variant::Str("Subtotal".into()));
+                for reducer in &reducers {
+                    result.extend(reduce_rows(reducer, &subtotal_rows)?);
+                }
+            }
+        }
+        result.extend(key.clone());
+        for reducer in &reducers {
+            result.extend(reduce_rows(reducer, group_data)?);
+        }
+        if total_depth == 2 && group_cols >= 2 {
+            let prefix = &key[..group_cols.saturating_sub(1)];
+            let parent_appears_later = groups[index + 1..]
+                .iter()
+                .any(|(candidate_key, _)| candidate_key[..group_cols.saturating_sub(1)] == *prefix);
+            if !parent_appears_later {
+                let mut subtotal_rows = Vec::new();
+                for (candidate_key, candidate_data) in &groups {
+                    if candidate_key[..group_cols.saturating_sub(1)] == *prefix {
+                        subtotal_rows.extend(candidate_data.iter().cloned());
+                    }
+                }
+                result.extend(prefix.iter().cloned());
+                result.push(Variant::Str("Subtotal".into()));
+                for reducer in &reducers {
+                    result.extend(reduce_rows(reducer, &subtotal_rows)?);
+                }
+            }
+        }
+    }
+    if total_depth > 0 {
+        result.push(Variant::Str("Total".into()));
+        result.extend((1..group_cols).map(|_| Variant::Empty));
+        result.extend(totals.expect("total requested"));
     }
     Ok(wrap_array(result))
 }
@@ -10990,57 +13022,658 @@ fn func_pivotby(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.len() != 4 {
-        return Err("PIVOTBY requires 4 arguments in the bounded array form".into());
+    if !(4..=11).contains(&args.len()) {
+        return Err("PIVOTBY requires 4 to 11 arguments".into());
     }
-    let row_values = flatten_array_vals(collect_values(&args[0], cells)?);
-    let col_values = flatten_array_vals(collect_values(&args[1], cells)?);
-    let data_values = flatten_array_vals(collect_values(&args[2], cells)?);
-    let shapes = [
-        array_shape_for_expr(&args[0], cells, row_values.len()),
-        array_shape_for_expr(&args[1], cells, col_values.len()),
-        array_shape_for_expr(&args[2], cells, data_values.len()),
-    ];
-    if shapes.iter().any(|(_rows, cols)| *cols != 1)
-        || row_values.len() != col_values.len()
-        || row_values.len() != data_values.len()
+    let mut row_values = flatten_array_vals(collect_values(&args[0], cells)?);
+    let mut col_values = flatten_array_vals(collect_values(&args[1], cells)?);
+    let mut data_values = flatten_array_vals(collect_values(&args[2], cells)?);
+    let (mut row_rows, row_cols) = array_shape_for_expr(&args[0], cells, row_values.len());
+    let (col_rows, col_cols) = array_shape_for_expr(&args[1], cells, col_values.len());
+    let (data_rows, data_cols) = array_shape_for_expr(&args[2], cells, data_values.len());
+    if row_cols == 0
+        || col_cols == 0
+        || data_cols == 0
+        || row_rows != col_rows
+        || row_rows != data_rows
+        || data_values.len() != data_rows * data_cols
     {
         return Ok(Variant::Error(ExcelError::Value));
     }
-    let aggregate_name = match &args[3] {
-        FormulaExpr::FuncCall {
-            name,
-            args: call_args,
-        } if call_args.is_empty() => name,
-        FormulaExpr::Str(name) => name,
-        _ => return Ok(Variant::Error(ExcelError::Value)),
+    let explicit_field_headers = args.get(4).is_some();
+    let field_headers = match args.get(4).map(|expr| evaluate(expr, cells)).transpose()? {
+        None => 3,
+        Some(Variant::Integer(value)) => value,
+        Some(Variant::Float(value)) if value.is_finite() && value.fract() == 0.0 => value as i64,
+        Some(_) => i64::MIN,
     };
-    let mut row_keys = Vec::new();
-    let mut col_keys = Vec::new();
-    for value in &row_values {
-        if !row_keys.iter().any(|key| variant_eq(key, value)) {
-            row_keys.push(value.clone());
-        }
+    if !(0..=3).contains(&field_headers) {
+        return Ok(Variant::Error(ExcelError::Value));
     }
-    for value in &col_values {
-        if !col_keys.iter().any(|key| variant_eq(key, value)) {
-            col_keys.push(value.clone());
+    let automatic_input_headers = !explicit_field_headers
+        && data_rows >= 2
+        && matches!(data_values.first(), Some(Variant::Str(_)))
+        && matches!(
+            data_values.get(data_cols),
+            Some(Variant::Integer(_) | Variant::Float(_))
+        );
+    let input_headers = if explicit_field_headers {
+        matches!(field_headers, 1 | 3)
+    } else {
+        automatic_input_headers
+    };
+    if input_headers {
+        if row_rows < 2 || col_rows < 2 || data_rows < 2 {
+            return Ok(Variant::Error(ExcelError::Value));
         }
+        row_values.drain(..row_cols);
+        col_values.drain(..col_cols);
+        data_values.drain(..data_cols);
+        row_rows -= 1;
     }
-    let mut result = Vec::with_capacity((row_keys.len() + 1) * (col_keys.len() + 1));
-    result.push(Variant::Empty);
-    result.extend(col_keys.iter().cloned());
-    for row_key in &row_keys {
-        result.push(row_key.clone());
-        for col_key in &col_keys {
-            let group = row_values
+    // Automatic (omitted) keeps the historical layout; explicit 0/1 omit
+    // the generated header row, while 2/3 retain it.
+    let show_field_header_row = if explicit_field_headers {
+        matches!(field_headers, 2 | 3)
+    } else if automatic_input_headers {
+        row_cols > 1 || col_cols > 1
+    } else {
+        true
+    };
+    if let Some(filter_expr) = args.get(9) {
+        let flags = eval_as_bool_array(filter_expr, cells)?;
+        if flags.len() != row_rows {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        let selected = flags
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, keep)| keep.then_some(index))
+            .collect::<Vec<_>>();
+        row_values = selected
+            .iter()
+            .flat_map(|&index| {
+                row_values[index * row_cols..(index + 1) * row_cols]
+                    .iter()
+                    .cloned()
+            })
+            .collect();
+        col_values = selected
+            .iter()
+            .flat_map(|&index| {
+                col_values[index * col_cols..(index + 1) * col_cols]
+                    .iter()
+                    .cloned()
+            })
+            .collect();
+        data_values = selected
+            .iter()
+            .flat_map(|&index| {
+                data_values[index * data_cols..(index + 1) * data_cols]
+                    .iter()
+                    .cloned()
+            })
+            .collect();
+    }
+    let data_rows = row_values.len() / row_cols;
+    let reducer = &args[3];
+    let reducer_vertical = matches!(
+        reducer,
+        FormulaExpr::FuncCall { name, args }
+            if name.eq_ignore_ascii_case("VSTACK") && !args.is_empty()
+    );
+    let reducers: Vec<&FormulaExpr> = match reducer {
+        FormulaExpr::FuncCall { name, args }
+            if name.eq_ignore_ascii_case("HSTACK") || name.eq_ignore_ascii_case("VSTACK") =>
+        {
+            if args.is_empty() {
+                return Ok(Variant::Error(ExcelError::Value));
+            }
+            args.iter().collect()
+        }
+        _ => vec![reducer],
+    };
+    if reducers.iter().any(|reducer| {
+        !matches!(reducer, FormulaExpr::Str(_))
+            && !matches!(reducer, FormulaExpr::FuncCall { name, .. } if name.eq_ignore_ascii_case("LAMBDA"))
+            && !matches!(reducer, FormulaExpr::FuncCall { args, .. } if args.is_empty())
+    }) {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let reducer_count = reducers.len();
+    let output_value_count = if reducer_vertical {
+        data_cols
+    } else {
+        data_cols.saturating_mul(reducer_count)
+    };
+    let total_depth = |index: usize| -> Result<i64, String> {
+        let Some(expr) = args.get(index) else {
+            return Ok(0);
+        };
+        match evaluate(expr, cells)? {
+            Variant::Integer(value) => Ok(value),
+            Variant::Float(value) if value.is_finite() && value.fract() == 0.0 => Ok(value as i64),
+            _ => Ok(i64::MIN),
+        }
+    };
+    let row_total_depth = total_depth(5)?;
+    let col_total_depth = total_depth(7)?;
+    if !(-2..=2).contains(&row_total_depth) || !(-2..=2).contains(&col_total_depth) {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    if row_total_depth.unsigned_abs() >= 2 && row_cols < 2 {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    if col_total_depth.unsigned_abs() >= 2 && col_cols < 2 {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let relative_to = match args.get(10) {
+        None | Some(FormulaExpr::Omitted) => 0,
+        Some(expr) => match evaluate(expr, cells)? {
+            Variant::Integer(value) => value,
+            Variant::Float(value) if value.is_finite() && value.fract() == 0.0 => value as i64,
+            _ => i64::MIN,
+        },
+    };
+    if !(0..=4).contains(&relative_to) {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let mut row_keys: Vec<Vec<Variant>> = Vec::new();
+    let mut col_keys: Vec<Vec<Variant>> = Vec::new();
+    let key_equal = |left: &[Variant], right: &[Variant]| {
+        left.len() == right.len()
+            && left
                 .iter()
-                .zip(col_values.iter())
-                .zip(data_values.iter())
-                .filter(|((row, col), _)| variant_eq(row_key, row) && variant_eq(col_key, col))
-                .map(|((_, _), value)| value.clone())
+                .zip(right)
+                .all(|(left, right)| variant_eq(left, right))
+    };
+    for row in 0..data_rows {
+        let key = row_values[row * row_cols..(row + 1) * row_cols].to_vec();
+        if !row_keys.iter().any(|candidate| key_equal(candidate, &key)) {
+            row_keys.push(key);
+        }
+        let key = col_values[row * col_cols..(row + 1) * col_cols].to_vec();
+        if !col_keys.iter().any(|candidate| key_equal(candidate, &key)) {
+            col_keys.push(key);
+        }
+    }
+    let sort_order = |index: usize| -> Result<Option<Vec<i64>>, String> {
+        let Some(expr) = args.get(index) else {
+            return Ok(None);
+        };
+        let parse = |value: Variant| -> i64 {
+            match value {
+                Variant::Integer(value) => value,
+                Variant::Float(value) if value.is_finite() && value.fract() == 0.0 => value as i64,
+                _ => i64::MIN,
+            }
+        };
+        Ok(Some(match evaluate(expr, cells)? {
+            Variant::Array(values) => values.into_iter().map(parse).collect(),
+            value => vec![parse(value)],
+        }))
+    };
+    let row_sort_order = sort_order(6)?;
+    let col_sort_order = sort_order(8)?;
+    let valid_sort_order = |orders: &Option<Vec<i64>>, width: usize| {
+        orders.as_ref().is_none_or(|orders| {
+            !orders.is_empty()
+                && orders.iter().all(|order| {
+                    *order != 0
+                        && if orders.len() == 1 {
+                            order.unsigned_abs() as usize <= width + data_cols
+                        } else {
+                            order.unsigned_abs() as usize <= width
+                        }
+                })
+        })
+    };
+    if !valid_sort_order(&row_sort_order, row_cols) || !valid_sort_order(&col_sort_order, col_cols)
+    {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let sort_aggregate =
+        |row_key: Option<&[Variant]>, col_key: Option<&[Variant]>, data_col: usize| {
+            let group = row_values
+                .chunks(row_cols)
+                .zip(col_values.chunks(col_cols))
+                .enumerate()
+                .filter(|(index, (row, col))| {
+                    row_key.is_none_or(|key| key_equal(key, row))
+                        && col_key.is_none_or(|key| key_equal(key, col))
+                        && *index < data_rows
+                })
+                .map(|(index, _)| data_values[index * data_cols + data_col].clone())
                 .collect::<Vec<_>>();
-            result.push(groupby_aggregate(aggregate_name, &group)?);
+            groupby_reduce(reducer, &group, cells).unwrap_or(Variant::Empty)
+        };
+    let sort_key_values = |keys: &[Vec<Variant>], axis_width: usize, rows_axis: bool| {
+        keys.iter()
+            .map(|key| {
+                (0..data_cols)
+                    .map(|data_col| {
+                        if rows_axis {
+                            sort_aggregate(Some(key), None, data_col)
+                        } else {
+                            sort_aggregate(None, Some(key), data_col)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map(|values| (axis_width, values))
+            .collect::<Vec<_>>()
+    };
+    let compare_keys = |left: (&[Variant], &[Variant]),
+                        right: (&[Variant], &[Variant]),
+                        orders: &[i64],
+                        width: usize| {
+        orders
+            .iter()
+            .map(|order| {
+                let index = order.unsigned_abs() as usize - 1;
+                let (left_value, right_value) = if index < width {
+                    (&left.0[index], &right.0[index])
+                } else {
+                    (&left.1[index - width], &right.1[index - width])
+                };
+                let comparison = variant_cmp(left_value, right_value)
+                    .unwrap_or_else(|_| to_str(left_value).cmp(&to_str(right_value)));
+                if *order < 0 {
+                    comparison.reverse()
+                } else {
+                    comparison
+                }
+            })
+            .find(|ordering| *ordering != Ordering::Equal)
+            .unwrap_or(Ordering::Equal)
+    };
+    if let Some(orders) = row_sort_order {
+        let values = sort_key_values(&row_keys, row_cols, true);
+        let mut paired = row_keys.into_iter().zip(values).collect::<Vec<_>>();
+        paired.sort_by(|left, right| {
+            compare_keys(
+                (&left.0, &left.1.1),
+                (&right.0, &right.1.1),
+                &orders,
+                row_cols,
+            )
+        });
+        row_keys = paired.into_iter().map(|(key, _)| key).collect();
+    }
+    if let Some(orders) = col_sort_order {
+        let values = sort_key_values(&col_keys, col_cols, false);
+        let mut paired = col_keys.into_iter().zip(values).collect::<Vec<_>>();
+        paired.sort_by(|left, right| {
+            compare_keys(
+                (&left.0, &left.1.1),
+                (&right.0, &right.1.1),
+                &orders,
+                col_cols,
+            )
+        });
+        col_keys = paired.into_iter().map(|(key, _)| key).collect();
+    }
+    let mut col_segments: Vec<(Vec<Variant>, bool)> = Vec::new();
+    for (index, col_key) in col_keys.iter().enumerate() {
+        let parent = &col_key[..col_cols.saturating_sub(1)];
+        let first_in_parent =
+            index == 0 || col_keys[index - 1][..col_cols.saturating_sub(1)] != *parent;
+        let last_in_parent = index + 1 == col_keys.len()
+            || col_keys[index + 1][..col_cols.saturating_sub(1)] != *parent;
+        if col_total_depth == -2 && first_in_parent {
+            col_segments.push((parent.to_vec(), true));
+        }
+        col_segments.push((col_key.clone(), false));
+        if col_total_depth == 2 && last_in_parent {
+            col_segments.push((parent.to_vec(), true));
+        }
+    }
+    let total_column = row_total_depth != 0 || col_total_depth != 0;
+    let row_total_cols = usize::from(total_column) * output_value_count;
+    let output_cols = row_cols + col_segments.len() * output_value_count + row_total_cols;
+    let row_subtotal_count = if row_total_depth.unsigned_abs() >= 2 {
+        row_keys
+            .windows(2)
+            .filter(|keys| keys[0][..row_cols - 1] != keys[1][..row_cols - 1])
+            .count()
+            + usize::from(!row_keys.is_empty())
+    } else {
+        0
+    };
+    let output_rows = row_keys.len() + row_subtotal_count + 1 + usize::from(col_total_depth != 0);
+    let mut result = Vec::with_capacity(output_rows * output_cols);
+    if show_field_header_row {
+        if col_total_depth < 0 {
+            result.push(Variant::Str("Total".into()));
+            result.extend(std::iter::repeat_n(Variant::Empty, row_cols - 1));
+        } else {
+            result.extend(std::iter::repeat_n(Variant::Empty, row_cols));
+        }
+    } else if col_total_depth < 0 {
+        result.extend(std::iter::repeat_n(Variant::Empty, row_cols));
+    }
+    let collect_matching = |row_key: Option<&[Variant]>,
+                            row_prefix: bool,
+                            col_key: Option<&[Variant]>,
+                            col_prefix: bool,
+                            data_col: usize| {
+        row_values
+            .chunks(row_cols)
+            .zip(col_values.chunks(col_cols))
+            .enumerate()
+            .filter(|(index, (row, col))| {
+                let row_matches = row_key.is_none_or(|key| {
+                    if row_prefix {
+                        row.starts_with(key)
+                    } else {
+                        key_equal(key, row)
+                    }
+                });
+                let col_matches = col_key.is_none_or(|key| {
+                    if col_prefix {
+                        col.starts_with(key)
+                    } else {
+                        key_equal(key, col)
+                    }
+                });
+                row_matches && col_matches && *index < data_rows
+            })
+            .map(|(index, _)| data_values[index * data_cols + data_col].clone())
+            .collect::<Vec<_>>()
+    };
+    let reduce_values = |reducer: &FormulaExpr, subset: &[Variant], total: &[Variant]| {
+        if matches!(
+            reducer,
+            FormulaExpr::FuncCall { name, .. } if name.eq_ignore_ascii_case("LAMBDA")
+        ) {
+            let (params, _) = extract_lambda(reducer)?;
+            let args = if params.len() >= 2 {
+                vec![
+                    Variant::Array(subset.to_vec()),
+                    Variant::Array(total.to_vec()),
+                ]
+            } else {
+                vec![Variant::Array(subset.to_vec())]
+            };
+            return call_lambda(reducer, args, cells);
+        }
+        let is_percentof = matches!(
+            reducer,
+            FormulaExpr::FuncCall { name, args }
+                if name.eq_ignore_ascii_case("PERCENTOF") && args.is_empty()
+        );
+        if !is_percentof {
+            return groupby_reduce(reducer, subset, cells);
+        }
+        let sum = |values: &[Variant]| values.iter().filter_map(as_f64).sum::<f64>();
+        let numerator = sum(subset);
+        let denominator = sum(total);
+        if !numerator.is_finite() || !denominator.is_finite() {
+            return Ok(Variant::Error(ExcelError::Num));
+        }
+        if denominator == 0.0 {
+            return Ok(Variant::Error(ExcelError::DivZero));
+        }
+        Ok(as_integer_if_whole(numerator / denominator))
+    };
+    let reduce_matching = |reducer: &FormulaExpr,
+                           row_key: Option<&[Variant]>,
+                           row_prefix: bool,
+                           col_key: Option<&[Variant]>,
+                           col_prefix: bool,
+                           data_col: usize| {
+        let subset = collect_matching(row_key, row_prefix, col_key, col_prefix, data_col);
+        let total = match relative_to {
+            0 => collect_matching(None, false, col_key, col_prefix, data_col),
+            1 => collect_matching(row_key, row_prefix, None, false, data_col),
+            2 => collect_matching(None, false, None, false, data_col),
+            3 => {
+                let parent = col_key.map(|key| &key[..key.len().saturating_sub(1)]);
+                collect_matching(None, false, parent, true, data_col)
+            }
+            4 => {
+                let parent = row_key.map(|key| &key[..key.len().saturating_sub(1)]);
+                collect_matching(parent, true, None, false, data_col)
+            }
+            _ => unreachable!(),
+        };
+        reduce_values(reducer, &subset, &total)
+    };
+    let aggregate = |reducer: &FormulaExpr,
+                     row_key: Option<&[Variant]>,
+                     col_key: Option<&[Variant]>,
+                     data_col: usize| {
+        reduce_matching(reducer, row_key, false, col_key, false, data_col)
+    };
+    let aggregate_row_prefix = |reducer: &FormulaExpr,
+                                prefix: &[Variant],
+                                col_key: Option<&[Variant]>,
+                                data_col: usize| {
+        reduce_matching(reducer, Some(prefix), true, col_key, false, data_col)
+    };
+    let aggregate_col_prefix = |reducer: &FormulaExpr,
+                                row_key: Option<&[Variant]>,
+                                prefix: &[Variant],
+                                data_col: usize| {
+        reduce_matching(reducer, row_key, false, Some(prefix), true, data_col)
+    };
+    let aggregate_segment = |reducer: &FormulaExpr,
+                             row_key: Option<&[Variant]>,
+                             segment: &(Vec<Variant>, bool),
+                             data_col: usize| {
+        if segment.1 {
+            aggregate_col_prefix(reducer, row_key, &segment.0, data_col)
+        } else {
+            aggregate(reducer, row_key, Some(segment.0.as_slice()), data_col)
+        }
+    };
+    let aggregate_row_segment = |reducer: &FormulaExpr,
+                                 prefix: &[Variant],
+                                 segment: &(Vec<Variant>, bool),
+                                 data_col: usize| {
+        reduce_matching(
+            reducer,
+            Some(prefix),
+            true,
+            Some(segment.0.as_slice()),
+            segment.1,
+            data_col,
+        )
+    };
+    if show_field_header_row {
+        for (col_key, subtotal) in &col_segments {
+            let label = if *subtotal {
+                Variant::Str("Subtotal".into())
+            } else {
+                col_key.last().cloned().unwrap_or(Variant::Empty)
+            };
+            if reducer_vertical {
+                result.extend(std::iter::repeat_n(label, data_cols));
+            } else {
+                for _ in &reducers {
+                    result.extend(std::iter::repeat_n(label.clone(), data_cols));
+                }
+            }
+        }
+        if total_column {
+            result.extend(std::iter::repeat_n(
+                Variant::Str("Total".into()),
+                output_value_count,
+            ));
+        }
+    }
+    if col_total_depth < 0 {
+        if reducer_vertical {
+            for reducer in &reducers {
+                result.extend(std::iter::repeat_n(Variant::Empty, row_cols));
+                for segment in &col_segments {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_segment(reducer, None, segment, data_col)?);
+                    }
+                }
+                for data_col in 0..data_cols {
+                    result.push(aggregate(reducer, None, None, data_col)?);
+                }
+            }
+        } else {
+            for segment in &col_segments {
+                for reducer in &reducers {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_segment(reducer, None, segment, data_col)?);
+                    }
+                }
+            }
+            for reducer in &reducers {
+                for data_col in 0..data_cols {
+                    result.push(aggregate(reducer, None, None, data_col)?);
+                }
+            }
+        }
+    }
+    let emit_subtotal = |result: &mut Vec<Variant>, prefix: &[Variant]| -> Result<(), String> {
+        result.extend(prefix.iter().cloned());
+        result.push(Variant::Str("Subtotal".into()));
+        if reducer_vertical {
+            for reducer in &reducers {
+                for segment in &col_segments {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_row_segment(reducer, prefix, segment, data_col)?);
+                    }
+                }
+                if row_total_depth != 0 {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_row_prefix(reducer, prefix, None, data_col)?);
+                    }
+                } else if total_column {
+                    result.extend(std::iter::repeat_n(Variant::Empty, output_value_count));
+                }
+            }
+        } else {
+            for segment in &col_segments {
+                for reducer in &reducers {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_row_segment(reducer, prefix, segment, data_col)?);
+                    }
+                }
+            }
+            if row_total_depth != 0 {
+                for reducer in &reducers {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_row_prefix(reducer, prefix, None, data_col)?);
+                    }
+                }
+            } else if total_column {
+                result.extend(std::iter::repeat_n(Variant::Empty, output_value_count));
+            }
+        }
+        Ok(())
+    };
+    for (row_index, row_key) in row_keys.iter().enumerate() {
+        if row_total_depth == -2
+            && (row_index == 0
+                || row_keys[row_index - 1][..row_cols - 1] != row_key[..row_cols - 1])
+        {
+            emit_subtotal(result.as_mut(), &row_key[..row_cols - 1])?;
+        }
+        if reducer_vertical {
+            for reducer in &reducers {
+                result.extend(row_key.clone());
+                for segment in &col_segments {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_segment(
+                            reducer,
+                            Some(row_key.as_slice()),
+                            segment,
+                            data_col,
+                        )?);
+                    }
+                }
+                if row_total_depth != 0 {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate(
+                            reducer,
+                            Some(row_key.as_slice()),
+                            None,
+                            data_col,
+                        )?);
+                    }
+                } else if total_column {
+                    result.extend(std::iter::repeat_n(Variant::Empty, output_value_count));
+                }
+            }
+        } else {
+            result.extend(row_key.clone());
+            for segment in &col_segments {
+                for reducer in &reducers {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_segment(
+                            reducer,
+                            Some(row_key.as_slice()),
+                            segment,
+                            data_col,
+                        )?);
+                    }
+                }
+            }
+            if row_total_depth != 0 {
+                for reducer in &reducers {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate(
+                            reducer,
+                            Some(row_key.as_slice()),
+                            None,
+                            data_col,
+                        )?);
+                    }
+                }
+            } else if total_column {
+                result.extend(std::iter::repeat_n(Variant::Empty, output_value_count));
+            }
+        }
+        if row_total_depth == 2
+            && (row_index + 1 == row_keys.len()
+                || row_keys[row_index + 1][..row_cols - 1] != row_key[..row_cols - 1])
+        {
+            emit_subtotal(result.as_mut(), &row_key[..row_cols - 1])?;
+        }
+    }
+    if col_total_depth > 0 {
+        if reducer_vertical {
+            for reducer in &reducers {
+                if show_field_header_row {
+                    result.push(Variant::Str("Total".into()));
+                    result.extend(std::iter::repeat_n(Variant::Empty, row_cols - 1));
+                } else {
+                    result.extend(std::iter::repeat_n(Variant::Empty, row_cols));
+                }
+                for segment in &col_segments {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_segment(reducer, None, segment, data_col)?);
+                    }
+                }
+                for data_col in 0..data_cols {
+                    result.push(aggregate(reducer, None, None, data_col)?);
+                }
+            }
+        } else {
+            if show_field_header_row {
+                result.push(Variant::Str("Total".into()));
+                result.extend(std::iter::repeat_n(Variant::Empty, row_cols - 1));
+            } else {
+                result.extend(std::iter::repeat_n(Variant::Empty, row_cols));
+            }
+            for segment in &col_segments {
+                for reducer in &reducers {
+                    for data_col in 0..data_cols {
+                        result.push(aggregate_segment(reducer, None, segment, data_col)?);
+                    }
+                }
+            }
+            for reducer in &reducers {
+                for data_col in 0..data_cols {
+                    result.push(aggregate(reducer, None, None, data_col)?);
+                }
+            }
         }
     }
     Ok(wrap_array(result))
@@ -11320,16 +13953,6 @@ fn func_sortby(
         return Err("SORTBY requires at least 2 arguments".into());
     }
     let data = flatten_array_vals(collect_values(&args[0], cells)?);
-    let by_vals = flatten_array_vals(collect_values(&args[1], cells)?);
-    let order = if args.len() >= 3 {
-        match evaluate(&args[2], cells)? {
-            Variant::Integer(value) if value == 1 || value == -1 => value,
-            Variant::Float(value) if value == 1.0 || value == -1.0 => value as i64,
-            _ => return Ok(Variant::Error(ExcelError::Value)),
-        }
-    } else {
-        1
-    };
     let (rows, cols) = array_shape_for_expr(&args[0], cells, data.len());
     if rows > 1 && cols > 1 {
         let mut sort_keys = Vec::new();
@@ -11372,15 +13995,39 @@ fn func_sortby(
         }
         return Ok(wrap_array(result));
     }
-    if data.len() != by_vals.len() {
-        return Err("SORTBY: data and sort-by arrays must have equal length".into());
+    let mut sort_keys = Vec::new();
+    let mut key_arg = 1;
+    while key_arg < args.len() {
+        let key_values = flatten_array_vals(collect_values(&args[key_arg], cells)?);
+        if data.len() != key_values.len() {
+            return Err("SORTBY: data and sort-by arrays must have equal length".into());
+        }
+        let key_order = match args.get(key_arg + 1) {
+            Some(arg) => match evaluate(arg, cells)? {
+                Variant::Integer(value) if value == 1 || value == -1 => value,
+                Variant::Float(value) if value == 1.0 || value == -1.0 => value as i64,
+                _ => return Ok(Variant::Error(ExcelError::Value)),
+            },
+            None => 1,
+        };
+        sort_keys.push((key_values, key_order));
+        key_arg += 2;
     }
     let mut indexed: Vec<usize> = (0..data.len()).collect();
     indexed.sort_by(|&a, &b| {
-        let af = to_float(&by_vals[a]).unwrap_or(f64::INFINITY);
-        let bf = to_float(&by_vals[b]).unwrap_or(f64::INFINITY);
-        let o = af.partial_cmp(&bf).unwrap_or(Ordering::Equal);
-        if order < 0 { o.reverse() } else { o }
+        for (key_values, key_order) in &sort_keys {
+            let ordering = variant_cmp(&key_values[a], &key_values[b])
+                .unwrap_or_else(|_| to_str(&key_values[a]).cmp(&to_str(&key_values[b])));
+            let ordering = if *key_order < 0 {
+                ordering.reverse()
+            } else {
+                ordering
+            };
+            if ordering != Ordering::Equal {
+                return ordering;
+            }
+        }
+        Ordering::Equal
     });
     let result: Vec<Variant> = indexed.iter().map(|&i| data[i].clone()).collect();
     Ok(wrap_array(result))
@@ -14018,18 +16665,18 @@ fn func_textsplit(
         return Err("TEXTSPLIT requires 2 to 6 arguments".into());
     }
     let text = to_str(&evaluate(&args[0], cells)?);
-    let column_delim = to_str(&evaluate(&args[1], cells)?);
-    if column_delim.is_empty() {
-        return Err("TEXTSPLIT: column delimiter cannot be empty".into());
-    }
+    let column_delims = textsplit_delimiters(&args[1], cells, true)?;
     // An empty third argument is commonly used as an explicit placeholder
     // for the optional row delimiter; treat it like an omitted delimiter.
-    let row_delim = if let Some(arg) = args.get(2) {
-        let delimiter = to_str(&evaluate(arg, cells)?);
-        (!delimiter.is_empty()).then_some(delimiter)
+    let row_delims = if let Some(arg) = args.get(2) {
+        let delimiters = textsplit_delimiters(arg, cells, true)?;
+        (!delimiters.is_empty()).then_some(delimiters)
     } else {
         None
     };
+    if column_delims.is_empty() && row_delims.is_none() {
+        return Err("TEXTSPLIT: at least one delimiter is required".into());
+    }
     let ignore_empty = args.len() >= 4 && is_truthy(&evaluate(&args[3], cells)?);
     let case_insensitive = if args.len() >= 5 {
         let mode = to_float(&evaluate(&args[4], cells)?)?;
@@ -14046,26 +16693,40 @@ fn func_textsplit(
         Variant::Error(ExcelError::NA)
     };
 
-    let split = |source: &str, delimiter: &str| -> Vec<String> {
+    let split = |source: &str, delimiters: &[String]| -> Vec<String> {
         let search_source = if case_insensitive {
             source.to_lowercase()
         } else {
             source.to_string()
         };
-        let search_delimiter = if case_insensitive {
-            delimiter.to_lowercase()
-        } else {
-            delimiter.to_string()
-        };
         let mut parts = vec![];
         let mut start = 0usize;
-        while let Some(relative) = search_source[start..].find(&search_delimiter) {
-            let end = start + relative;
+        while start <= search_source.len() {
+            let next = delimiters
+                .iter()
+                .filter_map(|delimiter| {
+                    let search_delimiter = if case_insensitive {
+                        delimiter.to_lowercase()
+                    } else {
+                        delimiter.clone()
+                    };
+                    search_source[start..]
+                        .find(&search_delimiter)
+                        .map(|relative| (start + relative, search_delimiter.len()))
+                })
+                .min_by(|(left_pos, left_len), (right_pos, right_len)| {
+                    left_pos
+                        .cmp(right_pos)
+                        .then_with(|| right_len.cmp(left_len))
+                });
+            let Some((end, delimiter_len)) = next else {
+                break;
+            };
             let part = &source[start..end];
             if !ignore_empty || !part.is_empty() {
                 parts.push(part.to_string());
             }
-            start = end + search_delimiter.len();
+            start = end + delimiter_len;
         }
         let part = &source[start..];
         if !ignore_empty || !part.is_empty() {
@@ -14074,11 +16735,11 @@ fn func_textsplit(
         parts
     };
 
-    let rows = row_delim
+    let rows = row_delims
         .as_deref()
-        .map_or_else(|| vec![text.clone()], |delimiter| split(&text, delimiter));
+        .map_or_else(|| vec![text.clone()], |delimiters| split(&text, delimiters));
     let mut split_rows: Vec<Vec<String>> =
-        rows.iter().map(|row| split(row, &column_delim)).collect();
+        rows.iter().map(|row| split(row, &column_delims)).collect();
     let width = split_rows.iter().map(Vec::len).max().unwrap_or(0);
     let mut result = vec![];
     for row in &mut split_rows {
@@ -14086,6 +16747,30 @@ fn func_textsplit(
         result.extend(row.iter().cloned().map(Variant::Str));
     }
     Ok(wrap_array(result))
+}
+
+fn textsplit_delimiters(
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+    allow_empty_placeholder: bool,
+) -> Result<Vec<String>, String> {
+    let values = collect_values(expr, cells)?;
+    let single_value = values.len() == 1;
+    let mut delimiters = Vec::with_capacity(values.len());
+    for value in values {
+        let delimiter = to_str(&value);
+        if delimiter.is_empty() {
+            if allow_empty_placeholder && single_value {
+                continue;
+            }
+            return Err("TEXTSPLIT: delimiter cannot be empty".into());
+        }
+        delimiters.push(delimiter);
+    }
+    if delimiters.is_empty() && !allow_empty_placeholder {
+        return Err("TEXTSPLIT: column delimiter cannot be empty".into());
+    }
+    Ok(delimiters)
 }
 
 // ── TEXTBEFORE / TEXTAFTER ────────────────────────────────────────────────────
@@ -14112,15 +16797,58 @@ fn text_before_after(
     }
     let text = to_str(&evaluate(&args[0], cells)?);
     let delim = to_str(&evaluate(&args[1], cells)?);
-    if delim.is_empty() {
-        return Err(format!("{}: delimiter cannot be empty", fname));
-    }
     let instance_num: i64 = if args.len() >= 3 {
-        to_float(&evaluate(&args[2], cells)?)? as i64
+        let value = to_float(&evaluate(&args[2], cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        if value < i64::MIN as f64 || value > i64::MAX as f64 {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        value as i64
     } else {
         1
     };
-    let case_insensitive = args.len() >= 4 && is_truthy(&evaluate(&args[3], cells)?);
+    let case_insensitive = if args.len() >= 4 {
+        let value = to_float(&evaluate(&args[3], cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=1.0).contains(&value) {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        value == 1.0
+    } else {
+        false
+    };
+    let match_end = if args.len() >= 5 {
+        let value = to_float(&evaluate(&args[4], cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=1.0).contains(&value) {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        value == 1.0
+    } else {
+        false
+    };
+
+    // Excel treats an empty delimiter as an immediate boundary. This is
+    // useful for explicitly selecting the first/last side of a string and
+    // must not be confused with an invalid delimiter.
+    if delim.is_empty() {
+        let result = if before {
+            if instance_num < 0 {
+                text.clone()
+            } else if instance_num > 0 {
+                String::new()
+            } else {
+                return Ok(Variant::Error(ExcelError::Value));
+            }
+        } else if instance_num < 0 {
+            String::new()
+        } else if instance_num > 0 {
+            text.clone()
+        } else {
+            return Ok(Variant::Error(ExcelError::Value));
+        };
+        return Ok(Variant::Str(result));
+    }
 
     let (search_text, search_delim) = if case_insensitive {
         (text.to_lowercase(), delim.to_lowercase())
@@ -14129,6 +16857,10 @@ fn text_before_after(
     };
 
     let positions = find_all_occurrences(&search_text, &search_delim);
+    let mut positions = positions;
+    if match_end && positions.last().copied() != Some(text.len()) {
+        positions.push(text.len());
+    }
 
     // Resolve instance_num to an index
     let idx: Option<usize> = if instance_num > 0 {
@@ -14159,6 +16891,8 @@ fn text_before_after(
             let byte_pos = positions[i];
             if before {
                 Ok(Variant::Str(text[..byte_pos].to_string()))
+            } else if byte_pos == text.len() {
+                Ok(Variant::Str(String::new()))
             } else {
                 Ok(Variant::Str(text[byte_pos + delim.len()..].to_string()))
             }
@@ -14450,6 +17184,28 @@ fn array_shape_for_expr(
                 })
                 .unwrap_or(1);
             (n, n)
+        }
+        FormulaExpr::FuncCall { name, args } if name.eq_ignore_ascii_case("VSTACK") => {
+            let mut rows = 0usize;
+            let mut cols = 0usize;
+            for arg in args {
+                let values = flatten_array_vals(collect_values(arg, cells).unwrap_or_default());
+                let (arg_rows, arg_cols) = array_shape_for_expr(arg, cells, values.len());
+                rows = rows.saturating_add(arg_rows);
+                cols = cols.max(arg_cols);
+            }
+            (rows.max(1), cols.max(1))
+        }
+        FormulaExpr::FuncCall { name, args } if name.eq_ignore_ascii_case("HSTACK") => {
+            let mut rows = 0usize;
+            let mut cols = 0usize;
+            for arg in args {
+                let values = flatten_array_vals(collect_values(arg, cells).unwrap_or_default());
+                let (arg_rows, arg_cols) = array_shape_for_expr(arg, cells, values.len());
+                rows = rows.max(arg_rows);
+                cols = cols.saturating_add(arg_cols);
+            }
+            (rows.max(1), cols.max(1))
         }
         FormulaExpr::FuncCall { name, args } if name.eq_ignore_ascii_case("TRANSPOSE") => {
             let Some(arg) = args.first() else {
@@ -15105,6 +17861,9 @@ fn db_row_matches_criteria(
 ) -> bool {
     let (db_c1, db_header_row, db_c2, _db_r2) = db_range;
     let (cr_c1, cr_r1, cr_c2, cr_r2) = criteria_range;
+    if cr_r2 == cr_r1 {
+        return true;
+    }
     // Each criteria row (cr_r1+1 .. cr_r2) is one OR-branch
     for cr_row in (cr_r1 + 1)..=cr_r2 {
         let mut row_match = true;
@@ -15208,34 +17967,38 @@ fn db_resolve_args(
         .collect();
 
     // Pre-build criteria: outer = OR rows, inner = (db_col, ParsedCriteria)
-    let criteria: Vec<Vec<(u32, ParsedCriteria)>> = (cr_r1 + 1..=cr_r2)
-        .map(|cr_row| {
-            let mut branch: Vec<(u32, ParsedCriteria)> = Vec::new();
-            let mut valid = true;
-            for cr_col in cr_c1..=cr_c2 {
-                let crit_val = cell_val(cells, cr_row, cr_col);
-                if matches!(crit_val, Variant::Empty) {
-                    continue;
-                }
-                let header_name = to_str(&cell_val(cells, cr_r1, cr_col)).to_lowercase();
-                if header_name.is_empty() {
-                    continue;
-                }
-                match header_map.get(&header_name) {
-                    Some(&db_col) => branch.push((db_col, parse_criteria(&crit_val))),
-                    None => {
-                        valid = false;
-                        break;
+    let criteria: Vec<Vec<(u32, ParsedCriteria)>> = if cr_r2 == cr_r1 {
+        vec![Vec::new()]
+    } else {
+        (cr_r1 + 1..=cr_r2)
+            .map(|cr_row| {
+                let mut branch: Vec<(u32, ParsedCriteria)> = Vec::new();
+                let mut valid = true;
+                for cr_col in cr_c1..=cr_c2 {
+                    let crit_val = cell_val(cells, cr_row, cr_col);
+                    if matches!(crit_val, Variant::Empty) {
+                        continue;
+                    }
+                    let header_name = to_str(&cell_val(cells, cr_r1, cr_col)).to_lowercase();
+                    if header_name.is_empty() {
+                        continue;
+                    }
+                    match header_map.get(&header_name) {
+                        Some(&db_col) => branch.push((db_col, parse_criteria(&crit_val))),
+                        None => {
+                            valid = false;
+                            break;
+                        }
                     }
                 }
-            }
-            if !valid {
-                vec![(0, ParsedCriteria::CompNum(CompOp::Gt, f64::NAN))]
-            } else {
-                branch
-            }
-        })
-        .collect();
+                if !valid {
+                    vec![(0, ParsedCriteria::CompNum(CompOp::Gt, f64::NAN))]
+                } else {
+                    branch
+                }
+            })
+            .collect()
+    };
 
     Ok(Some(DbCtx {
         db_r1,
@@ -15461,33 +18224,68 @@ fn func_tocol(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.is_empty() {
-        return Err("TOCOL requires 1 argument".into());
+    if args.is_empty() || args.len() > 3 {
+        return Err("TOCOL requires 1 to 3 arguments".into());
     }
     let ignore = if args.len() >= 2 {
-        to_float(&evaluate(&args[1], cells)?)? as u8
+        let value = to_float(&evaluate(&args[1], cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=3.0).contains(&value) {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        value as u8
     } else {
         0
     };
-    // args[2] = scan_by_column (bool); we treat range traversal as row-major regardless
     let vals = flatten_array_vals(collect_values(&args[0], cells)?);
-    Ok(wrap_array(ignore_filter(vals, ignore)))
+    let (rows, cols) = array_shape_for_expr(&args[0], cells, vals.len());
+    let scan_by_column = args.len() == 3 && is_truthy(&evaluate(&args[2], cells)?);
+    Ok(wrap_array(ignore_filter(
+        scan_array_values(vals, rows, cols, scan_by_column),
+        ignore,
+    )))
 }
 
 fn func_torow(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.is_empty() {
-        return Err("TOROW requires 1 argument".into());
+    if args.is_empty() || args.len() > 3 {
+        return Err("TOROW requires 1 to 3 arguments".into());
     }
     let ignore = if args.len() >= 2 {
-        to_float(&evaluate(&args[1], cells)?)? as u8
+        let value = to_float(&evaluate(&args[1], cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=3.0).contains(&value) {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        value as u8
     } else {
         0
     };
     let vals = flatten_array_vals(collect_values(&args[0], cells)?);
-    Ok(wrap_array(ignore_filter(vals, ignore)))
+    let (rows, cols) = array_shape_for_expr(&args[0], cells, vals.len());
+    let scan_by_column = args.len() == 3 && is_truthy(&evaluate(&args[2], cells)?);
+    Ok(wrap_array(ignore_filter(
+        scan_array_values(vals, rows, cols, scan_by_column),
+        ignore,
+    )))
+}
+
+fn scan_array_values(
+    values: Vec<Variant>,
+    rows: usize,
+    cols: usize,
+    scan_by_column: bool,
+) -> Vec<Variant> {
+    if !scan_by_column || rows <= 1 || cols <= 1 || rows.checked_mul(cols) != Some(values.len()) {
+        return values;
+    }
+    let mut scanned = Vec::with_capacity(values.len());
+    for col in 0..cols {
+        for row in 0..rows {
+            scanned.push(values[row * cols + col].clone());
+        }
+    }
+    scanned
 }
 
 // ── WRAPCOLS / WRAPROWS ───────────────────────────────────────────────────────
@@ -15776,6 +18574,61 @@ mod tests {
     }
 
     #[test]
+    fn test_getpivotdata_on_bounded_rendered_pivot_grid() {
+        let c = cells_from(&[
+            ((1, 1), Variant::Str("Region".into())),
+            ((1, 2), Variant::Str("Sales".into())),
+            ((2, 1), Variant::Str("East".into())),
+            ((2, 2), Variant::Integer(10)),
+            ((3, 1), Variant::Str("West".into())),
+            ((3, 2), Variant::Integer(20)),
+            ((4, 1), Variant::Str("Grand Total".into())),
+            ((4, 2), Variant::Integer(30)),
+        ]);
+        assert_eq!(
+            calc("=GETPIVOTDATA(\"Sales\",A1,\"Region\",\"East\")", &c),
+            Variant::Integer(10)
+        );
+        assert_eq!(
+            calc("=GETPIVOTDATA(\"Sales\",A1)", &c),
+            Variant::Integer(30)
+        );
+        assert_eq!(
+            calc("=GETPIVOTDATA(\"Missing\",A1)", &c),
+            Variant::Error(ExcelError::Ref)
+        );
+
+        let c = cells_from(&[
+            ((1, 1), Variant::Str("Sum of Sales".into())),
+            ((1, 2), Variant::Str("Region".into())),
+            ((1, 3), Variant::Str("East".into())),
+            ((1, 4), Variant::Str("West".into())),
+            ((1, 5), Variant::Str("Grand Total".into())),
+            ((2, 1), Variant::Str("Product".into())),
+            ((3, 1), Variant::Str("A".into())),
+            ((3, 3), Variant::Integer(12)),
+            ((3, 4), Variant::Integer(8)),
+            ((3, 5), Variant::Integer(20)),
+            ((4, 1), Variant::Str("Grand Total".into())),
+            ((4, 3), Variant::Integer(30)),
+            ((4, 4), Variant::Integer(25)),
+            ((4, 5), Variant::Integer(55)),
+        ]);
+        assert_eq!(
+            calc("=GETPIVOTDATA(\"Sales\",A1,\"Region\",\"East\")", &c),
+            Variant::Integer(30)
+        );
+        assert_eq!(
+            calc("=GETPIVOTDATA(\"Sales\",A1,\"Region\",\"West\")", &c),
+            Variant::Integer(25)
+        );
+        assert_eq!(
+            calc("=GETPIVOTDATA(\"Sales\",A1)", &c),
+            Variant::Integer(55)
+        );
+    }
+
+    #[test]
     fn test_extended_trigonometry() {
         let c = HashMap::new();
         assert_eq!(calc("=SINH(0)", &c), Variant::Integer(0));
@@ -15881,6 +18734,18 @@ mod tests {
             ((3, 1), Variant::Integer(3)),
         ]);
         assert_eq!(calc("=SUM(A1:A3)", &c), Variant::Integer(6));
+        let with_error = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Error(ExcelError::DivZero)),
+        ]);
+        assert_eq!(
+            calc("=SUM(A1:A2)", &with_error),
+            Variant::Error(ExcelError::DivZero)
+        );
+        assert_eq!(
+            calc("=SUM(1/0,2)", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
     }
 
     #[test]
@@ -15891,12 +18756,44 @@ mod tests {
             ((3, 1), Variant::Integer(30)),
         ]);
         assert_eq!(calc("=AVERAGE(A1:A3)", &c), Variant::Float(20.0));
+        let with_error = cells_from(&[
+            ((1, 1), Variant::Integer(10)),
+            ((2, 1), Variant::Error(ExcelError::NA)),
+        ]);
+        assert_eq!(
+            calc("=AVERAGE(A1:A2)", &with_error),
+            Variant::Error(ExcelError::NA)
+        );
         match calc("=AVERAGEA(1,TRUE,\"x\")", &c) {
             Variant::Float(value) => assert!((value - 2.0 / 3.0).abs() < 1e-12),
             other => panic!("AVERAGEA: {:?}", other),
         }
         assert_eq!(calc("=MINA(1,TRUE,\"x\")", &c), Variant::Integer(0));
         assert_eq!(calc("=MAXA(1,TRUE,\"x\")", &c), Variant::Integer(1));
+        assert_eq!(
+            calc("=AVERAGEA(CHOOSE(SEQUENCE(2),1,2))", &c),
+            Variant::Float(1.5)
+        );
+        assert_eq!(
+            calc("=MINA(CHOOSE(SEQUENCE(2),3,1))", &c),
+            Variant::Integer(1)
+        );
+        assert_eq!(
+            calc("=MAXA(CHOOSE(SEQUENCE(2),3,1))", &c),
+            Variant::Integer(3)
+        );
+        assert_eq!(
+            calc("=AVERAGEA(CHOOSE(SEQUENCE(2),1,1/0))", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
+        assert!(matches!(
+            calc("=VARA(1,2,TRUE,\"x\")", &c),
+            Variant::Float(value) if (value - (2.0 / 3.0)).abs() < 1e-12
+        ));
+        assert!(matches!(
+            calc("=VARPA(1,2,TRUE,\"x\")", &c),
+            Variant::Float(value) if (value - 0.5).abs() < 1e-12
+        ));
         assert_eq!(calc("=ISEVEN(3.9)", &c), Variant::Boolean(false));
         assert_eq!(calc("=ISODD(-3.9)", &c), Variant::Boolean(true));
     }
@@ -15910,6 +18807,18 @@ mod tests {
         ]);
         assert_eq!(calc("=MIN(A1:A3)", &c), Variant::Integer(2));
         assert_eq!(calc("=MAX(A1:A3)", &c), Variant::Integer(8));
+        let with_error = cells_from(&[
+            ((1, 1), Variant::Integer(5)),
+            ((2, 1), Variant::Error(ExcelError::Value)),
+        ]);
+        assert_eq!(
+            calc("=MIN(A1:A2)", &with_error),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=MAX(A1:A2)", &with_error),
+            Variant::Error(ExcelError::Value)
+        );
     }
 
     #[test]
@@ -15921,6 +18830,19 @@ mod tests {
         ]);
         assert_eq!(calc("=COUNT(A1:A3)", &c), Variant::Integer(1));
         assert_eq!(calc("=COUNTA(A1:A3)", &c), Variant::Integer(2));
+        assert_eq!(calc("=COUNT(SEQUENCE(3))", &c), Variant::Integer(3));
+        assert_eq!(
+            calc("=COUNTA(CHOOSE(SEQUENCE(2),\"x\",\"\"))", &c),
+            Variant::Integer(2)
+        );
+        assert_eq!(
+            calc("=COUNT(CHOOSE(SEQUENCE(2),1,1/0))", &c),
+            Variant::Integer(1)
+        );
+        assert_eq!(
+            calc("=COUNTA(CHOOSE(SEQUENCE(2),1,1/0))", &c),
+            Variant::Integer(2)
+        );
     }
 
     #[test]
@@ -15987,6 +18909,26 @@ mod tests {
         assert_eq!(calc("=AND(TRUE,FALSE)", &c), Variant::Boolean(false));
         assert_eq!(calc("=OR(FALSE,TRUE)", &c), Variant::Boolean(true));
         assert_eq!(calc("=NOT(TRUE)", &c), Variant::Boolean(false));
+        assert_eq!(
+            calc("=AND(CHOOSE(SEQUENCE(2),TRUE,FALSE),TRUE)", &c),
+            Variant::Boolean(false)
+        );
+        assert_eq!(
+            calc("=OR(CHOOSE(SEQUENCE(2),FALSE,TRUE),FALSE)", &c),
+            Variant::Boolean(true)
+        );
+        assert_eq!(
+            calc("=NOT(CHOOSE(SEQUENCE(2),TRUE,FALSE))", &c),
+            Variant::Array(vec![Variant::Boolean(false), Variant::Boolean(true)])
+        );
+        assert_eq!(
+            calc("=XOR(CHOOSE(SEQUENCE(3),TRUE,FALSE,TRUE),FALSE)", &c),
+            Variant::Boolean(false)
+        );
+        assert_eq!(
+            calc("=IFERROR(NOT(CHOOSE(SEQUENCE(2),1/0,TRUE)),99)", &c),
+            Variant::Array(vec![Variant::Integer(99), Variant::Boolean(false)])
+        );
         assert_eq!(calc("=NOT(1/0)", &c), Variant::Error(ExcelError::DivZero));
         assert_eq!(
             calc("=AND(FALSE,1/0)", &c),
@@ -16039,6 +18981,22 @@ mod tests {
             Variant::Error(ExcelError::DivZero)
         );
         assert_eq!(calc("=IFNA(10,99)", &c), Variant::Integer(10));
+    }
+
+    #[test]
+    fn test_iferror_and_ifna_map_array_errors_elementwise() {
+        let c = HashMap::new();
+        assert_eq!(
+            calc("=IFERROR(CHOOSE(SEQUENCE(2),1/0,NA()),99)", &c),
+            Variant::Array(vec![Variant::Integer(99), Variant::Integer(99)])
+        );
+        assert_eq!(
+            calc("=IFNA(CHOOSE(SEQUENCE(2),1/0,NA()),99)", &c),
+            Variant::Array(vec![
+                Variant::Error(ExcelError::DivZero),
+                Variant::Integer(99)
+            ])
+        );
     }
 
     #[test]
@@ -16186,6 +19144,17 @@ mod tests {
             calc("=INDEX(A1:B2,1,1.5)", &c),
             Variant::Error(ExcelError::Value)
         );
+        // Bounded reference-form support: this parser has one explicit range
+        // per INDEX call, so area 1 is valid and other areas fail closed.
+        assert_eq!(calc("=INDEX(A1:B2,2,2,1)", &c), Variant::Integer(40));
+        assert_eq!(
+            calc("=INDEX(A1:B2,1,1,2)", &c),
+            Variant::Error(ExcelError::Ref)
+        );
+        assert_eq!(
+            calc("=INDEX(A1:B2,1,1,1.5)", &c),
+            Variant::Error(ExcelError::Value)
+        );
     }
 
     #[test]
@@ -16224,6 +19193,51 @@ mod tests {
         );
         assert_eq!(
             calc("=MATCH(\"Alpha\",A1:A2,0.5)", &text),
+            Variant::Error(ExcelError::Value)
+        );
+
+        let ascending = cells_from(&[
+            ((1, 1), Variant::Integer(10)),
+            ((2, 1), Variant::Integer(20)),
+            ((3, 1), Variant::Integer(30)),
+        ]);
+        assert_eq!(calc("=MATCH(25,A1:A3,1)", &ascending), Variant::Integer(2));
+        assert_eq!(
+            calc("=MATCH(25,A1:A3,-1)", &ascending),
+            Variant::Error(ExcelError::NA)
+        );
+
+        let descending = cells_from(&[
+            ((1, 1), Variant::Integer(30)),
+            ((2, 1), Variant::Integer(20)),
+            ((3, 1), Variant::Integer(10)),
+        ]);
+        assert_eq!(
+            calc("=MATCH(25,A1:A3,-1)", &descending),
+            Variant::Integer(1)
+        );
+        assert_eq!(
+            calc("=MATCH(25,A1:A3,1)", &descending),
+            Variant::Error(ExcelError::NA)
+        );
+
+        let incomparable = cells_from(&[
+            ((1, 1), Variant::Integer(10)),
+            ((2, 1), Variant::Error(ExcelError::DivZero)),
+        ]);
+        assert_eq!(
+            calc("=MATCH(20,A1:A2,1)", &incomparable),
+            Variant::Error(ExcelError::Value)
+        );
+
+        let matrix = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Integer(2)),
+            ((2, 1), Variant::Integer(3)),
+            ((2, 2), Variant::Integer(4)),
+        ]);
+        assert_eq!(
+            calc("=MATCH(2,A1:B2,0)", &matrix),
             Variant::Error(ExcelError::Value)
         );
     }
@@ -16311,6 +19325,10 @@ mod tests {
         assert_eq!(calc("=COUNTIF(A1:A3,10)", &c), Variant::Integer(2));
         assert_eq!(calc("=COUNTIF(A1:A3,\">10\")", &c), Variant::Integer(1));
         assert_eq!(calc("=COUNTIF(A1:A4,\"apple\")", &c), Variant::Integer(1));
+        assert_eq!(
+            calc("=COUNTIF(SEQUENCE(3),\">1\")", &c),
+            Variant::Integer(2)
+        );
     }
 
     #[test]
@@ -16325,6 +19343,18 @@ mod tests {
         ]);
         assert_eq!(calc("=SUMIF(A1:A3,\"a\",B1:B3)", &c), Variant::Integer(40));
         assert_eq!(calc("=SUMIF(B1:B3,\">10\")", &c), Variant::Integer(50));
+        assert_eq!(
+            calc("=SUMIF(SEQUENCE(3),\">1\",SEQUENCE(3))", &c),
+            Variant::Integer(5)
+        );
+        let with_error = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((1, 2), Variant::Error(ExcelError::DivZero)),
+        ]);
+        assert_eq!(
+            calc("=SUMIF(A1:A1,\"a\",B1:B1)", &with_error),
+            Variant::Error(ExcelError::DivZero)
+        );
     }
 
     #[test]
@@ -16342,8 +19372,42 @@ mod tests {
             Variant::Integer(30)
         );
         assert_eq!(
+            calc("=SUMIFS(SEQUENCE(3),SEQUENCE(3),\">1\")", &c),
+            Variant::Integer(5)
+        );
+        let with_error = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((1, 2), Variant::Error(ExcelError::NA)),
+        ]);
+        assert_eq!(
+            calc("=SUMIFS(B1:B1,A1:A1,\"a\")", &with_error),
+            Variant::Error(ExcelError::NA)
+        );
+        assert_eq!(
             calc("=COUNTIFS(A1:A3,\"a\",B1:B3,\">10\")", &c),
             Variant::Integer(1)
+        );
+        // Equal element counts are not enough: Excel requires matching
+        // rectangular dimensions for every criteria range.
+        assert_eq!(
+            calc("=SUMIFS(B1:C2,A1:A4,\"a\")", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=COUNTIFS(A1:B2,\"a\",A1:A4,\"a\")", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=AVERAGEIFS(B1:B3,A1:B2,\"a\")", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=MAXIFS(B1:B3,A1:B2,\"a\")", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=MINIFS(B1:B3,A1:B2,\"a\")", &c),
+            Variant::Error(ExcelError::Value)
         );
     }
 
@@ -16352,6 +19416,10 @@ mod tests {
         let c = HashMap::new();
         assert_eq!(calc("=MEDIAN(1,3,2)", &c), Variant::Integer(2));
         assert_eq!(calc("=MEDIAN(1,2,3,4)", &c), Variant::Float(2.5));
+        assert_eq!(
+            calc("=MEDIAN(CHOOSE(SEQUENCE(2),1,1/0))", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
     }
 
     #[test]
@@ -16368,6 +19436,10 @@ mod tests {
     fn test_product() {
         let c = HashMap::new();
         assert_eq!(calc("=PRODUCT(2,3,4)", &c), Variant::Integer(24));
+        assert_eq!(
+            calc("=PRODUCT(2,1/0)", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
     }
 
     #[test]
@@ -16389,6 +19461,27 @@ mod tests {
         assert_eq!(calc("=DATE(1900,1,1)", &c), Variant::Date(1));
         // Jan 1 2000 = 36526
         assert_eq!(calc("=DATE(2000,1,1)", &c), Variant::Date(36526));
+        // Excel normalizes month/day overflow and maps a two-digit year.
+        assert_eq!(
+            calc("=DATE(2020,0,1)", &c),
+            Variant::Date(date_to_serial(2019, 12, 1))
+        );
+        assert_eq!(
+            calc("=DATE(2020,13,1)", &c),
+            Variant::Date(date_to_serial(2021, 1, 1))
+        );
+        assert_eq!(
+            calc("=DATE(2020,1,0)", &c),
+            Variant::Date(date_to_serial(2019, 12, 31))
+        );
+        assert_eq!(
+            calc("=DATE(20,1,1)", &c),
+            Variant::Date(date_to_serial(1920, 1, 1))
+        );
+        assert_eq!(
+            calc("=DATE(2020.9,1.9,1.9)", &c),
+            Variant::Date(date_to_serial(2020, 1, 1))
+        );
     }
 
     #[test]
@@ -16429,6 +19522,17 @@ mod tests {
             Variant::Str("b".into())
         );
         assert_eq!(calc("=IFS(TRUE,42,FALSE,99)", &c), Variant::Integer(42));
+        assert_eq!(
+            calc("=IFS(CHOOSE(SEQUENCE(2),TRUE,FALSE),\"Y\",TRUE,\"N\")", &c),
+            Variant::Array(vec![Variant::Str("Y".into()), Variant::Str("N".into())])
+        );
+        assert_eq!(
+            calc(
+                "=IFS(CHOOSE(SEQUENCE(2),TRUE,FALSE),SEQUENCE(2),TRUE,0)",
+                &c
+            ),
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(0)])
+        );
     }
 
     #[test]
@@ -16448,6 +19552,10 @@ mod tests {
         assert_eq!(
             calc("=XLOOKUP(99,A1:A3,B1:B3,\"N/A\")", &c),
             Variant::Str("N/A".into())
+        );
+        assert_eq!(
+            calc("=XLOOKUP(2,A1:A3,B1:B2,\"missing\")", &c),
+            Variant::Error(ExcelError::Value)
         );
     }
 
@@ -16499,6 +19607,46 @@ mod tests {
             calc("=XLOOKUP(2,A1:A3,B1:B3,\"missing\",0.5)", &ascending),
             Variant::Error(ExcelError::Value)
         );
+
+        let unsorted_ascending = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Str("one".into())),
+            ((2, 1), Variant::Integer(3)),
+            ((2, 2), Variant::Str("three".into())),
+            ((3, 1), Variant::Integer(2)),
+            ((3, 2), Variant::Str("two".into())),
+        ]);
+        assert_eq!(
+            calc(
+                "=XLOOKUP(2,A1:A3,B1:B3,\"missing\",0,2)",
+                &unsorted_ascending
+            ),
+            Variant::Error(ExcelError::NA)
+        );
+        assert_eq!(
+            calc("=XMATCH(2,A1:A3,0,2)", &unsorted_ascending),
+            Variant::Error(ExcelError::NA)
+        );
+
+        let unsorted_descending = cells_from(&[
+            ((1, 1), Variant::Integer(3)),
+            ((1, 2), Variant::Str("three".into())),
+            ((2, 1), Variant::Integer(1)),
+            ((2, 2), Variant::Str("one".into())),
+            ((3, 1), Variant::Integer(2)),
+            ((3, 2), Variant::Str("two".into())),
+        ]);
+        assert_eq!(
+            calc(
+                "=XLOOKUP(2,A1:A3,B1:B3,\"missing\",0,-2)",
+                &unsorted_descending
+            ),
+            Variant::Error(ExcelError::NA)
+        );
+        assert_eq!(
+            calc("=XMATCH(2,A1:A3,0,-2)", &unsorted_descending),
+            Variant::Error(ExcelError::NA)
+        );
     }
 
     #[test]
@@ -16527,6 +19675,34 @@ mod tests {
             calc("=SUBTOTAL(111,A1:A3)", &c),
             Variant::Float(value) if (value - (200.0 / 3.0)).abs() < 1e-12
         ));
+    }
+
+    #[test]
+    fn test_subtotal_ignores_nested_aggregates_and_propagates_errors() {
+        let mut nested = cells_from(&[
+            ((1, 1), Variant::Integer(10)),
+            ((2, 1), Variant::Integer(30)),
+            ((3, 1), Variant::Integer(5)),
+        ]);
+        nested.insert(
+            (2, 1),
+            CellContent {
+                formula: Some("=AGGREGATE(9,4,B1:B2)".into()),
+                value: Variant::Integer(30),
+            },
+        );
+        assert_eq!(calc("=SUBTOTAL(9,A1:A3)", &nested), Variant::Integer(15));
+        assert_eq!(calc("=SUBTOTAL(3,A1:A3)", &nested), Variant::Integer(2));
+
+        let errors = cells_from(&[
+            ((1, 1), Variant::Integer(10)),
+            ((2, 1), Variant::Error(ExcelError::Value)),
+            ((3, 1), Variant::Integer(5)),
+        ]);
+        assert_eq!(
+            calc("=SUBTOTAL(9,A1:A3)", &errors),
+            Variant::Error(ExcelError::Value)
+        );
     }
 
     #[test]
@@ -16648,6 +19824,14 @@ mod tests {
             calc("=AVERAGEIF(A1:A3,\"a\",B1:B3)", &c),
             Variant::Float(20.0)
         );
+        let with_error = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((1, 2), Variant::Error(ExcelError::Value)),
+        ]);
+        assert_eq!(
+            calc("=AVERAGEIF(A1:A1,\"a\",B1:B1)", &with_error),
+            Variant::Error(ExcelError::Value)
+        );
     }
 
     #[test]
@@ -16714,6 +19898,18 @@ mod tests {
         ]);
         assert_eq!(calc("=MAXIFS(B1:B3,A1:A3,\"a\")", &c), Variant::Integer(30));
         assert_eq!(calc("=MINIFS(B1:B3,A1:A3,\"a\")", &c), Variant::Integer(10));
+        let with_error = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((1, 2), Variant::Error(ExcelError::Ref)),
+        ]);
+        assert_eq!(
+            calc("=MAXIFS(B1:B1,A1:A1,\"a\")", &with_error),
+            Variant::Error(ExcelError::Ref)
+        );
+        assert_eq!(
+            calc("=MINIFS(B1:B1,A1:A1,\"a\")", &with_error),
+            Variant::Error(ExcelError::Ref)
+        );
     }
 
     #[test]
@@ -16743,6 +19939,26 @@ mod tests {
         assert_eq!(
             calc("=TRIM(\"  hello   world  \")", &c),
             Variant::Str("hello world".into())
+        );
+    }
+
+    #[test]
+    fn test_unicode_functions_are_not_legacy_aliases() {
+        let c = HashMap::new();
+        assert_eq!(calc("=UNICHAR(128512)", &c), Variant::Str("😀".into()));
+        assert_eq!(calc("=UNICODE(\"😀ok\")", &c), Variant::Integer(128512));
+        assert_eq!(calc("=UNICHAR(0)", &c), Variant::Error(ExcelError::Value));
+        assert_eq!(
+            calc("=UNICHAR(55296)", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=UNICODE(\"\")", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=UNICHAR(65.5)", &c),
+            Variant::Error(ExcelError::Value)
         );
     }
 
@@ -16910,6 +20126,38 @@ mod tests {
         assert_eq!(calc("=DAY(DATE(2000,6,15))", &c), Variant::Integer(15));
         // June 15 2000 was a Thursday; WEEKDAY type=2: Mon=1,...Thu=4
         assert_eq!(calc("=WEEKDAY(DATE(2000,6,15),2)", &c), Variant::Integer(4));
+        // The 11–17 forms select Monday through Sunday as the first day.
+        // June 15 2000 was Thursday, so the results are 4, 3, 2, 1, 7, 6, 5.
+        assert_eq!(
+            calc("=WEEKDAY(DATE(2000,6,15),11)", &c),
+            Variant::Integer(4)
+        );
+        assert_eq!(
+            calc("=WEEKDAY(DATE(2000,6,15),12)", &c),
+            Variant::Integer(3)
+        );
+        assert_eq!(
+            calc("=WEEKDAY(DATE(2000,6,15),13)", &c),
+            Variant::Integer(2)
+        );
+        assert_eq!(
+            calc("=WEEKDAY(DATE(2000,6,15),14)", &c),
+            Variant::Integer(1)
+        );
+        assert_eq!(
+            calc("=WEEKDAY(DATE(2000,6,15),15)", &c),
+            Variant::Integer(7)
+        );
+        assert_eq!(
+            calc("=WEEKDAY(DATE(2000,6,15),16)", &c),
+            Variant::Integer(6)
+        );
+        assert_eq!(
+            calc("=WEEKDAY(DATE(2000,6,15),17)", &c),
+            Variant::Integer(5)
+        );
+        assert!(evaluate(&fparse("=WEEKDAY(DATE(2000,6,15),2.5)").unwrap(), &c).is_err());
+        assert!(evaluate(&fparse("=WEEKNUM(DATE(2000,6,15),2.5)").unwrap(), &c).is_err());
     }
 
     #[test]
@@ -16942,11 +20190,37 @@ mod tests {
         let c = HashMap::new();
         assert_eq!(calc("=DATEVALUE(\"2000/01/01\")", &c), Variant::Date(36526));
         assert_eq!(calc("=DATEVALUE(\"2000-01-01\")", &c), Variant::Date(36526));
+        assert_eq!(
+            calc("=DATEVALUE(\"2000-01-01T12:30:00\")", &c),
+            Variant::Date(36526)
+        );
+        assert_eq!(calc("=DATEVALUE(\"2000.01.01\")", &c), Variant::Date(36526));
+        assert_eq!(
+            calc("=DATEVALUE(\"January 1, 2000\")", &c),
+            Variant::Date(36526)
+        );
+        assert_eq!(calc("=DATEVALUE(\"1 Jan 2000\")", &c), Variant::Date(36526));
+        assert_eq!(
+            calc("=DATEVALUE(\"2020-02-31\")", &c),
+            Variant::Date(date_to_serial(2020, 3, 2))
+        );
         if let Variant::Float(v) = calc("=TIMEVALUE(\"12:00:00\")", &c) {
             assert!((v - 0.5).abs() < 1e-9);
         } else {
             panic!("TIMEVALUE should return Float");
         }
+        if let Variant::Float(v) = calc("=TIMEVALUE(\"12:30 PM\")", &c) {
+            assert!((v - 0.5208333333333334).abs() < 1e-9);
+        } else {
+            panic!("TIMEVALUE should accept PM notation");
+        }
+        if let Variant::Float(v) = calc("=TIMEVALUE(\"12:30 AM\")", &c) {
+            assert!((v - 0.020833333333333332).abs() < 1e-9);
+        } else {
+            panic!("TIMEVALUE should accept AM notation");
+        }
+        let invalid = evaluate(&fparse("=TIMEVALUE(\"24:00\")").unwrap(), &c);
+        assert!(invalid.is_err());
     }
 
     #[test]
@@ -16973,6 +20247,10 @@ mod tests {
             calc("=NETWORKDAYS.INTL(36528,36532,12)", &c),
             Variant::Integer(4)
         );
+        assert_eq!(
+            calc("=NETWORKDAYS.INTL(36528,36532,\"0000011\")", &c),
+            Variant::Integer(5)
+        );
     }
 
     #[test]
@@ -16981,6 +20259,10 @@ mod tests {
         // 5 workdays after Mon Jan 3 2000 (serial 36528) = Fri Jan 7 2000 (36532)? no, it's Mon Jan 10 (36535)
         // Actually: Jan 3+1=Tue4, +2=Wed5, +3=Thu6, +4=Fri7, +5=Mon10 = 36535
         assert_eq!(calc("=WORKDAY.INTL(36528,5,1)", &c), Variant::Date(36535));
+        assert_eq!(
+            calc("=WORKDAY.INTL(36528,5,\"0000011\")", &c),
+            Variant::Date(36535)
+        );
     }
 
     #[test]
@@ -16993,6 +20275,50 @@ mod tests {
         assert_eq!(
             calc("=SWITCH(99,1,\"one\",\"default\")", &c),
             Variant::Str("default".into())
+        );
+        assert_eq!(
+            calc(
+                "=SWITCH(CHOOSE(SEQUENCE(2),1,2),1,\"one\",2,\"two\")",
+                &c
+            ),
+            Variant::Array(vec![
+                Variant::Str("one".into()),
+                Variant::Str("two".into())
+            ])
+        );
+        assert_eq!(
+            calc(
+                "=SWITCH(CHOOSE(SEQUENCE(2),1,3),1,\"one\",\"other\")",
+                &c
+            ),
+            Variant::Array(vec![
+                Variant::Str("one".into()),
+                Variant::Str("other".into())
+            ])
+        );
+        assert_eq!(
+            calc("=SWITCH(CHOOSE(SEQUENCE(2),1,3),1,\"one\")", &c),
+            Variant::Array(vec![
+                Variant::Str("one".into()),
+                Variant::Error(ExcelError::NA)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_if_broadcasts_array_conditions_and_branches() {
+        let c = HashMap::new();
+        assert_eq!(
+            calc("=IF(CHOOSE(SEQUENCE(2),TRUE,FALSE),\"Y\",\"N\")", &c),
+            Variant::Array(vec![Variant::Str("Y".into()), Variant::Str("N".into())])
+        );
+        assert_eq!(
+            calc("=IF(CHOOSE(SEQUENCE(2),TRUE,FALSE),SEQUENCE(2),0)", &c),
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(0)])
+        );
+        assert_eq!(
+            calc("=IF(CHOOSE(SEQUENCE(3),TRUE,FALSE),1,2)", &c),
+            Variant::Error(ExcelError::Value)
         );
     }
 
@@ -17014,6 +20340,22 @@ mod tests {
         assert_eq!(
             calc("=CHOOSE(2,\"a\",\"b\",\"c\")", &c),
             Variant::Str("b".into())
+        );
+        let range = cells_from(&[
+            ((1, 1), Variant::Integer(10)),
+            ((2, 1), Variant::Integer(20)),
+        ]);
+        assert_eq!(
+            calc("=CHOOSE(1,A1:A2,\"unused\")", &range),
+            Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)])
+        );
+        assert_eq!(
+            calc("=CHOOSE(SEQUENCE(2),10,20)", &c),
+            Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)])
+        );
+        assert_eq!(
+            calc("=CHOOSE(SEQUENCE(3),10,20)", &c),
+            Variant::Error(ExcelError::Value)
         );
         assert_eq!(calc("=COLUMN(C1)", &c), Variant::Integer(3));
         assert_eq!(calc("=COLUMN()", &c), Variant::Integer(1));
@@ -17037,6 +20379,14 @@ mod tests {
             calc("=LOOKUP(2,A1:A3,B1:B3)", &c),
             Variant::Str("two".into())
         );
+        assert_eq!(
+            calc("=LOOKUP(2,A1:A3,B1:B2)", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=LOOKUP(2,A1:A3,B1:D1)", &c),
+            Variant::Error(ExcelError::Value)
+        );
         assert_eq!(calc("=XMATCH(2,A1:A3,0)", &c), Variant::Integer(2));
         assert_eq!(calc("=XMATCH(2,A1:A3)", &c), Variant::Integer(2));
         assert_eq!(calc("=XMATCH(\"t*\",B1:B3,2)", &c), Variant::Integer(2));
@@ -17044,6 +20394,36 @@ mod tests {
         assert_eq!(calc("=XMATCH(4,A1:A3,-1,2)", &c), Variant::Integer(3));
         assert_eq!(
             calc("=XMATCH(2,A1:A3,0.5)", &c),
+            Variant::Error(ExcelError::Value)
+        );
+
+        let unsorted = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Integer(3)),
+            ((3, 1), Variant::Integer(2)),
+        ]);
+        assert_eq!(
+            calc("=LOOKUP(2,A1:A3,B1:B3)", &unsorted),
+            Variant::Error(ExcelError::NA)
+        );
+
+        let errored = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Error(ExcelError::DivZero)),
+        ]);
+        assert_eq!(
+            calc("=LOOKUP(2,A1:A2)", &errored),
+            Variant::Error(ExcelError::Value)
+        );
+
+        let matrix = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Integer(2)),
+            ((2, 1), Variant::Integer(3)),
+            ((2, 2), Variant::Integer(4)),
+        ]);
+        assert_eq!(
+            calc("=XMATCH(2,A1:B2,0)", &matrix),
             Variant::Error(ExcelError::Value)
         );
     }
@@ -17105,6 +20485,40 @@ mod tests {
         assert_eq!(calc("=AGGREGATE(21,0,A1:A3,20)", &c), Variant::Float(0.5));
     }
 
+    #[test]
+    fn test_aggregate_options_filter_nested_and_errors() {
+        let mut nested = cells_from(&[
+            ((1, 1), Variant::Integer(10)),
+            ((2, 1), Variant::Integer(30)),
+            ((3, 1), Variant::Integer(5)),
+        ]);
+        nested.insert(
+            (2, 1),
+            CellContent {
+                formula: Some("=SUBTOTAL(9,B1:B2)".into()),
+                value: Variant::Integer(30),
+            },
+        );
+        // Option 0 ignores a nested SUBTOTAL; option 4 includes it.
+        assert_eq!(calc("=AGGREGATE(9,0,A1:A3)", &nested), Variant::Integer(15));
+        assert_eq!(calc("=AGGREGATE(9,4,A1:A3)", &nested), Variant::Integer(45));
+
+        let errors = cells_from(&[
+            ((1, 1), Variant::Integer(10)),
+            ((2, 1), Variant::Error(ExcelError::DivZero)),
+            ((3, 1), Variant::Integer(5)),
+        ]);
+        assert_eq!(
+            calc("=AGGREGATE(9,0,A1:A3)", &errors),
+            Variant::Error(ExcelError::DivZero)
+        );
+        assert_eq!(calc("=AGGREGATE(9,6,A1:A3)", &errors), Variant::Integer(15));
+        assert_eq!(
+            calc("=AGGREGATE(9,1.5,A1:A3)", &errors),
+            Variant::Error(ExcelError::Value)
+        );
+    }
+
     // ── Phase 10: numerical functions ─────────────────────────────────────────
 
     fn approx(v: Variant, expected: f64) {
@@ -17137,6 +20551,9 @@ mod tests {
         // VAR: sample=32/7, population=32/8=4
         approx(calc("=VAR(2,4,4,4,5,5,7,9)", &c), 32.0 / 7.0);
         approx(calc("=VARP(2,4,4,4,5,5,7,9)", &c), 4.0);
+        approx(calc("=STDEV.S(SEQUENCE(3))", &c), 1.0);
+        approx(calc("=VAR.S(SEQUENCE(3))", &c), 1.0);
+        approx(calc("=STDEV.P(SEQUENCE(3))", &c), (2.0_f64 / 3.0).sqrt());
     }
 
     #[test]
@@ -17228,8 +20645,23 @@ mod tests {
         assert_eq!(calc("=INDIRECT(\"B3\")", &c), Variant::Str("hello".into()));
         // INDIRECT of empty cell → Empty
         assert_eq!(calc("=INDIRECT(\"C5\")", &c), Variant::Empty);
-        // INDIRECT with range reference → top-left cell
-        assert_eq!(calc("=INDIRECT(\"A1:B3\")", &c), Variant::Integer(42));
+        // INDIRECT with range reference → bounded row-major array
+        assert_eq!(
+            calc("=INDIRECT(\"A1:B3\")", &c),
+            Variant::Array(vec![
+                Variant::Integer(42),
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Str("hello".into()),
+            ])
+        );
+        assert_eq!(calc("=SUM(INDIRECT(\"A1:A1\"))", &c), Variant::Integer(42));
+        assert_eq!(
+            calc("=INDIRECT(\"R1C1\",FALSE)", &c),
+            Variant::Integer(42)
+        );
     }
 
     #[test]
@@ -17270,6 +20702,58 @@ mod tests {
                 Variant::Integer(3),
                 Variant::Integer(2),
                 Variant::Integer(1)
+            ])
+        );
+        c.extend([
+            (
+                (1, 2),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(2),
+                },
+            ),
+            (
+                (2, 2),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(1),
+                },
+            ),
+            (
+                (3, 2),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(1),
+                },
+            ),
+            (
+                (1, 3),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(20),
+                },
+            ),
+            (
+                (2, 3),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(30),
+                },
+            ),
+            (
+                (3, 3),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(10),
+                },
+            ),
+        ]);
+        assert_eq!(
+            calc("=SORTBY(A1:A3,B1:B3,1,C1:C3,-1)", &c),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(3),
             ])
         );
     }
@@ -17767,6 +21251,35 @@ mod tests {
     }
 
     #[test]
+    fn test_approximate_lookup_requires_sorted_keys() {
+        let vlookup = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Str("one".into())),
+            ((2, 1), Variant::Integer(3)),
+            ((2, 2), Variant::Str("three".into())),
+            ((3, 1), Variant::Integer(2)),
+            ((3, 2), Variant::Str("two".into())),
+        ]);
+        assert_eq!(
+            calc("=VLOOKUP(2,A1:B3,2,TRUE)", &vlookup),
+            Variant::Error(ExcelError::NA)
+        );
+
+        let hlookup = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Integer(3)),
+            ((1, 3), Variant::Integer(2)),
+            ((2, 1), Variant::Str("one".into())),
+            ((2, 2), Variant::Str("three".into())),
+            ((2, 3), Variant::Str("two".into())),
+        ]);
+        assert_eq!(
+            calc("=HLOOKUP(2,A1:C2,2,TRUE)", &hlookup),
+            Variant::Error(ExcelError::NA)
+        );
+    }
+
+    #[test]
     fn test_wildcard_match_many_stars() {
         let c = HashMap::new();
         // Many-star pattern must complete without stack overflow or timeout
@@ -17812,6 +21325,13 @@ mod tests {
             },
         );
         c.insert(
+            (2, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(40),
+            },
+        );
+        c.insert(
             (3, 3),
             CellContent {
                 formula: None,
@@ -17826,6 +21346,20 @@ mod tests {
         assert_eq!(calc("=OFFSET(A1, 2, 2)", &c), Variant::Str("far".into()));
         // OFFSET with negative offset: A2 → 1 row up = A1 = 10
         assert_eq!(calc("=OFFSET(A2, -1, 0)", &c), Variant::Integer(10));
+        assert_eq!(
+            calc("=OFFSET(A1,0,0,2,2)", &c),
+            Variant::Array(vec![
+                Variant::Integer(10),
+                Variant::Integer(30),
+                Variant::Integer(20),
+                Variant::Integer(40),
+            ])
+        );
+        assert_eq!(calc("=SUM(OFFSET(A1,0,0,2,2))", &c), Variant::Integer(100));
+        assert_eq!(
+            calc("=SUM(OFFSET(A1:B2,0,0))", &c),
+            Variant::Integer(100)
+        );
     }
 
     #[test]
@@ -17914,6 +21448,34 @@ mod tests {
                 Variant::Str("d".into())
             ])
         );
+        // Array delimiters are accepted from a dynamic-array expression.
+        assert_eq!(
+            calc("=TEXTSPLIT(\"a,b;c\",VSTACK(\",\",\";\"),\"\",FALSE)", &c),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("b".into()),
+                Variant::Str("c".into())
+            ])
+        );
+        // An omitted/empty column delimiter produces a single column.
+        assert_eq!(
+            calc("=TEXTSPLIT(\"a;b\",\"\",\";\")", &c),
+            Variant::Array(vec![Variant::Str("a".into()), Variant::Str("b".into())])
+        );
+        assert_eq!(
+            calc(
+                "=TEXTSPLIT(\"a,b;c,d|e,f\",\",\",VSTACK(\";\",\"|\"),FALSE)",
+                &c
+            ),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("b".into()),
+                Variant::Str("c".into()),
+                Variant::Str("d".into()),
+                Variant::Str("e".into()),
+                Variant::Str("f".into())
+            ])
+        );
     }
 
     #[test]
@@ -17979,6 +21541,26 @@ mod tests {
         assert_eq!(
             calc("=TEXTBEFORE(\"hello\",\",\")", &c),
             Variant::Error(ExcelError::NA)
+        );
+        assert_eq!(
+            calc("=TEXTBEFORE(\"Socrates\",\" \",1,0,1)", &c),
+            Variant::Str("Socrates".into())
+        );
+        assert_eq!(
+            calc("=TEXTAFTER(\"Socrates\",\" \",1,0,1)", &c),
+            Variant::Str(String::new())
+        );
+        assert_eq!(
+            calc("=TEXTBEFORE(\"hello\",\"\",-1)", &c),
+            Variant::Str("hello".into())
+        );
+        assert_eq!(
+            calc("=TEXTAFTER(\"hello\",\"\")", &c),
+            Variant::Str("hello".into())
+        );
+        assert_eq!(
+            calc("=TEXTBEFORE(\"hello\",\",\",1,0,0,\"missing\")", &c),
+            Variant::Str("missing".into())
         );
     }
 
@@ -18198,6 +21780,274 @@ mod tests {
                 Variant::Integer(2),
             ])
         );
+        assert_eq!(
+            calc("=GROUPBY(A1:A4,B1:B4,LAMBDA(values,SUM(values)))", &c),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Integer(4),
+                Variant::Str("b".into()),
+                Variant::Integer(6),
+            ])
+        );
+        assert_eq!(
+            calc(
+                "=GROUPBY(A1:A4,B1:B4,HSTACK(LAMBDA(values,SUM(values)),LAMBDA(values,MAX(values))))",
+                &c
+            ),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Integer(4),
+                Variant::Integer(3),
+                Variant::Str("b".into()),
+                Variant::Integer(6),
+                Variant::Integer(4),
+            ])
+        );
+        assert_eq!(
+            calc(
+                "=GROUPBY(A1:A4,B1:B4,LAMBDA(values,total,SUM(values)/SUM(total)))",
+                &c
+            ),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Float(0.4),
+                Variant::Str("b".into()),
+                Variant::Float(0.6),
+            ])
+        );
+        assert_eq!(
+            calc("=GROUPBY(A1:A4,B1:B4,HSTACK(SUM,AVERAGE))", &c),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Integer(4),
+                Variant::Float(2.0),
+                Variant::Str("b".into()),
+                Variant::Integer(6),
+                Variant::Float(3.0),
+            ])
+        );
+        let mut c_multi = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((2, 1), Variant::Str("a".into())),
+            ((3, 1), Variant::Str("b".into())),
+            ((4, 1), Variant::Str("b".into())),
+            ((1, 2), Variant::Str("x".into())),
+            ((2, 2), Variant::Str("y".into())),
+            ((3, 2), Variant::Str("x".into())),
+            ((4, 2), Variant::Str("y".into())),
+            ((1, 3), Variant::Integer(1)),
+            ((2, 3), Variant::Integer(2)),
+            ((3, 3), Variant::Integer(3)),
+            ((4, 3), Variant::Integer(4)),
+        ]);
+        for (row, value) in [(1, 10), (2, 20), (3, 30), (4, 40)] {
+            c_multi.insert(
+                (row, 4),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(value),
+                },
+            );
+        }
+        assert_eq!(
+            calc("=GROUPBY(A1:B4,C1:C4,\"SUM\")", &c_multi),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(1),
+                Variant::Str("a".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(2),
+                Variant::Str("b".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(3),
+                Variant::Str("b".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(4),
+            ])
+        );
+        assert_eq!(
+            calc("=GROUPBY(A1:B4,C1:D4,\"SUM\")", &c_multi),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(1),
+                Variant::Integer(10),
+                Variant::Str("a".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Str("b".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(3),
+                Variant::Integer(30),
+                Variant::Str("b".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(4),
+                Variant::Integer(40),
+            ])
+        );
+        assert_eq!(
+            calc("=GROUPBY(A1:B4,C1:D4,\"SUM\",0,0,VSTACK(1,-1))", &c_multi),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Str("a".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(1),
+                Variant::Integer(10),
+                Variant::Str("b".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(4),
+                Variant::Integer(40),
+                Variant::Str("b".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(3),
+                Variant::Integer(30),
+            ])
+        );
+        assert_eq!(
+            calc("=GROUPBY(A1:B4,C1:D4,\"SUM\",0,2)", &c_multi),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(1),
+                Variant::Integer(10),
+                Variant::Str("a".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Str("a".into()),
+                Variant::Str("Subtotal".into()),
+                Variant::Integer(3),
+                Variant::Integer(30),
+                Variant::Str("b".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(3),
+                Variant::Integer(30),
+                Variant::Str("b".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(4),
+                Variant::Integer(40),
+                Variant::Str("b".into()),
+                Variant::Str("Subtotal".into()),
+                Variant::Integer(7),
+                Variant::Integer(70),
+                Variant::Str("Total".into()),
+                Variant::Empty,
+                Variant::Integer(10),
+                Variant::Integer(100),
+            ])
+        );
+        assert_eq!(
+            calc("=GROUPBY(A1:B4,C1:D4,\"SUM\",0,-2)", &c_multi),
+            Variant::Array(vec![
+                Variant::Str("Total".into()),
+                Variant::Empty,
+                Variant::Integer(10),
+                Variant::Integer(100),
+                Variant::Str("a".into()),
+                Variant::Str("Subtotal".into()),
+                Variant::Integer(3),
+                Variant::Integer(30),
+                Variant::Str("a".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(1),
+                Variant::Integer(10),
+                Variant::Str("a".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Str("b".into()),
+                Variant::Str("Subtotal".into()),
+                Variant::Integer(7),
+                Variant::Integer(70),
+                Variant::Str("b".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(3),
+                Variant::Integer(30),
+                Variant::Str("b".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(4),
+                Variant::Integer(40),
+            ])
+        );
+        let interleaved = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((2, 1), Variant::Str("b".into())),
+            ((3, 1), Variant::Str("a".into())),
+            ((4, 1), Variant::Str("b".into())),
+            ((1, 2), Variant::Str("x".into())),
+            ((2, 2), Variant::Str("x".into())),
+            ((3, 2), Variant::Str("y".into())),
+            ((4, 2), Variant::Str("y".into())),
+            ((1, 3), Variant::Integer(1)),
+            ((2, 3), Variant::Integer(2)),
+            ((3, 3), Variant::Integer(3)),
+            ((4, 3), Variant::Integer(4)),
+        ]);
+        assert_eq!(
+            calc("=GROUPBY(A1:B4,C1:C4,\"SUM\",0,2)", &interleaved),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(1),
+                Variant::Str("b".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(2),
+                Variant::Str("a".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(3),
+                Variant::Str("a".into()),
+                Variant::Str("Subtotal".into()),
+                Variant::Integer(4),
+                Variant::Str("b".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(4),
+                Variant::Str("b".into()),
+                Variant::Str("Subtotal".into()),
+                Variant::Integer(6),
+                Variant::Str("Total".into()),
+                Variant::Empty,
+                Variant::Integer(10),
+            ])
+        );
+        let c_headers = cells_from(&[
+            ((1, 1), Variant::Str("Category".into())),
+            ((2, 1), Variant::Str("a".into())),
+            ((3, 1), Variant::Str("b".into())),
+            ((4, 1), Variant::Str("a".into())),
+            ((1, 2), Variant::Str("Amount".into())),
+            ((2, 2), Variant::Integer(1)),
+            ((3, 2), Variant::Integer(2)),
+            ((4, 2), Variant::Integer(3)),
+        ]);
+        assert_eq!(
+            calc("=GROUPBY(A1:A4,B1:B4,SUM,3,1)", &c_headers),
+            Variant::Array(vec![
+                Variant::Str("Category".into()),
+                Variant::Str("Amount".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(4),
+                Variant::Str("b".into()),
+                Variant::Integer(2),
+                Variant::Str("Total".into()),
+                Variant::Integer(6),
+            ])
+        );
+        assert_eq!(
+            calc("=GROUPBY(A1:A4,B1:B4,SUM,2,0)", &c),
+            Variant::Array(vec![
+                Variant::Str("Field1".into()),
+                Variant::Str("Values".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(4),
+                Variant::Str("b".into()),
+                Variant::Integer(6),
+            ])
+        );
     }
 
     #[test]
@@ -18215,6 +22065,14 @@ mod tests {
             ((2, 3), Variant::Integer(2)),
             ((3, 3), Variant::Integer(3)),
             ((4, 3), Variant::Integer(4)),
+            ((1, 4), Variant::Integer(10)),
+            ((2, 4), Variant::Integer(20)),
+            ((3, 4), Variant::Integer(30)),
+            ((4, 4), Variant::Integer(40)),
+            ((1, 5), Variant::Boolean(true)),
+            ((2, 5), Variant::Boolean(false)),
+            ((3, 5), Variant::Boolean(true)),
+            ((4, 5), Variant::Boolean(false)),
         ]);
         assert_eq!(
             calc("=PIVOTBY(A1:A4,B1:B4,C1:C4,\"SUM\")", &c),
@@ -18228,6 +22086,393 @@ mod tests {
                 Variant::Str("b".into()),
                 Variant::Integer(3),
                 Variant::Integer(4),
+            ])
+        );
+        let c_with_headers = cells_from(&[
+            ((1, 1), Variant::Str("Category".into())),
+            ((2, 1), Variant::Str("a".into())),
+            ((3, 1), Variant::Str("a".into())),
+            ((4, 1), Variant::Str("b".into())),
+            ((5, 1), Variant::Str("b".into())),
+            ((1, 2), Variant::Str("Year".into())),
+            ((2, 2), Variant::Str("x".into())),
+            ((3, 2), Variant::Str("y".into())),
+            ((4, 2), Variant::Str("x".into())),
+            ((5, 2), Variant::Str("y".into())),
+            ((1, 3), Variant::Str("Amount".into())),
+            ((2, 3), Variant::Integer(1)),
+            ((3, 3), Variant::Integer(2)),
+            ((4, 3), Variant::Integer(3)),
+            ((5, 3), Variant::Integer(4)),
+        ]);
+        assert_eq!(
+            calc("=PIVOTBY(A1:A5,B1:B5,C1:C5,SUM,1)", &c_with_headers),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(4),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A5,B1:B5,C1:C5,SUM)", &c_with_headers),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(4),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A5,B1:B5,C1:C5,SUM,3)", &c_with_headers),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(4),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A4,B1:B4,C1:D4,\"SUM\")", &c),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("y".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(10),
+                Variant::Integer(2),
+                Variant::Integer(20),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(30),
+                Variant::Integer(4),
+                Variant::Integer(40),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A4,B1:B4,C1:C4,\"SUM\",2,0,1,0,1,E1:E4)", &c),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A4,B1:B4,C1:C4,\"SUM\",2,1,1,1,1)", &c),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("Total".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(3),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(4),
+                Variant::Integer(7),
+                Variant::Str("Total".into()),
+                Variant::Integer(4),
+                Variant::Integer(6),
+                Variant::Integer(10),
+            ])
+        );
+        let composite = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((2, 1), Variant::Str("a".into())),
+            ((3, 1), Variant::Str("b".into())),
+            ((4, 1), Variant::Str("b".into())),
+            ((1, 2), Variant::Str("x".into())),
+            ((2, 2), Variant::Str("y".into())),
+            ((3, 2), Variant::Str("x".into())),
+            ((4, 2), Variant::Str("y".into())),
+            ((1, 3), Variant::Str("x".into())),
+            ((2, 3), Variant::Str("y".into())),
+            ((3, 3), Variant::Str("x".into())),
+            ((4, 3), Variant::Str("y".into())),
+            ((1, 4), Variant::Integer(10)),
+            ((2, 4), Variant::Integer(20)),
+            ((3, 4), Variant::Integer(30)),
+            ((4, 4), Variant::Integer(40)),
+        ]);
+        assert_eq!(
+            calc("=PIVOTBY(A1:B4,C1:C4,D1:D4,\"SUM\")", &composite),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("a".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(10),
+                Variant::Integer(0),
+                Variant::Str("a".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(0),
+                Variant::Integer(20),
+                Variant::Str("b".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(30),
+                Variant::Integer(0),
+                Variant::Str("b".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(0),
+                Variant::Integer(40),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A4,B1:B4,C1:C4,\"SUM\",0)", &c),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(4),
+            ])
+        );
+        assert_eq!(
+            calc(
+                "=PIVOTBY(A1:A4,B1:B4,C1:C4,PERCENTOF,0,1,1,0,1,SEQUENCE(4,1),2)",
+                &c
+            ),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Float(0.1),
+                Variant::Float(0.2),
+                Variant::Float(0.3),
+                Variant::Str("b".into()),
+                Variant::Float(0.3),
+                Variant::Float(0.4),
+                Variant::Float(0.7),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A4,B1:B4,C1:C4,\"SUM\",2,0,-2,0,1)", &c),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(4),
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(2),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A4,B1:B4,C1:C4,\"SUM\",2,0,1,0,-2)", &c),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("y".into()),
+                Variant::Str("x".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(2),
+                Variant::Integer(1),
+                Variant::Str("b".into()),
+                Variant::Integer(4),
+                Variant::Integer(3),
+            ])
+        );
+        assert_eq!(
+            calc(
+                "=PIVOTBY(A1:B4,C1:C4,D1:D4,\"SUM\",2,0,HSTACK(-2,1),0)",
+                &composite
+            ),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("a".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(0),
+                Variant::Integer(20),
+                Variant::Str("b".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(0),
+                Variant::Integer(40),
+                Variant::Str("a".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(10),
+                Variant::Integer(0),
+                Variant::Str("b".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(30),
+                Variant::Integer(0),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:B4,C1:C4,D1:D4,\"SUM\",0,2,1,0)", &composite),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(10),
+                Variant::Integer(0),
+                Variant::Integer(10),
+                Variant::Str("a".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(0),
+                Variant::Integer(20),
+                Variant::Integer(20),
+                Variant::Str("a".into()),
+                Variant::Str("Subtotal".into()),
+                Variant::Integer(10),
+                Variant::Integer(20),
+                Variant::Integer(30),
+                Variant::Str("b".into()),
+                Variant::Str("x".into()),
+                Variant::Integer(30),
+                Variant::Integer(0),
+                Variant::Integer(30),
+                Variant::Str("b".into()),
+                Variant::Str("y".into()),
+                Variant::Integer(0),
+                Variant::Integer(40),
+                Variant::Integer(40),
+                Variant::Str("b".into()),
+                Variant::Str("Subtotal".into()),
+                Variant::Integer(30),
+                Variant::Integer(40),
+                Variant::Integer(70),
+            ])
+        );
+        let col_composite = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((2, 1), Variant::Str("a".into())),
+            ((3, 1), Variant::Str("a".into())),
+            ((4, 1), Variant::Str("a".into())),
+            ((1, 2), Variant::Str("p".into())),
+            ((2, 2), Variant::Str("p".into())),
+            ((3, 2), Variant::Str("q".into())),
+            ((4, 2), Variant::Str("q".into())),
+            ((1, 3), Variant::Str("x".into())),
+            ((2, 3), Variant::Str("y".into())),
+            ((3, 3), Variant::Str("x".into())),
+            ((4, 3), Variant::Str("y".into())),
+            ((1, 4), Variant::Integer(1)),
+            ((2, 4), Variant::Integer(2)),
+            ((3, 4), Variant::Integer(3)),
+            ((4, 4), Variant::Integer(4)),
+        ]);
+        assert_eq!(
+            calc(
+                "=PIVOTBY(A1:A4,B1:C4,D1:D4,\"SUM\",0,0,1,2)",
+                &col_composite
+            ),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(3),
+                Variant::Integer(3),
+                Variant::Integer(4),
+                Variant::Integer(7),
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(3),
+                Variant::Integer(3),
+                Variant::Integer(4),
+                Variant::Integer(7),
+                Variant::Integer(10),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A4,B1:B4,C1:C4,HSTACK(SUM,AVERAGE))", &c),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("y".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Float(1.0),
+                Variant::Integer(2),
+                Variant::Float(2.0),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Float(3.0),
+                Variant::Integer(4),
+                Variant::Float(4.0),
+            ])
+        );
+        assert_eq!(
+            calc(
+                "=PIVOTBY(A1:A4,B1:B4,C1:C4,HSTACK(LAMBDA(x,SUM(x)),LAMBDA(x,MAX(x))))",
+                &c
+            ),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("y".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(2),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(3),
+                Variant::Integer(4),
+                Variant::Integer(4),
+            ])
+        );
+        assert_eq!(
+            calc(
+                "=PIVOTBY(A1:A4,B1:B4,C1:C4,LAMBDA(subset,total,SUM(subset)/SUM(total)),0,1,1,0,1,SEQUENCE(4,1),2)",
+                &c
+            ),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Float(0.1),
+                Variant::Float(0.2),
+                Variant::Float(0.3),
+                Variant::Str("b".into()),
+                Variant::Float(0.3),
+                Variant::Float(0.4),
+                Variant::Float(0.7),
+            ])
+        );
+        assert_eq!(
+            calc("=PIVOTBY(A1:A4,B1:B4,C1:C4,VSTACK(SUM,AVERAGE))", &c),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Str("a".into()),
+                Variant::Float(1.0),
+                Variant::Float(2.0),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(4),
+                Variant::Str("b".into()),
+                Variant::Float(3.0),
+                Variant::Float(4.0),
             ])
         );
     }
@@ -18578,6 +22823,20 @@ mod tests {
             Variant::Float(25.0)
         );
 
+        // A criteria range containing only its header selects every record.
+        assert_eq!(
+            calc("=DSUM(A1:B5,\"Score\",D1:D1)", &c),
+            Variant::Integer(300)
+        );
+        assert_eq!(
+            calc("=DCOUNT(A1:B5,\"Score\",D1:D1)", &c),
+            Variant::Integer(4)
+        );
+        assert_eq!(
+            calc("=DGET(A1:B5,\"Score\",D1:D1)", &c),
+            Variant::Error(ExcelError::Num)
+        );
+
         // No matches → DSUM=0, DAVERAGE=#DIV/0!, DCOUNT=0, DMAX=0, DMIN=0
         c.insert(
             (2, 4),
@@ -18611,6 +22870,35 @@ mod tests {
     #[test]
     fn test_statistical_summary_functions() {
         let mut c = HashMap::new();
+        assert_eq!(calc("=SUM(\"2\",TRUE)", &c), Variant::Integer(3));
+        assert_eq!(
+            calc("=AVERAGE(\"2\",TRUE)", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
+        assert_eq!(calc("=AVERAGE(3,\"2\")", &c), Variant::Float(3.0));
+        c.insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(1),
+            },
+        );
+        c.insert(
+            (2, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Str("2".into()),
+            },
+        );
+        c.insert(
+            (3, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Boolean(true),
+            },
+        );
+        assert_eq!(calc("=SUM(A1:A3)", &c), Variant::Integer(1));
+        assert_eq!(calc("=AVERAGE(A1:A3)", &c), Variant::Float(1.0));
         assert_eq!(calc("=MODE.SNGL(1,2,2,3)", &c), Variant::Integer(2));
         match calc("=VARA(1,2,TRUE,\"x\")", &c) {
             Variant::Float(value) => assert!((value - 2.0 / 3.0).abs() < 1e-12),
@@ -19089,6 +23377,25 @@ mod tests {
         assert_eq!(calc("=ERROR.TYPE(NA())", &c), Variant::Integer(7)); // #N/A = 7
         assert_eq!(calc("=ERROR.TYPE(42)", &c), Variant::Error(ExcelError::NA)); // not an error
 
+        // External-service worksheet functions are recognized but remain
+        // headless-safe and fail closed without evaluating external inputs.
+        assert_eq!(
+            calc("=WEBSERVICE(\"https://example.invalid\")", &c),
+            Variant::Error(ExcelError::NA)
+        );
+        assert_eq!(
+            calc("=CUBESETCOUNT(\"local-cube\")", &c),
+            Variant::Error(ExcelError::NA)
+        );
+        assert_eq!(
+            calc("=TRANSLATE(\"hello\",\"en\",\"EN\")", &c),
+            Variant::Str("hello".into())
+        );
+        assert_eq!(
+            calc("=TRANSLATE(\"hello\",\"en\",\"ja\")", &c),
+            Variant::Error(ExcelError::NA)
+        );
+
         // FORMULATEXT
         let mut cf = cells_from(&[((1, 1), Variant::Integer(10))]);
         cf.insert(
@@ -19289,6 +23596,92 @@ mod tests {
             }
             other => panic!("LINEST stats unexpected: {:?}", other),
         }
+        let multivariate = cells_from(&[
+            ((1, 7), Variant::Integer(10)),
+            ((2, 7), Variant::Integer(12)),
+            ((3, 7), Variant::Integer(13)),
+            ((4, 7), Variant::Integer(15)),
+            ((5, 7), Variant::Integer(14)),
+            ((6, 7), Variant::Integer(16)),
+            ((1, 8), Variant::Integer(1)),
+            ((2, 8), Variant::Integer(2)),
+            ((3, 8), Variant::Integer(1)),
+            ((4, 8), Variant::Integer(2)),
+            ((5, 8), Variant::Integer(3)),
+            ((6, 8), Variant::Integer(1)),
+            ((1, 9), Variant::Integer(1)),
+            ((2, 9), Variant::Integer(1)),
+            ((3, 9), Variant::Integer(2)),
+            ((4, 9), Variant::Integer(2)),
+            ((5, 9), Variant::Integer(1)),
+            ((6, 9), Variant::Integer(3)),
+        ]);
+        match calc("=LINEST(G1:G6,H1:I6)", &multivariate) {
+            Variant::Array(values) => {
+                assert_eq!(values.len(), 3);
+                for (value, expected) in values.iter().zip([3.0, 2.0, 5.0]) {
+                    assert!((as_f64(value).unwrap() - expected).abs() < 1e-9);
+                }
+            }
+            other => panic!("multivariate LINEST unexpected: {:?}", other),
+        }
+        match calc("=LINEST(G1:G6,H1:I6,TRUE,TRUE)", &multivariate) {
+            Variant::Array(values) => {
+                assert_eq!(values.len(), 15);
+                for (value, expected) in values.iter().take(3).zip([3.0, 2.0, 5.0]) {
+                    assert!((as_f64(value).unwrap() - expected).abs() < 1e-9);
+                }
+                assert!((as_f64(&values[6]).unwrap() - 1.0).abs() < 1e-9);
+            }
+            other => panic!("multivariate LINEST stats unexpected: {:?}", other),
+        }
+        match calc("=LOGEST(G1:G6,H1:I6)", &multivariate) {
+            Variant::Array(values) => {
+                assert_eq!(values.len(), 3);
+                assert!(
+                    values
+                        .iter()
+                        .all(|value| as_f64(value).is_some_and(f64::is_finite))
+                );
+            }
+            other => panic!("multivariate LOGEST unexpected: {:?}", other),
+        }
+        match calc("=TREND(G1:G6,H1:I6,H1:I2)", &multivariate) {
+            Variant::Array(values) => {
+                assert_eq!(values.len(), 2);
+                assert!((as_f64(&values[0]).unwrap() - 10.0).abs() < 1e-9);
+                assert!((as_f64(&values[1]).unwrap() - 12.0).abs() < 1e-9);
+            }
+            other => panic!("multivariate TREND unexpected: {:?}", other),
+        }
+        let growth_multi = cells_from(&[
+            ((1, 1), Variant::Float(1.3_f64.exp())),
+            ((2, 1), Variant::Float(1.4_f64.exp())),
+            ((3, 1), Variant::Float(1.5_f64.exp())),
+            ((4, 1), Variant::Float(1.6_f64.exp())),
+            ((5, 1), Variant::Float(1.5_f64.exp())),
+            ((6, 1), Variant::Float(1.7_f64.exp())),
+            ((1, 2), Variant::Integer(1)),
+            ((2, 2), Variant::Integer(2)),
+            ((3, 2), Variant::Integer(1)),
+            ((4, 2), Variant::Integer(2)),
+            ((5, 2), Variant::Integer(3)),
+            ((6, 2), Variant::Integer(1)),
+            ((1, 3), Variant::Integer(1)),
+            ((2, 3), Variant::Integer(1)),
+            ((3, 3), Variant::Integer(2)),
+            ((4, 3), Variant::Integer(2)),
+            ((5, 3), Variant::Integer(1)),
+            ((6, 3), Variant::Integer(3)),
+        ]);
+        match calc("=GROWTH(A1:A6,B1:C6,B1:C2)", &growth_multi) {
+            Variant::Array(values) => {
+                assert_eq!(values.len(), 2);
+                assert!((as_f64(&values[0]).unwrap() - 1.3_f64.exp()).abs() < 1e-9);
+                assert!((as_f64(&values[1]).unwrap() - 1.4_f64.exp()).abs() < 1e-9);
+            }
+            other => panic!("multivariate GROWTH unexpected: {:?}", other),
+        }
         match calc("=GROWTH(D1:D3,E1:E3,F1:F1)", &c) {
             Variant::Array(values) => match values.as_slice() {
                 [Variant::Float(value)] => assert!((*value - 16.0).abs() < 1e-9),
@@ -19343,6 +23736,14 @@ mod tests {
         match calc("=PEARSON(A1:A3,B1:B3)", &c) {
             Variant::Float(f) => assert!((f - 1.0).abs() < 1e-9),
             other => panic!("PEARSON: {:?}", other),
+        }
+        match calc("=CORREL(SEQUENCE(3),SEQUENCE(3))", &c) {
+            Variant::Float(f) => assert!((f - 1.0).abs() < 1e-9),
+            other => panic!("CORREL dynamic array: {:?}", other),
+        }
+        match calc("=COVARIANCE.P(SEQUENCE(3),SEQUENCE(3))", &c) {
+            Variant::Float(f) => assert!((f - (2.0 / 3.0)).abs() < 1e-9),
+            other => panic!("COVARIANCE.P dynamic array: {:?}", other),
         }
         match calc("=SLOPE(B1:B3,A1:A3)", &c) {
             Variant::Float(f) => assert!((f - 2.0).abs() < 1e-9),
@@ -19711,6 +24112,60 @@ mod tests {
         assert_eq!(
             calc("=TOROW(A1:A3, 1)", &c2),
             Variant::Array(vec![Variant::Integer(10), Variant::Integer(30)])
+        );
+        let mut matrix = HashMap::new();
+        for (row, values) in [(1, [1, 2, 3]), (2, [4, 5, 6])] {
+            for (col, value) in values.into_iter().enumerate() {
+                matrix.insert(
+                    (row, col as u32 + 1),
+                    CellContent {
+                        formula: None,
+                        value: Variant::Integer(value),
+                    },
+                );
+            }
+        }
+        assert_eq!(
+            calc("=TOCOL(A1:C2,0,TRUE)", &matrix),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(4),
+                Variant::Integer(2),
+                Variant::Integer(5),
+                Variant::Integer(3),
+                Variant::Integer(6)
+            ])
+        );
+        assert_eq!(
+            calc("=TOROW(A1:C2,0,TRUE)", &matrix),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(4),
+                Variant::Integer(2),
+                Variant::Integer(5),
+                Variant::Integer(3),
+                Variant::Integer(6)
+            ])
+        );
+        assert_eq!(
+            calc("=TOCOL(VSTACK(SEQUENCE(1,3),SEQUENCE(1,3,4)),0,TRUE)", &c),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(4),
+                Variant::Integer(2),
+                Variant::Integer(5),
+                Variant::Integer(3),
+                Variant::Integer(6)
+            ])
+        );
+        assert_eq!(
+            calc("=TOROW(HSTACK(SEQUENCE(2,1),SEQUENCE(2,1,3)),0,TRUE)", &c),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(3),
+                Variant::Integer(4)
+            ])
         );
     }
 
