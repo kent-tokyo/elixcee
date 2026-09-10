@@ -318,7 +318,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `STEYX` | Standard error of predicted y values | Classic |
 | `COVARIANCE.S` / `COVAR` | Sample covariance | Classic / 2010 |
 | `COVARIANCE.P` | Population covariance | 2010 |
-| `MODE.SNGL` / `MODE.MULT` | Most frequent numeric value | 2010 / 2010 |
+| `MODE` / `MODE.SNGL` / `MODE.MULT` | Most frequent numeric value | Classic / 2010 / 2010 |
 | `FREQUENCY` | Frequency distribution over bins | Classic |
 | `PROB` | Probability of values within inclusive limits | Classic |
 | `TRIMMEAN` | Mean after symmetric outlier trimming | Classic |
@@ -336,7 +336,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `NORM.S.INV` / `NORMSINV` | Inverse standard normal distribution | 2010 / Classic |
 | `BINOM.DIST` / `BINOMDIST` | Binomial distribution PMF or CDF | 2010 / Classic |
 | `BINOM.DIST.RANGE` | Binomial probability over an inclusive success range | 2010 |
-| `BINOM.INV` | Inverse binomial cumulative probability | 2010 |
+| `BINOM.INV` / `CRITBINOM` | Inverse binomial cumulative probability | 2010 / Classic |
 | `NEGBINOM.DIST` / `NEGBINOMDIST` | Negative binomial distribution PMF or CDF | 2010 / Classic |
 | `HYPGEOM.DIST` / `HYPGEOMDIST` | Hypergeometric distribution PMF or CDF | 2010 / Classic |
 | `POISSON.DIST` / `POISSON` | Poisson distribution PMF or CDF | 2010 / Classic |
@@ -348,10 +348,10 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `F.DIST` / `FDIST` | F distribution PDF or CDF | 2010 / Classic |
 | `F.DIST.RT` | Right-tailed F distribution probability | 2010 |
 | `F.DIST.2T` | Two-tailed F distribution probability | 2010 |
-| `F.INV` / `F.INV.RT` | Inverse F distribution, left/right tail | 2010 |
-| `GAMMA.DIST` / `GAMMA.INV` | Gamma distribution and inverse | 2010 |
+| `F.INV` / `F.INV.RT` / `FINV` | Inverse F distribution, left/right tail | 2010 / Classic |
+| `GAMMA.DIST` / `GAMMADIST` / `GAMMA.INV` / `GAMMAINV` | Gamma distribution and inverse | 2010 / Classic |
 | `CHISQ.DIST.RT` | Right-tailed chi-squared probability | 2010 |
-| `CHISQ.INV` / `CHISQ.INV.RT` | Inverse chi-squared distribution, left/right tail | 2010 |
+| `CHISQ.INV` / `CHISQ.INV.RT` / `CHIINV` | Inverse chi-squared distribution, left/right tail | 2010 / Classic |
 | `WEIBULL.DIST` / `WEIBULL` | Weibull distribution PDF or CDF | 2010 / Classic |
 | `EXPON.DIST` / `EXPONDIST` | Exponential distribution PDF or CDF | 2010 / Classic |
 | `LOGNORM.DIST` / `LOGNORMDIST` | Lognormal distribution PDF or CDF | 2010 / Classic |

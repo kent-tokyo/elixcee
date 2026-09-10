@@ -391,7 +391,7 @@ fn eval_func(
         "COUNTIFS" => func_countifs(args, cells),
         "MEDIAN" => func_median(args, cells),
         "MODE.MULT" => func_mode_mult(args, cells, true),
-        "MODE.SNGL" => func_mode_mult(args, cells, false),
+        "MODE" | "MODE.SNGL" => func_mode_mult(args, cells, false),
         "FREQUENCY" => func_frequency(args, cells),
         "PROB" => func_prob(args, cells),
         "PRODUCT" => func_product(args, cells),
@@ -548,25 +548,25 @@ fn eval_func(
         "NORM.S.INV" | "NORMSINV" => func_norm_s_inv(args, cells),
         "BINOM.DIST" | "BINOMDIST" => func_binom_dist(args, cells),
         "BINOM.DIST.RANGE" => func_binom_dist_range(args, cells),
-        "BINOM.INV" => func_binom_inv(args, cells),
+        "BINOM.INV" | "CRITBINOM" => func_binom_inv(args, cells),
         "NEGBINOM.DIST" | "NEGBINOMDIST" => func_negbinom_dist(args, cells),
         "HYPGEOM.DIST" | "HYPGEOMDIST" => func_hypgeom_dist(args, cells),
         "POISSON.DIST" | "POISSON" => func_poisson_dist(args, cells),
         "GAMMA" => func_gamma(args, cells),
         "GAMMALN" | "GAMMALN.PRECISE" => func_gammaln(args, cells),
-        "GAMMA.DIST" => func_gamma_dist(args, cells),
-        "GAMMA.INV" => func_gamma_inv(args, cells),
+        "GAMMA.DIST" | "GAMMADIST" => func_gamma_dist(args, cells),
+        "GAMMA.INV" | "GAMMAINV" => func_gamma_inv(args, cells),
         "BETA.DIST" | "BETADIST" => func_beta_dist(args, cells),
         "BETA.INV" | "BETAINV" => func_beta_inv(args, cells),
         "CHISQ.DIST" | "CHIDIST" => func_chisq_dist(args, cells),
         "CHISQ.DIST.RT" => func_chisq_dist_rt(args, cells),
         "CHISQ.INV" => func_chisq_inv(args, cells),
-        "CHISQ.INV.RT" => func_chisq_inv_rt(args, cells),
+        "CHISQ.INV.RT" | "CHIINV" => func_chisq_inv_rt(args, cells),
         "F.DIST" | "FDIST" => func_f_dist(args, cells),
         "F.DIST.RT" => func_f_dist_rt(args, cells),
         "F.DIST.2T" => func_f_dist_2t(args, cells),
         "F.INV" => func_f_inv(args, cells),
-        "F.INV.RT" => func_f_inv_rt(args, cells),
+        "F.INV.RT" | "FINV" => func_f_inv_rt(args, cells),
         "WEIBULL.DIST" | "WEIBULL" => func_weibull_dist(args, cells),
         "EXPON.DIST" | "EXPONDIST" => func_expon_dist(args, cells),
         "LOGNORM.DIST" | "LOGNORMDIST" => func_lognorm_dist(args, cells),
@@ -16577,6 +16577,16 @@ mod tests {
             Variant::Float(f) => assert!((f - 24.0_f64.ln()).abs() < 1e-9),
             other => panic!("GAMMALN: {:?}", other),
         }
+        assert_eq!(
+            calc("=GAMMADIST(1,2,1,TRUE)", &cn),
+            calc("=GAMMA.DIST(1,2,1,TRUE)", &cn)
+        );
+        assert_eq!(calc("=CRITBINOM(10,0.5,0.5)", &cn), Variant::Integer(5));
+        assert_eq!(
+            calc("=CHIINV(0.5,2)", &cn),
+            calc("=CHISQ.INV.RT(0.5,2)", &cn)
+        );
+        assert_eq!(calc("=FINV(0.5,1,1)", &cn), calc("=F.INV.RT(0.5,1,1)", &cn));
         match calc("=BETA.DIST(0.5,2,2,TRUE)", &cn) {
             Variant::Float(f) => assert!((f - 0.5).abs() < 1e-9),
             other => panic!("BETA.DIST CDF: {:?}", other),
