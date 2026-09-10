@@ -186,6 +186,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 参照情報BUILD: `AREAS`を単一セル／範囲／`INDIRECT`／`OFFSET`の1-area参照へ接続し、非参照を`#VALUE!`として回帰した。Union式の複数AreaとExcel oracle校正は未完。
 - [x] G4 安全なINFO BUILD: `INFO`の`system`／`osversion`／`release`／`recalc`だけを実行環境へ接続し、path・memory・file-count系は`#N/A`として情報漏えいを避ける境界を回帰した。Excelの全info_type・oracle校正は未完。
 - [x] G4 奇数初回クーポンBUILD: `ODDFPRICE`／`ODDFYIELD`を初回クーポン按分、定期キャッシュフロー割引、利回り二分探索へ接続し、価格／利回り往復と日付・係数境界を回帰した。Excelの端数日・丸め・basis全域・oracle校正は未完。
+- [x] G4 奇数最終クーポンBUILD: `ODDLPRICE`／`ODDLYIELD`を最終クーポン按分、定期キャッシュフロー割引、利回り二分探索へ接続し、価格／利回り往復と日付・係数境界を回帰した。Excelの端数日・丸め・basis全域・oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素三角関数 BUILD: `IMSIN`／`IMCOS`／`IMTAN`、`IMSINH`／`IMCOSH`／`IMTANH`、`IMSEC`／`IMCSC`／`IMCOT`を複素公式と除算へ接続し、原点・接尾辞・極のゼロ除算を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。

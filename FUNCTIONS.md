@@ -295,6 +295,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `PRICE` | Price of a coupon-bearing security | Classic |
 | `YIELD` | Yield of a coupon-bearing security | Classic |
 | `ODDFPRICE` / `ODDFYIELD` | Price / yield of a security with an odd first coupon period | Classic |
+| `ODDLPRICE` / `ODDLYIELD` | Price / yield of a security with an odd last coupon period | Classic |
 | `TBILLPRICE` / `TBILLYIELD` / `TBILLEQ` | Treasury bill price, yield, and equivalent yield | Classic |
 
 ### Statistical
