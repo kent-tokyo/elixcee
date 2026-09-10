@@ -266,6 +266,7 @@ dependencies = [
  "libc",
  "proptest",
  "pyo3",
+ "regex",
  "serde_json",
  "toml",
  "zip 7.2.0",

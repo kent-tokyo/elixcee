@@ -494,6 +494,9 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `TEXTAFTER` | Extract text after the Nth occurrence of a delimiter | 2024/365 |
 | `VALUETOTEXT` | Convert any value to its text representation | 2024/365 |
 | `ENCODEURL` | Percent-encode text as UTF-8 for a URL without performing network I/O | 2013 |
+| `REGEXTEST` | Test text against a Rust regular expression | 2024/365 |
+| `REGEXEXTRACT` | Extract the first, all, or first capture-group matches | 2024/365 |
+| `REGEXREPLACE` | Replace all regular-expression matches without I/O | 2024/365 |
 | `FILTERXML` | Extract values using a bounded local XML element/attribute XPath subset | 2013 |
 | `HYPERLINK` | Return display text for a hyperlink without opening external resources | Classic |
 | `REPT` | Repeat a text string N times | Classic |

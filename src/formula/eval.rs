@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use regex::Regex;
+
 use super::ast::{BinOpKind, FormulaExpr};
 use crate::types::{MAX_ARRAY_ELEMENTS, days_in_month, is_leap, serial_to_ymd};
 use crate::vm::{CellContent, ExcelError, Variant};
@@ -475,6 +477,9 @@ fn eval_func(
         "VALUE" => func_value(args, cells),
         "REPT" => func_rept(args, cells),
         "NUMBERVALUE" => func_numbervalue(args, cells),
+        "REGEXTEST" => func_regextest(args, cells),
+        "REGEXEXTRACT" => func_regexextract(args, cells),
+        "REGEXREPLACE" => func_regexreplace(args, cells),
         // -- Date/Time --
         "YEAR" => func_year(args, cells),
         "MONTH" => func_month(args, cells),
@@ -3411,6 +3416,112 @@ fn func_encodeurl(
         }
     }
     Ok(Variant::Str(encoded))
+}
+
+fn regex_from_args(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    pattern_index: usize,
+    case_index: Option<usize>,
+    name: &str,
+) -> Result<Regex, String> {
+    let pattern = to_str(&evaluate(&args[pattern_index], cells)?);
+    let case_insensitive = if let Some(index) = case_index {
+        if let Some(arg) = args.get(index) {
+            let value = to_float(&evaluate(arg, cells)?)?;
+            if !value.is_finite() || value.fract() != 0.0 || !(0.0..=1.0).contains(&value) {
+                return Err(format!("{name}: case_sensitivity must be 0 or 1"));
+            }
+            value == 1.0
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    let source = if case_insensitive {
+        format!("(?i:{pattern})")
+    } else {
+        pattern
+    };
+    Regex::new(&source).map_err(|error| format!("{name}: invalid pattern: {error}"))
+}
+
+fn func_regextest(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(2..=3).contains(&args.len()) {
+        return Err("REGEXTEST requires 2 or 3 arguments".into());
+    }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    let regex = regex_from_args(args, cells, 1, Some(2), "REGEXTEST")?;
+    Ok(Variant::Boolean(regex.is_match(&text)))
+}
+
+fn func_regexextract(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(2..=4).contains(&args.len()) {
+        return Err("REGEXEXTRACT requires 2 to 4 arguments".into());
+    }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    let mode = if let Some(arg) = args.get(2) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=2.0).contains(&value) {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        value as u8
+    } else {
+        0
+    };
+    let regex = regex_from_args(args, cells, 1, Some(3), "REGEXEXTRACT")?;
+    if mode == 1 {
+        return Ok(Variant::Array(
+            regex
+                .find_iter(&text)
+                .map(|matched| Variant::Str(matched.as_str().to_string()))
+                .collect(),
+        ));
+    }
+    let Some(captures) = regex.captures(&text) else {
+        return Ok(Variant::Error(ExcelError::NA));
+    };
+    if mode == 2 {
+        if regex.captures_len() <= 1 {
+            return Ok(Variant::Error(ExcelError::NA));
+        }
+        return Ok(Variant::Array(
+            captures
+                .iter()
+                .skip(1)
+                .map(|capture| {
+                    Variant::Str(capture.map_or(String::new(), |m| m.as_str().to_string()))
+                })
+                .collect(),
+        ));
+    }
+    Ok(Variant::Str(
+        captures
+            .get(0)
+            .map_or(String::new(), |m| m.as_str().to_string()),
+    ))
+}
+
+fn func_regexreplace(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("REGEXREPLACE requires 3 arguments".into());
+    }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    let regex = regex_from_args(args, cells, 1, None, "REGEXREPLACE")?;
+    let replacement = to_str(&evaluate(&args[2], cells)?);
+    Ok(Variant::Str(
+        regex.replace_all(&text, replacement.as_str()).to_string(),
+    ))
 }
 
 fn func_proper(
@@ -15366,6 +15477,28 @@ mod tests {
         assert_eq!(
             calc("=ENCODEURL(\"東京\")", &c),
             Variant::Str("%E6%9D%B1%E4%BA%AC".into())
+        );
+        assert_eq!(
+            calc("=REGEXTEST(\"Invoice-42\",\"[0-9]+\")", &c),
+            Variant::Boolean(true)
+        );
+        assert_eq!(
+            calc("=REGEXTEST(\"Invoice-AB\",\"[0-9]+\")", &c),
+            Variant::Boolean(false)
+        );
+        assert_eq!(
+            calc(
+                "=REGEXEXTRACT(\"Invoice-42\",\"([A-Za-z]+)-([0-9]+)\",2)",
+                &c
+            ),
+            Variant::Array(vec![
+                Variant::Str("Invoice".into()),
+                Variant::Str("42".into())
+            ])
+        );
+        assert_eq!(
+            calc("=REGEXREPLACE(\"a1 b22\",\"[0-9]+\",\"#\")", &c),
+            Variant::Str("a# b#".into())
         );
     }
 
