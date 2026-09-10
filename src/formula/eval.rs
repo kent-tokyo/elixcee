@@ -13713,10 +13713,9 @@ fn func_textsplit(
         parts
     };
 
-    let rows = row_delim.as_deref().map_or_else(
-        || vec![text.as_str()],
-        |delimiter| text.split(delimiter).collect(),
-    );
+    let rows = row_delim
+        .as_deref()
+        .map_or_else(|| vec![text.clone()], |delimiter| split(&text, delimiter));
     let mut split_rows: Vec<Vec<String>> =
         rows.iter().map(|row| split(row, &column_delim)).collect();
     let width = split_rows.iter().map(Vec::len).max().unwrap_or(0);
@@ -17457,6 +17456,15 @@ mod tests {
                 Variant::Str("b".into()),
                 Variant::Str("c".into()),
                 Variant::Str("_".into())
+            ])
+        );
+        assert_eq!(
+            calc("=TEXTSPLIT(\"a,bXc,d\",\",\",\"x\",FALSE,1,\"_\")", &c),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("b".into()),
+                Variant::Str("c".into()),
+                Variant::Str("d".into())
             ])
         );
     }
