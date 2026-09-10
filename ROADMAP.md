@@ -156,6 +156,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 F分布両側モード BUILD: `F.DIST.2T`を追加し、既存の累積F分布から両側確率を導出して、x・自由度・確率上限の境界を回帰した。Excelの全型変換・数値精度・oracle校正は未完。
 - [x] G4 複素数基盤 BUILD: `COMPLEX`、`IMREAL`、`IMAGINARY`、`IMABS`を追加し、i/j接尾辞、純虚数、符号、実部・虚部抽出、絶対値を共通パーサーで回帰した。複素数演算全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素偏角 BUILD: `IMARGUMENT`を追加し、`atan2`による象限判定と原点の未定義境界を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。
+- [x] G4 複素常用対数 BUILD: `IMLOG2`を主値対数ヘルパーへ接続し、基数2の実軸代表値とゼロ定義域を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素三角関数 BUILD: `IMSIN`／`IMCOS`／`IMTAN`、`IMSINH`／`IMCOSH`／`IMTANH`、`IMSEC`／`IMCSC`／`IMCOT`を複素公式と除算へ接続し、原点・接尾辞・極のゼロ除算を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。

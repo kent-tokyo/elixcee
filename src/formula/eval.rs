@@ -622,6 +622,7 @@ fn eval_func(
         "IMEXP" => func_imexp(args, cells),
         "IMLN" => func_imln(args, cells),
         "IMLOG10" => func_imlog10(args, cells),
+        "IMLOG2" => func_imlog2(args, cells),
         "IMSQRT" => func_imsqrt(args, cells),
         "IMPOWER" => func_impower(args, cells),
         "IMSIN" => func_imsin(args, cells),
@@ -7852,6 +7853,26 @@ fn func_imlog10(
     )))
 }
 
+fn func_imlog2(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMLOG2 requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMLOG2")?;
+    let logarithm = complex_ln_value(value).map_err(|error| format!("IMLOG2: {error:?}"))?;
+    let scale = 2.0_f64.ln();
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: logarithm.re / scale,
+            im: logarithm.im / scale,
+        },
+        suffix,
+    )))
+}
+
 fn func_imsqrt(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -11917,6 +11938,7 @@ mod tests {
         assert_eq!(calc("=IMEXP(\"0\")", &c), Variant::Str("1".into()));
         assert_eq!(calc("=IMLN(\"1\")", &c), Variant::Str("0".into()));
         assert_eq!(calc("=IMLOG10(\"1\")", &c), Variant::Str("0".into()));
+        assert_eq!(calc("=IMLOG2(\"2\")", &c), Variant::Str("1".into()));
         assert_eq!(calc("=IMSQRT(\"-1\")", &c), Variant::Str("i".into()));
         assert_eq!(calc("=IMPOWER(\"2\",\"2\")", &c), Variant::Str("4".into()));
         assert_eq!(calc("=IMSIN(\"0\")", &c), Variant::Str("0".into()));

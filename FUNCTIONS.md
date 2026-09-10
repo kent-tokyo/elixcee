@@ -396,7 +396,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `IMSUM` / `IMSUB` | Add / subtract complex numbers | Classic |
 | `IMPRODUCT` / `IMDIV` | Multiply / divide complex numbers | Classic |
 | `IMCONJUGATE` | Complex conjugate | Classic |
-| `IMEXP` / `IMLN` / `IMLOG10` | Complex exponential and logarithms | Classic |
+| `IMEXP` / `IMLN` / `IMLOG10` / `IMLOG2` | Complex exponential and logarithms | Classic |
 | `IMSQRT` / `IMPOWER` | Complex square root / power | Classic |
 | `IMSIN` / `IMCOS` / `IMTAN` | Complex sine / cosine / tangent | Classic |
 | `IMSINH` / `IMCOSH` / `IMTANH` | Complex hyperbolic functions | Classic |
