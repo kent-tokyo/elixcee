@@ -46,12 +46,12 @@ Excel oracleを確認したうえで、合成または再配布可能な小規�
 ### L7–L10 品質保証・競合対応phase
 
 - [x] **L7a CI診断契約**: `diagnose-workbook`のGitHub Actions利用例、seed／case replay、失敗JSON artifact、root cause／observationの扱いを[CI VBA diagnostics](docs/ci-vba-diagnostics.md)へ固定した。これは既存CLI契約の導線整備であり、新しいVBA意味論の追加ではない。
-- [x] **L7b 診断corpus manifest BUILD**: Range/Paste、非表示行列、Protection、Formula result、VBA resolutionの5分類を`compat/vba-diagnostics/corpus.json`へ固定し、runner test名・期待終了状態・root cause／observation・MIT再配布境界をテストで検証した。実workbook pairとseed付き実行artifactはL7cとして継続する。
-- [x] **L7c 診断corpus execution BUILD**: `scripts/run-vba-diagnostic-corpus.py`にmanifest classからCargo test targetへのallowlist mappingを実装し、5分類をofflineでcase別実行してJSON summaryを出力できるようにした。実workbook pair・seed付きgenerated JSON artifactの拡充はL7dとして継続する。
+- [x] **L7b 診断corpus manifest BUILD**: Range/Paste、非表示行列、Protection、Formula result、VBA resolutionの5分類を`compat/vba-diagnostics/corpus.json`へ固定し、runner test名・期待終了状態・root cause／observation・MIT再配布境界をテストで検証した。再配布可能artifactはL7dで接続済み。
+- [x] **L7c 診断corpus execution BUILD**: `scripts/run-vba-diagnostic-corpus.py`にmanifest classからCargo test targetへのallowlist mappingを実装し、5分類をofflineでcase別実行してJSON summaryを出力できるようにした。L7dのartifact生成・検証と組み合わせて再現可能にした。
 - [x] **L7d 診断corpus artifact BUILD**: 各manifest caseに固定seed、再生成可能な合成XLSX、VBA source、期待JSONを接続し、`scripts/generate-vba-diagnostic-artifacts.py`で再生成できるようにした。runnerのcase replayと組み合わせてCIで再現できる。これは診断契約artifactであり、Excel oracle／完全なworkbook pair互換性を意味しない。
 - [x] **L8 再現可能benchmark MEASURE**: `scripts/measure-vba-diagnostic-corpus.py`でcorpus version、manifest SHA-256、runtime、git revision、OS／CPU／Python、child wall time、RSSを記録する。実測は診断corpusの回帰実行時間であり、before/afterや競合比較・Excel oracleとは別表・別主張にする。[測定記録](docs/measurements/vba-diagnostic-corpus-2026-09-11.json)
 - [x] **L9 snapshot／依存関係 BUILD**: snapshot JSONへformula、入力／出力候補、依存辺、cycle／unresolved referenceを後方互換フィールドとして追加した。Python opt-in時だけ読み取り専用・bounded・決定論的に出力し、既定snapshotは不変とする。
-- [x] **L9a dependency projection BUILD**: Python `Vm.snapshot(include_dependencies=True)`へ、数式の直接セル参照／範囲参照をbounded・決定論的な`dependencies`配列として追加した。既定snapshotは不変で、範囲をセル単位へ展開しない。parse failure、cycle、unresolved referenceの分類と入力／出力候補はL9b以降。
+- [x] **L9a dependency projection BUILD**: Python `Vm.snapshot(include_dependencies=True)`へ、数式の直接セル参照／範囲参照をbounded・決定論的な`dependencies`配列として追加した。既定snapshotは不変で、範囲をセル単位へ展開しない。parse failure、cycle、unresolved reference、入力／出力候補もL9本体で接続済み。
 - [x] **L10 formula oracle BUILD/MEASURE**: HyperFormula 3.4.0を固定dev dependencyとして補助oracle化し、VSTACK/HSTACK/UNIQUE/SORT/XIRRの5 probeを実行して5/5一致を記録した。LibreOfficeの`#NAME?`結果は一致扱いにせず、Excel oracleとは分離する。[測定記録](docs/measurements/formula-hyperformula-dynamic-2026-09-11.json)
 - [ ] **L10b 外部benchmark gate**: Workbook Time Machine／SpreadsheetBench 2はライセンス、再配布条件、タスク変換、期待値の出所を確認できた範囲だけ採用する。外部datasetの存在だけで品質向上や競合優位を主張しない。
 
