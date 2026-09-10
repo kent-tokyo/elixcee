@@ -294,6 +294,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `MDURATION` | Modified duration of a security | 2010 |
 | `PRICE` | Price of a coupon-bearing security | Classic |
 | `YIELD` | Yield of a coupon-bearing security | Classic |
+| `ODDFPRICE` / `ODDFYIELD` | Price / yield of a security with an odd first coupon period | Classic |
 | `TBILLPRICE` / `TBILLYIELD` / `TBILLEQ` | Treasury bill price, yield, and equivalent yield | Classic |
 
 ### Statistical

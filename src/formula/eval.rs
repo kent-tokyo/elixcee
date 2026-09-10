@@ -777,6 +777,8 @@ fn eval_func(
         "MDURATION" => func_duration(args, cells, true),
         "PRICE" => func_price(args, cells),
         "YIELD" => func_yield(args, cells),
+        "ODDFPRICE" => func_oddfprice(args, cells),
+        "ODDFYIELD" => func_oddfyield(args, cells),
         "TBILLPRICE" => func_tbillprice(args, cells),
         "TBILLYIELD" => func_tbillyield(args, cells),
         "TBILLEQ" => func_tbilleq(args, cells),
@@ -11570,6 +11572,169 @@ fn func_yield(
     Ok(Variant::Float((lo + hi) / 2.0))
 }
 
+struct OddFirstBondArgs {
+    settlement: i64,
+    maturity: i64,
+    issue: i64,
+    first_coupon: i64,
+    rate: f64,
+    price_or_yield: f64,
+    redemption: f64,
+    frequency: i32,
+    basis: i32,
+}
+
+fn odd_first_price_for_yield(args: &OddFirstBondArgs, yield_rate: f64) -> Result<f64, Variant> {
+    if args.issue >= args.settlement
+        || args.settlement >= args.first_coupon
+        || args.first_coupon > args.maturity
+    {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    if !args.rate.is_finite()
+        || !yield_rate.is_finite()
+        || !args.redemption.is_finite()
+        || args.redemption <= 0.0
+        || yield_rate <= -(args.frequency as f64)
+    {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let months = 12 / args.frequency;
+    let previous_coupon = coupon_month_shift(args.first_coupon, -months);
+    let period_days = coupon_day_count(previous_coupon, args.first_coupon, args.basis);
+    let odd_days = coupon_day_count(args.issue, args.first_coupon, args.basis);
+    let accrued_days = coupon_day_count(args.issue, args.settlement, args.basis);
+    if period_days <= 0.0 || odd_days <= 0.0 || accrued_days < 0.0 {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let coupon = args.redemption * args.rate / args.frequency as f64;
+    let first_payment = coupon * odd_days / period_days;
+    let rate_per_period = yield_rate / args.frequency as f64;
+    let mut payment = args.first_coupon;
+    let mut dirty = 0.0;
+    let mut period_index = 0_u32;
+    while payment <= args.maturity {
+        let amount = if payment == args.first_coupon {
+            first_payment
+        } else {
+            coupon
+        } + if payment == args.maturity {
+            args.redemption
+        } else {
+            0.0
+        };
+        let periods_from_settlement =
+            coupon_day_count(args.settlement, payment, args.basis) / period_days;
+        dirty += amount / (1.0 + rate_per_period).powf(periods_from_settlement);
+        payment = coupon_month_shift(payment, months);
+        period_index += 1;
+        if period_index > 10_000 {
+            return Err(Variant::Error(ExcelError::Num));
+        }
+    }
+    let clean = dirty - coupon * accrued_days / period_days;
+    if clean.is_finite() && clean > 0.0 {
+        Ok(clean)
+    } else {
+        Err(Variant::Error(ExcelError::Num))
+    }
+}
+
+fn odd_first_arguments(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+    price_form: bool,
+) -> Result<OddFirstBondArgs, String> {
+    if args.len() < 8 || args.len() > 9 {
+        return Err(format!("{name} requires 8 or 9 arguments"));
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let issue = to_float(&evaluate(&args[2], cells)?)?;
+    let first_coupon = to_float(&evaluate(&args[3], cells)?)?;
+    let rate = to_float(&evaluate(&args[4], cells)?)?;
+    let price_or_yield = to_float(&evaluate(&args[5], cells)?)?;
+    let redemption = to_float(&evaluate(&args[6], cells)?)?;
+    let frequency = to_float(&evaluate(&args[7], cells)?)?;
+    let basis = if args.len() == 9 {
+        to_float(&evaluate(&args[8], cells)?)?
+    } else {
+        0.0
+    };
+    if !settlement.is_finite()
+        || !maturity.is_finite()
+        || !issue.is_finite()
+        || !first_coupon.is_finite()
+        || !rate.is_finite()
+        || !price_or_yield.is_finite()
+        || !redemption.is_finite()
+        || !frequency.is_finite()
+        || !basis.is_finite()
+        || settlement.fract() != 0.0
+        || maturity.fract() != 0.0
+        || issue.fract() != 0.0
+        || first_coupon.fract() != 0.0
+        || frequency.fract() != 0.0
+        || basis.fract() != 0.0
+        || (!price_form && price_or_yield <= 0.0)
+        || (price_form && price_or_yield <= -(frequency.max(1.0)))
+        || redemption <= 0.0
+        || !matches!(frequency as i32, 1 | 2 | 4)
+        || !(0.0..=4.0).contains(&basis)
+    {
+        return Err(format!("{name}: invalid odd-first bond arguments"));
+    }
+    Ok(OddFirstBondArgs {
+        settlement: settlement as i64,
+        maturity: maturity as i64,
+        issue: issue as i64,
+        first_coupon: first_coupon as i64,
+        rate,
+        price_or_yield,
+        redemption,
+        frequency: frequency as i32,
+        basis: basis as i32,
+    })
+}
+
+fn func_oddfprice(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let bond = odd_first_arguments(args, cells, "ODDFPRICE", true)?;
+    match odd_first_price_for_yield(&bond, bond.price_or_yield) {
+        Ok(value) => Ok(Variant::Float(value)),
+        Err(error) => Ok(error),
+    }
+}
+
+fn func_oddfyield(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let bond = odd_first_arguments(args, cells, "ODDFYIELD", false)?;
+    let low = -(bond.frequency as f64) + 1e-10;
+    let high = 10.0;
+    let low_price = odd_first_price_for_yield(&bond, low).unwrap_or(0.0);
+    let high_price = odd_first_price_for_yield(&bond, high).unwrap_or(0.0);
+    if bond.price_or_yield > low_price || bond.price_or_yield < high_price {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let mut lo = low;
+    let mut hi = high;
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        let price = odd_first_price_for_yield(&bond, mid).unwrap_or(0.0);
+        if price > bond.price_or_yield {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(Variant::Float((lo + hi) / 2.0))
+}
+
 fn func_pduration(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -16680,6 +16845,23 @@ mod tests {
                 &c
             ),
             Variant::Float(value) if (value - 0.1).abs() < 1e-10
+        ));
+        let odd_first_price = match calc(
+            "=ODDFPRICE(DATE(2024,2,1),DATE(2025,1,1),DATE(2024,1,1),DATE(2024,7,1),0.08,0.1,100,2,0)",
+            &c,
+        ) {
+            Variant::Float(value) => value,
+            other => panic!("ODDFPRICE unexpected: {:?}", other),
+        };
+        assert!(odd_first_price.is_finite() && odd_first_price > 0.0);
+        assert!(matches!(
+            calc(
+                &format!(
+                    "=ODDFYIELD(DATE(2024,2,1),DATE(2025,1,1),DATE(2024,1,1),DATE(2024,7,1),0.08,{odd_first_price},100,2,0)"
+                ),
+                &c
+            ),
+            Variant::Float(value) if (value - 0.1).abs() < 1e-9
         ));
         assert!(
             matches!(calc("=AMORLINC(1000,DATE(2020,1,1),DATE(2020,7,1),0,0,0.2,0)", &c), Variant::Float(value) if (value - 100.0).abs() < 1e-12)
