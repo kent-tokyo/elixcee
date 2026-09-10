@@ -522,6 +522,7 @@ fn eval_func(
         "FORECAST.LINEAR" | "FORECAST" => func_forecast_linear(args, cells),
         "TREND" => func_trend(args, cells),
         "GROWTH" => func_growth(args, cells),
+        "LINEST" => func_linest(args, cells),
         "STEYX" => func_steyx(args, cells),
         "FISHER" => func_fisher(args, cells),
         "FISHERINV" => func_fisherinv(args, cells),
@@ -4937,6 +4938,127 @@ fn func_growth(
             .into_iter()
             .map(|x| as_integer_if_whole((intercept + slope * x).exp()))
             .collect(),
+    ))
+}
+
+fn func_linest(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(1..=4).contains(&args.len()) {
+        return Err("LINEST requires 1 to 4 arguments".into());
+    }
+    let known_y = collect_values(&args[0], cells)?
+        .into_iter()
+        .filter_map(|v| as_f64(&v))
+        .collect::<Vec<_>>();
+    if known_y.len() < 2 {
+        return Err("LINEST: known_y must contain at least 2 numeric values".into());
+    }
+    let known_x = if args.len() >= 2 {
+        collect_values(&args[1], cells)?
+            .into_iter()
+            .filter_map(|v| as_f64(&v))
+            .collect::<Vec<_>>()
+    } else {
+        (1..=known_y.len()).map(|value| value as f64).collect()
+    };
+    if known_x.len() != known_y.len() {
+        return Err("LINEST: known arrays must have equal length".into());
+    }
+    let constant = if args.len() >= 3 {
+        is_truthy(&evaluate(&args[2], cells)?)
+    } else {
+        true
+    };
+    let stats = if args.len() == 4 {
+        is_truthy(&evaluate(&args[3], cells)?)
+    } else {
+        false
+    };
+    let n = known_y.len() as f64;
+    let mean_y = known_y.iter().sum::<f64>() / n;
+    let mean_x = known_x.iter().sum::<f64>() / n;
+    let (slope, intercept, x_variation) = if constant {
+        let x_variation = known_x.iter().map(|x| (x - mean_x).powi(2)).sum::<f64>();
+        if x_variation == 0.0 {
+            return Err("LINEST: known_x values must vary".into());
+        }
+        let slope = known_x
+            .iter()
+            .zip(&known_y)
+            .map(|(x, y)| (x - mean_x) * (y - mean_y))
+            .sum::<f64>()
+            / x_variation;
+        (slope, mean_y - slope * mean_x, x_variation)
+    } else {
+        let x_variation = known_x.iter().map(|x| x * x).sum::<f64>();
+        if x_variation == 0.0 {
+            return Err("LINEST: known_x values must not all be zero".into());
+        }
+        let slope = known_x
+            .iter()
+            .zip(&known_y)
+            .map(|(x, y)| x * y)
+            .sum::<f64>()
+            / x_variation;
+        (slope, 0.0, x_variation)
+    };
+    if !stats {
+        return Ok(Variant::Array(vec![
+            as_integer_if_whole(slope),
+            as_integer_if_whole(intercept),
+        ]));
+    }
+    let residuals = known_x
+        .iter()
+        .zip(&known_y)
+        .map(|(x, y)| y - (slope * x + intercept))
+        .collect::<Vec<_>>();
+    let ss_resid = residuals.iter().map(|value| value * value).sum::<f64>();
+    let degrees = known_y.len() as i64 - if constant { 2 } else { 1 };
+    if degrees <= 0 {
+        return Err("LINEST: insufficient degrees of freedom".into());
+    }
+    let standard_error = (ss_resid / degrees as f64).sqrt();
+    let slope_se = standard_error / x_variation.sqrt();
+    let intercept_se = if constant {
+        standard_error * (1.0 / n + mean_x.powi(2) / x_variation).sqrt()
+    } else {
+        0.0
+    };
+    let ss_total = if constant {
+        known_y.iter().map(|y| (y - mean_y).powi(2)).sum::<f64>()
+    } else {
+        known_y.iter().map(|y| y * y).sum::<f64>()
+    };
+    let ss_reg = (ss_total - ss_resid).max(0.0);
+    let r_squared = if ss_total == 0.0 {
+        0.0
+    } else {
+        1.0 - ss_resid / ss_total
+    };
+    let f_stat = if ss_resid == 0.0 {
+        f64::INFINITY
+    } else {
+        ss_reg / (ss_resid / degrees as f64)
+    };
+    Ok(Variant::Array(
+        [
+            slope,
+            intercept,
+            slope_se,
+            intercept_se,
+            r_squared,
+            standard_error,
+            f_stat,
+            degrees as f64,
+            ss_reg,
+            ss_resid,
+        ]
+        .into_iter()
+        .map(as_integer_if_whole)
+        .collect(),
     ))
 }
 
@@ -13599,6 +13721,19 @@ mod tests {
             calc("=TREND(A1:A3,B1:B3,C1:C2)", &c),
             Variant::Array(vec![Variant::Integer(8), Variant::Integer(10)])
         );
+        assert_eq!(
+            calc("=LINEST(A1:A3,B1:B3)", &c),
+            Variant::Array(vec![Variant::Integer(2), Variant::Integer(0)])
+        );
+        match calc("=LINEST(A1:A3,B1:B3,TRUE,TRUE)", &c) {
+            Variant::Array(values) => {
+                assert_eq!(values.len(), 10);
+                assert_eq!(values[0], Variant::Integer(2));
+                assert_eq!(values[1], Variant::Integer(0));
+                assert_eq!(values[7], Variant::Integer(1));
+            }
+            other => panic!("LINEST stats unexpected: {:?}", other),
+        }
         match calc("=GROWTH(D1:D3,E1:E3,F1:F1)", &c) {
             Variant::Array(values) => match values.as_slice() {
                 [Variant::Float(value)] => assert!((*value - 16.0).abs() < 1e-9),
