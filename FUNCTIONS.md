@@ -556,6 +556,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `HSTACK` | Stack arrays horizontally (concatenate) | 2024/365 |
 | `CHOOSECOLS` | Select specific columns by 1-based index | 2024/365 |
 | `CHOOSEROWS` | Select specific rows by 1-based index | 2024/365 |
+| `MAKEARRAY` | Generate an array by calling a LAMBDA with row and column indices | 2024/365 |
 | `MUNIT` | Identity matrix | Classic |
 | `MMULT` | Matrix multiplication | Classic |
 | `MDETERM` | Matrix determinant | Classic |
@@ -618,10 +619,3 @@ per-function mode coverage, and independent oracle tests are tracked in
 | Function | Description | Excel |
 |---|---|---|
 | `PHONETIC` | Extract phonetic (furigana) characters | Classic |
-
-
-### Dynamic Array
-
-| Function | Description | Excel |
-|---|---|---|
-| `MAKEARRAY` | Generate an array by calling a LAMBDA for each element | 2024/365 |

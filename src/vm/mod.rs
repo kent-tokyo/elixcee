@@ -15817,7 +15817,7 @@ fn formula_spill_shape(
     };
 
     match name.as_str() {
-        "SEQUENCE" | "RANDARRAY" => {
+        "SEQUENCE" | "RANDARRAY" | "MAKEARRAY" => {
             let rows = dimension(args.first(), 1)?.max(1);
             let cols = dimension(args.get(1), 1)?.max(1);
             exact(rows, cols).or(Some(fallback))

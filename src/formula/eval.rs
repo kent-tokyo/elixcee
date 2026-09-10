@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use super::ast::{BinOpKind, FormulaExpr};
-use crate::types::{days_in_month, is_leap, serial_to_ymd};
+use crate::types::{MAX_ARRAY_ELEMENTS, days_in_month, is_leap, serial_to_ymd};
 use crate::vm::{CellContent, ExcelError, Variant};
 
 // ── LET/LAMBDA name-binding stack ────────────────────────────────────────────
@@ -687,6 +687,7 @@ fn eval_func(
         "HSTACK" => func_hstack(args, cells),
         "CHOOSECOLS" => func_choosecols(args, cells),
         "CHOOSEROWS" => func_chooserows(args, cells),
+        "MAKEARRAY" => func_makearray(args, cells),
         // ── Math / Financial ─────────────────────────────────────────────────
         "COMBIN" => func_combin(args, cells),
         "COMBINA" => func_combina(args, cells),
@@ -8723,6 +8724,46 @@ fn call_lambda(
     result
 }
 
+fn func_makearray(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("MAKEARRAY requires 3 arguments".into());
+    }
+    let rows = to_float(&evaluate(&args[0], cells)?)?;
+    let cols = to_float(&evaluate(&args[1], cells)?)?;
+    if !rows.is_finite()
+        || !cols.is_finite()
+        || rows < 1.0
+        || cols < 1.0
+        || rows.fract() != 0.0
+        || cols.fract() != 0.0
+    {
+        return Err("MAKEARRAY dimensions must be positive integers".into());
+    }
+    let rows = rows as usize;
+    let cols = cols as usize;
+    let element_count = rows
+        .checked_mul(cols)
+        .ok_or_else(|| "MAKEARRAY dimensions are too large".to_string())?;
+    if element_count > MAX_ARRAY_ELEMENTS {
+        return Err("MAKEARRAY dimensions exceed the element limit".into());
+    }
+    let lambda = &args[2];
+    let mut result = Vec::with_capacity(element_count);
+    for row in 1..=rows {
+        for col in 1..=cols {
+            result.push(call_lambda(
+                lambda,
+                vec![Variant::Integer(row as i64), Variant::Integer(col as i64)],
+                cells,
+            )?);
+        }
+    }
+    Ok(wrap_array(result))
+}
+
 // ── MAP ───────────────────────────────────────────────────────────────────────
 
 fn func_map(
@@ -14392,6 +14433,23 @@ mod tests {
         assert_eq!(calc("=LET(x, 3, y, 4, x*y)", &c), Variant::Integer(12));
         // LET with string
         assert_eq!(calc("=LET(s, \"hello\", LEN(s))", &c), Variant::Integer(5));
+    }
+
+    #[test]
+    fn test_makearray_lambda() {
+        let c = HashMap::new();
+        assert_eq!(
+            calc("=MAKEARRAY(2,3,LAMBDA(r,c,r*10+c))", &c),
+            Variant::Array(vec![
+                Variant::Integer(11),
+                Variant::Integer(12),
+                Variant::Integer(13),
+                Variant::Integer(21),
+                Variant::Integer(22),
+                Variant::Integer(23),
+            ])
+        );
+        assert!(evaluate(&fparse("=MAKEARRAY(0,2,LAMBDA(r,c,r+c))").unwrap(), &c).is_err());
     }
 
     #[test]
