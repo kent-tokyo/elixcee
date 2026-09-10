@@ -609,6 +609,10 @@ fn eval_func(
         "CONVERT" => func_convert(args, cells),
         "ROMAN" => func_roman(args, cells),
         "ARABIC" => func_arabic(args, cells),
+        "COMPLEX" => func_complex(args, cells),
+        "IMREAL" => func_imreal(args, cells),
+        "IMAGINARY" => func_imaginary(args, cells),
+        "IMABS" => func_imabs(args, cells),
         // ── Trigonometry ──────────────────────────────────────────────────────
         "PI" => func_pi(args, cells),
         "SIN" => func_trig1(args, cells, f64::sin),
@@ -7474,6 +7478,167 @@ fn func_arabic(
     Ok(Variant::Integer(total))
 }
 
+#[derive(Clone, Copy)]
+struct ComplexValue {
+    re: f64,
+    im: f64,
+}
+
+fn parse_complex(text: &str) -> Result<ComplexValue, String> {
+    let normalized = text.trim().replace(' ', "");
+    if normalized.is_empty() {
+        return Err("complex value is empty".into());
+    }
+    let (body, has_suffix) = match normalized.chars().last() {
+        Some('i' | 'j') => (&normalized[..normalized.len() - 1], true),
+        _ => (normalized.as_str(), false),
+    };
+    if !has_suffix {
+        return Ok(ComplexValue {
+            re: body
+                .parse()
+                .map_err(|_| "invalid complex real part".to_string())?,
+            im: 0.0,
+        });
+    }
+    if body.is_empty() || body == "+" {
+        return Ok(ComplexValue { re: 0.0, im: 1.0 });
+    }
+    if body == "-" {
+        return Ok(ComplexValue { re: 0.0, im: -1.0 });
+    }
+    let split = body
+        .char_indices()
+        .skip(1)
+        .find(|(_, ch)| *ch == '+' || *ch == '-')
+        .map(|(index, _)| index);
+    if let Some(index) = split {
+        let re = body[..index]
+            .parse()
+            .map_err(|_| "invalid complex real part".to_string())?;
+        let imaginary = &body[index..];
+        let im = match imaginary {
+            "+" => 1.0,
+            "-" => -1.0,
+            _ => imaginary
+                .parse()
+                .map_err(|_| "invalid complex imaginary part".to_string())?,
+        };
+        Ok(ComplexValue { re, im })
+    } else {
+        Ok(ComplexValue {
+            re: 0.0,
+            im: body
+                .parse()
+                .map_err(|_| "invalid complex imaginary part".to_string())?,
+        })
+    }
+}
+
+fn complex_number(value: f64) -> String {
+    if value == 0.0 {
+        "0".into()
+    } else if value.fract() == 0.0 {
+        (value as i64).to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn complex_text(value: ComplexValue, suffix: char) -> String {
+    if value.im == 0.0 {
+        return complex_number(value.re);
+    }
+    let imaginary = value.im.abs();
+    let imaginary_text = if imaginary == 1.0 {
+        suffix.to_string()
+    } else {
+        format!("{}{}", complex_number(imaginary), suffix)
+    };
+    if value.re == 0.0 {
+        return if value.im < 0.0 {
+            format!("-{}", imaginary_text)
+        } else {
+            imaginary_text
+        };
+    }
+    format!(
+        "{}{}{}",
+        complex_number(value.re),
+        if value.im < 0.0 { "-" } else { "+" },
+        imaginary_text
+    )
+}
+
+fn complex_argument(
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<ComplexValue, String> {
+    let value = evaluate(expr, cells)?;
+    parse_complex(&to_str(&value)).map_err(|error| format!("{name}: {error}"))
+}
+
+fn func_complex(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("COMPLEX requires 2 or 3 arguments".into());
+    }
+    let re = to_float(&evaluate(&args[0], cells)?)?;
+    let im = to_float(&evaluate(&args[1], cells)?)?;
+    let suffix = if args.len() == 3 {
+        let value = to_str(&evaluate(&args[2], cells)?).to_ascii_lowercase();
+        match value.as_str() {
+            "i" => 'i',
+            "j" => 'j',
+            _ => return Err("COMPLEX: suffix must be i or j".into()),
+        }
+    } else {
+        'i'
+    };
+    if !re.is_finite() || !im.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Str(complex_text(ComplexValue { re, im }, suffix)))
+}
+
+fn func_imreal(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMREAL requires 1 argument".into());
+    }
+    Ok(as_integer_if_whole(
+        complex_argument(&args[0], cells, "IMREAL")?.re,
+    ))
+}
+
+fn func_imaginary(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMAGINARY requires 1 argument".into());
+    }
+    Ok(as_integer_if_whole(
+        complex_argument(&args[0], cells, "IMAGINARY")?.im,
+    ))
+}
+
+fn func_imabs(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMABS requires 1 argument".into());
+    }
+    let value = complex_argument(&args[0], cells, "IMABS")?;
+    Ok(as_integer_if_whole(value.re.hypot(value.im)))
+}
+
 // ── Trigonometry ──────────────────────────────────────────────────────────────
 
 fn func_pi(
@@ -10991,6 +11156,16 @@ mod tests {
         assert_eq!(calc("=OCT2HEX(\"377\")", &c), Variant::Str("FF".into()));
         assert_eq!(calc("=DEC2BIN(512)", &c), Variant::Error(ExcelError::Num));
         assert_eq!(calc("=DEC2BIN(10,3)", &c), Variant::Error(ExcelError::Num));
+    }
+
+    #[test]
+    fn test_complex_number_functions() {
+        let c = HashMap::new();
+        assert_eq!(calc("=COMPLEX(3,4)", &c), Variant::Str("3+4i".into()));
+        assert_eq!(calc("=COMPLEX(3,-1,\"j\")", &c), Variant::Str("3-j".into()));
+        assert_eq!(calc("=IMREAL(\"-3-4j\")", &c), Variant::Integer(-3));
+        assert_eq!(calc("=IMAGINARY(\"-3-4j\")", &c), Variant::Integer(-4));
+        assert_eq!(calc("=IMABS(\"3+4i\")", &c), Variant::Integer(5));
     }
 
     #[test]
