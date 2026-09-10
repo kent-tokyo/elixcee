@@ -401,6 +401,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `IMSIN` / `IMCOS` / `IMTAN` | Complex sine / cosine / tangent | Classic |
 | `IMSINH` / `IMCOSH` / `IMTANH` | Complex hyperbolic functions | Classic |
 | `IMSEC` / `IMCSC` / `IMCOT` | Complex reciprocal trigonometric functions | Classic |
+| `IMASIN` / `IMACOS` / `IMATAN` / `IMACOT` | Complex inverse trigonometric functions | Classic |
 
 ### Logical
 

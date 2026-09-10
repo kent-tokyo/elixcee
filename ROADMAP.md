@@ -158,6 +158,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素三角関数 BUILD: `IMSIN`／`IMCOS`／`IMTAN`、`IMSINH`／`IMCOSH`／`IMTANH`、`IMSEC`／`IMCSC`／`IMCOT`を複素公式と除算へ接続し、原点・接尾辞・極のゼロ除算を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。
+- [x] G4 複素逆三角関数 BUILD: `IMASIN`／`IMACOS`／`IMATAN`／`IMACOT`を主値平方根・対数ヘルパーへ接続し、実軸の代表値と主値計算を回帰した。複素関数全体、branch cut・Excel oracle校正は未完。
 - [x] G4 回帰予測配列 BUILD: `TREND`と`GROWTH`を配列結果として追加し、線形／指数回帰、const指定、new_x範囲、正値制約を回帰した。多変量LINEST互換、Excelの全型変換・spill oracle校正は未完。
 - [x] G4 単回帰LINEST BUILD: `LINEST`の単回帰について係数・切片、`const`、`stats`時の標準誤差・R²・F・自由度・平方和を配列結果として追加した。多変量回帰、Excelの全型変換・2D spill・oracle校正は未完。
 - [x] G4 指数回帰LOGEST BUILD: `LOGEST`の単回帰について指数係数・基底、`const`、`stats`時の回帰統計を配列結果として追加した。多変量回帰、Excelの全型変換・2D spill・oracle校正は未完。

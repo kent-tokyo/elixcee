@@ -632,6 +632,10 @@ fn eval_func(
         "IMSEC" => func_imsec(args, cells),
         "IMCSC" => func_imcsc(args, cells),
         "IMCOT" => func_imcot(args, cells),
+        "IMASIN" => func_imasin(args, cells),
+        "IMACOS" => func_imacos(args, cells),
+        "IMATAN" => func_imatan(args, cells),
+        "IMACOT" => func_imacot(args, cells),
         // ── Trigonometry ──────────────────────────────────────────────────────
         "PI" => func_pi(args, cells),
         "SIN" => func_trig1(args, cells, f64::sin),
@@ -8058,6 +8062,143 @@ fn func_imcot(
     Ok(Variant::Str(complex_text(result, suffix)))
 }
 
+fn complex_sqrt_value(value: ComplexValue) -> ComplexValue {
+    let magnitude = value.re.hypot(value.im);
+    ComplexValue {
+        re: ((magnitude + value.re) / 2.0).sqrt(),
+        im: ((magnitude - value.re) / 2.0).sqrt().copysign(value.im),
+    }
+}
+
+fn complex_ln_value(value: ComplexValue) -> Result<ComplexValue, ExcelError> {
+    if value.re == 0.0 && value.im == 0.0 {
+        return Err(ExcelError::Num);
+    }
+    Ok(ComplexValue {
+        re: value.re.hypot(value.im).ln(),
+        im: value.im.atan2(value.re),
+    })
+}
+
+fn complex_mul_values(left: ComplexValue, right: ComplexValue) -> ComplexValue {
+    ComplexValue {
+        re: left.re * right.re - left.im * right.im,
+        im: left.re * right.im + left.im * right.re,
+    }
+}
+
+fn func_imasin(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMASIN requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMASIN")?;
+    let square = complex_mul_values(value, value);
+    let root = complex_sqrt_value(ComplexValue {
+        re: 1.0 - square.re,
+        im: -square.im,
+    });
+    let logarithm = complex_ln_value(ComplexValue {
+        re: root.re - value.im,
+        im: root.im + value.re,
+    })
+    .map_err(|error| format!("IMASIN: {error:?}"))?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: logarithm.im,
+            im: -logarithm.re,
+        },
+        suffix,
+    )))
+}
+
+fn func_imacos(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMACOS requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMACOS")?;
+    let square = complex_mul_values(value, value);
+    let root = complex_sqrt_value(ComplexValue {
+        re: 1.0 - square.re,
+        im: -square.im,
+    });
+    let logarithm = complex_ln_value(ComplexValue {
+        re: root.re - value.im,
+        im: root.im + value.re,
+    })
+    .map_err(|error| format!("IMACOS: {error:?}"))?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: std::f64::consts::FRAC_PI_2 - logarithm.im,
+            im: logarithm.re,
+        },
+        suffix,
+    )))
+}
+
+fn func_imatan(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMATAN requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMATAN")?;
+    let left = complex_ln_value(ComplexValue {
+        re: 1.0 + value.im,
+        im: -value.re,
+    })
+    .map_err(|error| format!("IMATAN: {error:?}"))?;
+    let right = complex_ln_value(ComplexValue {
+        re: 1.0 - value.im,
+        im: value.re,
+    })
+    .map_err(|error| format!("IMATAN: {error:?}"))?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: -(left.im - right.im) / 2.0,
+            im: (left.re - right.re) / 2.0,
+        },
+        suffix,
+    )))
+}
+
+fn func_imacot(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMACOT requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMACOT")?;
+    let left = complex_ln_value(ComplexValue {
+        re: 1.0 + value.im,
+        im: -value.re,
+    })
+    .map_err(|error| format!("IMACOT: {error:?}"))?;
+    let right = complex_ln_value(ComplexValue {
+        re: 1.0 - value.im,
+        im: value.re,
+    })
+    .map_err(|error| format!("IMACOT: {error:?}"))?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: std::f64::consts::FRAC_PI_2 + (left.im - right.im) / 2.0,
+            im: -(left.re - right.re) / 2.0,
+        },
+        suffix,
+    )))
+}
+
 // ── Trigonometry ──────────────────────────────────────────────────────────────
 
 fn func_pi(
@@ -11623,6 +11764,9 @@ mod tests {
         assert_eq!(calc("=IMSEC(\"0\")", &c), Variant::Str("1".into()));
         assert!(evaluate(&fparse("=IMCSC(\"0\")").unwrap(), &c).is_err());
         assert!(evaluate(&fparse("=IMCOT(\"0\")").unwrap(), &c).is_err());
+        assert_eq!(calc("=IMASIN(\"0\")", &c), Variant::Str("0".into()));
+        assert_eq!(calc("=IMACOS(\"1\")", &c), Variant::Str("0".into()));
+        assert_eq!(calc("=IMATAN(\"0\")", &c), Variant::Str("0".into()));
     }
 
     #[test]
