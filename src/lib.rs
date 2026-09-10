@@ -1081,6 +1081,19 @@ impl PyVm {
                 "has_formula_cycle",
                 crate::formula::workbook_has_formula_cycle(self.inner.sheets()),
             )?;
+            let (inputs, outputs) = crate::formula::formula_io_candidates(self.inner.sheets());
+            for (key, candidates) in [("input_candidates", inputs), ("output_candidates", outputs)]
+            {
+                let values = PyList::empty(py);
+                for candidate in candidates {
+                    let item = PyDict::new(py);
+                    item.set_item("sheet", &candidate.sheet)?;
+                    item.set_item("address", cell_address(candidate.row, candidate.col))?;
+                    item.set_item("kind", candidate.kind)?;
+                    values.append(item)?;
+                }
+                snapshot.set_item(key, values)?;
+            }
         }
         Ok(snapshot.into_any().unbind())
     }

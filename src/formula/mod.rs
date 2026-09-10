@@ -15,7 +15,9 @@ pub use rewrite::{
 };
 pub(crate) use workbook::recalculate as recalculate_workbook;
 #[cfg(feature = "python")]
-pub(crate) use workbook::{formula_dependencies, formula_dependency_diagnostics};
+pub(crate) use workbook::{
+    formula_dependencies, formula_dependency_diagnostics, formula_io_candidates,
+};
 
 /// Return whether a workbook's parsed formula dependency graph is cyclic.
 /// This is a diagnostic signal; it does not change best-effort calculation.

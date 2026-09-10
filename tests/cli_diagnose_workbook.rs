@@ -197,7 +197,10 @@ fn diagnostic_corpus_manifest_is_versioned_and_complete() {
             .join("compat/vba-diagnostics")
             .join(artifact_dir);
         for name in ["input.xlsx", "Run.bas", "expected.json"] {
-            assert!(artifact.join(name).is_file(), "missing artifact {artifact_dir}/{name}");
+            assert!(
+                artifact.join(name).is_file(),
+                "missing artifact {artifact_dir}/{name}"
+            );
         }
         assert!(case["expected"].is_object());
     }

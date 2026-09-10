@@ -46,6 +46,114 @@ pub(crate) struct FormulaDependencyDiagnostic {
     pub detail: String,
 }
 
+#[cfg(any(feature = "python", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FormulaIoCandidate {
+    pub sheet: String,
+    pub row: u32,
+    pub col: u32,
+    pub kind: &'static str,
+}
+
+/// Return bounded input/output candidates for agent-facing snapshots.
+/// Inputs retain range shape; they are not expanded to individual cells.
+#[cfg(any(feature = "python", test))]
+pub(crate) fn formula_io_candidates(
+    sheets: &HashMap<String, SheetCells>,
+) -> (Vec<FormulaIoCandidate>, Vec<FormulaIoCandidate>) {
+    let edges = formula_dependencies(sheets);
+    let formula_cells = sheets
+        .iter()
+        .flat_map(|(sheet, cells)| {
+            cells.iter().filter_map(move |(&(row, col), cell)| {
+                cell.formula
+                    .as_ref()
+                    .map(|_| (sheet.to_ascii_lowercase(), row, col))
+            })
+        })
+        .collect::<HashSet<_>>();
+    let mut inputs = edges
+        .iter()
+        .filter_map(|edge| {
+            let key = (
+                edge.target_sheet.to_ascii_lowercase(),
+                edge.target_row,
+                edge.target_col,
+            );
+            if edge.target_kind == "cell" && formula_cells.contains(&key) {
+                return None;
+            }
+            Some(FormulaIoCandidate {
+                sheet: edge.target_sheet.clone(),
+                row: edge.target_row,
+                col: edge.target_col,
+                kind: edge.target_kind,
+            })
+        })
+        .collect::<Vec<_>>();
+    inputs.sort_by(|left, right| {
+        (
+            left.sheet.to_ascii_lowercase(),
+            left.row,
+            left.col,
+            left.kind,
+        )
+            .cmp(&(
+                right.sheet.to_ascii_lowercase(),
+                right.row,
+                right.col,
+                right.kind,
+            ))
+    });
+    inputs.dedup_by(|left, right| {
+        left.sheet.eq_ignore_ascii_case(&right.sheet)
+            && left.row == right.row
+            && left.col == right.col
+            && left.kind == right.kind
+    });
+
+    let inbound = edges
+        .iter()
+        .map(|edge| {
+            (
+                edge.target_sheet.to_ascii_lowercase(),
+                edge.target_row,
+                edge.target_col,
+                edge.target_end_row,
+                edge.target_end_col,
+                edge.target_kind,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut outputs = formula_cells
+        .iter()
+        .filter_map(|(sheet, row, col)| {
+            let referenced = inbound.iter().any(|(target_sheet, r1, c1, r2, c2, kind)| {
+                target_sheet == sheet
+                    && if *kind == "cell" {
+                        *r1 == *row && *c1 == *col
+                    } else {
+                        *r1 <= *row && *c1 <= *col && *r2 >= *row && *c2 >= *col
+                    }
+            });
+            (!referenced).then(|| FormulaIoCandidate {
+                sheet: sheet.clone(),
+                row: *row,
+                col: *col,
+                kind: "formula",
+            })
+        })
+        .collect::<Vec<_>>();
+    outputs.sort_by(|left, right| {
+        (left.sheet.to_ascii_lowercase(), left.row, left.col).cmp(&(
+            right.sheet.to_ascii_lowercase(),
+            right.row,
+            right.col,
+        ))
+    });
+    (inputs, outputs)
+}
+
 /// Extract deterministic, bounded dependency edges without evaluating formulas.
 /// Parse failures are intentionally omitted; callers can inspect the formula
 /// text and parser diagnostics separately rather than treating an incomplete
@@ -1286,6 +1394,31 @@ mod tests {
         assert_eq!((edges[0].target_row, edges[0].target_end_row), (1, 2));
         assert_eq!(edges[1].target_kind, "cell");
         assert_eq!(edges[1].target_sheet, "sheet2");
+    }
+
+    #[test]
+    fn formula_io_candidates_are_bounded_and_deterministic() {
+        let sheets = HashMap::from([(
+            "Sheet1".to_string(),
+            HashMap::from([
+                ((1, 1), cell(Variant::Integer(3), None)),
+                ((2, 1), cell(Variant::Empty, Some("=A1+1"))),
+                ((3, 1), cell(Variant::Empty, Some("=SUM(A1:A2)"))),
+            ]),
+        )]);
+        let (inputs, outputs) = formula_io_candidates(&sheets);
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(
+            (inputs[0].sheet.as_str(), inputs[0].row, inputs[0].col),
+            ("sheet1", 1, 1)
+        );
+        assert_eq!(inputs[1].kind, "range");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(
+            (outputs[0].sheet.as_str(), outputs[0].row, outputs[0].col),
+            ("sheet1", 3, 1)
+        );
+        assert_eq!(outputs[0].kind, "formula");
     }
 
     #[test]

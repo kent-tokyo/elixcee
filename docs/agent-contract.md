@@ -182,7 +182,9 @@ callers may opt into `include_dependencies=True` to receive bounded,
 syntax-level cell/range dependency edges; parse failures are omitted from that
 array and are reported in `dependency_diagnostics`. The same field reports
 unresolved worksheet references; `has_formula_cycle` reports a detected formula
-cycle. These fields are diagnostics, not an Excel calculation oracle.
+cycle. `input_candidates` and `output_candidates` are bounded navigation
+heuristics: range inputs retain their range boundary and are never expanded.
+These fields are diagnostics, not an Excel calculation oracle.
 Read errors use the common error shape with `messages: []`.
 Default Markdown output is for display, not lossless round-trip serialization.
 
