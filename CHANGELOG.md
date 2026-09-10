@@ -58,6 +58,7 @@
 - Formula coverage: add bounded `FORECAST.ETS.CONFINT` and `FORECAST.ETS.STAT` diagnostics.
 - Formula coverage: add bounded `REGEXTEST`, `REGEXEXTRACT`, and `REGEXREPLACE` text functions.
 - Formula coverage: add `ARRAYTOTEXT`, `PHI`, and `GAUSS` coverage.
+- Formula coverage: add bounded `SINGLE` implicit-intersection behavior.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.

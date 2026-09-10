@@ -599,6 +599,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `CHOOSEROWS` | Select specific rows by 1-based index | 2024/365 |
 | `EXPAND` | Expand an array to a requested rectangle with a padding value | 2024/365 |
 | `TRIMRANGE` | Remove blank outer rows and columns from an array | 2024/365 |
+| `SINGLE` | Return the first value of a bounded array (implicit intersection) | 365/2021 |
 | `GROUPBY` | Group a one-column array and aggregate values with a bounded reducer | 2024/365 |
 | `PIVOTBY` | Cross-tabulate one-column row and column keys with a bounded reducer | 2024/365 |
 | `MAKEARRAY` | Generate an array by calling a LAMBDA with row and column indices | 2024/365 |

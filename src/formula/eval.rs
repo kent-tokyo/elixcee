@@ -731,6 +731,7 @@ fn eval_func(
         "CHOOSEROWS" => func_chooserows(args, cells),
         "EXPAND" => func_expand(args, cells),
         "TRIMRANGE" => func_trimrange(args, cells),
+        "SINGLE" => func_single(args, cells),
         "MAKEARRAY" => func_makearray(args, cells),
         // ── Math / Financial ─────────────────────────────────────────────────
         "COMBIN" => func_combin(args, cells),
@@ -13824,6 +13825,22 @@ fn func_arraytotext(
     Ok(Variant::Str(text))
 }
 
+fn func_single(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("SINGLE requires 1 argument".into());
+    }
+    match evaluate(&args[0], cells)? {
+        Variant::Array(values) => values
+            .into_iter()
+            .next()
+            .ok_or_else(|| "SINGLE: empty array".into()),
+        value => Ok(value),
+    }
+}
+
 // ── TAKE / DROP ───────────────────────────────────────────────────────────────
 
 fn func_take(
@@ -16792,6 +16809,8 @@ mod tests {
                 Variant::Integer(9)
             ])
         );
+        assert_eq!(calc("=SINGLE(SEQUENCE(4))", &c), Variant::Integer(1));
+        assert_eq!(calc("=SINGLE(42)", &c), Variant::Integer(42));
         assert!(evaluate(&fparse("=SEQUENCE(2.5)").unwrap(), &c).is_err());
         assert!(evaluate(&fparse("=SEQUENCE(0)").unwrap(), &c).is_err());
     }
