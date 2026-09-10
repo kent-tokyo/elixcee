@@ -540,6 +540,7 @@ fn eval_func(
         "NORM.S.INV" | "NORMSINV" => func_norm_s_inv(args, cells),
         "BINOM.DIST" | "BINOMDIST" => func_binom_dist(args, cells),
         "BINOM.DIST.RANGE" => func_binom_dist_range(args, cells),
+        "BINOM.INV" => func_binom_inv(args, cells),
         "NEGBINOM.DIST" | "NEGBINOMDIST" => func_negbinom_dist(args, cells),
         "HYPGEOM.DIST" | "HYPGEOMDIST" => func_hypgeom_dist(args, cells),
         "POISSON.DIST" | "POISSON" => func_poisson_dist(args, cells),
@@ -5602,6 +5603,41 @@ fn func_binom_dist_range(
         })
         .sum::<f64>();
     Ok(Variant::Float(result))
+}
+
+fn func_binom_inv(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("BINOM.INV requires 3 arguments".into());
+    }
+    let trials = to_float(&evaluate(&args[0], cells)?)?;
+    let probability = to_float(&evaluate(&args[1], cells)?)?;
+    let alpha = to_float(&evaluate(&args[2], cells)?)?;
+    if !trials.is_finite()
+        || trials.fract() != 0.0
+        || trials < 0.0
+        || !(0.0..=1.0).contains(&probability)
+        || !alpha.is_finite()
+        || !(0.0..=1.0).contains(&alpha)
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let trials = trials as i64;
+    let mass = |successes: i64| {
+        binom_coeff(trials, successes)
+            * probability.powi(successes as i32)
+            * (1.0 - probability).powi((trials - successes) as i32)
+    };
+    let mut cumulative = 0.0;
+    for successes in 0..=trials {
+        cumulative += mass(successes);
+        if cumulative + 1e-15 >= alpha {
+            return Ok(Variant::Integer(successes));
+        }
+    }
+    Ok(Variant::Integer(trials))
 }
 
 fn func_negbinom_dist(
@@ -14628,6 +14664,11 @@ mod tests {
         assert!(
             matches!(calc("=BINOM.DIST.RANGE(10,0.5,3,5)", &cells), Variant::Float(v) if (v - (582.0 / 1024.0)).abs() < 1e-12)
         );
+        assert_eq!(
+            calc("=BINOM.INV(4,0.5,0.6875)", &cells),
+            Variant::Integer(2)
+        );
+        assert_eq!(calc("=BINOM.INV(4,0.5,0)", &cells), Variant::Integer(0));
         assert!(
             matches!(calc("=NEGBINOM.DIST(3,2,0.5,FALSE)", &cells), Variant::Float(v) if (v - 0.125).abs() < 1e-12)
         );

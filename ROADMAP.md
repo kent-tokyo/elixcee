@@ -152,6 +152,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 順位・母集団統計 BUILD: `RANK.EQ`／`RANK.AVG`と`SKEW.P`を追加し、同順位平均、昇順／降順、母集団標準化と定義域を回帰した。`MODE.MULT`の複数spill意味論、Excelの全型変換・oracle校正は未完。
 - [x] G4 度数分布 BUILD: `FREQUENCY`を配列結果として追加し、階級ごとの包含境界、最終超過階級、空の階級範囲を回帰した。Excelの未ソートbins・全型変換・spill oracle校正は未完。
 - [x] G4 確率集計 BUILD: `PROB`を追加し、値／確率範囲の長さ、確率合計・非負条件、下限／上限の包含範囲を回帰した。Excelの全型変換・丸め・oracle校正は未完。
+- [x] G4 二項逆関数 BUILD: `BINOM.INV`を追加し、累積確率の最小成功数、確率・試行回数・alphaの境界を回帰した。Excelの全型変換・数値精度・oracle校正は未完。
 - [x] G4 回帰予測配列 BUILD: `TREND`と`GROWTH`を配列結果として追加し、線形／指数回帰、const指定、new_x範囲、正値制約を回帰した。多変量LINEST互換、Excelの全型変換・spill oracle校正は未完。
 - [x] G4 単回帰LINEST BUILD: `LINEST`の単回帰について係数・切片、`const`、`stats`時の標準誤差・R²・F・自由度・平方和を配列結果として追加した。多変量回帰、Excelの全型変換・2D spill・oracle校正は未完。
 - [x] G4 指数回帰LOGEST BUILD: `LOGEST`の単回帰について指数係数・基底、`const`、`stats`時の回帰統計を配列結果として追加した。多変量回帰、Excelの全型変換・2D spill・oracle校正は未完。
