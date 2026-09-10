@@ -612,6 +612,7 @@ fn eval_func(
         "COMPLEX" => func_complex(args, cells),
         "IMREAL" => func_imreal(args, cells),
         "IMAGINARY" => func_imaginary(args, cells),
+        "IMARGUMENT" => func_imargument(args, cells),
         "IMABS" => func_imabs(args, cells),
         "IMSUM" => func_imsum(args, cells),
         "IMSUB" => func_imsub(args, cells),
@@ -7657,6 +7658,20 @@ fn func_imaginary(
     ))
 }
 
+fn func_imargument(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMARGUMENT requires 1 argument".into());
+    }
+    let value = complex_argument(&args[0], cells, "IMARGUMENT")?;
+    if value.re == 0.0 && value.im == 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(value.im.atan2(value.re)))
+}
+
 fn func_imabs(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -11864,6 +11879,16 @@ mod tests {
         assert_eq!(calc("=COMPLEX(3,-1,\"j\")", &c), Variant::Str("3-j".into()));
         assert_eq!(calc("=IMREAL(\"-3-4j\")", &c), Variant::Integer(-3));
         assert_eq!(calc("=IMAGINARY(\"-3-4j\")", &c), Variant::Integer(-4));
+        match calc("=IMARGUMENT(\"0+1i\")", &c) {
+            Variant::Float(value) => {
+                assert!((value - std::f64::consts::FRAC_PI_2).abs() < 1e-12)
+            }
+            other => panic!("IMARGUMENT unexpected: {:?}", other),
+        }
+        assert_eq!(
+            calc("=IMARGUMENT(\"0\")", &c),
+            Variant::Error(ExcelError::Num)
+        );
         assert_eq!(calc("=IMABS(\"3+4i\")", &c), Variant::Integer(5));
         assert_eq!(
             calc("=IMSUM(\"1+2j\",\"3+4j\")", &c),

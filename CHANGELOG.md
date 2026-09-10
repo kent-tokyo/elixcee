@@ -12,6 +12,7 @@
 - Formula coverage: add `BINOM.INV` inverse cumulative binomial coverage.
 - Formula coverage: add `F.DIST.2T` two-tailed F-distribution probability coverage.
 - Formula coverage: add complex-number construction and inspection formulas `COMPLEX`, `IMREAL`, `IMAGINARY`, and `IMABS`.
+- Formula coverage: add `IMARGUMENT` complex phase extraction with origin validation.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
 - Formula coverage: add complex trigonometric, hyperbolic, and reciprocal trigonometric formulas.

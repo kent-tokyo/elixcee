@@ -391,7 +391,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `CONVERT` | Convert between supported length, mass, time, area, volume, temperature, pressure, energy, power, and speed units | Classic |
 | `ROMAN` / `ARABIC` | Convert between integers and canonical Roman numerals | Classic |
 | `COMPLEX` | Construct a complex number string | Classic |
-| `IMREAL` / `IMAGINARY` | Extract real / imaginary part of a complex number | Classic |
+| `IMREAL` / `IMAGINARY` / `IMARGUMENT` | Extract real / imaginary part or argument of a complex number | Classic |
 | `IMABS` | Absolute value of a complex number | Classic |
 | `IMSUM` / `IMSUB` | Add / subtract complex numbers | Classic |
 | `IMPRODUCT` / `IMDIV` | Multiply / divide complex numbers | Classic |
