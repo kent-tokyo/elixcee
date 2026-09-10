@@ -520,6 +520,8 @@ fn eval_func(
         "INTERCEPT" => func_intercept(args, cells),
         "RSQ" => func_rsq(args, cells),
         "FORECAST.LINEAR" | "FORECAST" => func_forecast_linear(args, cells),
+        "TREND" => func_trend(args, cells),
+        "GROWTH" => func_growth(args, cells),
         "STEYX" => func_steyx(args, cells),
         "FISHER" => func_fisher(args, cells),
         "FISHERINV" => func_fisherinv(args, cells),
@@ -4829,6 +4831,113 @@ fn func_forecast_linear(
     let my = known_y.iter().sum::<f64>() / known_y.len() as f64;
     let mx = known_x.iter().sum::<f64>() / known_x.len() as f64;
     Ok(Variant::Float(my + slope * (x - mx)))
+}
+
+struct RegressionInputs {
+    known_y: Vec<f64>,
+    known_x: Vec<f64>,
+    new_x: Vec<f64>,
+    constant: bool,
+}
+
+fn regression_inputs(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<RegressionInputs, String> {
+    if !(2..=4).contains(&args.len()) {
+        return Err(format!("{name} requires 2 to 4 arguments"));
+    }
+    let known_y = collect_values(&args[0], cells)?
+        .into_iter()
+        .filter_map(|v| as_f64(&v))
+        .collect::<Vec<_>>();
+    let known_x = collect_values(&args[1], cells)?
+        .into_iter()
+        .filter_map(|v| as_f64(&v))
+        .collect::<Vec<_>>();
+    if known_y.is_empty() || known_y.len() != known_x.len() {
+        return Err(format!(
+            "{name}: known arrays must have equal non-zero length"
+        ));
+    }
+    let new_x = if args.len() >= 3 {
+        collect_values(&args[2], cells)?
+            .into_iter()
+            .filter_map(|v| as_f64(&v))
+            .collect::<Vec<_>>()
+    } else {
+        known_x.clone()
+    };
+    if new_x.is_empty() {
+        return Err(format!("{name}: new_x must not be empty"));
+    }
+    let constant = if args.len() == 4 {
+        is_truthy(&evaluate(&args[3], cells)?)
+    } else {
+        true
+    };
+    Ok(RegressionInputs {
+        known_y,
+        known_x,
+        new_x,
+        constant,
+    })
+}
+
+fn func_trend(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let inputs = regression_inputs(args, cells, "TREND")?;
+    let slope = regression_slope(&inputs.known_y, &inputs.known_x)?;
+    let intercept = if inputs.constant {
+        let mean_y = inputs.known_y.iter().sum::<f64>() / inputs.known_y.len() as f64;
+        let mean_x = inputs.known_x.iter().sum::<f64>() / inputs.known_x.len() as f64;
+        mean_y - slope * mean_x
+    } else {
+        0.0
+    };
+    Ok(Variant::Array(
+        inputs
+            .new_x
+            .into_iter()
+            .map(|x| as_integer_if_whole(intercept + slope * x))
+            .collect(),
+    ))
+}
+
+fn func_growth(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let inputs = regression_inputs(args, cells, "GROWTH")?;
+    if inputs.known_y.iter().any(|value| *value <= 0.0)
+        || inputs.known_x.iter().any(|value| *value <= 0.0)
+        || inputs.new_x.iter().any(|value| *value <= 0.0)
+    {
+        return Err("GROWTH: values must be positive".into());
+    }
+    let log_y = inputs
+        .known_y
+        .iter()
+        .map(|value| value.ln())
+        .collect::<Vec<_>>();
+    let slope = regression_slope(&log_y, &inputs.known_x)?;
+    let intercept = if inputs.constant {
+        let mean_y = log_y.iter().sum::<f64>() / log_y.len() as f64;
+        let mean_x = inputs.known_x.iter().sum::<f64>() / inputs.known_x.len() as f64;
+        mean_y - slope * mean_x
+    } else {
+        0.0
+    };
+    Ok(Variant::Array(
+        inputs
+            .new_x
+            .into_iter()
+            .map(|x| as_integer_if_whole((intercept + slope * x).exp()))
+            .collect(),
+    ))
 }
 
 fn func_steyx(
@@ -13465,6 +13574,38 @@ mod tests {
             calc("=SLN(1000,100,0)", &c),
             Variant::Error(ExcelError::DivZero)
         );
+    }
+
+    #[test]
+    fn test_regression_array_functions() {
+        let c = cells_from(&[
+            ((1, 1), Variant::Integer(2)),
+            ((2, 1), Variant::Integer(4)),
+            ((3, 1), Variant::Integer(6)),
+            ((1, 2), Variant::Integer(1)),
+            ((2, 2), Variant::Integer(2)),
+            ((3, 2), Variant::Integer(3)),
+            ((1, 3), Variant::Integer(4)),
+            ((2, 3), Variant::Integer(5)),
+            ((1, 4), Variant::Integer(2)),
+            ((2, 4), Variant::Integer(4)),
+            ((3, 4), Variant::Integer(8)),
+            ((1, 5), Variant::Integer(1)),
+            ((2, 5), Variant::Integer(2)),
+            ((3, 5), Variant::Integer(3)),
+            ((1, 6), Variant::Integer(4)),
+        ]);
+        assert_eq!(
+            calc("=TREND(A1:A3,B1:B3,C1:C2)", &c),
+            Variant::Array(vec![Variant::Integer(8), Variant::Integer(10)])
+        );
+        match calc("=GROWTH(D1:D3,E1:E3,F1:F1)", &c) {
+            Variant::Array(values) => match values.as_slice() {
+                [Variant::Float(value)] => assert!((*value - 16.0).abs() < 1e-9),
+                other => panic!("GROWTH values unexpected: {:?}", other),
+            },
+            other => panic!("GROWTH result unexpected: {:?}", other),
+        }
     }
 
     #[test]

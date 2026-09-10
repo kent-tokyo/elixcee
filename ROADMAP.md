@@ -151,6 +151,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 統計要約関数 BUILD: `MODE.SNGL`、`TRIMMEAN`、`SKEW`、`KURT`を追加し、最頻値、対称trim、標本歪度、過剰標本尖度と定義域を回帰した。`MODE.MULT`の複数spill意味論、Excelの全型変換・oracle校正は未完。
 - [x] G4 順位・母集団統計 BUILD: `RANK.EQ`／`RANK.AVG`と`SKEW.P`を追加し、同順位平均、昇順／降順、母集団標準化と定義域を回帰した。`MODE.MULT`の複数spill意味論、Excelの全型変換・oracle校正は未完。
 - [x] G4 度数分布 BUILD: `FREQUENCY`を配列結果として追加し、階級ごとの包含境界、最終超過階級、空の階級範囲を回帰した。Excelの未ソートbins・全型変換・spill oracle校正は未完。
+- [x] G4 回帰予測配列 BUILD: `TREND`と`GROWTH`を配列結果として追加し、線形／指数回帰、const指定、new_x範囲、正値制約を回帰した。多変量LINEST互換、Excelの全型変換・spill oracle校正は未完。
 - [x] G4 債券・割引証券関数 BUILD: `PDURATION`、`PRICEDISC`、`RECEIVED`、`TBILLPRICE`／`TBILLYIELD`／`TBILLEQ`を追加し、期間・basis・割引率・価格の境界を回帰した。Excelのうるう年・basis全域・丸め・oracle校正は未完。
 - [x] G4 Engineering単位・表記変換 BUILD: `CONVERT`の主要単位カテゴリ（長さ・質量・時間・面積・体積・温度・圧力・エネルギー・電力・速度）と`ROMAN`／`ARABIC`を追加し、カテゴリ不一致・定義域・canonical Roman表記を回帰した。Excelの全単位表・locale・oracle校正は未完。
 - [x] G4 分布関数ファミリー拡張 BUILD: `GAMMA.DIST`／`GAMMA.INV`、`CHISQ.DIST.RT`／`CHISQ.INV`系、`F.DIST.RT`／`F.INV`系、`WEIBULL.DIST`、`EXPON.DIST`、`LOGNORM.DIST`／`LOGNORM.INV`を追加し、PDF/CDF・片側・逆関数の代表値と定義域を回帰した。近似精度の全域評価とExcel oracle校正は未完。
