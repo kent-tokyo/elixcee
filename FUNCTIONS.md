@@ -265,6 +265,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `SYD` | Sum-of-years' digits depreciation | Classic |
 | `DB` | Fixed-declining balance depreciation | Classic |
 | `DDB` | Double-declining balance depreciation | Classic |
+| `AMORLINC` | Linear depreciation for an asset purchased during a period | Classic |
 | `EFFECT` | Effective annual interest rate | Classic |
 | `NOMINAL` | Nominal annual interest rate | Classic |
 | `RRI` | Equivalent growth interest rate | 2013 |

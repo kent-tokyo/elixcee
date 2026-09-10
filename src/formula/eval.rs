@@ -720,6 +720,7 @@ fn eval_func(
         "SYD" => func_syd(args, cells),
         "DB" => func_db(args, cells),
         "DDB" => func_ddb(args, cells),
+        "AMORLINC" => func_amorlinc(args, cells),
         "EFFECT" => func_effect(args, cells),
         "NOMINAL" => func_nominal(args, cells),
         "RRI" => func_rri(args, cells),
@@ -11336,6 +11337,68 @@ fn func_db(
     Ok(Variant::Float(depreciation))
 }
 
+fn func_amorlinc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 7 {
+        return Err("AMORLINC requires 7 arguments".into());
+    }
+    let cost = to_float(&evaluate(&args[0], cells)?)?;
+    let purchased = to_float(&evaluate(&args[1], cells)?)?;
+    let first_period = to_float(&evaluate(&args[2], cells)?)?;
+    let salvage = to_float(&evaluate(&args[3], cells)?)?;
+    let period = to_float(&evaluate(&args[4], cells)?)?;
+    let rate = to_float(&evaluate(&args[5], cells)?)?;
+    let basis = to_float(&evaluate(&args[6], cells)?)?;
+    if !cost.is_finite()
+        || !purchased.is_finite()
+        || !first_period.is_finite()
+        || !salvage.is_finite()
+        || !period.is_finite()
+        || !rate.is_finite()
+        || !basis.is_finite()
+        || purchased.fract() != 0.0
+        || first_period.fract() != 0.0
+        || purchased >= first_period
+        || cost < 0.0
+        || salvage < 0.0
+        || salvage > cost
+        || period < 0.0
+        || period.fract() != 0.0
+        || rate < 0.0
+        || basis.fract() != 0.0
+        || !(0.0..=4.0).contains(&basis)
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let purchased = purchased as i64;
+    let first_period = first_period as i64;
+    let period = period as u64;
+    let basis = basis as i32;
+    let year_days = match basis {
+        0 | 2 | 4 => 360.0,
+        1 | 3 => 365.0,
+        _ => unreachable!(),
+    };
+    let first_days = coupon_day_count(purchased, first_period, basis);
+    let first_depreciation = cost * rate * first_days / year_days;
+    let regular_depreciation = cost * rate;
+    let prior = if period == 0 {
+        0.0
+    } else {
+        first_depreciation + regular_depreciation * (period - 1) as f64
+    };
+    let depreciation = if period == 0 {
+        first_depreciation
+    } else {
+        regular_depreciation
+    };
+    Ok(Variant::Float(
+        depreciation.min((cost - salvage - prior).max(0.0)),
+    ))
+}
+
 fn func_effect(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -15653,6 +15716,15 @@ mod tests {
             ),
             Variant::Float(value) if (value - 0.1).abs() < 1e-10
         ));
+        assert!(
+            matches!(calc("=AMORLINC(1000,DATE(2020,1,1),DATE(2020,7,1),0,0,0.2,0)", &c), Variant::Float(value) if (value - 100.0).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=AMORLINC(1000,DATE(2020,1,1),DATE(2020,7,1),0,1,0.2,0)", &c), Variant::Float(value) if (value - 200.0).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=AMORLINC(1000,DATE(2020,1,1),DATE(2020,7,1),0,5,0.2,0)", &c), Variant::Float(value) if (value - 100.0).abs() < 1e-12)
+        );
     }
 
     #[test]
