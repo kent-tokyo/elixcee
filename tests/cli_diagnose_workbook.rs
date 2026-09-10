@@ -191,6 +191,14 @@ fn diagnostic_corpus_manifest_is_versioned_and_complete() {
     for case in cases {
         assert!(case["class"].as_str().is_some());
         assert!(case["runner_test"].as_str().is_some());
+        assert!(case["seed"].as_u64().is_some());
+        let artifact_dir = case["artifact_dir"].as_str().expect("artifact directory");
+        let artifact = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("compat/vba-diagnostics")
+            .join(artifact_dir);
+        for name in ["input.xlsx", "Run.bas", "expected.json"] {
+            assert!(artifact.join(name).is_file(), "missing artifact {artifact_dir}/{name}");
+        }
         assert!(case["expected"].is_object());
     }
 }

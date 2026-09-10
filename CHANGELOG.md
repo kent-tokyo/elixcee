@@ -21,6 +21,8 @@
   against cross-library and Excel-oracle performance claims.
 - Formula oracle: add a fixed HyperFormula 3.4.0 probe for dynamic arrays and
   XIRR, with the oracle version and license mode recorded in the output.
+- Diagnostic artifacts: add deterministic synthetic XLSX, VBA source, and
+  expected-JSON bundles for all five diagnostic corpus classes.
 - CI guidance: add a reproducible `diagnose-workbook` workflow, failure-artifact
   triage rules, and a redistributable diagnostic-corpus contract. This documents
   the supported diagnostic surface; it does not expand the VBA or Excel oracle.

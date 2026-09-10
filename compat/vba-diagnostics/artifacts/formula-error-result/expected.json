@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "root_cause": "ARRAY_INDEX_OUT_OF_BOUNDS",
+  "exit_success": false
+}

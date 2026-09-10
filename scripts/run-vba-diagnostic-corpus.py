@@ -46,6 +46,13 @@ def load_cases() -> list[dict[str, object]]:
             raise ValueError("each case needs non-empty id, class, and runner_test")
         if case_class not in TARGETS:
             raise ValueError(f"no safe cargo target mapping for class {case_class!r}")
+        artifact_dir = case.get("artifact_dir")
+        if not isinstance(case.get("seed"), int) or not isinstance(artifact_dir, str):
+            raise ValueError(f"case {case_id!r} needs an integer seed and artifact_dir")
+        artifact = ROOT / "compat" / "vba-diagnostics" / artifact_dir
+        for name in ("input.xlsx", "Run.bas", "expected.json"):
+            if not (artifact / name).is_file():
+                raise ValueError(f"case {case_id!r} is missing artifact {name}")
     return cases
 
 
