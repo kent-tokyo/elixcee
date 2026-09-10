@@ -917,8 +917,13 @@ impl PyVm {
     ///
     /// The returned nested dictionaries are copies and use 1-based
     /// ``(row, col)`` keys, so mutating the result cannot change this VM.
-    #[pyo3(signature = (include_formulas = false))]
-    fn snapshot(&self, py: Python<'_>, include_formulas: bool) -> PyResult<Py<PyAny>> {
+    #[pyo3(signature = (include_formulas = false, include_dependencies = false))]
+    fn snapshot(
+        &self,
+        py: Python<'_>,
+        include_formulas: bool,
+        include_dependencies: bool,
+    ) -> PyResult<Py<PyAny>> {
         let snapshot = PyDict::new(py);
         snapshot.set_item("schema_version", 1u32)?;
         snapshot.set_item("active_sheet", self.inner.active_sheet.as_str())?;
@@ -1035,6 +1040,30 @@ impl PyVm {
         snapshot.set_item("sheets", sheets)?;
         if let Some(formulas) = formulas {
             snapshot.set_item("formulas", formulas)?;
+        }
+        if include_dependencies {
+            let dependencies = PyList::empty(py);
+            for edge in crate::formula::formula_dependencies(self.inner.sheets()) {
+                let item = PyDict::new(py);
+                item.set_item("sheet", &edge.source_sheet)?;
+                item.set_item("address", cell_address(edge.source_row, edge.source_col))?;
+                item.set_item("target_sheet", &edge.target_sheet)?;
+                item.set_item("target_kind", edge.target_kind)?;
+                item.set_item(
+                    "target_address",
+                    if edge.target_kind == "cell" {
+                        cell_address(edge.target_row, edge.target_col)
+                    } else {
+                        format!(
+                            "{}:{}",
+                            cell_address(edge.target_row, edge.target_col),
+                            cell_address(edge.target_end_row, edge.target_end_col)
+                        )
+                    },
+                )?;
+                dependencies.append(item)?;
+            }
+            snapshot.set_item("dependencies", dependencies)?;
         }
         Ok(snapshot.into_any().unbind())
     }

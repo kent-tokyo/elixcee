@@ -13,6 +13,8 @@ pub use rewrite::{
     MoveRect, MoveRewrite, RefAxis, StructuralEdit, rename_sheet_references, shift_references,
     translate_references_for_move,
 };
+#[cfg(feature = "python")]
+pub(crate) use workbook::formula_dependencies;
 pub(crate) use workbook::recalculate as recalculate_workbook;
 
 /// Return whether a workbook's parsed formula dependency graph is cyclic.

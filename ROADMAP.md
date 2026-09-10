@@ -49,6 +49,7 @@ Excel oracleを確認したうえで、合成または再配布可能な小規�
 - [ ] **L7b 診断corpus BUILD**: Range/Paste、非表示行列、Protection、Formula result、VBA resolutionの合成workbook pairを最小セットで追加し、各ケースに期待JSONと再現seedを持たせる。
 - [ ] **L8 再現可能benchmark MEASURE**: corpusのversion・fixture hash・runtime version・OS・CPU・RSS・wall timeを記録し、before/afterと競合比較を別表にする。未測定の速度・正確性・Rubberduck互換性は主張しない。
 - [ ] **L9 snapshot／依存関係 BUILD**: snapshot JSONへformula、入力／出力候補、依存辺、cycle／unresolved referenceを後方互換フィールドとして段階追加する。まず読み取り専用・bounded・決定論的出力で設計する。
+- [x] **L9a dependency projection BUILD**: Python `Vm.snapshot(include_dependencies=True)`へ、数式の直接セル参照／範囲参照をbounded・決定論的な`dependencies`配列として追加した。既定snapshotは不変で、範囲をセル単位へ展開しない。parse failure、cycle、unresolved referenceの分類と入力／出力候補はL9b以降。
 - [ ] **L10 formula oracle BUILD/MEASURE**: HyperFormula 3.4.0等の固定版を補助oracleとしてVSTACK/HSTACK/UNIQUE/SORT/XIRRと空セルLOOKUPをcorpus化し、Excel oracleと分離した一致表を作る。
 - [ ] **L10b 外部benchmark gate**: Workbook Time Machine／SpreadsheetBench 2はライセンス、再配布条件、タスク変換、期待値の出所を確認できた範囲だけ採用する。外部datasetの存在だけで品質向上や競合優位を主張しない。
 

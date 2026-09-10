@@ -20,6 +20,96 @@ type NodeKey = (String, u32, u32);
 
 const SHEET_ROW_STRIDE: u32 = 2_000_000;
 
+/// A bounded, syntax-level dependency edge for snapshot/diagnostic consumers.
+/// Range edges remain ranges; they are never expanded into one record per cell.
+#[cfg(any(feature = "python", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FormulaDependency {
+    pub source_sheet: String,
+    pub source_row: u32,
+    pub source_col: u32,
+    pub target_sheet: String,
+    pub target_kind: &'static str,
+    pub target_row: u32,
+    pub target_col: u32,
+    pub target_end_row: u32,
+    pub target_end_col: u32,
+}
+
+/// Extract deterministic, bounded dependency edges without evaluating formulas.
+/// Parse failures are intentionally omitted; callers can inspect the formula
+/// text and parser diagnostics separately rather than treating an incomplete
+/// graph as authoritative.
+#[cfg(any(feature = "python", test))]
+pub(crate) fn formula_dependencies(sheets: &HashMap<String, SheetCells>) -> Vec<FormulaDependency> {
+    let mut edges = Vec::new();
+    for (sheet, cells) in sheets {
+        for (&(row, col), cell) in cells {
+            let Some(source) = cell.formula.as_deref() else {
+                continue;
+            };
+            let Ok(expr) = parse(source) else {
+                continue;
+            };
+            let mut refs = Vec::new();
+            let mut ranges = Vec::new();
+            collect_dependencies(&expr, sheet, &mut refs, &mut ranges);
+            for (target_sheet, target_row, target_col) in refs {
+                edges.push(FormulaDependency {
+                    source_sheet: sheet.clone(),
+                    source_row: row,
+                    source_col: col,
+                    target_sheet,
+                    target_kind: "cell",
+                    target_row,
+                    target_col,
+                    target_end_row: target_row,
+                    target_end_col: target_col,
+                });
+            }
+            for (target_sheet, r1, c1, r2, c2) in ranges {
+                edges.push(FormulaDependency {
+                    source_sheet: sheet.clone(),
+                    source_row: row,
+                    source_col: col,
+                    target_sheet,
+                    target_kind: "range",
+                    target_row: r1,
+                    target_col: c1,
+                    target_end_row: r2,
+                    target_end_col: c2,
+                });
+            }
+        }
+    }
+    edges.sort_by(|left, right| {
+        (
+            left.source_sheet.to_ascii_lowercase(),
+            left.source_row,
+            left.source_col,
+            left.target_sheet.to_ascii_lowercase(),
+            left.target_kind,
+            left.target_row,
+            left.target_col,
+            left.target_end_row,
+            left.target_end_col,
+        )
+            .cmp(&(
+                right.source_sheet.to_ascii_lowercase(),
+                right.source_row,
+                right.source_col,
+                right.target_sheet.to_ascii_lowercase(),
+                right.target_kind,
+                right.target_row,
+                right.target_col,
+                right.target_end_row,
+                right.target_end_col,
+            ))
+    });
+    edges.dedup();
+    edges
+}
+
 /// Recalculate every formula in a workbook containing at least one qualified
 /// reference. Returns `Ok(true)` when this slow path handled the workbook and
 /// `Ok(false)` when the caller should use its existing active-sheet plan.
@@ -1089,5 +1179,23 @@ mod tests {
         );
         assert_eq!(sheets["Sheet1"][&(2, 1)].value, Variant::Integer(4));
         assert_eq!(sheets["Sheet2"][&(1, 1)].value, Variant::Integer(7));
+    }
+
+    #[test]
+    fn formula_dependency_snapshot_edges_are_bounded_and_deterministic() {
+        let sheets = HashMap::from([(
+            "Sheet1".to_string(),
+            HashMap::from([(
+                (1, 1),
+                cell(Variant::Empty, Some("=Sheet2!B2+Sheet1!A1:A2")),
+            )]),
+        )]);
+        let edges = formula_dependencies(&sheets);
+        assert_eq!(edges.len(), 2);
+        assert_eq!(edges[0].target_kind, "range");
+        assert_eq!(edges[0].target_sheet, "sheet1");
+        assert_eq!((edges[0].target_row, edges[0].target_end_row), (1, 2));
+        assert_eq!(edges[1].target_kind, "cell");
+        assert_eq!(edges[1].target_sheet, "sheet2");
     }
 }

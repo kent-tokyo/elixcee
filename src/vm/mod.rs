@@ -3767,6 +3767,11 @@ impl Vm {
         self.sheets.get(&name.to_lowercase())
     }
 
+    #[cfg(feature = "python")]
+    pub(crate) fn sheets(&self) -> &HashMap<String, HashMap<(u32, u32), CellContent>> {
+        &self.sheets
+    }
+
     /// Resolves `sheet` (`None` = active sheet) to its internal lowercase key,
     /// for the Python-binding bulk range/row API (`get_range`/`set_range`/
     /// `append_row`/`iter_rows`/`max_row`/`max_column`/`calculate_dimension`).

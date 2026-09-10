@@ -229,8 +229,8 @@ class Vm:
         """Return all non-empty cells of the active sheet as ``{(row, col): value}``."""
         ...
 
-    def snapshot(self, include_formulas: bool = False) -> dict[str, Any]:
-        """Return a detached workbook snapshot including calculation mode and date-system metadata; optionally include ``formulas``."""
+    def snapshot(self, include_formulas: bool = False, include_dependencies: bool = False) -> dict[str, Any]:
+        """Return a detached workbook snapshot; optionally include ``formulas`` and bounded syntax-level ``dependencies``."""
         ...
 
     @property
