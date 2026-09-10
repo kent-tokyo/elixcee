@@ -395,7 +395,8 @@ fn eval_func(
         "TODAY" => func_today(args, cells),
         "NETWORKDAYS" => func_networkdays(args, cells),
         "WORKDAY" => func_workday(args, cells),
-        "RANK" => func_rank(args, cells),
+        "RANK" | "RANK.EQ" => func_rank(args, cells),
+        "RANK.AVG" => func_rank_avg(args, cells),
         "IFS" => func_ifs(args, cells),
         "XLOOKUP" => func_xlookup(args, cells),
         "EOMONTH" => func_eomonth(args, cells),
@@ -426,6 +427,7 @@ fn eval_func(
         "AVEDEV" => func_avedev(args, cells),
         "TRIMMEAN" => func_trimmean(args, cells),
         "SKEW" => func_skew(args, cells),
+        "SKEW.P" => func_skew_p(args, cells),
         "KURT" => func_kurt(args, cells),
         "TRUNC" => func_trunc(args, cells),
         // -- String --
@@ -1951,6 +1953,40 @@ fn func_rank(
     Ok(Variant::Integer(rank as i64))
 }
 
+fn func_rank_avg(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("RANK.AVG requires 2 or 3 arguments".into());
+    }
+    let num = to_float(&evaluate(&args[0], cells)?)?;
+    let vals: Vec<f64> = collect_values(&args[1], cells)?
+        .iter()
+        .filter_map(as_f64)
+        .collect();
+    if vals.is_empty() {
+        return Err("RANK.AVG: no numeric values".into());
+    }
+    let asc = if args.len() == 3 {
+        to_float(&evaluate(&args[2], cells)?)? != 0.0
+    } else {
+        false
+    };
+    let before = if asc {
+        vals.iter().filter(|&&value| value < num).count()
+    } else {
+        vals.iter().filter(|&&value| value > num).count()
+    };
+    let ties = vals.iter().filter(|&&value| value == num).count();
+    if ties == 0 {
+        return Err("RANK.AVG: number is not present in array".into());
+    }
+    Ok(as_integer_if_whole(
+        before as f64 + (ties as f64 + 1.0) / 2.0,
+    ))
+}
+
 // ── Conditional ───────────────────────────────────────────────────────────────
 
 fn func_ifs(
@@ -2810,6 +2846,24 @@ fn func_skew(
     Ok(Variant::Float(
         nums.len() as f64 / ((nums.len() - 1) * (nums.len() - 2)) as f64 * sum_cubed,
     ))
+}
+
+fn func_skew_p(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let nums = numeric_args(args, cells, "SKEW.P")?;
+    if nums.len() < 2 {
+        return Err("SKEW.P requires at least 2 values".into());
+    }
+    let n = nums.len() as f64;
+    let mean = nums.iter().sum::<f64>() / n;
+    let second = nums.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+    if second == 0.0 {
+        return Err("SKEW.P: standard deviation is zero".into());
+    }
+    let third = nums.iter().map(|v| (v - mean).powi(3)).sum::<f64>() / n;
+    Ok(Variant::Float(third / second.powf(1.5)))
 }
 
 fn func_kurt(
@@ -12905,10 +12959,30 @@ mod tests {
                 },
             );
         }
+        assert_eq!(calc("=RANK.EQ(2,A1:A3,0)", &c), Variant::Integer(2));
         assert_eq!(calc("=TRIMMEAN(A1:A8,0.5)", &c), Variant::Float(4.5));
+        c.insert(
+            (1, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Float(2.0),
+            },
+        );
+        c.insert(
+            (3, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Float(2.0),
+            },
+        );
+        assert_eq!(calc("=RANK.AVG(2,A1:A3,0)", &c), Variant::Float(1.5));
         match calc("=SKEW(1,2,3,4,5)", &c) {
             Variant::Float(value) => assert!(value.abs() < 1e-12),
             other => panic!("SKEW unexpected: {:?}", other),
+        }
+        match calc("=SKEW.P(1,2,3,4,5)", &c) {
+            Variant::Float(value) => assert!(value.abs() < 1e-12),
+            other => panic!("SKEW.P unexpected: {:?}", other),
         }
         match calc("=KURT(1,2,3,4,5)", &c) {
             Variant::Float(value) => assert!((value + 1.2).abs() < 1e-12),

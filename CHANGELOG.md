@@ -6,6 +6,7 @@
 
 - Formula coverage: add database product, sample/population standard deviation, and sample/population variance formulas using the shared criteria engine.
 - Formula coverage: add `MODE.SNGL`, `TRIMMEAN`, `SKEW`, and `KURT` statistical summary formulas with domain and sample-estimator regression tests.
+- Formula coverage: add `RANK.EQ`, `RANK.AVG`, and `SKEW.P` coverage for tied ranks, ordering, and population skewness.
 - Formula coverage: add bitwise, step/delta, and error-function engineering formulas.
 - Formula coverage: add hyperbolic, reciprocal-trigonometric, and inverse-trigonometric formulas.
 - Formula coverage: add combinatorics and pairwise sum-of-squares formulas.

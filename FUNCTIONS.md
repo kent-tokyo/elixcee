@@ -218,6 +218,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `MOD` | Modulo | Classic |
 | `RAND` | Random float 0–1 | Classic |
 | `RANDBETWEEN` | Random integer in range | Classic |
+| `RANK` / `RANK.EQ` / `RANK.AVG` | Rank a number in a list | Classic / 2010 / 2010 |
 | `SUMPRODUCT` | Sum of element-wise products | Classic |
 | `COMBIN` | Number of combinations C(n, k) | Classic |
 | `COUNTIF` / `SUMIF` / `AVERAGEIF` | Conditional count / sum / average | 2007 |
@@ -295,6 +296,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `MODE.SNGL` / `MODE.MULT` | Most frequent numeric value | 2010 / 2010 |
 | `TRIMMEAN` | Mean after symmetric outlier trimming | Classic |
 | `SKEW` | Sample skewness | Classic |
+| `SKEW.P` | Population skewness | 2010 |
 | `KURT` | Excess sample kurtosis | Classic |
 | `NORM.DIST` / `NORMDIST` | Normal distribution CDF or PDF | 2010 / Classic |
 | `NORM.INV` / `NORMINV` | Inverse normal distribution | 2010 / Classic |
