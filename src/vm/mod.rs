@@ -15665,7 +15665,7 @@ fn collect_direct_formula_inputs(
                 collect_direct_formula_inputs(arg, refs, ranges);
             }
         }
-        Number(_) | Str(_) | Bool(_) => {}
+        Number(_) | Str(_) | Bool(_) | Omitted => {}
     }
 }
 
@@ -15724,7 +15724,7 @@ fn collect_formula_dependencies(
                 collect_formula_dependencies(arg, positions, positions_by_row, spill_rects, out);
             }
         }
-        Number(_) | Str(_) | Bool(_) => {}
+        Number(_) | Str(_) | Bool(_) | Omitted => {}
     }
 }
 

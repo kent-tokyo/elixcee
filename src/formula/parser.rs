@@ -595,18 +595,32 @@ impl FormulaParser {
         if self.peek() == Some('(') {
             self.advance();
             let mut args = vec![];
+            let mut needs_argument = false;
             self.skip_ws();
-            if self.peek() != Some(')') {
-                args.push(self.parse_nested_expr()?);
-                loop {
-                    self.skip_ws();
-                    if self.consume(',') {
-                        self.skip_ws();
-                        args.push(self.parse_nested_expr()?);
-                    } else {
-                        break;
+            loop {
+                self.skip_ws();
+                if self.peek() == Some(')') {
+                    if needs_argument {
+                        args.push(FormulaExpr::Omitted);
                     }
+                    break;
                 }
+                if self.peek() == Some(',') {
+                    args.push(FormulaExpr::Omitted);
+                    self.advance();
+                    needs_argument = true;
+                    self.skip_ws();
+                    continue;
+                } else {
+                    args.push(self.parse_nested_expr()?);
+                }
+                self.skip_ws();
+                if self.consume(',') {
+                    needs_argument = true;
+                } else {
+                    break;
+                }
+                self.skip_ws();
             }
             self.skip_ws();
             if !self.consume(')') {
@@ -703,6 +717,7 @@ fn validate_expr_shape(expr: &FormulaExpr, depth: usize, nodes: &mut usize) -> R
         FormulaExpr::Number(_)
         | FormulaExpr::Str(_)
         | FormulaExpr::Bool(_)
+        | FormulaExpr::Omitted
         | FormulaExpr::CellRef { .. }
         | FormulaExpr::Range { .. } => {}
     }
@@ -733,6 +748,32 @@ mod tests {
     fn test_bool() {
         assert_eq!(parse("=TRUE").unwrap(), FormulaExpr::Bool(true));
         assert_eq!(parse("=FALSE").unwrap(), FormulaExpr::Bool(false));
+    }
+
+    #[test]
+    fn test_omitted_argument_slots() {
+        assert_eq!(
+            parse("=CHOOSE(1,,3)").unwrap(),
+            FormulaExpr::FuncCall {
+                name: "CHOOSE".into(),
+                args: vec![
+                    FormulaExpr::Number(1.0),
+                    FormulaExpr::Omitted,
+                    FormulaExpr::Number(3.0),
+                ],
+            }
+        );
+        assert_eq!(
+            parse("=CHOOSE(,2,)").unwrap(),
+            FormulaExpr::FuncCall {
+                name: "CHOOSE".into(),
+                args: vec![
+                    FormulaExpr::Omitted,
+                    FormulaExpr::Number(2.0),
+                    FormulaExpr::Omitted,
+                ],
+            }
+        );
     }
 
     #[test]

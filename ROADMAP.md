@@ -203,7 +203,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 formula metadata BUILD: `ISFORMULA`を`CellContent.formula`へ接続し、単一セル・bounded range・非参照式の判定を回帰した。跨ぎsheet参照とExcel全型変換のoracle校正は未完。
 - [x] G4 TEXTSPLIT mode BUILD: `TEXTSPLIT`へrow delimiter、case-insensitive match、pad valueを追加し、既存ignore-empty placeholderとflat row-major配列を回帰した。完全な2D shape・複数delimiter配列・Excel oracle校正は未完。
 - [x] G4 worksheet context BUILD: `SHEET`／`SHEETS`をsingle-sheet evaluatorの既定値とworkbook recalculationのsheet index/count contextへ接続した。3D参照、名前付き範囲全域、Excel oracle校正は未完。
-- [x] G4 ISOMITTED boundary BUILD: `ISOMITTED`を明示引数に対する`FALSE`として登録し、未省略引数の安全なsubsetを提供した。空引数AST、LAMBDA省略引数、Excel oracle校正は未完。
+- [x] G4 ISOMITTED AST／LAMBDA BUILD: 空引数スロットを`FormulaExpr::Omitted`として保持し、`ISOMITTED`が構文上の省略と明示的`Empty`を区別できるようにした。高階LAMBDA呼出しの不足引数は省略束縛として追跡する。直接のLAMBDA呼出し構文、Excel oracle校正は未完。
 - [x] G4 PIVOTBY配列集計BUILD: `PIVOTBY`を1列row／column fieldsとvaluesのcross-tab、行列ヘッダー、空組合せのreducer評価へ接続した。multi-field relationship、headers／totals depth、sort／filter／LAMBDA、Excel oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。

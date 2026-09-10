@@ -332,7 +332,10 @@ fn contains_qualified_ref(expr: &FormulaExpr) -> bool {
         }
         FormulaExpr::UnaryMinus(inner) => contains_qualified_ref(inner),
         FormulaExpr::FuncCall { args, .. } => args.iter().any(contains_qualified_ref),
-        FormulaExpr::Number(_) | FormulaExpr::Str(_) | FormulaExpr::Bool(_) => false,
+        FormulaExpr::Number(_)
+        | FormulaExpr::Str(_)
+        | FormulaExpr::Bool(_)
+        | FormulaExpr::Omitted => false,
     }
 }
 
@@ -433,7 +436,8 @@ fn contains_named_range(
         | FormulaExpr::Str(_)
         | FormulaExpr::Bool(_)
         | FormulaExpr::CellRef { .. }
-        | FormulaExpr::Range { .. } => false,
+        | FormulaExpr::Range { .. }
+        | FormulaExpr::Omitted => false,
     }
 }
 
@@ -541,7 +545,10 @@ fn collect_dependencies(
                 collect_dependencies(arg, host, refs, ranges);
             }
         }
-        FormulaExpr::Number(_) | FormulaExpr::Str(_) | FormulaExpr::Bool(_) => {}
+        FormulaExpr::Number(_)
+        | FormulaExpr::Str(_)
+        | FormulaExpr::Bool(_)
+        | FormulaExpr::Omitted => {}
     }
 }
 
@@ -611,6 +618,7 @@ fn remap_expr(
         FormulaExpr::Number(n) => FormulaExpr::Number(*n),
         FormulaExpr::Str(value) => FormulaExpr::Str(value.clone()),
         FormulaExpr::Bool(value) => FormulaExpr::Bool(*value),
+        FormulaExpr::Omitted => FormulaExpr::Omitted,
     })
 }
 

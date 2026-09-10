@@ -372,7 +372,10 @@ fn contains_qualified_reference(expr: &elixcee::formula::FormulaExpr) -> bool {
         }
         FormulaExpr::UnaryMinus(inner) => contains_qualified_reference(inner),
         FormulaExpr::FuncCall { args, .. } => args.iter().any(contains_qualified_reference),
-        FormulaExpr::Number(_) | FormulaExpr::Str(_) | FormulaExpr::Bool(_) => false,
+        FormulaExpr::Number(_)
+        | FormulaExpr::Str(_)
+        | FormulaExpr::Bool(_)
+        | FormulaExpr::Omitted => false,
     }
 }
 

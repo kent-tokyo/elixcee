@@ -12,8 +12,14 @@ use crate::vm::{CellContent, ExcelError, Variant};
 // A stack of binding frames; each frame is pushed by LET or a lambda call.
 
 thread_local! {
-    static BINDINGS: RefCell<Vec<HashMap<String, Variant>>> = const { RefCell::new(vec![]) };
+    static BINDINGS: RefCell<Vec<HashMap<String, BindingValue>>> = const { RefCell::new(vec![]) };
     static SHEET_CONTEXT: RefCell<(usize, usize)> = const { RefCell::new((1, 1)) };
+}
+
+#[derive(Clone)]
+enum BindingValue {
+    Value(Variant),
+    Omitted,
 }
 
 pub(crate) fn with_sheet_context<T>(
@@ -34,7 +40,7 @@ fn sheet_context() -> (usize, usize) {
     SHEET_CONTEXT.with(|context| *context.borrow())
 }
 
-fn push_bindings(frame: HashMap<String, Variant>) {
+fn push_bindings(frame: HashMap<String, BindingValue>) {
     BINDINGS.with(|b| b.borrow_mut().push(frame));
 }
 
@@ -48,11 +54,26 @@ fn lookup_binding(name: &str) -> Option<Variant> {
     BINDINGS.with(|b| {
         let stack = b.borrow();
         for frame in stack.iter().rev() {
-            if let Some(v) = frame.get(name) {
-                return Some(v.clone());
+            if let Some(value) = frame.get(name) {
+                return Some(match value {
+                    BindingValue::Value(value) => value.clone(),
+                    BindingValue::Omitted => Variant::Empty,
+                });
             }
         }
         None
+    })
+}
+
+fn binding_is_omitted(name: &str) -> bool {
+    BINDINGS.with(|b| {
+        let stack = b.borrow();
+        for frame in stack.iter().rev() {
+            if let Some(value) = frame.get(name) {
+                return matches!(value, BindingValue::Omitted);
+            }
+        }
+        false
     })
 }
 
@@ -64,7 +85,10 @@ fn lookup_binding(name: &str) -> Option<Variant> {
 /// this evaluator.
 pub(crate) fn references_another_sheet(expr: &FormulaExpr) -> bool {
     match expr {
-        FormulaExpr::Number(_) | FormulaExpr::Str(_) | FormulaExpr::Bool(_) => false,
+        FormulaExpr::Number(_)
+        | FormulaExpr::Str(_)
+        | FormulaExpr::Bool(_)
+        | FormulaExpr::Omitted => false,
         FormulaExpr::CellRef { sheet, .. } => sheet.is_some(),
         FormulaExpr::Range { sheet, .. } => sheet.is_some(),
         FormulaExpr::BinOp { lhs, rhs, .. } => {
@@ -86,6 +110,7 @@ pub fn evaluate(
         FormulaExpr::Number(n) => Ok(as_integer_if_whole(*n)),
         FormulaExpr::Str(s) => Ok(Variant::Str(s.clone())),
         FormulaExpr::Bool(b) => Ok(Variant::Boolean(*b)),
+        FormulaExpr::Omitted => Ok(Variant::Empty),
         FormulaExpr::CellRef { col, row, .. } => Ok(cells
             .get(&(*row, *col))
             .map(|c| c.value.clone())
@@ -5129,9 +5154,10 @@ fn func_isomitted(
     if args.len() != 1 {
         return Err("ISOMITTED requires 1 argument".into());
     }
-    // The parser currently has no omitted-argument AST node. Every argument
-    // that reaches this evaluator was therefore explicitly supplied.
-    Ok(Variant::Boolean(false))
+    Ok(Variant::Boolean(
+        matches!(args[0], FormulaExpr::Omitted)
+            || matches!(&args[0], FormulaExpr::FuncCall { name, args } if args.is_empty() && binding_is_omitted(name)),
+    ))
 }
 
 fn func_sheet(
@@ -10153,7 +10179,7 @@ fn func_let(
     if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err("LET requires an odd number of arguments: LET(name, val, ..., result)".into());
     }
-    let mut frame: HashMap<String, Variant> = HashMap::new();
+    let mut frame: HashMap<String, BindingValue> = HashMap::new();
     let mut i = 0;
     while i < args.len() - 1 {
         let name = match &args[i] {
@@ -10161,7 +10187,7 @@ fn func_let(
             _ => return Err("LET: name arguments must be identifiers".into()),
         };
         let val = evaluate(&args[i + 1], cells)?; // evaluated with current scope
-        frame.insert(name, val);
+        frame.insert(name, BindingValue::Value(val));
         i += 2;
     }
     push_bindings(frame);
@@ -10207,14 +10233,27 @@ fn call_lambda(
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
     let (params, body) = extract_lambda(lambda_expr)?;
-    if params.len() != arg_vals.len() {
+    if arg_vals.len() > params.len() {
         return Err(format!(
-            "LAMBDA: expected {} args, got {}",
+            "LAMBDA: expected at most {} args, got {}",
             params.len(),
             arg_vals.len()
         ));
     }
-    let frame: HashMap<String, Variant> = params.into_iter().zip(arg_vals).collect();
+    let frame: HashMap<String, BindingValue> = params
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            (
+                name,
+                arg_vals
+                    .get(index)
+                    .cloned()
+                    .map(BindingValue::Value)
+                    .unwrap_or(BindingValue::Omitted),
+            )
+        })
+        .collect();
     push_bindings(frame);
     let result = evaluate(body, cells);
     pop_bindings();
@@ -17168,6 +17207,20 @@ mod tests {
         assert_eq!(calc("=LET(x, 3, y, 4, x*y)", &c), Variant::Integer(12));
         // LET with string
         assert_eq!(calc("=LET(s, \"hello\", LEN(s))", &c), Variant::Integer(5));
+    }
+
+    #[test]
+    fn test_isomitted_tracks_missing_lambda_bindings() {
+        let c = HashMap::new();
+        let lambda = fparse("=LAMBDA(value,ISOMITTED(value))").unwrap();
+        assert_eq!(
+            call_lambda(&lambda, vec![], &c).unwrap(),
+            Variant::Boolean(true)
+        );
+        assert_eq!(
+            call_lambda(&lambda, vec![Variant::Empty], &c).unwrap(),
+            Variant::Boolean(false)
+        );
     }
 
     #[test]
