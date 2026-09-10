@@ -402,6 +402,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `IMSINH` / `IMCOSH` / `IMTANH` | Complex hyperbolic functions | Classic |
 | `IMSEC` / `IMCSC` / `IMCOT` | Complex reciprocal trigonometric functions | Classic |
 | `IMASIN` / `IMACOS` / `IMATAN` / `IMACOT` | Complex inverse trigonometric functions | Classic |
+| `IMASINH` / `IMACOSH` / `IMATANH` | Complex inverse hyperbolic functions | Classic |
+| `IMSECH` / `IMCSCH` / `IMCOTH` | Complex reciprocal hyperbolic functions | Classic |
 
 ### Logical
 

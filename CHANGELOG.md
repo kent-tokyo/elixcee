@@ -16,6 +16,7 @@
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
 - Formula coverage: add complex trigonometric, hyperbolic, and reciprocal trigonometric formulas.
 - Formula coverage: add complex inverse trigonometric formulas `IMASIN`, `IMACOS`, `IMATAN`, and `IMACOT`.
+- Formula coverage: add complex inverse-hyperbolic and reciprocal-hyperbolic formulas.
 - Formula coverage: add array-returning `TREND` and `GROWTH` regression predictions with constant/intercept and domain validation.
 - Formula coverage: add single-variable `LINEST` coefficients and optional regression statistics.
 - Formula coverage: add single-variable `LOGEST` exponential coefficients and optional regression statistics.
