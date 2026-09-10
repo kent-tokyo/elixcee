@@ -598,6 +598,8 @@ fn eval_func(
         "GESTEP" => func_gestep(args, cells),
         "ERF" | "ERF.PRECISE" => func_erf(args, cells),
         "ERFC" | "ERFC.PRECISE" => func_erfc(args, cells),
+        "BESSELJ" => func_bessel(args, cells, false),
+        "BESSELI" => func_bessel(args, cells, true),
         "DEC2BIN" => func_dec_to_radix(args, cells, 2),
         "DEC2HEX" => func_dec_to_radix(args, cells, 16),
         "DEC2OCT" => func_dec_to_radix(args, cells, 8),
@@ -7051,6 +7053,46 @@ fn func_erfc(
     Ok(Variant::Float(result))
 }
 
+fn func_bessel(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    modified: bool,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err(format!(
+            "{} requires 2 arguments",
+            if modified { "BESSELI" } else { "BESSELJ" }
+        ));
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let order = to_float(&evaluate(&args[1], cells)?)?;
+    if !x.is_finite() || !order.is_finite() || order < 0.0 || order.fract() != 0.0 || order > 100.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let order = order as usize;
+    let mut factorial = 1.0;
+    for value in 2..=order {
+        factorial *= value as f64;
+    }
+    let mut term = (x / 2.0).powi(order as i32) / factorial;
+    let x_squared_quarter = x * x / 4.0;
+    let mut result = 0.0;
+    for m in 0..10_000_u32 {
+        let signed_term = if modified || m % 2 == 0 { term } else { -term };
+        result += signed_term;
+        if !result.is_finite() {
+            return Ok(Variant::Error(ExcelError::Num));
+        }
+        let next = term * x_squared_quarter / ((m + 1) as f64 * (m as usize + order + 1) as f64);
+        if next.abs() <= 1e-15 * result.abs().max(1.0) {
+            break;
+        }
+        term = next;
+    }
+    Ok(as_integer_if_whole(result))
+}
+
 fn radix_limits(base: u32) -> (usize, u32, i64, i64) {
     match base {
         2 => (10, 10, -512, 511),
@@ -12930,6 +12972,16 @@ mod tests {
         match calc("=ERFC(0)", &c) {
             Variant::Float(value) => assert!((value - 1.0).abs() < 1e-12),
             other => panic!("ERFC: {:?}", other),
+        }
+        assert_eq!(calc("=BESSELJ(0,0)", &c), Variant::Integer(1));
+        match calc("=BESSELJ(1,0)", &c) {
+            Variant::Float(value) => assert!((value - 0.7651976865579666).abs() < 1e-12),
+            other => panic!("BESSELJ: {:?}", other),
+        }
+        assert_eq!(calc("=BESSELI(0,0)", &c), Variant::Integer(1));
+        match calc("=BESSELI(1,0)", &c) {
+            Variant::Float(value) => assert!((value - 1.2660658777520084).abs() < 1e-12),
+            other => panic!("BESSELI: {:?}", other),
         }
         assert_eq!(
             calc("=BITLSHIFT(281474976710655,1)", &c),

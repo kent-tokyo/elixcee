@@ -170,6 +170,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 定率償却期間按分 BUILD: `AMORLINC`を購入日・初回期間・basis別日数からの初回按分と残存価額上限へ接続し、初回／通常／上限期間を回帰した。Excelの全型変換・うるう年・oracle校正は未完。
 - [x] G4 定率逓減償却期間按分 BUILD: `AMORDEGRC`を耐用年数に応じた係数、初回期間按分、簿価・残存価額上限へ接続し、初回／通常期間を回帰した。Excelの全型変換・係数境界・oracle校正は未完。
 - [x] G4 Math Classic補完 BUILD: `SQRTPI`を非負引数の`√(xπ)`へ接続し、整数化・負数・非有限値の境界を回帰した。Excelの全型変換・丸め・oracle校正は未完。
+- [x] G4 Engineering特殊関数 BUILD: `BESSELJ`／`BESSELI`を非負整数次数の収束級数へ接続し、零点・代表値・定義域を回帰した。BESSEL Y/K、全型変換・大引数精度・oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素三角関数 BUILD: `IMSIN`／`IMCOS`／`IMTAN`、`IMSINH`／`IMCOSH`／`IMTANH`、`IMSEC`／`IMCSC`／`IMCOT`を複素公式と除算へ接続し、原点・接尾辞・極のゼロ除算を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。
