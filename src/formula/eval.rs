@@ -520,6 +520,7 @@ fn eval_func(
         "FORMULATEXT" => func_formulatext(args, cells),
         "CELL" => func_cell(args, cells),
         "AREAS" => func_areas(args, cells),
+        "INFO" => func_info(args, cells),
         "VLOOKUP" => func_vlookup(args, cells),
         "HLOOKUP" => func_hlookup(args, cells),
         "INDEX" => func_index(args, cells),
@@ -4925,6 +4926,33 @@ fn func_areas(
         Ok(Variant::Integer(1))
     } else {
         Ok(Variant::Error(ExcelError::Value))
+    }
+}
+
+fn func_info(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("INFO requires 1 argument".into());
+    }
+    let info_type = to_str(&evaluate(&args[0], cells)?).to_ascii_lowercase();
+    match info_type.as_str() {
+        "system" => Ok(Variant::Str(
+            if cfg!(target_os = "macos") {
+                "mac"
+            } else {
+                "pcdos"
+            }
+            .into(),
+        )),
+        "osversion" => Ok(Variant::Str(std::env::consts::OS.into())),
+        "release" => Ok(Variant::Str(env!("CARGO_PKG_VERSION").into())),
+        "recalc" => Ok(Variant::Str("Automatic".into())),
+        // Directory, memory, and file-count values are host-sensitive and can
+        // disclose information in a headless service, so they remain explicit
+        // unsupported results rather than guessed placeholders.
+        _ => Ok(Variant::Error(ExcelError::NA)),
     }
 }
 
@@ -14987,6 +15015,18 @@ mod tests {
         assert_eq!(calc("=AREAS(A1)", &c), Variant::Integer(1));
         assert_eq!(calc("=AREAS(A1:B2)", &c), Variant::Integer(1));
         assert_eq!(calc("=AREAS(1+2)", &c), Variant::Error(ExcelError::Value));
+        assert_eq!(
+            calc("=INFO(\"release\")", &c),
+            Variant::Str(env!("CARGO_PKG_VERSION").into())
+        );
+        assert_eq!(
+            calc("=INFO(\"recalc\")", &c),
+            Variant::Str("Automatic".into())
+        );
+        assert_eq!(
+            calc("=INFO(\"memused\")", &c),
+            Variant::Error(ExcelError::NA)
+        );
     }
 
     #[test]

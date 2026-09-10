@@ -560,6 +560,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `ERROR.TYPE` | Return numeric code of an error (#NULL!=1 … #N/A=7) | Classic |
 | `FORMULATEXT` | Return formula of a cell as text | 2013 |
 | `CELL` | Return cell metadata (address, row, col, type, contents, width, …) | Classic |
+| `INFO` | Return bounded runtime information (`system`, `osversion`, `release`, `recalc`) | Classic |
 
 ### Array / Spill Functions
 

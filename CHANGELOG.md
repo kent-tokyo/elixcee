@@ -41,6 +41,7 @@
 - Formula compatibility: add legacy `TDIST` and `TINV` t-distribution functions.
 - Formula compatibility: add the legacy `ECMA.CEILING` rounding alias.
 - Formula coverage: add bounded reference-form `AREAS` evaluation.
+- Formula coverage: add bounded, headless-safe `INFO` runtime metadata.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
