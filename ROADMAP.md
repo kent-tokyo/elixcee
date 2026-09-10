@@ -25,6 +25,32 @@ JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公�
 4. **G5 メモリ**: 通常保存のpassthrough遅延処理と、追記専用Writerの行数非依存メモリを別々に実装・測定する。
 5. **G6 判定**: quiet-host再測定、Excel oracle、3 OS、配布・安全性ゲート。以下の性能バックログも継続する。
 6. **LogiSheets対抗 L0–L6**: workbook数式・共有runtime・操作履歴を、既存の安全性と互換性ゲートを維持したまま段階導入する。
+7. **品質保証トラック L7–L10**: Rubberduck後のCI診断、公開可能なworkbook pair benchmark、snapshot／依存関係、動的配列oracleを分離して進める。
+
+## 競合ウォッチ反映（2026-09-11）
+
+Rubberduckの公式リポジトリは2026-03-08にアーカイブされ、最後に確認できる
+pre-releaseはv2.5.92.6381-pre（2026-06-25）です。[公式リポジトリ／releases](https://github.com/rubberduck-vba/Rubberduck/releases)
+を一次情報とします。これは「Rubberduck互換」を意味しません。elixceeは
+クロスプラットフォームのworkbook実行・診断・テストに限定して、保守されるCI導線を訴求します。
+
+HyperFormula 3.4.0は2026-08-10にVSTACK、HSTACK、XIRR、UNIQUE、SORTと関数metadata APIを追加しました。
+[公式release notes](https://hyperformula.handsontable.com/docs/guide/release-notes.html)を参照し、
+数式oracleの比較対象として扱います。Python `formulas` 1.3.4はxlsx／ods／JSONのCLI、build、test、
+HTTP APIを提供していますが、elixceeとはVBA診断・workbook障害の境界が異なります。
+
+Workbook Time Machineの150タスク、SpreadsheetBench 2の321タスクは、AIによるworkbook編集結果を
+workbook単位で検証する方向性を示します。外部データをそのまま取り込まず、ライセンス・個人情報・
+Excel oracleを確認したうえで、合成または再配布可能な小規模corpusから段階的に採用します。
+
+### L7–L10 品質保証・競合対応phase
+
+- [x] **L7a CI診断契約**: `diagnose-workbook`のGitHub Actions利用例、seed／case replay、失敗JSON artifact、root cause／observationの扱いを[CI VBA diagnostics](docs/ci-vba-diagnostics.md)へ固定した。これは既存CLI契約の導線整備であり、新しいVBA意味論の追加ではない。
+- [ ] **L7b 診断corpus BUILD**: Range/Paste、非表示行列、Protection、Formula result、VBA resolutionの合成workbook pairを最小セットで追加し、各ケースに期待JSONと再現seedを持たせる。
+- [ ] **L8 再現可能benchmark MEASURE**: corpusのversion・fixture hash・runtime version・OS・CPU・RSS・wall timeを記録し、before/afterと競合比較を別表にする。未測定の速度・正確性・Rubberduck互換性は主張しない。
+- [ ] **L9 snapshot／依存関係 BUILD**: snapshot JSONへformula、入力／出力候補、依存辺、cycle／unresolved referenceを後方互換フィールドとして段階追加する。まず読み取り専用・bounded・決定論的出力で設計する。
+- [ ] **L10 formula oracle BUILD/MEASURE**: HyperFormula 3.4.0等の固定版を補助oracleとしてVSTACK/HSTACK/UNIQUE/SORT/XIRRと空セルLOOKUPをcorpus化し、Excel oracleと分離した一致表を作る。
+- [ ] **L10b 外部benchmark gate**: Workbook Time Machine／SpreadsheetBench 2はライセンス、再配布条件、タスク変換、期待値の出所を確認できた範囲だけ採用する。外部datasetの存在だけで品質向上や競合優位を主張しない。
 
 ## 互換性・数式・省メモリ強化（G0–G6）
 

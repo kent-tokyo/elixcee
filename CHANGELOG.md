@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- CI guidance: add a reproducible `diagnose-workbook` workflow, failure-artifact
+  triage rules, and a redistributable diagnostic-corpus contract. This documents
+  the supported diagnostic surface; it does not expand the VBA or Excel oracle.
 - Chart BUILD: add creation of line/bar/area/pie charts in an existing Drawing,
   including bounded additional category/value series, and document that this is
   not yet an Excel-compatibility guarantee.

@@ -23,6 +23,7 @@ replacement.
 | Formula argument/mode contracts | [formula-contracts.json](../compat/formula-contracts.json); validate with `python3 -B scripts/check-formula-dispatch.py --check-docs --check-contracts` |
 | Python signatures | [elixcee.pyi](../elixcee.pyi) |
 | CLI commands and JSON schema | [Agent contract](agent-contract.md) |
+| CI VBA diagnosis | [CI VBA diagnostics](ci-vba-diagnostics.md) |
 | Support guarantees and non-goals | [v1 support contract](v1-support-contract.md) |
 | Migration examples and boundaries | [Migration guide](migration.md) |
 | Resource ceilings and sizing evidence | [Limits](limits.md) |
