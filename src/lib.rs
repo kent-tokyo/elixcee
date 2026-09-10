@@ -4661,13 +4661,19 @@ fn rewrite_chart_sheet_refs(
     Ok(out)
 }
 
+fn render_chart_title(text: &str) -> String {
+    format!(
+        "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
+        xml_escape(text)
+    )
+}
+
 fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
-    let title = chart.title.as_deref().map(|text| {
-        format!(
-            "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
-            xml_escape(text)
-        )
-    }).unwrap_or_default();
+    let title = chart
+        .title
+        .as_deref()
+        .map(render_chart_title)
+        .unwrap_or_default();
     let mut series = String::new();
     let marker = if matches!(chart.chart_type.as_str(), "line" | "area") {
         "<c:marker><c:symbol val=\"none\"/></c:marker>"
@@ -5313,10 +5319,7 @@ fn rewrite_chart_title(xml: &str, text: &str) -> Result<String, String> {
             .ok_or_else(|| {
                 "chart title element is missing and plotArea is unavailable".to_string()
             })?;
-        let title = format!(
-            "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
-            xml_escape(text)
-        );
+        let title = render_chart_title(text);
         let mut out = String::with_capacity(xml.len() + title.len());
         out.push_str(&xml[..plot_area]);
         out.push_str(&title);
@@ -5800,10 +5803,7 @@ fn rewrite_chart_axis_titles(
         let rewritten = if fragment.contains("<c:title") {
             rewrite_chart_title(fragment, text)?
         } else {
-            let title = format!(
-                "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
-                xml_escape(text)
-            );
+            let title = render_chart_title(text);
             let insertion = [
                 fragment.find("<c:numFmt"),
                 fragment.find("<c:majorTickMark"),
@@ -11052,10 +11052,19 @@ mod tests {
         let source = "<c:chart><c:plotArea><c:layout/></c:plotArea></c:chart>";
         let actual = rewrite_chart_title(source, "New & title").unwrap();
         assert!(actual.contains(
-            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>New &amp; title</a:t>"
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>New &amp; title</a:t>"
         ));
         assert!(actual.contains("</c:title><c:plotArea><c:layout/></c:plotArea>"));
         assert_eq!(actual.matches("<c:title>").count(), 1);
+    }
+
+    #[test]
+    fn chart_title_renderer_escapes_text_and_uses_compatible_rich_text_shape() {
+        let actual = render_chart_title("A < B & C > D");
+        assert_eq!(
+            actual,
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>A &lt; B &amp; C &gt; D</a:t></a:r></a:p></c:rich></c:tx></c:title>"
+        );
     }
 
     #[test]
