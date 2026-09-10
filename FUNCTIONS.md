@@ -326,6 +326,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `CHISQ.DIST` / `CHIDIST` | Chi-squared distribution PDF or CDF | 2010 / Classic |
 | `F.DIST` / `FDIST` | F distribution PDF or CDF | 2010 / Classic |
 | `F.DIST.RT` | Right-tailed F distribution probability | 2010 |
+| `F.DIST.2T` | Two-tailed F distribution probability | 2010 |
 | `F.INV` / `F.INV.RT` | Inverse F distribution, left/right tail | 2010 |
 | `GAMMA.DIST` / `GAMMA.INV` | Gamma distribution and inverse | 2010 |
 | `CHISQ.DIST.RT` | Right-tailed chi-squared probability | 2010 |

@@ -556,6 +556,7 @@ fn eval_func(
         "CHISQ.INV.RT" => func_chisq_inv_rt(args, cells),
         "F.DIST" | "FDIST" => func_f_dist(args, cells),
         "F.DIST.RT" => func_f_dist_rt(args, cells),
+        "F.DIST.2T" => func_f_dist_2t(args, cells),
         "F.INV" => func_f_inv(args, cells),
         "F.INV.RT" => func_f_inv_rt(args, cells),
         "WEIBULL.DIST" | "WEIBULL" => func_weibull_dist(args, cells),
@@ -6130,6 +6131,23 @@ fn func_f_dist_rt(
         return Ok(Variant::Error(ExcelError::Num));
     }
     Ok(Variant::Float(1.0 - f_cdf(x, df1, df2)))
+}
+
+fn func_f_dist_2t(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("F.DIST.2T requires 3 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let df1 = to_float(&evaluate(&args[1], cells)?)?;
+    let df2 = to_float(&evaluate(&args[2], cells)?)?;
+    if !x.is_finite() || !df1.is_finite() || !df2.is_finite() || x < 0.0 || df1 <= 0.0 || df2 <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float((2.0 * (1.0 - f_cdf(x, df1, df2))).min(1.0)))
 }
 
 fn f_inverse(probability: f64, df1: f64, df2: f64, right_tail: bool) -> f64 {
@@ -14669,6 +14687,10 @@ mod tests {
             Variant::Integer(2)
         );
         assert_eq!(calc("=BINOM.INV(4,0.5,0)", &cells), Variant::Integer(0));
+        assert!(matches!(
+            calc("=F.DIST.2T(1,1,1)", &cells),
+            Variant::Float(v) if (v - 1.0).abs() < 1e-9
+        ));
         assert!(
             matches!(calc("=NEGBINOM.DIST(3,2,0.5,FALSE)", &cells), Variant::Float(v) if (v - 0.125).abs() < 1e-12)
         );
