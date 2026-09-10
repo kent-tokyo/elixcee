@@ -388,6 +388,7 @@ fn eval_func(
         "COUNTIFS" => func_countifs(args, cells),
         "MEDIAN" => func_median(args, cells),
         "MODE.MULT" | "MODE.SNGL" => func_mode_mult(args, cells),
+        "FREQUENCY" => func_frequency(args, cells),
         "PRODUCT" => func_product(args, cells),
         "ROW" => func_row(args, cells),
         "ROWS" => func_rows(args, cells),
@@ -1912,6 +1913,37 @@ fn func_mode_mult(
     // Return the first value (in original order) that has max frequency
     let mode = vals.into_iter().find(|v| freq[v] == max_freq).unwrap();
     Ok(Variant::Integer(mode))
+}
+
+fn func_frequency(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("FREQUENCY requires 2 arguments".into());
+    }
+    let data = collect_values(&args[0], cells)?
+        .iter()
+        .filter_map(as_f64)
+        .collect::<Vec<_>>();
+    let bins = collect_values(&args[1], cells)?
+        .iter()
+        .filter_map(as_f64)
+        .collect::<Vec<_>>();
+    if bins.is_empty() {
+        return Ok(Variant::Array(vec![Variant::Integer(data.len() as i64)]));
+    }
+    let mut counts = vec![0_i64; bins.len() + 1];
+    for value in data {
+        let bucket = bins
+            .iter()
+            .position(|bin| value <= *bin)
+            .unwrap_or(bins.len());
+        counts[bucket] += 1;
+    }
+    Ok(Variant::Array(
+        counts.into_iter().map(Variant::Integer).collect(),
+    ))
 }
 
 fn func_product(
@@ -12976,6 +13008,24 @@ mod tests {
             },
         );
         assert_eq!(calc("=RANK.AVG(2,A1:A3,0)", &c), Variant::Float(1.5));
+        for (row, value) in [3.0, 5.0, 100.0].into_iter().enumerate() {
+            c.insert(
+                (row as u32 + 1, 2),
+                CellContent {
+                    formula: None,
+                    value: Variant::Float(value),
+                },
+            );
+        }
+        assert_eq!(
+            calc("=FREQUENCY(A1:A8,B1:B3)", &c),
+            Variant::Array(vec![
+                Variant::Integer(3),
+                Variant::Integer(2),
+                Variant::Integer(2),
+                Variant::Integer(1),
+            ])
+        );
         match calc("=SKEW(1,2,3,4,5)", &c) {
             Variant::Float(value) => assert!(value.abs() < 1e-12),
             other => panic!("SKEW unexpected: {:?}", other),

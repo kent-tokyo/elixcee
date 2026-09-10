@@ -294,6 +294,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `COVARIANCE.S` / `COVAR` | Sample covariance | Classic / 2010 |
 | `COVARIANCE.P` | Population covariance | 2010 |
 | `MODE.SNGL` / `MODE.MULT` | Most frequent numeric value | 2010 / 2010 |
+| `FREQUENCY` | Frequency distribution over bins | Classic |
 | `TRIMMEAN` | Mean after symmetric outlier trimming | Classic |
 | `SKEW` | Sample skewness | Classic |
 | `SKEW.P` | Population skewness | 2010 |
