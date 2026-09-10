@@ -255,6 +255,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `NPER` | Number of periods for an annuity | Classic |
 | `RATE` | Interest rate per period (Newton-Raphson) | Classic |
 | `IPMT` | Interest portion of a periodic payment | Classic |
+| `ISPMT` | Interest payment for a straight-line principal schedule | Classic |
 | `PPMT` | Principal portion of a periodic payment | Classic |
 | `NPV`  | Net present value (regular cash flows) | Classic |
 | `IRR`  | Internal rate of return (regular cash flows) | Classic |

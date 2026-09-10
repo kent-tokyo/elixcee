@@ -721,6 +721,7 @@ fn eval_func(
         "RATE" => func_rate(args, cells),
         "IPMT" => func_ipmt(args, cells),
         "PPMT" => func_ppmt(args, cells),
+        "ISPMT" => func_ispmt(args, cells),
         "NPV" => func_npv(args, cells),
         "IRR" => func_irr(args, cells),
         "MIRR" => func_mirr(args, cells),
@@ -10226,6 +10227,32 @@ fn func_rate(
     Ok(Variant::Error(ExcelError::Num)) // did not converge
 }
 
+fn func_ispmt(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("ISPMT requires 4 arguments".into());
+    }
+    let rate = to_float(&evaluate(&args[0], cells)?)?;
+    let per = to_float(&evaluate(&args[1], cells)?)?;
+    let nper = to_float(&evaluate(&args[2], cells)?)?;
+    let pv = to_float(&evaluate(&args[3], cells)?)?;
+    if !rate.is_finite()
+        || !per.is_finite()
+        || !nper.is_finite()
+        || !pv.is_finite()
+        || per.fract() != 0.0
+        || nper.fract() != 0.0
+        || nper <= 0.0
+        || per < 1.0
+        || per > nper
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(pv * rate * (per / nper - 1.0)))
+}
+
 fn func_ipmt(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -15211,6 +15238,19 @@ mod tests {
         );
         // rate=0: PMT = -pv/nper
         assert_eq!(calc("=PMT(0,10,1000)", &c), Variant::Float(-100.0));
+    }
+
+    #[test]
+    fn test_ispmt() {
+        let c = HashMap::new();
+        match calc("=ISPMT(0.1,1,3,800000)", &c) {
+            Variant::Float(value) => assert!((value + 53333.3333333333).abs() < 1e-8),
+            other => panic!("ISPMT: {:?}", other),
+        }
+        assert_eq!(
+            calc("=ISPMT(0.1,0,3,800000)", &c),
+            Variant::Error(ExcelError::Num)
+        );
     }
 
     #[test]
