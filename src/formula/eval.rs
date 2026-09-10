@@ -584,6 +584,7 @@ fn eval_func(
         "T.DIST.RT" => func_t_dist_rt(args, cells),
         "T.INV" => func_t_inv(args, cells),
         "T.INV.2T" => func_t_inv_2t(args, cells),
+        "TTEST" => func_ttest(args, cells),
         // ── Rounding ─────────────────────────────────────────────────────────
         "FLOOR" | "FLOOR.MATH" => func_floor(args, cells),
         "CEILING" | "CEILING.MATH" => func_ceiling(args, cells),
@@ -6916,6 +6917,99 @@ fn func_t_dist_rt(
         return Ok(Variant::Error(ExcelError::Num));
     }
     Ok(Variant::Float(1.0 - t_dist_value(t, v, true)))
+}
+
+fn func_ttest(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("TTEST requires 4 arguments".into());
+    }
+    let first = collect_nums(std::slice::from_ref(&args[0]), cells)?;
+    let second = collect_nums(std::slice::from_ref(&args[1]), cells)?;
+    let tails = to_float(&evaluate(&args[2], cells)?)?;
+    let test_type = to_float(&evaluate(&args[3], cells)?)?;
+    if !tails.is_finite()
+        || !test_type.is_finite()
+        || tails.fract() != 0.0
+        || test_type.fract() != 0.0
+        || !(tails == 1.0 || tails == 2.0)
+        || !(1.0..=3.0).contains(&test_type)
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    if first.len() < 2 || second.len() < 2 {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let mean = |values: &[f64]| values.iter().sum::<f64>() / values.len() as f64;
+    let variance = |values: &[f64]| {
+        let average = mean(values);
+        values
+            .iter()
+            .map(|value| (value - average).powi(2))
+            .sum::<f64>()
+            / (values.len() - 1) as f64
+    };
+    let (t, df) = match test_type as u8 {
+        1 => {
+            if first.len() != second.len() {
+                return Ok(Variant::Error(ExcelError::NA));
+            }
+            let differences: Vec<f64> = first
+                .iter()
+                .zip(second.iter())
+                .map(|(left, right)| left - right)
+                .collect();
+            let difference_mean = mean(&differences);
+            let difference_variance = variance(&differences);
+            if difference_variance <= 0.0 {
+                return Ok(Variant::Error(ExcelError::DivZero));
+            }
+            (
+                difference_mean / (difference_variance / differences.len() as f64).sqrt(),
+                (differences.len() - 1) as f64,
+            )
+        }
+        2 => {
+            let first_variance = variance(&first);
+            let second_variance = variance(&second);
+            let df = (first.len() + second.len() - 2) as f64;
+            let pooled = ((first.len() - 1) as f64 * first_variance
+                + (second.len() - 1) as f64 * second_variance)
+                / df;
+            if pooled <= 0.0 {
+                return Ok(Variant::Error(ExcelError::DivZero));
+            }
+            (
+                (mean(&first) - mean(&second))
+                    / (pooled * (1.0 / first.len() as f64 + 1.0 / second.len() as f64)).sqrt(),
+                df,
+            )
+        }
+        3 => {
+            let first_variance = variance(&first);
+            let second_variance = variance(&second);
+            let first_term = first_variance / first.len() as f64;
+            let second_term = second_variance / second.len() as f64;
+            let denominator = (first_term * first_term) / (first.len() - 1) as f64
+                + (second_term * second_term) / (second.len() - 1) as f64;
+            if first_term + second_term <= 0.0 || denominator <= 0.0 {
+                return Ok(Variant::Error(ExcelError::DivZero));
+            }
+            (
+                (mean(&first) - mean(&second)) / (first_term + second_term).sqrt(),
+                (first_term + second_term).powi(2) / denominator,
+            )
+        }
+        _ => unreachable!(),
+    };
+    let p = if tails == 1.0 {
+        1.0 - t_dist_value(t.abs(), df, true)
+    } else {
+        2.0 * (1.0 - t_dist_value(t.abs(), df, true))
+    };
+    Ok(Variant::Float(p.min(1.0)))
 }
 
 fn invert_t_probability(probability: f64, v: f64, two_tailed: bool) -> f64 {
@@ -17337,6 +17431,14 @@ mod tests {
             ((2, 1), Variant::Integer(2)),
             ((3, 1), Variant::Integer(3)),
         ]);
+        let two_samples = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Integer(2)),
+            ((3, 1), Variant::Integer(3)),
+            ((1, 2), Variant::Integer(1)),
+            ((2, 2), Variant::Integer(2)),
+            ((3, 2), Variant::Integer(4)),
+        ]);
         assert!(
             matches!(calc("=FISHER(0.5)", &cells), Variant::Float(v) if (v - 0.5493061443340549).abs() < 1e-12)
         );
@@ -17354,6 +17456,10 @@ mod tests {
         );
         let confidence_t = calc("=CONFIDENCE.T(0.05,1,10)", &cells);
         assert!(matches!(confidence_t, Variant::Float(v) if (v - 0.7154368582207706).abs() < 1e-4));
+        for test_type in 1..=3 {
+            let formula = format!("=TTEST(A1:A3,B1:B3,2,{test_type})");
+            assert!(matches!(calc(&formula, &two_samples), Variant::Float(v) if v.is_finite()));
+        }
         assert_eq!(calc("=FISHER(1)", &cells), Variant::Error(ExcelError::Num));
         assert_eq!(
             calc("=STANDARDIZE(1,1,0)", &cells),
