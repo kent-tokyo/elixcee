@@ -395,6 +395,9 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `IMABS` | Absolute value of a complex number | Classic |
 | `IMSUM` / `IMSUB` | Add / subtract complex numbers | Classic |
 | `IMPRODUCT` / `IMDIV` | Multiply / divide complex numbers | Classic |
+| `IMCONJUGATE` | Complex conjugate | Classic |
+| `IMEXP` / `IMLN` / `IMLOG10` | Complex exponential and logarithms | Classic |
+| `IMSQRT` / `IMPOWER` | Complex square root / power | Classic |
 
 ### Logical
 

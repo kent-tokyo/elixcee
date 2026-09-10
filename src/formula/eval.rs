@@ -617,6 +617,12 @@ fn eval_func(
         "IMSUB" => func_imsub(args, cells),
         "IMPRODUCT" => func_improduct(args, cells),
         "IMDIV" => func_imdiv(args, cells),
+        "IMCONJUGATE" => func_imconjugate(args, cells),
+        "IMEXP" => func_imexp(args, cells),
+        "IMLN" => func_imln(args, cells),
+        "IMLOG10" => func_imlog10(args, cells),
+        "IMSQRT" => func_imsqrt(args, cells),
+        "IMPOWER" => func_impower(args, cells),
         // ── Trigonometry ──────────────────────────────────────────────────────
         "PI" => func_pi(args, cells),
         "SIN" => func_trig1(args, cells, f64::sin),
@@ -7732,6 +7738,135 @@ fn func_imdiv(
     )))
 }
 
+fn func_imconjugate(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMCONJUGATE requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMCONJUGATE")?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: value.re,
+            im: -value.im,
+        },
+        suffix,
+    )))
+}
+
+fn func_imexp(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMEXP requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMEXP")?;
+    let scale = value.re.exp();
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: scale * value.im.cos(),
+            im: scale * value.im.sin(),
+        },
+        suffix,
+    )))
+}
+
+fn func_imln(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMLN requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMLN")?;
+    if value.re == 0.0 && value.im == 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: value.re.hypot(value.im).ln(),
+            im: value.im.atan2(value.re),
+        },
+        suffix,
+    )))
+}
+
+fn func_imlog10(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMLOG10 requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMLOG10")?;
+    if value.re == 0.0 && value.im == 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let scale = 10.0_f64.ln();
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: value.re.hypot(value.im).ln() / scale,
+            im: value.im.atan2(value.re) / scale,
+        },
+        suffix,
+    )))
+}
+
+fn func_imsqrt(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMSQRT requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMSQRT")?;
+    let magnitude = value.re.hypot(value.im);
+    let re = ((magnitude + value.re) / 2.0).sqrt();
+    let im = ((magnitude - value.re) / 2.0).sqrt().copysign(value.im);
+    Ok(Variant::Str(complex_text(ComplexValue { re, im }, suffix)))
+}
+
+fn func_impower(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("IMPOWER requires 2 arguments".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let base = complex_argument(&args[0], cells, "IMPOWER")?;
+    let exponent = complex_argument(&args[1], cells, "IMPOWER")?;
+    if base.re == 0.0 && base.im == 0.0 {
+        if exponent.re > 0.0 && exponent.im == 0.0 {
+            return Ok(Variant::Str("0".into()));
+        }
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let ln_base = ComplexValue {
+        re: base.re.hypot(base.im).ln(),
+        im: base.im.atan2(base.re),
+    };
+    let log_product = ComplexValue {
+        re: exponent.re * ln_base.re - exponent.im * ln_base.im,
+        im: exponent.re * ln_base.im + exponent.im * ln_base.re,
+    };
+    let scale = log_product.re.exp();
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: scale * log_product.im.cos(),
+            im: scale * log_product.im.sin(),
+        },
+        suffix,
+    )))
+}
+
 // ── Trigonometry ──────────────────────────────────────────────────────────────
 
 fn func_pi(
@@ -11279,6 +11414,15 @@ mod tests {
             calc("=IMDIV(\"1+2i\",\"0\")", &c),
             Variant::Error(ExcelError::DivZero)
         );
+        assert_eq!(
+            calc("=IMCONJUGATE(\"3+4i\")", &c),
+            Variant::Str("3-4i".into())
+        );
+        assert_eq!(calc("=IMEXP(\"0\")", &c), Variant::Str("1".into()));
+        assert_eq!(calc("=IMLN(\"1\")", &c), Variant::Str("0".into()));
+        assert_eq!(calc("=IMLOG10(\"1\")", &c), Variant::Str("0".into()));
+        assert_eq!(calc("=IMSQRT(\"-1\")", &c), Variant::Str("i".into()));
+        assert_eq!(calc("=IMPOWER(\"2\",\"2\")", &c), Variant::Str("4".into()));
     }
 
     #[test]
