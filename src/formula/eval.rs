@@ -623,6 +623,15 @@ fn eval_func(
         "IMLOG10" => func_imlog10(args, cells),
         "IMSQRT" => func_imsqrt(args, cells),
         "IMPOWER" => func_impower(args, cells),
+        "IMSIN" => func_imsin(args, cells),
+        "IMCOS" => func_imcos(args, cells),
+        "IMTAN" => func_imtan(args, cells),
+        "IMSINH" => func_imsinh(args, cells),
+        "IMCOSH" => func_imcosh(args, cells),
+        "IMTANH" => func_imtanh(args, cells),
+        "IMSEC" => func_imsec(args, cells),
+        "IMCSC" => func_imcsc(args, cells),
+        "IMCOT" => func_imcot(args, cells),
         // ── Trigonometry ──────────────────────────────────────────────────────
         "PI" => func_pi(args, cells),
         "SIN" => func_trig1(args, cells, f64::sin),
@@ -7867,6 +7876,188 @@ fn func_impower(
     )))
 }
 
+fn complex_div_values(left: ComplexValue, right: ComplexValue) -> Result<ComplexValue, ExcelError> {
+    let denominator = right.re * right.re + right.im * right.im;
+    if denominator == 0.0 {
+        return Err(ExcelError::DivZero);
+    }
+    Ok(ComplexValue {
+        re: (left.re * right.re + left.im * right.im) / denominator,
+        im: (left.im * right.re - left.re * right.im) / denominator,
+    })
+}
+
+fn func_imsin(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMSIN requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMSIN")?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: value.re.sin() * value.im.cosh(),
+            im: value.re.cos() * value.im.sinh(),
+        },
+        suffix,
+    )))
+}
+
+fn func_imcos(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMCOS requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMCOS")?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: value.re.cos() * value.im.cosh(),
+            im: -value.re.sin() * value.im.sinh(),
+        },
+        suffix,
+    )))
+}
+
+fn func_imtan(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMTAN requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMTAN")?;
+    let sin = ComplexValue {
+        re: value.re.sin() * value.im.cosh(),
+        im: value.re.cos() * value.im.sinh(),
+    };
+    let cos = ComplexValue {
+        re: value.re.cos() * value.im.cosh(),
+        im: -value.re.sin() * value.im.sinh(),
+    };
+    let result = complex_div_values(sin, cos).map_err(|error| format!("IMTAN: {error:?}"))?;
+    Ok(Variant::Str(complex_text(result, suffix)))
+}
+
+fn func_imsinh(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMSINH requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMSINH")?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: value.re.sinh() * value.im.cos(),
+            im: value.re.cosh() * value.im.sin(),
+        },
+        suffix,
+    )))
+}
+
+fn func_imcosh(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMCOSH requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMCOSH")?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: value.re.cosh() * value.im.cos(),
+            im: value.re.sinh() * value.im.sin(),
+        },
+        suffix,
+    )))
+}
+
+fn func_imtanh(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMTANH requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMTANH")?;
+    let sinh = ComplexValue {
+        re: value.re.sinh() * value.im.cos(),
+        im: value.re.cosh() * value.im.sin(),
+    };
+    let cosh = ComplexValue {
+        re: value.re.cosh() * value.im.cos(),
+        im: value.re.sinh() * value.im.sin(),
+    };
+    let result = complex_div_values(sinh, cosh).map_err(|error| format!("IMTANH: {error:?}"))?;
+    Ok(Variant::Str(complex_text(result, suffix)))
+}
+
+fn func_imsec(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMSEC requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMSEC")?;
+    let cos = ComplexValue {
+        re: value.re.cos() * value.im.cosh(),
+        im: -value.re.sin() * value.im.sinh(),
+    };
+    let result = complex_div_values(ComplexValue { re: 1.0, im: 0.0 }, cos)
+        .map_err(|error| format!("IMSEC: {error:?}"))?;
+    Ok(Variant::Str(complex_text(result, suffix)))
+}
+
+fn func_imcsc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMCSC requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMCSC")?;
+    let sin = ComplexValue {
+        re: value.re.sin() * value.im.cosh(),
+        im: value.re.cos() * value.im.sinh(),
+    };
+    let result = complex_div_values(ComplexValue { re: 1.0, im: 0.0 }, sin)
+        .map_err(|error| format!("IMCSC: {error:?}"))?;
+    Ok(Variant::Str(complex_text(result, suffix)))
+}
+
+fn func_imcot(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("IMCOT requires 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let value = complex_argument(&args[0], cells, "IMCOT")?;
+    let sin = ComplexValue {
+        re: value.re.sin() * value.im.cosh(),
+        im: value.re.cos() * value.im.sinh(),
+    };
+    let cos = ComplexValue {
+        re: value.re.cos() * value.im.cosh(),
+        im: -value.re.sin() * value.im.sinh(),
+    };
+    let result = complex_div_values(cos, sin).map_err(|error| format!("IMCOT: {error:?}"))?;
+    Ok(Variant::Str(complex_text(result, suffix)))
+}
+
 // ── Trigonometry ──────────────────────────────────────────────────────────────
 
 fn func_pi(
@@ -11423,6 +11614,15 @@ mod tests {
         assert_eq!(calc("=IMLOG10(\"1\")", &c), Variant::Str("0".into()));
         assert_eq!(calc("=IMSQRT(\"-1\")", &c), Variant::Str("i".into()));
         assert_eq!(calc("=IMPOWER(\"2\",\"2\")", &c), Variant::Str("4".into()));
+        assert_eq!(calc("=IMSIN(\"0\")", &c), Variant::Str("0".into()));
+        assert_eq!(calc("=IMCOS(\"0\")", &c), Variant::Str("1".into()));
+        assert_eq!(calc("=IMTAN(\"0\")", &c), Variant::Str("0".into()));
+        assert_eq!(calc("=IMSINH(\"0\")", &c), Variant::Str("0".into()));
+        assert_eq!(calc("=IMCOSH(\"0\")", &c), Variant::Str("1".into()));
+        assert_eq!(calc("=IMTANH(\"0\")", &c), Variant::Str("0".into()));
+        assert_eq!(calc("=IMSEC(\"0\")", &c), Variant::Str("1".into()));
+        assert!(evaluate(&fparse("=IMCSC(\"0\")").unwrap(), &c).is_err());
+        assert!(evaluate(&fparse("=IMCOT(\"0\")").unwrap(), &c).is_err());
     }
 
     #[test]

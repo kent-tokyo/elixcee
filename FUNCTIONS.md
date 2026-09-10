@@ -398,6 +398,9 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `IMCONJUGATE` | Complex conjugate | Classic |
 | `IMEXP` / `IMLN` / `IMLOG10` | Complex exponential and logarithms | Classic |
 | `IMSQRT` / `IMPOWER` | Complex square root / power | Classic |
+| `IMSIN` / `IMCOS` / `IMTAN` | Complex sine / cosine / tangent | Classic |
+| `IMSINH` / `IMCOSH` / `IMTANH` | Complex hyperbolic functions | Classic |
+| `IMSEC` / `IMCSC` / `IMCOT` | Complex reciprocal trigonometric functions | Classic |
 
 ### Logical
 
