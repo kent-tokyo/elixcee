@@ -458,6 +458,7 @@ fn eval_func(
         "TEXTSPLIT" => func_textsplit(args, cells),
         "TEXTBEFORE" => func_textbefore(args, cells),
         "TEXTAFTER" => func_textafter(args, cells),
+        "ENCODEURL" => func_encodeurl(args, cells),
         "VALUETOTEXT" => func_valuetotext(args, cells),
         "HYPERLINK" => func_hyperlink(args, cells),
         "TRIM" => func_trim(args, cells),
@@ -3383,6 +3384,27 @@ fn func_phonetic(
         Variant::Empty => Ok(Variant::Str(String::new())),
         _ => Ok(Variant::Error(ExcelError::Value)),
     }
+}
+
+fn func_encodeurl(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("ENCODEURL requires 1 argument".into());
+    }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(*byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
+            encoded.push(char::from(b"0123456789ABCDEF"[(byte & 0x0f) as usize]));
+        }
+    }
+    Ok(Variant::Str(encoded))
 }
 
 fn func_proper(
@@ -14472,6 +14494,14 @@ mod tests {
         );
         assert_eq!(calc("=PHONETIC(\"東京\")", &c), Variant::Str("東京".into()));
         assert_eq!(calc("=PHONETIC(42)", &c), Variant::Error(ExcelError::Value));
+        assert_eq!(
+            calc("=ENCODEURL(\"hello world/a?x=1\")", &c),
+            Variant::Str("hello%20world%2Fa%3Fx%3D1".into())
+        );
+        assert_eq!(
+            calc("=ENCODEURL(\"東京\")", &c),
+            Variant::Str("%E6%9D%B1%E4%BA%AC".into())
+        );
     }
 
     #[test]

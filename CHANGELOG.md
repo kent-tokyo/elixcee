@@ -46,6 +46,7 @@
 - Formula coverage: add odd-last-coupon bond `ODDLPRICE` and `ODDLYIELD`.
 - Formula coverage: add dynamic-array `EXPAND` with rectangular padding.
 - Formula coverage: add deterministic headless `PHONETIC` source-text fallback.
+- Formula coverage: add side-effect-free UTF-8 `ENCODEURL` percent encoding.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
