@@ -208,6 +208,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 PERCENTOF BUILD: `PERCENTOF(data_subset,data_all)`をGROUPBY／PIVOTBYと共有できるSUM比率へ接続し、空集合・ゼロ分母・有限値境界を回帰した。Excel型変換とoracle校正は未完。
 - [x] G4 compatibility alias BUILD: `T.TEST`を既存の`TTEST`実装へ接続し、旧名称／新名称の同値経路を回帰した。alias固有のExcel oracle校正は未完。
 - [x] G4 EUROCONVERT BUILD: 固定EU換算率、通貨別丸め、full_precision、triangulation_precisionを実装し、同一通貨・無効コード・精度境界を回帰した。Excelの追加locale／oracle校正は未完。
+- [x] G4 logical constants BUILD: `TRUE()`／`FALSE()`のExcel関数形式を追加し、引数なしの戻り値と不正引数を既存の論理評価へ接続した。裸の`TRUE`／`FALSE`リテラルは従来どおりパーサーで扱う。
 - [x] G4 PIVOTBY配列集計BUILD: `PIVOTBY`を1列row／column fieldsとvaluesのcross-tab、行列ヘッダー、空組合せのreducer評価へ接続した。multi-field relationship、headers／totals depth、sort／filter／LAMBDA、Excel oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。

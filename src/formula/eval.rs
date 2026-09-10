@@ -419,6 +419,8 @@ fn eval_func(
         "AND" => func_and(args, cells),
         "OR" => func_or(args, cells),
         "NOT" => func_not(args, cells),
+        "TRUE" => func_boolean_constant(args, true),
+        "FALSE" => func_boolean_constant(args, false),
         "IFERROR" => func_iferror(args, cells),
         "IFNA" => func_ifna(args, cells),
         "LEFT" => func_left(args, cells),
@@ -1191,6 +1193,16 @@ fn func_not(
         return Ok(Variant::Error(error));
     }
     Ok(Variant::Boolean(!is_truthy(&value)))
+}
+
+fn func_boolean_constant(args: &[FormulaExpr], value: bool) -> Result<Variant, String> {
+    if !args.is_empty() {
+        return Err(format!(
+            "{} takes no arguments",
+            if value { "TRUE" } else { "FALSE" }
+        ));
+    }
+    Ok(Variant::Boolean(value))
 }
 
 fn func_iferror(
@@ -15874,6 +15886,8 @@ mod tests {
     #[test]
     fn test_and_or_not() {
         let c = HashMap::new();
+        assert_eq!(calc("=TRUE()", &c), Variant::Boolean(true));
+        assert_eq!(calc("=FALSE()", &c), Variant::Boolean(false));
         assert_eq!(calc("=AND(TRUE,TRUE)", &c), Variant::Boolean(true));
         assert_eq!(calc("=AND(TRUE,FALSE)", &c), Variant::Boolean(false));
         assert_eq!(calc("=OR(FALSE,TRUE)", &c), Variant::Boolean(true));

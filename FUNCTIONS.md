@@ -460,6 +460,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `AND` / `OR` / `NOT` | Logical operators | Classic |
 | `IFERROR` | Fallback on any error | 2007 |
 | `IFNA` | Fallback on `#N/A` only | 2013 |
+| `TRUE` / `FALSE` | Return the logical constants TRUE / FALSE (zero-argument function form) | Classic |
 | `XOR` | Exclusive OR | 2013 |
 | `IFS` | Multi-condition branch | 2019 |
 | `SWITCH` | Switch/case | 2019 |
