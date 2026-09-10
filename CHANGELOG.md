@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-09-11
+
 - Snapshot BUILD: add opt-in Python `Vm.snapshot(include_dependencies=True)`
   projection for deterministic, bounded syntax-level cell and range dependency
   edges. Existing snapshot output is unchanged.
@@ -42,7 +44,7 @@
   safety paths; external-reference formula evaluation and Excel oracle
   calibration remain unverified.
 
-The entries below are released in 1.0.8.
+The entries below are released in 1.0.9.
 
 ## [1.0.8] - 2026-09-10
 

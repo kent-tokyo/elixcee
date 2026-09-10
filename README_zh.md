@@ -18,9 +18,9 @@ VBA 不是必需的：Python 或 CLI 也可以单独使用 elixcee 读取、编�
 | 在 Linux/macOS/CI 中运行或诊断数据处理 VBA | elixcee |
 | 完整 Excel 对象模型、UI 或完整 OOXML 兼容性 | 对照 Excel 或专用库及 elixcee 的支持边界 |
 
-版本：**1.0.8**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+版本：**1.0.9**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 JavaScript 包仍为 private，尚未发布。
-当前分支遵循已发布的 1.0.8 契约。后续变更会记录在 `[Unreleased]` 中，并与已发布功能分开。
+当前分支遵循已发布的 1.0.9 契约。后续变更会记录在 `[Unreleased]` 中，并与已发布功能分开。
 
 ## 安装
 
@@ -115,7 +115,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 开发阶段、当前状态和发布门槛统一维护在 [ROADMAP.md](ROADMAP.md)。
-已发布的 1.0.8 包含文档化的 G0/G1 基础，以及逐步加入的 G2/G3/G4 能力。
+已发布的 1.0.9 包含文档化的 G0/G1 基础，以及逐步加入的 G2/G3/G4 能力。
 兼容性限制和安全策略请参阅 [docs/](docs/)。
 
 入门资料：[简体中文快速开始](docs/quickstart-zh.md)、[初学者教程](docs/tutorial-beginners-zh.md)、

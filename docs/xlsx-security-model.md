@@ -11,7 +11,7 @@ This describes implemented safeguards, not immunity to unknown vulnerabilities.
 Versioned changes and future Unreleased work are distinguished in
 [CHANGELOG](../CHANGELOG.md).
 
-## Existing limits (1.0.8)
+## Existing limits (1.0.9)
 
 The numeric inventory and calibration notes are maintained in **[Resource limits](limits.md)**.
 Do not duplicate thresholds here: ZIP, XML, workbook model, formula, VBA parser,
