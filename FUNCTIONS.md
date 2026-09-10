@@ -507,6 +507,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `HYPERLINK` | Return display text for a hyperlink without opening external resources | Classic |
 | `REPT` | Repeat a text string N times | Classic |
 | `NUMBERVALUE` | Parse number with locale-specific decimal/group separators | 2013 |
+| `DETECTLANGUAGE` | Detect a bounded set of languages locally without a translation service; ambiguous text returns `#N/A` | 365 |
 | `CLEAN` | Remove non-printing control characters | Classic |
 | `T` | Return text or empty text for non-text values | Classic |
 | `FIXED` | Format a number with fixed decimal places | Classic |

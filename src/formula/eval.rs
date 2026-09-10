@@ -534,6 +534,7 @@ fn eval_func(
         "REGEXTEST" => func_regextest(args, cells),
         "REGEXEXTRACT" => func_regexextract(args, cells),
         "REGEXREPLACE" => func_regexreplace(args, cells),
+        "DETECTLANGUAGE" => func_detectlanguage(args, cells),
         // -- Date/Time --
         "YEAR" => func_year(args, cells),
         "MONTH" => func_month(args, cells),
@@ -3504,6 +3505,100 @@ fn func_encodeurl(
         }
     }
     Ok(Variant::Str(encoded))
+}
+
+/// Detect a small, deterministic language subset without contacting a
+/// translation service. Excel's implementation is service-backed; returning
+/// #N/A for ambiguous text is safer than claiming a language from weak
+/// evidence.
+fn func_detectlanguage(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("DETECTLANGUAGE requires 1 argument".into());
+    }
+    let text = match evaluate(&args[0], cells)? {
+        Variant::Str(text) => text,
+        _ => return Ok(Variant::Error(ExcelError::Value)),
+    };
+    if text.is_empty() || text.chars().count() > 32_768 {
+        return Ok(Variant::Error(ExcelError::NA));
+    }
+
+    let mut script = None;
+    for ch in text.chars() {
+        let code = ch as u32;
+        script = if (0x3040..=0x30ff).contains(&code) {
+            Some("ja")
+        } else if (0xac00..=0xd7af).contains(&code) {
+            Some("ko")
+        } else if (0x0600..=0x06ff).contains(&code) {
+            Some("ar")
+        } else if (0x0590..=0x05ff).contains(&code) {
+            Some("he")
+        } else if (0x0370..=0x03ff).contains(&code) {
+            Some("el")
+        } else if (0x0400..=0x04ff).contains(&code) {
+            Some("ru")
+        } else if (0x4e00..=0x9fff).contains(&code) {
+            Some("zh")
+        } else {
+            script
+        };
+        if matches!(script, Some("ja" | "ko" | "ar" | "he" | "el" | "ru")) {
+            break;
+        }
+    }
+    if let Some(code) = script {
+        return Ok(Variant::Str(code.into()));
+    }
+
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|ch: char| !ch.is_ascii_alphabetic())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let lexicons: [(&str, &[&str]); 5] = [
+        (
+            "en",
+            &["the", "and", "of", "to", "is", "in", "hello", "world"],
+        ),
+        (
+            "es",
+            &["el", "la", "los", "las", "de", "que", "hola", "mundo"],
+        ),
+        (
+            "fr",
+            &["le", "la", "les", "des", "de", "que", "bonjour", "monde"],
+        ),
+        (
+            "de",
+            &["der", "die", "das", "und", "ist", "ich", "hallo", "welt"],
+        ),
+        ("it", &["il", "la", "gli", "dei", "che", "ciao", "mondo"]),
+    ];
+    let mut best = None;
+    let mut best_score = 0usize;
+    let mut tied = false;
+    for (code, vocabulary) in lexicons {
+        let score = words
+            .iter()
+            .filter(|word| vocabulary.contains(word))
+            .count();
+        if score > best_score {
+            best = Some(code);
+            best_score = score;
+            tied = false;
+        } else if score != 0 && score == best_score {
+            tied = true;
+        }
+    }
+    if best_score >= 2 && !tied {
+        Ok(Variant::Str(best.unwrap().into()))
+    } else {
+        Ok(Variant::Error(ExcelError::NA))
+    }
 }
 
 fn regex_from_args(
@@ -15904,6 +15999,27 @@ mod tests {
         assert_eq!(
             calc("=IFERROR(AND(FALSE,1/0),99)", &c),
             Variant::Integer(99)
+        );
+    }
+
+    #[test]
+    fn test_detectlanguage_is_local_and_conservative() {
+        let c = HashMap::new();
+        assert_eq!(
+            calc("=DETECTLANGUAGE(\"Hello world and the test\")", &c),
+            Variant::Str("en".into())
+        );
+        assert_eq!(
+            calc("=DETECTLANGUAGE(\"こんにちは世界\")", &c),
+            Variant::Str("ja".into())
+        );
+        assert_eq!(
+            calc("=DETECTLANGUAGE(\"12345\")", &c),
+            Variant::Error(ExcelError::NA)
+        );
+        assert_eq!(
+            calc("=DETECTLANGUAGE(42)", &c),
+            Variant::Error(ExcelError::Value)
         );
     }
 
