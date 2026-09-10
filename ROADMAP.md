@@ -146,6 +146,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 
 ### G4 — 関数・配列互換性の拡張（X3）
 
+- [x] G4 債券・割引証券関数 BUILD: `PDURATION`、`PRICEDISC`、`RECEIVED`、`TBILLPRICE`／`TBILLYIELD`／`TBILLEQ`を追加し、期間・basis・割引率・価格の境界を回帰した。Excelのうるう年・basis全域・丸め・oracle校正は未完。
 - [x] G4 Engineering単位・表記変換 BUILD: `CONVERT`の主要単位カテゴリ（長さ・質量・時間・面積・体積・温度・圧力・エネルギー・電力・速度）と`ROMAN`／`ARABIC`を追加し、カテゴリ不一致・定義域・canonical Roman表記を回帰した。Excelの全単位表・locale・oracle校正は未完。
 - [x] G4 分布関数ファミリー拡張 BUILD: `GAMMA.DIST`／`GAMMA.INV`、`CHISQ.DIST.RT`／`CHISQ.INV`系、`F.DIST.RT`／`F.INV`系、`WEIBULL.DIST`、`EXPON.DIST`、`LOGNORM.DIST`／`LOGNORM.INV`を追加し、PDF/CDF・片側・逆関数の代表値と定義域を回帰した。近似精度の全域評価とExcel oracle校正は未完。
 - [x] G4 財務関数拡張 BUILD: `CUMIPMT`／`CUMPRINC`、`FVSCHEDULE`、`DOLLARDE`／`DOLLARFR`を追加し、期間境界・支払種別・利率スケジュール・分数 quotation の検証を回帰した。Excelの期末規則・丸め・全型変換・oracle校正は未完。

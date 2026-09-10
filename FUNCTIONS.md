@@ -270,6 +270,10 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `CUMIPMT` / `CUMPRINC` | Cumulative interest / principal paid between periods | 2010 |
 | `FVSCHEDULE` | Future value using a sequence of rates | Classic |
 | `DOLLARDE` / `DOLLARFR` | Convert fractional dollar quotations | Classic |
+| `PDURATION` | Number of periods for a growth investment | 2013 |
+| `PRICEDISC` | Price of a discounted security | Classic |
+| `RECEIVED` | Amount received at maturity for a discounted security | Classic |
+| `TBILLPRICE` / `TBILLYIELD` / `TBILLEQ` | Treasury bill price, yield, and equivalent yield | Classic |
 
 ### Statistical
 

@@ -671,6 +671,12 @@ fn eval_func(
         "FVSCHEDULE" => func_fvschedule(args, cells),
         "DOLLARDE" => func_dollarde(args, cells),
         "DOLLARFR" => func_dollarfr(args, cells),
+        "PDURATION" => func_pduration(args, cells),
+        "PRICEDISC" => func_pricedisc(args, cells),
+        "RECEIVED" => func_received(args, cells),
+        "TBILLPRICE" => func_tbillprice(args, cells),
+        "TBILLYIELD" => func_tbillyield(args, cells),
+        "TBILLEQ" => func_tbilleq(args, cells),
         // ── Database ─────────────────────────────────────────────────────────
         "DGET" => func_dget(args, cells),
         "DSUM" => func_dsum(args, cells),
@@ -8338,6 +8344,187 @@ fn func_dollarfr(
     Ok(Variant::Float(result))
 }
 
+fn bond_day_fraction(settlement: f64, maturity: f64, basis: f64) -> Result<f64, Variant> {
+    if !settlement.is_finite()
+        || !maturity.is_finite()
+        || !basis.is_finite()
+        || maturity <= settlement
+        || basis.fract() != 0.0
+        || !(0.0..=4.0).contains(&basis)
+    {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    let basis = basis as i32;
+    let start = settlement.trunc() as i64;
+    let end = maturity.trunc() as i64;
+    let days = if basis == 0 || basis == 4 {
+        days360_serial(start, end, basis == 4) as f64
+    } else {
+        (maturity - settlement).trunc()
+    };
+    let denominator = match basis {
+        0 | 2 | 4 => 360.0,
+        1 | 3 => 365.0,
+        _ => unreachable!(),
+    };
+    if days <= 0.0 {
+        return Err(Variant::Error(ExcelError::Num));
+    }
+    Ok(days / denominator)
+}
+
+fn func_pduration(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("PDURATION requires 3 arguments".into());
+    }
+    let rate = to_float(&evaluate(&args[0], cells)?)?;
+    let present = to_float(&evaluate(&args[1], cells)?)?;
+    let future = to_float(&evaluate(&args[2], cells)?)?;
+    if !rate.is_finite()
+        || !present.is_finite()
+        || !future.is_finite()
+        || rate <= -1.0
+        || present <= 0.0
+        || future <= 0.0
+        || rate == 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let result = (future / present).ln() / (1.0 + rate).ln();
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(result))
+}
+
+fn func_pricedisc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 4 || args.len() > 5 {
+        return Err("PRICEDISC requires 4 or 5 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let discount = to_float(&evaluate(&args[2], cells)?)?;
+    let redemption = to_float(&evaluate(&args[3], cells)?)?;
+    let basis = if args.len() == 5 {
+        to_float(&evaluate(&args[4], cells)?)?
+    } else {
+        0.0
+    };
+    let year_fraction = match bond_day_fraction(settlement, maturity, basis) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    if !discount.is_finite()
+        || !redemption.is_finite()
+        || !(0.0..1.0).contains(&discount)
+        || redemption <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(
+        redemption * (1.0 - discount * year_fraction),
+    ))
+}
+
+fn func_received(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 4 || args.len() > 5 {
+        return Err("RECEIVED requires 4 or 5 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let investment = to_float(&evaluate(&args[2], cells)?)?;
+    let discount = to_float(&evaluate(&args[3], cells)?)?;
+    let basis = if args.len() == 5 {
+        to_float(&evaluate(&args[4], cells)?)?
+    } else {
+        0.0
+    };
+    let year_fraction = match bond_day_fraction(settlement, maturity, basis) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    let denominator = 1.0 - discount * year_fraction;
+    if !investment.is_finite()
+        || !discount.is_finite()
+        || investment <= 0.0
+        || !(0.0..1.0).contains(&discount)
+        || denominator <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(investment / denominator))
+}
+
+fn func_tbillprice(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("TBILLPRICE requires 3 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let discount = to_float(&evaluate(&args[2], cells)?)?;
+    let year_fraction = match bond_day_fraction(settlement, maturity, 2.0) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    if !discount.is_finite() || !(0.0..1.0).contains(&discount) {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(100.0 * (1.0 - discount * year_fraction)))
+}
+
+fn func_tbillyield(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("TBILLYIELD requires 3 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let price = to_float(&evaluate(&args[2], cells)?)?;
+    let year_fraction = match bond_day_fraction(settlement, maturity, 2.0) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    if !price.is_finite() || price <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float((100.0 - price) / price / year_fraction))
+}
+
+fn func_tbilleq(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("TBILLEQ requires 3 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let discount = to_float(&evaluate(&args[2], cells)?)?;
+    let days = match bond_day_fraction(settlement, maturity, 2.0) {
+        Ok(value) => value * 360.0,
+        Err(error) => return Ok(error),
+    };
+    let denominator = 360.0 - discount * days;
+    if !discount.is_finite() || !(0.0..1.0).contains(&discount) || denominator <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(365.0 * discount / denominator))
+}
+
 fn func_npv(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -12515,6 +12702,25 @@ mod tests {
             other => panic!("PMT unexpected: {:?}", other),
         };
         assert!((cum_interest + cum_principal - 2.0 * pmt).abs() < 1e-9);
+
+        assert!(
+            matches!(calc("=PDURATION(0.1,100,200)", &c), Variant::Float(value) if (value - 7.272540897341714).abs() < 1e-9)
+        );
+        assert!(
+            matches!(calc("=PRICEDISC(1,181,0.1,100,2)", &c), Variant::Float(value) if (value - 95.0).abs() < 1e-9)
+        );
+        assert!(
+            matches!(calc("=RECEIVED(1,181,95,0.1,2)", &c), Variant::Float(value) if (value - 100.0).abs() < 1e-9)
+        );
+        assert!(
+            matches!(calc("=TBILLPRICE(1,181,0.1)", &c), Variant::Float(value) if (value - 95.0).abs() < 1e-9)
+        );
+        assert!(
+            matches!(calc("=TBILLYIELD(1,181,95)", &c), Variant::Float(value) if (value - (10.0 / 95.0)).abs() < 1e-9)
+        );
+        assert!(
+            matches!(calc("=TBILLEQ(1,181,0.1)", &c), Variant::Float(value) if (value - (36.5 / 342.0)).abs() < 1e-12)
+        );
     }
 
     #[test]
