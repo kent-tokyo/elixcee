@@ -14470,6 +14470,8 @@ mod tests {
             calc("=HYPERLINK(\"Sheet1!A1\")", &c),
             Variant::Str("Sheet1!A1".into())
         );
+        assert_eq!(calc("=PHONETIC(\"東京\")", &c), Variant::Str("東京".into()));
+        assert_eq!(calc("=PHONETIC(42)", &c), Variant::Error(ExcelError::Value));
     }
 
     #[test]
