@@ -300,9 +300,13 @@ per-function mode coverage, and independent oracle tests are tracked in
 | Function | Description | Excel |
 |---|---|---|
 | `STDEV` / `STDEV.S` | Sample standard deviation | Classic / 2010 |
+| `STDEVA` | Sample standard deviation including logical values and text | Classic |
 | `STDEVP` / `STDEV.P` | Population standard deviation | Classic / 2010 |
+| `STDEVPA` | Population standard deviation including logical values and text | Classic |
+| `VARA` | Sample variance including logical values and text | Classic |
 | `AVERAGEA` | Average including logical values and text as zero | Classic |
 | `MINA` / `MAXA` | Minimum / maximum including logical values and text as zero | Classic |
+| `VARPA` | Population variance including logical values and text | Classic |
 | `VAR` / `VAR.S` | Sample variance | Classic / 2010 |
 | `VARP` / `VAR.P` | Population variance | Classic / 2010 |
 | `CORREL` | Pearson correlation coefficient | Classic |

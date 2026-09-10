@@ -524,9 +524,13 @@ fn eval_func(
         "MATCH" => func_match_fn(args, cells),
         // ── Statistics ───────────────────────────────────────────────────────
         "STDEV" | "STDEV.S" => func_stdev_s(args, cells),
+        "STDEVA" => func_stdev_a(args, cells),
         "STDEVP" | "STDEV.P" => func_stdev_p(args, cells),
+        "STDEVPA" => func_stdev_pa(args, cells),
         "VAR" | "VAR.S" => func_var_s(args, cells),
+        "VARA" => func_var_a(args, cells),
         "VARP" | "VAR.P" => func_var_p(args, cells),
+        "VARPA" => func_var_pa(args, cells),
         "CORREL" | "PEARSON" => func_correl(args, cells),
         "SLOPE" => func_slope(args, cells),
         "INTERCEPT" => func_intercept(args, cells),
@@ -877,7 +881,7 @@ fn collect_a_values(
             Variant::Integer(n) => Some(n as f64),
             Variant::Float(value) => Some(value),
             Variant::Boolean(value) => Some(if value { 1.0 } else { 0.0 }),
-            Variant::Str(_) => Some(0.0),
+            Variant::Str(text) => Some(text.parse::<f64>().unwrap_or(0.0)),
             Variant::Error(_) => None,
             Variant::Array(values) => Some(
                 values
@@ -886,7 +890,7 @@ fn collect_a_values(
                         Variant::Integer(n) => Some(n as f64),
                         Variant::Float(value) => Some(value),
                         Variant::Boolean(value) => Some(if value { 1.0 } else { 0.0 }),
-                        Variant::Str(_) => Some(0.0),
+                        Variant::Str(text) => Some(text.parse::<f64>().unwrap_or(0.0)),
                         _ => None,
                     })
                     .sum(),
@@ -899,7 +903,7 @@ fn collect_a_values(
                         Variant::Integer(n) => Some(n as f64),
                         Variant::Float(value) => Some(value),
                         Variant::Boolean(value) => Some(if value { 1.0 } else { 0.0 }),
-                        Variant::Str(_) => Some(0.0),
+                        Variant::Str(text) => Some(text.parse::<f64>().unwrap_or(0.0)),
                         _ => None,
                     })
                     .sum(),
@@ -5164,6 +5168,48 @@ fn func_var_p(
     Ok(Variant::Float(
         nums.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / nums.len() as f64,
     ))
+}
+
+fn func_var_a(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let values = collect_a_values(args, cells)?;
+    if values.len() < 2 {
+        return Err("VARA requires at least 2 values".into());
+    }
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    Ok(Variant::Float(
+        values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64,
+    ))
+}
+
+fn func_var_pa(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let values = collect_a_values(args, cells)?;
+    if values.is_empty() {
+        return Err("VARPA requires at least 1 value".into());
+    }
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    Ok(Variant::Float(
+        values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / values.len() as f64,
+    ))
+}
+
+fn func_stdev_a(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    Ok(Variant::Float(to_float(&func_var_a(args, cells)?)?.sqrt()))
+}
+
+fn func_stdev_pa(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    Ok(Variant::Float(to_float(&func_var_pa(args, cells)?)?.sqrt()))
 }
 
 // ── Statistical: CORREL / COVARIANCE / NORM.DIST / NORM.INV / T.DIST ─────────
@@ -15939,6 +15985,22 @@ mod tests {
     fn test_statistical_summary_functions() {
         let mut c = HashMap::new();
         assert_eq!(calc("=MODE.SNGL(1,2,2,3)", &c), Variant::Integer(2));
+        match calc("=VARA(1,2,TRUE,\"x\")", &c) {
+            Variant::Float(value) => assert!((value - 2.0 / 3.0).abs() < 1e-12),
+            other => panic!("VARA: {:?}", other),
+        }
+        match calc("=VARPA(1,2,TRUE,\"x\")", &c) {
+            Variant::Float(value) => assert!((value - 0.5).abs() < 1e-12),
+            other => panic!("VARPA: {:?}", other),
+        }
+        match calc("=STDEVA(1,2,TRUE,\"x\")", &c) {
+            Variant::Float(value) => assert!((value - (2.0_f64 / 3.0).sqrt()).abs() < 1e-12),
+            other => panic!("STDEVA: {:?}", other),
+        }
+        match calc("=STDEVPA(1,2,TRUE,\"x\")", &c) {
+            Variant::Float(value) => assert!((value - 0.5_f64.sqrt()).abs() < 1e-12),
+            other => panic!("STDEVPA: {:?}", other),
+        }
         for (row, value) in [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 100.0, 200.0]
             .into_iter()
             .enumerate()
