@@ -19,6 +19,9 @@
     {"name":"PHI","argument_shape":"x","supported_modes":{"distribution":["standard normal density"]},"unsupported_modes":["non-finite input parity"],"oracle_status":"unverified","tests":["test_distribution_functions"]},
     {"name":"GAUSS","argument_shape":"z","supported_modes":{"distribution":["standard normal CDF minus 0.5"]},"unsupported_modes":["non-finite input parity"],"oracle_status":"unverified","tests":["test_distribution_functions"]},
     {"name":"SINGLE","argument_shape":"array","supported_modes":{"selection":["first value of bounded array","scalar passthrough"]},"unsupported_modes":["full Excel implicit-intersection context"],"oracle_status":"unverified","tests":["test_spill_sequence"]},
-    {"name":"ISFORMULA","argument_shape":"reference","supported_modes":{"reference":["single cell","bounded range"]},"unsupported_modes":["cross-sheet reference context"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]}
+    {"name":"ISFORMULA","argument_shape":"reference","supported_modes":{"reference":["single cell","bounded range"]},"unsupported_modes":["cross-sheet reference context"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]},
+    {"name":"TEXTSPLIT","argument_shape":"text, col_delimiter [, row_delimiter [, ignore_empty [, match_mode [, pad_with]]]]","supported_modes":{"ignore_empty":[0,1],"match_mode":[0,1],"pad_with":["scalar"]},"unsupported_modes":["array delimiters","2D shape metadata"],"oracle_status":"unverified","tests":["test_textsplit"]},
+    {"name":"TOCOL","argument_shape":"array [, ignore [, scan_by_column]]","supported_modes":{"ignore":[0,1,2,3]},"unsupported_modes":["scan_by_column shape semantics"],"oracle_status":"unverified","tests":["test_tocol_torow"]},
+    {"name":"TOROW","argument_shape":"array [, ignore [, scan_by_column]]","supported_modes":{"ignore":[0,1,2,3]},"unsupported_modes":["scan_by_column shape semantics"],"oracle_status":"unverified","tests":["test_tocol_torow"]}
   ]
 }
