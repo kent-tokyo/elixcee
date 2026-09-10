@@ -160,6 +160,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 級数・参照情報 BUILD: `SERIESSUM`を係数配列の累乗和として、`ISREF`をセル／範囲／参照関数式の構文判定として追加し、配列入力・数値overflow・参照判定を回帰した。Excelの全型変換・遅延参照評価・oracle校正は未完。
 - [x] G4 割引証券利回り BUILD: `DISC`と`YIELDDISC`を既存の債券日数基準へ接続し、価格・償還額から割引率／満期利回りを算出して往復を回帰した。Excelの全型変換・basis全域・oracle校正は未完。
 - [x] G4 ローカライズ文字列 BUILD: `BAHTTEXT`をThai Bahtの整数・サタン・負数表記へ接続し、百万単位の再帰と丸め境界を回帰した。Excelの全型変換・locale oracle・上限全域は未完。
+- [x] G4 クーポンスケジュール BUILD: `COUPDAYBS`／`COUPDAYS`／`COUPDAYSNC`／`COUPNCD`／`COUPNUM`／`COUPPCD`を満期基準のクーポン境界とbasis別日数計算へ接続し、半期・年次の期間境界を回帰した。Excelの端数日・EOM・全型変換・oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素三角関数 BUILD: `IMSIN`／`IMCOS`／`IMTAN`、`IMSINH`／`IMCOSH`／`IMTANH`、`IMSEC`／`IMCSC`／`IMCOT`を複素公式と除算へ接続し、原点・接尾辞・極のゼロ除算を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。

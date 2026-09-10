@@ -732,6 +732,12 @@ fn eval_func(
         "DISC" => func_disc(args, cells),
         "RECEIVED" => func_received(args, cells),
         "YIELDDISC" => func_yielddisc(args, cells),
+        "COUPDAYBS" => func_coupdaybs(args, cells),
+        "COUPDAYS" => func_coupdays(args, cells),
+        "COUPDAYSNC" => func_coupdaysnc(args, cells),
+        "COUPNCD" => func_coupncd(args, cells),
+        "COUPNUM" => func_coupnum(args, cells),
+        "COUPPCD" => func_couppcd(args, cells),
         "TBILLPRICE" => func_tbillprice(args, cells),
         "TBILLYIELD" => func_tbillyield(args, cells),
         "TBILLEQ" => func_tbilleq(args, cells),
@@ -10134,6 +10140,141 @@ fn bond_day_fraction(settlement: f64, maturity: f64, basis: f64) -> Result<f64, 
     Ok(days / denominator)
 }
 
+fn coupon_month_shift(serial: i64, months: i32) -> i64 {
+    let (year, month, day) = serial_to_ymd(serial);
+    let total = year * 12 + month as i32 - 1 + months;
+    let shifted_year = total.div_euclid(12);
+    let shifted_month = (total.rem_euclid(12) + 1) as u32;
+    let shifted_day = day.min(days_in_month(shifted_year, shifted_month));
+    date_to_serial(shifted_year, shifted_month, shifted_day)
+}
+
+fn coupon_arguments(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<(i64, i64, i32, i32), String> {
+    if args.len() < 3 || args.len() > 4 {
+        return Err(format!("{name} requires 3 or 4 arguments"));
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let frequency = to_float(&evaluate(&args[2], cells)?)?;
+    let basis = if args.len() == 4 {
+        to_float(&evaluate(&args[3], cells)?)?
+    } else {
+        0.0
+    };
+    if !settlement.is_finite()
+        || !maturity.is_finite()
+        || !frequency.is_finite()
+        || !basis.is_finite()
+        || settlement.fract() != 0.0
+        || maturity.fract() != 0.0
+        || frequency.fract() != 0.0
+        || basis.fract() != 0.0
+        || maturity <= settlement
+        || !matches!(frequency as i32, 1 | 2 | 4)
+        || !(0.0..=4.0).contains(&basis)
+    {
+        return Err(format!(
+            "{name}: invalid settlement, maturity, frequency, or basis"
+        ));
+    }
+    Ok((
+        settlement as i64,
+        maturity as i64,
+        frequency as i32,
+        basis as i32,
+    ))
+}
+
+fn coupon_boundaries(settlement: i64, maturity: i64, frequency: i32) -> (i64, i64) {
+    let months = 12 / frequency;
+    let mut next = maturity;
+    while next > settlement {
+        let previous = coupon_month_shift(next, -months);
+        if previous <= settlement {
+            return (previous, next);
+        }
+        next = previous;
+    }
+    (next, coupon_month_shift(next, months))
+}
+
+fn coupon_day_count(start: i64, end: i64, basis: i32) -> f64 {
+    if basis == 0 || basis == 4 {
+        days360_serial(start, end, basis == 4) as f64
+    } else {
+        (end - start) as f64
+    }
+}
+
+fn func_coupdaybs(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (settlement, maturity, frequency, basis) = coupon_arguments(args, cells, "COUPDAYBS")?;
+    let (previous, _) = coupon_boundaries(settlement, maturity, frequency);
+    Ok(Variant::Float(coupon_day_count(
+        previous, settlement, basis,
+    )))
+}
+
+fn func_coupdays(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (settlement, maturity, frequency, basis) = coupon_arguments(args, cells, "COUPDAYS")?;
+    let (previous, next) = coupon_boundaries(settlement, maturity, frequency);
+    Ok(Variant::Float(coupon_day_count(previous, next, basis)))
+}
+
+fn func_coupdaysnc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (settlement, maturity, frequency, basis) = coupon_arguments(args, cells, "COUPDAYSNC")?;
+    let (_, next) = coupon_boundaries(settlement, maturity, frequency);
+    Ok(Variant::Float(coupon_day_count(settlement, next, basis)))
+}
+
+fn func_coupncd(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (settlement, maturity, frequency, _) = coupon_arguments(args, cells, "COUPNCD")?;
+    let (_, next) = coupon_boundaries(settlement, maturity, frequency);
+    Ok(Variant::Date(next))
+}
+
+fn func_coupnum(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (settlement, maturity, frequency, _) = coupon_arguments(args, cells, "COUPNUM")?;
+    let months = 12 / frequency;
+    let (_, mut next) = coupon_boundaries(settlement, maturity, frequency);
+    let mut count = 0_i64;
+    while next <= maturity {
+        count += 1;
+        next = coupon_month_shift(next, months);
+        if count > 10_000 {
+            return Ok(Variant::Error(ExcelError::Num));
+        }
+    }
+    Ok(Variant::Integer(count))
+}
+
+fn func_couppcd(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (settlement, maturity, frequency, _) = coupon_arguments(args, cells, "COUPPCD")?;
+    let (previous, _) = coupon_boundaries(settlement, maturity, frequency);
+    Ok(Variant::Date(previous))
+}
+
 fn func_pduration(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -14860,6 +15001,30 @@ mod tests {
         );
         assert!(
             matches!(calc("=TBILLEQ(1,181,0.1)", &c), Variant::Float(value) if (value - (36.5 / 342.0)).abs() < 1e-12)
+        );
+        assert_eq!(
+            calc("=COUPDAYBS(DATE(2020,3,1),DATE(2021,1,15),2,0)", &c),
+            Variant::Float(46.0)
+        );
+        assert_eq!(
+            calc("=COUPDAYS(DATE(2020,3,1),DATE(2021,1,15),2,0)", &c),
+            Variant::Float(180.0)
+        );
+        assert_eq!(
+            calc("=COUPDAYSNC(DATE(2020,3,1),DATE(2021,1,15),2,0)", &c),
+            Variant::Float(134.0)
+        );
+        assert_eq!(
+            calc("=COUPNCD(DATE(2020,3,1),DATE(2021,1,15),2,0)", &c),
+            Variant::Date(date_to_serial(2020, 7, 15))
+        );
+        assert_eq!(
+            calc("=COUPPCD(DATE(2020,3,1),DATE(2021,1,15),2,0)", &c),
+            Variant::Date(date_to_serial(2020, 1, 15))
+        );
+        assert_eq!(
+            calc("=COUPNUM(DATE(2020,3,1),DATE(2021,1,15),2,0)", &c),
+            Variant::Integer(2)
         );
     }
 

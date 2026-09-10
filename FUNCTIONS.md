@@ -276,6 +276,11 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `DISC` | Discount rate of a security | Classic |
 | `RECEIVED` | Amount received at maturity for a discounted security | Classic |
 | `YIELDDISC` | Annual yield of a discounted security | Classic |
+| `COUPDAYBS` | Days from coupon period start to settlement | Classic |
+| `COUPDAYS` | Days in coupon period | Classic |
+| `COUPDAYSNC` | Days from settlement to next coupon | Classic |
+| `COUPNCD` / `COUPPCD` | Next / previous coupon date | Classic |
+| `COUPNUM` | Number of coupons remaining | Classic |
 | `TBILLPRICE` / `TBILLYIELD` / `TBILLEQ` | Treasury bill price, yield, and equivalent yield | Classic |
 
 ### Statistical
