@@ -2659,7 +2659,11 @@ fn func_subtotal(
         4 => func_max(rest, cells),
         5 => func_min(rest, cells),
         6 => func_product(rest, cells),
+        7 => func_stdev_s(rest, cells),
+        8 => func_stdev_p(rest, cells),
         9 => func_sum(rest, cells),
+        10 => func_var_s(rest, cells),
+        11 => func_var_p(rest, cells),
         n => Err(format!("SUBTOTAL: unsupported function_num {}", n)),
     }
 }
@@ -14907,6 +14911,22 @@ mod tests {
         assert_eq!(calc("=SUBTOTAL(9,A1:A3)", &c), Variant::Integer(60));
         assert_eq!(calc("=SUBTOTAL(1,A1:A3)", &c), Variant::Float(20.0));
         assert_eq!(calc("=SUBTOTAL(109,A1:A3)", &c), Variant::Integer(60));
+        assert!(matches!(
+            calc("=SUBTOTAL(7,A1:A3)", &c),
+            Variant::Float(value) if (value - 10.0).abs() < 1e-12
+        ));
+        assert!(matches!(
+            calc("=SUBTOTAL(108,A1:A3)", &c),
+            Variant::Float(value) if (value - (200.0_f64 / 3.0).sqrt()).abs() < 1e-12
+        ));
+        assert!(matches!(
+            calc("=SUBTOTAL(10,A1:A3)", &c),
+            Variant::Float(value) if (value - 100.0).abs() < 1e-12
+        ));
+        assert!(matches!(
+            calc("=SUBTOTAL(111,A1:A3)", &c),
+            Variant::Float(value) if (value - (200.0 / 3.0)).abs() < 1e-12
+        ));
     }
 
     #[test]

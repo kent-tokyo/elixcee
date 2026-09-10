@@ -48,6 +48,7 @@
 - Formula coverage: add deterministic headless `PHONETIC` source-text fallback.
 - Formula coverage: add side-effect-free UTF-8 `ENCODEURL` percent encoding.
 - Formula compatibility: extend `AGGREGATE` across function numbers 7, 8, 10, 11, 13, and 17–21 and honor k arguments for LARGE/SMALL modes.
+- Formula compatibility: extend `SUBTOTAL` to standard-deviation and variance modes 7, 8, 10, and 11.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.

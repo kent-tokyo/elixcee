@@ -223,7 +223,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `COMBIN` | Number of combinations C(n, k) | Classic |
 | `COUNTIF` / `SUMIF` / `AVERAGEIF` | Conditional count / sum / average | 2007 |
 | `COUNTIFS` / `SUMIFS` / `AVERAGEIFS` | Multi-criteria count / sum / average | 2007 |
-| `SUBTOTAL` | Aggregate with selectable function (1–6, 9, 101–106, 109) | Classic |
+| `SUBTOTAL` | Aggregate with selectable function (1–11, 101–111; hidden rows are not modeled) | Classic |
 | `AGGREGATE` | Extended subtotal (1–21; array/reference option filtering remains bounded) | 2010 |
 | `PERCENTILE` / `PERCENTILE.INC` | Percentile (inclusive) | Classic / 2010 |
 | `PERCENTILE.EXC` | Percentile (exclusive) | 2010 |
