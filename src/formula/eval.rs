@@ -455,6 +455,7 @@ fn eval_func(
         "T" => func_t(args, cells),
         "FIXED" => func_fixed(args, cells),
         "DOLLAR" => func_dollar(args, cells),
+        "BAHTTEXT" => func_bahttext(args, cells),
         "BASE" => func_base(args, cells),
         "DECIMAL" => func_decimal(args, cells),
         "UNICHAR" => func_char(args, cells),
@@ -3322,6 +3323,99 @@ fn fixed_number(value: f64, decimals: i32, no_commas: bool) -> Result<String, St
     } else {
         grouped_decimal(text)
     })
+}
+
+const THAI_DIGITS: [&str; 10] = [
+    "ศูนย์",
+    "หนึ่ง",
+    "สอง",
+    "สาม",
+    "สี่",
+    "ห้า",
+    "หก",
+    "เจ็ด",
+    "แปด",
+    "เก้า",
+];
+
+fn thai_integer_group(mut value: u64) -> String {
+    if value == 0 {
+        return String::new();
+    }
+    let positions = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
+    let mut parts = Vec::new();
+    for (position, suffix) in positions.iter().enumerate() {
+        let digit = (value % 10) as usize;
+        value /= 10;
+        if digit != 0 {
+            let word = if position == 1 && digit == 1 {
+                "สิบ"
+            } else if position == 1 && digit == 2 {
+                "ยี่สิบ"
+            } else if position == 0 && digit == 1 && value > 0 {
+                "เอ็ด"
+            } else {
+                THAI_DIGITS[digit]
+            };
+            if position == 1 && (digit == 1 || digit == 2) {
+                parts.push(word.to_string());
+            } else {
+                parts.push(format!("{}{}", word, suffix));
+            }
+        }
+        if value == 0 {
+            break;
+        }
+    }
+    parts.into_iter().rev().collect()
+}
+
+fn thai_integer(value: u64) -> String {
+    if value == 0 {
+        return THAI_DIGITS[0].to_string();
+    }
+    let mut groups = Vec::new();
+    let mut remaining = value;
+    while remaining > 0 {
+        groups.push(remaining % 1_000_000);
+        remaining /= 1_000_000;
+    }
+    groups
+        .into_iter()
+        .enumerate()
+        .rev()
+        .filter(|&(_, group)| group != 0)
+        .map(|(index, group)| format!("{}{}", thai_integer_group(group), "ล้าน".repeat(index)))
+        .collect()
+}
+
+fn func_bahttext(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("BAHTTEXT requires 1 argument".into());
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    if !value.is_finite() || value.abs() >= 1e15 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let scaled = (value.abs() * 100.0).round() as u64;
+    let integer = scaled / 100;
+    let satang = scaled % 100;
+    let mut result = String::new();
+    if value < 0.0 {
+        result.push_str("ลบ");
+    }
+    result.push_str(&thai_integer(integer));
+    result.push_str("บาท");
+    if satang == 0 {
+        result.push_str("ถ้วน");
+    } else {
+        result.push_str(&thai_integer(satang));
+        result.push_str("สตางค์");
+    }
+    Ok(Variant::Str(result))
 }
 
 fn func_fixed(
@@ -15218,6 +15312,23 @@ mod tests {
             Variant::Float(f) => assert!((f - 0.5).abs() < 1e-6),
             other => panic!("F.DIST CDF: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_bahttext() {
+        let c = HashMap::new();
+        assert_eq!(
+            calc("=BAHTTEXT(1234.56)", &c),
+            Variant::Str("หนึ่งพันสองร้อยสามสิบสี่บาทห้าสิบหกสตางค์".into())
+        );
+        assert_eq!(
+            calc("=BAHTTEXT(1000000)", &c),
+            Variant::Str("หนึ่งล้านบาทถ้วน".into())
+        );
+        assert_eq!(
+            calc("=BAHTTEXT(-0.25)", &c),
+            Variant::Str("ลบศูนย์บาทยี่สิบห้าสตางค์".into())
+        );
     }
 
     #[test]

@@ -455,6 +455,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `T` | Return text or empty text for non-text values | Classic |
 | `FIXED` | Format a number with fixed decimal places | Classic |
 | `DOLLAR` | Format a number as currency text | Classic |
+| `BAHTTEXT` | Format a number as Thai Baht text | Classic |
 | `BASE` | Convert an integer to a string in a base from 2 to 36 | 2013 |
 | `DECIMAL` | Convert a base-2-to-36 string to an integer | 2013 |
 
@@ -603,7 +604,6 @@ per-function mode coverage, and independent oracle tests are tracked in
 | Function | Description | Excel |
 |---|---|---|
 | `PHONETIC` | Extract phonetic (furigana) characters | Classic |
-| `BAHTTEXT` | Format number as Thai Baht text | Classic |
 
 
 ### Dynamic Array
