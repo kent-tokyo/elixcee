@@ -27,5 +27,6 @@
     {"name":"SHEETS","argument_shape":"[reference]","supported_modes":{"reference":["current bounded workbook","single cell or range"]},"unsupported_modes":["3D reference and external workbook context"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]},
     {"name":"ISOMITTED","argument_shape":"value","supported_modes":{"argument":["omitted AST slot returns TRUE","missing higher-order LAMBDA binding returns TRUE","explicit Empty returns FALSE"]},"unsupported_modes":["named LAMBDA reuse and Excel oracle parity"],"oracle_status":"unverified","tests":["test_series_and_reference_functions","test_isomitted_tracks_missing_lambda_bindings"]},
     {"name":"PERCENTOF","argument_shape":"data_subset, data_all","supported_modes":{"aggregation":["SUM(subset)/SUM(all)"]},"unsupported_modes":["Excel type-coercion and oracle parity"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]}
+    ,{"name":"EUROCONVERT","argument_shape":"number, source, target [, full_precision [, triangulation_precision]]","supported_modes":{"currency":["BEF LUF DEM ESP FRF IEP ITL NLG ATS PTE FIM GRD SIT EUR"],"precision":["full_precision and triangulation_precision >= 3"]},"unsupported_modes":["additional locale currencies and Excel oracle parity"],"oracle_status":"unverified","tests":["test_euroconvert"]}
   ]
 }

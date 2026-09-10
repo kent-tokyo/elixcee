@@ -830,6 +830,7 @@ fn eval_func(
         "FVSCHEDULE" => func_fvschedule(args, cells),
         "DOLLARDE" => func_dollarde(args, cells),
         "DOLLARFR" => func_dollarfr(args, cells),
+        "EUROCONVERT" => func_euroconvert(args, cells),
         "PDURATION" => func_pduration(args, cells),
         "PRICEDISC" => func_pricedisc(args, cells),
         "DISC" => func_disc(args, cells),
@@ -12077,6 +12078,89 @@ fn func_dollarfr(
     Ok(Variant::Float(result))
 }
 
+fn euro_currency(code: &str) -> Option<(f64, u32)> {
+    // Fixed EU conversion rates: units of the legacy currency per EUR and
+    // the currency-specific calculation/display precision used by Excel.
+    Some(match code.to_ascii_uppercase().as_str() {
+        "BEF" => (40.3399, 0),
+        "LUF" => (40.3399, 0),
+        "DEM" => (1.95583, 2),
+        "ESP" => (166.386, 0),
+        "FRF" => (6.55957, 2),
+        "IEP" => (0.787564, 2),
+        "ITL" => (1936.27, 0),
+        "NLG" => (2.20371, 2),
+        "ATS" => (13.7603, 2),
+        "PTE" => (200.482, 0),
+        "FIM" => (5.94573, 2),
+        "GRD" => (340.750, 0),
+        "SIT" => (239.640, 2),
+        "EUR" => (1.0, 2),
+        _ => return None,
+    })
+}
+
+fn round_significant(value: f64, digits: i32) -> f64 {
+    if value == 0.0 {
+        return value;
+    }
+    let scale = 10f64.powi(digits - 1 - value.abs().log10().floor() as i32);
+    (value * scale).round() / scale
+}
+
+fn func_euroconvert(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 3 || args.len() > 5 {
+        return Err("EUROCONVERT requires 3 to 5 arguments".into());
+    }
+    let number = to_float(&evaluate(&args[0], cells)?)?;
+    let source = to_str(&evaluate(&args[1], cells)?).to_ascii_uppercase();
+    let target = to_str(&evaluate(&args[2], cells)?).to_ascii_uppercase();
+    let full_precision = if args.len() >= 4 {
+        to_float(&evaluate(&args[3], cells)?)? != 0.0
+    } else {
+        false
+    };
+    let triangulation_precision = if args.len() == 5 {
+        let value = to_float(&evaluate(&args[4], cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || value < 3.0 {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        Some(value as i32)
+    } else {
+        None
+    };
+    let Some((source_rate, _)) = euro_currency(&source) else {
+        return Ok(Variant::Error(ExcelError::Value));
+    };
+    let Some((target_rate, target_precision)) = euro_currency(&target) else {
+        return Ok(Variant::Error(ExcelError::Value));
+    };
+    if !number.is_finite() {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    if source == target {
+        return Ok(as_integer_if_whole(number));
+    }
+    let mut euros = number / source_rate;
+    if source != "EUR"
+        && target != "EUR"
+        && let Some(precision) = triangulation_precision
+    {
+        euros = round_significant(euros, precision);
+    }
+    let mut result = euros * target_rate;
+    if !full_precision {
+        result = round_significant(result, target_precision as i32);
+    }
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(as_integer_if_whole(result))
+}
+
 fn bond_day_fraction(settlement: f64, maturity: f64, basis: f64) -> Result<f64, Variant> {
     if !settlement.is_finite()
         || !maturity.is_finite()
@@ -16650,6 +16734,31 @@ mod tests {
         let c = HashMap::new();
         assert_eq!(calc("=VALUE(\"42\")", &c), Variant::Integer(42));
         assert_eq!(calc("=VALUE(\"3.14\")", &c), Variant::Float(3.14));
+    }
+
+    #[test]
+    fn test_euroconvert() {
+        let c = HashMap::new();
+        assert_eq!(
+            calc("=EUROCONVERT(1.2,\"DEM\",\"EUR\")", &c),
+            Variant::Float(0.61)
+        );
+        assert!(matches!(
+            calc("=EUROCONVERT(1,\"FRF\",\"DEM\",TRUE,3)", &c),
+            Variant::Float(value) if (value - 0.29728616).abs() < 1e-12
+        ));
+        assert_eq!(
+            calc("=EUROCONVERT(7,\"EUR\",\"EUR\")", &c),
+            Variant::Integer(7)
+        );
+        assert_eq!(
+            calc("=EUROCONVERT(1,\"EUR\",\"DEM\",FALSE,2)", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=EUROCONVERT(1,\"JPY\",\"EUR\")", &c),
+            Variant::Error(ExcelError::Value)
+        );
     }
 
     #[test]
