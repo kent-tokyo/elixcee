@@ -146,6 +146,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 
 ### G4 — 関数・配列互換性の拡張（X3）
 
+- [x] G4 統計推定・検定関数 BUILD: ` FISHER `／` FISHERINV `、` STANDARDIZE `、` Z.TEST `／` ZTEST `、` CONFIDENCE.NORM `／` CONFIDENCE.T `を追加し、定義域・標準偏差・標本数・有意水準を回帰した。t分布近似の誤差、Excel oracle校正、全型変換は未完。
 - [x] G4 Engineering基数変換 BUILD: `DEC2BIN`／`DEC2HEX`／`DEC2OCT`、各基数間変換、`BIN2DEC`／`HEX2DEC`／`OCT2DEC`を追加し、固定ビット幅・負数・桁数不足・範囲外を回帰した。Excelの全型変換・locale・oracle校正は未完。
 - [x] G4 統計関数拡張 BUILD: `SUMSQ`、`GEOMEAN`、`HARMEAN`、`DEVSQ`、`AVEDEV`、`PERCENTILE.EXC`、`PERCENTRANK.EXC`、`QUARTILE`／`QUARTILE.INC`／`QUARTILE.EXC`を追加した。exclusive percentile/quartileの境界、正値制約、空入力・範囲外引数を検証し、10ケースのRust回帰テストを追加した。Excel oracle校正と統計関数全体の完全一致は未完。
 - [x] G4 分布関数拡張 BUILD: `NORM.S.DIST`／`NORMSDIST`、`NORM.S.INV`／`NORMSINV`、`BINOM.DIST`／`BINOMDIST`、`POISSON.DIST`／`POISSON`を追加した。PMF/CDF、確率・整数引数の境界を検証する回帰を追加した。近似誤差、Excel oracle校正、分布関数全体の完全一致は未完。
