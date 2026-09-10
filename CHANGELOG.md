@@ -25,6 +25,7 @@
 - Formula coverage: add periodic coupon accrued-interest calculation with `ACCRINT`.
 - Formula coverage: add `MAKEARRAY` with row/column-indexed LAMBDA evaluation and 2D spill shape recovery.
 - Formula coverage: add prorated straight-line depreciation with `AMORLINC`.
+- Formula coverage: add prorated declining-balance depreciation with `AMORDEGRC`.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
