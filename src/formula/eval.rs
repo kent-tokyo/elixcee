@@ -494,6 +494,7 @@ fn eval_func(
         "XMATCH" => func_xmatch(args, cells),
         // -- Info --
         "ISBLANK" => func_isblank(args, cells),
+        "ISREF" => func_isref(args, cells),
         "ISERROR" => func_iserror(args, cells),
         "ISERR" => func_iserror(args, cells),
         "ISNA" => func_isna(args, cells),
@@ -699,6 +700,7 @@ fn eval_func(
         "SUMX2MY2" => func_sumx2my2(args, cells),
         "SUMX2PY2" => func_sumx2py2(args, cells),
         "SUMXMY2" => func_sumxmy2(args, cells),
+        "SERIESSUM" => func_seriessum(args, cells),
         "PMT" => func_pmt(args, cells),
         "FV" => func_fv(args, cells),
         "PV" => func_pv(args, cells),
@@ -4510,6 +4512,23 @@ fn func_isblank(
         evaluate(&args[0], cells)?,
         Variant::Empty
     )))
+}
+
+fn func_isref(
+    args: &[FormulaExpr],
+    _cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("ISREF requires 1 argument".into());
+    }
+    let is_reference = match &args[0] {
+        FormulaExpr::CellRef { .. } | FormulaExpr::Range { .. } => true,
+        FormulaExpr::FuncCall { name, .. } => {
+            name.eq_ignore_ascii_case("INDIRECT") || name.eq_ignore_ascii_case("OFFSET")
+        }
+        _ => false,
+    };
+    Ok(Variant::Boolean(is_reference))
 }
 
 fn func_iserror(
@@ -11309,6 +11328,38 @@ fn func_sumxmy2(
     paired_sum(args, cells, "SUMXMY2", |a, b| (a - b) * (a - b))
 }
 
+fn func_seriessum(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("SERIESSUM requires 4 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let n = to_float(&evaluate(&args[1], cells)?)?;
+    let m = to_float(&evaluate(&args[2], cells)?)?;
+    let coefficients = collect_values(&args[3], cells)?
+        .into_iter()
+        .filter_map(|value| as_f64(&value))
+        .collect::<Vec<_>>();
+    if !x.is_finite()
+        || !n.is_finite()
+        || !m.is_finite()
+        || coefficients.is_empty()
+        || coefficients.iter().any(|value| !value.is_finite())
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let mut result = 0.0;
+    for (index, coefficient) in coefficients.into_iter().enumerate() {
+        result += coefficient * x.powf(n + m * index as f64);
+    }
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(as_integer_if_whole(result))
+}
+
 // ── DGET ─────────────────────────────────────────────────────────────────────
 
 /// Resolve the `field` argument of a database function to an absolute column number.
@@ -11959,6 +12010,20 @@ mod tests {
         assert_eq!(calc("=IMSECH(\"0\")", &c), Variant::Str("1".into()));
         assert!(evaluate(&fparse("=IMCSCH(\"0\")").unwrap(), &c).is_err());
         assert!(evaluate(&fparse("=IMCOTH(\"0\")").unwrap(), &c).is_err());
+    }
+
+    #[test]
+    fn test_series_and_reference_functions() {
+        let c = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Integer(2)),
+            ((3, 1), Variant::Integer(3)),
+        ]);
+        assert_eq!(calc("=SERIESSUM(2,0,1,A1:A3)", &c), Variant::Integer(17));
+        assert_eq!(calc("=ISREF(A1)", &c), Variant::Boolean(true));
+        assert_eq!(calc("=ISREF(A1:A3)", &c), Variant::Boolean(true));
+        assert_eq!(calc("=ISREF(1+2)", &c), Variant::Boolean(false));
+        assert_eq!(calc("=ISREF(INDIRECT(\"A1\"))", &c), Variant::Boolean(true));
     }
 
     #[test]

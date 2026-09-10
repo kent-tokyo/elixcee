@@ -14,6 +14,7 @@
 - Formula coverage: add complex-number construction and inspection formulas `COMPLEX`, `IMREAL`, `IMAGINARY`, and `IMABS`.
 - Formula coverage: add `IMARGUMENT` complex phase extraction with origin validation.
 - Formula coverage: add `IMLOG2` complex base-2 logarithm coverage.
+- Formula coverage: add `SERIESSUM` power-series evaluation and `ISREF` reference detection.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
 - Formula coverage: add complex trigonometric, hyperbolic, and reciprocal trigonometric formulas.

@@ -366,6 +366,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `MULTINOMIAL` | Multinomial coefficient | Classic |
 | `PERMUTATIONA` | Permutations with repetitions | 2013 |
 | `SUMX2MY2` / `SUMX2PY2` / `SUMXMY2` | Pairwise sums of squares and square differences | Classic |
+| `SERIESSUM` | Sum a power series using coefficient values | Classic |
 | `SINH` / `COSH` / `TANH` | Hyperbolic sine / cosine / tangent | Classic |
 | `ASINH` / `ACOSH` / `ATANH` | Inverse hyperbolic functions | 2013 |
 | `SEC` / `SECH` / `CSC` / `CSCH` | Secant / hyperbolic secant / cosecant variants | 2013 |
@@ -510,6 +511,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `ISTEXT` | Is the value a string? | Classic |
 | `ISLOGICAL` | Is the value a boolean? | Classic |
 | `ISNONTEXT` | Is the value not a string? | Classic |
+| `ISREF` | Is the expression a reference? | Classic |
 | `N` | Convert a value to a number | Classic |
 | `NA` | Generate an #N/A error value | Classic |
 | `TYPE` | Return numeric type code (1=num, 2=text, 4=bool, 16=error, 64=array) | Classic |
