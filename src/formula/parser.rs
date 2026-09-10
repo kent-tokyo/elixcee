@@ -594,39 +594,20 @@ impl FormulaParser {
         self.skip_ws();
         if self.peek() == Some('(') {
             self.advance();
-            let mut args = vec![];
-            let mut needs_argument = false;
+            let args = self.parse_argument_list()?;
+            let function = FormulaExpr::FuncCall {
+                name: name.clone(),
+                args,
+            };
             self.skip_ws();
-            loop {
-                self.skip_ws();
-                if self.peek() == Some(')') {
-                    if needs_argument {
-                        args.push(FormulaExpr::Omitted);
-                    }
-                    break;
-                }
-                if self.peek() == Some(',') {
-                    args.push(FormulaExpr::Omitted);
-                    self.advance();
-                    needs_argument = true;
-                    self.skip_ws();
-                    continue;
-                } else {
-                    args.push(self.parse_nested_expr()?);
-                }
-                self.skip_ws();
-                if self.consume(',') {
-                    needs_argument = true;
-                } else {
-                    break;
-                }
-                self.skip_ws();
+            if name.eq_ignore_ascii_case("LAMBDA") && self.consume('(') {
+                let call_args = self.parse_argument_list()?;
+                return Ok(FormulaExpr::Call {
+                    callee: Box::new(function),
+                    args: call_args,
+                });
             }
-            self.skip_ws();
-            if !self.consume(')') {
-                return Err(format!("Expected ')' after arguments of '{}'", name));
-            }
-            return Ok(FormulaExpr::FuncCall { name, args });
+            return Ok(function);
         }
 
         // Boolean literals
@@ -638,6 +619,40 @@ impl FormulaParser {
 
         // Bare identifier not matching any known pattern → name reference for LET/LAMBDA
         Ok(FormulaExpr::FuncCall { name, args: vec![] })
+    }
+
+    fn parse_argument_list(&mut self) -> Result<Vec<FormulaExpr>, String> {
+        let mut args = vec![];
+        let mut needs_argument = false;
+        self.skip_ws();
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(')') {
+                if needs_argument {
+                    args.push(FormulaExpr::Omitted);
+                }
+                self.advance();
+                return Ok(args);
+            }
+            if self.peek() == Some(',') {
+                args.push(FormulaExpr::Omitted);
+                self.advance();
+                needs_argument = true;
+                self.skip_ws();
+                continue;
+            }
+            args.push(self.parse_nested_expr()?);
+            self.skip_ws();
+            if self.consume(',') {
+                needs_argument = true;
+                self.skip_ws();
+            } else {
+                if !self.consume(')') {
+                    return Err("Expected ')' after arguments".into());
+                }
+                return Ok(args);
+            }
+        }
     }
 }
 
@@ -714,6 +729,12 @@ fn validate_expr_shape(expr: &FormulaExpr, depth: usize, nodes: &mut usize) -> R
                 validate_expr_shape(arg, depth + 1, nodes)?;
             }
         }
+        FormulaExpr::Call { callee, args } => {
+            validate_expr_shape(callee, depth + 1, nodes)?;
+            for arg in args {
+                validate_expr_shape(arg, depth + 1, nodes)?;
+            }
+        }
         FormulaExpr::Number(_)
         | FormulaExpr::Str(_)
         | FormulaExpr::Bool(_)
@@ -774,6 +795,10 @@ mod tests {
                 ],
             }
         );
+        assert!(matches!(
+            parse("=LAMBDA(x,x+1)(2)").unwrap(),
+            FormulaExpr::Call { .. }
+        ));
     }
 
     #[test]

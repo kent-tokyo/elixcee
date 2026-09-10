@@ -25,6 +25,6 @@
     {"name":"TOROW","argument_shape":"array [, ignore [, scan_by_column]]","supported_modes":{"ignore":[0,1,2,3]},"unsupported_modes":["scan_by_column shape semantics"],"oracle_status":"unverified","tests":["test_tocol_torow"]},
     {"name":"SHEET","argument_shape":"[value]","supported_modes":{"reference":["current bounded sheet","single cell or range"]},"unsupported_modes":["3D reference and external workbook context"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]},
     {"name":"SHEETS","argument_shape":"[reference]","supported_modes":{"reference":["current bounded workbook","single cell or range"]},"unsupported_modes":["3D reference and external workbook context"],"oracle_status":"unverified","tests":["test_series_and_reference_functions"]},
-    {"name":"ISOMITTED","argument_shape":"value","supported_modes":{"argument":["omitted AST slot returns TRUE","missing higher-order LAMBDA binding returns TRUE","explicit Empty returns FALSE"]},"unsupported_modes":["direct LAMBDA invocation syntax"],"oracle_status":"unverified","tests":["test_series_and_reference_functions","test_isomitted_tracks_missing_lambda_bindings"]}
+    {"name":"ISOMITTED","argument_shape":"value","supported_modes":{"argument":["omitted AST slot returns TRUE","missing higher-order LAMBDA binding returns TRUE","explicit Empty returns FALSE"]},"unsupported_modes":["named LAMBDA reuse and Excel oracle parity"],"oracle_status":"unverified","tests":["test_series_and_reference_functions","test_isomitted_tracks_missing_lambda_bindings"]}
   ]
 }

@@ -617,7 +617,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | Function | Description | Excel |
 |---|---|---|
 | `LET` | Assign named variables within a formula | 365/2021 |
-| `LAMBDA` | Define an anonymous function | 365/2021 |
+| `LAMBDA` | Define and directly invoke an anonymous function; missing parameters are tracked for `ISOMITTED` | 365/2021 |
 | `MAP` | Apply LAMBDA to each element | 365/2021 |
 | `REDUCE` | Reduce array to a single value via LAMBDA | 365/2021 |
 | `SCAN` | Cumulative reduce (returns all partial results) | 365/2021 |

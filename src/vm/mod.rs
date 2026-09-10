@@ -15665,6 +15665,12 @@ fn collect_direct_formula_inputs(
                 collect_direct_formula_inputs(arg, refs, ranges);
             }
         }
+        Call { callee, args } => {
+            collect_direct_formula_inputs(callee, refs, ranges);
+            for arg in args {
+                collect_direct_formula_inputs(arg, refs, ranges);
+            }
+        }
         Number(_) | Str(_) | Bool(_) | Omitted => {}
     }
 }
@@ -15720,6 +15726,12 @@ fn collect_formula_dependencies(
             collect_formula_dependencies(inner, positions, positions_by_row, spill_rects, out)
         }
         FuncCall { args, .. } => {
+            for arg in args {
+                collect_formula_dependencies(arg, positions, positions_by_row, spill_rects, out);
+            }
+        }
+        Call { callee, args } => {
+            collect_formula_dependencies(callee, positions, positions_by_row, spill_rects, out);
             for arg in args {
                 collect_formula_dependencies(arg, positions, positions_by_row, spill_rects, out);
             }

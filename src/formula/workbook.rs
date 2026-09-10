@@ -332,6 +332,9 @@ fn contains_qualified_ref(expr: &FormulaExpr) -> bool {
         }
         FormulaExpr::UnaryMinus(inner) => contains_qualified_ref(inner),
         FormulaExpr::FuncCall { args, .. } => args.iter().any(contains_qualified_ref),
+        FormulaExpr::Call { callee, args } => {
+            contains_qualified_ref(callee) || args.iter().any(contains_qualified_ref)
+        }
         FormulaExpr::Number(_)
         | FormulaExpr::Str(_)
         | FormulaExpr::Bool(_)
@@ -421,6 +424,12 @@ fn contains_named_range(
                 && (scoped_named_ranges
                     .is_some_and(|local| local.contains_key(&name.to_ascii_lowercase()))
                     || named_ranges.contains_key(&name.to_ascii_lowercase())))
+                || args
+                    .iter()
+                    .any(|arg| contains_named_range(arg, named_ranges, scoped_named_ranges))
+        }
+        FormulaExpr::Call { callee, args } => {
+            contains_named_range(callee, named_ranges, scoped_named_ranges)
                 || args
                     .iter()
                     .any(|arg| contains_named_range(arg, named_ranges, scoped_named_ranges))
@@ -545,6 +554,12 @@ fn collect_dependencies(
                 collect_dependencies(arg, host, refs, ranges);
             }
         }
+        FormulaExpr::Call { callee, args } => {
+            collect_dependencies(callee, host, refs, ranges);
+            for arg in args {
+                collect_dependencies(arg, host, refs, ranges);
+            }
+        }
         FormulaExpr::Number(_)
         | FormulaExpr::Str(_)
         | FormulaExpr::Bool(_)
@@ -610,6 +625,13 @@ fn remap_expr(
         }
         FormulaExpr::FuncCall { name, args } => FormulaExpr::FuncCall {
             name: name.clone(),
+            args: args
+                .iter()
+                .map(|arg| remap_expr(arg, host, offsets))
+                .collect::<Result<_, _>>()?,
+        },
+        FormulaExpr::Call { callee, args } => FormulaExpr::Call {
+            callee: Box::new(remap_expr(callee, host, offsets)?),
             args: args
                 .iter()
                 .map(|arg| remap_expr(arg, host, offsets))

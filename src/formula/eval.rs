@@ -96,6 +96,9 @@ pub(crate) fn references_another_sheet(expr: &FormulaExpr) -> bool {
         }
         FormulaExpr::UnaryMinus(inner) => references_another_sheet(inner),
         FormulaExpr::FuncCall { args, .. } => args.iter().any(references_another_sheet),
+        FormulaExpr::Call { callee, args } => {
+            references_another_sheet(callee) || args.iter().any(references_another_sheet)
+        }
     }
 }
 
@@ -131,6 +134,7 @@ pub fn evaluate(
             }
             eval_func(name, args, cells)
         }
+        FormulaExpr::Call { callee, args } => evaluate_lambda_call(callee, args, cells),
     }
 }
 
@@ -10232,12 +10236,39 @@ fn call_lambda(
     arg_vals: Vec<Variant>,
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
+    call_lambda_bindings(
+        lambda_expr,
+        arg_vals.into_iter().map(BindingValue::Value).collect(),
+        cells,
+    )
+}
+
+fn evaluate_lambda_call(
+    lambda_expr: &FormulaExpr,
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let arg_bindings = args
+        .iter()
+        .map(|arg| match arg {
+            FormulaExpr::Omitted => Ok(BindingValue::Omitted),
+            _ => evaluate(arg, cells).map(BindingValue::Value),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    call_lambda_bindings(lambda_expr, arg_bindings, cells)
+}
+
+fn call_lambda_bindings(
+    lambda_expr: &FormulaExpr,
+    arg_bindings: Vec<BindingValue>,
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
     let (params, body) = extract_lambda(lambda_expr)?;
-    if arg_vals.len() > params.len() {
+    if arg_bindings.len() > params.len() {
         return Err(format!(
             "LAMBDA: expected at most {} args, got {}",
             params.len(),
-            arg_vals.len()
+            arg_bindings.len()
         ));
     }
     let frame: HashMap<String, BindingValue> = params
@@ -10246,10 +10277,9 @@ fn call_lambda(
         .map(|(index, name)| {
             (
                 name,
-                arg_vals
+                arg_bindings
                     .get(index)
                     .cloned()
-                    .map(BindingValue::Value)
                     .unwrap_or(BindingValue::Omitted),
             )
         })
@@ -17221,6 +17251,15 @@ mod tests {
             call_lambda(&lambda, vec![Variant::Empty], &c).unwrap(),
             Variant::Boolean(false)
         );
+        assert_eq!(
+            calc("=LAMBDA(value,ISOMITTED(value))()", &c),
+            Variant::Boolean(true)
+        );
+        assert_eq!(
+            calc("=LAMBDA(value,ISOMITTED(value))(\"\")", &c),
+            Variant::Boolean(false)
+        );
+        assert_eq!(calc("=LAMBDA(value,value+1)(2)", &c), Variant::Integer(3));
     }
 
     #[test]

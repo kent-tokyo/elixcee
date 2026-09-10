@@ -78,4 +78,9 @@ pub enum FormulaExpr {
         name: String,
         args: Vec<FormulaExpr>,
     },
+    /// Invoke a first-class LAMBDA expression, e.g. `LAMBDA(x,x+1)(2)`.
+    Call {
+        callee: Box<FormulaExpr>,
+        args: Vec<FormulaExpr>,
+    },
 }
