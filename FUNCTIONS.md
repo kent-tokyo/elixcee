@@ -284,6 +284,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `INTRATE` | Interest rate for a fully invested security | Classic |
 | `PRICEMAT` | Price of a security paying interest at maturity | Classic |
 | `YIELDMAT` | Yield of a security paying interest at maturity | Classic |
+| `DURATION` | Macaulay duration of a security | Classic |
+| `MDURATION` | Modified duration of a security | 2010 |
 | `TBILLPRICE` / `TBILLYIELD` / `TBILLEQ` | Treasury bill price, yield, and equivalent yield | Classic |
 
 ### Statistical

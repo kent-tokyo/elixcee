@@ -741,6 +741,8 @@ fn eval_func(
         "INTRATE" => func_intrate(args, cells),
         "PRICEMAT" => func_pricemat(args, cells),
         "YIELDMAT" => func_yieldmat(args, cells),
+        "DURATION" => func_duration(args, cells, false),
+        "MDURATION" => func_duration(args, cells, true),
         "TBILLPRICE" => func_tbillprice(args, cells),
         "TBILLYIELD" => func_tbillyield(args, cells),
         "TBILLEQ" => func_tbilleq(args, cells),
@@ -10405,6 +10407,89 @@ fn func_yieldmat(
     ))
 }
 
+fn func_duration(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    modified: bool,
+) -> Result<Variant, String> {
+    if args.len() < 5 || args.len() > 6 {
+        return Err(format!(
+            "{} requires 5 or 6 arguments",
+            if modified { "MDURATION" } else { "DURATION" }
+        ));
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let coupon_rate = to_float(&evaluate(&args[2], cells)?)?;
+    let yield_rate = to_float(&evaluate(&args[3], cells)?)?;
+    let frequency = to_float(&evaluate(&args[4], cells)?)?;
+    let basis = if args.len() == 6 {
+        to_float(&evaluate(&args[5], cells)?)?
+    } else {
+        0.0
+    };
+    if !settlement.is_finite()
+        || !maturity.is_finite()
+        || !coupon_rate.is_finite()
+        || !yield_rate.is_finite()
+        || !frequency.is_finite()
+        || !basis.is_finite()
+        || settlement.fract() != 0.0
+        || maturity.fract() != 0.0
+        || maturity <= settlement
+        || frequency.fract() != 0.0
+        || !matches!(frequency as i32, 1 | 2 | 4)
+        || basis.fract() != 0.0
+        || !(0.0..=4.0).contains(&basis)
+        || yield_rate <= -frequency
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let frequency = frequency as i32;
+    let basis = basis as i32;
+    let maturity_serial = maturity as i64;
+    let (previous, next_coupon) = coupon_boundaries(settlement as i64, maturity_serial, frequency);
+    let period_days = coupon_day_count(previous, next_coupon, basis);
+    let first_days = coupon_day_count(settlement as i64, next_coupon, basis);
+    if period_days <= 0.0 || first_days <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let periods_per_year = frequency as f64;
+    let coupon = 100.0 * coupon_rate / periods_per_year;
+    let rate_per_period = yield_rate / periods_per_year;
+    let mut payment_date = next_coupon;
+    let mut period_index = 0_i64;
+    let mut price = 0.0;
+    let mut weighted = 0.0;
+    while payment_date <= maturity_serial {
+        period_index += 1;
+        let periods_from_settlement = (period_index - 1) as f64 + first_days / period_days;
+        let discount = (1.0 + rate_per_period).powf(periods_from_settlement);
+        let cashflow = coupon
+            + if payment_date == maturity_serial {
+                100.0
+            } else {
+                0.0
+            };
+        price += cashflow / discount;
+        weighted += (periods_from_settlement / periods_per_year) * cashflow / discount;
+        payment_date = coupon_month_shift(payment_date, 12 / frequency);
+        if period_index > 10_000 {
+            return Ok(Variant::Error(ExcelError::Num));
+        }
+    }
+    if !price.is_finite() || price <= 0.0 || !weighted.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let duration = weighted / price;
+    let result = if modified {
+        duration / (1.0 + rate_per_period)
+    } else {
+        duration
+    };
+    Ok(Variant::Float(result))
+}
+
 fn func_pduration(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -15166,6 +15251,19 @@ mod tests {
         assert!(
             matches!(calc(&format!("=YIELDMAT(DATE(2020,7,1),DATE(2021,1,1),DATE(2020,1,1),0.08,{price_mat},0)"), &c), Variant::Float(value) if (value - 0.1).abs() < 1e-12)
         );
+        let duration = match calc("=DURATION(DATE(2020,3,1),DATE(2021,1,15),0.08,0.1,2,0)", &c) {
+            Variant::Float(value) => value,
+            other => panic!("DURATION unexpected: {:?}", other),
+        };
+        let mduration = match calc(
+            "=MDURATION(DATE(2020,3,1),DATE(2021,1,15),0.08,0.1,2,0)",
+            &c,
+        ) {
+            Variant::Float(value) => value,
+            other => panic!("MDURATION unexpected: {:?}", other),
+        };
+        assert!(duration.is_finite() && duration > 0.0);
+        assert!((mduration - duration / 1.05).abs() < 1e-12);
     }
 
     #[test]
