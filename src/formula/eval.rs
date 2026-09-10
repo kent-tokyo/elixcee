@@ -415,10 +415,7 @@ fn collect_all(
 /// Flatten the engine's bounded one-dimensional array representation for
 /// functions whose worksheet contract consumes a value range.
 fn flatten_values(values: Vec<Variant>) -> Vec<Variant> {
-    values
-        .into_iter()
-        .flat_map(variant_values)
-        .collect()
+    values.into_iter().flat_map(variant_values).collect()
 }
 
 /// Collect numeric values for scalar statistical aggregators while retaining
@@ -1261,14 +1258,20 @@ fn func_count(
             Variant::Array(values) => values
                 .into_iter()
                 .filter(|value| {
-                    matches!(value, Variant::Integer(_) | Variant::Float(_) | Variant::Date(_))
+                    matches!(
+                        value,
+                        Variant::Integer(_) | Variant::Float(_) | Variant::Date(_)
+                    )
                 })
                 .count(),
             Variant::VbaArray(array) => array
                 .elements
                 .into_iter()
                 .filter(|value| {
-                    matches!(value, Variant::Integer(_) | Variant::Float(_) | Variant::Date(_))
+                    matches!(
+                        value,
+                        Variant::Integer(_) | Variant::Float(_) | Variant::Date(_)
+                    )
                 })
                 .count(),
             _ => 0,
@@ -6216,7 +6219,11 @@ fn func_switch(
         let expression_values = variant_values(expr);
         let count = expression_values.len();
         let has_default = args.len().is_multiple_of(2);
-        let pair_end = if has_default { args.len() - 1 } else { args.len() };
+        let pair_end = if has_default {
+            args.len() - 1
+        } else {
+            args.len()
+        };
         let mut selected = vec![None; count];
 
         let broadcast = |value: Variant| -> Result<Vec<Variant>, ExcelError> {
@@ -6286,10 +6293,7 @@ fn func_switch(
             }
         }
         return Ok(Variant::Array(
-            selected
-                .into_iter()
-                .map(Option::unwrap)
-                .collect(),
+            selected.into_iter().map(Option::unwrap).collect(),
         ));
     }
     let mut i = 1;
@@ -18742,10 +18746,7 @@ mod tests {
             calc("=SUM(A1:A2)", &with_error),
             Variant::Error(ExcelError::DivZero)
         );
-        assert_eq!(
-            calc("=SUM(1/0,2)", &c),
-            Variant::Error(ExcelError::DivZero)
-        );
+        assert_eq!(calc("=SUM(1/0,2)", &c), Variant::Error(ExcelError::DivZero));
     }
 
     #[test]
@@ -20277,20 +20278,11 @@ mod tests {
             Variant::Str("default".into())
         );
         assert_eq!(
-            calc(
-                "=SWITCH(CHOOSE(SEQUENCE(2),1,2),1,\"one\",2,\"two\")",
-                &c
-            ),
-            Variant::Array(vec![
-                Variant::Str("one".into()),
-                Variant::Str("two".into())
-            ])
+            calc("=SWITCH(CHOOSE(SEQUENCE(2),1,2),1,\"one\",2,\"two\")", &c),
+            Variant::Array(vec![Variant::Str("one".into()), Variant::Str("two".into())])
         );
         assert_eq!(
-            calc(
-                "=SWITCH(CHOOSE(SEQUENCE(2),1,3),1,\"one\",\"other\")",
-                &c
-            ),
+            calc("=SWITCH(CHOOSE(SEQUENCE(2),1,3),1,\"one\",\"other\")", &c),
             Variant::Array(vec![
                 Variant::Str("one".into()),
                 Variant::Str("other".into())
@@ -20658,10 +20650,7 @@ mod tests {
             ])
         );
         assert_eq!(calc("=SUM(INDIRECT(\"A1:A1\"))", &c), Variant::Integer(42));
-        assert_eq!(
-            calc("=INDIRECT(\"R1C1\",FALSE)", &c),
-            Variant::Integer(42)
-        );
+        assert_eq!(calc("=INDIRECT(\"R1C1\",FALSE)", &c), Variant::Integer(42));
     }
 
     #[test]
@@ -21356,10 +21345,7 @@ mod tests {
             ])
         );
         assert_eq!(calc("=SUM(OFFSET(A1,0,0,2,2))", &c), Variant::Integer(100));
-        assert_eq!(
-            calc("=SUM(OFFSET(A1:B2,0,0))", &c),
-            Variant::Integer(100)
-        );
+        assert_eq!(calc("=SUM(OFFSET(A1:B2,0,0))", &c), Variant::Integer(100));
     }
 
     #[test]
