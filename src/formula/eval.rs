@@ -657,7 +657,7 @@ fn eval_func(
         "T.INV.2T" => func_t_inv_2t(args, cells),
         "TDIST" => func_tdist_legacy(args, cells),
         "TINV" => func_t_inv_2t(args, cells),
-        "TTEST" => func_ttest(args, cells),
+        "TTEST" | "T.TEST" => func_ttest(args, cells),
         // ── Rounding ─────────────────────────────────────────────────────────
         "FLOOR" | "FLOOR.MATH" => func_floor(args, cells),
         "CEILING" | "CEILING.MATH" => func_ceiling(args, cells),
@@ -19810,6 +19810,10 @@ mod tests {
             let formula = format!("=TTEST(A1:A3,B1:B3,2,{test_type})");
             assert!(matches!(calc(&formula, &two_samples), Variant::Float(v) if v.is_finite()));
         }
+        assert!(matches!(
+            calc("=T.TEST(A1:A3,B1:B3,2,2)", &two_samples),
+            Variant::Float(v) if v.is_finite()
+        ));
         let chi_cells = cells_from(&[
             ((1, 1), Variant::Integer(10)),
             ((2, 1), Variant::Integer(20)),

@@ -347,7 +347,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `T.DIST.RT` | Right-tailed Student's t-distribution probability | 2010 |
 | `T.INV` | Inverse Student's t-distribution | 2010 |
 | `T.INV.2T` / `TINV` | Two-tailed inverse Student's t-distribution | 2010 / Classic |
-| `TTEST` | Student's t-test probability for paired or two-sample data | Classic |
+| `TTEST` / `T.TEST` | Student's t-test probability for paired or two-sample data | Classic / 2010 |
 | `NORM.S.DIST` / `NORMSDIST` | Standard normal distribution CDF or PDF | 2010 / Classic |
 | `NORM.S.INV` / `NORMSINV` | Inverse standard normal distribution | 2010 / Classic |
 | `BINOM.DIST` / `BINOMDIST` | Binomial distribution PMF or CDF | 2010 / Classic |
