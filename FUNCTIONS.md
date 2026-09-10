@@ -292,6 +292,10 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `STEYX` | Standard error of predicted y values | Classic |
 | `COVARIANCE.S` / `COVAR` | Sample covariance | Classic / 2010 |
 | `COVARIANCE.P` | Population covariance | 2010 |
+| `MODE.SNGL` / `MODE.MULT` | Most frequent numeric value | 2010 / 2010 |
+| `TRIMMEAN` | Mean after symmetric outlier trimming | Classic |
+| `SKEW` | Sample skewness | Classic |
+| `KURT` | Excess sample kurtosis | Classic |
 | `NORM.DIST` / `NORMDIST` | Normal distribution CDF or PDF | 2010 / Classic |
 | `NORM.INV` / `NORMINV` | Inverse normal distribution | 2010 / Classic |
 | `T.DIST` | Student's t-distribution CDF or PDF | 2010 |

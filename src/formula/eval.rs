@@ -387,7 +387,7 @@ fn eval_func(
         "SUMIFS" => func_sumifs(args, cells),
         "COUNTIFS" => func_countifs(args, cells),
         "MEDIAN" => func_median(args, cells),
-        "MODE.MULT" => func_mode_mult(args, cells),
+        "MODE.MULT" | "MODE.SNGL" => func_mode_mult(args, cells),
         "PRODUCT" => func_product(args, cells),
         "ROW" => func_row(args, cells),
         "ROWS" => func_rows(args, cells),
@@ -424,6 +424,9 @@ fn eval_func(
         "HARMEAN" => func_harmean(args, cells),
         "DEVSQ" => func_devsq(args, cells),
         "AVEDEV" => func_avedev(args, cells),
+        "TRIMMEAN" => func_trimmean(args, cells),
+        "SKEW" => func_skew(args, cells),
+        "KURT" => func_kurt(args, cells),
         "TRUNC" => func_trunc(args, cells),
         // -- String --
         "ASC" => func_asc(args, cells),
@@ -2766,6 +2769,68 @@ fn func_avedev(
     Ok(Variant::Float(
         nums.iter().map(|v| (v - mean).abs()).sum::<f64>() / nums.len() as f64,
     ))
+}
+
+fn func_trimmean(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("TRIMMEAN requires 2 arguments".into());
+    }
+    let mut nums = numeric_args(&args[..1], cells, "TRIMMEAN")?;
+    let percent = to_float(&evaluate(&args[1], cells)?)?;
+    if !percent.is_finite() || !(0.0..1.0).contains(&percent) {
+        return Err("TRIMMEAN: percent must be in [0, 1)".into());
+    }
+    let trim_each = (nums.len() as f64 * percent / 2.0).floor() as usize;
+    if trim_each * 2 >= nums.len() {
+        return Err("TRIMMEAN: trimming removes all values".into());
+    }
+    nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let kept = &nums[trim_each..nums.len() - trim_each];
+    Ok(Variant::Float(kept.iter().sum::<f64>() / kept.len() as f64))
+}
+
+fn func_skew(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let nums = numeric_args(args, cells, "SKEW")?;
+    if nums.len() < 3 {
+        return Err("SKEW requires at least 3 values".into());
+    }
+    let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+    let sum_sq = nums.iter().map(|v| (v - mean).powi(2)).sum::<f64>();
+    if sum_sq == 0.0 {
+        return Err("SKEW: standard deviation is zero".into());
+    }
+    let s = (sum_sq / (nums.len() - 1) as f64).sqrt();
+    let sum_cubed = nums.iter().map(|v| ((v - mean) / s).powi(3)).sum::<f64>();
+    Ok(Variant::Float(
+        nums.len() as f64 / ((nums.len() - 1) * (nums.len() - 2)) as f64 * sum_cubed,
+    ))
+}
+
+fn func_kurt(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let nums = numeric_args(args, cells, "KURT")?;
+    if nums.len() < 4 {
+        return Err("KURT requires at least 4 values".into());
+    }
+    let n = nums.len() as f64;
+    let mean = nums.iter().sum::<f64>() / n;
+    let sum_sq = nums.iter().map(|v| (v - mean).powi(2)).sum::<f64>();
+    if sum_sq == 0.0 {
+        return Err("KURT: standard deviation is zero".into());
+    }
+    let s = (sum_sq / (n - 1.0)).sqrt();
+    let sum_fourth = nums.iter().map(|v| ((v - mean) / s).powi(4)).sum::<f64>();
+    let result = n * (n + 1.0) / ((n - 1.0) * (n - 2.0) * (n - 3.0)) * sum_fourth
+        - 3.0 * (n - 1.0).powi(2) / ((n - 2.0) * (n - 3.0));
+    Ok(Variant::Float(result))
 }
 
 fn pseudo_rand() -> f64 {
@@ -12822,6 +12887,33 @@ mod tests {
             calc("=DMIN(A1:B5,\"Score\",D1:D2)", &c),
             Variant::Integer(0)
         );
+    }
+
+    #[test]
+    fn test_statistical_summary_functions() {
+        let mut c = HashMap::new();
+        assert_eq!(calc("=MODE.SNGL(1,2,2,3)", &c), Variant::Integer(2));
+        for (row, value) in [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 100.0, 200.0]
+            .into_iter()
+            .enumerate()
+        {
+            c.insert(
+                (row as u32 + 1, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Float(value),
+                },
+            );
+        }
+        assert_eq!(calc("=TRIMMEAN(A1:A8,0.5)", &c), Variant::Float(4.5));
+        match calc("=SKEW(1,2,3,4,5)", &c) {
+            Variant::Float(value) => assert!(value.abs() < 1e-12),
+            other => panic!("SKEW unexpected: {:?}", other),
+        }
+        match calc("=KURT(1,2,3,4,5)", &c) {
+            Variant::Float(value) => assert!((value + 1.2).abs() < 1e-12),
+            other => panic!("KURT unexpected: {:?}", other),
+        }
     }
 
     #[test]
