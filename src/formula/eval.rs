@@ -541,6 +541,8 @@ fn eval_func(
         "INTERCEPT" => func_intercept(args, cells),
         "RSQ" => func_rsq(args, cells),
         "FORECAST.LINEAR" | "FORECAST" => func_forecast_linear(args, cells),
+        "FORECAST.ETS" => func_forecast_ets(args, cells),
+        "FORECAST.ETS.SEASONALITY" => func_forecast_ets_seasonality(args, cells),
         "TREND" => func_trend(args, cells),
         "GROWTH" => func_growth(args, cells),
         "LINEST" => func_linest(args, cells),
@@ -5520,6 +5522,178 @@ fn func_forecast_linear(
     let my = known_y.iter().sum::<f64>() / known_y.len() as f64;
     let mx = known_x.iter().sum::<f64>() / known_x.len() as f64;
     Ok(Variant::Float(my + slope * (x - mx)))
+}
+
+fn forecast_ets_series(
+    values_expr: &FormulaExpr,
+    timeline_expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<(Vec<f64>, Vec<f64>), String> {
+    let values: Vec<f64> = collect_values(values_expr, cells)?
+        .iter()
+        .filter_map(as_f64)
+        .collect();
+    let timeline: Vec<f64> = collect_values(timeline_expr, cells)?
+        .iter()
+        .filter_map(as_f64)
+        .collect();
+    if values.len() != timeline.len() || values.len() < 2 {
+        return Err(format!(
+            "{name}: values and timeline must have equal length >= 2"
+        ));
+    }
+    let mut pairs: Vec<(f64, f64)> = timeline.into_iter().zip(values).collect();
+    if pairs
+        .iter()
+        .any(|(time, value)| !time.is_finite() || !value.is_finite())
+    {
+        return Err(format!("{name}: values and timeline must be finite"));
+    }
+    pairs.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(Ordering::Equal));
+    if pairs.windows(2).any(|window| window[0].0 == window[1].0) {
+        return Err(format!("{name}: timeline cannot contain duplicates"));
+    }
+    let step = pairs[1].0 - pairs[0].0;
+    if step <= 0.0
+        || pairs.windows(2).any(|window| {
+            let current = window[1].0 - window[0].0;
+            (current - step).abs() > step.abs().max(1.0) * 1e-9
+        })
+    {
+        return Err(format!(
+            "{name}: timeline must have a constant positive step"
+        ));
+    }
+    Ok((
+        pairs.iter().map(|(_, value)| *value).collect(),
+        pairs.iter().map(|(time, _)| *time).collect(),
+    ))
+}
+
+fn forecast_ets_seasonality(values: &[f64]) -> usize {
+    if values.len() < 4 {
+        return 1;
+    }
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>();
+    if variance == 0.0 {
+        return 1;
+    }
+    let max_lag = (values.len() / 2).min(24);
+    let mut best = (1, f64::INFINITY);
+    for lag in 2..=max_lag {
+        let error = values
+            .iter()
+            .skip(lag)
+            .zip(values.iter())
+            .map(|(current, prior)| (current - prior).powi(2))
+            .sum::<f64>();
+        if error < best.1 {
+            best = (lag, error);
+        }
+    }
+    if best.1 <= variance * 0.2 { best.0 } else { 1 }
+}
+
+fn forecast_ets_optional(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<usize, String> {
+    let seasonality = if let Some(arg) = args.get(3) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=8760.0).contains(&value) {
+            return Err("FORECAST.ETS: seasonality must be 0 or a positive integer <= 8760".into());
+        }
+        value as usize
+    } else {
+        1
+    };
+    if let Some(arg) = args.get(4) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=1.0).contains(&value) {
+            return Err("FORECAST.ETS: data_completion must be 0 or 1".into());
+        }
+    }
+    if let Some(arg) = args.get(5) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=6.0).contains(&value) {
+            return Err("FORECAST.ETS: aggregation must be an integer from 0 to 6".into());
+        }
+    }
+    Ok(seasonality)
+}
+
+fn func_forecast_ets(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(3..=6).contains(&args.len()) {
+        return Err("FORECAST.ETS requires 3 to 6 arguments".into());
+    }
+    let target = to_float(&evaluate(&args[0], cells)?)?;
+    let (values, timeline) = forecast_ets_series(&args[1], &args[2], cells, "FORECAST.ETS")?;
+    let requested = forecast_ets_optional(args, cells)?;
+    if requested > values.len() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let seasonality = if requested == 0 {
+        0
+    } else if args.len() >= 4 && requested > 1 {
+        requested
+    } else {
+        forecast_ets_seasonality(&values)
+    };
+    let step = timeline[1] - timeline[0];
+    let ahead = (target - timeline[2..].last().copied().unwrap_or(timeline[0])) / step;
+    if !target.is_finite() || ahead <= 0.0 || (ahead - ahead.round()).abs() > 1e-8 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let horizon = ahead.round() as usize;
+    let result = if seasonality == 0 {
+        func_forecast_linear(
+            &[
+                FormulaExpr::Number(target),
+                args[1].clone(),
+                args[2].clone(),
+            ],
+            cells,
+        )?
+    } else if seasonality == 1 {
+        Variant::Float(*values.last().unwrap_or(&0.0))
+    } else {
+        let index = values.len() - seasonality + (horizon - 1) % seasonality;
+        Variant::Float(values[index])
+    };
+    Ok(result)
+}
+
+fn func_forecast_ets_seasonality(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(2..=4).contains(&args.len()) {
+        return Err("FORECAST.ETS.SEASONALITY requires 2 to 4 arguments".into());
+    }
+    let (values, _) = forecast_ets_series(&args[0], &args[1], cells, "FORECAST.ETS.SEASONALITY")?;
+    if let Some(arg) = args.get(2) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=1.0).contains(&value) {
+            return Err("FORECAST.ETS.SEASONALITY: data_completion must be 0 or 1".into());
+        }
+    }
+    if let Some(arg) = args.get(3) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=6.0).contains(&value) {
+            return Err(
+                "FORECAST.ETS.SEASONALITY: aggregation must be an integer from 0 to 6".into(),
+            );
+        }
+    }
+    Ok(Variant::Integer(forecast_ets_seasonality(&values) as i64))
 }
 
 struct RegressionInputs {
@@ -18180,6 +18354,28 @@ mod tests {
             Variant::Float(f) => assert!((f - 8.0).abs() < 1e-9),
             other => panic!("FORECAST.LINEAR: {:?}", other),
         }
+        let ets = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Integer(2)),
+            ((3, 1), Variant::Integer(3)),
+            ((4, 1), Variant::Integer(4)),
+            ((1, 2), Variant::Integer(10)),
+            ((2, 2), Variant::Integer(20)),
+            ((3, 2), Variant::Integer(10)),
+            ((4, 2), Variant::Integer(20)),
+        ]);
+        assert_eq!(
+            calc("=FORECAST.ETS.SEASONALITY(B1:B4,A1:A4)", &ets),
+            Variant::Integer(2)
+        );
+        assert_eq!(
+            calc("=FORECAST.ETS(5,B1:B4,A1:A4)", &ets),
+            Variant::Float(10.0)
+        );
+        assert_eq!(
+            calc("=FORECAST.ETS(5,B1:B4,A1:A4,0)", &ets),
+            Variant::Float(20.0)
+        );
         match calc("=STEYX(B1:B3,A1:A3)", &c) {
             Variant::Float(f) => assert!(f.abs() < 1e-9),
             other => panic!("STEYX: {:?}", other),

@@ -318,6 +318,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `INTERCEPT` | Y-intercept of a linear regression | Classic |
 | `RSQ` | R-squared of a linear regression | Classic |
 | `FORECAST.LINEAR` / `FORECAST` | Linear regression forecast | 2016 / Classic |
+| `FORECAST.ETS` | Bounded seasonal forecast for a regular numeric timeline | 2016 |
+| `FORECAST.ETS.SEASONALITY` | Detect a bounded repeating seasonality length | 2016 |
 | `TREND` | Linear regression predictions | Classic |
 | `GROWTH` | Exponential regression predictions | Classic |
 | `LINEST` | Linear regression coefficients and optional statistics | Classic |
