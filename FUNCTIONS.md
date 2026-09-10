@@ -224,7 +224,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `COUNTIF` / `SUMIF` / `AVERAGEIF` | Conditional count / sum / average | 2007 |
 | `COUNTIFS` / `SUMIFS` / `AVERAGEIFS` | Multi-criteria count / sum / average | 2007 |
 | `SUBTOTAL` | Aggregate with selectable function (1–6, 9, 101–106, 109) | Classic |
-| `AGGREGATE` | Extended subtotal (1–6, 9, 12–16) | 2010 |
+| `AGGREGATE` | Extended subtotal (1–21; array/reference option filtering remains bounded) | 2010 |
 | `PERCENTILE` / `PERCENTILE.INC` | Percentile (inclusive) | Classic / 2010 |
 | `PERCENTILE.EXC` | Percentile (exclusive) | 2010 |
 | `PERCENTRANK` / `PERCENTRANK.INC` | Percent rank | Classic / 2010 |

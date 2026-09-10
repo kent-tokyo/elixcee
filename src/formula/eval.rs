@@ -3304,7 +3304,11 @@ fn func_aggregate(
             .map(as_integer_if_whole)
             .ok_or_else(|| "AGGREGATE: no values".into()),
         6 => Ok(as_integer_if_whole(nums.iter().fold(1.0, |a, &x| a * x))),
+        7 => func_stdev_s(rest, cells),
+        8 => func_stdev_p(rest, cells),
         9 => Ok(as_integer_if_whole(nums.iter().sum::<f64>())),
+        10 => func_var_s(rest, cells),
+        11 => func_var_p(rest, cells),
         12 => {
             // MEDIAN
             let mut s = nums.clone();
@@ -3320,25 +3324,15 @@ fn func_aggregate(
             };
             Ok(as_integer_if_whole(r))
         }
-        14 => {
-            // LARGE
-            let mut s = nums.clone();
-            s.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
-            s.first()
-                .copied()
-                .map(as_integer_if_whole)
-                .ok_or_else(|| "AGGREGATE: no values".into())
-        }
-        15 => {
-            // SMALL
-            let mut s = nums.clone();
-            s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-            s.first()
-                .copied()
-                .map(as_integer_if_whole)
-                .ok_or_else(|| "AGGREGATE: no values".into())
-        }
+        13 => func_mode_mult(rest, cells, false),
+        14 => func_large(rest, cells),
+        15 => func_small(rest, cells),
         16 => func_percentile(rest, cells),
+        17 => func_quartile(rest, cells, false),
+        18 => func_percentile_exc(rest, cells),
+        19 => func_quartile(rest, cells, true),
+        20 => func_percentrank(rest, cells),
+        21 => func_percentrank_exc(rest, cells),
         n => Err(format!("AGGREGATE: unsupported function_num {}", n)),
     }
 }
@@ -15448,6 +15442,21 @@ mod tests {
         assert_eq!(calc("=AGGREGATE(1,0,A1:A3)", &c), Variant::Float(20.0));
         assert_eq!(calc("=AGGREGATE(4,0,A1:A3)", &c), Variant::Integer(30));
         assert_eq!(calc("=AGGREGATE(12,0,A1:A3)", &c), Variant::Integer(20));
+        assert_eq!(calc("=AGGREGATE(14,0,A1:A3,2)", &c), Variant::Integer(20));
+        assert_eq!(calc("=AGGREGATE(15,0,A1:A3,2)", &c), Variant::Integer(20));
+        assert!(matches!(
+            calc("=AGGREGATE(7,0,A1:A3)", &c),
+            Variant::Float(value) if (value - 10.0).abs() < 1e-12
+        ));
+        assert!(matches!(
+            calc("=AGGREGATE(8,0,A1:A3)", &c),
+            Variant::Float(value) if (value - (200.0_f64 / 3.0).sqrt()).abs() < 1e-12
+        ));
+        assert_eq!(calc("=AGGREGATE(13,0,A1:A3)", &c), Variant::Integer(10));
+        assert_eq!(calc("=AGGREGATE(17,0,A1:A3,2)", &c), Variant::Integer(20));
+        assert_eq!(calc("=AGGREGATE(18,0,A1:A3,0.5)", &c), Variant::Integer(20));
+        assert_eq!(calc("=AGGREGATE(20,0,A1:A3,20)", &c), Variant::Float(0.5));
+        assert_eq!(calc("=AGGREGATE(21,0,A1:A3,20)", &c), Variant::Float(0.5));
     }
 
     // ── Phase 10: numerical functions ─────────────────────────────────────────
