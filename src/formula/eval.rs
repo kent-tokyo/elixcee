@@ -593,7 +593,7 @@ fn eval_func(
         "FLOOR" | "FLOOR.MATH" => func_floor(args, cells),
         "CEILING" | "CEILING.MATH" => func_ceiling(args, cells),
         "FLOOR.PRECISE" | "ISO.FLOOR" => func_precise_round(args, cells, false),
-        "CEILING.PRECISE" | "ISO.CEILING" => func_precise_round(args, cells, true),
+        "CEILING.PRECISE" | "ISO.CEILING" | "ECMA.CEILING" => func_precise_round(args, cells, true),
         "EVEN" => func_even_odd(args, cells, true),
         "ODD" => func_even_odd(args, cells, false),
         "MROUND" => func_mround(args, cells),
@@ -13847,6 +13847,10 @@ mod tests {
         assert_eq!(calc("=CEILING.PRECISE(-4.3,2)", &c), Variant::Integer(-4));
         assert_eq!(calc("=FLOOR.PRECISE(-4.3,2)", &c), Variant::Integer(-6));
         assert_eq!(calc("=ISO.CEILING(4.1,2)", &c), Variant::Integer(6));
+        assert_eq!(
+            calc("=ECMA.CEILING(-4.3,2)", &c),
+            calc("=CEILING.PRECISE(-4.3,2)", &c)
+        );
         assert_eq!(calc("=ISO.FLOOR(4.1,2)", &c), Variant::Integer(4));
     }
 

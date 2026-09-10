@@ -392,7 +392,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `MROUND` | Round to nearest multiple | Classic |
 | `EVEN` / `ODD` | Round away from zero to an even / odd integer | Classic |
 | `CEILING.PRECISE` / `FLOOR.PRECISE` | Sign-independent multiple rounding | 2010 |
-| `ISO.CEILING` / `ISO.FLOOR` | ISO sign-independent multiple rounding aliases | 2010 |
+| `ISO.CEILING` / `ECMA.CEILING` / `ISO.FLOOR` | ISO sign-independent multiple rounding aliases | 2010 / Classic |
 | `COMBINA` | Combinations with repetitions | 2013 |
 | `FACTDOUBLE` | Double factorial | Classic |
 | `MULTINOMIAL` | Multinomial coefficient | Classic |

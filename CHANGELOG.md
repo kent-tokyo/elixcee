@@ -39,6 +39,7 @@
 - Formula coverage: add headless-safe `HYPERLINK` display-text evaluation.
 - Formula coverage: add the classic `VDB` variable declining-balance depreciation function.
 - Formula compatibility: add legacy `TDIST` and `TINV` t-distribution functions.
+- Formula compatibility: add the legacy `ECMA.CEILING` rounding alias.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
