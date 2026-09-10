@@ -448,7 +448,10 @@ fn eval_func(
         "LOWER" => func_lower(args, cells),
         "PROPER" => func_proper(args, cells),
         "REPLACE" => func_replace(args, cells),
+        "REPLACEB" => func_replaceb(args, cells),
         "SEARCH" => func_search(args, cells),
+        "SEARCHB" => func_searchb(args, cells),
+        "FINDB" => func_findb(args, cells),
         "SUBSTITUTE" => func_substitute(args, cells),
         "TEXTJOIN" => func_textjoin(args, cells),
         "TEXTSPLIT" => func_textsplit(args, cells),
@@ -3706,6 +3709,44 @@ fn func_replace(
     Ok(Variant::Str(result))
 }
 
+fn func_replaceb(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("REPLACEB requires 4 arguments".into());
+    }
+    let text = to_str(&evaluate(&args[0], cells)?);
+    let start = to_float(&evaluate(&args[1], cells)?)?;
+    let length = to_float(&evaluate(&args[2], cells)?)?;
+    if !start.is_finite()
+        || !length.is_finite()
+        || start < 1.0
+        || length < 0.0
+        || start.fract() != 0.0
+        || length.fract() != 0.0
+    {
+        return Err("REPLACEB: invalid byte position or length".into());
+    }
+    let new = to_str(&evaluate(&args[3], cells)?);
+    let start_byte = start as usize - 1;
+    let end_byte = start_byte.saturating_add(length as usize);
+    let mut prefix = String::new();
+    let mut suffix = String::new();
+    let mut offset = 0;
+    for ch in text.chars() {
+        let next = offset + char_byte_width(ch);
+        if next <= start_byte {
+            prefix.push(ch);
+        }
+        if offset >= end_byte {
+            suffix.push(ch);
+        }
+        offset = next;
+    }
+    Ok(Variant::Str(format!("{prefix}{new}{suffix}")))
+}
+
 fn func_find(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -3746,6 +3787,43 @@ fn func_find(
         .ok_or_else(|| "FIND: value not found".into())
 }
 
+fn func_findb(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("FINDB requires 2 or 3 arguments".into());
+    }
+    let needle = to_str(&evaluate(&args[0], cells)?);
+    let haystack = to_str(&evaluate(&args[1], cells)?);
+    let start_byte = if args.len() == 3 {
+        let start = to_float(&evaluate(&args[2], cells)?)?;
+        if !start.is_finite() || start < 1.0 || start.fract() != 0.0 {
+            return Err("FINDB: invalid start position".into());
+        }
+        start as usize - 1
+    } else {
+        0
+    };
+    let hay_chars: Vec<char> = haystack.chars().collect();
+    let needle_chars: Vec<char> = needle.chars().collect();
+    if needle_chars.is_empty() {
+        return if start_byte <= str_byte_len(&haystack) {
+            Ok(Variant::Integer((start_byte + 1) as i64))
+        } else {
+            Err("FINDB: value not found".into())
+        };
+    }
+    let mut byte_offset = 0;
+    for (index, _) in hay_chars.iter().enumerate() {
+        if byte_offset >= start_byte && hay_chars[index..].starts_with(&needle_chars) {
+            return Ok(Variant::Integer((byte_offset + 1) as i64));
+        }
+        byte_offset += char_byte_width(hay_chars[index]);
+    }
+    Err("FINDB: value not found".into())
+}
+
 fn func_search(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -3773,6 +3851,40 @@ fn func_search(
         }
     }
     Err("SEARCH: value not found".into())
+}
+
+fn func_searchb(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("SEARCHB requires 2 or 3 arguments".into());
+    }
+    let needle = to_str(&evaluate(&args[0], cells)?).to_uppercase();
+    let haystack = to_str(&evaluate(&args[1], cells)?);
+    let start_byte = if args.len() == 3 {
+        let start = to_float(&evaluate(&args[2], cells)?)?;
+        if !start.is_finite() || start < 1.0 || start.fract() != 0.0 {
+            return Err("SEARCHB: invalid start position".into());
+        }
+        start as usize - 1
+    } else {
+        0
+    };
+    let hay_chars: Vec<char> = haystack.chars().collect();
+    let hay_upper: Vec<char> = hay_chars
+        .iter()
+        .map(|ch| ch.to_uppercase().next().unwrap_or(*ch))
+        .collect();
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let mut byte_offset = 0;
+    for (index, _) in hay_chars.iter().enumerate() {
+        if byte_offset >= start_byte && wildcard_match_prefix(&hay_upper[index..], &needle_chars) {
+            return Ok(Variant::Integer((byte_offset + 1) as i64));
+        }
+        byte_offset += char_byte_width(hay_chars[index]);
+    }
+    Err("SEARCHB: value not found".into())
 }
 
 fn func_exact(
@@ -14234,6 +14346,12 @@ mod tests {
         assert_eq!(calc("=FIND(\"lo\",\"Hello\")", &c), Variant::Integer(4));
         assert_eq!(calc("=SEARCH(\"LO\",\"Hello\")", &c), Variant::Integer(4));
         assert_eq!(calc("=SEARCH(\"h*o\",\"Hello\")", &c), Variant::Integer(1));
+        assert_eq!(calc("=FINDB(\"a\",\"あa\")", &c), Variant::Integer(3));
+        assert_eq!(calc("=SEARCHB(\"A\",\"あa\")", &c), Variant::Integer(3));
+        assert_eq!(
+            calc("=REPLACEB(\"あいう\",3,2,\"X\")", &c),
+            Variant::Str("あXう".into())
+        );
     }
 
     #[test]

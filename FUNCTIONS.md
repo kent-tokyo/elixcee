@@ -455,9 +455,12 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `UPPER` / `LOWER` / `PROPER` | Case conversion | Classic |
 | `TRIM` | Remove extra spaces | Classic |
 | `FIND` | Case-sensitive position search | Classic |
+| `FINDB` | Case-sensitive byte-position search using DBCS widths | Classic |
 | `SEARCH` | Case-insensitive wildcard search | Classic |
+| `SEARCHB` | Case-insensitive wildcard search returning a DBCS byte position | Classic |
 | `SUBSTITUTE` | Replace by value | Classic |
 | `REPLACE` | Replace by position | Classic |
+| `REPLACEB` | Replace by DBCS byte position and length | Classic |
 | `CONCATENATE` | Concatenate strings (legacy) | Classic |
 | `TEXT` | Format number as string | Classic |
 | `VALUE` | Parse string to number | Classic |
