@@ -6,8 +6,10 @@
 
 - Snapshot BUILD: add opt-in Python `Vm.snapshot(include_dependencies=True)`
   projection for deterministic, bounded syntax-level cell and range dependency
-  edges. Existing snapshot output is unchanged; parse failures, cycles, and
-  unresolved-reference diagnostics remain future work.
+  edges. Existing snapshot output is unchanged.
+- Snapshot BUILD: include bounded `dependency_diagnostics` and
+  `has_formula_cycle` fields when dependency projection is enabled, covering
+  formula parse failures, unresolved worksheet references, and cycle detection.
 - CI guidance: add a reproducible `diagnose-workbook` workflow, failure-artifact
   triage rules, and a redistributable diagnostic-corpus contract. This documents
   the supported diagnostic surface; it does not expand the VBA or Excel oracle.

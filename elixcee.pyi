@@ -230,7 +230,7 @@ class Vm:
         ...
 
     def snapshot(self, include_formulas: bool = False, include_dependencies: bool = False) -> dict[str, Any]:
-        """Return a detached workbook snapshot; optionally include ``formulas`` and bounded syntax-level ``dependencies``."""
+        """Return a detached workbook snapshot; optionally include ``formulas`` and bounded syntax-level ``dependencies`` plus ``dependency_diagnostics``/``has_formula_cycle``."""
         ...
 
     @property

@@ -1064,6 +1064,23 @@ impl PyVm {
                 dependencies.append(item)?;
             }
             snapshot.set_item("dependencies", dependencies)?;
+            let diagnostics = PyList::empty(py);
+            for diagnostic in crate::formula::formula_dependency_diagnostics(self.inner.sheets()) {
+                let item = PyDict::new(py);
+                item.set_item("sheet", &diagnostic.source_sheet)?;
+                item.set_item(
+                    "address",
+                    cell_address(diagnostic.source_row, diagnostic.source_col),
+                )?;
+                item.set_item("kind", diagnostic.kind)?;
+                item.set_item("detail", diagnostic.detail)?;
+                diagnostics.append(item)?;
+            }
+            snapshot.set_item("dependency_diagnostics", diagnostics)?;
+            snapshot.set_item(
+                "has_formula_cycle",
+                crate::formula::workbook_has_formula_cycle(self.inner.sheets()),
+            )?;
         }
         Ok(snapshot.into_any().unbind())
     }

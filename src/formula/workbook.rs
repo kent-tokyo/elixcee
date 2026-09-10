@@ -36,6 +36,16 @@ pub(crate) struct FormulaDependency {
     pub target_end_col: u32,
 }
 
+#[cfg(any(feature = "python", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FormulaDependencyDiagnostic {
+    pub source_sheet: String,
+    pub source_row: u32,
+    pub source_col: u32,
+    pub kind: &'static str,
+    pub detail: String,
+}
+
 /// Extract deterministic, bounded dependency edges without evaluating formulas.
 /// Parse failures are intentionally omitted; callers can inspect the formula
 /// text and parser diagnostics separately rather than treating an incomplete
@@ -108,6 +118,85 @@ pub(crate) fn formula_dependencies(sheets: &HashMap<String, SheetCells>) -> Vec<
     });
     edges.dedup();
     edges
+}
+
+/// Report dependency information that cannot be represented as a complete
+/// edge list. This is diagnostic metadata, not an evaluation result.
+#[cfg(any(feature = "python", test))]
+pub(crate) fn formula_dependency_diagnostics(
+    sheets: &HashMap<String, SheetCells>,
+) -> Vec<FormulaDependencyDiagnostic> {
+    let sheet_names = sheets
+        .keys()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let mut diagnostics = Vec::new();
+    for (sheet, cells) in sheets {
+        for (&(row, col), cell) in cells {
+            let Some(source) = cell.formula.as_deref() else {
+                continue;
+            };
+            let Ok(expr) = parse(source) else {
+                diagnostics.push(FormulaDependencyDiagnostic {
+                    source_sheet: sheet.clone(),
+                    source_row: row,
+                    source_col: col,
+                    kind: "parse_error",
+                    detail: "formula could not be parsed".to_string(),
+                });
+                continue;
+            };
+            let mut refs = Vec::new();
+            let mut ranges = Vec::new();
+            collect_dependencies(&expr, sheet, &mut refs, &mut ranges);
+            let mut missing = HashSet::new();
+            for (target_sheet, _, _) in refs {
+                if !sheet_names.contains(&target_sheet) {
+                    missing.insert(target_sheet);
+                }
+            }
+            for (target_sheet, _, _, _, _) in ranges {
+                if !sheet_names.contains(&target_sheet) {
+                    missing.insert(target_sheet);
+                }
+            }
+            for target_sheet in missing {
+                diagnostics.push(FormulaDependencyDiagnostic {
+                    source_sheet: sheet.clone(),
+                    source_row: row,
+                    source_col: col,
+                    kind: "unresolved_sheet",
+                    detail: target_sheet,
+                });
+            }
+        }
+    }
+    if has_formula_cycle(sheets) {
+        diagnostics.push(FormulaDependencyDiagnostic {
+            source_sheet: String::new(),
+            source_row: 0,
+            source_col: 0,
+            kind: "cycle",
+            detail: "formula dependency graph contains a cycle".to_string(),
+        });
+    }
+    diagnostics.sort_by(|left, right| {
+        (
+            left.source_sheet.to_ascii_lowercase(),
+            left.source_row,
+            left.source_col,
+            left.kind,
+            &left.detail,
+        )
+            .cmp(&(
+                right.source_sheet.to_ascii_lowercase(),
+                right.source_row,
+                right.source_col,
+                right.kind,
+                &right.detail,
+            ))
+    });
+    diagnostics
 }
 
 /// Recalculate every formula in a workbook containing at least one qualified
@@ -1197,5 +1286,26 @@ mod tests {
         assert_eq!((edges[0].target_row, edges[0].target_end_row), (1, 2));
         assert_eq!(edges[1].target_kind, "cell");
         assert_eq!(edges[1].target_sheet, "sheet2");
+    }
+
+    #[test]
+    fn formula_dependency_diagnostics_report_parse_missing_sheet_and_cycle() {
+        let sheets = HashMap::from([(
+            "Sheet1".to_string(),
+            HashMap::from([
+                ((1, 1), cell(Variant::Empty, Some("=Missing!A1"))),
+                ((1, 2), cell(Variant::Empty, Some("=B1"))),
+                ((1, 3), cell(Variant::Empty, Some("=A1"))),
+                ((1, 4), cell(Variant::Empty, Some("=+"))),
+            ]),
+        )]);
+        let diagnostics = formula_dependency_diagnostics(&sheets);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.kind == "unresolved_sheet" && item.detail == "missing")
+        );
+        assert!(diagnostics.iter().any(|item| item.kind == "cycle"));
+        assert!(diagnostics.iter().any(|item| item.kind == "parse_error"));
     }
 }

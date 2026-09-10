@@ -180,7 +180,9 @@ Cells contain address and stored value, not formula text or formatting.
 This CLI shape is distinct from the richer Python `Vm.snapshot()` API. Python
 callers may opt into `include_dependencies=True` to receive bounded,
 syntax-level cell/range dependency edges; parse failures are omitted from that
-array and remain visible through the formula text and diagnostics.
+array and are reported in `dependency_diagnostics`. The same field reports
+unresolved worksheet references; `has_formula_cycle` reports a detected formula
+cycle. These fields are diagnostics, not an Excel calculation oracle.
 Read errors use the common error shape with `messages: []`.
 Default Markdown output is for display, not lossless round-trip serialization.
 
