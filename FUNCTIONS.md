@@ -376,6 +376,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `Z.TEST` / `ZTEST` | One-tailed z-test p-value | 2010 / Classic |
 | `CONFIDENCE.NORM` / `CONFIDENCE` | Normal-distribution confidence interval half-width | 2010 / Classic |
 | `CONFIDENCE.T` | Student's t confidence interval half-width | 2010 |
+| `PHI` | Standard normal probability density | 2013 |
+| `GAUSS` | Standard normal CDF minus 0.5 | 2013 |
 
 ### Math & Trigonometry
 
@@ -493,6 +495,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `TEXTBEFORE` | Extract text before the Nth occurrence of a delimiter | 2024/365 |
 | `TEXTAFTER` | Extract text after the Nth occurrence of a delimiter | 2024/365 |
 | `VALUETOTEXT` | Convert any value to its text representation | 2024/365 |
+| `ARRAYTOTEXT` | Convert a bounded array to deterministic text | 2024/365 |
 | `ENCODEURL` | Percent-encode text as UTF-8 for a URL without performing network I/O | 2013 |
 | `REGEXTEST` | Test text against a Rust regular expression | 2024/365 |
 | `REGEXEXTRACT` | Extract the first, all, or first capture-group matches | 2024/365 |

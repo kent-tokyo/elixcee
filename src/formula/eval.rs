@@ -439,6 +439,8 @@ fn eval_func(
         "SKEW" => func_skew(args, cells),
         "SKEW.P" => func_skew_p(args, cells),
         "KURT" => func_kurt(args, cells),
+        "PHI" => func_phi(args, cells),
+        "GAUSS" => func_gauss(args, cells),
         "TRUNC" => func_trunc(args, cells),
         // -- String --
         "ASC" => func_asc(args, cells),
@@ -462,6 +464,7 @@ fn eval_func(
         "TEXTAFTER" => func_textafter(args, cells),
         "ENCODEURL" => func_encodeurl(args, cells),
         "VALUETOTEXT" => func_valuetotext(args, cells),
+        "ARRAYTOTEXT" => func_arraytotext(args, cells),
         "HYPERLINK" => func_hyperlink(args, cells),
         "TRIM" => func_trim(args, cells),
         "CLEAN" => func_clean(args, cells),
@@ -6631,6 +6634,28 @@ fn func_norm_s_dist(
     } else {
         norm_pdf(x, 0.0, 1.0)
     }))
+}
+
+fn func_phi(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("PHI requires 1 argument".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    Ok(Variant::Float(norm_pdf(x, 0.0, 1.0)))
+}
+
+fn func_gauss(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("GAUSS requires 1 argument".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    Ok(Variant::Float(norm_cdf(x, 0.0, 1.0) - 0.5))
 }
 
 fn func_norm_s_inv(
@@ -13749,6 +13774,56 @@ fn func_valuetotext(
     Ok(Variant::Str(s))
 }
 
+fn arraytotext_atom(value: &Variant, format: i64) -> String {
+    match value {
+        Variant::Str(text) if format == 1 => format!("\"{}\"", text.replace('"', "\"\"")),
+        Variant::Array(values) => values
+            .iter()
+            .map(|value| arraytotext_atom(value, format))
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => to_str(value),
+    }
+}
+
+fn func_arraytotext(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(1..=2).contains(&args.len()) {
+        return Err("ARRAYTOTEXT requires 1 or 2 arguments".into());
+    }
+    let format = if let Some(arg) = args.get(1) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=1.0).contains(&value) {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        value as i64
+    } else {
+        0
+    };
+    let value = evaluate(&args[0], cells)?;
+    if let Variant::Error(error) = value {
+        return Ok(Variant::Error(error));
+    }
+    let text = match &value {
+        Variant::Array(values) => {
+            let body = values
+                .iter()
+                .map(|item| arraytotext_atom(item, format))
+                .collect::<Vec<_>>()
+                .join(if format == 1 { "," } else { ", " });
+            if format == 1 {
+                format!("{{{body}}}")
+            } else {
+                body
+            }
+        }
+        _ => arraytotext_atom(&value, format),
+    };
+    Ok(Variant::Str(text))
+}
+
 // ── TAKE / DROP ───────────────────────────────────────────────────────────────
 
 fn func_take(
@@ -15499,6 +15574,14 @@ mod tests {
         assert_eq!(
             calc("=REGEXREPLACE(\"a1 b22\",\"[0-9]+\",\"#\")", &c),
             Variant::Str("a# b#".into())
+        );
+        assert_eq!(
+            calc("=ARRAYTOTEXT(SEQUENCE(3))", &c),
+            Variant::Str("1, 2, 3".into())
+        );
+        assert_eq!(
+            calc("=ARRAYTOTEXT(TEXTSPLIT(\"a,b\",\",\"),1)", &c),
+            Variant::Str("{\"a\",\"b\"}".into())
         );
     }
 
@@ -19411,6 +19494,10 @@ mod tests {
             matches!(calc("=NORM.S.DIST(0,FALSE)", &cells), Variant::Float(v) if (v - 0.39894228).abs() < 1e-7)
         );
         assert!(matches!(calc("=NORM.S.INV(0.5)", &cells), Variant::Float(v) if v.abs() < 1e-6));
+        assert!(
+            matches!(calc("=PHI(0)", &cells), Variant::Float(v) if (v - 0.39894228).abs() < 1e-7)
+        );
+        assert!(matches!(calc("=GAUSS(0)", &cells), Variant::Float(v) if v.abs() < 1e-9));
         assert!(
             matches!(calc("=BINOM.DIST(2,4,0.5,FALSE)", &cells), Variant::Float(v) if (v - 0.375).abs() < 1e-12)
         );

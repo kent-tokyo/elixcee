@@ -14,6 +14,9 @@
     {"name":"FORECAST.ETS.STAT","argument_shape":"values, timeline, statistic_type [, seasonality [, data_completion [, aggregation]]]","supported_modes":{"statistic_type":[1,2,3,4,5,6,7,8],"seasonality":["0 or bounded positive integer"]},"unsupported_modes":["Excel AAA ETS parameter estimation parity","missing-value completion","duplicate-timeline aggregation"],"oracle_status":"unverified","tests":["test_statistical_extended"]}
     ,{"name":"REGEXTEST","argument_shape":"text, pattern [, case_sensitivity]","supported_modes":{"case_sensitivity":[0,1]},"unsupported_modes":["Excel regex dialect differences"],"oracle_status":"unverified","tests":["test_string_functions"]},
     {"name":"REGEXEXTRACT","argument_shape":"text, pattern [, return_mode [, case_sensitivity]]","supported_modes":{"return_mode":[0,1,2],"case_sensitivity":[0,1]},"unsupported_modes":["Excel regex dialect differences"],"oracle_status":"unverified","tests":["test_string_functions"]},
-    {"name":"REGEXREPLACE","argument_shape":"text, pattern, replacement","supported_modes":{"replacement":["all matches"]},"unsupported_modes":["Excel regex dialect differences"],"oracle_status":"unverified","tests":["test_string_functions"]}
+    {"name":"REGEXREPLACE","argument_shape":"text, pattern, replacement","supported_modes":{"replacement":["all matches"]},"unsupported_modes":["Excel regex dialect differences"],"oracle_status":"unverified","tests":["test_string_functions"]},
+    {"name":"ARRAYTOTEXT","argument_shape":"array [, format]","supported_modes":{"format":[0,1]},"unsupported_modes":["full 2D array metadata formatting"],"oracle_status":"unverified","tests":["test_string_functions"]},
+    {"name":"PHI","argument_shape":"x","supported_modes":{"distribution":["standard normal density"]},"unsupported_modes":["non-finite input parity"],"oracle_status":"unverified","tests":["test_distribution_functions"]},
+    {"name":"GAUSS","argument_shape":"z","supported_modes":{"distribution":["standard normal CDF minus 0.5"]},"unsupported_modes":["non-finite input parity"],"oracle_status":"unverified","tests":["test_distribution_functions"]}
   ]
 }
