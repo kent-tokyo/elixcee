@@ -16,6 +16,7 @@
 - Formula coverage: add `IMLOG2` complex base-2 logarithm coverage.
 - Formula coverage: add `SERIESSUM` power-series evaluation and `ISREF` reference detection.
 - Formula coverage: add discounted-security formulas `DISC` and `YIELDDISC`.
+- Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
 - Formula coverage: add complex trigonometric, hyperbolic, and reciprocal trigonometric formulas.

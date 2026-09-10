@@ -148,8 +148,8 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 
 - [x] G4 離散分布関数 BUILD: `BINOM.DIST.RANGE`、`NEGBINOM.DIST`、`HYPGEOM.DIST`、`PERMUTATIONA`を追加し、PMF/CDF・範囲境界・母集団制約・非負整数条件を回帰した。Excelの全型変換・大規模引数・oracle校正は未完。
 - [x] G4 Database集計関数 BUILD: `DPRODUCT`、`DSTDEV`／`DSTDEVP`、`DVAR`／`DVARP`を既存の条件抽出基盤へ接続し、標本／母集団の分母、数値列抽出、空集合の境界を回帰した。Excelの全型変換・criteria互換性・oracle校正は未完。
-- [x] G4 統計要約関数 BUILD: `MODE.SNGL`、`TRIMMEAN`、`SKEW`、`KURT`を追加し、最頻値、対称trim、標本歪度、過剰標本尖度と定義域を回帰した。`MODE.MULT`の複数spill意味論、Excelの全型変換・oracle校正は未完。
-- [x] G4 順位・母集団統計 BUILD: `RANK.EQ`／`RANK.AVG`と`SKEW.P`を追加し、同順位平均、昇順／降順、母集団標準化と定義域を回帰した。`MODE.MULT`の複数spill意味論、Excelの全型変換・oracle校正は未完。
+- [x] G4 統計要約関数 BUILD: `MODE.SNGL`、`MODE.MULT`、`TRIMMEAN`、`SKEW`、`KURT`を追加し、最頻値、複数spill、対称trim、標本歪度、過剰標本尖度と定義域を回帰した。Excelの全型変換・浮動小数点最頻値・oracle校正は未完。
+- [x] G4 順位・母集団統計 BUILD: `RANK.EQ`／`RANK.AVG`と`SKEW.P`を追加し、同順位平均、昇順／降順、母集団標準化と定義域を回帰した。Excelの全型変換・浮動小数点順位・oracle校正は未完。
 - [x] G4 度数分布 BUILD: `FREQUENCY`を配列結果として追加し、階級ごとの包含境界、最終超過階級、空の階級範囲を回帰した。Excelの未ソートbins・全型変換・spill oracle校正は未完。
 - [x] G4 確率集計 BUILD: `PROB`を追加し、値／確率範囲の長さ、確率合計・非負条件、下限／上限の包含範囲を回帰した。Excelの全型変換・丸め・oracle校正は未完。
 - [x] G4 二項逆関数 BUILD: `BINOM.INV`を追加し、累積確率の最小成功数、確率・試行回数・alphaの境界を回帰した。Excelの全型変換・数値精度・oracle校正は未完。

@@ -387,7 +387,8 @@ fn eval_func(
         "SUMIFS" => func_sumifs(args, cells),
         "COUNTIFS" => func_countifs(args, cells),
         "MEDIAN" => func_median(args, cells),
-        "MODE.MULT" | "MODE.SNGL" => func_mode_mult(args, cells),
+        "MODE.MULT" => func_mode_mult(args, cells, true),
+        "MODE.SNGL" => func_mode_mult(args, cells, false),
         "FREQUENCY" => func_frequency(args, cells),
         "PROB" => func_prob(args, cells),
         "PRODUCT" => func_product(args, cells),
@@ -1936,6 +1937,7 @@ fn func_median(
 fn func_mode_mult(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
+    spill: bool,
 ) -> Result<Variant, String> {
     if args.is_empty() {
         return Err("MODE.MULT requires at least 1 argument".into());
@@ -1956,9 +1958,18 @@ fn func_mode_mult(
         *freq.entry(v).or_insert(0) += 1;
     }
     let max_freq = *freq.values().max().unwrap();
-    // Return the first value (in original order) that has max frequency
-    let mode = vals.into_iter().find(|v| freq[v] == max_freq).unwrap();
-    Ok(Variant::Integer(mode))
+    let mut modes: Vec<i64> = freq
+        .into_iter()
+        .filter_map(|(value, count)| (count == max_freq).then_some(value))
+        .collect();
+    modes.sort_unstable();
+    if spill {
+        Ok(Variant::Array(
+            modes.into_iter().map(Variant::Integer).collect(),
+        ))
+    } else {
+        Ok(Variant::Integer(modes[0]))
+    }
 }
 
 fn func_frequency(
@@ -12565,7 +12576,11 @@ mod tests {
     #[test]
     fn test_mode_mult() {
         let c = HashMap::new();
-        assert_eq!(calc("=MODE.MULT(1,2,2,3)", &c), Variant::Integer(2));
+        assert_eq!(
+            calc("=MODE.MULT(1,2,2,3,3)", &c),
+            Variant::Array(vec![Variant::Integer(2), Variant::Integer(3)])
+        );
+        assert_eq!(calc("=MODE.SNGL(1,2,2,3)", &c), Variant::Integer(2));
     }
 
     #[test]
