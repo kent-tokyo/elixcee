@@ -613,6 +613,10 @@ fn eval_func(
         "IMREAL" => func_imreal(args, cells),
         "IMAGINARY" => func_imaginary(args, cells),
         "IMABS" => func_imabs(args, cells),
+        "IMSUM" => func_imsum(args, cells),
+        "IMSUB" => func_imsub(args, cells),
+        "IMPRODUCT" => func_improduct(args, cells),
+        "IMDIV" => func_imdiv(args, cells),
         // ── Trigonometry ──────────────────────────────────────────────────────
         "PI" => func_pi(args, cells),
         "SIN" => func_trig1(args, cells, f64::sin),
@@ -7639,6 +7643,95 @@ fn func_imabs(
     Ok(as_integer_if_whole(value.re.hypot(value.im)))
 }
 
+fn complex_suffix(
+    expr: &FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<char, String> {
+    let text = to_str(&evaluate(expr, cells)?);
+    Ok(match text.chars().last() {
+        Some('j' | 'J') => 'j',
+        _ => 'i',
+    })
+}
+
+fn func_imsum(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() {
+        return Err("IMSUM requires at least 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let mut result = ComplexValue { re: 0.0, im: 0.0 };
+    for arg in args {
+        let value = complex_argument(arg, cells, "IMSUM")?;
+        result.re += value.re;
+        result.im += value.im;
+    }
+    Ok(Variant::Str(complex_text(result, suffix)))
+}
+
+fn func_imsub(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("IMSUB requires 2 arguments".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let left = complex_argument(&args[0], cells, "IMSUB")?;
+    let right = complex_argument(&args[1], cells, "IMSUB")?;
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: left.re - right.re,
+            im: left.im - right.im,
+        },
+        suffix,
+    )))
+}
+
+fn func_improduct(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() {
+        return Err("IMPRODUCT requires at least 1 argument".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let mut result = ComplexValue { re: 1.0, im: 0.0 };
+    for arg in args {
+        let value = complex_argument(arg, cells, "IMPRODUCT")?;
+        result = ComplexValue {
+            re: result.re * value.re - result.im * value.im,
+            im: result.re * value.im + result.im * value.re,
+        };
+    }
+    Ok(Variant::Str(complex_text(result, suffix)))
+}
+
+fn func_imdiv(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("IMDIV requires 2 arguments".into());
+    }
+    let suffix = complex_suffix(&args[0], cells)?;
+    let left = complex_argument(&args[0], cells, "IMDIV")?;
+    let right = complex_argument(&args[1], cells, "IMDIV")?;
+    let denominator = right.re * right.re + right.im * right.im;
+    if denominator == 0.0 {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    Ok(Variant::Str(complex_text(
+        ComplexValue {
+            re: (left.re * right.re + left.im * right.im) / denominator,
+            im: (left.im * right.re - left.re * right.im) / denominator,
+        },
+        suffix,
+    )))
+}
+
 // ── Trigonometry ──────────────────────────────────────────────────────────────
 
 fn func_pi(
@@ -11166,6 +11259,26 @@ mod tests {
         assert_eq!(calc("=IMREAL(\"-3-4j\")", &c), Variant::Integer(-3));
         assert_eq!(calc("=IMAGINARY(\"-3-4j\")", &c), Variant::Integer(-4));
         assert_eq!(calc("=IMABS(\"3+4i\")", &c), Variant::Integer(5));
+        assert_eq!(
+            calc("=IMSUM(\"1+2j\",\"3+4j\")", &c),
+            Variant::Str("4+6j".into())
+        );
+        assert_eq!(
+            calc("=IMSUB(\"5+4i\",\"2+1i\")", &c),
+            Variant::Str("3+3i".into())
+        );
+        assert_eq!(
+            calc("=IMPRODUCT(\"1+2i\",\"3+4i\")", &c),
+            Variant::Str("-5+10i".into())
+        );
+        assert_eq!(
+            calc("=IMDIV(\"1+2i\",\"1+1i\")", &c),
+            Variant::Str("1.5+0.5i".into())
+        );
+        assert_eq!(
+            calc("=IMDIV(\"1+2i\",\"0\")", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
     }
 
     #[test]

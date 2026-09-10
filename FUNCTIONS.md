@@ -393,6 +393,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `COMPLEX` | Construct a complex number string | Classic |
 | `IMREAL` / `IMAGINARY` | Extract real / imaginary part of a complex number | Classic |
 | `IMABS` | Absolute value of a complex number | Classic |
+| `IMSUM` / `IMSUB` | Add / subtract complex numbers | Classic |
+| `IMPRODUCT` / `IMDIV` | Multiply / divide complex numbers | Classic |
 
 ### Logical
 
