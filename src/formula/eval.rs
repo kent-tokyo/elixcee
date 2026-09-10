@@ -590,6 +590,9 @@ fn eval_func(
         "HEX2OCT" => func_radix_to_radix(args, cells, 16, 8),
         "OCT2BIN" => func_radix_to_radix(args, cells, 8, 2),
         "OCT2HEX" => func_radix_to_radix(args, cells, 8, 16),
+        "CONVERT" => func_convert(args, cells),
+        "ROMAN" => func_roman(args, cells),
+        "ARABIC" => func_arabic(args, cells),
         // ── Trigonometry ──────────────────────────────────────────────────────
         "PI" => func_pi(args, cells),
         "SIN" => func_trig1(args, cells, f64::sin),
@@ -6286,6 +6289,450 @@ fn func_radix_to_radix(
     format_radix_value(value, target_base, places)
 }
 
+#[derive(Clone, Copy)]
+struct UnitDef {
+    category: &'static str,
+    scale: f64,
+    offset: f64,
+}
+
+fn unit_def(unit: &str) -> Option<UnitDef> {
+    let unit = unit.to_ascii_lowercase().replace('^', "");
+    let unit = unit.as_str();
+    let def = match unit {
+        "m" | "meter" | "meters" => UnitDef {
+            category: "length",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "km" | "kilometer" | "kilometers" => UnitDef {
+            category: "length",
+            scale: 1_000.0,
+            offset: 0.0,
+        },
+        "cm" | "centimeter" | "centimeters" => UnitDef {
+            category: "length",
+            scale: 0.01,
+            offset: 0.0,
+        },
+        "mm" | "millimeter" | "millimeters" => UnitDef {
+            category: "length",
+            scale: 0.001,
+            offset: 0.0,
+        },
+        "um" | "micron" | "microns" => UnitDef {
+            category: "length",
+            scale: 1e-6,
+            offset: 0.0,
+        },
+        "in" | "inch" | "inches" => UnitDef {
+            category: "length",
+            scale: 0.0254,
+            offset: 0.0,
+        },
+        "ft" | "foot" | "feet" => UnitDef {
+            category: "length",
+            scale: 0.3048,
+            offset: 0.0,
+        },
+        "yd" | "yard" | "yards" => UnitDef {
+            category: "length",
+            scale: 0.9144,
+            offset: 0.0,
+        },
+        "mi" | "mile" | "miles" => UnitDef {
+            category: "length",
+            scale: 1_609.344,
+            offset: 0.0,
+        },
+        "nmi" | "nauticalmile" | "nauticalmiles" => UnitDef {
+            category: "length",
+            scale: 1_852.0,
+            offset: 0.0,
+        },
+        "g" | "gram" | "grams" => UnitDef {
+            category: "mass",
+            scale: 0.001,
+            offset: 0.0,
+        },
+        "kg" | "kilogram" | "kilograms" => UnitDef {
+            category: "mass",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "mg" | "milligram" | "milligrams" => UnitDef {
+            category: "mass",
+            scale: 1e-6,
+            offset: 0.0,
+        },
+        "lbm" | "lb" | "pound" | "pounds" => UnitDef {
+            category: "mass",
+            scale: 0.45359237,
+            offset: 0.0,
+        },
+        "ozm" | "oz" | "ounce" | "ounces" => UnitDef {
+            category: "mass",
+            scale: 0.028349523125,
+            offset: 0.0,
+        },
+        "stone" | "st" => UnitDef {
+            category: "mass",
+            scale: 6.35029318,
+            offset: 0.0,
+        },
+        "s" | "sec" | "second" | "seconds" => UnitDef {
+            category: "time",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "min" | "minute" | "minutes" => UnitDef {
+            category: "time",
+            scale: 60.0,
+            offset: 0.0,
+        },
+        "h" | "hr" | "hour" | "hours" => UnitDef {
+            category: "time",
+            scale: 3_600.0,
+            offset: 0.0,
+        },
+        "d" | "day" | "days" => UnitDef {
+            category: "time",
+            scale: 86_400.0,
+            offset: 0.0,
+        },
+        "week" | "weeks" => UnitDef {
+            category: "time",
+            scale: 604_800.0,
+            offset: 0.0,
+        },
+        "m2" | "squaremeter" | "squaremeters" => UnitDef {
+            category: "area",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "km2" | "squarekilometer" | "squarekilometers" => UnitDef {
+            category: "area",
+            scale: 1e6,
+            offset: 0.0,
+        },
+        "cm2" | "squarecentimeter" | "squarecentimeters" => UnitDef {
+            category: "area",
+            scale: 1e-4,
+            offset: 0.0,
+        },
+        "ft2" | "squarefoot" | "squarefeet" => UnitDef {
+            category: "area",
+            scale: 0.09290304,
+            offset: 0.0,
+        },
+        "in2" | "squareinch" | "squareinches" => UnitDef {
+            category: "area",
+            scale: 0.00064516,
+            offset: 0.0,
+        },
+        "acre" | "acres" => UnitDef {
+            category: "area",
+            scale: 4_046.8564224,
+            offset: 0.0,
+        },
+        "ha" | "hectare" | "hectares" => UnitDef {
+            category: "area",
+            scale: 10_000.0,
+            offset: 0.0,
+        },
+        "l" | "liter" | "liters" | "litre" | "litres" => UnitDef {
+            category: "volume",
+            scale: 0.001,
+            offset: 0.0,
+        },
+        "ml" | "milliliter" | "milliliters" | "millilitre" | "millilitres" => UnitDef {
+            category: "volume",
+            scale: 1e-6,
+            offset: 0.0,
+        },
+        "m3" | "cubicmeter" | "cubicmeters" => UnitDef {
+            category: "volume",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "cm3" | "cubiccentimeter" | "cubiccentimeters" => UnitDef {
+            category: "volume",
+            scale: 1e-6,
+            offset: 0.0,
+        },
+        "gal" | "gallon" | "gallons" => UnitDef {
+            category: "volume",
+            scale: 0.003785411784,
+            offset: 0.0,
+        },
+        "qt" | "quart" | "quarts" => UnitDef {
+            category: "volume",
+            scale: 0.000946352946,
+            offset: 0.0,
+        },
+        "pt" | "pint" | "pints" => UnitDef {
+            category: "volume",
+            scale: 0.000473176473,
+            offset: 0.0,
+        },
+        "cup" | "cups" => UnitDef {
+            category: "volume",
+            scale: 0.0002365882365,
+            offset: 0.0,
+        },
+        "tsp" | "teaspoon" | "teaspoons" => UnitDef {
+            category: "volume",
+            scale: 4.92892159375e-6,
+            offset: 0.0,
+        },
+        "tbsp" | "tbs" | "tablespoon" | "tablespoons" => UnitDef {
+            category: "volume",
+            scale: 1.478676478125e-5,
+            offset: 0.0,
+        },
+        "pa" | "pascal" | "pascals" => UnitDef {
+            category: "pressure",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "kpa" => UnitDef {
+            category: "pressure",
+            scale: 1_000.0,
+            offset: 0.0,
+        },
+        "bar" => UnitDef {
+            category: "pressure",
+            scale: 100_000.0,
+            offset: 0.0,
+        },
+        "atm" | "atmosphere" | "atmospheres" => UnitDef {
+            category: "pressure",
+            scale: 101_325.0,
+            offset: 0.0,
+        },
+        "psi" => UnitDef {
+            category: "pressure",
+            scale: 6_894.757293168,
+            offset: 0.0,
+        },
+        "mmhg" => UnitDef {
+            category: "pressure",
+            scale: 133.322387415,
+            offset: 0.0,
+        },
+        "j" | "joule" | "joules" => UnitDef {
+            category: "energy",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "kj" => UnitDef {
+            category: "energy",
+            scale: 1_000.0,
+            offset: 0.0,
+        },
+        "cal" | "calorie" | "calories" => UnitDef {
+            category: "energy",
+            scale: 4.184,
+            offset: 0.0,
+        },
+        "kcal" => UnitDef {
+            category: "energy",
+            scale: 4_184.0,
+            offset: 0.0,
+        },
+        "wh" => UnitDef {
+            category: "energy",
+            scale: 3_600.0,
+            offset: 0.0,
+        },
+        "kwh" => UnitDef {
+            category: "energy",
+            scale: 3_600_000.0,
+            offset: 0.0,
+        },
+        "btu" => UnitDef {
+            category: "energy",
+            scale: 1_055.05585262,
+            offset: 0.0,
+        },
+        "w" | "watt" | "watts" => UnitDef {
+            category: "power",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "kw" => UnitDef {
+            category: "power",
+            scale: 1_000.0,
+            offset: 0.0,
+        },
+        "mw" => UnitDef {
+            category: "power",
+            scale: 1_000_000.0,
+            offset: 0.0,
+        },
+        "hp" | "horsepower" => UnitDef {
+            category: "power",
+            scale: 745.699871582,
+            offset: 0.0,
+        },
+        "m/s" | "mps" => UnitDef {
+            category: "speed",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "km/h" | "kph" => UnitDef {
+            category: "speed",
+            scale: 1.0 / 3.6,
+            offset: 0.0,
+        },
+        "mph" => UnitDef {
+            category: "speed",
+            scale: 0.44704,
+            offset: 0.0,
+        },
+        "knot" | "knots" => UnitDef {
+            category: "speed",
+            scale: 0.514444444444,
+            offset: 0.0,
+        },
+        "c" | "celsius" => UnitDef {
+            category: "temperature",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "f" | "fahrenheit" => UnitDef {
+            category: "temperature",
+            scale: 5.0 / 9.0,
+            offset: -32.0,
+        },
+        "k" | "kelvin" => UnitDef {
+            category: "temperature",
+            scale: 1.0,
+            offset: -273.15,
+        },
+        _ => return None,
+    };
+    Some(def)
+}
+
+fn func_convert(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("CONVERT requires 3 arguments".into());
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    let from = to_str(&evaluate(&args[1], cells)?);
+    let to = to_str(&evaluate(&args[2], cells)?);
+    let from_def = match unit_def(&from) {
+        Some(def) => def,
+        None => return Ok(Variant::Error(ExcelError::NA)),
+    };
+    let to_def = match unit_def(&to) {
+        Some(def) => def,
+        None => return Ok(Variant::Error(ExcelError::NA)),
+    };
+    if !value.is_finite() || from_def.category != to_def.category {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let base_value = (value + from_def.offset) * from_def.scale;
+    let result = base_value / to_def.scale - to_def.offset;
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(as_integer_if_whole(result))
+}
+
+fn roman_value(number: i64) -> String {
+    const VALUES: &[(i64, &str)] = &[
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut remaining = number;
+    let mut result = String::new();
+    for &(value, symbol) in VALUES {
+        while remaining >= value {
+            result.push_str(symbol);
+            remaining -= value;
+        }
+    }
+    result
+}
+
+fn func_roman(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("ROMAN requires 1 or 2 arguments".into());
+    }
+    let number = to_float(&evaluate(&args[0], cells)?)?;
+    if !number.is_finite() || number.fract() != 0.0 || !(1.0..=3999.0).contains(&number) {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    if args.len() == 2 {
+        let form = to_float(&evaluate(&args[1], cells)?)?;
+        if !form.is_finite() || form.fract() != 0.0 || !(0.0..=4.0).contains(&form) {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+    }
+    Ok(Variant::Str(roman_value(number as i64)))
+}
+
+fn roman_digit(value: char) -> Option<i64> {
+    match value {
+        'I' => Some(1),
+        'V' => Some(5),
+        'X' => Some(10),
+        'L' => Some(50),
+        'C' => Some(100),
+        'D' => Some(500),
+        'M' => Some(1000),
+        _ => None,
+    }
+}
+
+fn func_arabic(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("ARABIC requires 1 argument".into());
+    }
+    let text = to_str(&evaluate(&args[0], cells)?).to_ascii_uppercase();
+    if text.is_empty() {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let digits: Vec<i64> = match text.chars().map(roman_digit).collect() {
+        Some(digits) => digits,
+        None => return Ok(Variant::Error(ExcelError::Value)),
+    };
+    let mut total = 0;
+    for i in 0..digits.len() {
+        total += if i + 1 < digits.len() && digits[i] < digits[i + 1] {
+            -digits[i]
+        } else {
+            digits[i]
+        };
+    }
+    if !(1..=3999).contains(&total) || roman_value(total) != text {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    Ok(Variant::Integer(total))
+}
+
 // ── Trigonometry ──────────────────────────────────────────────────────────────
 
 fn func_pi(
@@ -9658,6 +10105,28 @@ mod tests {
         assert_eq!(
             calc("=IF(1/0,\"yes\",\"no\")", &c),
             Variant::Error(ExcelError::DivZero)
+        );
+    }
+
+    #[test]
+    fn test_unit_and_roman_conversions() {
+        let c = HashMap::new();
+        assert_eq!(calc("=CONVERT(1,\"km\",\"m\")", &c), Variant::Integer(1000));
+        assert_eq!(calc("=CONVERT(32,\"F\",\"C\")", &c), Variant::Integer(0));
+        assert!(matches!(
+            calc("=CONVERT(1,\"kWh\",\"J\")", &c),
+            Variant::Integer(3600000)
+        ));
+        assert_eq!(
+            calc("=CONVERT(1,\"m\",\"s\")", &c),
+            Variant::Error(ExcelError::Num)
+        );
+        assert_eq!(calc("=ROMAN(1999)", &c), Variant::Str("MCMXCIX".into()));
+        assert_eq!(calc("=ARABIC(\"mcmxcix\")", &c), Variant::Integer(1999));
+        assert_eq!(calc("=ROMAN(4000)", &c), Variant::Error(ExcelError::Value));
+        assert_eq!(
+            calc("=ARABIC(\"IC\")", &c),
+            Variant::Error(ExcelError::Value)
         );
     }
 
