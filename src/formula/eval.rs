@@ -519,6 +519,7 @@ fn eval_func(
         "ERROR.TYPE" => func_error_type(args, cells),
         "FORMULATEXT" => func_formulatext(args, cells),
         "CELL" => func_cell(args, cells),
+        "AREAS" => func_areas(args, cells),
         "VLOOKUP" => func_vlookup(args, cells),
         "HLOOKUP" => func_hlookup(args, cells),
         "INDEX" => func_index(args, cells),
@@ -4904,6 +4905,27 @@ fn func_isref(
         _ => false,
     };
     Ok(Variant::Boolean(is_reference))
+}
+
+fn func_areas(
+    args: &[FormulaExpr],
+    _cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("AREAS requires 1 argument".into());
+    }
+    let is_reference = match &args[0] {
+        FormulaExpr::CellRef { .. } | FormulaExpr::Range { .. } => true,
+        FormulaExpr::FuncCall { name, .. } => {
+            name.eq_ignore_ascii_case("INDIRECT") || name.eq_ignore_ascii_case("OFFSET")
+        }
+        _ => false,
+    };
+    if is_reference {
+        Ok(Variant::Integer(1))
+    } else {
+        Ok(Variant::Error(ExcelError::Value))
+    }
 }
 
 fn func_iserror(
@@ -14962,6 +14984,9 @@ mod tests {
         assert_eq!(calc("=ISLOGICAL(TRUE)", &c), Variant::Boolean(true));
         assert_eq!(calc("=ISNONTEXT(42)", &c), Variant::Boolean(true));
         assert_eq!(calc("=ISNA(1)", &c), Variant::Boolean(false));
+        assert_eq!(calc("=AREAS(A1)", &c), Variant::Integer(1));
+        assert_eq!(calc("=AREAS(A1:B2)", &c), Variant::Integer(1));
+        assert_eq!(calc("=AREAS(1+2)", &c), Variant::Error(ExcelError::Value));
     }
 
     #[test]

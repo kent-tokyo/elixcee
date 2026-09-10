@@ -553,6 +553,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `ISLOGICAL` | Is the value a boolean? | Classic |
 | `ISNONTEXT` | Is the value not a string? | Classic |
 | `ISREF` | Is the expression a reference? | Classic |
+| `AREAS` | Return the number of areas represented by a reference | Classic |
 | `N` | Convert a value to a number | Classic |
 | `NA` | Generate an #N/A error value | Classic |
 | `TYPE` | Return numeric type code (1=num, 2=text, 4=bool, 16=error, 64=array) | Classic |
