@@ -531,10 +531,22 @@ fn eval_func(
         "POISSON.DIST" | "POISSON" => func_poisson_dist(args, cells),
         "GAMMA" => func_gamma(args, cells),
         "GAMMALN" | "GAMMALN.PRECISE" => func_gammaln(args, cells),
+        "GAMMA.DIST" => func_gamma_dist(args, cells),
+        "GAMMA.INV" => func_gamma_inv(args, cells),
         "BETA.DIST" | "BETADIST" => func_beta_dist(args, cells),
         "BETA.INV" | "BETAINV" => func_beta_inv(args, cells),
         "CHISQ.DIST" | "CHIDIST" => func_chisq_dist(args, cells),
+        "CHISQ.DIST.RT" => func_chisq_dist_rt(args, cells),
+        "CHISQ.INV" => func_chisq_inv(args, cells),
+        "CHISQ.INV.RT" => func_chisq_inv_rt(args, cells),
         "F.DIST" | "FDIST" => func_f_dist(args, cells),
+        "F.DIST.RT" => func_f_dist_rt(args, cells),
+        "F.INV" => func_f_inv(args, cells),
+        "F.INV.RT" => func_f_inv_rt(args, cells),
+        "WEIBULL.DIST" | "WEIBULL" => func_weibull_dist(args, cells),
+        "EXPON.DIST" | "EXPONDIST" => func_expon_dist(args, cells),
+        "LOGNORM.DIST" | "LOGNORMDIST" => func_lognorm_dist(args, cells),
+        "LOGNORM.INV" | "LOGINV" => func_lognorm_inv(args, cells),
         "T.DIST" => func_t_dist(args, cells),
         "T.DIST.2T" => func_t_dist_2t(args, cells),
         "T.DIST.RT" => func_t_dist_rt(args, cells),
@@ -5208,6 +5220,342 @@ fn func_f_dist(
             * df1
     };
     Ok(Variant::Float(result))
+}
+
+fn gamma_pdf(x: f64, shape: f64, scale: f64) -> f64 {
+    if x < 0.0 || shape <= 0.0 || scale <= 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 && shape < 1.0 {
+        return f64::INFINITY;
+    }
+    ((shape - 1.0) * x.max(f64::MIN_POSITIVE).ln() - x / scale - lgamma(shape) - shape * scale.ln())
+        .exp()
+}
+
+fn gamma_cdf(x: f64, shape: f64, scale: f64) -> f64 {
+    if x < 0.0 || shape <= 0.0 || scale <= 0.0 {
+        return f64::NAN;
+    }
+    reg_inc_gamma(shape, x / scale)
+}
+
+fn inverse_cdf<F>(probability: f64, cdf: F) -> f64
+where
+    F: Fn(f64) -> f64,
+{
+    let mut hi = 1.0;
+    while cdf(hi) < probability && hi < 1.0e12 {
+        hi *= 2.0;
+    }
+    let mut lo = 0.0;
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        if cdf(mid) < probability {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) / 2.0
+}
+
+fn func_gamma_dist(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("GAMMA.DIST requires 4 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let alpha = to_float(&evaluate(&args[1], cells)?)?;
+    let beta = to_float(&evaluate(&args[2], cells)?)?;
+    let cumulative = is_truthy(&evaluate(&args[3], cells)?);
+    if !x.is_finite()
+        || !alpha.is_finite()
+        || !beta.is_finite()
+        || x < 0.0
+        || alpha <= 0.0
+        || beta <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let result = if cumulative {
+        gamma_cdf(x, alpha, beta)
+    } else {
+        gamma_pdf(x, alpha, beta)
+    };
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(result))
+}
+
+fn func_gamma_inv(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("GAMMA.INV requires 3 arguments".into());
+    }
+    let probability = to_float(&evaluate(&args[0], cells)?)?;
+    let alpha = to_float(&evaluate(&args[1], cells)?)?;
+    let beta = to_float(&evaluate(&args[2], cells)?)?;
+    if !probability.is_finite()
+        || !alpha.is_finite()
+        || !beta.is_finite()
+        || !(0.0..1.0).contains(&probability)
+        || alpha <= 0.0
+        || beta <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(inverse_cdf(probability, |x| {
+        gamma_cdf(x, alpha, beta)
+    })))
+}
+
+fn chisq_cdf(x: f64, df: f64) -> f64 {
+    reg_inc_gamma(df / 2.0, x / 2.0)
+}
+
+fn func_chisq_dist_rt(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("CHISQ.DIST.RT requires 2 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let df = to_float(&evaluate(&args[1], cells)?)?;
+    if !x.is_finite() || !df.is_finite() || x < 0.0 || df <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(1.0 - chisq_cdf(x, df)))
+}
+
+fn chisq_inverse(probability: f64, df: f64, right_tail: bool) -> f64 {
+    let lower_probability = if right_tail {
+        1.0 - probability
+    } else {
+        probability
+    };
+    inverse_cdf(lower_probability, |x| chisq_cdf(x, df))
+}
+
+fn func_chisq_inv(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("CHISQ.INV requires 2 arguments".into());
+    }
+    let probability = to_float(&evaluate(&args[0], cells)?)?;
+    let df = to_float(&evaluate(&args[1], cells)?)?;
+    if !probability.is_finite()
+        || !df.is_finite()
+        || !(0.0..1.0).contains(&probability)
+        || df <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(chisq_inverse(probability, df, false)))
+}
+
+fn func_chisq_inv_rt(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("CHISQ.INV.RT requires 2 arguments".into());
+    }
+    let probability = to_float(&evaluate(&args[0], cells)?)?;
+    let df = to_float(&evaluate(&args[1], cells)?)?;
+    if !probability.is_finite()
+        || !df.is_finite()
+        || !(0.0..1.0).contains(&probability)
+        || df <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(chisq_inverse(probability, df, true)))
+}
+
+fn f_cdf(x: f64, df1: f64, df2: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    let z = df1 * x / (df1 * x + df2);
+    reg_inc_beta(z, df1 / 2.0, df2 / 2.0)
+}
+
+fn func_f_dist_rt(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("F.DIST.RT requires 3 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let df1 = to_float(&evaluate(&args[1], cells)?)?;
+    let df2 = to_float(&evaluate(&args[2], cells)?)?;
+    if !x.is_finite() || !df1.is_finite() || !df2.is_finite() || x < 0.0 || df1 <= 0.0 || df2 <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(1.0 - f_cdf(x, df1, df2)))
+}
+
+fn f_inverse(probability: f64, df1: f64, df2: f64, right_tail: bool) -> f64 {
+    let lower_probability = if right_tail {
+        1.0 - probability
+    } else {
+        probability
+    };
+    inverse_cdf(lower_probability, |x| f_cdf(x, df1, df2))
+}
+
+fn func_f_inv(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("F.INV requires 3 arguments".into());
+    }
+    let probability = to_float(&evaluate(&args[0], cells)?)?;
+    let df1 = to_float(&evaluate(&args[1], cells)?)?;
+    let df2 = to_float(&evaluate(&args[2], cells)?)?;
+    if !probability.is_finite()
+        || !df1.is_finite()
+        || !df2.is_finite()
+        || !(0.0..1.0).contains(&probability)
+        || df1 <= 0.0
+        || df2 <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(f_inverse(probability, df1, df2, false)))
+}
+
+fn func_f_inv_rt(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("F.INV.RT requires 3 arguments".into());
+    }
+    let probability = to_float(&evaluate(&args[0], cells)?)?;
+    let df1 = to_float(&evaluate(&args[1], cells)?)?;
+    let df2 = to_float(&evaluate(&args[2], cells)?)?;
+    if !probability.is_finite()
+        || !df1.is_finite()
+        || !df2.is_finite()
+        || !(0.0..1.0).contains(&probability)
+        || df1 <= 0.0
+        || df2 <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(f_inverse(probability, df1, df2, true)))
+}
+
+fn func_weibull_dist(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("WEIBULL.DIST requires 4 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let alpha = to_float(&evaluate(&args[1], cells)?)?;
+    let beta = to_float(&evaluate(&args[2], cells)?)?;
+    let cumulative = is_truthy(&evaluate(&args[3], cells)?);
+    if !x.is_finite()
+        || !alpha.is_finite()
+        || !beta.is_finite()
+        || x < 0.0
+        || alpha <= 0.0
+        || beta <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let ratio = x / beta;
+    let result = if cumulative {
+        1.0 - (-ratio.powf(alpha)).exp()
+    } else if x == 0.0 && alpha < 1.0 {
+        f64::INFINITY
+    } else {
+        alpha / beta * ratio.powf(alpha - 1.0) * (-ratio.powf(alpha)).exp()
+    };
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(result))
+}
+
+fn func_expon_dist(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("EXPON.DIST requires 3 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let lambda = to_float(&evaluate(&args[1], cells)?)?;
+    let cumulative = is_truthy(&evaluate(&args[2], cells)?);
+    if !x.is_finite() || !lambda.is_finite() || x < 0.0 || lambda <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let result = if cumulative {
+        1.0 - (-lambda * x).exp()
+    } else {
+        lambda * (-lambda * x).exp()
+    };
+    Ok(Variant::Float(result))
+}
+
+fn func_lognorm_dist(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("LOGNORM.DIST requires 4 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let mean = to_float(&evaluate(&args[1], cells)?)?;
+    let std = to_float(&evaluate(&args[2], cells)?)?;
+    let cumulative = is_truthy(&evaluate(&args[3], cells)?);
+    if !x.is_finite() || !mean.is_finite() || !std.is_finite() || x <= 0.0 || std <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let log_x = x.ln();
+    let result = if cumulative {
+        norm_cdf(log_x, mean, std)
+    } else {
+        norm_pdf(log_x, mean, std) / x
+    };
+    Ok(Variant::Float(result))
+}
+
+fn func_lognorm_inv(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("LOGNORM.INV requires 3 arguments".into());
+    }
+    let probability = to_float(&evaluate(&args[0], cells)?)?;
+    let mean = to_float(&evaluate(&args[1], cells)?)?;
+    let std = to_float(&evaluate(&args[2], cells)?)?;
+    if !probability.is_finite()
+        || !mean.is_finite()
+        || !std.is_finite()
+        || !(0.0..1.0).contains(&probability)
+        || std <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float((mean + std * norm_ppf(probability)).exp()))
 }
 
 /// Natural log of gamma function.
@@ -12616,6 +12964,36 @@ mod tests {
         assert_eq!(
             calc("=POISSON.DIST(1,0,TRUE)", &cells),
             Variant::Error(ExcelError::Num)
+        );
+        assert!(
+            matches!(calc("=GAMMA.DIST(3,2,3,TRUE)", &cells), Variant::Float(v) if (v - 0.2642411176571153).abs() < 1e-6)
+        );
+        assert!(
+            matches!(calc("=GAMMA.DIST(3,2,3,FALSE)", &cells), Variant::Float(v) if (v - 0.1226264803904808).abs() < 1e-6)
+        );
+        assert!(
+            matches!(calc("=GAMMA.INV(0.2642411176571153,2,3)", &cells), Variant::Float(v) if (v - 3.0).abs() < 1e-5)
+        );
+        assert!(
+            matches!(calc("=CHISQ.DIST.RT(0,2)", &cells), Variant::Float(v) if (v - 1.0).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=F.DIST.RT(0,1,1)", &cells), Variant::Float(v) if (v - 1.0).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=F.INV(0.5,1,1)", &cells), Variant::Float(v) if (v - 1.0).abs() < 1e-5)
+        );
+        assert!(
+            matches!(calc("=WEIBULL.DIST(1,2,1,TRUE)", &cells), Variant::Float(v) if (v - (1.0 - (-1.0f64).exp())).abs() < 1e-8)
+        );
+        assert!(
+            matches!(calc("=EXPON.DIST(1,1,TRUE)", &cells), Variant::Float(v) if (v - (1.0 - (-1.0f64).exp())).abs() < 1e-8)
+        );
+        assert!(
+            matches!(calc("=LOGNORM.DIST(1,0,1,TRUE)", &cells), Variant::Float(v) if (v - 0.5).abs() < 1e-7)
+        );
+        assert!(
+            matches!(calc("=LOGNORM.INV(0.5,0,1)", &cells), Variant::Float(v) if (v - 1.0).abs() < 1e-7)
         );
     }
 }

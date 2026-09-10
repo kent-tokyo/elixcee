@@ -146,6 +146,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 
 ### G4 — 関数・配列互換性の拡張（X3）
 
+- [x] G4 分布関数ファミリー拡張 BUILD: `GAMMA.DIST`／`GAMMA.INV`、`CHISQ.DIST.RT`／`CHISQ.INV`系、`F.DIST.RT`／`F.INV`系、`WEIBULL.DIST`、`EXPON.DIST`、`LOGNORM.DIST`／`LOGNORM.INV`を追加し、PDF/CDF・片側・逆関数の代表値と定義域を回帰した。近似精度の全域評価とExcel oracle校正は未完。
 - [x] G4 財務関数拡張 BUILD: `CUMIPMT`／`CUMPRINC`、`FVSCHEDULE`、`DOLLARDE`／`DOLLARFR`を追加し、期間境界・支払種別・利率スケジュール・分数 quotation の検証を回帰した。Excelの期末規則・丸め・全型変換・oracle校正は未完。
 - [x] G4 統計推定・検定関数 BUILD: ` FISHER `／` FISHERINV `、` STANDARDIZE `、` Z.TEST `／` ZTEST `、` CONFIDENCE.NORM `／` CONFIDENCE.T `を追加し、定義域・標準偏差・標本数・有意水準を回帰した。t分布近似の誤差、Excel oracle校正、全型変換は未完。
 - [x] G4 Engineering基数変換 BUILD: `DEC2BIN`／`DEC2HEX`／`DEC2OCT`、各基数間変換、`BIN2DEC`／`HEX2DEC`／`OCT2DEC`を追加し、固定ビット幅・負数・桁数不足・範囲外を回帰した。Excelの全型変換・locale・oracle校正は未完。

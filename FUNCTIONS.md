@@ -305,6 +305,15 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `BETA.INV` / `BETAINV` | Inverse beta distribution | 2010 / Classic |
 | `CHISQ.DIST` / `CHIDIST` | Chi-squared distribution PDF or CDF | 2010 / Classic |
 | `F.DIST` / `FDIST` | F distribution PDF or CDF | 2010 / Classic |
+| `F.DIST.RT` | Right-tailed F distribution probability | 2010 |
+| `F.INV` / `F.INV.RT` | Inverse F distribution, left/right tail | 2010 |
+| `GAMMA.DIST` / `GAMMA.INV` | Gamma distribution and inverse | 2010 |
+| `CHISQ.DIST.RT` | Right-tailed chi-squared probability | 2010 |
+| `CHISQ.INV` / `CHISQ.INV.RT` | Inverse chi-squared distribution, left/right tail | 2010 |
+| `WEIBULL.DIST` / `WEIBULL` | Weibull distribution PDF or CDF | 2010 / Classic |
+| `EXPON.DIST` / `EXPONDIST` | Exponential distribution PDF or CDF | 2010 / Classic |
+| `LOGNORM.DIST` / `LOGNORMDIST` | Lognormal distribution PDF or CDF | 2010 / Classic |
+| `LOGNORM.INV` / `LOGINV` | Inverse lognormal distribution | 2010 / Classic |
 | `FISHER` / `FISHERINV` | Fisher transformation and inverse | Classic |
 | `STANDARDIZE` | Convert a value to a standardized z-score | Classic |
 | `Z.TEST` / `ZTEST` | One-tailed z-test p-value | 2010 / Classic |
