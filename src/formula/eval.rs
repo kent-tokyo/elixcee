@@ -600,6 +600,8 @@ fn eval_func(
         "ERFC" | "ERFC.PRECISE" => func_erfc(args, cells),
         "BESSELJ" => func_bessel(args, cells, false),
         "BESSELI" => func_bessel(args, cells, true),
+        "BESSELY" => func_bessel_second_kind(args, cells, false),
+        "BESSELK" => func_bessel_second_kind(args, cells, true),
         "DEC2BIN" => func_dec_to_radix(args, cells, 2),
         "DEC2HEX" => func_dec_to_radix(args, cells, 16),
         "DEC2OCT" => func_dec_to_radix(args, cells, 8),
@@ -7071,6 +7073,11 @@ fn func_bessel(
         return Ok(Variant::Error(ExcelError::Num));
     }
     let order = order as usize;
+    let result = bessel_first_kind(x, order, modified)?;
+    Ok(as_integer_if_whole(result))
+}
+
+fn bessel_first_kind(x: f64, order: usize, modified: bool) -> Result<f64, String> {
     let mut factorial = 1.0;
     for value in 2..=order {
         factorial *= value as f64;
@@ -7082,7 +7089,7 @@ fn func_bessel(
         let signed_term = if modified || m % 2 == 0 { term } else { -term };
         result += signed_term;
         if !result.is_finite() {
-            return Ok(Variant::Error(ExcelError::Num));
+            return Err("Bessel series overflow".to_string());
         }
         let next = term * x_squared_quarter / ((m + 1) as f64 * (m as usize + order + 1) as f64);
         if next.abs() <= 1e-15 * result.abs().max(1.0) {
@@ -7090,7 +7097,116 @@ fn func_bessel(
         }
         term = next;
     }
-    Ok(as_integer_if_whole(result))
+    Ok(result)
+}
+
+fn func_bessel_second_kind(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    modified: bool,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err(format!(
+            "{} requires 2 arguments",
+            if modified { "BESSELK" } else { "BESSELY" }
+        ));
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let order = to_float(&evaluate(&args[1], cells)?)?;
+    if !x.is_finite()
+        || !order.is_finite()
+        || x <= 0.0
+        || order < 0.0
+        || order.fract() != 0.0
+        || order > 100.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let order = order as usize;
+    let result = if modified {
+        bessel_k(x, order)
+    } else {
+        bessel_y(x, order)
+    }?;
+    if result.is_finite() {
+        Ok(as_integer_if_whole(result))
+    } else {
+        Ok(Variant::Error(ExcelError::Num))
+    }
+}
+
+fn bessel_y(x: f64, order: usize) -> Result<f64, String> {
+    const EULER_GAMMA: f64 = 0.5772156649015329;
+    let j0 = bessel_first_kind(x, 0, false)?;
+    let j1 = bessel_first_kind(x, 1, false)?;
+    let a = (x / 2.0).ln() + EULER_GAMMA;
+    let mut term = x * x / 4.0;
+    let mut harmonic = 1.0;
+    let mut sum = 0.0;
+    let mut derivative_sum = 0.0;
+    for m in 1..=10_000_u32 {
+        let signed = if m % 2 == 1 { term } else { -term };
+        sum += harmonic * signed;
+        derivative_sum += (2.0 * m as f64 / x) * harmonic * signed;
+        if signed.abs() <= 1e-15 * sum.abs().max(1.0) {
+            break;
+        }
+        term *= x * x / (4.0 * (m + 1) as f64 * (m + 1) as f64);
+        harmonic += 1.0 / (m + 1) as f64;
+    }
+    let factor = 2.0 / std::f64::consts::PI;
+    let y0 = factor * (a * j0 + sum);
+    if order == 0 {
+        return Ok(y0);
+    }
+    let y1 = -factor * (j0 / x - a * j1 + derivative_sum);
+    if order == 1 {
+        return Ok(y1);
+    }
+    let mut previous = y0;
+    let mut current = y1;
+    for n in 1..order {
+        let next = 2.0 * n as f64 / x * current - previous;
+        previous = current;
+        current = next;
+    }
+    Ok(current)
+}
+
+fn bessel_k(x: f64, order: usize) -> Result<f64, String> {
+    const EULER_GAMMA: f64 = 0.5772156649015329;
+    let i0 = bessel_first_kind(x, 0, true)?;
+    let i1 = bessel_first_kind(x, 1, true)?;
+    let a = (x / 2.0).ln() + EULER_GAMMA;
+    let mut term = x * x / 4.0;
+    let mut harmonic = 1.0;
+    let mut sum = 0.0;
+    let mut derivative_sum = 0.0;
+    for m in 1..=10_000_u32 {
+        sum += harmonic * term;
+        derivative_sum += (2.0 * m as f64 / x) * harmonic * term;
+        if term.abs() <= 1e-15 * sum.abs().max(1.0) {
+            break;
+        }
+        term *= x * x / (4.0 * (m + 1) as f64 * (m + 1) as f64);
+        harmonic += 1.0 / (m + 1) as f64;
+    }
+    let k0 = -a * i0 + sum;
+    if order == 0 {
+        return Ok(k0);
+    }
+    let k1 = i0 / x + a * i1 - derivative_sum;
+    if order == 1 {
+        return Ok(k1);
+    }
+    let mut previous = k0;
+    let mut current = k1;
+    for n in 1..order {
+        let next = 2.0 * n as f64 / x * current + previous;
+        previous = current;
+        current = next;
+    }
+    Ok(current)
 }
 
 fn radix_limits(base: u32) -> (usize, u32, i64, i64) {
@@ -12982,6 +13098,14 @@ mod tests {
         match calc("=BESSELI(1,0)", &c) {
             Variant::Float(value) => assert!((value - 1.2660658777520084).abs() < 1e-12),
             other => panic!("BESSELI: {:?}", other),
+        }
+        match calc("=BESSELY(1,0)", &c) {
+            Variant::Float(value) => assert!((value - 0.08825696421567696).abs() < 1e-12),
+            other => panic!("BESSELY: {:?}", other),
+        }
+        match calc("=BESSELK(1,0)", &c) {
+            Variant::Float(value) => assert!((value - 0.42102443824070834).abs() < 1e-12),
+            other => panic!("BESSELK: {:?}", other),
         }
         assert_eq!(
             calc("=BITLSHIFT(281474976710655,1)", &c),

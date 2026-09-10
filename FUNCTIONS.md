@@ -398,6 +398,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 |---|---|---|
 | `BESSELJ` | Bessel function of the first kind | Classic |
 | `BESSELI` | Modified Bessel function of the first kind | Classic |
+| `BESSELY` | Bessel function of the second kind | Classic |
+| `BESSELK` | Modified Bessel function of the second kind | Classic |
 | `BITAND` / `BITOR` / `BITXOR` | Bitwise AND / OR / XOR for non-negative 48-bit integers | 2013 |
 | `BITLSHIFT` / `BITRSHIFT` | Bitwise left / right shift | 2013 |
 | `DELTA` | Returns 1 when two numbers are equal | Classic |
