@@ -69,6 +69,17 @@ it is not an Excel oracle.
 
 ## Recommended diagnostic corpus
 
+The checked-in manifest can be executed without external data:
+
+```bash
+python3 scripts/run-vba-diagnostic-corpus.py --json
+```
+
+Use `--case <id>` for a focused replay. The runner has an allowlisted mapping
+from corpus class to a Cargo test target; manifest text cannot supply shell
+commands. The tests construct synthetic inputs or use checked-in fixtures, and
+their assertions verify the expected root cause or observation.
+
 The first public corpus should use input/output workbook pairs and classify
 each task by the failure mechanism it is meant to catch:
 

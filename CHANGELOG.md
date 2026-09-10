@@ -13,6 +13,9 @@
 - Diagnostic corpus BUILD: add a versioned five-class manifest covering range/
   paste, hidden visibility, protection, formula results, and VBA resolution;
   validate its expected machine-readable outcomes and redistribution boundary.
+- Diagnostic corpus execution: add an allowlisted offline runner that executes
+  all five manifest cases and emits a deterministic JSON summary without
+  accepting arbitrary shell commands from the manifest.
 - CI guidance: add a reproducible `diagnose-workbook` workflow, failure-artifact
   triage rules, and a redistributable diagnostic-corpus contract. This documents
   the supported diagnostic surface; it does not expand the VBA or Excel oracle.
