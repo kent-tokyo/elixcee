@@ -302,6 +302,11 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `BETA.INV` / `BETAINV` | Inverse beta distribution | 2010 / Classic |
 | `CHISQ.DIST` / `CHIDIST` | Chi-squared distribution PDF or CDF | 2010 / Classic |
 | `F.DIST` / `FDIST` | F distribution PDF or CDF | 2010 / Classic |
+| `FISHER` / `FISHERINV` | Fisher transformation and inverse | Classic |
+| `STANDARDIZE` | Convert a value to a standardized z-score | Classic |
+| `Z.TEST` / `ZTEST` | One-tailed z-test p-value | 2010 / Classic |
+| `CONFIDENCE.NORM` / `CONFIDENCE` | Normal-distribution confidence interval half-width | 2010 / Classic |
+| `CONFIDENCE.T` | Student's t confidence interval half-width | 2010 |
 
 ### Math & Trigonometry
 

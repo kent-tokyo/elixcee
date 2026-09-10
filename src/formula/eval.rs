@@ -515,6 +515,12 @@ fn eval_func(
         "RSQ" => func_rsq(args, cells),
         "FORECAST.LINEAR" | "FORECAST" => func_forecast_linear(args, cells),
         "STEYX" => func_steyx(args, cells),
+        "FISHER" => func_fisher(args, cells),
+        "FISHERINV" => func_fisherinv(args, cells),
+        "STANDARDIZE" => func_standardize(args, cells),
+        "Z.TEST" | "ZTEST" => func_z_test(args, cells),
+        "CONFIDENCE.NORM" | "CONFIDENCE" => func_confidence_norm(args, cells),
+        "CONFIDENCE.T" => func_confidence_t(args, cells),
         "COVARIANCE.S" | "COVAR" => func_covariance_s(args, cells),
         "COVARIANCE.P" => func_covariance_p(args, cells),
         "NORM.DIST" | "NORMDIST" => func_norm_dist(args, cells),
@@ -4659,6 +4665,131 @@ fn func_steyx(
     Ok(Variant::Float(
         (residuals / (known_y.len() - 2) as f64).sqrt(),
     ))
+}
+
+fn func_fisher(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("FISHER requires 1 argument".into());
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    if !value.is_finite() || value <= -1.0 || value >= 1.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(0.5 * ((1.0 + value) / (1.0 - value)).ln()))
+}
+
+fn func_fisherinv(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("FISHERINV requires 1 argument".into());
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    if !value.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(value.tanh()))
+}
+
+fn func_standardize(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("STANDARDIZE requires 3 arguments".into());
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    let mean = to_float(&evaluate(&args[1], cells)?)?;
+    let standard_dev = to_float(&evaluate(&args[2], cells)?)?;
+    if !value.is_finite() || !mean.is_finite() || !standard_dev.is_finite() || standard_dev <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float((value - mean) / standard_dev))
+}
+
+fn func_z_test(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err("Z.TEST requires 2 or 3 arguments".into());
+    }
+    let values = collect_nums(&args[..1], cells)?;
+    if values.is_empty() {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let target = to_float(&evaluate(&args[1], cells)?)?;
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let standard_dev = if args.len() == 3 {
+        to_float(&evaluate(&args[2], cells)?)?
+    } else {
+        if values.len() < 2 {
+            return Ok(Variant::Error(ExcelError::DivZero));
+        }
+        let variance = values
+            .iter()
+            .map(|value| (value - mean).powi(2))
+            .sum::<f64>()
+            / (values.len() - 1) as f64;
+        variance.sqrt()
+    };
+    if !target.is_finite() || !standard_dev.is_finite() || standard_dev <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let z = (mean - target) / (standard_dev / (values.len() as f64).sqrt());
+    Ok(Variant::Float(1.0 - norm_cdf(z.abs(), 0.0, 1.0)))
+}
+
+fn func_confidence_norm(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("CONFIDENCE.NORM requires 3 arguments".into());
+    }
+    let alpha = to_float(&evaluate(&args[0], cells)?)?;
+    let standard_dev = to_float(&evaluate(&args[1], cells)?)?;
+    let size = to_float(&evaluate(&args[2], cells)?)?;
+    if !alpha.is_finite()
+        || !standard_dev.is_finite()
+        || !size.is_finite()
+        || !(0.0..1.0).contains(&alpha)
+        || standard_dev <= 0.0
+        || size < 1.0
+        || size.fract() != 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let critical = norm_ppf(1.0 - alpha / 2.0);
+    Ok(Variant::Float(critical * standard_dev / size.sqrt()))
+}
+
+fn func_confidence_t(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("CONFIDENCE.T requires 3 arguments".into());
+    }
+    let alpha = to_float(&evaluate(&args[0], cells)?)?;
+    let standard_dev = to_float(&evaluate(&args[1], cells)?)?;
+    let size = to_float(&evaluate(&args[2], cells)?)?;
+    if !alpha.is_finite()
+        || !standard_dev.is_finite()
+        || !size.is_finite()
+        || !(0.0..1.0).contains(&alpha)
+        || standard_dev <= 0.0
+        || size < 2.0
+        || size.fract() != 0.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let critical = invert_t_probability(alpha, size - 1.0, true).abs();
+    Ok(Variant::Float(critical * standard_dev / size.sqrt()))
 }
 
 fn func_covariance_s(
@@ -12256,6 +12387,37 @@ mod tests {
             Variant::Float(0.6)
         );
         assert!(evaluate(&fparse("=GEOMEAN(A1:A4)").unwrap(), &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn test_estimation_and_hypothesis_functions() {
+        let cells = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Integer(2)),
+            ((3, 1), Variant::Integer(3)),
+        ]);
+        assert!(
+            matches!(calc("=FISHER(0.5)", &cells), Variant::Float(v) if (v - 0.5493061443340549).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=FISHERINV(0.5493061443340549)", &cells), Variant::Float(v) if (v - 0.5).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=STANDARDIZE(10,4,3)", &cells), Variant::Float(v) if (v - 2.0).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=Z.TEST(A1:A3,2)", &cells), Variant::Float(v) if (v - 0.5).abs() < 1e-8)
+        );
+        assert!(
+            matches!(calc("=CONFIDENCE.NORM(0.05,1,100)", &cells), Variant::Float(v) if (v - 0.1959963988186964).abs() < 1e-6)
+        );
+        let confidence_t = calc("=CONFIDENCE.T(0.05,1,10)", &cells);
+        assert!(matches!(confidence_t, Variant::Float(v) if (v - 0.7154368582207706).abs() < 1e-4));
+        assert_eq!(calc("=FISHER(1)", &cells), Variant::Error(ExcelError::Num));
+        assert_eq!(
+            calc("=STANDARDIZE(1,1,0)", &cells),
+            Variant::Error(ExcelError::Num)
+        );
     }
 
     #[test]
