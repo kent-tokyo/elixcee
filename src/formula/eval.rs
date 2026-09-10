@@ -535,6 +535,7 @@ fn eval_func(
         // -- Info --
         "ISBLANK" => func_isblank(args, cells),
         "ISFORMULA" => func_isformula(args, cells),
+        "ISOMITTED" => func_isomitted(args, cells),
         "SHEET" => func_sheet(args, cells),
         "SHEETS" => func_sheets(args, cells),
         "ISREF" => func_isref(args, cells),
@@ -5119,6 +5120,18 @@ fn func_isformula(
         }
         _ => Ok(Variant::Boolean(false)),
     }
+}
+
+fn func_isomitted(
+    args: &[FormulaExpr],
+    _cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("ISOMITTED requires 1 argument".into());
+    }
+    // The parser currently has no omitted-argument AST node. Every argument
+    // that reaches this evaluator was therefore explicitly supplied.
+    Ok(Variant::Boolean(false))
 }
 
 fn func_sheet(
@@ -15451,6 +15464,7 @@ mod tests {
         assert_eq!(calc("=SHEET(A1)", &c), Variant::Integer(1));
         assert_eq!(calc("=SHEETS()", &c), Variant::Integer(1));
         assert_eq!(calc("=SHEETS(A1:A3)", &c), Variant::Integer(1));
+        assert_eq!(calc("=ISOMITTED(42)", &c), Variant::Boolean(false));
         assert_eq!(
             with_sheet_context(3, 5, || calc("=SHEET()", &c)),
             Variant::Integer(3)
