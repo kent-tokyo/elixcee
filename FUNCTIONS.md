@@ -227,6 +227,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `AGGREGATE` | Extended subtotal (1–21; array/reference option filtering remains bounded) | 2010 |
 | `PERCENTILE` / `PERCENTILE.INC` | Percentile (inclusive) | Classic / 2010 |
 | `PERCENTILE.EXC` | Percentile (exclusive) | 2010 |
+| `PERCENTOF` | Percentage represented by a subset of a data set | 365 |
 | `PERCENTRANK` / `PERCENTRANK.INC` | Percent rank | Classic / 2010 |
 | `PERCENTRANK.EXC` | Percent rank (exclusive) | 2010 |
 | `MODE.MULT` | Most frequent value | 2010 |

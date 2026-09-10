@@ -470,6 +470,7 @@ fn eval_func(
         "MOD" => func_mod(args, cells),
         "PERCENTILE" | "PERCENTILE.INC" => func_percentile(args, cells),
         "PERCENTILE.EXC" => func_percentile_exc(args, cells),
+        "PERCENTOF" => func_percentof(args, cells),
         "PERCENTRANK" | "PERCENTRANK.INC" => func_percentrank(args, cells),
         "PERCENTRANK.EXC" => func_percentrank_exc(args, cells),
         "QUARTILE" | "QUARTILE.INC" => func_quartile(args, cells, false),
@@ -953,6 +954,24 @@ fn func_average(
         return Err("AVERAGE: no numeric values".into());
     }
     Ok(Variant::Float(nums.iter().sum::<f64>() / nums.len() as f64))
+}
+
+fn func_percentof(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("PERCENTOF requires 2 arguments".into());
+    }
+    let subset = to_float(&func_sum(&args[0..1], cells)?)?;
+    let all = to_float(&func_sum(&args[1..2], cells)?)?;
+    if !subset.is_finite() || !all.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    if all == 0.0 {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    Ok(as_integer_if_whole(subset / all))
 }
 
 fn collect_a_values(
@@ -15534,6 +15553,7 @@ mod tests {
         assert_eq!(calc("=SHEETS()", &c), Variant::Integer(1));
         assert_eq!(calc("=SHEETS(A1:A3)", &c), Variant::Integer(1));
         assert_eq!(calc("=ISOMITTED(42)", &c), Variant::Boolean(false));
+        assert_eq!(calc("=PERCENTOF(A1:A2,A1:A3)", &c), Variant::Float(0.5));
         assert_eq!(
             with_sheet_context(3, 5, || calc("=SHEET()", &c)),
             Variant::Integer(3)
