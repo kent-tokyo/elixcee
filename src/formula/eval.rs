@@ -358,8 +358,11 @@ fn eval_func(
     match name {
         "SUM" => func_sum(args, cells),
         "AVERAGE" => func_average(args, cells),
+        "AVERAGEA" => func_averagea(args, cells),
         "MIN" => func_min(args, cells),
+        "MINA" => func_mina(args, cells),
         "MAX" => func_max(args, cells),
+        "MAXA" => func_maxa(args, cells),
         "COUNT" => func_count(args, cells),
         "COUNTA" => func_counta(args, cells),
         "IF" => func_if(args, cells),
@@ -409,6 +412,8 @@ fn eval_func(
         "AVERAGEIF" => func_averageif(args, cells),
         "AVERAGEIFS" => func_averageifs(args, cells),
         "INT" => func_int(args, cells),
+        "ISEVEN" => func_parity(args, cells, true),
+        "ISODD" => func_parity(args, cells, false),
         "LARGE" => func_large(args, cells),
         "MAXIFS" => func_maxifs(args, cells),
         "MINIFS" => func_minifs(args, cells),
@@ -857,6 +862,63 @@ fn func_average(
     Ok(Variant::Float(nums.iter().sum::<f64>() / nums.len() as f64))
 }
 
+fn collect_a_values(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Vec<f64>, String> {
+    Ok(collect_all(args, cells)?
+        .into_iter()
+        .filter_map(|value| match value {
+            Variant::Empty => None,
+            Variant::Integer(n) => Some(n as f64),
+            Variant::Float(value) => Some(value),
+            Variant::Boolean(value) => Some(if value { 1.0 } else { 0.0 }),
+            Variant::Str(_) => Some(0.0),
+            Variant::Error(_) => None,
+            Variant::Array(values) => Some(
+                values
+                    .into_iter()
+                    .filter_map(|nested| match nested {
+                        Variant::Integer(n) => Some(n as f64),
+                        Variant::Float(value) => Some(value),
+                        Variant::Boolean(value) => Some(if value { 1.0 } else { 0.0 }),
+                        Variant::Str(_) => Some(0.0),
+                        _ => None,
+                    })
+                    .sum(),
+            ),
+            Variant::VbaArray(array) => Some(
+                array
+                    .elements
+                    .into_iter()
+                    .filter_map(|nested| match nested {
+                        Variant::Integer(n) => Some(n as f64),
+                        Variant::Float(value) => Some(value),
+                        Variant::Boolean(value) => Some(if value { 1.0 } else { 0.0 }),
+                        Variant::Str(_) => Some(0.0),
+                        _ => None,
+                    })
+                    .sum(),
+            ),
+            Variant::Null | Variant::Record(_) => None,
+            Variant::Date(value) => Some(value as f64),
+        })
+        .collect())
+}
+
+fn func_averagea(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let values = collect_a_values(args, cells)?;
+    if values.is_empty() {
+        return Err("AVERAGEA: no values".into());
+    }
+    Ok(Variant::Float(
+        values.iter().sum::<f64>() / values.len() as f64,
+    ))
+}
+
 fn func_min(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -873,6 +935,30 @@ fn func_max(
     let max = range_nums_fast!(args, cells).into_iter().reduce(f64::max);
     max.map(as_integer_if_whole)
         .ok_or_else(|| "MAX: no numeric values".into())
+}
+
+fn func_mina(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    Ok(as_integer_if_whole(
+        collect_a_values(args, cells)?
+            .into_iter()
+            .reduce(f64::min)
+            .unwrap_or(0.0),
+    ))
+}
+
+fn func_maxa(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    Ok(as_integer_if_whole(
+        collect_a_values(args, cells)?
+            .into_iter()
+            .reduce(f64::max)
+            .unwrap_or(0.0),
+    ))
 }
 
 fn func_count(
@@ -897,6 +983,25 @@ fn func_counta(
             .filter(|v| !matches!(v, Variant::Empty))
             .count() as i64,
     ))
+}
+
+fn func_parity(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    even: bool,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err(format!(
+            "{} requires 1 argument",
+            if even { "ISEVEN" } else { "ISODD" }
+        ));
+    }
+    let value = to_float(&evaluate(&args[0], cells)?)?;
+    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let integer = value.trunc() as i64;
+    Ok(Variant::Boolean((integer % 2 == 0) == even))
 }
 
 // ── Logical ───────────────────────────────────────────────────────────────────
@@ -13327,6 +13432,14 @@ mod tests {
             ((3, 1), Variant::Integer(30)),
         ]);
         assert_eq!(calc("=AVERAGE(A1:A3)", &c), Variant::Float(20.0));
+        match calc("=AVERAGEA(1,TRUE,\"x\")", &c) {
+            Variant::Float(value) => assert!((value - 2.0 / 3.0).abs() < 1e-12),
+            other => panic!("AVERAGEA: {:?}", other),
+        }
+        assert_eq!(calc("=MINA(1,TRUE,\"x\")", &c), Variant::Integer(0));
+        assert_eq!(calc("=MAXA(1,TRUE,\"x\")", &c), Variant::Integer(1));
+        assert_eq!(calc("=ISEVEN(3.9)", &c), Variant::Boolean(false));
+        assert_eq!(calc("=ISODD(-3.9)", &c), Variant::Boolean(true));
     }
 
     #[test]

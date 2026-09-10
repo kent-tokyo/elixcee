@@ -28,6 +28,7 @@
 - Formula coverage: add prorated declining-balance depreciation with `AMORDEGRC`.
 - Formula coverage: add the Classic math function `SQRTPI`.
 - Formula coverage: add `BESSELJ`, `BESSELI`, `BESSELY`, and `BESSELK` for non-negative integer orders.
+- Formula coverage: add `AVERAGEA`, `MINA`, `MAXA`, `ISEVEN`, and `ISODD`.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.

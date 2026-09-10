@@ -300,6 +300,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 |---|---|---|
 | `STDEV` / `STDEV.S` | Sample standard deviation | Classic / 2010 |
 | `STDEVP` / `STDEV.P` | Population standard deviation | Classic / 2010 |
+| `AVERAGEA` | Average including logical values and text as zero | Classic |
+| `MINA` / `MAXA` | Minimum / maximum including logical values and text as zero | Classic |
 | `VAR` / `VAR.S` | Sample variance | Classic / 2010 |
 | `VARP` / `VAR.P` | Population variance | Classic / 2010 |
 | `CORREL` | Pearson correlation coefficient | Classic |
@@ -364,6 +366,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | Function | Description | Excel |
 |---|---|---|
 | `ABS` | Absolute value | Classic |
+| `ISEVEN` / `ISODD` | Test the parity of the truncated integer value | Classic |
 | `SQRT` | Square root | Classic |
 | `SQRTPI` | Square root of a number multiplied by π | Classic |
 | `POWER` | Base raised to an exponent | Classic |
