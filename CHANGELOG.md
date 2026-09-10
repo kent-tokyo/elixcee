@@ -44,6 +44,7 @@
 - Formula coverage: add bounded, headless-safe `INFO` runtime metadata.
 - Formula coverage: add odd-first-coupon bond `ODDFPRICE` and `ODDFYIELD`.
 - Formula coverage: add odd-last-coupon bond `ODDLPRICE` and `ODDLYIELD`.
+- Formula coverage: add dynamic-array `EXPAND` with rectangular padding.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.

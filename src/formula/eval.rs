@@ -712,6 +712,7 @@ fn eval_func(
         "HSTACK" => func_hstack(args, cells),
         "CHOOSECOLS" => func_choosecols(args, cells),
         "CHOOSEROWS" => func_chooserows(args, cells),
+        "EXPAND" => func_expand(args, cells),
         "MAKEARRAY" => func_makearray(args, cells),
         // ── Math / Financial ─────────────────────────────────────────────────
         "COMBIN" => func_combin(args, cells),
@@ -13124,6 +13125,51 @@ fn func_chooserows(
     choose_elements(args, cells, "CHOOSEROWS")
 }
 
+fn func_expand(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 2 || args.len() > 4 {
+        return Err("EXPAND requires 2 to 4 arguments".into());
+    }
+    let values = flatten_array_vals(collect_values(&args[0], cells)?);
+    let (source_rows, source_cols) = array_shape_for_expr(&args[0], cells, values.len());
+    let integer_arg = |arg: &FormulaExpr, name: &str| -> Result<usize, String> {
+        match evaluate(arg, cells)? {
+            Variant::Integer(value) if value > 0 => Ok(value as usize),
+            Variant::Float(value) if value.is_finite() && value.fract() == 0.0 && value > 0.0 => {
+                Ok(value as usize)
+            }
+            _ => Err(format!("EXPAND {name} must be a positive integer")),
+        }
+    };
+    let target_rows = integer_arg(&args[1], "rows")?;
+    let target_cols = if let Some(columns) = args.get(2) {
+        integer_arg(columns, "columns")?
+    } else {
+        source_cols
+    };
+    if target_rows < source_rows || target_cols < source_cols {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let pad = if let Some(pad_with) = args.get(3) {
+        evaluate(pad_with, cells)?
+    } else {
+        Variant::Error(ExcelError::NA)
+    };
+    let mut result = Vec::with_capacity(target_rows.saturating_mul(target_cols));
+    for row in 0..target_rows {
+        for col in 0..target_cols {
+            result.push(if row < source_rows && col < source_cols {
+                values[row * source_cols + col].clone()
+            } else {
+                pad.clone()
+            });
+        }
+    }
+    Ok(wrap_array(result))
+}
+
 // ── COMBIN ───────────────────────────────────────────────────────────────────
 
 fn func_combin(
@@ -16285,6 +16331,27 @@ mod tests {
                 Variant::Error(ExcelError::NA),
             ])
         );
+        assert_eq!(
+            calc("=EXPAND(SEQUENCE(2,2),3,4,0)", &c),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Integer(0),
+                Variant::Integer(0),
+                Variant::Integer(3),
+                Variant::Integer(4),
+                Variant::Integer(0),
+                Variant::Integer(0),
+                Variant::Integer(0),
+                Variant::Integer(0),
+                Variant::Integer(0),
+                Variant::Integer(0),
+            ])
+        );
+        assert!(matches!(
+            calc("=EXPAND(SEQUENCE(2),1,1,0)", &c),
+            Variant::Error(ExcelError::Num)
+        ));
     }
 
     #[test]
