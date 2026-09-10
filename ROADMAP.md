@@ -516,6 +516,12 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 
 ### 直近の性能実績
 
+- [x] 1.05x large-workbook follow-up: allocation-free A1 parsing, formula-free
+  load fast path, optional XML rescan skips, and event-only worksheet codeName
+  loading reached 1.060x/1.074x on strict 100k/400k pairs. The 1M supporting
+  run reached 1.084x without the full ZIP comparison because local resource
+  limits terminated that heavier harness; it is not promoted to strict paired
+  evidence. [測定記録](docs/measurements/performance-105-2026-09-11.md)
 - [x] Readerのborrow化・単一走査・VMへの所有権移動、read budget／deadline／協調キャンセル。
 - [x] 部分 G5 BUILD/MEASURE: 現行候補の同一bench binaryでcached appendとreference rescan、dirty closureとstructure rebuildを各10サンプル・2秒条件で再測定した。appendは約1.128倍、dirty closureは約1.323倍だったが、XLSX end-to-end、100k/400k/1Mセル、RSS・耐久保存を含む大規模総合判定は未完。[G5測定](docs/measurements/g5-large-hotpath-2026-09-10.md)
 - [x] worksheet XMLのZipWriterへの直接出力、passthrough payloadの二重clone除去。

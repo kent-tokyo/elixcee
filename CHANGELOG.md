@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+- Performance follow-up: reduce large-workbook load overhead by making A1
+  parsing allocation-free, skipping empty formula-map lookups and absent
+  optional-feature rescans, and lazily loading worksheet code names for event
+  dispatch. Add a packed-coordinate worksheet sort key and record the 1.05x
+  target measurements in `docs/measurements/performance-105-2026-09-11.md`.
+
 ## [1.0.9] - 2026-09-11
 
 - Snapshot BUILD: add opt-in Python `Vm.snapshot(include_dependencies=True)`

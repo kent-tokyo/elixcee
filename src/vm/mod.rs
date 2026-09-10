@@ -10482,7 +10482,6 @@ impl Vm {
         self.workbook_date1904 = reader::xlsx_date1904_for_path(path)
             .map_err(|error| format!("cannot read '{}': {}", path, error))?;
         let names = self.populate_from_sheets(sheets);
-        self.load_sheet_code_names(path)?;
         self.load_simple_defined_names(path)?;
         Ok(names)
     }
@@ -10644,6 +10643,7 @@ impl Vm {
                 .get_mut(&key)
                 .expect("just-inserted sheet must exist");
             target_cells.reserve(source_cells.len().saturating_add(formulas.len()));
+            let formulas_present = !formulas.is_empty();
             for ((row, col), cell) in source_cells {
                 let value = match cell {
                     SheetCell::Integer(n) => Variant::Integer(n),
@@ -10655,7 +10655,15 @@ impl Vm {
                 target_cells.insert(
                     (row, col),
                     CellContent {
-                        formula: formulas.remove(&(row, col)),
+                        // Numeric/text-only sheets are the dominant bulk-data
+                        // path. Avoid a HashMap lookup for every cell when the
+                        // parser found no formulas at all; the formula-bearing
+                        // path retains the existing coordinate-aware lookup.
+                        formula: if formulas_present {
+                            formulas.remove(&(row, col))
+                        } else {
+                            None
+                        },
                         value,
                     },
                 );
@@ -11026,6 +11034,12 @@ impl Vm {
     /// events are enabled, then runs `sub_name`; an event failure prevents the
     /// main entrypoint from running.
     pub fn run_sub_with_events(&mut self, program: &Program, sub_name: &str) -> Result<(), String> {
+        // Sheet code names are only consulted when selecting an automatic
+        // worksheet event handler. Defer loading them until event dispatch so
+        // ordinary workbook editing does not reopen every worksheet XML part.
+        if let Some(path) = self.loaded_workbook_path.clone() {
+            self.load_sheet_code_names(&path)?;
+        }
         let previous = self.auto_event_program.replace(program.clone());
         let result = (|| {
             if program

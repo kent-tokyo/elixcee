@@ -3449,7 +3449,11 @@ fn read_workbook_from_archive<R: Read + Seek>(
         };
         let sheet_rels_base = crate::rels_target_dir(&sheet_rels_name).to_string();
         let mut tables = Vec::new();
-        let table_rids = xlsx_table_part_rids(&sheet_xml);
+        let table_rids = if sheet_xml.contains("tableParts") {
+            xlsx_table_part_rids(&sheet_xml)
+        } else {
+            Vec::new()
+        };
         if !table_rids.is_empty()
             && let Some(sheet_rels_xml) = &sheet_rels_xml
         {
@@ -3468,8 +3472,19 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 }
             }
         }
-        let data_validations = xlsx_data_validations(&sheet_xml);
-        let conditional_format_ranges = xlsx_conditional_format_ranges(&sheet_xml);
+        // Optional-feature parsers each walk the worksheet XML independently.
+        // Skip those full rescans when a bulk-data sheet has no matching
+        // container; the substring checks also accept namespace-prefixed tags.
+        let data_validations = if sheet_xml.contains("dataValidations") {
+            xlsx_data_validations(&sheet_xml)
+        } else {
+            Vec::new()
+        };
+        let conditional_format_ranges = if sheet_xml.contains("conditionalFormatting") {
+            xlsx_conditional_format_ranges(&sheet_xml)
+        } else {
+            Vec::new()
+        };
         let mut comment_cells = HashSet::new();
         if let Some(sheet_rels_xml) = &sheet_rels_xml {
             for target in xlsx_rels(sheet_rels_xml, "/comments").into_values() {
@@ -3483,7 +3498,11 @@ fn read_workbook_from_archive<R: Read + Seek>(
         }
         let mut comment_cells: Vec<_> = comment_cells.into_iter().collect();
         comment_cells.sort_unstable();
-        let autofilter = xlsx_autofilter(&sheet_xml);
+        let autofilter = if sheet_xml.contains("autoFilter") {
+            xlsx_autofilter(&sheet_xml)
+        } else {
+            None
+        };
         sheets.push(BufferSheet {
             sheet: WorkbookSheet {
                 name,
@@ -4969,15 +4988,33 @@ fn num_to_cell(f: f64) -> SheetCell {
 
 /// Parse an XLSX cell reference like "A1", "AB12" → (row, col), both 1-based.
 fn parse_cell_ref(r: &str) -> Option<(u32, u32)> {
-    let r = r.trim().to_uppercase();
-    let alpha_end = r.find(|c: char| c.is_ascii_digit())?;
-    if alpha_end == 0 {
+    // Worksheet cell references are ASCII by OOXML convention.  The previous
+    // implementation uppercased the complete reference, allocating a new
+    // `String` for every `<c r="...">` in a large sheet.  Scan the borrowed
+    // bytes instead; lowercase input remains accepted without allocation and
+    // malformed/non-ASCII input still returns `None` as before.
+    let bytes = r.trim().as_bytes();
+    let mut split = 0;
+    let mut col = 0u32;
+    while split < bytes.len() {
+        let byte = bytes[split];
+        let upper = byte.to_ascii_uppercase();
+        if !upper.is_ascii_uppercase() {
+            break;
+        }
+        col = col.checked_mul(26)?.checked_add((upper - b'A' + 1) as u32)?;
+        split += 1;
+    }
+    if split == 0 || split == bytes.len() {
         return None;
     }
-    let col = r[..alpha_end]
-        .chars()
-        .fold(0u32, |acc, c| acc * 26 + (c as u32 - 'A' as u32 + 1));
-    let row: u32 = r[alpha_end..].parse().ok()?;
+    let mut row = 0u32;
+    for &byte in &bytes[split..] {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        row = row.checked_mul(10)?.checked_add((byte - b'0') as u32)?;
+    }
     Some((row, col))
 }
 

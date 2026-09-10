@@ -9736,10 +9736,15 @@ fn write_xlsx_sheet<W: XmlSink>(
         // One flat coordinate sort avoids a tree lookup per cell and a separate
         // allocation per row. `None` is style-only; column zero is an empty-row
         // marker, never a cell (including for sparse hidden/height/style rows).
+        // Pack the two 32-bit coordinates into one scalar.  The worksheet
+        // writer only needs lexicographic `(row, col)` order, and the packed
+        // representation has exactly that order while reducing the sort's
+        // comparator work on large dense sheets (one integer comparison
+        // instead of a tuple comparison with a possible second comparison).
         let mut ordered_cells = Vec::with_capacity(cells.len());
         for (&(r, c), v) in cells.iter() {
             if r > 0 && c > 0 {
-                ordered_cells.push(((r, c), Some(v)));
+                ordered_cells.push((((r as u64) << 32) | c as u64, Some(v)));
             }
         }
         // A value-less, pre-formatted cell (e.g. a merged-cell anchor styled but never
@@ -9756,7 +9761,7 @@ fn write_xlsx_sheet<W: XmlSink>(
         if let Some(styles) = style_indices {
             for &(r, c) in styles.keys() {
                 if r > 0 && c > 0 && !cells.contains_key(&(r, c)) {
-                    ordered_cells.push(((r, c), None));
+                    ordered_cells.push((((r as u64) << 32) | c as u64, None));
                 }
             }
         }
@@ -9768,23 +9773,23 @@ fn write_xlsx_sheet<W: XmlSink>(
         // that's what a real <row>-element-per-row source already looks like.
         for iv in hidden_rows {
             for r in iv.start..=iv.end {
-                ordered_cells.push(((r, 0), None));
+                ordered_cells.push(((r as u64) << 32, None));
             }
         }
         if let Some(heights) = row_heights {
             for &r in heights.keys() {
-                ordered_cells.push(((r, 0), None));
+                ordered_cells.push(((r as u64) << 32, None));
             }
         }
         if let Some(styles) = row_styles {
             for &r in styles.keys() {
-                ordered_cells.push(((r, 0), None));
+                ordered_cells.push(((r as u64) << 32, None));
             }
         }
         ordered_cells.sort_unstable_by_key(|&(position, _)| position);
         let mut cell_ref_buffer = [0u8; 17];
-        for row_cells in ordered_cells.chunk_by(|a, b| a.0.0 == b.0.0) {
-            let row = row_cells[0].0.0;
+        for row_cells in ordered_cells.chunk_by(|a, b| a.0 >> 32 == b.0 >> 32) {
+            let row = (row_cells[0].0 >> 32) as u32;
             let row_hidden = hidden_rows
                 .iter()
                 .any(|iv| iv.start <= row && row <= iv.end);
@@ -9801,7 +9806,8 @@ fn write_xlsx_sheet<W: XmlSink>(
             out.xml_fmt(format_args!(
                 "<row r=\"{row}\"{height_attr}{style_attr}{hidden_attr}>\n"
             ))?;
-            for &((_, c), content) in row_cells {
+            for &(position, content) in row_cells {
+                let c = position as u32;
                 if c == 0 {
                     continue;
                 }
