@@ -21,6 +21,7 @@
 - Formula coverage: add maturity-security functions `INTRATE`, `PRICEMAT`, and `YIELDMAT`.
 - Formula coverage: add bond duration functions `DURATION` and `MDURATION`.
 - Formula coverage: add coupon-bond `PRICE` and `YIELD` with clean-price and accrued-interest handling.
+- Formula coverage: add the maturity accrued-interest function `ACCRINTM`.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.

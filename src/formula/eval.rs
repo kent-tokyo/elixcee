@@ -732,6 +732,7 @@ fn eval_func(
         "DISC" => func_disc(args, cells),
         "RECEIVED" => func_received(args, cells),
         "YIELDDISC" => func_yielddisc(args, cells),
+        "ACCRINTM" => func_accrintm(args, cells),
         "COUPDAYBS" => func_coupdaybs(args, cells),
         "COUPDAYS" => func_coupdays(args, cells),
         "COUPDAYSNC" => func_coupdaysnc(args, cells),
@@ -10217,6 +10218,36 @@ fn coupon_day_count(start: i64, end: i64, basis: i32) -> f64 {
     }
 }
 
+fn func_accrintm(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 3 || args.len() > 5 {
+        return Err("ACCRINTM requires 3 to 5 arguments".into());
+    }
+    let issue = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let rate = to_float(&evaluate(&args[2], cells)?)?;
+    let par = if args.len() >= 4 {
+        to_float(&evaluate(&args[3], cells)?)?
+    } else {
+        1000.0
+    };
+    let basis = if args.len() == 5 {
+        to_float(&evaluate(&args[4], cells)?)?
+    } else {
+        0.0
+    };
+    let year_fraction = match bond_day_fraction(issue, maturity, basis) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    if !rate.is_finite() || !par.is_finite() || !basis.is_finite() || rate < 0.0 || par <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(par * rate * year_fraction))
+}
+
 fn func_coupdaybs(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -15415,6 +15446,9 @@ mod tests {
         );
         assert!(
             matches!(calc("=YIELDDISC(1,181,95,100,2)", &c), Variant::Float(value) if (value - (100.0 / 95.0 - 1.0) / 0.5).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=ACCRINTM(1,181,0.1,1000,2)", &c), Variant::Float(value) if (value - 50.0).abs() < 1e-12)
         );
         assert!(
             matches!(calc("=TBILLPRICE(1,181,0.1)", &c), Variant::Float(value) if (value - 95.0).abs() < 1e-9)
