@@ -523,6 +523,7 @@ fn eval_func(
         "TREND" => func_trend(args, cells),
         "GROWTH" => func_growth(args, cells),
         "LINEST" => func_linest(args, cells),
+        "LOGEST" => func_logest(args, cells),
         "STEYX" => func_steyx(args, cells),
         "FISHER" => func_fisher(args, cells),
         "FISHERINV" => func_fisherinv(args, cells),
@@ -5060,6 +5061,119 @@ fn func_linest(
         .map(as_integer_if_whole)
         .collect(),
     ))
+}
+
+fn func_logest(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(1..=4).contains(&args.len()) {
+        return Err("LOGEST requires 1 to 4 arguments".into());
+    }
+    let known_y = collect_values(&args[0], cells)?
+        .into_iter()
+        .filter_map(|v| as_f64(&v))
+        .collect::<Vec<_>>();
+    if known_y.len() < 2 || known_y.iter().any(|value| *value <= 0.0) {
+        return Err("LOGEST: known_y must contain at least 2 positive values".into());
+    }
+    let known_x = if args.len() >= 2 {
+        collect_values(&args[1], cells)?
+            .into_iter()
+            .filter_map(|v| as_f64(&v))
+            .collect::<Vec<_>>()
+    } else {
+        (1..=known_y.len()).map(|value| value as f64).collect()
+    };
+    if known_x.len() != known_y.len() || known_x.iter().any(|value| !value.is_finite()) {
+        return Err("LOGEST: known arrays must have equal length".into());
+    }
+    let constant = if args.len() >= 3 {
+        is_truthy(&evaluate(&args[2], cells)?)
+    } else {
+        true
+    };
+    let stats = if args.len() == 4 {
+        is_truthy(&evaluate(&args[3], cells)?)
+    } else {
+        false
+    };
+    let log_y = known_y.iter().map(|value| value.ln()).collect::<Vec<_>>();
+    let n = log_y.len() as f64;
+    let mean_y = log_y.iter().sum::<f64>() / n;
+    let mean_x = known_x.iter().sum::<f64>() / n;
+    let (slope, intercept, x_variation) = if constant {
+        let variation = known_x.iter().map(|x| (x - mean_x).powi(2)).sum::<f64>();
+        if variation == 0.0 {
+            return Err("LOGEST: known_x values must vary".into());
+        }
+        let slope = known_x
+            .iter()
+            .zip(&log_y)
+            .map(|(x, y)| (x - mean_x) * (y - mean_y))
+            .sum::<f64>()
+            / variation;
+        (slope, mean_y - slope * mean_x, variation)
+    } else {
+        let variation = known_x.iter().map(|x| x * x).sum::<f64>();
+        if variation == 0.0 {
+            return Err("LOGEST: known_x values must not all be zero".into());
+        }
+        let slope = known_x.iter().zip(&log_y).map(|(x, y)| x * y).sum::<f64>() / variation;
+        (slope, 0.0, variation)
+    };
+    let mut result = vec![Variant::Float(slope.exp()), Variant::Float(intercept.exp())];
+    if !stats {
+        return Ok(Variant::Array(result));
+    }
+    let residuals = known_x
+        .iter()
+        .zip(&log_y)
+        .map(|(x, y)| y - (slope * x + intercept))
+        .collect::<Vec<_>>();
+    let ss_resid = residuals.iter().map(|value| value * value).sum::<f64>();
+    let degrees = log_y.len() as i64 - if constant { 2 } else { 1 };
+    if degrees <= 0 {
+        return Err("LOGEST: insufficient degrees of freedom".into());
+    }
+    let standard_error = (ss_resid / degrees as f64).sqrt();
+    let slope_se = standard_error / x_variation.sqrt();
+    let intercept_se = if constant {
+        standard_error * (1.0 / n + mean_x.powi(2) / x_variation).sqrt()
+    } else {
+        0.0
+    };
+    let ss_total = if constant {
+        log_y.iter().map(|y| (y - mean_y).powi(2)).sum::<f64>()
+    } else {
+        log_y.iter().map(|y| y * y).sum::<f64>()
+    };
+    let ss_reg = (ss_total - ss_resid).max(0.0);
+    let r_squared = if ss_total == 0.0 {
+        0.0
+    } else {
+        1.0 - ss_resid / ss_total
+    };
+    let f_stat = if ss_resid == 0.0 {
+        f64::INFINITY
+    } else {
+        ss_reg / (ss_resid / degrees as f64)
+    };
+    result.extend(
+        [
+            slope_se,
+            intercept_se,
+            r_squared,
+            standard_error,
+            f_stat,
+            degrees as f64,
+            ss_reg,
+            ss_resid,
+        ]
+        .into_iter()
+        .map(as_integer_if_whole),
+    );
+    Ok(Variant::Array(result))
 }
 
 fn func_steyx(
@@ -13740,6 +13854,16 @@ mod tests {
                 other => panic!("GROWTH values unexpected: {:?}", other),
             },
             other => panic!("GROWTH result unexpected: {:?}", other),
+        }
+        match calc("=LOGEST(D1:D3,E1:E3)", &c) {
+            Variant::Array(values) => match values.as_slice() {
+                [Variant::Float(base), Variant::Float(factor)] => {
+                    assert!((*base - 2.0).abs() < 1e-9);
+                    assert!((*factor - 1.0).abs() < 1e-9);
+                }
+                other => panic!("LOGEST values unexpected: {:?}", other),
+            },
+            other => panic!("LOGEST result unexpected: {:?}", other),
         }
     }
 

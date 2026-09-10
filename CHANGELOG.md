@@ -10,6 +10,7 @@
 - Formula coverage: add array-returning `FREQUENCY` with inclusive bins and an overflow bucket.
 - Formula coverage: add array-returning `TREND` and `GROWTH` regression predictions with constant/intercept and domain validation.
 - Formula coverage: add single-variable `LINEST` coefficients and optional regression statistics.
+- Formula coverage: add single-variable `LOGEST` exponential coefficients and optional regression statistics.
 - Formula coverage: add bitwise, step/delta, and error-function engineering formulas.
 - Formula coverage: add hyperbolic, reciprocal-trigonometric, and inverse-trigonometric formulas.
 - Formula coverage: add combinatorics and pairwise sum-of-squares formulas.

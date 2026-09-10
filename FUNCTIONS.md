@@ -293,6 +293,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `TREND` | Linear regression predictions | Classic |
 | `GROWTH` | Exponential regression predictions | Classic |
 | `LINEST` | Linear regression coefficients and optional statistics | Classic |
+| `LOGEST` | Exponential regression coefficients and optional statistics | Classic |
 | `STEYX` | Standard error of predicted y values | Classic |
 | `COVARIANCE.S` / `COVAR` | Sample covariance | Classic / 2010 |
 | `COVARIANCE.P` | Population covariance | 2010 |
