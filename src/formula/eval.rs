@@ -549,6 +549,7 @@ fn eval_func(
         "CONFIDENCE.T" => func_confidence_t(args, cells),
         "COVARIANCE.S" | "COVAR" => func_covariance_s(args, cells),
         "COVARIANCE.P" => func_covariance_p(args, cells),
+        "FTEST" => func_ftest(args, cells),
         "NORM.DIST" | "NORMDIST" => func_norm_dist(args, cells),
         "NORM.INV" | "NORMINV" => func_norm_inv(args, cells),
         "NORM.S.DIST" | "NORMSDIST" => func_norm_s_dist(args, cells),
@@ -5196,6 +5197,41 @@ fn func_var_pa(
     Ok(Variant::Float(
         values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / values.len() as f64,
     ))
+}
+
+fn func_ftest(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("FTEST requires 2 arguments".into());
+    }
+    let first = collect_nums(std::slice::from_ref(&args[0]), cells)?;
+    let second = collect_nums(std::slice::from_ref(&args[1]), cells)?;
+    if first.len() < 2 || second.len() < 2 {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let variance = |values: &[f64]| {
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        values
+            .iter()
+            .map(|value| (value - mean).powi(2))
+            .sum::<f64>()
+            / (values.len() - 1) as f64
+    };
+    let first_variance = variance(&first);
+    let second_variance = variance(&second);
+    if !first_variance.is_finite()
+        || !second_variance.is_finite()
+        || first_variance <= 0.0
+        || second_variance <= 0.0
+    {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let ratio = (first_variance / second_variance).max(second_variance / first_variance);
+    let p =
+        (2.0 * (1.0 - f_cdf(ratio, (first.len() - 1) as f64, (second.len() - 1) as f64))).min(1.0);
+    Ok(Variant::Float(p))
 }
 
 fn func_stdev_a(
@@ -16786,6 +16822,16 @@ mod tests {
         match calc("=F.DIST(1,1,1,TRUE)", &cn) {
             Variant::Float(f) => assert!((f - 0.5).abs() < 1e-6),
             other => panic!("F.DIST CDF: {:?}", other),
+        }
+        let ftest_cells = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Integer(2)),
+            ((3, 1), Variant::Integer(4)),
+            ((4, 1), Variant::Integer(8)),
+        ]);
+        match calc("=FTEST(A1:A4,A1:A4)", &ftest_cells) {
+            Variant::Float(value) => assert!((value - 1.0).abs() < 1e-12),
+            other => panic!("FTEST: {:?}", other),
         }
     }
 
