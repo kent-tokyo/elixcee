@@ -267,6 +267,9 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `EFFECT` | Effective annual interest rate | Classic |
 | `NOMINAL` | Nominal annual interest rate | Classic |
 | `RRI` | Equivalent growth interest rate | 2013 |
+| `CUMIPMT` / `CUMPRINC` | Cumulative interest / principal paid between periods | 2010 |
+| `FVSCHEDULE` | Future value using a sequence of rates | Classic |
+| `DOLLARDE` / `DOLLARFR` | Convert fractional dollar quotations | Classic |
 
 ### Statistical
 

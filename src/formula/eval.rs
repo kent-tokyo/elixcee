@@ -651,6 +651,11 @@ fn eval_func(
         "EFFECT" => func_effect(args, cells),
         "NOMINAL" => func_nominal(args, cells),
         "RRI" => func_rri(args, cells),
+        "CUMIPMT" => func_cumipmt(args, cells),
+        "CUMPRINC" => func_cumprinc(args, cells),
+        "FVSCHEDULE" => func_fvschedule(args, cells),
+        "DOLLARDE" => func_dollarde(args, cells),
+        "DOLLARFR" => func_dollarfr(args, cells),
         // ── Database ─────────────────────────────────────────────────────────
         "DGET" => func_dget(args, cells),
         "DSUM" => func_dsum(args, cells),
@@ -7404,6 +7409,140 @@ fn func_ppmt(
     Ok(Variant::Float(pmt_val - ipmt))
 }
 
+fn cumulative_period_args(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<(f64, f64, f64, i64, i64, f64), String> {
+    if args.len() != 6 {
+        return Err(format!("{name} requires 6 arguments"));
+    }
+    let rate = to_float(&evaluate(&args[0], cells)?)?;
+    let nper = to_float(&evaluate(&args[1], cells)?)?;
+    let pv = to_float(&evaluate(&args[2], cells)?)?;
+    let start = to_float(&evaluate(&args[3], cells)?)?;
+    let end = to_float(&evaluate(&args[4], cells)?)?;
+    let typ = to_float(&evaluate(&args[5], cells)?)?;
+    if !rate.is_finite()
+        || !nper.is_finite()
+        || !pv.is_finite()
+        || !start.is_finite()
+        || !end.is_finite()
+        || !typ.is_finite()
+        || nper < 1.0
+        || nper.fract() != 0.0
+        || start.fract() != 0.0
+        || end.fract() != 0.0
+        || start < 1.0
+        || end < start
+        || end > nper
+        || (typ != 0.0 && typ != 1.0)
+    {
+        return Err(format!("{name}: invalid period or payment type"));
+    }
+    Ok((rate, nper, pv, start as i64, end as i64, typ))
+}
+
+fn cumulative_interest_or_principal(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    principal: bool,
+) -> Result<Variant, String> {
+    let name = if principal { "CUMPRINC" } else { "CUMIPMT" };
+    let (rate, nper, pv, start, end, typ) = cumulative_period_args(args, cells, name)?;
+    let mut total = 0.0;
+    let pmt = compute_pmt(rate, nper, pv, 0.0, typ);
+    for period in start..=end {
+        let balance = annuity_fv(rate, (period - 1) as f64, pmt, pv, 0.0);
+        let mut interest = balance * rate;
+        if typ == 1.0 {
+            if period == 1 {
+                interest = 0.0;
+            } else {
+                interest /= 1.0 + rate;
+            }
+        }
+        total += if principal { pmt - interest } else { interest };
+    }
+    if !total.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(total))
+}
+
+fn func_cumipmt(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    cumulative_interest_or_principal(args, cells, false)
+}
+
+fn func_cumprinc(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    cumulative_interest_or_principal(args, cells, true)
+}
+
+fn func_fvschedule(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("FVSCHEDULE requires 2 arguments".into());
+    }
+    let principal = to_float(&evaluate(&args[0], cells)?)?;
+    let rates = collect_nums(&args[1..], cells)?;
+    if !principal.is_finite() || rates.iter().any(|rate| !rate.is_finite() || *rate <= -1.0) {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let result = rates
+        .iter()
+        .fold(principal, |value, rate| value * (1.0 + rate));
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(result))
+}
+
+fn func_dollarde(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("DOLLARDE requires 2 arguments".into());
+    }
+    let dollar = to_float(&evaluate(&args[0], cells)?)?;
+    let fraction = to_float(&evaluate(&args[1], cells)?)?;
+    if !dollar.is_finite() || !fraction.is_finite() || fraction < 1.0 || fraction.fract() != 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let sign = dollar.signum();
+    let magnitude = dollar.abs();
+    let whole = magnitude.trunc();
+    let result = sign * (whole + (magnitude - whole) * 100.0 / fraction);
+    Ok(Variant::Float(result))
+}
+
+fn func_dollarfr(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("DOLLARFR requires 2 arguments".into());
+    }
+    let dollar = to_float(&evaluate(&args[0], cells)?)?;
+    let fraction = to_float(&evaluate(&args[1], cells)?)?;
+    if !dollar.is_finite() || !fraction.is_finite() || fraction < 1.0 || fraction.fract() != 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let sign = dollar.signum();
+    let magnitude = dollar.abs();
+    let whole = magnitude.trunc();
+    let result = sign * (whole + (magnitude - whole) * fraction / 100.0);
+    Ok(Variant::Float(result))
+}
+
 fn func_npv(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -11531,6 +11670,34 @@ mod tests {
             Variant::Float(f) => assert!(f > 0.0 && f < 2.0, "XIRR out of range: {}", f),
             other => panic!("XIRR unexpected: {:?}", other),
         }
+
+        let c_schedule =
+            cells_from(&[((1, 1), Variant::Float(0.1)), ((2, 1), Variant::Float(0.2))]);
+        match calc("=FVSCHEDULE(100,A1:A2)", &c_schedule) {
+            Variant::Float(value) => assert!((value - 132.0).abs() < 1e-12),
+            other => panic!("FVSCHEDULE unexpected: {:?}", other),
+        }
+        match calc("=DOLLARDE(1.02,16)", &c) {
+            Variant::Float(value) => assert!((value - 1.125).abs() < 1e-12),
+            other => panic!("DOLLARDE unexpected: {:?}", other),
+        }
+        match calc("=DOLLARFR(1.125,16)", &c) {
+            Variant::Float(value) => assert!((value - 1.02).abs() < 1e-12),
+            other => panic!("DOLLARFR unexpected: {:?}", other),
+        }
+        let cum_interest = match calc("=CUMIPMT(0.05,3,1000,1,2,0)", &c) {
+            Variant::Float(value) => value,
+            other => panic!("CUMIPMT unexpected: {:?}", other),
+        };
+        let cum_principal = match calc("=CUMPRINC(0.05,3,1000,1,2,0)", &c) {
+            Variant::Float(value) => value,
+            other => panic!("CUMPRINC unexpected: {:?}", other),
+        };
+        let pmt = match calc("=PMT(0.05,3,1000)", &c) {
+            Variant::Float(value) => value,
+            other => panic!("PMT unexpected: {:?}", other),
+        };
+        assert!((cum_interest + cum_principal - 2.0 * pmt).abs() < 1e-9);
     }
 
     #[test]
