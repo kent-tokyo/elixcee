@@ -13653,37 +13653,77 @@ fn func_textsplit(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    if args.len() < 2 {
-        return Err("TEXTSPLIT requires at least 2 arguments".into());
+    if !(2..=6).contains(&args.len()) {
+        return Err("TEXTSPLIT requires 2 to 6 arguments".into());
     }
     let text = to_str(&evaluate(&args[0], cells)?);
-    let delim = to_str(&evaluate(&args[1], cells)?);
-    if delim.is_empty() {
-        return Err("TEXTSPLIT: delimiter cannot be empty".into());
+    let column_delim = to_str(&evaluate(&args[1], cells)?);
+    if column_delim.is_empty() {
+        return Err("TEXTSPLIT: column delimiter cannot be empty".into());
     }
-    let ignore_empty = args.len() >= 4 && is_truthy(&evaluate(&args[3], cells)?);
-    let case_insensitive = args.len() >= 5 && is_truthy(&evaluate(&args[4], cells)?);
-
-    // Use lowercase copies for searching while preserving original text for output.
-    let (search_text, search_delim) = if case_insensitive {
-        (text.to_lowercase(), delim.to_lowercase())
+    // An empty third argument is commonly used as an explicit placeholder
+    // for the optional row delimiter; treat it like an omitted delimiter.
+    let row_delim = if let Some(arg) = args.get(2) {
+        let delimiter = to_str(&evaluate(arg, cells)?);
+        (!delimiter.is_empty()).then_some(delimiter)
     } else {
-        (text.clone(), delim.clone())
+        None
+    };
+    let ignore_empty = args.len() >= 4 && is_truthy(&evaluate(&args[3], cells)?);
+    let case_insensitive = if args.len() >= 5 {
+        let mode = to_float(&evaluate(&args[4], cells)?)?;
+        if !mode.is_finite() || mode.fract() != 0.0 || !(0.0..=1.0).contains(&mode) {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        mode == 1.0
+    } else {
+        false
+    };
+    let pad_with = if args.len() >= 6 {
+        evaluate(&args[5], cells)?
+    } else {
+        Variant::Error(ExcelError::NA)
     };
 
-    let mut result = vec![];
-    let mut char_start = 0usize;
-    while let Some(rel) = search_text[char_start..].find(&*search_delim) {
-        let abs = char_start + rel;
-        let piece = &text[char_start..abs];
-        if !ignore_empty || !piece.is_empty() {
-            result.push(Variant::Str(piece.to_string()));
+    let split = |source: &str, delimiter: &str| -> Vec<String> {
+        let search_source = if case_insensitive {
+            source.to_lowercase()
+        } else {
+            source.to_string()
+        };
+        let search_delimiter = if case_insensitive {
+            delimiter.to_lowercase()
+        } else {
+            delimiter.to_string()
+        };
+        let mut parts = vec![];
+        let mut start = 0usize;
+        while let Some(relative) = search_source[start..].find(&search_delimiter) {
+            let end = start + relative;
+            let part = &source[start..end];
+            if !ignore_empty || !part.is_empty() {
+                parts.push(part.to_string());
+            }
+            start = end + search_delimiter.len();
         }
-        char_start = abs + search_delim.len();
-    }
-    let last = &text[char_start..];
-    if !ignore_empty || !last.is_empty() {
-        result.push(Variant::Str(last.to_string()));
+        let part = &source[start..];
+        if !ignore_empty || !part.is_empty() {
+            parts.push(part.to_string());
+        }
+        parts
+    };
+
+    let rows = row_delim.as_deref().map_or_else(
+        || vec![text.as_str()],
+        |delimiter| text.split(delimiter).collect(),
+    );
+    let mut split_rows: Vec<Vec<String>> =
+        rows.iter().map(|row| split(row, &column_delim)).collect();
+    let width = split_rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut result = vec![];
+    for row in &mut split_rows {
+        row.resize(width, to_str(&pad_with));
+        result.extend(row.iter().cloned().map(Variant::Str));
     }
     Ok(wrap_array(result))
 }
@@ -17409,6 +17449,15 @@ mod tests {
         assert_eq!(
             calc("=TEXTSPLIT(\"hello\",\",\")", &c),
             Variant::Str("hello".into())
+        );
+        assert_eq!(
+            calc("=TEXTSPLIT(\"a,b;c\",\",\",\";\",FALSE,0,\"_\")", &c),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Str("b".into()),
+                Variant::Str("c".into()),
+                Variant::Str("_".into())
+            ])
         );
     }
 

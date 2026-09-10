@@ -491,7 +491,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `UNICODE` | Unicode code point of first character | 2013 |
 | `CONCAT` | Concatenate strings / ranges | 2019 |
 | `TEXTJOIN` | Join with delimiter | 2019 |
-| `TEXTSPLIT` | Split text into an array by a delimiter | 2024/365 |
+| `TEXTSPLIT` | Split text into a bounded row/column array with ignore, match, and pad modes | 2024/365 |
 | `TEXTBEFORE` | Extract text before the Nth occurrence of a delimiter | 2024/365 |
 | `TEXTAFTER` | Extract text after the Nth occurrence of a delimiter | 2024/365 |
 | `VALUETOTEXT` | Convert any value to its text representation | 2024/365 |

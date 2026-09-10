@@ -60,6 +60,7 @@
 - Formula coverage: add `ARRAYTOTEXT`, `PHI`, and `GAUSS` coverage.
 - Formula coverage: add bounded `SINGLE` implicit-intersection behavior.
 - Formula coverage: add bounded `ISFORMULA` cell and range inspection.
+- Formula compatibility: extend `TEXTSPLIT` with row delimiters, case-insensitive matching, and padding.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
