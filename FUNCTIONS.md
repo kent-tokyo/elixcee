@@ -464,6 +464,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `LEFTB` / `RIGHTB` / `MIDB` | Extract by DBCS bytes | Classic |
 | `LEN` / `LENB` | Character / byte count | Classic |
 | `UPPER` / `LOWER` / `PROPER` | Case conversion | Classic |
+| `PHONETIC` | Deterministic source-text fallback when OOXML phonetic runs are unavailable | Classic |
 | `TRIM` | Remove extra spaces | Classic |
 | `FIND` | Case-sensitive position search | Classic |
 | `FINDB` | Case-sensitive byte-position search using DBCS widths | Classic |
@@ -642,9 +643,3 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `IMAGE(source, ...)` | Fetches images from URLs — not applicable in a headless VBA emulator |
 | `GROUPBY(row_fields, values, function, ...)` | Complex pivot-style aggregation; requires a multi-dimensional grouping engine |
 | `TRIMRANGE(range)` | Trims empty rows/cols from the edges of a range; low usage frequency |
-
-### Text
-
-| Function | Description | Excel |
-|---|---|---|
-| `PHONETIC` | Extract phonetic (furigana) characters | Classic |

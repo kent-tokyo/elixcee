@@ -446,6 +446,7 @@ fn eval_func(
         "FIND" => func_find(args, cells),
         "JIS" => func_jis(args, cells),
         "LOWER" => func_lower(args, cells),
+        "PHONETIC" => func_phonetic(args, cells),
         "PROPER" => func_proper(args, cells),
         "REPLACE" => func_replace(args, cells),
         "REPLACEB" => func_replaceb(args, cells),
@@ -3365,6 +3366,23 @@ fn func_lower(
     Ok(Variant::Str(
         to_str(&evaluate(&args[0], cells)?).to_lowercase(),
     ))
+}
+
+fn func_phonetic(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("PHONETIC requires 1 argument".into());
+    }
+    // OOXML phonetic runs are not currently retained by the workbook model.
+    // Preserve the source text rather than invoking any locale-dependent UI or
+    // speech service; this is deterministic and safe for headless execution.
+    match evaluate(&args[0], cells)? {
+        Variant::Str(value) => Ok(Variant::Str(value)),
+        Variant::Empty => Ok(Variant::Str(String::new())),
+        _ => Ok(Variant::Error(ExcelError::Value)),
+    }
 }
 
 fn func_proper(
