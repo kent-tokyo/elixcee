@@ -689,6 +689,11 @@ fn eval_func(
         "DCOUNTA" => func_dcounta(args, cells),
         "DMAX" => func_dmax(args, cells),
         "DMIN" => func_dmin(args, cells),
+        "DPRODUCT" => func_dproduct(args, cells),
+        "DSTDEV" => func_dstdev(args, cells),
+        "DSTDEVP" => func_dstdevp(args, cells),
+        "DVAR" => func_dvar(args, cells),
+        "DVARP" => func_dvarp(args, cells),
         // ── LET / higher-order ───────────────────────────────────────────────
         "LET" => func_let(args, cells),
         "LAMBDA" => func_lambda(args, cells),
@@ -10095,6 +10100,95 @@ fn func_dmin(
     Ok(as_integer_if_whole(min.unwrap_or(0.0)))
 }
 
+fn db_numeric_vals(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    fname: &str,
+) -> Result<Option<Vec<f64>>, String> {
+    let Some(ctx) = db_resolve_args(args, cells, fname)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        db_matched_vals(&ctx, cells)
+            .iter()
+            .filter_map(as_f64)
+            .collect(),
+    ))
+}
+
+fn func_dproduct(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let Some(nums) = db_numeric_vals(args, cells, "DPRODUCT")? else {
+        return Ok(Variant::Error(ExcelError::Ref));
+    };
+    Ok(as_integer_if_whole(nums.into_iter().product::<f64>()))
+}
+
+fn func_dstdev(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let Some(nums) = db_numeric_vals(args, cells, "DSTDEV")? else {
+        return Ok(Variant::Error(ExcelError::Ref));
+    };
+    if nums.len() < 2 {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+    let variance =
+        nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / (nums.len() - 1) as f64;
+    Ok(Variant::Float(variance.sqrt()))
+}
+
+fn func_dstdevp(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let Some(nums) = db_numeric_vals(args, cells, "DSTDEVP")? else {
+        return Ok(Variant::Error(ExcelError::Ref));
+    };
+    if nums.is_empty() {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+    let variance = nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / nums.len() as f64;
+    Ok(Variant::Float(variance.sqrt()))
+}
+
+fn func_dvar(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let Some(nums) = db_numeric_vals(args, cells, "DVAR")? else {
+        return Ok(Variant::Error(ExcelError::Ref));
+    };
+    if nums.len() < 2 {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+    Ok(Variant::Float(
+        nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / (nums.len() - 1) as f64,
+    ))
+}
+
+fn func_dvarp(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let Some(nums) = db_numeric_vals(args, cells, "DVARP")? else {
+        return Ok(Variant::Error(ExcelError::Ref));
+    };
+    if nums.is_empty() {
+        return Ok(Variant::Error(ExcelError::DivZero));
+    }
+    let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+    Ok(Variant::Float(
+        nums.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / nums.len() as f64,
+    ))
+}
+
 // ── TOCOL / TOROW ─────────────────────────────────────────────────────────────
 
 /// Flatten any `Variant::Array` items in the collected values so that functions
@@ -12678,6 +12772,26 @@ mod tests {
         assert_eq!(
             calc("=DMIN(A1:B5,\"Score\",D1:D2)", &c),
             Variant::Integer(80)
+        );
+        assert_eq!(
+            calc("=DPRODUCT(A1:B5,\"Score\",D1:D2)", &c),
+            Variant::Integer(7200)
+        );
+        match calc("=DSTDEV(A1:B5,\"Score\",D1:D2)", &c) {
+            Variant::Float(value) => assert!((value - 7.0710678119).abs() < 1e-9),
+            other => panic!("DSTDEV unexpected: {:?}", other),
+        }
+        match calc("=DSTDEVP(A1:B5,\"Score\",D1:D2)", &c) {
+            Variant::Float(value) => assert!((value - 5.0).abs() < 1e-9),
+            other => panic!("DSTDEVP unexpected: {:?}", other),
+        }
+        assert_eq!(
+            calc("=DVAR(A1:B5,\"Score\",D1:D2)", &c),
+            Variant::Float(50.0)
+        );
+        assert_eq!(
+            calc("=DVARP(A1:B5,\"Score\",D1:D2)", &c),
+            Variant::Float(25.0)
         );
 
         // No matches → DSUM=0, DAVERAGE=#DIV/0!, DCOUNT=0, DMAX=0, DMIN=0

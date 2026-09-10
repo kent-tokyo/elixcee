@@ -537,6 +537,11 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `DCOUNTA`  | Count all values in a filtered database column | Classic |
 | `DMAX`     | Maximum value in a filtered database column | Classic |
 | `DMIN`     | Minimum value in a filtered database column | Classic |
+| `DPRODUCT` | Product of numeric values in a filtered database column | Classic |
+| `DSTDEV`   | Sample standard deviation of a filtered database column | Classic |
+| `DSTDEVP`  | Population standard deviation of a filtered database column | Classic |
+| `DVAR`     | Sample variance of a filtered database column | Classic |
+| `DVARP`    | Population variance of a filtered database column | Classic |
 
 ---
 
