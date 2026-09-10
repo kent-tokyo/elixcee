@@ -8016,6 +8016,16 @@ fn unit_def(unit: &str) -> Option<UnitDef> {
             scale: 1_852.0,
             offset: 0.0,
         },
+        "ang" | "angstrom" | "angstroms" => UnitDef {
+            category: "length",
+            scale: 1e-10,
+            offset: 0.0,
+        },
+        "pica" | "picas" => UnitDef {
+            category: "length",
+            scale: 0.0003528,
+            offset: 0.0,
+        },
         "g" | "gram" | "grams" => UnitDef {
             category: "mass",
             scale: 0.001,
@@ -8044,6 +8054,21 @@ fn unit_def(unit: &str) -> Option<UnitDef> {
         "stone" | "st" => UnitDef {
             category: "mass",
             scale: 6.35029318,
+            offset: 0.0,
+        },
+        "ton" | "tonne" | "tonnes" => UnitDef {
+            category: "mass",
+            scale: 1_000.0,
+            offset: 0.0,
+        },
+        "sg" | "slug" | "slugs" => UnitDef {
+            category: "mass",
+            scale: 14.59390294,
+            offset: 0.0,
+        },
+        "u" | "amu" => UnitDef {
+            category: "mass",
+            scale: 1.66053906660e-27,
             offset: 0.0,
         },
         "s" | "sec" | "second" | "seconds" => UnitDef {
@@ -8156,6 +8181,36 @@ fn unit_def(unit: &str) -> Option<UnitDef> {
             scale: 1.478676478125e-5,
             offset: 0.0,
         },
+        "in3" | "cubicinch" | "cubicinches" => UnitDef {
+            category: "volume",
+            scale: 1.6387064e-5,
+            offset: 0.0,
+        },
+        "ft3" | "cubicfoot" | "cubicfeet" => UnitDef {
+            category: "volume",
+            scale: 0.028316846592,
+            offset: 0.0,
+        },
+        "yd3" | "cubicyard" | "cubicyards" => UnitDef {
+            category: "volume",
+            scale: 0.764554857984,
+            offset: 0.0,
+        },
+        "n" | "force_n" | "newton" | "newtons" => UnitDef {
+            category: "force",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "dyn" | "dyne" | "dynes" => UnitDef {
+            category: "force",
+            scale: 1e-5,
+            offset: 0.0,
+        },
+        "lbf" | "poundforce" => UnitDef {
+            category: "force",
+            scale: 4.4482216152605,
+            offset: 0.0,
+        },
         "pa" | "pascal" | "pascals" => UnitDef {
             category: "pressure",
             scale: 1.0,
@@ -8184,6 +8239,11 @@ fn unit_def(unit: &str) -> Option<UnitDef> {
         "mmhg" => UnitDef {
             category: "pressure",
             scale: 133.322387415,
+            offset: 0.0,
+        },
+        "torr" => UnitDef {
+            category: "pressure",
+            scale: 133.322368421,
             offset: 0.0,
         },
         "j" | "joule" | "joules" => UnitDef {
@@ -8219,6 +8279,51 @@ fn unit_def(unit: &str) -> Option<UnitDef> {
         "btu" => UnitDef {
             category: "energy",
             scale: 1_055.05585262,
+            offset: 0.0,
+        },
+        "ev" | "electronvolt" | "electronvolts" => UnitDef {
+            category: "energy",
+            scale: 1.602176634e-19,
+            offset: 0.0,
+        },
+        "hz" | "hertz" => UnitDef {
+            category: "frequency",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "khz" => UnitDef {
+            category: "frequency",
+            scale: 1e3,
+            offset: 0.0,
+        },
+        "mhz" => UnitDef {
+            category: "frequency",
+            scale: 1e6,
+            offset: 0.0,
+        },
+        "ghz" => UnitDef {
+            category: "frequency",
+            scale: 1e9,
+            offset: 0.0,
+        },
+        "bit" | "bits" => UnitDef {
+            category: "information",
+            scale: 1.0,
+            offset: 0.0,
+        },
+        "byte" | "bytes" => UnitDef {
+            category: "information",
+            scale: 8.0,
+            offset: 0.0,
+        },
+        "kbit" => UnitDef {
+            category: "information",
+            scale: 1e3,
+            offset: 0.0,
+        },
+        "kbyte" => UnitDef {
+            category: "information",
+            scale: 8e3,
             offset: 0.0,
         },
         "w" | "watt" | "watts" => UnitDef {
@@ -14417,6 +14522,22 @@ mod tests {
         assert!(matches!(
             calc("=CONVERT(1,\"kWh\",\"J\")", &c),
             Variant::Integer(3600000)
+        ));
+        assert!(matches!(
+            calc("=CONVERT(1,\"N\",\"dyn\")", &c),
+            Variant::Float(value) if (value - 100000.0).abs() < 1e-9
+        ));
+        assert_eq!(
+            calc("=CONVERT(1,\"GHz\",\"MHz\")", &c),
+            Variant::Integer(1000)
+        );
+        assert_eq!(
+            calc("=CONVERT(1,\"byte\",\"bit\")", &c),
+            Variant::Integer(8)
+        );
+        assert!(matches!(
+            calc("=CONVERT(1,\"m\",\"N\")", &c),
+            Variant::Error(ExcelError::Num)
         ));
         assert_eq!(
             calc("=CONVERT(1,\"m\",\"s\")", &c),

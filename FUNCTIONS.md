@@ -427,7 +427,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `BIN2HEX` / `BIN2OCT` | Convert binary text to hexadecimal / octal text | Classic |
 | `HEX2BIN` / `HEX2OCT` | Convert hexadecimal text to binary / octal text | Classic |
 | `OCT2BIN` / `OCT2HEX` | Convert octal text to binary / hexadecimal text | Classic |
-| `CONVERT` | Convert between supported length, mass, time, area, volume, temperature, pressure, energy, power, and speed units | Classic |
+| `CONVERT` | Convert between supported length, mass, time, area, volume, temperature, pressure, energy, power, speed, force, frequency, and information units | Classic |
 | `ROMAN` / `ARABIC` | Convert between integers and canonical Roman numerals | Classic |
 | `COMPLEX` | Construct a complex number string | Classic |
 | `IMREAL` / `IMAGINARY` / `IMARGUMENT` | Extract real / imaginary part or argument of a complex number | Classic |
