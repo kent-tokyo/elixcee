@@ -196,7 +196,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 CONVERT単位拡張BUILD: `CONVERT`へangstrom／pica、ton／slug／atomic mass、立方インチ系、force、torr、electronvolt、frequency、bit／byte系を追加し、カテゴリ境界を維持した。Excel全単位表・大文字小文字細則・oracle校正は未完。
 - [x] G4 XML抽出BUILD: `FILTERXML`をローカルXMLの要素／属性XPath（absolute／descendant、wildcard、text）subsetへ接続し、複数結果・不正XML・未検出境界を回帰した。完全XPath、namespace、外部entity、Excel oracle校正は未完。
 - [x] G4 GROUPBY配列集計BUILD: `GROUPBY`を1列row_fields／valuesのグループ化、SUM／AVERAGE／COUNT／COUNTA／MIN／MAX／PRODUCT reducer、filter配列、first-seen／昇降順へ接続した。多列field relationship、headers／totals深度、LAMBDA reducer、Excel oracle校正は未完。
-- [x] G4 ETS予測BUILD: `FORECAST.ETS`／`FORECAST.ETS.SEASONALITY`を一定刻み・重複なしの数値timeline検証、明示seasonality、seasonal-naive／linear fallback、周期相関検出へ接続した。Excel AAA ETS、欠損補完、重複aggregation、CONFINT／STAT、oracle校正は未完。
+- [x] G4 ETS予測BUILD: `FORECAST.ETS`／`FORECAST.ETS.SEASONALITY`／`FORECAST.ETS.CONFINT`／`FORECAST.ETS.STAT`を一定刻み・重複なしの数値timeline検証、明示seasonality、seasonal-naive／linear fallback、周期検出、残差ベース区間・診断へ接続した。Excel AAA ETS、欠損補完、重複aggregation、厳密なExcel値一致、oracle校正は未完。
 - [x] G4 PIVOTBY配列集計BUILD: `PIVOTBY`を1列row／column fieldsとvaluesのcross-tab、行列ヘッダー、空組合せのreducer評価へ接続した。multi-field relationship、headers／totals depth、sort／filter／LAMBDA、Excel oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。

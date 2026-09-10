@@ -543,6 +543,8 @@ fn eval_func(
         "FORECAST.LINEAR" | "FORECAST" => func_forecast_linear(args, cells),
         "FORECAST.ETS" => func_forecast_ets(args, cells),
         "FORECAST.ETS.SEASONALITY" => func_forecast_ets_seasonality(args, cells),
+        "FORECAST.ETS.CONFINT" => func_forecast_ets_confint(args, cells),
+        "FORECAST.ETS.STAT" => func_forecast_ets_stat(args, cells),
         "TREND" => func_trend(args, cells),
         "GROWTH" => func_growth(args, cells),
         "LINEST" => func_linest(args, cells),
@@ -5694,6 +5696,208 @@ fn func_forecast_ets_seasonality(
         }
     }
     Ok(Variant::Integer(forecast_ets_seasonality(&values) as i64))
+}
+
+fn forecast_ets_requested_seasonality(
+    requested: usize,
+    explicit: bool,
+    values: &[f64],
+    name: &str,
+) -> Result<usize, String> {
+    if requested > values.len() {
+        return Err(format!("{name}: seasonality exceeds the values length"));
+    }
+    Ok(if requested == 0 {
+        0
+    } else if explicit && requested > 1 {
+        requested
+    } else {
+        forecast_ets_seasonality(values)
+    })
+}
+
+fn forecast_ets_point(
+    target: f64,
+    values: &[f64],
+    timeline: &[f64],
+    seasonality: usize,
+    name: &str,
+) -> Result<f64, String> {
+    let step = timeline[1] - timeline[0];
+    let ahead = (target - *timeline.last().unwrap_or(&timeline[0])) / step;
+    if !target.is_finite() || ahead <= 0.0 || (ahead - ahead.round()).abs() > 1e-8 {
+        return Err(format!(
+            "{name}: target must be a future integral timeline step"
+        ));
+    }
+    let horizon = ahead.round() as usize;
+    if seasonality == 0 {
+        let known_y = values.to_vec();
+        let known_x = timeline.to_vec();
+        let slope = regression_slope(&known_y, &known_x)?;
+        let my = known_y.iter().sum::<f64>() / known_y.len() as f64;
+        let mx = known_x.iter().sum::<f64>() / known_x.len() as f64;
+        Ok(my + slope * (target - mx))
+    } else if seasonality == 1 {
+        Ok(*values.last().unwrap_or(&0.0))
+    } else {
+        let index = values.len() - seasonality + (horizon - 1) % seasonality;
+        Ok(values[index])
+    }
+}
+
+fn forecast_ets_metric_residuals(values: &[f64], seasonality: usize) -> Vec<f64> {
+    if seasonality == 0 {
+        let x: Vec<f64> = (0..values.len()).map(|i| i as f64).collect();
+        let slope = regression_slope(values, &x).unwrap_or(0.0);
+        let mean_x = (values.len() - 1) as f64 / 2.0;
+        let mean_y = values.iter().sum::<f64>() / values.len() as f64;
+        let intercept = mean_y - slope * mean_x;
+        values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| value - (intercept + slope * i as f64))
+            .collect()
+    } else {
+        values
+            .iter()
+            .enumerate()
+            .skip(seasonality)
+            .map(|(i, value)| value - values[i - seasonality])
+            .collect()
+    }
+}
+
+fn forecast_ets_optional_at(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    seasonality_index: usize,
+    completion_index: usize,
+    aggregation_index: usize,
+    name: &str,
+) -> Result<(usize, bool), String> {
+    let requested = if let Some(arg) = args.get(seasonality_index) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=8760.0).contains(&value) {
+            return Err(format!(
+                "{name}: seasonality must be 0 or a positive integer <= 8760"
+            ));
+        }
+        value as usize
+    } else {
+        1
+    };
+    if let Some(arg) = args.get(completion_index) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=1.0).contains(&value) {
+            return Err(format!("{name}: data_completion must be 0 or 1"));
+        }
+    }
+    if let Some(arg) = args.get(aggregation_index) {
+        let value = to_float(&evaluate(arg, cells)?)?;
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=6.0).contains(&value) {
+            return Err(format!(
+                "{name}: aggregation must be an integer from 0 to 6"
+            ));
+        }
+    }
+    Ok((requested, args.len() > seasonality_index))
+}
+
+fn func_forecast_ets_confint(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(3..=7).contains(&args.len()) {
+        return Err("FORECAST.ETS.CONFINT requires 3 to 7 arguments".into());
+    }
+    let target = to_float(&evaluate(&args[0], cells)?)?;
+    let confidence = if let Some(arg) = args.get(3) {
+        to_float(&evaluate(arg, cells)?)?
+    } else {
+        0.95
+    };
+    if !(0.0..1.0).contains(&confidence) || !confidence.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let (values, timeline) =
+        forecast_ets_series(&args[1], &args[2], cells, "FORECAST.ETS.CONFINT")?;
+    let (requested, explicit) =
+        forecast_ets_optional_at(args, cells, 4, 5, 6, "FORECAST.ETS.CONFINT")?;
+    let seasonality =
+        forecast_ets_requested_seasonality(requested, explicit, &values, "FORECAST.ETS.CONFINT")?;
+    let _point = forecast_ets_point(
+        target,
+        &values,
+        &timeline,
+        seasonality,
+        "FORECAST.ETS.CONFINT",
+    )?;
+    let residuals = forecast_ets_metric_residuals(&values, seasonality);
+    let rmse =
+        (residuals.iter().map(|error| error * error).sum::<f64>() / residuals.len() as f64).sqrt();
+    let z = norm_ppf(0.5 + confidence / 2.0);
+    Ok(Variant::Float(
+        z * rmse * (1.0 + 1.0 / values.len() as f64).sqrt(),
+    ))
+}
+
+fn func_forecast_ets_stat(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(3..=6).contains(&args.len()) {
+        return Err("FORECAST.ETS.STAT requires 3 to 6 arguments".into());
+    }
+    let stat_type = to_float(&evaluate(&args[2], cells)?)?;
+    if !stat_type.is_finite() || stat_type.fract() != 0.0 || !(1.0..=8.0).contains(&stat_type) {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let (values, timeline) = forecast_ets_series(&args[0], &args[1], cells, "FORECAST.ETS.STAT")?;
+    let (requested, explicit) =
+        forecast_ets_optional_at(args, cells, 3, 4, 5, "FORECAST.ETS.STAT")?;
+    let seasonality =
+        forecast_ets_requested_seasonality(requested, explicit, &values, "FORECAST.ETS.STAT")?;
+    let residuals = forecast_ets_metric_residuals(&values, seasonality);
+    let mae = residuals.iter().map(|error| error.abs()).sum::<f64>() / residuals.len() as f64;
+    let rmse =
+        (residuals.iter().map(|error| error * error).sum::<f64>() / residuals.len() as f64).sqrt();
+    let result = match stat_type as u8 {
+        1 => 1.0,     // bounded model: level smoothing coefficient
+        2 | 3 => 0.0, // no trend/seasonal smoothing in this implementation
+        4 => {
+            let scale = values
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]).abs())
+                .sum::<f64>()
+                / (values.len() - 1) as f64;
+            if scale == 0.0 {
+                return Ok(Variant::Error(ExcelError::DivZero));
+            }
+            mae / scale
+        }
+        5 => {
+            residuals
+                .iter()
+                .enumerate()
+                .map(|(i, error)| {
+                    let actual = values[i + if seasonality == 0 { 0 } else { seasonality }];
+                    let predicted = actual - error;
+                    if actual.abs() + predicted.abs() == 0.0 {
+                        0.0
+                    } else {
+                        2.0 * error.abs() / (actual.abs() + predicted.abs())
+                    }
+                })
+                .sum::<f64>()
+                / residuals.len() as f64
+        }
+        6 => mae,
+        7 => rmse,
+        8 => timeline[1] - timeline[0],
+        _ => unreachable!(),
+    };
+    Ok(Variant::Float(result))
 }
 
 struct RegressionInputs {
@@ -18376,6 +18580,18 @@ mod tests {
             calc("=FORECAST.ETS(5,B1:B4,A1:A4,0)", &ets),
             Variant::Float(20.0)
         );
+        match calc("=FORECAST.ETS.CONFINT(5,B1:B4,A1:A4)", &ets) {
+            Variant::Float(value) => assert!(value.is_finite() && value >= 0.0),
+            other => panic!("FORECAST.ETS.CONFINT: {:?}", other),
+        }
+        assert_eq!(
+            calc("=FORECAST.ETS.STAT(B1:B4,A1:A4,8)", &ets),
+            Variant::Float(1.0)
+        );
+        match calc("=FORECAST.ETS.STAT(B1:B4,A1:A4,7,0)", &ets) {
+            Variant::Float(value) => assert!(value.is_finite() && value > 0.0),
+            other => panic!("FORECAST.ETS.STAT: {:?}", other),
+        }
         match calc("=STEYX(B1:B3,A1:A3)", &c) {
             Variant::Float(f) => assert!(f.abs() < 1e-9),
             other => panic!("STEYX: {:?}", other),
