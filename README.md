@@ -18,6 +18,9 @@ replacement for the Excel desktop application: UI features such as charts,
 dialogs, and screen updates are skipped, modeled, or reported according to the
 operation.
 
+VBA is optional: a Python or CLI workflow can use elixcee only to read, edit,
+save, and recalculate an Excel workbook.
+
 ### Choose by workflow
 
 | Need | Fit |

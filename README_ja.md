@@ -2,8 +2,8 @@
 
 [English](README.md) | **日本語** | [中文](README_zh.md)
 
-Microsoft Excelなしで、ワークブックの編集、対応する数式の再計算、
-データ処理向けVBAの実行・テスト・診断を行えるRust/Python製のヘッドレス
+Microsoft Excelなしで、Excelワークブックを直接編集し、対応する数式を再計算し、
+データ処理向けVBAの実行・テスト・診断も行えるRust/Python製のヘッドレス
 Excelワークブック自動化ランタイムです。
 PyO3によるPython API、単体CLI、実験的な`@elixcee/xlsx` JavaScript/WASMパッケージを提供します。
 
@@ -15,6 +15,7 @@ elixceeはVBA専用の実行ツールではありません。同じworkbookモ�
 データ編集、対応する数式の再計算、VBAの実行・診断・テストを行えます。
 ExcelをインストールできないCIやサーバーでの
 `.xlsx`/`.xlsm`の読み書きにも利用できます。
+VBAを使わず、PythonやCLIから読み込み、編集、保存、数式再計算だけを行うこともできます。
 
 Excelデスクトップアプリの完全な代替ではありません。画面更新、グラフ、
 ダイアログなどのUI機能は、スキップ・簡易モデル化・エラー化されます。
