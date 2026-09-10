@@ -389,6 +389,7 @@ fn eval_func(
         "MEDIAN" => func_median(args, cells),
         "MODE.MULT" | "MODE.SNGL" => func_mode_mult(args, cells),
         "FREQUENCY" => func_frequency(args, cells),
+        "PROB" => func_prob(args, cells),
         "PRODUCT" => func_product(args, cells),
         "ROW" => func_row(args, cells),
         "ROWS" => func_rows(args, cells),
@@ -1947,6 +1948,50 @@ fn func_frequency(
     }
     Ok(Variant::Array(
         counts.into_iter().map(Variant::Integer).collect(),
+    ))
+}
+
+fn func_prob(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if !(3..=4).contains(&args.len()) {
+        return Err("PROB requires 3 or 4 arguments".into());
+    }
+    let values = collect_values(&args[0], cells)?
+        .into_iter()
+        .filter_map(|value| as_f64(&value))
+        .collect::<Vec<_>>();
+    let probabilities = collect_values(&args[1], cells)?
+        .into_iter()
+        .filter_map(|value| as_f64(&value))
+        .collect::<Vec<_>>();
+    if values.is_empty() || values.len() != probabilities.len() {
+        return Err("PROB: value and probability arrays must have equal non-zero length".into());
+    }
+    if probabilities
+        .iter()
+        .any(|probability| !probability.is_finite() || *probability < 0.0)
+        || probabilities.iter().sum::<f64>() > 1.0 + 1e-12
+    {
+        return Err("PROB: probabilities must be non-negative and sum to at most 1".into());
+    }
+    let lower = to_float(&evaluate(&args[2], cells)?)?;
+    let upper = if args.len() == 4 {
+        to_float(&evaluate(&args[3], cells)?)?
+    } else {
+        lower
+    };
+    if !lower.is_finite() || !upper.is_finite() || lower > upper {
+        return Err("PROB: invalid lower or upper limit".into());
+    }
+    Ok(as_integer_if_whole(
+        values
+            .iter()
+            .zip(probabilities)
+            .filter(|(value, _)| **value >= lower && **value <= upper)
+            .map(|(_, probability)| probability)
+            .sum(),
     ))
 }
 
@@ -13865,6 +13910,23 @@ mod tests {
             },
             other => panic!("LOGEST result unexpected: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_prob_function() {
+        let c = cells_from(&[
+            ((1, 1), Variant::Integer(1)),
+            ((2, 1), Variant::Integer(2)),
+            ((3, 1), Variant::Integer(3)),
+            ((4, 1), Variant::Integer(4)),
+            ((1, 2), Variant::Float(0.1)),
+            ((2, 2), Variant::Float(0.2)),
+            ((3, 2), Variant::Float(0.3)),
+            ((4, 2), Variant::Float(0.4)),
+        ]);
+        assert_eq!(calc("=PROB(A1:A4,B1:B4,2,3)", &c), Variant::Float(0.5));
+        assert_eq!(calc("=PROB(A1:A4,B1:B4,2)", &c), Variant::Float(0.2));
+        assert!(evaluate(&fparse("=PROB(A1:A4,B1:B4,4,2)").unwrap(), &c).is_err());
     }
 
     #[test]

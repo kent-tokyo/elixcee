@@ -8,6 +8,7 @@
 - Formula coverage: add `MODE.SNGL`, `TRIMMEAN`, `SKEW`, and `KURT` statistical summary formulas with domain and sample-estimator regression tests.
 - Formula coverage: add `RANK.EQ`, `RANK.AVG`, and `SKEW.P` coverage for tied ranks, ordering, and population skewness.
 - Formula coverage: add array-returning `FREQUENCY` with inclusive bins and an overflow bucket.
+- Formula coverage: add `PROB` weighted probability aggregation with inclusive limits and probability validation.
 - Formula coverage: add array-returning `TREND` and `GROWTH` regression predictions with constant/intercept and domain validation.
 - Formula coverage: add single-variable `LINEST` coefficients and optional regression statistics.
 - Formula coverage: add single-variable `LOGEST` exponential coefficients and optional regression statistics.
