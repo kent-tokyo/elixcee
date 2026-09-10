@@ -57,7 +57,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G2a/G2b 追加 BUILD: pivotCaches ownerを再生成workbookへ戻し、workbook relationshipの再採番とcache definition／recordsへの内部relationship到達性検査を適用した。Pivotの再集計・編集、cacheIdの意味更新、fixtureによるExcel再open検証は未完。
 - [x] G2c safety BUILD: Chart/DrawingまたはPivotを含む入力に対するsheet rename／行列挿入削除などの構造編集を、参照更新経路がない場合は保存前に明示拒否するようにした。古い参照を黙って保存しない。実際のchart参照・anchor・pivot source更新はG2d以降の未完項目。
 - [ ] G2d: Charts / Drawingsの作成・一般編集API、Pivotの一般source/cache更新を一機能ずつ追加。既存Chart系列のformula／cache、worksheet-backed Pivot source、two-cell Drawing anchorの限定編集は部分BUILD済み。描画再現・Pivot再集計は保持とは別の未完項目として扱う。
-- [x] G2d Chart creation 部分 BUILD: 既存worksheet Drawingへのline/bar/area/pie Chart追加、two-cell anchor、Chart part、Drawing relationship、Content Typesを生成し、実Excel由来fixtureのZIP接続回帰を追加した。`Vm.add_chart_series`で作成Chartへ追加のcategory/value系列も最大65系列までキューできる。既存Drawingを持たない新規sheetへの自動Drawing生成、完全なChart編集、Excel再openは未完。
+- [x] G2d Chart creation 部分 BUILD: 既存worksheet Drawingへのline/bar/area/pie Chart追加、two-cell anchor、Chart part、Drawing relationship、Content Typesを生成し、実Excel由来fixtureのZIP接続回帰を追加した。`Vm.add_chart_series`で作成Chartへ追加のcategory/value系列も最大65系列までキューできる。生成ChartのlineChart単独はmacOS Excelで再openできたが、完全なmulti-chart/bar smoke caseは修復警告が残るため、Excel互換性は未検証のままとする。既存Drawingを持たない新規sheetへの自動Drawing生成、完全なChart編集、Excel再open gateは未完。
 - [x] G2d 部分 BUILD: sheet renameに限定したChart `<c:f>`とPivot `worksheetSource@sheet`の安全な参照更新、およびDrawing／relationship chain保持を実装・回帰検証した。Chart/Drawing作成・一般編集、row/column編集に伴うanchor更新、Pivot source/cache編集・再集計は未完。
 - [x] G2d Chart rename BUILD: 単純なsheet renameに限り、Chart XMLの`<c:f>`に含まれるqualified sheet referenceを既存formula parserで安全に書き換え、Drawing owner／relationshipを保持して保存する経路を実fixtureで検証した。chart creation、一般のChart/Drawing編集、Pivot更新、Excel再openは未完。
 - [x] G2d Pivot rename BUILD: 単純なsheet renameに限り、Pivot cache definitionの`worksheetSource@sheet`をXML escape付きで更新し、cache本体・cacheId・table source・再集計には触れずに保存する経路と回帰を追加した。Pivot source/cacheの一般編集、再集計、Excel再openは未完。
@@ -106,7 +106,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G2d Pivot source BUILD: 既存のworksheet-backed Pivot cacheに対する`Vm.set_pivot_worksheet_source`（Python binding／型stub含む）を追加し、`worksheetSource`のsheet／A1 `ref`を限定更新できるようにした。cache records・PivotTable layout・再集計は変更せず、対象cache／source／属性欠損は拒否する。table-backed source、一般cache編集、Excel再openは未完。
 - [x] G2c safety BUILD: sheet rename、row/column insert/delete、sheet move/deleteを構造編集として追跡し、未更新のDrawing／Pivot ownerを保存時に復元しない安全境界を追加した。参照の実更新と明示的な編集APIは未完。
 - [x] G2 External Links安全policy: 既定の`preserve`は外部URLを取得・実行せずrelationshipをラウンドトリップ用に保持し、`reject`ではモデル構築前に拒否、`drop`ではowner／relationship／`xl/externalLinks/` partsを保存時に除去する。外部参照数式のExcel oracle校正は未完。
-- [ ] MEASURE: 自作最小packageとExcel由来fixtureで、part／rels／owner／cacheを比較し、実Excelの修復警告と編集後の再利用を確認する。
+- [ ] MEASURE: 自作最小packageとExcel由来fixtureで、part／rels／owner／cacheを比較し、実Excelの修復警告と編集後の再利用を確認する。現時点の証拠は、lineChart単独の再open成功とmulti-chart/barの修復警告であり、後者を成功扱いしない。
 
 ### G3 — Workbook単位の数式評価（X3）
 

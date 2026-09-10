@@ -20,7 +20,8 @@ Excelデスクトップアプリの完全な代替ではありません。画面
 ダイアログなどのUI機能は、スキップ・簡易モデル化・エラー化されます。
 既存Chartの系列formula・cache・marker・smooth・負値表示・可視性・title、two-cell
 Drawing anchor、worksheet-backed Pivot sourceには限定編集APIがあります。既存Drawingへの
-line/bar/area/pie Chart作成にも対応しますが、一般のDrawing shape編集とPivot再集計は対象外です。
+line/bar/area/pie Chart作成APIもBUILD段階で追加していますが、macOS Excelでの完全な
+再open検証は未完です。一般のDrawing shape編集とPivot再集計は対象外です。
 完全なExcelオブジェクトモデルやOOXML互換性が必要な場合は、対応範囲を確認してください。
 
 ### 用途別の選択
@@ -98,7 +99,7 @@ boundedなイベント連鎖が反映されます。明示的なA1 targetを
 APIの詳細は[elixcee.pyi](elixcee.pyi)を参照してください。
 `Vm.tables()` と `Vm.data_validations()` は、テーブル列・範囲・検証規則を構造化された型付きmetadataとして返します。計算列数式や検証数式の評価は行いません。
 読込済みXLSX/XLSMでは、`Vm.sheet_id(name)` と `Vm.sheet_name_for_id(sheet_id)` により、タブ順やrenameから独立した元ファイルのsheet IDを参照できます。新規sheetやODS sheetには推測したIDを付けません。
-読込済みworkbookでは、既存Drawingへの限定的なline/bar/area/pie Chart作成（系列追加を含む）と、既存Chart系列の限定編集を提供しています。Chart作成には既存Drawingが必要です。一般的なobject編集とPivot cache再集計は現在の契約対象外です。
+読込済みworkbookでは、既存Drawingへの限定的なline/bar/area/pie Chart作成（系列追加を含む）と、既存Chart系列の限定編集をBUILD段階で提供しています。Chart作成には既存Drawingが必要です。lineChart単独はmacOS Excelで再openできましたが、複数Chart／barChartを含むケースは修復警告が残っています。一般的なobject編集とPivot cache再集計は現在の契約対象外です。
 
 大きなXLSX/XLSMには、全体を展開しない`open_stream(path, sheet=None)`を使えます。
 `include_row_numbers=True`では`(行番号, 値)`を返し、`max_rows=N`で読み取り行数を

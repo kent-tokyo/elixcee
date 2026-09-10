@@ -6,7 +6,7 @@ elixcee 是一个使用 Rust/Python 编写的无头 Excel 工作簿自动化运�
 
 elixcee 不是 VBA 专用执行器，而是工作簿自动化运行时：可以在同一个工作簿模型上直接编辑数据、重新计算受支持的公式，以及执行、诊断和测试受支持的 VBA。它适合没有安装 Excel 的 CI 和服务器环境中的 `.xlsx`/`.xlsm` 读写。
 
-它不是 Excel 桌面应用的完整替代品。屏幕更新和对话框等 UI 功能会被跳过、简化建模或报告错误。支持在现有 Drawing 中有限创建 line/bar/area/pie 图表（包括追加系列），也支持有限编辑现有图表系列、缓存和基于工作表的 Pivot source；一般 Drawing 编辑和 Pivot 重新计算仍不在当前契约内。需要完整 Excel 对象模型或完整 OOXML 兼容性时，请先检查支持边界。
+它不是 Excel 桌面应用的完整替代品。屏幕更新和对话框等 UI 功能会被跳过、简化建模或报告错误。现有 Drawing 中的 line/bar/area/pie 图表创建（包括追加系列）已经进入 BUILD 阶段，也支持有限编辑现有图表系列、缓存和基于工作表的 Pivot source；lineChart 单独通过了 macOS Excel 重新打开冒烟测试，但包含多个图表或 barChart 的完整案例仍会触发 Excel 修复。一般 Drawing 编辑和 Pivot 重新计算仍不在当前契约内。需要完整 Excel 对象模型或完整 OOXML 兼容性时，请先检查支持边界。
 
 版本：**1.0.7**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 JavaScript 包仍为 private，尚未发布。

@@ -80,6 +80,11 @@ documents selected workbooks authored/reopened in Excel for Mac.
 It does **not** verify the whole VBA corpus or post-save macro execution.
 Its version-specific losses must not be presented as a current implementation inventory.
 
+The 2026-09-10 Chart smoke check is narrower: a generated line-chart-only
+case reopened without a recovery warning, while the complete multi-chart/bar
+case reopened as repaired. The latter remains a negative result and does not
+promote the feature matrix's `excel_reopen` status.
+
 ## Performance and CI
 
 [Workbook benchmarks](../docs/benchmarks/README.md) and

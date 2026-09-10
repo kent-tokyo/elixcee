@@ -4,7 +4,20 @@
 
 ## [Unreleased]
 
-Next changes go here. The entries below are released in 1.0.7.
+- Chart BUILD: add creation of line/bar/area/pie charts in an existing Drawing,
+  including bounded additional category/value series, and document that this is
+  not yet an Excel-compatibility guarantee.
+- Chart compatibility: correct generated title and bar-series XML candidates,
+  but retain the Excel recovery warning for the complete multi-chart/bar smoke
+  case. The line-chart-only reopen smoke test passes on macOS Excel; no chart
+  Excel-reopen status is promoted in the feature matrix.
+- Compatibility boundary: Pivot cache refresh-on-load, field-caption and
+  worksheet-source edits remain limited BUILD features; cache regeneration and
+  recalculation are not implemented. External links remain preserve/reject/drop
+  safety paths; external-reference formula evaluation and Excel oracle
+  calibration remain unverified.
+
+The entries below are released in 1.0.7.
 
 ## [1.0.7] - 2026-09-10
 

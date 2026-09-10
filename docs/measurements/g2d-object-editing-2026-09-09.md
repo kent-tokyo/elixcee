@@ -1,13 +1,22 @@
 # G2d object editing local verification
 
-Date: 2026-09-09 (Asia/Tokyo)
+Date: 2026-09-10 (Asia/Tokyo; refreshed)
 
-This record covers only the bounded local BUILD for existing Chart-series,
+This record covers the bounded local BUILD for new and existing Chart content,
+including existing Chart-series,
 Chart-series-cache/smooth/invert-if-negative/visibility/line-color/fill-color, Chart-title/style/axis-title/legend-overlay/data-label, two-cell Drawing-anchor/shape-name/hidden, rotation/flip/fill/line-color/line-width/line-dash, worksheet-backed
 Pivot-source, Pivot refresh-policy, Pivot field-caption, Drawing
 alternative-text edits, and existing DrawingML text-run editing.
-It is not evidence of
-Excel reopening, Pivot recalculation, or general OOXML object compatibility.
+It is not evidence of Pivot recalculation or general OOXML object compatibility.
+
+## Excel reopen status
+
+The generated line-chart-only smoke case opened in Microsoft Excel for Mac
+without a recovery warning. The complete regression case containing a second
+Chart/barChart still opened as `修復済み` (Excel recovery). Its cells survived,
+but the Chart result is not accepted as a valid Excel artifact. This is a
+negative compatibility result, not a release claim; `compat/ooxml-feature-matrix.json`
+therefore keeps `excel_reopen` as `unverified`.
 
 ## Scope
 
@@ -131,6 +140,11 @@ Excel reopening, Pivot recalculation, or general OOXML object compatibility.
   retention of a second text run.
 - `Vm.set_chart_series_cache(...)` updates an existing cache or creates the
   matching cache when the selected series has only a `strRef`/`numRef` formula.
+- `Vm.add_chart(...)` and `Vm.add_chart_series(...)` are BUILD-stage APIs for
+  bounded line/bar/area/pie creation in an existing worksheet Drawing. They
+  generate a Chart part, two-cell anchor, Drawing relationship, and content
+  type override. New-sheet Drawing creation and Excel-reopen compatibility are
+  not covered by this record.
 - Missing source parts, series, references, malformed attributes, control
   characters, and invalid A1 ranges are rejected before a successful save.
 - Explicit Pivot source edits also require the requested worksheet to exist in

@@ -46,6 +46,10 @@ Results apply only to their recorded source/binary, input, host, and timing poli
 Do not replace a historical result with a current-sounding claim or multiply
 speedup ratios across different baselines.
 
+The current Chart evidence is deliberately split: bounded creation and editing
+are BUILD-stage capabilities, while the macOS Excel reopen gate has only passed
+for a line-chart-only smoke case; the multi-chart/bar case still repairs.
+
 ## Maintenance rules
 
 Keep commands/schema in the agent contract, coverage in FUNCTIONS, limits in limits,
