@@ -172,6 +172,30 @@ rule = "no_excel_errors"
 }
 
 #[test]
+fn diagnostic_corpus_manifest_is_versioned_and_complete() {
+    let manifest: Value =
+        serde_json::from_str(include_str!("../compat/vba-diagnostics/corpus.json"))
+            .expect("diagnostic corpus manifest is valid JSON");
+    assert_eq!(manifest["schema_version"], 1);
+    assert_eq!(manifest["license"], "MIT");
+    let cases = manifest["cases"].as_array().expect("cases is an array");
+    assert_eq!(cases.len(), 5);
+    let ids = cases
+        .iter()
+        .map(|case| case["id"].as_str().expect("case id is a string"))
+        .collect::<Vec<_>>();
+    let mut unique = ids.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(ids.len(), unique.len(), "case IDs must be unique");
+    for case in cases {
+        assert!(case["class"].as_str().is_some());
+        assert!(case["runner_test"].as_str().is_some());
+        assert!(case["expected"].is_object());
+    }
+}
+
+#[test]
 fn non_json_mode_reports_a_root_cause_line_for_a_classified_failure() {
     let dir = build_fixture_dir("plaintext", ARRAY_OOB_MACRO, ARRAY_OOB_FIXTURE_TOML);
     let output = Command::new(env!("CARGO_BIN_EXE_elixcee"))

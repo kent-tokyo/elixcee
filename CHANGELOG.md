@@ -10,6 +10,9 @@
 - Snapshot BUILD: include bounded `dependency_diagnostics` and
   `has_formula_cycle` fields when dependency projection is enabled, covering
   formula parse failures, unresolved worksheet references, and cycle detection.
+- Diagnostic corpus BUILD: add a versioned five-class manifest covering range/
+  paste, hidden visibility, protection, formula results, and VBA resolution;
+  validate its expected machine-readable outcomes and redistribution boundary.
 - CI guidance: add a reproducible `diagnose-workbook` workflow, failure-artifact
   triage rules, and a redistributable diagnostic-corpus contract. This documents
   the supported diagnostic surface; it does not expand the VBA or Excel oracle.

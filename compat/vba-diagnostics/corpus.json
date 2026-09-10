@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "corpus_version": "2026-09-11.1",
+  "license": "MIT",
+  "cases": [
+    {
+      "id": "paste-shape-mismatch",
+      "class": "range_paste",
+      "runner_test": "paste_shape_mismatch_reports_both_shapes_and_a_resize_suggestion",
+      "expected": {"exit_success": false, "root_cause": "PASTE_SHAPE_MISMATCH"}
+    },
+    {
+      "id": "hidden-range-observation",
+      "class": "hidden_rows_columns",
+      "runner_test": "populate_from_sheets_threads_hidden_rows_and_columns_into_the_vm",
+      "expected": {"exit_success": true, "observation": "RANGE_CONTAINS_HIDDEN_CELLS"}
+    },
+    {
+      "id": "protected-sheet-write",
+      "class": "protection",
+      "runner_test": "writing_to_a_protected_sheet_reports_sheet_protected",
+      "expected": {"exit_success": false, "root_cause": "SHEET_PROTECTED"}
+    },
+    {
+      "id": "formula-error-result",
+      "class": "formula_result",
+      "runner_test": "json_failing_fixture_reports_a_classified_array_index_root_cause",
+      "expected": {"exit_success": false, "root_cause": "ARRAY_INDEX_OUT_OF_BOUNDS"}
+    },
+    {
+      "id": "vba-entry-resolution",
+      "class": "vba_resolution",
+      "runner_test": "missing_entrypoint_is_reported",
+      "expected": {"exit_success": false, "diagnostic": "missing_entrypoint"}
+    }
+  ]
+}
