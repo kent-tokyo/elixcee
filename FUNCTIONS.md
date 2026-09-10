@@ -587,6 +587,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `CHOOSECOLS` | Select specific columns by 1-based index | 2024/365 |
 | `CHOOSEROWS` | Select specific rows by 1-based index | 2024/365 |
 | `EXPAND` | Expand an array to a requested rectangle with a padding value | 2024/365 |
+| `TRIMRANGE` | Remove blank outer rows and columns from an array | 2024/365 |
 | `MAKEARRAY` | Generate an array by calling a LAMBDA with row and column indices | 2024/365 |
 | `MUNIT` | Identity matrix | Classic |
 | `MMULT` | Matrix multiplication | Classic |
@@ -643,4 +644,3 @@ per-function mode coverage, and independent oracle tests are tracked in
 |---|---|
 | `IMAGE(source, ...)` | Fetches images from URLs — not applicable in a headless VBA emulator |
 | `GROUPBY(row_fields, values, function, ...)` | Complex pivot-style aggregation; requires a multi-dimensional grouping engine |
-| `TRIMRANGE(range)` | Trims empty rows/cols from the edges of a range; low usage frequency |

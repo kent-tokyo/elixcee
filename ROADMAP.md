@@ -188,6 +188,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 奇数初回クーポンBUILD: `ODDFPRICE`／`ODDFYIELD`を初回クーポン按分、定期キャッシュフロー割引、利回り二分探索へ接続し、価格／利回り往復と日付・係数境界を回帰した。Excelの端数日・丸め・basis全域・oracle校正は未完。
 - [x] G4 奇数最終クーポンBUILD: `ODDLPRICE`／`ODDLYIELD`を最終クーポン按分、定期キャッシュフロー割引、利回り二分探索へ接続し、価格／利回り往復と日付・係数境界を回帰した。Excelの端数日・丸め・basis全域・oracle校正は未完。
 - [x] G4 動的配列拡張BUILD: `EXPAND`を既存の2D shape復元・spill配列経路へ接続し、矩形拡張、padding値、縮小拒否、正整数境界を回帰した。spill適用時の完全なshape metadataとExcel oracle校正は未完。
+- [x] G4 動的配列trim BUILD: `TRIMRANGE`を外周の空行／空列走査へ接続し、trim_rows／trim_colsの0–3 mode、全空配列、2D shapeを回帰した。trim reference構文・空文字列細則・Excel oracle校正は未完。
 - [x] G4 文字列メタデータ境界BUILD: `PHONETIC`をheadless-safeなsource-text fallbackとして追加し、OOXML phonetic run未保持時に外部locale/UIへ依存せず決定的な値を返す境界を回帰した。phonetic runの読込・編集・Excel oracle校正は未完。
 - [x] G4 URL文字列BUILD: `ENCODEURL`をUTF-8のRFC 3986 unreserved文字以外のpercent-encodingとして追加し、ASCII・空白・Unicode境界を回帰した。Excelのlocale／異常Unicode挙動のoracle校正は未完。
 - [x] G4 AGGREGATE mode拡張BUILD: `AGGREGATE`の7/8/10/11（標本・母集団の標準偏差／分散）、13（MODE.SNGL）、14/15（k指定LARGE／SMALL）、17–21（quartile／percentile／percentrank）を既存関数へ接続した。nested reference除外・全option意味論・Excel oracle校正は未完。

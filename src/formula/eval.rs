@@ -715,6 +715,7 @@ fn eval_func(
         "CHOOSECOLS" => func_choosecols(args, cells),
         "CHOOSEROWS" => func_chooserows(args, cells),
         "EXPAND" => func_expand(args, cells),
+        "TRIMRANGE" => func_trimrange(args, cells),
         "MAKEARRAY" => func_makearray(args, cells),
         // ── Math / Financial ─────────────────────────────────────────────────
         "COMBIN" => func_combin(args, cells),
@@ -13313,6 +13314,65 @@ fn func_expand(
     Ok(wrap_array(result))
 }
 
+fn func_trimrange(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 3 {
+        return Err("TRIMRANGE requires 1 to 3 arguments".into());
+    }
+    let values = flatten_array_vals(collect_values(&args[0], cells)?);
+    let (rows, cols) = array_shape_for_expr(&args[0], cells, values.len());
+    if rows == 0 || cols == 0 || values.len() != rows.saturating_mul(cols) {
+        return Ok(Variant::Empty);
+    }
+    let trim_mode = |arg: Option<&FormulaExpr>, name: &str| -> Result<u8, String> {
+        let value = if let Some(arg) = arg {
+            to_float(&evaluate(arg, cells)?)?
+        } else {
+            3.0
+        };
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=3.0).contains(&value) {
+            return Err(format!("TRIMRANGE {name} must be an integer from 0 to 3"));
+        }
+        Ok(value as u8)
+    };
+    let row_mode = trim_mode(args.get(1), "trim_rows")?;
+    let col_mode = trim_mode(args.get(2), "trim_cols")?;
+    let blank = |row: usize, col: usize| matches!(values[row * cols + col], Variant::Empty);
+    let mut row_start = 0;
+    let mut row_end = rows;
+    if row_mode & 1 != 0 {
+        while row_start < row_end && (0..cols).all(|col| blank(row_start, col)) {
+            row_start += 1;
+        }
+    }
+    if row_mode & 2 != 0 {
+        while row_end > row_start && (0..cols).all(|col| blank(row_end - 1, col)) {
+            row_end -= 1;
+        }
+    }
+    let mut col_start = 0;
+    let mut col_end = cols;
+    if col_mode & 1 != 0 {
+        while col_start < col_end && (row_start..row_end).all(|row| blank(row, col_start)) {
+            col_start += 1;
+        }
+    }
+    if col_mode & 2 != 0 {
+        while col_end > col_start && (row_start..row_end).all(|row| blank(row, col_end - 1)) {
+            col_end -= 1;
+        }
+    }
+    let mut result = Vec::with_capacity((row_end - row_start) * (col_end - col_start));
+    for row in row_start..row_end {
+        for col in col_start..col_end {
+            result.push(values[row * cols + col].clone());
+        }
+    }
+    Ok(wrap_array(result))
+}
+
 // ── COMBIN ───────────────────────────────────────────────────────────────────
 
 fn func_combin(
@@ -16552,6 +16612,38 @@ mod tests {
             calc("=EXPAND(SEQUENCE(2),1,1,0)", &c),
             Variant::Error(ExcelError::Num)
         ));
+    }
+
+    #[test]
+    fn test_trimrange() {
+        let c = cells_from(&[((2, 2), Variant::Integer(1)), ((3, 3), Variant::Integer(2))]);
+        assert_eq!(
+            calc("=TRIMRANGE(A1:C4)", &c),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Integer(2),
+            ])
+        );
+        assert_eq!(
+            calc("=TRIMRANGE(A1:C4,0,0)", &c),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Integer(1),
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Integer(2),
+                Variant::Empty,
+                Variant::Empty,
+                Variant::Empty,
+            ])
+        );
+        assert!(evaluate(&fparse("=TRIMRANGE(A1:C4,4,3)").unwrap(), &c).is_err());
     }
 
     #[test]

@@ -45,6 +45,7 @@
 - Formula coverage: add odd-first-coupon bond `ODDFPRICE` and `ODDFYIELD`.
 - Formula coverage: add odd-last-coupon bond `ODDLPRICE` and `ODDLYIELD`.
 - Formula coverage: add dynamic-array `EXPAND` with rectangular padding.
+- Formula coverage: add dynamic-array `TRIMRANGE` with configurable edge trimming.
 - Formula coverage: add deterministic headless `PHONETIC` source-text fallback.
 - Formula coverage: add side-effect-free UTF-8 `ENCODEURL` percent encoding.
 - Formula compatibility: extend `AGGREGATE` across function numbers 7, 8, 10, 11, 13, and 17–21 and honor k arguments for LARGE/SMALL modes.
