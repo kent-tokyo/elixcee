@@ -696,6 +696,7 @@ fn eval_func(
         "FILTER" => func_filter(args, cells),
         "FILTERXML" => func_filterxml(args, cells),
         "GROUPBY" => func_groupby(args, cells),
+        "PIVOTBY" => func_pivotby(args, cells),
         "UNIQUE" => func_unique(args, cells),
         "SORT" => func_sort(args, cells),
         "SORTBY" => func_sortby(args, cells),
@@ -10149,6 +10150,66 @@ fn func_groupby(
     Ok(wrap_array(result))
 }
 
+fn func_pivotby(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("PIVOTBY requires 4 arguments in the bounded array form".into());
+    }
+    let row_values = flatten_array_vals(collect_values(&args[0], cells)?);
+    let col_values = flatten_array_vals(collect_values(&args[1], cells)?);
+    let data_values = flatten_array_vals(collect_values(&args[2], cells)?);
+    let shapes = [
+        array_shape_for_expr(&args[0], cells, row_values.len()),
+        array_shape_for_expr(&args[1], cells, col_values.len()),
+        array_shape_for_expr(&args[2], cells, data_values.len()),
+    ];
+    if shapes.iter().any(|(_rows, cols)| *cols != 1)
+        || row_values.len() != col_values.len()
+        || row_values.len() != data_values.len()
+    {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let aggregate_name = match &args[3] {
+        FormulaExpr::FuncCall {
+            name,
+            args: call_args,
+        } if call_args.is_empty() => name,
+        FormulaExpr::Str(name) => name,
+        _ => return Ok(Variant::Error(ExcelError::Value)),
+    };
+    let mut row_keys = Vec::new();
+    let mut col_keys = Vec::new();
+    for value in &row_values {
+        if !row_keys.iter().any(|key| variant_eq(key, value)) {
+            row_keys.push(value.clone());
+        }
+    }
+    for value in &col_values {
+        if !col_keys.iter().any(|key| variant_eq(key, value)) {
+            col_keys.push(value.clone());
+        }
+    }
+    let mut result = Vec::with_capacity((row_keys.len() + 1) * (col_keys.len() + 1));
+    result.push(Variant::Empty);
+    result.extend(col_keys.iter().cloned());
+    for row_key in &row_keys {
+        result.push(row_key.clone());
+        for col_key in &col_keys {
+            let group = row_values
+                .iter()
+                .zip(col_values.iter())
+                .zip(data_values.iter())
+                .filter(|((row, col), _)| variant_eq(row_key, row) && variant_eq(col_key, col))
+                .map(|((_, _), value)| value.clone())
+                .collect::<Vec<_>>();
+            result.push(groupby_aggregate(aggregate_name, &group)?);
+        }
+    }
+    Ok(wrap_array(result))
+}
+
 fn func_filter(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -16955,6 +17016,38 @@ mod tests {
                 Variant::Integer(2),
                 Variant::Str("b".into()),
                 Variant::Integer(2),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_pivotby() {
+        let c = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((2, 1), Variant::Str("a".into())),
+            ((3, 1), Variant::Str("b".into())),
+            ((4, 1), Variant::Str("b".into())),
+            ((1, 2), Variant::Str("x".into())),
+            ((2, 2), Variant::Str("y".into())),
+            ((3, 2), Variant::Str("x".into())),
+            ((4, 2), Variant::Str("y".into())),
+            ((1, 3), Variant::Integer(1)),
+            ((2, 3), Variant::Integer(2)),
+            ((3, 3), Variant::Integer(3)),
+            ((4, 3), Variant::Integer(4)),
+        ]);
+        assert_eq!(
+            calc("=PIVOTBY(A1:A4,B1:B4,C1:C4,\"SUM\")", &c),
+            Variant::Array(vec![
+                Variant::Empty,
+                Variant::Str("x".into()),
+                Variant::Str("y".into()),
+                Variant::Str("a".into()),
+                Variant::Integer(1),
+                Variant::Integer(2),
+                Variant::Str("b".into()),
+                Variant::Integer(3),
+                Variant::Integer(4),
             ])
         );
     }

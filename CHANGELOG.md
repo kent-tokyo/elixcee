@@ -53,6 +53,7 @@
 - Formula coverage: extend `CONVERT` with force, frequency, information, and additional physical units.
 - Formula coverage: add a side-effect-free bounded local XPath subset for `FILTERXML`.
 - Formula coverage: add bounded one-column `GROUPBY` aggregation with filter and sort modes.
+- Formula coverage: add bounded one-column `PIVOTBY` cross-tab aggregation.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
