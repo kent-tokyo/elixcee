@@ -550,6 +550,7 @@ fn eval_func(
         "COVARIANCE.S" | "COVAR" => func_covariance_s(args, cells),
         "COVARIANCE.P" => func_covariance_p(args, cells),
         "FTEST" => func_ftest(args, cells),
+        "CHITEST" => func_chitest(args, cells),
         "NORM.DIST" | "NORMDIST" => func_norm_dist(args, cells),
         "NORM.INV" | "NORMINV" => func_norm_inv(args, cells),
         "NORM.S.DIST" | "NORMSDIST" => func_norm_s_dist(args, cells),
@@ -5233,6 +5234,43 @@ fn func_ftest(
     let p =
         (2.0 * (1.0 - f_cdf(ratio, (first.len() - 1) as f64, (second.len() - 1) as f64))).min(1.0);
     Ok(Variant::Float(p))
+}
+
+fn func_chitest(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("CHITEST requires 2 arguments".into());
+    }
+    let observed = collect_nums(std::slice::from_ref(&args[0]), cells)?;
+    let expected = collect_nums(std::slice::from_ref(&args[1]), cells)?;
+    if observed.is_empty() || observed.len() != expected.len() {
+        return Ok(Variant::Error(ExcelError::NA));
+    }
+    let mut statistic = 0.0;
+    for (actual, expected) in observed.iter().zip(expected.iter()) {
+        if !actual.is_finite() || !expected.is_finite() || *expected <= 0.0 {
+            return Ok(Variant::Error(ExcelError::Num));
+        }
+        statistic += (actual - expected).powi(2) / expected;
+    }
+    let dimensions = |expr: &FormulaExpr| match expr {
+        FormulaExpr::Range { r1, r2, c1, c2, .. } => Some((
+            ((*r1).max(*r2) - (*r1).min(*r2) + 1) as usize,
+            ((*c1).max(*c2) - (*c1).min(*c2) + 1) as usize,
+        )),
+        _ => None,
+    };
+    let (rows, cols) = dimensions(&args[0]).unwrap_or((1, observed.len()));
+    if dimensions(&args[1]).is_some_and(|shape| shape != (rows, cols)) {
+        return Ok(Variant::Error(ExcelError::NA));
+    }
+    let degrees = (rows.saturating_sub(1) * cols.saturating_sub(1)) as f64;
+    if degrees <= 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(1.0 - chisq_cdf(statistic, degrees)))
 }
 
 fn func_stdev_a(
@@ -17460,6 +17498,24 @@ mod tests {
             let formula = format!("=TTEST(A1:A3,B1:B3,2,{test_type})");
             assert!(matches!(calc(&formula, &two_samples), Variant::Float(v) if v.is_finite()));
         }
+        let chi_cells = cells_from(&[
+            ((1, 1), Variant::Integer(10)),
+            ((2, 1), Variant::Integer(20)),
+            ((1, 2), Variant::Integer(20)),
+            ((2, 2), Variant::Integer(40)),
+            ((1, 3), Variant::Integer(12)),
+            ((2, 3), Variant::Integer(18)),
+            ((1, 4), Variant::Integer(18)),
+            ((2, 4), Variant::Integer(42)),
+        ]);
+        assert!(matches!(
+            calc("=CHITEST(A1:B2,C1:D2)", &chi_cells),
+            Variant::Float(value) if (0.0..=1.0).contains(&value)
+        ));
+        assert_eq!(
+            calc("=CHITEST(A1:A3,B1:B2)", &chi_cells),
+            Variant::Error(ExcelError::NA)
+        );
         assert_eq!(calc("=FISHER(1)", &cells), Variant::Error(ExcelError::Num));
         assert_eq!(
             calc("=STANDARDIZE(1,1,0)", &cells),

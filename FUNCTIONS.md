@@ -323,6 +323,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `COVARIANCE.S` / `COVAR` | Sample covariance | Classic / 2010 |
 | `COVARIANCE.P` | Population covariance | 2010 |
 | `FTEST` | Two-sample F-test probability for equality of variances | Classic |
+| `CHITEST` | Chi-square test probability for observed and expected data | Classic |
 | `MODE` / `MODE.SNGL` / `MODE.MULT` | Most frequent numeric value | Classic / 2010 / 2010 |
 | `FREQUENCY` | Frequency distribution over bins | Classic |
 | `PROB` | Probability of values within inclusive limits | Classic |
