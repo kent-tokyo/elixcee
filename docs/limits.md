@@ -9,7 +9,7 @@ Path-based workbook input is restricted to `.xlsx`, `.xlsm`, and `.ods` (case-in
 before opening the file. Unsupported or missing extensions return a deterministic error;
 the in-memory OOXML buffer reader is intentionally extension-independent.
 
-## Python append-only writer (1.0.7 G1)
+## Python append-only writer (1.0.8 G1)
 
 `create_stream` writes accepted rows to a temporary ZIP, retaining one row's values
 and generated XML during `append`, not all accepted rows until `close`.

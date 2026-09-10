@@ -8,9 +8,9 @@ elixcee 不是 VBA 专用执行器，而是工作簿自动化运行时：可以�
 
 它不是 Excel 桌面应用的完整替代品。屏幕更新和对话框等 UI 功能会被跳过、简化建模或报告错误。现有 Drawing 中的 line/bar/area/pie 图表创建（包括追加系列）已经进入 BUILD 阶段，也支持有限编辑现有图表系列、缓存和基于工作表的 Pivot source；lineChart 单独通过了 macOS Excel 重新打开冒烟测试，但包含多个图表或 barChart 的完整案例仍会触发 Excel 修复。一般 Drawing 编辑和 Pivot 重新计算仍不在当前契约内。需要完整 Excel 对象模型或完整 OOXML 兼容性时，请先检查支持边界。
 
-版本：**1.0.7**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+版本：**1.0.8**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 JavaScript 包仍为 private，尚未发布。
-当前分支遵循已发布的 1.0.7 契约。后续变更会记录在 `[Unreleased]` 中，并与已发布功能分开。
+当前分支遵循已发布的 1.0.8 契约。后续变更会记录在 `[Unreleased]` 中，并与已发布功能分开。
 
 ## 安装
 
@@ -105,7 +105,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 开发阶段、当前状态和发布门槛统一维护在 [ROADMAP.md](ROADMAP.md)。
-已发布的 1.0.7 包含文档化的 G0/G1 基础，以及逐步加入的 G2/G3/G4 能力。
+已发布的 1.0.8 包含文档化的 G0/G1 基础，以及逐步加入的 G2/G3/G4 能力。
 兼容性限制和安全策略请参阅 [docs/](docs/)。
 
 入门资料：[简体中文快速开始](docs/quickstart-zh.md)、[初学者教程](docs/tutorial-beginners-zh.md)、

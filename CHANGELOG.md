@@ -17,7 +17,11 @@
   safety paths; external-reference formula evaluation and Excel oracle
   calibration remain unverified.
 
-The entries below are released in 1.0.7.
+The entries below are released in 1.0.8.
+
+## [1.0.8] - 2026-09-10
+
+- Chart XML maintenance: centralize generated and inserted chart-title rendering so chart creation, chart-title edits, and axis-title edits use the same XML-escaped rich-text shape. Add regression coverage for special-character escaping and the compatible title structure.
 
 ## [1.0.7] - 2026-09-10
 

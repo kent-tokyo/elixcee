@@ -1,6 +1,6 @@
 # elixcee — Function & VBA Coverage Reference
 
-Coverage reference for **elixcee 1.0.7**. See [CHANGELOG](CHANGELOG.md) for versioned changes.
+Coverage reference for **elixcee 1.0.8**. See [CHANGELOG](CHANGELOG.md) for versioned changes.
 “Done”/“Active” describes the documented subset, not complete Excel equivalence or release status.
 Each worksheet function shows the minimum Excel version in which it was introduced as a built-in.
 
@@ -90,7 +90,7 @@ Collection graphs are reclaimed by VM reachability.
 
 ### In-memory Dictionary
 
-`Scripting.Dictionary` is active in the **1.0.7 VM-local adapter**, not a COM object.
+`Scripting.Dictionary` is active in the **1.0.8 VM-local adapter**, not a COM object.
 
 | Operation | Supported subset |
 |---|---|

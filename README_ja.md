@@ -7,9 +7,9 @@ Microsoft Excelなしで、ワークブックの編集、対応する数式の�
 Excelワークブック自動化ランタイムです。
 PyO3によるPython API、単体CLI、実験的な`@elixcee/xlsx` JavaScript/WASMパッケージを提供します。
 
-バージョンは **1.0.7** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+バージョンは **1.0.8** です。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 JavaScriptパッケージはprivate・未公開です。
-現在のブランチは公開済み1.0.7の契約に対応しています。次の変更は`[Unreleased]`に記録し、次回リリースまで公開版の機能とは区別します。
+現在のブランチは公開済み1.0.8の契約に対応しています。次の変更は`[Unreleased]`に記録し、次回リリースまで公開版の機能とは区別します。
 
 elixceeはVBA専用の実行ツールではありません。同じworkbookモデル上で、直接の
 データ編集、対応する数式の再計算、VBAの実行・診断・テストを行えます。
@@ -139,6 +139,6 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 開発フェーズ、現在の状態、リリースゲートは[ROADMAP.md](ROADMAP.md)に集約しています。
-公開済み1.0.7は、文書化したG0/G1の基盤と、段階的なG2/G3/G4の機能を含みます。
+公開済み1.0.8は、文書化したG0/G1の基盤と、段階的なG2/G3/G4の機能を含みます。
 互換性の制約とセキュリティ方針は[docs/](docs/)を参照してください。
 `Vm.tables()` と `Vm.data_validations()` は、テーブル列・範囲・検証規則を構造化された型付きmetadataとして返します。計算列数式や検証数式の評価は行いません。
