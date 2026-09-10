@@ -1,6 +1,6 @@
 # elixcee Roadmap
 
-更新日: 2026-09-10。対象versionは **1.0.8** です。
+更新日: 2026-09-11。対象versionは **1.0.8** です。
 完了項目は記載した実装・測定の範囲に限ります。公開先の状態はリリースごとに別途確認します。
 版ごとの変更は [CHANGELOG](CHANGELOG.md)、実装範囲は
 [FUNCTIONS](FUNCTIONS.md)、保証範囲は [v1契約](docs/v1-support-contract.md) を参照してください。
