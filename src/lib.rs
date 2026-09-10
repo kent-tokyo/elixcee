@@ -4664,7 +4664,7 @@ fn rewrite_chart_sheet_refs(
 fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
     let title = chart.title.as_deref().map(|text| {
         format!(
-            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r><a:endParaRPr lang=\"en-US\"/></a:p></c:rich></c:tx><c:layout/><c:overlay val=\"0\"/></c:title>",
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
             xml_escape(text)
         )
     }).unwrap_or_default();
@@ -5314,7 +5314,7 @@ fn rewrite_chart_title(xml: &str, text: &str) -> Result<String, String> {
                 "chart title element is missing and plotArea is unavailable".to_string()
             })?;
         let title = format!(
-            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r><a:endParaRPr lang=\"en-US\"/></a:p></c:rich></c:tx></c:title>",
+            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
             xml_escape(text)
         );
         let mut out = String::with_capacity(xml.len() + title.len());
@@ -5801,7 +5801,7 @@ fn rewrite_chart_axis_titles(
             rewrite_chart_title(fragment, text)?
         } else {
             let title = format!(
-                "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r><a:endParaRPr lang=\"en-US\"/></a:p></c:rich></c:tx></c:title>",
+                "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx></c:title>",
                 xml_escape(text)
             );
             let insertion = [
