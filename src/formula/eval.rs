@@ -695,6 +695,7 @@ fn eval_func(
         // ── Array / spill functions ───────────────────────────────────────────
         "FILTER" => func_filter(args, cells),
         "FILTERXML" => func_filterxml(args, cells),
+        "GROUPBY" => func_groupby(args, cells),
         "UNIQUE" => func_unique(args, cells),
         "SORT" => func_sort(args, cells),
         "SORTBY" => func_sortby(args, cells),
@@ -10049,6 +10050,105 @@ fn func_filterxml(
     }
 }
 
+fn groupby_aggregate(name: &str, values: &[Variant]) -> Result<Variant, String> {
+    let nums: Vec<f64> = values.iter().filter_map(as_f64).collect();
+    match name.to_ascii_uppercase().as_str() {
+        "SUM" => Ok(as_integer_if_whole(nums.iter().sum())),
+        "AVERAGE" => {
+            if nums.is_empty() {
+                return Ok(Variant::Error(ExcelError::DivZero));
+            }
+            Ok(Variant::Float(nums.iter().sum::<f64>() / nums.len() as f64))
+        }
+        "COUNT" => Ok(Variant::Integer(nums.len() as i64)),
+        "COUNTA" => Ok(Variant::Integer(
+            values
+                .iter()
+                .filter(|value| !matches!(value, Variant::Empty))
+                .count() as i64,
+        )),
+        "MAX" => nums
+            .iter()
+            .copied()
+            .reduce(f64::max)
+            .map(as_integer_if_whole)
+            .ok_or_else(|| "GROUPBY: MAX has no numeric values".into()),
+        "MIN" => nums
+            .iter()
+            .copied()
+            .reduce(f64::min)
+            .map(as_integer_if_whole)
+            .ok_or_else(|| "GROUPBY: MIN has no numeric values".into()),
+        "PRODUCT" => Ok(as_integer_if_whole(nums.iter().product())),
+        _ => Err(format!("GROUPBY: unsupported aggregate {}", name)),
+    }
+}
+
+fn func_groupby(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 3 || args.len() > 8 {
+        return Err("GROUPBY requires 3 to 8 arguments".into());
+    }
+    let group_values = flatten_array_vals(collect_values(&args[0], cells)?);
+    let data_values = flatten_array_vals(collect_values(&args[1], cells)?);
+    let (group_rows, group_cols) = array_shape_for_expr(&args[0], cells, group_values.len());
+    let (data_rows, data_cols) = array_shape_for_expr(&args[1], cells, data_values.len());
+    if group_cols != 1 || data_cols != 1 || group_rows != data_rows {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let aggregate_name = match &args[2] {
+        FormulaExpr::FuncCall {
+            name,
+            args: call_args,
+        } if call_args.is_empty() => name,
+        FormulaExpr::Str(name) => name,
+        _ => return Ok(Variant::Error(ExcelError::Value)),
+    };
+    let filter = if let Some(filter_expr) = args.get(6) {
+        let flags = eval_as_bool_array(filter_expr, cells)?;
+        if flags.len() != group_values.len() {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        Some(flags)
+    } else {
+        None
+    };
+    let mut groups: Vec<(Variant, Vec<Variant>)> = Vec::new();
+    for (index, (group, value)) in group_values.iter().zip(data_values.iter()).enumerate() {
+        if filter.as_ref().is_some_and(|flags| !flags[index]) {
+            continue;
+        }
+        if let Some((_, group_data)) = groups.iter_mut().find(|(key, _)| variant_eq(key, group)) {
+            group_data.push(value.clone());
+        } else {
+            groups.push((group.clone(), vec![value.clone()]));
+        }
+    }
+    if let Some(sort_expr) = args.get(5) {
+        let sort_order = match evaluate(sort_expr, cells)? {
+            Variant::Integer(value) if value == 1 || value == -1 => value,
+            Variant::Float(value) if value == 1.0 || value == -1.0 => value as i64,
+            _ => return Ok(Variant::Error(ExcelError::Value)),
+        };
+        groups.sort_by(|left, right| {
+            let ordering = variant_cmp(&left.0, &right.0).unwrap_or(Ordering::Equal);
+            if sort_order < 0 {
+                ordering.reverse()
+            } else {
+                ordering
+            }
+        });
+    }
+    let mut result = Vec::with_capacity(groups.len() * 2);
+    for (key, group_data) in groups {
+        result.push(key);
+        result.push(groupby_aggregate(aggregate_name, &group_data)?);
+    }
+    Ok(wrap_array(result))
+}
+
 fn func_filter(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -16825,6 +16925,38 @@ mod tests {
             ])
         );
         assert!(evaluate(&fparse("=TRIMRANGE(A1:C4,4,3)").unwrap(), &c).is_err());
+    }
+
+    #[test]
+    fn test_groupby() {
+        let c = cells_from(&[
+            ((1, 1), Variant::Str("a".into())),
+            ((2, 1), Variant::Str("b".into())),
+            ((3, 1), Variant::Str("a".into())),
+            ((4, 1), Variant::Str("b".into())),
+            ((1, 2), Variant::Integer(1)),
+            ((2, 2), Variant::Integer(2)),
+            ((3, 2), Variant::Integer(3)),
+            ((4, 2), Variant::Integer(4)),
+        ]);
+        assert_eq!(
+            calc("=GROUPBY(A1:A4,B1:B4,\"SUM\")", &c),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Integer(4),
+                Variant::Str("b".into()),
+                Variant::Integer(6),
+            ])
+        );
+        assert_eq!(
+            calc("=GROUPBY(A1:A4,B1:B4,\"COUNT\")", &c),
+            Variant::Array(vec![
+                Variant::Str("a".into()),
+                Variant::Integer(2),
+                Variant::Str("b".into()),
+                Variant::Integer(2),
+            ])
+        );
     }
 
     #[test]
