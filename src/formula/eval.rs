@@ -458,6 +458,7 @@ fn eval_func(
         "TEXTBEFORE" => func_textbefore(args, cells),
         "TEXTAFTER" => func_textafter(args, cells),
         "VALUETOTEXT" => func_valuetotext(args, cells),
+        "HYPERLINK" => func_hyperlink(args, cells),
         "TRIM" => func_trim(args, cells),
         "CLEAN" => func_clean(args, cells),
         "T" => func_t(args, cells),
@@ -3904,6 +3905,22 @@ fn func_exact(
     let a = to_str(&evaluate(&args[0], cells)?);
     let b = to_str(&evaluate(&args[1], cells)?);
     Ok(Variant::Boolean(a == b))
+}
+
+fn func_hyperlink(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.is_empty() || args.len() > 2 {
+        return Err("HYPERLINK requires 1 or 2 arguments".into());
+    }
+    let link_location = to_str(&evaluate(&args[0], cells)?);
+    let friendly_name = if args.len() == 2 {
+        to_str(&evaluate(&args[1], cells)?)
+    } else {
+        link_location
+    };
+    Ok(Variant::Str(friendly_name))
 }
 
 fn func_textjoin(
@@ -13906,6 +13923,14 @@ mod tests {
         assert_eq!(
             calc("=CONCATENATE(\"A\",\"B\",\"C\")", &c),
             Variant::Str("ABC".into())
+        );
+        assert_eq!(
+            calc("=HYPERLINK(\"https://example.test\",\"open\")", &c),
+            Variant::Str("open".into())
+        );
+        assert_eq!(
+            calc("=HYPERLINK(\"Sheet1!A1\")", &c),
+            Variant::Str("Sheet1!A1".into())
         );
     }
 

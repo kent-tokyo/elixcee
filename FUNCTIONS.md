@@ -484,6 +484,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `TEXTBEFORE` | Extract text before the Nth occurrence of a delimiter | 2024/365 |
 | `TEXTAFTER` | Extract text after the Nth occurrence of a delimiter | 2024/365 |
 | `VALUETOTEXT` | Convert any value to its text representation | 2024/365 |
+| `HYPERLINK` | Return display text for a hyperlink without opening external resources | Classic |
 | `REPT` | Repeat a text string N times | Classic |
 | `NUMBERVALUE` | Parse number with locale-specific decimal/group separators | 2013 |
 | `CLEAN` | Remove non-printing control characters | Classic |

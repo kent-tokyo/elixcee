@@ -36,6 +36,7 @@
 - Formula coverage: add the classic `FTEST` variance-equality test.
 - Formula coverage: add the classic `TTEST` paired and two-sample t-test.
 - Formula coverage: add the classic `CHITEST` chi-square test.
+- Formula coverage: add headless-safe `HYPERLINK` display-text evaluation.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
