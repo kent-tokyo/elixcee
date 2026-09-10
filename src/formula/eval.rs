@@ -738,6 +738,9 @@ fn eval_func(
         "COUPNCD" => func_coupncd(args, cells),
         "COUPNUM" => func_coupnum(args, cells),
         "COUPPCD" => func_couppcd(args, cells),
+        "INTRATE" => func_intrate(args, cells),
+        "PRICEMAT" => func_pricemat(args, cells),
+        "YIELDMAT" => func_yieldmat(args, cells),
         "TBILLPRICE" => func_tbillprice(args, cells),
         "TBILLYIELD" => func_tbillyield(args, cells),
         "TBILLEQ" => func_tbilleq(args, cells),
@@ -10275,6 +10278,133 @@ fn func_couppcd(
     Ok(Variant::Date(previous))
 }
 
+fn maturity_security_arguments(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+    name: &str,
+) -> Result<(f64, f64, f64, f64, i32), String> {
+    if args.len() < 4 || args.len() > 5 {
+        return Err(format!("{name} requires 4 or 5 arguments"));
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let investment = to_float(&evaluate(&args[2], cells)?)?;
+    let redemption = to_float(&evaluate(&args[3], cells)?)?;
+    let basis = if args.len() == 5 {
+        to_float(&evaluate(&args[4], cells)?)?
+    } else {
+        0.0
+    };
+    if !settlement.is_finite()
+        || !maturity.is_finite()
+        || !investment.is_finite()
+        || !redemption.is_finite()
+        || !basis.is_finite()
+        || settlement.fract() != 0.0
+        || maturity.fract() != 0.0
+        || maturity <= settlement
+        || investment <= 0.0
+        || redemption <= 0.0
+        || basis.fract() != 0.0
+        || !(0.0..=4.0).contains(&basis)
+    {
+        return Err(format!("{name}: invalid security arguments"));
+    }
+    Ok((settlement, maturity, investment, redemption, basis as i32))
+}
+
+fn func_intrate(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    let (settlement, maturity, investment, redemption, basis) =
+        maturity_security_arguments(args, cells, "INTRATE")?;
+    let year_fraction = match bond_day_fraction(settlement, maturity, basis as f64) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    Ok(Variant::Float(
+        (redemption / investment - 1.0) / year_fraction,
+    ))
+}
+
+fn func_pricemat(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 5 || args.len() > 6 {
+        return Err("PRICEMAT requires 5 or 6 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let issue = to_float(&evaluate(&args[2], cells)?)?;
+    let rate = to_float(&evaluate(&args[3], cells)?)?;
+    let yield_rate = to_float(&evaluate(&args[4], cells)?)?;
+    let basis = if args.len() == 6 {
+        to_float(&evaluate(&args[5], cells)?)?
+    } else {
+        0.0
+    };
+    let issue_fraction = match bond_day_fraction(issue, maturity, basis) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    let settlement_fraction = match bond_day_fraction(settlement, maturity, basis) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    let denominator = 1.0 + yield_rate * settlement_fraction;
+    if !rate.is_finite()
+        || !yield_rate.is_finite()
+        || !basis.is_finite()
+        || denominator <= 0.0
+        || issue >= settlement
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(
+        (100.0 + 100.0 * rate * issue_fraction) / denominator,
+    ))
+}
+
+fn func_yieldmat(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 5 || args.len() > 6 {
+        return Err("YIELDMAT requires 5 or 6 arguments".into());
+    }
+    let settlement = to_float(&evaluate(&args[0], cells)?)?;
+    let maturity = to_float(&evaluate(&args[1], cells)?)?;
+    let issue = to_float(&evaluate(&args[2], cells)?)?;
+    let rate = to_float(&evaluate(&args[3], cells)?)?;
+    let price = to_float(&evaluate(&args[4], cells)?)?;
+    let basis = if args.len() == 6 {
+        to_float(&evaluate(&args[5], cells)?)?
+    } else {
+        0.0
+    };
+    let issue_fraction = match bond_day_fraction(issue, maturity, basis) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    let settlement_fraction = match bond_day_fraction(settlement, maturity, basis) {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    if !rate.is_finite()
+        || !price.is_finite()
+        || !basis.is_finite()
+        || price <= 0.0
+        || issue >= settlement
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(
+        ((100.0 + 100.0 * rate * issue_fraction) / price - 1.0) / settlement_fraction,
+    ))
+}
+
 fn func_pduration(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -15025,6 +15155,16 @@ mod tests {
         assert_eq!(
             calc("=COUPNUM(DATE(2020,3,1),DATE(2021,1,15),2,0)", &c),
             Variant::Integer(2)
+        );
+        assert!(
+            matches!(calc("=INTRATE(1,181,95,100,2)", &c), Variant::Float(value) if (value - (100.0 / 95.0 - 1.0) / 0.5).abs() < 1e-12)
+        );
+        let price_mat = 108.0 / 1.05;
+        assert!(
+            matches!(calc("=PRICEMAT(DATE(2020,7,1),DATE(2021,1,1),DATE(2020,1,1),0.08,0.1,0)", &c), Variant::Float(value) if (value - price_mat).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc(&format!("=YIELDMAT(DATE(2020,7,1),DATE(2021,1,1),DATE(2020,1,1),0.08,{price_mat},0)"), &c), Variant::Float(value) if (value - 0.1).abs() < 1e-12)
         );
     }
 

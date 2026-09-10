@@ -18,6 +18,7 @@
 - Formula coverage: add discounted-security formulas `DISC` and `YIELDDISC`.
 - Formula coverage: add the localized `BAHTTEXT` number-to-Thai-Baht formatter.
 - Formula coverage: add coupon schedule functions `COUPDAYBS`, `COUPDAYS`, `COUPDAYSNC`, `COUPNCD`, `COUPNUM`, and `COUPPCD`.
+- Formula coverage: add maturity-security functions `INTRATE`, `PRICEMAT`, and `YIELDMAT`.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.

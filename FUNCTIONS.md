@@ -281,6 +281,9 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `COUPDAYSNC` | Days from settlement to next coupon | Classic |
 | `COUPNCD` / `COUPPCD` | Next / previous coupon date | Classic |
 | `COUPNUM` | Number of coupons remaining | Classic |
+| `INTRATE` | Interest rate for a fully invested security | Classic |
+| `PRICEMAT` | Price of a security paying interest at maturity | Classic |
+| `YIELDMAT` | Yield of a security paying interest at maturity | Classic |
 | `TBILLPRICE` / `TBILLYIELD` / `TBILLEQ` | Treasury bill price, yield, and equivalent yield | Classic |
 
 ### Statistical
