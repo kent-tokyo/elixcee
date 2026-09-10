@@ -329,8 +329,8 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `STEYX` | Standard error of predicted y values | Classic |
 | `COVARIANCE.S` / `COVAR` | Sample covariance | Classic / 2010 |
 | `COVARIANCE.P` | Population covariance | 2010 |
-| `FTEST` | Two-sample F-test probability for equality of variances | Classic |
-| `CHITEST` | Chi-square test probability for observed and expected data | Classic |
+| `FTEST` / `F.TEST` | Two-sample F-test probability for equality of variances | Classic / 2010 |
+| `CHITEST` / `CHISQ.TEST` | Chi-square test probability for observed and expected data | Classic / 2010 |
 | `MODE` / `MODE.SNGL` / `MODE.MULT` | Most frequent numeric value | Classic / 2010 / 2010 |
 | `FREQUENCY` | Frequency distribution over bins | Classic |
 | `PROB` | Probability of values within inclusive limits | Classic |
@@ -486,7 +486,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `CHAR` | Character from code point | Classic |
 | `CODE` | Code point of first character | Classic |
 | `ASC` | Full-width → half-width (DBCS) | Classic |
-| `JIS` | Half-width → full-width (DBCS) | Classic |
+| `JIS` / `DBCS` | Half-width → full-width (DBCS) | Classic / 2013 |
 | `UNICHAR` | Character from Unicode code point | 2013 |
 | `UNICODE` | Unicode code point of first character | 2013 |
 | `CONCAT` | Concatenate strings / ranges | 2019 |

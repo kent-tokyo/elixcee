@@ -496,7 +496,7 @@ fn eval_func(
         "CODE" => func_code(args, cells),
         "EXACT" => func_exact(args, cells),
         "FIND" => func_find(args, cells),
-        "JIS" => func_jis(args, cells),
+        "JIS" | "DBCS" => func_jis(args, cells),
         "LOWER" => func_lower(args, cells),
         "PHONETIC" => func_phonetic(args, cells),
         "PROPER" => func_proper(args, cells),
@@ -618,8 +618,8 @@ fn eval_func(
         "CONFIDENCE.T" => func_confidence_t(args, cells),
         "COVARIANCE.S" | "COVAR" => func_covariance_s(args, cells),
         "COVARIANCE.P" => func_covariance_p(args, cells),
-        "FTEST" => func_ftest(args, cells),
-        "CHITEST" => func_chitest(args, cells),
+        "FTEST" | "F.TEST" => func_ftest(args, cells),
+        "CHITEST" | "CHISQ.TEST" => func_chitest(args, cells),
         "NORM.DIST" | "NORMDIST" => func_norm_dist(args, cells),
         "NORM.INV" | "NORMINV" => func_norm_inv(args, cells),
         "NORM.S.DIST" | "NORMSDIST" => func_norm_s_dist(args, cells),
@@ -16639,6 +16639,7 @@ mod tests {
         assert_eq!(calc("=ASC(\"Ａ\")", &c), Variant::Str("A".into()));
         // Half-width A → full-width A
         assert_eq!(calc("=JIS(\"A\")", &c), Variant::Str("Ａ".into()));
+        assert_eq!(calc("=DBCS(\"A\")", &c), Variant::Str("Ａ".into()));
     }
 
     #[test]
@@ -19252,6 +19253,10 @@ mod tests {
             Variant::Float(value) => assert!((value - 1.0).abs() < 1e-12),
             other => panic!("FTEST: {:?}", other),
         }
+        match calc("=F.TEST(A1:A4,A1:A4)", &ftest_cells) {
+            Variant::Float(value) => assert!((value - 1.0).abs() < 1e-12),
+            other => panic!("F.TEST: {:?}", other),
+        }
     }
 
     #[test]
@@ -19797,6 +19802,10 @@ mod tests {
         ]);
         assert!(matches!(
             calc("=CHITEST(A1:B2,C1:D2)", &chi_cells),
+            Variant::Float(value) if (0.0..=1.0).contains(&value)
+        ));
+        assert!(matches!(
+            calc("=CHISQ.TEST(A1:B2,C1:D2)", &chi_cells),
             Variant::Float(value) if (0.0..=1.0).contains(&value)
         ));
         assert_eq!(

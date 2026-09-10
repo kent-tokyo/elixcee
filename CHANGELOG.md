@@ -65,6 +65,7 @@
 - Formula coverage: add bounded `ISOMITTED` handling for explicit arguments.
 - Formula parser: preserve empty argument slots and track missing higher-order LAMBDA bindings for `ISOMITTED`.
 - Formula evaluation: support direct `LAMBDA(...)(...)` calls with omitted and explicit-empty argument distinction.
+- Formula coverage: add `F.TEST`, `CHISQ.TEST`, and `DBCS` compatibility aliases.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.
