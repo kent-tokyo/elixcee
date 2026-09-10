@@ -582,6 +582,7 @@ fn eval_func(
         // ── Math ─────────────────────────────────────────────────────────────
         "ABS" => func_abs(args, cells),
         "SQRT" => func_sqrt(args, cells),
+        "SQRTPI" => func_sqrtpi(args, cells),
         "POWER" => func_power(args, cells),
         "EXP" => func_exp(args, cells),
         "LOG" => func_log(args, cells),
@@ -6803,6 +6804,20 @@ fn func_sqrt(
         return Ok(Variant::Error(ExcelError::Num));
     }
     Ok(as_integer_if_whole(n.sqrt()))
+}
+
+fn func_sqrtpi(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 1 {
+        return Err("SQRTPI requires 1 argument".into());
+    }
+    let n = to_float(&evaluate(&args[0], cells)?)?;
+    if !n.is_finite() || n < 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(as_integer_if_whole((n * std::f64::consts::PI).sqrt()))
 }
 
 fn func_power(
@@ -14232,6 +14247,8 @@ mod tests {
         approx(calc("=ABS(3.14)", &c), 3.14);
         assert_eq!(calc("=SQRT(9)", &c), Variant::Integer(3));
         approx(calc("=SQRT(2)", &c), 2f64.sqrt());
+        approx(calc("=SQRTPI(4)", &c), (4.0 * std::f64::consts::PI).sqrt());
+        assert_eq!(calc("=SQRTPI(-1)", &c), Variant::Error(ExcelError::Num));
         assert_eq!(calc("=POWER(2,10)", &c), Variant::Integer(1024));
         approx(calc("=EXP(0)", &c), 1.0);
         approx(calc("=EXP(1)", &c), std::f64::consts::E);

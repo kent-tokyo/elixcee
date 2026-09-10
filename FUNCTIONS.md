@@ -365,6 +365,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 |---|---|---|
 | `ABS` | Absolute value | Classic |
 | `SQRT` | Square root | Classic |
+| `SQRTPI` | Square root of a number multiplied by π | Classic |
 | `POWER` | Base raised to an exponent | Classic |
 | `EXP` | e raised to a power | Classic |
 | `LN` | Natural logarithm | Classic |
