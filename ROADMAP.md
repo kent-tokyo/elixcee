@@ -181,6 +181,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 カイ二乗検定BUILD: `CHITEST`を観測／期待値の同形状検査、期待値正数制約、行列自由度へ接続し、既存カイ二乗CDFによる確率を回帰した。Excelの全型変換・期待度数細則・oracle校正は未完。
 - [x] G4 ヘッドレスリンク表示BUILD: `HYPERLINK`を表示文字列の評価だけへ接続し、リンクを開く外部作用を発生させない既定動作と省略表示名を回帰した。Excelの表示・書式細則とoracle校正は未完。
 - [x] G4 可変減価償却BUILD: `VDB`を可変定率法と任意の定額法切替、期間区間の按分へ接続し、既定係数・境界・有限値を回帰した。Excelの端数期間・丸め・全型変換・oracle校正は未完。
+- [x] G4 旧版t分布BUILD: `TDIST`の片側／両側右側確率と`TINV`の両側逆関数を既存t分布実装へ接続し、tails・自由度・定義域境界を回帰した。Excelの全型変換・数値精度・oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素三角関数 BUILD: `IMSIN`／`IMCOS`／`IMTAN`、`IMSINH`／`IMCOSH`／`IMTANH`、`IMSEC`／`IMCSC`／`IMCOT`を複素公式と除算へ接続し、原点・接尾辞・極のゼロ除算を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。

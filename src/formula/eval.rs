@@ -586,6 +586,8 @@ fn eval_func(
         "T.DIST.RT" => func_t_dist_rt(args, cells),
         "T.INV" => func_t_inv(args, cells),
         "T.INV.2T" => func_t_inv_2t(args, cells),
+        "TDIST" => func_tdist_legacy(args, cells),
+        "TINV" => func_t_inv_2t(args, cells),
         "TTEST" => func_ttest(args, cells),
         // ── Rounding ─────────────────────────────────────────────────────────
         "FLOOR" | "FLOOR.MATH" => func_floor(args, cells),
@@ -6931,6 +6933,34 @@ fn func_t_dist(
         return Ok(Variant::Error(ExcelError::Num));
     }
     Ok(Variant::Float(t_dist_value(t, v, cum)))
+}
+
+fn func_tdist_legacy(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 3 {
+        return Err("TDIST requires 3 arguments".into());
+    }
+    let x = to_float(&evaluate(&args[0], cells)?)?;
+    let degrees = to_float(&evaluate(&args[1], cells)?)?;
+    let tails = to_float(&evaluate(&args[2], cells)?)?;
+    if !x.is_finite()
+        || !degrees.is_finite()
+        || !tails.is_finite()
+        || x < 0.0
+        || degrees < 1.0
+        || tails.fract() != 0.0
+        || !(tails == 1.0 || tails == 2.0)
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let right_tail = 1.0 - t_dist_value(x, degrees, true);
+    Ok(Variant::Float(if tails == 1.0 {
+        right_tail
+    } else {
+        (2.0 * right_tail).min(1.0)
+    }))
 }
 
 fn t_dist_value(t: f64, v: f64, cumulative: bool) -> f64 {
@@ -17031,6 +17061,14 @@ mod tests {
         match calc("=T.INV.2T(0.05,10)", &cn) {
             Variant::Float(f) => assert!((f - 2.228).abs() < 0.002),
             other => panic!("T.INV.2T: {:?}", other),
+        }
+        match calc("=TDIST(2.228,10,2)", &cn) {
+            Variant::Float(f) => assert!((f - 0.05).abs() < 0.001),
+            other => panic!("TDIST: {:?}", other),
+        }
+        match calc("=TINV(0.05,10)", &cn) {
+            Variant::Float(f) => assert!((f - 2.228).abs() < 0.002),
+            other => panic!("TINV: {:?}", other),
         }
         match calc("=GAMMA(5)", &cn) {
             Variant::Float(f) => assert!((f - 24.0).abs() < 1e-6),
