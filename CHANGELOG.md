@@ -16,6 +16,9 @@
 - Diagnostic corpus execution: add an allowlisted offline runner that executes
   all five manifest cases and emits a deterministic JSON summary without
   accepting arbitrary shell commands from the manifest.
+- Diagnostic corpus measurement: add a host-and-manifest-bound runner recording
+  corpus hash, runtime revision, wall time, and RSS, with an explicit boundary
+  against cross-library and Excel-oracle performance claims.
 - CI guidance: add a reproducible `diagnose-workbook` workflow, failure-artifact
   triage rules, and a redistributable diagnostic-corpus contract. This documents
   the supported diagnostic surface; it does not expand the VBA or Excel oracle.

@@ -49,7 +49,7 @@ Excel oracleを確認したうえで、合成または再配布可能な小規�
 - [x] **L7b 診断corpus manifest BUILD**: Range/Paste、非表示行列、Protection、Formula result、VBA resolutionの5分類を`compat/vba-diagnostics/corpus.json`へ固定し、runner test名・期待終了状態・root cause／observation・MIT再配布境界をテストで検証した。実workbook pairとseed付き実行artifactはL7cとして継続する。
 - [x] **L7c 診断corpus execution BUILD**: `scripts/run-vba-diagnostic-corpus.py`にmanifest classからCargo test targetへのallowlist mappingを実装し、5分類をofflineでcase別実行してJSON summaryを出力できるようにした。実workbook pair・seed付きgenerated JSON artifactの拡充はL7dとして継続する。
 - [ ] **L7d 診断corpus artifact BUILD**: 各manifest caseに再配布可能な合成workbook pair、VBA source、期待JSON、seed／case replayを接続し、実行結果artifactを保存する。
-- [ ] **L8 再現可能benchmark MEASURE**: corpusのversion・fixture hash・runtime version・OS・CPU・RSS・wall timeを記録し、before/afterと競合比較を別表にする。未測定の速度・正確性・Rubberduck互換性は主張しない。
+- [x] **L8 再現可能benchmark MEASURE**: `scripts/measure-vba-diagnostic-corpus.py`でcorpus version、manifest SHA-256、runtime、git revision、OS／CPU／Python、child wall time、RSSを記録する。実測は診断corpusの回帰実行時間であり、before/afterや競合比較・Excel oracleとは別表・別主張にする。[測定記録](docs/measurements/vba-diagnostic-corpus-2026-09-11.json)
 - [ ] **L9 snapshot／依存関係 BUILD**: snapshot JSONへformula、入力／出力候補、依存辺、cycle／unresolved referenceを後方互換フィールドとして段階追加する。まず読み取り専用・bounded・決定論的出力で設計する。
 - [x] **L9a dependency projection BUILD**: Python `Vm.snapshot(include_dependencies=True)`へ、数式の直接セル参照／範囲参照をbounded・決定論的な`dependencies`配列として追加した。既定snapshotは不変で、範囲をセル単位へ展開しない。parse failure、cycle、unresolved referenceの分類と入力／出力候補はL9b以降。
 - [ ] **L10 formula oracle BUILD/MEASURE**: HyperFormula 3.4.0等の固定版を補助oracleとしてVSTACK/HSTACK/UNIQUE/SORT/XIRRと空セルLOOKUPをcorpus化し、Excel oracleと分離した一致表を作る。

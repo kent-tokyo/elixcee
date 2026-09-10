@@ -26,6 +26,7 @@ fixture, host, and scope limit its conclusions. Open work belongs in the
 - [VBA runtime safety, 2026-09-09](vba-runtime-safety-2026-09-09.md): default rejection and structured diagnostics for Save/Close external effects.
 - [VBA event dispatch, 2026-09-09](vba-event-dispatch-2026-09-09.md): explicit event execution, EnableEvents, and re-entry suppression.
 - [VBA corpus local regression, 2026-09-10](vba-corpus-local-2026-09-10.md): 581 generated scenarios, all explained with no mismatch or unexplained outcome.
+- [VBA diagnostic corpus measurement, 2026-09-11](vba-diagnostic-corpus-2026-09-11.json): versioned five-case runner timing and host metadata; not a cross-library or Excel-oracle benchmark.
 
 ## Reader and release validation
 
