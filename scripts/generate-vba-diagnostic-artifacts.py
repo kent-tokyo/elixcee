@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -40,6 +41,9 @@ def main() -> None:
         directory = OUT / case_id
         directory.mkdir(parents=True, exist_ok=True)
         book = Workbook()
+        fixed_time = datetime(2000, 1, 1, 0, 0, 0)
+        book.properties.created = fixed_time
+        book.properties.modified = fixed_time
         sheet = book.active
         if case_id == "paste-shape-mismatch":
             for row in range(1, 11):
