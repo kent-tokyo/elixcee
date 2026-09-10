@@ -528,6 +528,9 @@ fn eval_func(
         "NORM.S.DIST" | "NORMSDIST" => func_norm_s_dist(args, cells),
         "NORM.S.INV" | "NORMSINV" => func_norm_s_inv(args, cells),
         "BINOM.DIST" | "BINOMDIST" => func_binom_dist(args, cells),
+        "BINOM.DIST.RANGE" => func_binom_dist_range(args, cells),
+        "NEGBINOM.DIST" | "NEGBINOMDIST" => func_negbinom_dist(args, cells),
+        "HYPGEOM.DIST" | "HYPGEOMDIST" => func_hypgeom_dist(args, cells),
         "POISSON.DIST" | "POISSON" => func_poisson_dist(args, cells),
         "GAMMA" => func_gamma(args, cells),
         "GAMMALN" | "GAMMALN.PRECISE" => func_gammaln(args, cells),
@@ -639,6 +642,7 @@ fn eval_func(
         "FACT" => func_fact(args, cells),
         "FACTDOUBLE" => func_factdouble(args, cells),
         "PERMUT" => func_permut(args, cells),
+        "PERMUTATIONA" => func_permutationa(args, cells),
         "MULTINOMIAL" => func_multinomial(args, cells),
         "GCD" => func_gcd(args, cells),
         "LCM" => func_lcm(args, cells),
@@ -5007,6 +5011,137 @@ fn func_binom_dist(
         (0..=x).map(probability).sum()
     } else {
         probability(x)
+    };
+    Ok(Variant::Float(result))
+}
+
+fn func_binom_dist_range(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 3 || args.len() > 4 {
+        return Err("BINOM.DIST.RANGE requires 3 or 4 arguments".into());
+    }
+    let trials = to_float(&evaluate(&args[0], cells)?)?;
+    let probability = to_float(&evaluate(&args[1], cells)?)?;
+    let lower = to_float(&evaluate(&args[2], cells)?)?;
+    let upper = if args.len() == 4 {
+        to_float(&evaluate(&args[3], cells)?)?
+    } else {
+        lower
+    };
+    if !trials.is_finite()
+        || !probability.is_finite()
+        || !lower.is_finite()
+        || !upper.is_finite()
+        || trials.fract() != 0.0
+        || lower.fract() != 0.0
+        || upper.fract() != 0.0
+        || trials < 0.0
+        || lower < 0.0
+        || upper < lower
+        || upper > trials
+        || !(0.0..=1.0).contains(&probability)
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let trials = trials as i64;
+    let lower = lower as i64;
+    let upper = upper as i64;
+    let result = (lower..=upper)
+        .map(|successes| {
+            binom_coeff(trials, successes)
+                * probability.powi(successes as i32)
+                * (1.0 - probability).powi((trials - successes) as i32)
+        })
+        .sum::<f64>();
+    Ok(Variant::Float(result))
+}
+
+fn func_negbinom_dist(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 4 {
+        return Err("NEGBINOM.DIST requires 4 arguments".into());
+    }
+    let failures = to_float(&evaluate(&args[0], cells)?)?;
+    let successes = to_float(&evaluate(&args[1], cells)?)?;
+    let probability = to_float(&evaluate(&args[2], cells)?)?;
+    let cumulative = is_truthy(&evaluate(&args[3], cells)?);
+    if !failures.is_finite()
+        || !successes.is_finite()
+        || !probability.is_finite()
+        || failures.fract() != 0.0
+        || successes.fract() != 0.0
+        || failures < 0.0
+        || successes < 1.0
+        || !(0.0..=1.0).contains(&probability)
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let failures = failures as i64;
+    let successes = successes as i64;
+    let pmf = |count: i64| {
+        binom_coeff(count + successes - 1, count)
+            * probability.powi(successes as i32)
+            * (1.0 - probability).powi(count as i32)
+    };
+    let result = if cumulative {
+        (0..=failures).map(pmf).sum()
+    } else {
+        pmf(failures)
+    };
+    Ok(Variant::Float(result))
+}
+
+fn func_hypgeom_dist(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 5 {
+        return Err("HYPGEOM.DIST requires 5 arguments".into());
+    }
+    let sample_success = to_float(&evaluate(&args[0], cells)?)?;
+    let sample_size = to_float(&evaluate(&args[1], cells)?)?;
+    let population_success = to_float(&evaluate(&args[2], cells)?)?;
+    let population_size = to_float(&evaluate(&args[3], cells)?)?;
+    let cumulative = is_truthy(&evaluate(&args[4], cells)?);
+    let inputs = [
+        sample_success,
+        sample_size,
+        population_success,
+        population_size,
+    ];
+    if inputs
+        .iter()
+        .any(|value| !value.is_finite() || value.fract() != 0.0 || *value < 0.0)
+        || sample_size > population_size
+        || population_success > population_size
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let sample_success = sample_success as i64;
+    let sample_size = sample_size as i64;
+    let population_success = population_success as i64;
+    let population_size = population_size as i64;
+    let lower = 0.max(sample_size - (population_size - population_success));
+    let upper = sample_size.min(population_success);
+    if sample_success < lower || sample_success > upper {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let probability = |successes: i64| {
+        binom_coeff(population_success, successes)
+            * binom_coeff(
+                population_size - population_success,
+                sample_size - successes,
+            )
+            / binom_coeff(population_size, sample_size)
+    };
+    let result = if cumulative {
+        (lower..=sample_success).map(probability).sum()
+    } else {
+        probability(sample_success)
     };
     Ok(Variant::Float(result))
 }
@@ -9479,6 +9614,33 @@ fn func_permut(
     Ok(as_integer_if_whole(result))
 }
 
+fn func_permutationa(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("PERMUTATIONA requires 2 arguments".into());
+    }
+    let n = to_float(&evaluate(&args[0], cells)?)?;
+    let k = to_float(&evaluate(&args[1], cells)?)?;
+    if !n.is_finite()
+        || !k.is_finite()
+        || n < 0.0
+        || k < 0.0
+        || n.fract() != 0.0
+        || k.fract() != 0.0
+        || n > 1.0e6
+        || k > 1024.0
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let result = n.powf(k);
+    if !result.is_finite() {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(as_integer_if_whole(result))
+}
+
 fn gcd_two(mut a: u64, mut b: u64) -> u64 {
     while b != 0 {
         let t = b;
@@ -12933,6 +13095,7 @@ mod tests {
         // PERMUT
         assert_eq!(calc("=PERMUT(5,2)", &c), Variant::Integer(20));
         assert_eq!(calc("=PERMUT(5,0)", &c), Variant::Integer(1));
+        assert_eq!(calc("=PERMUTATIONA(3,2)", &c), Variant::Integer(9));
         // GCD
         assert_eq!(calc("=GCD(12,8)", &c), Variant::Integer(4));
         assert_eq!(calc("=GCD(0,5)", &c), Variant::Integer(5));
@@ -13669,6 +13832,18 @@ mod tests {
         );
         assert!(
             matches!(calc("=LOGNORM.INV(0.5,0,1)", &cells), Variant::Float(v) if (v - 1.0).abs() < 1e-7)
+        );
+        assert!(
+            matches!(calc("=BINOM.DIST.RANGE(10,0.5,3,5)", &cells), Variant::Float(v) if (v - (582.0 / 1024.0)).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=NEGBINOM.DIST(3,2,0.5,FALSE)", &cells), Variant::Float(v) if (v - 0.125).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=NEGBINOM.DIST(3,2,0.5,TRUE)", &cells), Variant::Float(v) if (v - 0.8125).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=HYPGEOM.DIST(1,4,2,10,FALSE)", &cells), Variant::Float(v) if (v - (16.0 / 30.0)).abs() < 1e-12)
         );
     }
 }

@@ -14,6 +14,7 @@
 - Formula coverage: add gamma, chi-squared, F, Weibull, exponential, and lognormal distribution modes.
 - Formula coverage: add unit conversion and Roman numeral conversion formulas.
 - Formula coverage: add discounted-security and Treasury-bill financial formulas.
+- Formula coverage: add binomial-range, negative-binomial, hypergeometric, and repeated-permutation formulas.
 - Formula coverage: add common statistical functions `SUMSQ`, `GEOMEAN`, `HARMEAN`, `DEVSQ`, `AVEDEV`, exclusive percentile/rank, and inclusive/exclusive quartiles with argument-boundary regression tests.
 - Formula coverage: add standard-normal, binomial, and Poisson distribution functions with PMF/CDF modes and boundary regression tests.
 - Formula coverage: add gamma/log-gamma, beta distribution/inverse, chi-squared, and F-distribution functions with bounded numerical evaluation.

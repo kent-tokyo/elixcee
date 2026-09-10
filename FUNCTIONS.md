@@ -302,6 +302,9 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `NORM.S.DIST` / `NORMSDIST` | Standard normal distribution CDF or PDF | 2010 / Classic |
 | `NORM.S.INV` / `NORMSINV` | Inverse standard normal distribution | 2010 / Classic |
 | `BINOM.DIST` / `BINOMDIST` | Binomial distribution PMF or CDF | 2010 / Classic |
+| `BINOM.DIST.RANGE` | Binomial probability over an inclusive success range | 2010 |
+| `NEGBINOM.DIST` / `NEGBINOMDIST` | Negative binomial distribution PMF or CDF | 2010 / Classic |
+| `HYPGEOM.DIST` / `HYPGEOMDIST` | Hypergeometric distribution PMF or CDF | 2010 / Classic |
 | `POISSON.DIST` / `POISSON` | Poisson distribution PMF or CDF | 2010 / Classic |
 | `GAMMA` | Gamma function | 2010 |
 | `GAMMALN` / `GAMMALN.PRECISE` | Natural logarithm of gamma function | 2010 / 2013 |
@@ -347,6 +350,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `COMBINA` | Combinations with repetitions | 2013 |
 | `FACTDOUBLE` | Double factorial | Classic |
 | `MULTINOMIAL` | Multinomial coefficient | Classic |
+| `PERMUTATIONA` | Permutations with repetitions | 2013 |
 | `SUMX2MY2` / `SUMX2PY2` / `SUMXMY2` | Pairwise sums of squares and square differences | Classic |
 | `SINH` / `COSH` / `TANH` | Hyperbolic sine / cosine / tangent | Classic |
 | `ASINH` / `ACOSH` / `ATANH` | Inverse hyperbolic functions | 2013 |
