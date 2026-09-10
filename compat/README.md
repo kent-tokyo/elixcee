@@ -2,7 +2,9 @@
 
 These suites answer different questions. A passing synthetic fixture, JS reference
 case, workbook round-trip, and real Excel execution are not interchangeable evidence.
-The Node project is private and uses the fixed `xlsx@0.18.5` development oracle.
+The Node project is private and uses fixed `xlsx@0.18.5` and
+`hyperformula@3.4.0` development oracles. HyperFormula is used only by the
+formula probe; it is not part of elixcee's runtime or distribution.
 
 The native OOXML feature boundary is tracked in the machine-readable
 [feature matrix](ooxml-feature-matrix.json). It separates read, preservation,

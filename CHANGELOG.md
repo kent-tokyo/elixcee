@@ -19,6 +19,8 @@
 - Diagnostic corpus measurement: add a host-and-manifest-bound runner recording
   corpus hash, runtime revision, wall time, and RSS, with an explicit boundary
   against cross-library and Excel-oracle performance claims.
+- Formula oracle: add a fixed HyperFormula 3.4.0 probe for dynamic arrays and
+  XIRR, with the oracle version and license mode recorded in the output.
 - CI guidance: add a reproducible `diagnose-workbook` workflow, failure-artifact
   triage rules, and a redistributable diagnostic-corpus contract. This documents
   the supported diagnostic surface; it does not expand the VBA or Excel oracle.

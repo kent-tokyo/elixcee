@@ -8,6 +8,10 @@ The JS package carries the [MIT license text](../packages/xlsx/LICENSE).
 
 ## The compat target's license chain
 
+The fixed `hyperformula@3.4.0` package is a development-only oracle. The probe
+uses its `gpl-v3` license-key mode and does not bundle, import, or expose it from
+elixcee's runtime. Do not copy HyperFormula code into the MIT-licensed product.
+
 `xlsx@0.18.5` (SheetJS) and every one of its 7 runtime dependencies are **Apache-2.0**,
 confirmed via `npm view <pkg> license` against the live public registry:
 

@@ -27,6 +27,7 @@ fixture, host, and scope limit its conclusions. Open work belongs in the
 - [VBA event dispatch, 2026-09-09](vba-event-dispatch-2026-09-09.md): explicit event execution, EnableEvents, and re-entry suppression.
 - [VBA corpus local regression, 2026-09-10](vba-corpus-local-2026-09-10.md): 581 generated scenarios, all explained with no mismatch or unexplained outcome.
 - [VBA diagnostic corpus measurement, 2026-09-11](vba-diagnostic-corpus-2026-09-11.json): versioned five-case runner timing and host metadata; not a cross-library or Excel-oracle benchmark.
+- [HyperFormula dynamic-array oracle, 2026-09-11](formula-hyperformula-dynamic-2026-09-11.json): fixed HyperFormula 3.4.0 probes for VSTACK/HSTACK/UNIQUE/SORT/XIRR; separate from Excel and LibreOffice evidence.
 
 ## Reader and release validation
 
