@@ -733,6 +733,7 @@ fn eval_func(
         "RECEIVED" => func_received(args, cells),
         "YIELDDISC" => func_yielddisc(args, cells),
         "ACCRINTM" => func_accrintm(args, cells),
+        "ACCRINT" => func_accrint(args, cells),
         "COUPDAYBS" => func_coupdaybs(args, cells),
         "COUPDAYS" => func_coupdays(args, cells),
         "COUPDAYSNC" => func_coupdaysnc(args, cells),
@@ -10218,6 +10219,74 @@ fn coupon_day_count(start: i64, end: i64, basis: i32) -> f64 {
     }
 }
 
+fn func_accrint(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() < 6 || args.len() > 8 {
+        return Err("ACCRINT requires 6 to 8 arguments".into());
+    }
+    let issue = to_float(&evaluate(&args[0], cells)?)?;
+    let first_interest = to_float(&evaluate(&args[1], cells)?)?;
+    let settlement = to_float(&evaluate(&args[2], cells)?)?;
+    let rate = to_float(&evaluate(&args[3], cells)?)?;
+    let par = to_float(&evaluate(&args[4], cells)?)?;
+    let frequency = to_float(&evaluate(&args[5], cells)?)?;
+    let basis = if args.len() >= 7 {
+        to_float(&evaluate(&args[6], cells)?)?
+    } else {
+        0.0
+    };
+    let calc_method = if args.len() == 8 {
+        to_float(&evaluate(&args[7], cells)?)?
+    } else {
+        1.0
+    };
+    if !issue.is_finite()
+        || !first_interest.is_finite()
+        || !settlement.is_finite()
+        || !rate.is_finite()
+        || !par.is_finite()
+        || !frequency.is_finite()
+        || !basis.is_finite()
+        || !calc_method.is_finite()
+        || issue.fract() != 0.0
+        || first_interest.fract() != 0.0
+        || settlement.fract() != 0.0
+        || first_interest <= issue
+        || settlement <= issue
+        || rate < 0.0
+        || par <= 0.0
+        || frequency.fract() != 0.0
+        || !matches!(frequency as i32, 1 | 2 | 4)
+        || basis.fract() != 0.0
+        || !(0.0..=4.0).contains(&basis)
+        || (calc_method != 0.0 && calc_method != 1.0)
+    {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    let issue = issue as i64;
+    let first_interest = first_interest as i64;
+    let settlement = settlement as i64;
+    let frequency = frequency as i32;
+    let basis = basis as i32;
+    let months = 12 / frequency;
+    let mut next_coupon = first_interest;
+    while next_coupon <= settlement {
+        next_coupon = coupon_month_shift(next_coupon, months);
+    }
+    let previous_coupon = coupon_month_shift(next_coupon, -months);
+    let period_days = coupon_day_count(previous_coupon, next_coupon, basis);
+    let accrual_start = issue.max(previous_coupon);
+    let accrued_days = coupon_day_count(accrual_start, settlement, basis);
+    if period_days <= 0.0 || accrued_days < 0.0 {
+        return Ok(Variant::Error(ExcelError::Num));
+    }
+    Ok(Variant::Float(
+        par * rate / frequency as f64 * accrued_days / period_days,
+    ))
+}
+
 fn func_accrintm(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -15449,6 +15518,9 @@ mod tests {
         );
         assert!(
             matches!(calc("=ACCRINTM(1,181,0.1,1000,2)", &c), Variant::Float(value) if (value - 50.0).abs() < 1e-12)
+        );
+        assert!(
+            matches!(calc("=ACCRINT(DATE(2020,1,15),DATE(2020,7,15),DATE(2020,3,1),0.08,100,2,0,1)", &c), Variant::Float(value) if (value - (4.0 * 46.0 / 180.0)).abs() < 1e-12)
         );
         assert!(
             matches!(calc("=TBILLPRICE(1,181,0.1)", &c), Variant::Float(value) if (value - 95.0).abs() < 1e-9)

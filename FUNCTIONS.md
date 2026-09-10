@@ -276,6 +276,7 @@ per-function mode coverage, and independent oracle tests are tracked in
 | `DISC` | Discount rate of a security | Classic |
 | `RECEIVED` | Amount received at maturity for a discounted security | Classic |
 | `YIELDDISC` | Annual yield of a discounted security | Classic |
+| `ACCRINT` | Accrued interest for a periodic coupon security | Classic |
 | `ACCRINTM` | Accrued interest paid at maturity | Classic |
 | `COUPDAYBS` | Days from coupon period start to settlement | Classic |
 | `COUPDAYS` | Days in coupon period | Classic |
