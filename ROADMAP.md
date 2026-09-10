@@ -194,6 +194,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 AGGREGATE mode拡張BUILD: `AGGREGATE`の7/8/10/11（標本・母集団の標準偏差／分散）、13（MODE.SNGL）、14/15（k指定LARGE／SMALL）、17–21（quartile／percentile／percentrank）を既存関数へ接続した。nested reference除外・全option意味論・Excel oracle校正は未完。
 - [x] G4 SUBTOTAL mode拡張BUILD: `SUBTOTAL`の7/8/10/11と101–111 aliasを標準偏差／分散の既存集計へ接続し、通常／hidden-row番号の同値性を回帰した。hidden row実モデル・Excel oracle校正は未完。
 - [x] G4 CONVERT単位拡張BUILD: `CONVERT`へangstrom／pica、ton／slug／atomic mass、立方インチ系、force、torr、electronvolt、frequency、bit／byte系を追加し、カテゴリ境界を維持した。Excel全単位表・大文字小文字細則・oracle校正は未完。
+- [x] G4 XML抽出BUILD: `FILTERXML`をローカルXMLの要素／属性XPath（absolute／descendant、wildcard、text）subsetへ接続し、複数結果・不正XML・未検出境界を回帰した。完全XPath、namespace、外部entity、Excel oracle校正は未完。
 - [x] G4 複素数四則演算 BUILD: `IMSUM`／`IMSUB`／`IMPRODUCT`／`IMDIV`を追加し、接尾辞維持、加減乗除、複素分母のゼロ除算を回帰した。複素数関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素指数対数関数 BUILD: `IMCONJUGATE`、`IMEXP`、`IMLN`、`IMLOG10`、`IMSQRT`、`IMPOWER`を主値計算として追加し、ゼロ定義域・平方根・べき乗を回帰した。複素三角関数全体、Excelの全型変換・oracle校正は未完。
 - [x] G4 複素三角関数 BUILD: `IMSIN`／`IMCOS`／`IMTAN`、`IMSINH`／`IMCOSH`／`IMTANH`、`IMSEC`／`IMCSC`／`IMCOT`を複素公式と除算へ接続し、原点・接尾辞・極のゼロ除算を回帰した。複素関数全体、Excelの全型変換・oracle校正は未完。

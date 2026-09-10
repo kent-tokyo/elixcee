@@ -51,6 +51,7 @@
 - Formula compatibility: extend `AGGREGATE` across function numbers 7, 8, 10, 11, 13, and 17–21 and honor k arguments for LARGE/SMALL modes.
 - Formula compatibility: extend `SUBTOTAL` to standard-deviation and variance modes 7, 8, 10, and 11.
 - Formula coverage: extend `CONVERT` with force, frequency, information, and additional physical units.
+- Formula coverage: add a side-effect-free bounded local XPath subset for `FILTERXML`.
 - Formula compatibility: make `MODE.MULT` return all tied modes as a sorted array while preserving scalar `MODE.SNGL`.
 - Formula coverage: add complex arithmetic formulas `IMSUM`, `IMSUB`, `IMPRODUCT`, and `IMDIV`.
 - Formula coverage: add complex conjugate, exponential, logarithm, square-root, and power formulas.

@@ -694,6 +694,7 @@ fn eval_func(
         "OFFSET" => func_offset(args, cells),
         // ── Array / spill functions ───────────────────────────────────────────
         "FILTER" => func_filter(args, cells),
+        "FILTERXML" => func_filterxml(args, cells),
         "UNIQUE" => func_unique(args, cells),
         "SORT" => func_sort(args, cells),
         "SORTBY" => func_sortby(args, cells),
@@ -9902,6 +9903,152 @@ fn wrap_array(mut vals: Vec<Variant>) -> Variant {
 
 // ── FILTER ────────────────────────────────────────────────────────────────────
 
+#[derive(Default)]
+struct FilterXmlNode {
+    name: String,
+    text: String,
+    attrs: HashMap<String, String>,
+}
+
+fn filterxml_name_and_attrs(raw: &str) -> Option<(String, HashMap<String, String>)> {
+    let mut parts = raw.split_whitespace();
+    let name = parts.next()?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let mut attrs = HashMap::new();
+    for part in parts {
+        let (key, value) = part.split_once('=')?;
+        let value = value.trim_matches(['"', '\'']);
+        attrs.insert(key.to_string(), value.to_string());
+    }
+    Some((name, attrs))
+}
+
+fn filterxml_xpath_match(path: &[String], query: &[&str], descendant: bool) -> bool {
+    if path.len() < query.len() {
+        return false;
+    }
+    let offset = if descendant {
+        path.len() - query.len()
+    } else {
+        0
+    };
+    (!descendant && path.len() != query.len())
+        || path[offset..]
+            .iter()
+            .zip(query)
+            .all(|(name, expected)| *expected == "*" || name == expected)
+}
+
+fn func_filterxml(
+    args: &[FormulaExpr],
+    cells: &HashMap<(u32, u32), CellContent>,
+) -> Result<Variant, String> {
+    if args.len() != 2 {
+        return Err("FILTERXML requires 2 arguments".into());
+    }
+    let xml = to_str(&evaluate(&args[0], cells)?);
+    let xpath = to_str(&evaluate(&args[1], cells)?);
+    let descendant = xpath.starts_with("//");
+    let normalized = xpath.trim_start_matches('/');
+    let mut query_parts = normalized
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if query_parts.is_empty() || (!descendant && !xpath.starts_with('/')) {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let attribute = query_parts
+        .last()
+        .and_then(|part| part.strip_prefix('@'))
+        .map(str::to_string);
+    if attribute.is_some() {
+        query_parts.pop();
+    }
+    if query_parts.last() == Some(&"text()") {
+        query_parts.pop();
+    }
+    if query_parts.is_empty() {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    let mut stack: Vec<FilterXmlNode> = Vec::new();
+    let mut path: Vec<String> = Vec::new();
+    let mut values = Vec::new();
+    let mut cursor = 0;
+    while cursor < xml.len() {
+        let Some(relative_open) = xml[cursor..].find('<') else {
+            if let Some(node) = stack.last_mut() {
+                node.text.push_str(&xml[cursor..]);
+            }
+            break;
+        };
+        if relative_open > 0
+            && let Some(node) = stack.last_mut()
+        {
+            node.text.push_str(&xml[cursor..cursor + relative_open]);
+        }
+        let open = cursor + relative_open;
+        let Some(relative_end) = xml[open..].find('>') else {
+            return Ok(Variant::Error(ExcelError::Value));
+        };
+        let end = open + relative_end;
+        let token = xml[open + 1..end].trim();
+        if token.starts_with('?') || token.starts_with('!') {
+            cursor = end + 1;
+            continue;
+        }
+        if let Some(close_name) = token.strip_prefix('/') {
+            let Some(node) = stack.pop() else {
+                return Ok(Variant::Error(ExcelError::Value));
+            };
+            if node.name != close_name.trim() {
+                return Ok(Variant::Error(ExcelError::Value));
+            }
+            if filterxml_xpath_match(&path, &query_parts, descendant) {
+                let value = attribute
+                    .as_ref()
+                    .and_then(|name| node.attrs.get(name).cloned())
+                    .unwrap_or_else(|| node.text.trim().to_string());
+                values.push(Variant::Str(value));
+            }
+            path.pop();
+        } else {
+            let self_closing = token.ends_with('/');
+            let start = token.trim_end_matches('/').trim();
+            let Some((name, attrs)) = filterxml_name_and_attrs(start) else {
+                return Ok(Variant::Error(ExcelError::Value));
+            };
+            path.push(name.clone());
+            stack.push(FilterXmlNode {
+                name,
+                text: String::new(),
+                attrs,
+            });
+            if self_closing {
+                let node = stack.pop().expect("just pushed");
+                if filterxml_xpath_match(&path, &query_parts, descendant) {
+                    let value = attribute
+                        .as_ref()
+                        .and_then(|name| node.attrs.get(name).cloned())
+                        .unwrap_or_default();
+                    values.push(Variant::Str(value));
+                }
+                path.pop();
+            }
+        }
+        cursor = end + 1;
+    }
+    if !stack.is_empty() {
+        return Ok(Variant::Error(ExcelError::Value));
+    }
+    if values.is_empty() {
+        Ok(Variant::Error(ExcelError::NA))
+    } else {
+        Ok(wrap_array(values))
+    }
+}
+
 fn func_filter(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
@@ -16425,6 +16572,40 @@ mod tests {
         assert_eq!(
             calc("=TEXTSPLIT(\"hello\",\",\")", &c),
             Variant::Str("hello".into())
+        );
+    }
+
+    #[test]
+    fn test_filterxml() {
+        let c = HashMap::new();
+        assert_eq!(
+            calc(
+                "=FILTERXML(\"<root><item id=\"\"a\"\">A</item><item id=\"\"b\"\">B</item></root>\",\"//item\")",
+                &c
+            ),
+            Variant::Array(vec![Variant::Str("A".into()), Variant::Str("B".into())])
+        );
+        assert_eq!(
+            calc(
+                "=FILTERXML(\"<root><item id=\"\"a\"\">A</item><item id=\"\"b\"\">B</item></root>\",\"//item/@id\")",
+                &c
+            ),
+            Variant::Array(vec![Variant::Str("a".into()), Variant::Str("b".into())])
+        );
+        assert_eq!(
+            calc(
+                "=FILTERXML(\"<root><item>A</item></root>\",\"/root/item\")",
+                &c
+            ),
+            Variant::Str("A".into())
+        );
+        assert_eq!(
+            calc("=FILTERXML(\"<root>\",\"//item\")", &c),
+            Variant::Error(ExcelError::Value)
+        );
+        assert_eq!(
+            calc("=FILTERXML(\"<root/>\",\"//item\")", &c),
+            Variant::Error(ExcelError::NA)
         );
     }
 
