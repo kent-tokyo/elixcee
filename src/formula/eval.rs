@@ -12406,7 +12406,7 @@ fn func_indirect(
 }
 
 /// Parse the absolute R1C1 form accepted by INDIRECT(...,FALSE).
-/// Relative R[delta]C[delta] references need a caller cell context and are
+/// Relative R\[delta\]C\[delta\] references need a caller cell context and are
 /// deliberately rejected by this context-free formula evaluator.
 fn parse_r1c1_range(addr: &str) -> Option<((u32, u32), (u32, u32))> {
     fn parse_piece(piece: &str) -> Option<(u32, u32)> {
