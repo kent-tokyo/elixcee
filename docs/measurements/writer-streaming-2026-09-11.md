@@ -37,3 +37,12 @@ MiB and wall p50/p95 was 310/317 ms. At 250,000 rows, RSS p50/p95 was
 worksheet-shape, final-row, and semantic-digest validation. This supersedes
 neither the one-million-row confirmation nor the cross-platform gate; it is a
 repeatability check on the same macOS host.
+
+## Normal-VM three-repetition rerun
+
+The same fixture and isolated wheel were also measured in `normal-fresh` mode
+three times per case. At 100,000 rows, RSS p50/p95 was 117.11/117.14 MiB and
+wall p50/p95 was 213/231 ms. At 250,000 rows, RSS p50/p95 was 204.30/204.30
+MiB and wall p50/p95 was 508/540 ms. All six outputs passed the same semantic
+checks. The roughly linear RSS growth is expected for the retained normal VM
+cell model and is not constant-memory evidence.
