@@ -37,6 +37,12 @@ assertions, but the same data-row probe still produced the recovery dialog.
 These changes are therefore not counted as an Excel-reopen fix; the remaining
 defect is still isolated to generated Chart/Drawing compatibility.
 
+An independent LibreOffice 26.2.5 probe on 2026-09-11 also refused to load the
+generated multi-chart/bar `.xlsm`, so no independent repair diff could be
+collected. The package passed `unzip -t` and `xmllint` checks for the generated
+Chart and Drawing parts. This narrows the evidence to application-level Chart
+package compatibility, but does not identify a safe producer fix.
+
 ## Scope
 
 - `Vm.set_chart_series_formulas(chart_part, series_index, categories, values)`
