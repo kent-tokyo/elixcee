@@ -10,5 +10,5 @@ description = "wasm-bindgen bridge exposing elixcee's byte-input XLSX reader (re
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-elixcee = { path = "../..", version = "1.0.9" }
+elixcee = { path = "../..", version = "1.0.10" }
 wasm-bindgen = "0.2"

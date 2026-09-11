@@ -11,6 +11,10 @@
 
 - Documentation: shorten the English, Japanese, and Simplified Chinese README
   development sections and direct contributors to the roadmap and changelog.
+- Documentation: refresh the current-version markers in the function coverage
+  reference and align the private WASM crate's workspace dependency metadata
+  with elixcee 1.0.10. Historical measurement records retain their original
+  versions and dates.
 
 ## [1.0.10] - 2026-09-11
 
