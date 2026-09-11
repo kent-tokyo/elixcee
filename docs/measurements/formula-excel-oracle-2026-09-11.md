@@ -1,7 +1,7 @@
 # Microsoft Excel formula oracle — 2026-09-11
 
 Scope: Microsoft Excel for Mac 16.108 on the local macOS host, using a fresh
-blank workbook created through the UI. Six formulas were entered through
+blank workbook created through the UI. The initial six formulas were entered through
 AppleScript, read back after Excel's automatic calculation, and then evaluated
 with the current source-built CPython 3.13 arm64 wheel in an isolated
 environment.
@@ -17,7 +17,7 @@ environment.
 
 The source cells were `A1:A3 = 1,2,3`. The Excel side was driven by
 `osascript`; the elixcee side used `Vm.set_cell`, `Vm.set_cell_formula`,
-`Vm.recalculate`, and `Vm.get_cell`. The result is six/ six matching probes,
+`Vm.recalculate`, and `Vm.get_cell`. The result is six/six matching probes,
 not a complete Excel compatibility claim. Locale, date-system variants,
 coercion boundaries, arrays, errors, other Excel versions, and all remaining
 functions still require separate oracle coverage.
@@ -48,3 +48,13 @@ wheel both returned `1.5`. This exposed and fixed a coercion bug in the
 evaluator: direct text/logical arguments are included by `AVERAGE`, while
 text/logical values inside a referenced range remain excluded. The corrected
 source and wheel now match all 15 recorded probes.
+
+## Mixed-type aggregate range probes
+
+Five additional range probes used `A1:B2 = {{1,1},{TRUE,"x"}}` in the same
+workbook. Excel and the rebuilt wheel matched all five results: `AVERAGEA`
+returned `0.75`, `MINA` returned `0`, `MAXA` returned `1`, `COUNT` returned
+`2`, and `COUNTA` returned `4`. These cases confirm the current distinction
+between numeric-only `COUNT`, non-empty `COUNTA`, and the logical/text
+coercion used by the `*A` aggregate family for referenced ranges. They remain
+small single-host probes, not complete type-coercion coverage.
