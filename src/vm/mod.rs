@@ -863,12 +863,14 @@ pub(crate) struct ChartSeriesEdit {
 
 /// A bounded request to create one chart in an existing Drawing part. The
 /// writer assigns a collision-free chart part name during save.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ChartCreation {
     pub drawing_part: String,
     pub chart_type: String,
     pub categories: String,
     pub values: String,
+    pub category_cache: Vec<Variant>,
+    pub value_cache: Vec<Variant>,
     pub additional_series: Vec<ChartCreationSeries>,
     pub title: Option<String>,
     pub from_row: u32,
@@ -877,10 +879,12 @@ pub(crate) struct ChartCreation {
     pub to_col: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ChartCreationSeries {
     pub categories: String,
     pub values: String,
+    pub category_cache: Vec<Variant>,
+    pub value_cache: Vec<Variant>,
     pub title: Option<String>,
 }
 
@@ -3765,6 +3769,33 @@ impl Vm {
 
     pub fn get_sheet_cells(&self, name: &str) -> Option<&HashMap<(u32, u32), CellContent>> {
         self.sheets.get(&name.to_lowercase())
+    }
+
+    /// Resolve a simple chart formula into cached source values. Named and
+    /// external references intentionally remain uncached; Excel can resolve
+    /// those formulas after opening the workbook.
+    pub(crate) fn chart_cache_values(&self, formula: &str) -> Vec<Variant> {
+        let Some((sheet, address)) = formula.rsplit_once('!') else {
+            return Vec::new();
+        };
+        let sheet = sheet.trim_matches('\'').replace("''", "'");
+        let address = address.replace('$', "");
+        let Some(((row1, col1), (row2, col2))) = parse_range_addr(&address) else {
+            return Vec::new();
+        };
+        let Some(cells) = self.get_sheet_cells(&sheet) else {
+            return Vec::new();
+        };
+        (row1.min(row2)..=row1.max(row2))
+            .flat_map(|row| {
+                (col1.min(col2)..=col1.max(col2)).map(move |col| {
+                    cells
+                        .get(&(row, col))
+                        .map(|content| content.value.clone())
+                        .unwrap_or(Variant::Empty)
+                })
+            })
+            .collect()
     }
 
     #[cfg(feature = "python")]
@@ -7621,6 +7652,8 @@ impl Vm {
             chart_type,
             categories: categories.to_string(),
             values: values.to_string(),
+            category_cache: self.chart_cache_values(categories),
+            value_cache: self.chart_cache_values(values),
             additional_series: Vec::new(),
             title,
             from_row,
@@ -7651,6 +7684,8 @@ impl Vm {
             .ok()
             .and_then(|value| value.checked_sub(1))
             .ok_or_else(|| "chart_part creation index must be positive".to_string())?;
+        let category_cache = self.chart_cache_values(categories);
+        let value_cache = self.chart_cache_values(values);
         let chart = self
             .chart_creations
             .get_mut(index)
@@ -7676,6 +7711,8 @@ impl Vm {
         chart.additional_series.push(ChartCreationSeries {
             categories: categories.to_string(),
             values: values.to_string(),
+            category_cache,
+            value_cache,
             title,
         });
         Ok(())

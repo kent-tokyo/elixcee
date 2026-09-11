@@ -346,6 +346,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 独立oracle再測定: 現行ソースのCPython 3.13 arm64 macOS wheelとLibreOffice 26.2.5を同一fixtureで実行し、118 common probesを118/118一致で確認した。配列結果を`INDEX`で投影する`LINEST`／`LOGEST`／`TREND`／`GROWTH`のケースも含む。これはsource-wheel／LibreOffice evidenceであり、Microsoft Excel・公開wheel・他OSの証拠ではない。[測定記録](docs/measurements/formula-independent-oracle-expansion-2026-09-10.md)
 - [ ] MEASURE: Excel／EPPlus／Aspose.Cellsはversion・計算設定・license利用条件を固定して比較。実行していない公式対応表と、実測一致率を分ける。
 - [x] 部分 G4 benchmark: ClosedXML 0.105.1／.NET 10.0.400／openpyxl 3.1.2／elixcee 1.0.10 source binaryをmacOS arm64で同一fixture・同一耐久保存条件に固定し、small／1,000×10／10,000×10を再測定した。速度結果は公開記録へ保存したが、Excel／EPPlus／Aspose.Cellsの数式一致率・ライセンス条件比較は未完。[比較記録](docs/benchmarks/workbook-closedxml-2026-09-11.md)
+- [x] 部分 G2d Chart cache BUILD: 新規Chartの単純なworksheet範囲からcategory/value cache pointを生成し、数値cacheへ文字列を混入させない回帰を追加した。Excel再openの修復警告はdata-row probeでも残るため、Chart/Drawing互換性の完了扱いにはしない。[測定記録](docs/measurements/g2d-object-editing-2026-09-09.md)
 
 ### G5 — 保存メモリの段階削減（X4 / X5）
 

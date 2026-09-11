@@ -29,6 +29,13 @@ values), avoiding the header/type mix in the first smoke input. Excel still
 displayed the same recovery dialog and opened the file as `修復済み`; therefore
 the warning is not explained by the original header-inclusive ranges.
 
+The generator now materializes cached category/value points for simple
+worksheet ranges and leaves non-numeric values blank in numeric caches. This
+improves the OOXML payload and is covered by round-trip assertions, but the
+same data-row probe still produced the recovery dialog. The cache change is
+therefore not counted as an Excel-reopen fix; the remaining defect is still
+isolated to generated Chart/Drawing compatibility.
+
 ## Scope
 
 - `Vm.set_chart_series_formulas(chart_part, series_index, categories, values)`

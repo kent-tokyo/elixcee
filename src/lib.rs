@@ -4727,6 +4727,70 @@ fn render_chart_title(text: &str) -> String {
     )
 }
 
+fn chart_cache_value(value: &Variant) -> String {
+    match value {
+        Variant::Integer(value) => value.to_string(),
+        Variant::Float(value) => value.to_string(),
+        Variant::Str(value) => value.clone(),
+        Variant::Boolean(value) => value.to_string(),
+        Variant::Date(value) => value.to_string(),
+        Variant::Error(value) => value.as_str().to_string(),
+        Variant::Empty | Variant::Null => String::new(),
+        Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => String::new(),
+    }
+}
+
+fn render_chart_cache(values: &[Variant], numeric: bool) -> String {
+    let points = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let rendered = if numeric {
+                match value {
+                    Variant::Integer(_)
+                    | Variant::Float(_)
+                    | Variant::Boolean(_)
+                    | Variant::Date(_) => chart_cache_value(value),
+                    Variant::Str(_)
+                    | Variant::Error(_)
+                    | Variant::Empty
+                    | Variant::Null
+                    | Variant::Array(_)
+                    | Variant::VbaArray(_)
+                    | Variant::Record(_) => String::new(),
+                }
+            } else {
+                chart_cache_value(value)
+            };
+            format!(
+                "<c:pt idx=\"{index}\"><c:v>{}</c:v></c:pt>",
+                xml_escape(&rendered)
+            )
+        })
+        .collect::<String>();
+    let body = format!("<c:ptCount val=\"{}\"/>{points}", values.len());
+    if numeric {
+        format!("<c:numCache><c:formatCode>General</c:formatCode>{body}</c:numCache>")
+    } else {
+        format!("<c:strCache>{body}</c:strCache>")
+    }
+}
+
+fn render_chart_reference(formula: &str, values: &[Variant], numeric: bool) -> String {
+    let cache = render_chart_cache(values, numeric);
+    if numeric {
+        format!(
+            "<c:numRef><c:f>{}</c:f>{cache}</c:numRef>",
+            xml_escape(formula)
+        )
+    } else {
+        format!(
+            "<c:strRef><c:f>{}</c:f>{cache}</c:strRef>",
+            xml_escape(formula)
+        )
+    }
+}
+
 fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
     let title = chart
         .title
@@ -4744,23 +4808,37 @@ fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
     } else {
         "<c:spPr><a:ln><a:prstDash val=\"solid\"/></a:ln></c:spPr>"
     };
-    let mut append_series = |index: usize, categories: &str, values: &str, name: Option<&str>| {
+    let mut append_series = |index: usize,
+                             categories: &str,
+                             values: &str,
+                             name: Option<&str>,
+                             category_cache: &[Variant],
+                             value_cache: &[Variant]| {
         let series_name = name
             .map(|value| format!("<c:tx><c:v>{}</c:v></c:tx>", xml_escape(value)))
-            .unwrap_or_default();
+            .unwrap_or_else(|| "<c:tx><c:v>Series 1</c:v></c:tx>".to_string());
+        let category_ref = render_chart_reference(categories, category_cache, false);
+        let value_ref = render_chart_reference(values, value_cache, true);
         series.push_str(&format!(
-            "<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/>{series_name}{series_shape}{marker}<c:cat><c:strRef><c:f>{}</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>{}</c:f></c:numRef></c:val></c:ser>",
-            xml_escape(categories),
-            xml_escape(values),
+            "<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/>{series_name}{series_shape}{marker}<c:cat>{category_ref}</c:cat><c:val>{value_ref}</c:val></c:ser>",
         ));
     };
-    append_series(0, &chart.categories, &chart.values, None);
+    append_series(
+        0,
+        &chart.categories,
+        &chart.values,
+        None,
+        &chart.category_cache,
+        &chart.value_cache,
+    );
     for (index, extra) in chart.additional_series.iter().enumerate() {
         append_series(
             index + 1,
             &extra.categories,
             &extra.values,
             extra.title.as_deref(),
+            &extra.category_cache,
+            &extra.value_cache,
         );
     }
     let plot_chart = match chart.chart_type.as_str() {

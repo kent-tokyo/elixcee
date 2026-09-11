@@ -1441,8 +1441,13 @@ fn create_bar_chart_connects_new_part_to_existing_drawing() {
     let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
     let chart = String::from_utf8(output_entries["xl/charts/chart-new-1.xml"].clone()).unwrap();
     assert!(chart.contains("<c:barChart>"));
+    assert!(chart.contains("<c:tx><c:v>Series 1</c:v></c:tx>"));
     assert!(chart.contains("<c:f>Sheet1!$C$1:$C$5</c:f>"));
     assert!(chart.contains("<c:f>Sheet1!$B$1:$B$5</c:f>"));
+    assert!(chart.contains("<c:strCache><c:ptCount val=\"5\"/><c:pt idx=\"0\"><c:v>Status</c:v>"));
+    assert!(chart.contains(
+        "<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"5\"/><c:pt idx=\"0\"><c:v></c:v>"
+    ));
 }
 
 /// G2 measurement helper: use data rows only so a generated bar chart does not
