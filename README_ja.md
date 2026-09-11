@@ -15,6 +15,17 @@ PyO3によるPython API、単体CLI、実験的な`@elixcee/xlsx` JavaScript/WAS
 JavaScriptパッケージはprivate・未公開です。
 現在のブランチは公開済み1.0.9の契約に対応しています。次の変更は`[Unreleased]`に記録し、次回リリースまで公開版の機能とは区別します。
 
+## まずここから
+
+初めて使う場合は、次の順に進んでください。
+
+1. [クイックスタート](docs/quickstart-ja.md) — インストールして最初の操作を実行します。
+2. [初心者向けチュートリアル](docs/tutorial-beginners-ja.md) — 編集、数式、ヘッドレスVBAを順に学びます。
+3. [ブラウザーplaygroundを開く](https://kent-tokyo.github.io/elixcee/playground/) — インストールなしで試せます。
+
+playgroundには英語・日本語・簡体中文の切り替えがあります。ローカル開発と公開方法は
+[playgroundの説明](playground/README-ja.md)を参照してください。
+
 elixceeはVBA専用の実行ツールではありません。同じworkbookモデル上で、直接の
 データ編集、対応する数式の再計算、VBAの実行・診断・テストを行えます。
 ExcelをインストールできないCIやサーバーでの

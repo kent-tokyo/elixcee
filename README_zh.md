@@ -26,6 +26,17 @@ VBA 不是必需的：Python 或 CLI 也可以单独使用 elixcee 读取、编�
 JavaScript 包仍为 private，尚未发布。
 当前分支遵循已发布的 1.0.9 契约。后续变更会记录在 `[Unreleased]` 中，并与已发布功能分开。
 
+## 从这里开始
+
+第一次使用时，按以下顺序进行：
+
+1. [快速开始](docs/quickstart-zh.md) — 安装并完成第一次工作簿操作。
+2. [初学者教程](docs/tutorial-beginners-zh.md) — 逐步学习编辑、公式和无头VBA。
+3. [打开浏览器playground](https://kent-tokyo.github.io/elixcee/playground/) — 无需安装即可试用。
+
+playground支持英语、日本語和简体中文切换。本地开发与部署说明见
+[playground文档](playground/README-zh.md)。
+
 ## 安装
 
 ```bash

@@ -15,6 +15,18 @@ The experimental JS package remains private and is not published. [English](READ
 The current branch follows the published 1.0.9 contract. New work is recorded
 under `[Unreleased]` and is not part of this artifact until a later release.
 
+## Start here
+
+New to elixcee? Follow this path:
+
+1. [Quick start](docs/quickstart.md) — install it and run your first workbook operation.
+2. [Beginner tutorial](docs/tutorial-beginners.md) — learn editing, formulas, and headless VBA step by step.
+3. [Open the browser playground](https://kent-tokyo.github.io/elixcee/playground/) — try it without installing anything.
+
+The playground has an English / 日本語 / 简体中文 language switcher. See
+[playground documentation](playground/README.md) for local development and
+deployment details.
+
 elixcee is a workbook automation runtime, not a VBA-only execution tool. Use the
 same workbook model for direct data edits, supported formula recalculation, and
 execution, diagnosis, or testing of supported data-processing VBA. It is not a
