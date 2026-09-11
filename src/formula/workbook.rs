@@ -17,6 +17,7 @@ use crate::vm::CellContent;
 type Position = (u32, u32);
 type SheetCells = HashMap<Position, CellContent>;
 type NodeKey = (String, u32, u32);
+type RangeDependent = (u32, u32, u32, u32, NodeKey);
 
 const SHEET_ROW_STRIDE: u32 = 2_000_000;
 
@@ -368,7 +369,10 @@ pub(crate) fn recalculate(
     }
 
     let mut dependents: HashMap<NodeKey, Vec<NodeKey>> = HashMap::new();
-    let mut range_dependents = Vec::new();
+    // Index range dependencies by their source sheet. Dirty propagation only
+    // needs to inspect ranges on the sheet whose value changed; keeping one
+    // flat list made every cross-sheet write scan unrelated ranges as well.
+    let mut range_dependents: HashMap<String, Vec<RangeDependent>> = HashMap::new();
     let mut indegree: HashMap<NodeKey, usize> = parsed.keys().map(|key| (key.clone(), 0)).collect();
     let mut nodes_by_sheet: HashMap<String, Vec<NodeKey>> = HashMap::new();
     for key in parsed.keys() {
@@ -399,7 +403,10 @@ pub(crate) fn recalculate(
         // over the sheet-local node index is sufficient and bounded by formula
         // count on that sheet.
         for (sheet, r1, c1, r2, c2) in ranges {
-            range_dependents.push((sheet.clone(), r1, c1, r2, c2, key.clone()));
+            range_dependents
+                .entry(sheet.clone())
+                .or_default()
+                .push((r1, c1, r2, c2, key.clone()));
             for reference in nodes_by_sheet
                 .get(&sheet)
                 .into_iter()
@@ -464,14 +471,11 @@ pub(crate) fn recalculate(
                     if let Some(children) = dependents.get(&input) {
                         queue.extend(children.iter().cloned());
                     }
-                    for (range_sheet, r1, c1, r2, c2, formula) in &range_dependents {
-                        if range_sheet == &sheet
-                            && *r1 <= row
-                            && row <= *r2
-                            && *c1 <= col
-                            && col <= *c2
-                        {
-                            queue.push_back(formula.clone());
+                    if let Some(ranges) = range_dependents.get(&sheet) {
+                        for (r1, c1, r2, c2, formula) in ranges {
+                            if *r1 <= row && row <= *r2 && *c1 <= col && col <= *c2 {
+                                queue.push_back(formula.clone());
+                            }
                         }
                     }
                 }

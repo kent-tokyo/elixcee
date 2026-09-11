@@ -529,6 +529,13 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
   The current 10,000×10 numeric fixture is about 3.2 MB with `Stored` versus
   about 0.57 MB with Deflate, so the speed/size trade-off remains an explicit
   P0 measurement item rather than a general compression claim.
+- [x] Formula range-dependency locality: index range dependents by source
+  worksheet before dirty-cell propagation, preserving the existing range
+  interval semantics. The 2026-09-11 release calibration (10 samples) showed
+  1,000-formula single-sheet dirty/full p50 of 0.543/0.837 ms, but
+  cross-sheet fan-out dirty/full p50 of 2.084/2.048 ms; the latter remains a
+  negative result because workbook graph reconstruction dominates. No general
+  cross-sheet speedup is claimed.
 - [x] Readerのborrow化・単一走査・VMへの所有権移動、read budget／deadline／協調キャンセル。
 - [x] 部分 G5 BUILD/MEASURE: 現行候補の同一bench binaryでcached appendとreference rescan、dirty closureとstructure rebuildを各10サンプル・2秒条件で再測定した。appendは約1.128倍、dirty closureは約1.323倍だったが、XLSX end-to-end、100k/400k/1Mセル、RSS・耐久保存を含む大規模総合判定は未完。[G5測定](docs/measurements/g5-large-hotpath-2026-09-10.md)
 - [x] worksheet XMLのZipWriterへの直接出力、passthrough payloadの二重clone除去。

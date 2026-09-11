@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- Formula dirty propagation: index range dependencies by source worksheet so
+  a changed cell does not inspect ranges belonging to unrelated sheets. The
+  existing formula and cross-sheet value-parity tests remain green; the
+  current 1,000-formula cross-sheet calibration is retained as a negative
+  result because graph rebuild cost still dominates that case.
 - Performance follow-up: use ZIP `Stored` only for large, dense numeric
   worksheets; large text/mixed worksheets continue to use Deflate level 1 so
   the throughput optimization does not cause avoidable package expansion.
