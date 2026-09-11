@@ -12,6 +12,12 @@ select, input { border: 1px solid #cad2e2; border-radius: 8px; background: white
 .toolbar label { display: grid; gap: 6px; color: #58657d; font-size: .9rem; }
 .toolbar select { min-width: 190px; }
 .badge { color: #58657d; font-size: .85rem; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid #dce3ef; margin-bottom: 18px; }
+.tab { border-radius: 9px 9px 0 0; color: #58657d; background: transparent; }
+.tab:hover { color: #3856d9; background: #eef1ff; }
+.tab.active { color: #3856d9; background: #eef1ff; box-shadow: inset 0 -3px #3856d9; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
 .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 18px; }
 .card { border: 1px solid #dce3ef; border-radius: 18px; background: white; padding: 24px; box-shadow: 0 8px 28px #203a7810; }
 h1, h2 { margin-top: 0; } h2 { font-size: 1.05rem; }
@@ -38,6 +44,10 @@ code { color: #172033; } .answer { margin: 26px 0 20px; font-size: 3rem; font-we
 .status.warning { color: #a36500; }
 .boundary { margin: 22px 0; padding: 14px 16px; border-left: 3px solid #8da1e8; color: #58657d; background: #eef1ff; line-height: 1.5; }
 .download { width: 100%; }
+.download-card { max-width: 640px; margin: 0 auto; text-align: center; }
+.download-icon { display: inline-grid; place-items: center; width: 58px; height: 58px; margin-bottom: 14px; border-radius: 16px; color: white; background: #1c8b52; font-size: .75rem; font-weight: 800; }
+.download-card p { color: #58657d; line-height: 1.6; }
+.file-meta { display: flex; justify-content: space-between; gap: 12px; margin: 22px 0; padding: 12px 14px; border-radius: 9px; color: #58657d; background: #f3f6fb; font-size: .85rem; }
 .guide { margin-top: 18px; line-height: 1.6; color: #58657d; }
 .guide h2 { color: #172033; }
 .guide p { margin: 0 0 12px; }
