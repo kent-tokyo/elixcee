@@ -4846,6 +4846,10 @@ fn append_created_chart_relationship(
     Ok(output)
 }
 
+fn render_created_chart_relationships() -> String {
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.microsoft.com/office/2011/relationships/chartStyle\" Target=\"style1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.microsoft.com/office/2011/relationships/chartColorStyle\" Target=\"colors1.xml\"/></Relationships>".to_string()
+}
+
 /// Rewrite one or more existing chart series' category/value formulas without
 /// touching the surrounding chart XML. Series indexes are zero-based and are
 /// counted by `<c:ser>` order. Missing series or missing references are hard
@@ -7985,11 +7989,14 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                 chart_part.clone(),
                 render_created_chart_xml(chart).into_bytes(),
             ));
-            // The generated chart XML deliberately does not emit the optional
-            // chart-style/color-style elements.  Do not attach the source
-            // workbook's style/color relationships to such a part: Excel treats
-            // those dangling chart relationships as a damaged chart and may
-            // remove the newly-created object during repair.
+            if surviving_source_parts.contains("xl/charts/style1.xml")
+                && surviving_source_parts.contains("xl/charts/colors1.xml")
+            {
+                passthrough.push((
+                    format!("xl/charts/_rels/chart-new-{}.xml.rels", index + 1),
+                    render_created_chart_relationships().into_bytes(),
+                ));
+            }
             carried_overrides.push((
                 format!("/{chart_part}"),
                 "application/vnd.openxmlformats-officedocument.drawingml.chart+xml".to_string(),

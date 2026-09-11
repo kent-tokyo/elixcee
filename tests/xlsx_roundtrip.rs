@@ -1397,8 +1397,6 @@ fn create_chart_connects_new_part_to_existing_drawing() {
     assert!(rels.contains("relationships/chart"));
     assert!(rels.contains("Target=\"../charts/chart-new-1.xml\""));
     assert!(rels.contains("Target=\"../charts/chart-new-2.xml\""));
-    assert!(!output_entries.contains_key("xl/charts/_rels/chart-new-1.xml.rels"));
-    assert!(!output_entries.contains_key("xl/charts/_rels/chart-new-2.xml.rels"));
     for chart_name in ["chart-new-1.xml", "chart-new-2.xml"] {
         let relation = rels
             .split("<Relationship ")
@@ -1412,6 +1410,39 @@ fn create_chart_connects_new_part_to_existing_drawing() {
         assert!(drawing.contains(&format!("r:id=\"{relation_id}\"")));
     }
     assert_eq!(drawing.matches("<xdr:graphicFrame").count(), 3);
+}
+
+/// G2 measurement helper: isolate a newly-created bar chart from the
+/// multi-chart case so Excel reopen failures can be attributed to the chart
+/// type rather than to multiple anchors/parts.
+#[test]
+fn create_bar_chart_connects_new_part_to_existing_drawing() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let output_path = tmp_path("create_bar_chart_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.add_chart(
+        "xl/drawings/drawing1.xml",
+        "bar",
+        "Sheet1!$C$1:$C$5",
+        "Sheet1!$B$1:$B$5",
+        Some("Bar chart"),
+        2,
+        2,
+        12,
+        10,
+    )
+    .expect("bar chart creation should be accepted");
+    save_workbook(&vm, &output_path).expect("bar chart should save");
+    if let Ok(kept_path) = std::env::var("ELIXCEE_KEEP_BAR_CHART_OUTPUT") {
+        std::fs::copy(&output_path, kept_path).expect("bar chart output should be copied");
+    }
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries["xl/charts/chart-new-1.xml"].clone()).unwrap();
+    assert!(chart.contains("<c:barChart>"));
+    assert!(chart.contains("<c:f>Sheet1!$C$1:$C$5</c:f>"));
+    assert!(chart.contains("<c:f>Sheet1!$B$1:$B$5</c:f>"));
 }
 
 /// G2d: the chart-series smooth edit is exercised through the loaded-workbook

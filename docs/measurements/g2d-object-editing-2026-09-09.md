@@ -256,6 +256,17 @@ The corresponding `edit_chart_series_visibility_survives_real_fixture_save`
 regression also passed with the same temporary-copy method, changing an
 existing series `<c:delete val>` from `0` to `1` while retaining its formula.
 
+On 2026-09-11, Excel for macOS was used to open the multi-chart creation output
+`g2d-chart-bar-smoke-no-style-rels.xlsm`. Excel displayed its repair warning;
+accepting recovery opened the sheet but removed the newly-created Charts. A
+follow-up experiment that omitted the generated chart parts' optional
+style/color relationship files produced the same warning and the same loss.
+This rules out dangling style/color relationships as the sole cause; Chart
+creation remains an Excel-reopen failure until the Chart XML/Drawing structure
+is corrected. A bar-only output was then opened after adding the OOXML
+`<c:crossBetween val="between"/>` value-axis element; Excel still showed the
+same warning. That element is therefore not sufficient to fix the failure.
+
 ## Not measured or claimed
 
 - Excel reopen, repair-warning absence, or recalculated Chart/Pivot caches.
