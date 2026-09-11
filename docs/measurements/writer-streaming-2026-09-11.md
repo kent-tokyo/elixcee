@@ -27,3 +27,13 @@ Command:
 python scripts/measure-stream-writer-memory.py --rows 100000 250000 \
   --columns 3 --mode append --value-profile plain --repetitions 2
 ```
+
+## Three-repetition rerun
+
+After reclaiming the local build cache, the same isolated wheel and fixture
+were rerun three times per case. At 100,000 rows, RSS p50/p95 was 19.86/20.03
+MiB and wall p50/p95 was 310/317 ms. At 250,000 rows, RSS p50/p95 was
+19.90/20.00 MiB and wall p50/p95 was 719/720 ms. All six outputs passed ZIP,
+worksheet-shape, final-row, and semantic-digest validation. This supersedes
+neither the one-million-row confirmation nor the cross-platform gate; it is a
+repeatability check on the same macOS host.
