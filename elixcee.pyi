@@ -390,7 +390,7 @@ class Vm:
     def set_chart_data_labels_show_category(
         self, chart_part: str, show_category: bool
     ) -> None:
-        """Update the first existing chart data-labels showCat flag."""
+        """Update the first existing chart data-labels showCatName flag."""
         ...
 
     def set_chart_data_labels_show_series_name(

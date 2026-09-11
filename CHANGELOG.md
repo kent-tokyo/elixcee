@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- Chart compatibility: emit the OOXML-standard `showCatName` data-label
+  attribute for category labels while preserving the Python API name.
+
 - Documentation: shorten the English, Japanese, and Simplified Chinese README
   development sections and direct contributors to the roadmap and changelog.
 

@@ -45,11 +45,11 @@ therefore keeps `excel_reopen` as `unverified`.
   adds only the first existing `<c:dLbls showVal>` flag; a missing data-label
   element is rejected.
 - `Vm.set_chart_data_labels_show_category(chart_part, show_category)` rewrites
-  or adds only the first existing `<c:dLbls showCat>` flag and composes with
+  or adds only the first existing `<c:dLbls showCatName>` flag and composes with
   `showVal`; a missing data-label element is rejected.
 - `Vm.set_chart_data_labels_show_series_name(chart_part, show_series_name)`
   rewrites or adds only the first existing `<c:dLbls showSerName>` flag and
-  composes with `showVal`/`showCat`; a missing data-label element is rejected.
+  composes with `showVal`/`showCatName`; a missing data-label element is rejected.
 - `Vm.set_chart_data_labels_show_percent(chart_part, show_percent)` rewrites
   or adds only the first existing `<c:dLbls showPercent>` flag; a missing
   data-label element is rejected.

@@ -7643,7 +7643,8 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
                         chart = rewrite_chart_data_labels_show_value(&chart, show_value)?;
                     }
                     if let Some(show_category) = edit.show_category {
-                        chart = rewrite_chart_data_labels_flag(&chart, "showCat", show_category)?;
+                        chart =
+                            rewrite_chart_data_labels_flag(&chart, "showCatName", show_category)?;
                     }
                     if let Some(show_series_name) = edit.show_series_name {
                         chart = rewrite_chart_data_labels_flag(
@@ -11309,11 +11310,12 @@ mod tests {
 
     #[test]
     fn chart_data_labels_rewriter_updates_show_category_and_preserves_value() {
-        let source = r#"<c:chart><c:dLbls showVal="1" showCat="0"><c:txPr/></c:dLbls></c:chart>"#;
-        let actual = rewrite_chart_data_labels_flag(source, "showCat", true).unwrap();
-        assert!(actual.contains("showVal=\"1\" showCat=\"1\"") && actual.contains("<c:txPr/>"));
+        let source =
+            r#"<c:chart><c:dLbls showVal="1" showCatName="0"><c:txPr/></c:dLbls></c:chart>"#;
+        let actual = rewrite_chart_data_labels_flag(source, "showCatName", true).unwrap();
+        assert!(actual.contains("showVal=\"1\" showCatName=\"1\"") && actual.contains("<c:txPr/>"));
         let actual = rewrite_chart_data_labels_show_value(&actual, false).unwrap();
-        assert!(actual.contains("showVal=\"0\" showCat=\"1\""));
+        assert!(actual.contains("showVal=\"0\" showCatName=\"1\""));
     }
 
     #[test]
@@ -11330,10 +11332,10 @@ mod tests {
     #[test]
     fn chart_data_labels_rewriter_updates_show_percent() {
         let source =
-            r#"<c:chart><c:dLbls showCat="1"><c:showLeaderLines val="1"/></c:dLbls></c:chart>"#;
+            r#"<c:chart><c:dLbls showCatName="1"><c:showLeaderLines val="1"/></c:dLbls></c:chart>"#;
         let actual = rewrite_chart_data_labels_flag(source, "showPercent", true).unwrap();
         assert!(
-            actual.contains("showCat=\"1\" showPercent=\"1\"")
+            actual.contains("showCatName=\"1\" showPercent=\"1\"")
                 && actual.contains("<c:showLeaderLines val=\"1\"/>")
         );
     }
@@ -11380,9 +11382,11 @@ mod tests {
                 && actual.contains("<c:tx/>")
         );
 
-        let source = r#"<c:chart><c:dLbls showCat="1"></c:dLbls></c:chart>"#;
+        let source = r#"<c:chart><c:dLbls showCatName="1"></c:dLbls></c:chart>"#;
         let actual = rewrite_chart_data_labels_position(source, "ctr").unwrap();
-        assert!(actual.contains("<c:dLblPos val=\"ctr\"/>") && actual.contains("showCat=\"1\""));
+        assert!(
+            actual.contains("<c:dLblPos val=\"ctr\"/>") && actual.contains("showCatName=\"1\"")
+        );
     }
 
     #[test]
