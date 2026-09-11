@@ -42,3 +42,9 @@ Excel date results as localized date objects while the binding returns Python
 `date` values. The combined result is 14/14 matching probes on one host; it
 still does not cover the full type-conversion, 1904-date, array-spill, or
 recalculation surface.
+
+The boundary rerun also included `=AVERAGE("1",2)`: Excel and the rebuilt
+wheel both returned `1.5`. This exposed and fixed a coercion bug in the
+evaluator: direct text/logical arguments are included by `AVERAGE`, while
+text/logical values inside a referenced range remain excluded. The corrected
+source and wheel now match all 15 recorded probes.

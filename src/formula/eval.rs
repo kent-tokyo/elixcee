@@ -1057,7 +1057,11 @@ fn func_average(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    let nums = match collect_direct_numeric_args(args, cells, false) {
+    // Excel includes numeric text and logical values supplied as direct
+    // arguments to AVERAGE, while values of those types inside a reference
+    // remain excluded. `collect_direct_numeric_args` applies that distinction
+    // per argument rather than flattening everything through one coercion rule.
+    let nums = match collect_direct_numeric_args(args, cells, true) {
         Ok(values) => values,
         Err(error) => return Ok(Variant::Error(error)),
     };
@@ -22922,11 +22926,8 @@ mod tests {
     fn test_statistical_summary_functions() {
         let mut c = HashMap::new();
         assert_eq!(calc("=SUM(\"2\",TRUE)", &c), Variant::Integer(3));
-        assert_eq!(
-            calc("=AVERAGE(\"2\",TRUE)", &c),
-            Variant::Error(ExcelError::DivZero)
-        );
-        assert_eq!(calc("=AVERAGE(3,\"2\")", &c), Variant::Float(3.0));
+        assert_eq!(calc("=AVERAGE(\"2\",TRUE)", &c), Variant::Float(1.5));
+        assert_eq!(calc("=AVERAGE(3,\"2\")", &c), Variant::Float(2.5));
         c.insert(
             (1, 1),
             CellContent {
