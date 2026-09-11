@@ -2952,7 +2952,9 @@ fn func_product(
     if args.is_empty() {
         return Err("PRODUCT requires at least 1 argument".into());
     }
-    let values = match collect_numeric_values_with_errors(args, cells) {
+    // Excel counts numeric text and logical values supplied directly to
+    // PRODUCT, but ignores those same non-numeric types in a reference.
+    let values = match collect_direct_numeric_args(args, cells, true) {
         Ok(values) => values,
         Err(error) => return Ok(Variant::Error(error)),
     };
@@ -19512,6 +19514,7 @@ mod tests {
     fn test_product() {
         let c = HashMap::new();
         assert_eq!(calc("=PRODUCT(2,3,4)", &c), Variant::Integer(24));
+        assert_eq!(calc("=PRODUCT(\"2\",TRUE)", &c), Variant::Integer(2));
         assert_eq!(
             calc("=PRODUCT(2,1/0)", &c),
             Variant::Error(ExcelError::DivZero)

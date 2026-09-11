@@ -54,6 +54,9 @@ The same boundary check found that Excel returns `1` for both
 arguments through the existing coercion path; text and logical values in a
 referenced range remain excluded. Focused regressions cover both functions.
 
+Excel also returns `2` for `=PRODUCT("2",TRUE)`. `PRODUCT` now uses the same
+direct-argument coercion path, with a regression for the observed result.
+
 ## Mixed-type aggregate range probes
 
 Five additional range probes used `A1:B2 = {{1,1},{TRUE,"x"}}` in the same
