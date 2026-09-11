@@ -31,10 +31,11 @@ the warning is not explained by the original header-inclusive ranges.
 
 The generator now materializes cached category/value points for simple
 worksheet ranges and leaves non-numeric values blank in numeric caches. This
-improves the OOXML payload and is covered by round-trip assertions, but the
-same data-row probe still produced the recovery dialog. The cache change is
-therefore not counted as an Excel-reopen fix; the remaining defect is still
-isolated to generated Chart/Drawing compatibility.
+improves the OOXML payload, and generated charts now receive distinct axis IDs
+when multiple charts are created. Both properties are covered by round-trip
+assertions, but the same data-row probe still produced the recovery dialog.
+These changes are therefore not counted as an Excel-reopen fix; the remaining
+defect is still isolated to generated Chart/Drawing compatibility.
 
 ## Scope
 

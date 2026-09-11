@@ -1388,9 +1388,11 @@ fn create_chart_connects_new_part_to_existing_drawing() {
     assert!(chart.contains("<c:f>Sheet1!$A$1:$A$5</c:f>"));
     assert!(chart.contains("Created chart"));
     assert!(chart.contains("<c:idx val=\"1\"/><c:order val=\"1\"/><c:tx><c:v>Second series</c:v>"));
+    assert!(chart.contains("<c:axId val=\"10000\"/><c:axId val=\"10001\"/>"));
     let second_chart =
         String::from_utf8(output_entries[second_chart_part.as_str()].clone()).unwrap();
     assert!(second_chart.contains("<c:barChart>"));
+    assert!(second_chart.contains("<c:axId val=\"10002\"/><c:axId val=\"10003\"/>"));
     let drawing = String::from_utf8(output_entries["xl/drawings/drawing1.xml"].clone()).unwrap();
     let rels =
         String::from_utf8(output_entries["xl/drawings/_rels/drawing1.xml.rels"].clone()).unwrap();
